@@ -5,13 +5,16 @@ import styles from './styles.module.css'
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Download, Github } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Home() {
   return (
     <div>
       <NavBar />
       <div>
-        <div className={cn(styles.fluid, "m-auto blur-xl -z-10 absolute left-1/2 -translate-x-1/2 max-md:translate-y-1/2")} />
+        <div className={cn(styles.fluid, "m-auto blur-xl absolute top-0 left-1/2 -translate-x-1/2 max-md:translate-y-1/2 select-none pointer-events-none -z-10")} />
 
         <div className="container mx-auto p-12">
 
@@ -27,10 +30,51 @@ export default function Home() {
             GitHub
           </Button>
 
-
           <div className="mt-8 mx-auto select-none pointer-events-none">
             <Image className="scale-[107.5%]" src="/img/brand-image2.png" alt="brand image" width={1920} height={1080} />
           </div>
+        </div>
+
+        <div className="bg-[hsl(var(--card)/60%)] py-4" />
+        <ToggleGroup type="single" defaultValue="a" className="md:sticky max-md:hidden top-[calc(3.5rem+1px)] z-10 bg-[hsl(var(--card)/60%)] mx-auto p-3 gap-2 backdrop-blur-lg">
+          <ToggleGroupItem value="a">クロスプラットフォーム</ToggleGroupItem>
+          <ToggleGroupItem value="b">アニメーション</ToggleGroupItem>
+          <ToggleGroupItem value="c">エフェクト</ToggleGroupItem>
+          <ToggleGroupItem value="d">拡張機能</ToggleGroupItem>
+        </ToggleGroup>
+        <div className="md:hidden bg-[hsl(var(--card)/60%)]">
+        <Select defaultValue="a">
+          <SelectTrigger className="w-[240px] mx-auto bg-transparent">
+            <SelectValue placeholder="Select a fruit" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="a">クロスプラットフォーム</SelectItem>
+              <SelectItem value="b">アニメーション</SelectItem>
+              <SelectItem value="c">エフェクト</SelectItem>
+              <SelectItem value="d">拡張機能</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+          </Select>
+        </div>
+        <div className="bg-[hsl(var(--card)/60%)] py-4" />
+
+        <div className="container mx-auto p-12 grid lg:grid-cols-2 gap-4">
+
+          <div className="mt-8">
+            <h3 className="scroll-m-20 text-2xl md:text-4xl font-semibold tracking-tight">
+              クロスプラットフォーム
+            </h3>
+            <p className="mt-8 text-lg leading-8">
+              Windows専用のソフトにはうんざりしていませんか？<br />
+              Beutl は常に最新の .NET を使用しているため、いろいろな OS で動作します。 Windows, Linux, macOSをサポートしています。
+            </p>
+          </div>
+
+          <div className="mt-8 ">
+            <Image className="scale-[107.5%]" src="/img/brand-image2.png" alt="brand image" width={1920} height={1080} />
+          </div>
+
         </div>
       </div>
 
