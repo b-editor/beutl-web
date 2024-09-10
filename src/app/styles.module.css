@@ -26,7 +26,16 @@
 }
 
 .easingDemo {
+  background: transparent;
+}
+
+.easingDemoMeter {
+  visibility: hidden;
+}
+
+.easingDemo:hover > .easingDemoMeter {
   /* animation: bottom-to-top 10s ease-in-out 0s infinite normal; */
+  visibility: visible;
   animation-name: bottom-to-top;
   animation-duration: 2.5s;
   animation-iteration-count: infinite;
@@ -90,7 +99,7 @@
 }
 
 @media not all and (min-width: 768px) {
-.loopSlide ul:first-child {
+  .loopSlide ul:first-child {
     animation: slide1 60s -30s linear infinite;
   }
 
@@ -100,7 +109,7 @@
 }
 
 @media not all and (min-width: 640px) {
-.loopSlide ul:first-child {
+  .loopSlide ul:first-child {
     animation: slide1 90s -45s linear infinite;
   }
 

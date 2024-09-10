@@ -1,17 +1,33 @@
 import NavBar from "@/components/nav-bar";
-import SignIn from "@/components/sign-in";
 import Image from "next/image";
 import styles from './styles.module.css'
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Download, Github } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Download } from "lucide-react";
 import FeaturesToc from "@/components/features-toc";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import EasingDemo from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import { Card, CardContent } from "@/components/ui/card";
+
+const extensions = [
+  {
+    name: "FFmpeg配置ツール",
+    description: "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
+    image: "https://beutl.beditor.net/api/v1/assets/b-editor/ffmpeg-locator.png/download",
+  },
+  {
+    name: "Sugar Shaker",
+    description: "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
+    image: "https://beutl.beditor.net/api/v1/assets/b-editor/sugar-shaker-logo.jpg/download",
+  },
+  {
+    name: "Cefサンプル",
+    description: "Cefを使ったブラウザをページに追加します。",
+    image: "https://beutl.beditor.net/api/v1/assets/b-editor/icon/download"
+  }
+];
 
 export default function Home() {
   return (
@@ -106,16 +122,20 @@ export default function Home() {
               アニメーション
             </h3>
             <p className="mt-8 text-lg leading-8">
-              キーフレームを使用して、フェードインアウト、スライドインなど基本的なアニメーションや、
+              キーフレームとイージングを使用して、フェードインアウト、スライドインなど基本的なアニメーションや、
               さまざまなオブジェクトをアニメーションすることができます。
             </p>
+            <Button className="mt-8" variant="outline">利用可能なアニメーション</Button>
           </div>
 
           <div className="lg:flex-1">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-3 gap-4 gap-y-12">
               <EasingDemo type="in" path="M1 84c14 1 47.75 1 123-83" easing="cubic-bezier(.12,0,.39,0)" />
               <EasingDemo type="out" path="M1 84C76.25 0 110 0 124 1" easing="cubic-bezier(.61,1,.88,1)" />
               <EasingDemo type="inOut" path="M1 84C46.25 85 78.75 0 124 1" easing="cubic-bezier(.37,0,.63,1)" />
+              <EasingDemo type="in" path="M1 84c79 1 96.5 1 123-83" easing="cubic-bezier(.64,0,.78,0)" />
+              <EasingDemo type="out" path="M1 84C27.5 0 45 0 124 1" easing="cubic-bezier(.22,1,.36,1)" />
+              <EasingDemo type="inOut" path="M1 84C103.75 85 21.25 0 124 1" easing="cubic-bezier(.83,0,.17,1)" />
             </div>
           </div>
 
@@ -130,9 +150,9 @@ export default function Home() {
           </p>
           <EffectsDemo />
         </div>
-        <div className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:flex-row-reverse lg:items-center gap-8">
+        <div className="container mx-auto px-6 py-12 md:px-12 flex flex-col lg:grid lg:grid-cols-2 lg:items-center gap-8">
 
-          <div className="lg:flex-1">
+          <div className="lg:col-start-2 lg:row-start-1">
             <h3 id="features-extensions" className="features-header scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight">
               拡張機能
             </h3>
@@ -142,8 +162,44 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="lg:flex-1">
-            <Image className="scale-[107.5%]" src="/img/brand-image2.png" alt="brand image" width={1920} height={1080} />
+          <div className="lg:col-start-1 lg:row-start-1">
+            {/* <Image className="scale-[107.5%]" src="/img/brand-image2.png" alt="brand image" width={1920} height={1080} /> */}
+            <Carousel>
+              <CarouselContent className="ml-0">
+                {extensions.map((item) => (
+                  <CarouselItem key={item.name} className="basis-2/3 md:basis-1/2">
+                    <div className="p-1 h-full">
+                      <Card className="h-full">
+                        <CardContent className="p-6">
+                          <div className="flex">
+                            <div className="flex-[3]">
+                              <h4 className="text-xl font-semibold">{item.name}</h4>
+                              <span className="text-muted">公式パッケージ</span>
+                            </div>
+                            <img className="flex-1 w-16 h-16 max-w-fit rounded-md"
+                              src={item.image} />
+                          </div>
+                          <p className="text-sm mt-4">{item.description}</p>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </CarouselItem>
+                ))}
+                <CarouselItem className="basis-2/3 md:basis-1/2">
+                  <div className="p-1 h-full">
+                    <Card className="h-full">
+                      <CardContent className="p-6">
+                        <p className="text-xl font-semibold text-wrap" style={{ overflowWrap: "anywhere" }}>
+                          まだまだ開発中！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </CarouselItem>
+              </CarouselContent>
+              <CarouselPrevious className="left-1 top-[calc(100%+2rem)]" />
+              <CarouselNext className="right-1 top-[calc(100%+2rem)]" />
+            </Carousel>
           </div>
 
         </div>
