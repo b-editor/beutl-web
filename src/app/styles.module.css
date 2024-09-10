@@ -1,7 +1,5 @@
 .fluid {
   background: #3323FF;
-  width: 50vw;
-  height: 50vw;
   animation: morph 10s ease-in-out 0s infinite normal;
 }
 
@@ -24,5 +22,109 @@
 
   100% {
     border-radius: 50% 50% 50% 50%;
+  }
+}
+
+.easingDemo {
+  /* animation: bottom-to-top 10s ease-in-out 0s infinite normal; */
+  animation-name: bottom-to-top;
+  animation-duration: 2.5s;
+  animation-iteration-count: infinite;
+  animation-direction: normal;
+}
+
+@keyframes bottom-to-top {
+
+  0%,
+  10% {
+    top: 100%;
+  }
+
+  90%,
+  100% {
+    top: 1%;
+  }
+}
+
+.transparent {
+  position: relative;
+  /* 基準位置とする */
+}
+
+.transparent::after {
+  content: "";
+  /* 疑似要素に必須 */
+  width: 100%;
+  /* 幅いっぱい */
+  height: 100%;
+  /* 高さいっぱい */
+  display: block;
+  /* 高さを指定するためにブロック要素にする */
+  background: linear-gradient(rgba(255, 255, 255, 0) 0, hsl(var(--background)) 80%);
+  /* 徐々に透明にする */
+  position: absolute;
+  /*  */
+  top: 0;
+  left: 0;
+}
+
+.loopSlide {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+  overflow: hidden;
+}
+
+.loopSlide ul {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.loopSlide ul:first-child {
+  animation: slide1 30s -15s linear infinite;
+}
+
+.loopSlide ul:last-child {
+  animation: slide2 30s linear infinite;
+}
+
+@media not all and (min-width: 768px) {
+.loopSlide ul:first-child {
+    animation: slide1 60s -30s linear infinite;
+  }
+
+  .loopSlide ul:last-child {
+    animation: slide2 60s linear infinite;
+  }
+}
+
+@media not all and (min-width: 640px) {
+.loopSlide ul:first-child {
+    animation: slide1 90s -45s linear infinite;
+  }
+
+  .loopSlide ul:last-child {
+    animation: slide2 90s linear infinite;
+  }
+}
+
+@keyframes slide1 {
+  0% {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(-100%);
+  }
+}
+
+@keyframes slide2 {
+  0% {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(-200%);
   }
 }
