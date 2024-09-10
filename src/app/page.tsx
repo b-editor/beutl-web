@@ -10,6 +10,7 @@ import EasingDemo from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { Card, CardContent } from "@/components/ui/card";
+import Footer from "@/components/footer";
 
 const extensions = [
   {
@@ -56,12 +57,6 @@ export default function Home() {
         </div>
 
         <div className="bg-[hsl(var(--card)/60%)] py-4" />
-        {/* <ToggleGroup type="single" className="md:sticky mx-auto p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-[hsl(var(--card)/60%)] gap-2 backdrop-blur-lg">
-          <ToggleGroupItem value="a">クロスプラットフォーム</ToggleGroupItem>
-          <ToggleGroupItem value="b">アニメーション</ToggleGroupItem>
-          <ToggleGroupItem value="c">エフェクト</ToggleGroupItem>
-          <ToggleGroupItem value="d">拡張機能</ToggleGroupItem>
-        </ToggleGroup> */}
         <FeaturesToc />
         <div className="bg-[hsl(var(--card)/60%)] py-4" />
 
@@ -150,7 +145,7 @@ export default function Home() {
           </p>
           <EffectsDemo />
         </div>
-        <div className="container mx-auto px-6 py-12 md:px-12 flex flex-col lg:grid lg:grid-cols-2 lg:items-center gap-8">
+        <div className="container mx-auto px-6 pt-12 pb-20 md:px-12 flex flex-col lg:grid lg:grid-cols-2 lg:items-center gap-8">
 
           <div className="lg:col-start-2 lg:row-start-1">
             <h3 id="features-extensions" className="features-header scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight">
@@ -163,7 +158,6 @@ export default function Home() {
           </div>
 
           <div className="lg:col-start-1 lg:row-start-1">
-            {/* <Image className="scale-[107.5%]" src="/img/brand-image2.png" alt="brand image" width={1920} height={1080} /> */}
             <Carousel>
               <CarouselContent className="ml-0">
                 {extensions.map((item) => (
@@ -203,8 +197,16 @@ export default function Home() {
           </div>
 
         </div>
-      </div>
 
+        {/* <div className="container mx-auto px-6 py-12 md:px-12">
+          <h3 className="text-2xl md:text-4xl font-semibold tracking-tight">新機能</h3>
+        </div>
+
+        <div className="container mx-auto px-6 py-12 md:px-12">
+          <h3 className="text-2xl md:text-4xl font-semibold tracking-tight">製品ニュース</h3>
+        </div> */}
+      </div>
+      <Footer />
     </div>
     // <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
     //   <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
