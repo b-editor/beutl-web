@@ -41,7 +41,7 @@ async function signInWithEmail(formData: FormData) {
     if (returnUrl) {
       params.append("returnUrl", returnUrl);
     }
-    redirect(`/account/send-magic-link?${params.toString()}`);
+    redirect(`/account/sign-up?${params.toString()}`);
   }
 
   await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
@@ -67,13 +67,6 @@ export default function Page({ searchParams: { returnUrl } }: { searchParams: { 
                   <Label htmlFor="email">メールアドレス</Label>
                   <Input name="email" id="email" placeholder="me@example.com" />
                 </div>
-                {/* <div className="flex flex-col space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <Label htmlFor="password">パスワード</Label>
-                    <Link href="/account/forgot-password" className="text-muted-foreground text-sm font-medium">パスワードを忘れましたか？</Link>
-                  </div>
-                  <Input name="password" id="password" type="password" placeholder="********" />
-                </div> */}
               </div>
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </form>

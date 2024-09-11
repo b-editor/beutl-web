@@ -1,16 +1,10 @@
 import { signIn } from "@/auth";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
-import { sql } from "@vercel/postgres"
-import type {
-  AdapterUser,
-} from "@auth/core/adapters";
-import { redirect } from "next/navigation";
 
 async function signInWithProvider(formData: FormData) {
   "use server";
@@ -31,23 +25,10 @@ async function signInWithEmail(formData: FormData) {
     return;
   }
 
-  const userResult = await sql<AdapterUser>`
-    SELECT * FROM users WHERE email = ${email} LIMIT 1
-  `;
-  if (userResult.rowCount === 0) {
-    // アカウント未作成
-    const params = new URLSearchParams();
-    params.append("email", email);
-    if (returnUrl) {
-      params.append("returnUrl", returnUrl);
-    }
-    redirect(`/account/send-magic-link?${params.toString()}`);
-  }
-
   await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
 }
 
-export default function Page({ searchParams: { returnUrl } }: { searchParams: { returnUrl?: string } }) {
+export default function Page({ searchParams: { returnUrl, email } }: { searchParams: { returnUrl?: string, email?: string } }) {
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">
@@ -57,30 +38,22 @@ export default function Page({ searchParams: { returnUrl } }: { searchParams: { 
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>サインイン</CardTitle>
-            <CardDescription>お使いのアカウントを使用</CardDescription>
+            <CardTitle>アカウントを作成</CardTitle>
           </CardHeader>
           <CardContent>
             <form id="signin-form" action={signInWithEmail}>
               <div className="grid w-full items-center gap-4">
                 <div className="flex flex-col space-y-1.5">
                   <Label htmlFor="email">メールアドレス</Label>
-                  <Input name="email" id="email" placeholder="me@example.com" />
+                  <Input name="email" id="email" placeholder="me@example.com" defaultValue={email} />
                 </div>
-                {/* <div className="flex flex-col space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <Label htmlFor="password">パスワード</Label>
-                    <Link href="/account/forgot-password" className="text-muted-foreground text-sm font-medium">パスワードを忘れましたか？</Link>
-                  </div>
-                  <Input name="password" id="password" type="password" placeholder="********" />
-                </div> */}
               </div>
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </form>
           </CardContent>
           <CardFooter className="block">
-            <Button className="w-full" form="signin-form" type="submit">サインイン</Button>
-            <Link href="/account/sign-up" className="text-sm font-medium inline-block mt-6">アカウント作成</Link>
+            <Button className="w-full" form="signin-form" type="submit">サインアップ</Button>
+            <Link href="/account/sign-up" className="text-sm font-medium inline-block mt-6">アカウントをお持ちですか？</Link>
           </CardFooter>
         </Card>
         <Card>
@@ -111,12 +84,6 @@ export default function Page({ searchParams: { returnUrl } }: { searchParams: { 
                 </Button>
               </form>
 
-              <form className="flex-1">
-                <input type="hidden" name="returnUrl" value={returnUrl} />
-                <Button variant="outline" className="p-2 w-full" type="submit">
-                  <KeyRound className="w-5 h-5" />
-                </Button>
-              </form>
             </div>
           </CardContent>
         </Card>
