@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { StandardDrawer } from "./drawer";
-import { NavigationMenu, NavigationMenuContent, NavigationMenuItem, NavigationMenuLink, NavigationMenuList, NavigationMenuTrigger, navigationMenuTriggerStyle, NavigationMenuViewport } from "./ui/navigation-menu";
+import { NavigationMenu, NavigationMenuLink, NavigationMenuList, navigationMenuTriggerStyle } from "./ui/navigation-menu";
 import { CircleUser } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,17 +19,17 @@ export default function NavBar() {
       <div>
         <NavigationMenu>
           <NavigationMenuList>
-            <Link href="/docs" legacyBehavior passHref className="max-md:hidden">
-              <NavigationMenuLink className={navigationMenuTriggerStyle()}>
+            <Link href="/docs" legacyBehavior passHref>
+              <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
                 ドキュメント
               </NavigationMenuLink>
             </Link>
-            <Link href="/store" legacyBehavior passHref className="max-md:hidden">
-              <NavigationMenuLink className={navigationMenuTriggerStyle()}>
+            <Link href="/store" legacyBehavior passHref className="max-sm:hidden">
+              <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
                 ストア
               </NavigationMenuLink>
             </Link>
-            <Link href="/account" legacyBehavior passHref className="max-md:hidden">
+            <Link href="/account" legacyBehavior passHref>
               <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}>
                 <CircleUser className="w-5 h-5" />
               </NavigationMenuLink>
