@@ -1,0 +1,22 @@
+.transparent {
+  position: relative;
+  /* 基準位置とする */
+}
+
+.transparent::after {
+  content: "";
+  /* 疑似要素に必須 */
+  width: 100%;
+  /* 幅いっぱい */
+  height: 100%;
+  /* 高さいっぱい */
+  display: block;
+  /* 高さを指定するためにブロック要素にする */
+  background: linear-gradient(hsl(var(--background)) 0%, rgba(255, 255, 255, 0) 10%, hsl(var(--background)) 90%);
+  /* 徐々に透明にする */
+  position: absolute;
+  /*  */
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}

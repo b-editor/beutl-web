@@ -1,0 +1,30 @@
+
+.easingDemo {
+  background: transparent;
+}
+
+.easingDemoMeter {
+  visibility: hidden;
+}
+
+.easingDemo:hover > .easingDemoMeter {
+  /* animation: bottom-to-top 10s ease-in-out 0s infinite normal; */
+  visibility: visible;
+  animation-name: bottom-to-top;
+  animation-duration: 2.5s;
+  animation-iteration-count: infinite;
+  animation-direction: normal;
+}
+
+@keyframes bottom-to-top {
+
+  0%,
+  10% {
+    top: 100%;
+  }
+
+  90%,
+  100% {
+    top: 1%;
+  }
+}

@@ -1,9 +1,10 @@
-import styles from "@/app/styles.module.css"
+import styles from "@/styles/easing-demo.module.css";
 import { cn } from "@/lib/utils";
 
 export default function EasingDemo({ path, easing, type }: { path: string, easing: string, type: "in" | "out" | "inOut" }) {
   return (
     <div className={cn(styles.easingDemo, "relative")}>
+      {/* biome-ignore lint/a11y/noSvgWithoutTitle: <explanation> */}
       <svg className="overflow-visible" viewBox="0 0 125 85" xmlns="http://www.w3.org/2000/svg">
         <defs>
           {type === "in" &&

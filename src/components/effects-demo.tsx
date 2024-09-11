@@ -1,6 +1,8 @@
-import styles from "@/app/styles.module.css"
+import styles from "@/styles/loop-slide.module.css";
+import transparentStyles from "@/styles/transparent.module.css";
+import growStyles from "@/styles/grow.module.css";
 import { cn } from "@/lib/utils";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 
 const effects = [
   {
@@ -90,27 +92,15 @@ const effects = [
 ];
 
 export default function EffectsDemo() {
-  return (
-    // <ul className={cn("flex flex-wrap justify-between md:justify-center gap-4 mt-8 max-h-[400px] overflow-hidden", styles.transparent)}>
-    // {/* <ul className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8", styles.transparent)}> */}
-    //   {effects.map((item) => (
-    //     <li key={item.name} className="max-md:flex-auto">
-    //       <Card>
-    //         <CardHeader>
-    //           <CardTitle className="max-md:text-center">{item.name}</CardTitle>
-    //           {/* <CardDescription>Deploy your new project in one-click.</CardDescription> */}
-    //         </CardHeader>
-    //       </Card>
-    //     </li>
-    //   ))}
-    // </ul>
-    <div className={cn(styles.loopSlide, styles.transparent, "mt-8")}>
-      <ul className={cn("pt-4 flex flex-wrap justify-between md:justify-center gap-4 overflow-hidden")}>
+  return (  
+    // styles.loopSlide, 
+    <div className={cn(styles.loopSlide, transparentStyles.transparent, "mt-8 -mx-6 px-6")}>
+      <ul className={cn("pt-4 flex flex-wrap justify-between md:justify-center gap-4")}>
         {/* <ul className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8", styles.transparent)}> */}
         {effects.map((item) => (
-          <li key={item.name} className="max-md:flex-auto">
-            <Card>
-              <CardHeader>
+          <li key={item.name} className={cn(growStyles.listItem, "max-md:flex-auto")}>
+            <Card className={growStyles.grow}>
+              <CardHeader>  
                 <CardTitle className="max-md:text-center">{item.name}</CardTitle>
                 {/* <CardDescription>Deploy your new project in one-click.</CardDescription> */}
               </CardHeader>
@@ -118,11 +108,11 @@ export default function EffectsDemo() {
           </li>
         ))}
       </ul>
-      <ul className={cn("pt-4 flex flex-wrap justify-between md:justify-center gap-4 overflow-hidden")}>
+      <ul className={cn("pt-4 flex flex-wrap justify-between md:justify-center gap-4")}>
         {/* <ul className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8", styles.transparent)}> */}
         {effects.map((item) => (
-          <li key={item.name} className="max-md:flex-auto">
-            <Card>
+          <li key={item.name} className={cn(growStyles.listItem, "max-md:flex-auto")}>
+            <Card className={growStyles.grow}>
               <CardHeader>
                 <CardTitle className="max-md:text-center">{item.name}</CardTitle>
                 {/* <CardDescription>Deploy your new project in one-click.</CardDescription> */}

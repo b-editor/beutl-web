@@ -1,6 +1,5 @@
 import NavBar from "@/components/nav-bar";
 import Image from "next/image";
-import styles from './styles.module.css'
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
@@ -11,22 +10,26 @@ import EffectsDemo from "@/components/effects-demo";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { Card, CardContent } from "@/components/ui/card";
 import Footer from "@/components/footer";
+import styles from "@/styles/fluid.module.css";
 
 const extensions = [
   {
     name: "FFmpeg配置ツール",
     description: "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
     image: "https://beutl.beditor.net/api/v1/assets/b-editor/ffmpeg-locator.png/download",
+    borderGradient: "linear-gradient(135deg, #5C9A55 0%, #5E84E7 50%, #7B59F6 100%)"
   },
   {
     name: "Sugar Shaker",
     description: "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
     image: "https://beutl.beditor.net/api/v1/assets/b-editor/sugar-shaker-logo.jpg/download",
+    borderGradient: "linear-gradient(135deg, #ffffff 0%, #090C1D 50%, #ffffff 100%)"
   },
   {
     name: "Cefサンプル",
     description: "Cefを使ったブラウザをページに追加します。",
-    image: "https://beutl.beditor.net/api/v1/assets/b-editor/icon/download"
+    image: "https://beutl.beditor.net/api/v1/assets/b-editor/icon/download",
+    borderGradient: "linear-gradient(135deg, #693AF4 0%, #D0D2D2 100%)"
   }
 ];
 
@@ -159,19 +162,22 @@ export default function Home() {
 
           <div className="lg:col-start-1 lg:row-start-1">
             <Carousel>
-              <CarouselContent className="ml-0">
+              <CarouselContent>
                 {extensions.map((item) => (
-                  <CarouselItem key={item.name} className="basis-2/3 md:basis-1/2">
+                  <CarouselItem key={item.name} className={cn("basis-2/3 md:basis-1/2")}>
                     <div className="p-1 h-full">
-                      <Card className="h-full">
+                      <Card className="h-full relative border-0">
+                        <div className="absolute inline-block -top-[1px] -left-[1px] -right-[1px] -bottom-[1px] -z-10 rounded-lg"
+                          style={{ backgroundImage: item.borderGradient }} />
                         <CardContent className="p-6">
                           <div className="flex">
                             <div className="flex-[3]">
                               <h4 className="text-xl font-semibold">{item.name}</h4>
                               <span className="text-muted">公式パッケージ</span>
                             </div>
-                            <img className="flex-1 w-16 h-16 max-w-fit rounded-md"
-                              src={item.image} />
+                            <Image width={64} height={64}
+                              className="flex-1 w-16 h-16 max-w-fit rounded-md"
+                              alt="Package icon" src={item.image} />
                           </div>
                           <p className="text-sm mt-4">{item.description}</p>
                         </CardContent>
