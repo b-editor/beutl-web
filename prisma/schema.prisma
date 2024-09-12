@@ -22,6 +22,7 @@ model User {
   updatedAt     DateTime        @updatedAt
   SocialProfile SocialProfile[]
   Profile       Profile?
+  File          File[]
 }
 
 model Account {
@@ -107,4 +108,17 @@ model SocialProfileProvider {
   name          String
   urlTemplate   String
   SocialProfile SocialProfile[]
+}
+
+model File {
+  id        String   @id @default(cuid())
+  name      String
+  size      Int
+  mimeType  String
+  url       String
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
