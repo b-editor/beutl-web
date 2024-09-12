@@ -8,40 +8,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 import { prisma } from "@/prisma";
-
-async function signInWithProvider(formData: FormData) {
-  "use server";
-  const provider = formData.get("provider") as string;
-  const returnUrl = formData.get("returnUrl") as string | undefined;
-  if (provider !== "google") {
-    return;
-  }
-
-  await signIn(provider, { redirectTo: returnUrl || "/" });
-}
-
-async function signInWithEmail(formData: FormData) {
-  "use server";
-  const email = formData.get("email") as string;
-  const returnUrl = formData.get("returnUrl") as string | undefined;
-  if (!email) {
-    return;
-  }
-
-  const userResult = await prisma.user.findFirst({ where: { email: email } });
-
-  if (!userResult) {
-    // アカウント未作成
-    const params = new URLSearchParams();
-    params.append("email", email);
-    if (returnUrl) {
-      params.append("returnUrl", returnUrl);
-    }
-    redirect(`/account/sign-up?${params.toString()}`);
-  }
-
-  await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
-}
+import { useActionState } from "react";
 
 export default function Page({ searchParams: { returnUrl } }: { searchParams: { returnUrl?: string } }) {
   return (
@@ -57,7 +24,7 @@ export default function Page({ searchParams: { returnUrl } }: { searchParams: { 
             <CardDescription>お使いのアカウントを使用</CardDescription>
           </CardHeader>
           <CardContent>
-            <form id="signin-form" action={signInWithEmail}>
+            <form id="signin-form" action={dispatch}>
               <div className="grid w-full items-center gap-4">
                 <div className="flex flex-col space-y-1.5">
                   <Label htmlFor="email">メールアドレス</Label>
