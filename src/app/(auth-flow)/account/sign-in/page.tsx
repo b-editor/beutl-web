@@ -6,11 +6,8 @@ import { Label } from "@/components/ui/label";
 import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
-import { sql } from "@vercel/postgres"
-import type {
-  AdapterUser,
-} from "@auth/core/adapters";
 import { redirect } from "next/navigation";
+import { prisma } from "@/prisma";
 
 async function signInWithProvider(formData: FormData) {
   "use server";
@@ -31,10 +28,9 @@ async function signInWithEmail(formData: FormData) {
     return;
   }
 
-  const userResult = await sql<AdapterUser>`
-    SELECT * FROM users WHERE email = ${email} LIMIT 1
-  `;
-  if (userResult.rowCount === 0) {
+  const userResult = await prisma.user.findFirst({ where: { email: email } });
+
+  if (!userResult) {
     // アカウント未作成
     const params = new URLSearchParams();
     params.append("email", email);

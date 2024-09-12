@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@auth/core": "^0.34.2",
-    "@auth/pg-adapter": "^1.4.2",
+    "@auth/prisma-adapter": "^2.4.2",
+    "@prisma/client": "^5.19.1",
     "@radix-ui/react-dialog": "^1.1.1",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-navigation-menu": "^1.2.0",
@@ -20,7 +21,6 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toggle": "^1.1.0",
     "@radix-ui/react-toggle-group": "^1.1.0",
-    "@vercel/postgres": "^0.10.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "embla-carousel-react": "^8.2.1",
@@ -28,7 +28,6 @@
     "next": "14.2.8",
     "next-auth": "5.0.0-beta.20",
     "nodemailer": "^6.9.15",
-    "pg": "^8.12.0",
     "react": "^18",
     "react-dom": "^18",
     "tailwind-merge": "^2.5.2",
@@ -43,6 +42,7 @@
     "eslint": "^8",
     "eslint-config-next": "14.2.8",
     "postcss": "^8",
+    "prisma": "^5.19.1",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
   },

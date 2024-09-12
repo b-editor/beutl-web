@@ -1,22 +1,11 @@
 import NextAuth from "next-auth"
-import PostgresAdapter from "@auth/pg-adapter"
-import { Pool } from "pg";
+import { PrismaAdapter } from "@auth/prisma-adapter"
+import { prisma } from "@/prisma"
 import Google from "next-auth/providers/google";
 import Nodemailer from "@auth/core/providers/nodemailer";
 
-const pool = new Pool({
-  host: process.env.DATABASE_HOST,
-  user: process.env.DATABASE_USER,
-  password: process.env.DATABASE_PASSWORD,
-  database: process.env.DATABASE_NAME,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-  ssl: true
-})
-
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PostgresAdapter(pool),
+  adapter: PrismaAdapter(prisma),
   providers: [
     Google,
     Nodemailer({
@@ -39,7 +28,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     signOut: "/account/sign-out",
     // error: "/account/error",
     verifyRequest: "/account/verify-request",
-    newUser: "/account/sign-up",
   },
   theme:{
     logo: "/img/logo_dark.svg",
