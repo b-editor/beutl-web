@@ -1,4 +1,4 @@
-import { signIn } from "@/auth";
+import { auth, signIn } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,9 +8,47 @@ import Link from "next/link";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 import { prisma } from "@/prisma";
-import { useActionState } from "react";
 
-export default function Page({ searchParams: { returnUrl } }: { searchParams: { returnUrl?: string } }) {
+async function signInWithProvider(formData: FormData) {
+  "use server";
+  const provider = formData.get("provider") as string;
+  const returnUrl = formData.get("returnUrl") as string | undefined;
+  if (provider !== "google") {
+    return;
+  }
+
+  await signIn(provider, { redirectTo: returnUrl || "/" });
+}
+
+async function signInWithEmail(formData: FormData) {
+  "use server";
+  const email = formData.get("email") as string;
+  const returnUrl = formData.get("returnUrl") as string | undefined;
+  if (!email) {
+    return;
+  }
+
+  const userResult = await prisma.user.findFirst({ where: { email: email } });
+
+  if (!userResult) {
+    // アカウント未作成
+    const params = new URLSearchParams();
+    params.append("email", email);
+    if (returnUrl) {
+      params.append("returnUrl", returnUrl);
+    }
+    redirect(`/account/sign-up?${params.toString()}`);
+  }
+
+  await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
+}
+
+export default async function Page({ searchParams: { returnUrl } }: { searchParams: { returnUrl?: string } }) {
+  const session = await auth();
+  if (session) {
+    redirect(returnUrl || "/");
+  }
+
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">
@@ -24,7 +62,7 @@ export default function Page({ searchParams: { returnUrl } }: { searchParams: { 
             <CardDescription>お使いのアカウントを使用</CardDescription>
           </CardHeader>
           <CardContent>
-            <form id="signin-form" action={dispatch}>
+            <form id="signin-form" action={signInWithEmail}>
               <div className="grid w-full items-center gap-4">
                 <div className="flex flex-col space-y-1.5">
                   <Label htmlFor="email">メールアドレス</Label>

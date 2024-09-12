@@ -22,11 +22,12 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toggle": "^1.1.0",
     "@radix-ui/react-toggle-group": "^1.1.0",
+    "algoliasearch": "^5.4.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "embla-carousel-react": "^8.2.1",
-    "lucide-react": "^0.439.0",
-    "next": "14.2.8",
+    "lucide-react": "^0.441.0",
+    "next": "14.2.10",
     "next-auth": "5.0.0-beta.20",
     "nodemailer": "^6.9.15",
     "react": "^18",
@@ -38,16 +39,16 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^20",
-    "@types/pg": "^8.11.8",
+    "@types/node": "^22.5.4",
+    "@types/pg": "^8.11.9",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.8",
+    "eslint": "^9.10.0",
+    "eslint-config-next": "14.2.10",
     "postcss": "^8",
     "prisma": "^5.19.1",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "tailwindcss": "^3.4.11",
+    "typescript": "^5.6.2"
   },
   "packageManager": "pnpm@9.10.0+sha512.73a29afa36a0d092ece5271de5177ecbf8318d454ecd701343131b8ebc0c1a91c487da46ab77c8e596d6acf1461e3594ced4becedf8921b074fbd8653ed7051c"
 }

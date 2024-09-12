@@ -1,8 +1,15 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import Image from "next/image";
+import { notFound } from "next/navigation";
+import { auth } from "@/auth";
 
-export default function Page() {
+export default async function Page() {
+  const session = await auth();
+  if (session) {
+    notFound();
+  }
+
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">

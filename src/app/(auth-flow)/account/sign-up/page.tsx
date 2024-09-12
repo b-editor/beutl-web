@@ -1,10 +1,11 @@
-import { signIn } from "@/auth";
+import { auth, signIn } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import Image from "next/image";
+import { redirect } from "next/navigation";
 
 async function signInWithProvider(formData: FormData) {
   "use server";
@@ -28,7 +29,12 @@ async function signInWithEmail(formData: FormData) {
   await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
 }
 
-export default function Page({ searchParams: { returnUrl, email } }: { searchParams: { returnUrl?: string, email?: string } }) {
+export default async function Page({ searchParams: { returnUrl, email } }: { searchParams: { returnUrl?: string, email?: string } }) {
+  const session = await auth();
+  if (session) {
+    redirect(returnUrl || "/");
+  }
+
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">

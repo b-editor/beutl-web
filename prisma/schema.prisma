@@ -103,7 +103,7 @@ model SocialProfile {
 }
 
 model SocialProfileProvider {
-  id            String          @id
+  id            String          @id @default(cuid())
   provider      String
   name          String
   urlTemplate   String
