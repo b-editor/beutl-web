@@ -7,6 +7,7 @@ import { prisma } from "@/prisma";
 import { Link2 } from "lucide-react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { ChangeUserName } from "./components";
 
 export default async function Page() {
   const session = await auth();
@@ -51,6 +52,7 @@ export default async function Page() {
             <Label htmlFor="displayName">表示名</Label>
             <Input type="text" id="displayName" name="displayName" defaultValue={profile?.displayName} />
           </div>
+          <ChangeUserName profile={profile} />
           <div className="flex flex-col space-y-1.5 max-w-md">
             <Label htmlFor="bio">自己紹介</Label>
             <Textarea id="bio" name="bio" defaultValue={profile?.bio || undefined} />
