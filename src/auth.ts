@@ -2,26 +2,39 @@ import NextAuth from "next-auth"
 import { PrismaAdapter } from "@auth/prisma-adapter"
 import { prisma } from "@/prisma"
 import Google from "next-auth/providers/google";
+import GitHub from "next-auth/providers/github";
 import Nodemailer from "@auth/core/providers/nodemailer";
+import { options as nodemailerOptions } from "./nodemailer";
+import Credentials from "@auth/core/providers/credentials";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
   providers: [
     Google,
-    Nodemailer({
-      // dmarc
-      from: process.env.EMAIL_FROM,
-      server: {
-        host: process.env.EMAIL_SERVER_HOST,
-        port: process.env.EMAIL_SERVER_PORT,
-        secure: false,
-        requireTLS: true,
-        auth: {
-          user: process.env.EMAIL_SERVER_USER,
-          pass: process.env.EMAIL_SERVER_PASSWORD,
-        },
-      }
-    }),
+    GitHub,
+    Nodemailer(nodemailerOptions),
+    // サーバー内部で使う
+    //  - src/app/(manage-account)/account/manage/email/actions.ts
+    Credentials({
+      credentials: {
+        userId: {},
+        secret: {}
+      },
+      async authorize(credentials) {
+        const user = await prisma.user.findFirst({
+          where: {
+            id: credentials.userId as string,
+          },
+        });
+        if (!user) {
+          return null;
+        }
+        if (credentials.secret !== process.env.AUTH_SECRET) {
+          return null;
+        }
+        return user;
+      },
+    })
   ],
   events: {
     async createUser(message) {
@@ -34,7 +47,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           userName: userName,
         }
       });
-    },
+    }
   },
   pages: {
     signIn: "/account/sign-in",

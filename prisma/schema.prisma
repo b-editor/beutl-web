@@ -18,11 +18,12 @@ model User {
   // Optional for WebAuthn support
   Authenticator Authenticator[]
 
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  SocialProfile SocialProfile[]
-  Profile       Profile?
-  File          File[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  SocialProfile     SocialProfile[]
+  Profile           Profile?
+  File              File[]
+  ConfirmationToken ConfirmationToken[]
 }
 
 model Account {
@@ -60,6 +61,22 @@ model VerificationToken {
   identifier String
   token      String
   expires    DateTime
+
+  @@id([identifier, token])
+}
+
+enum ConfirmationTokenPurpose {
+  EMAIL_UPDATE
+  ACCOUNT_DELETE
+}
+
+model ConfirmationToken {
+  userId     String
+  identifier String
+  token      String
+  expires    DateTime
+  purpose    ConfirmationTokenPurpose
+  user       User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([identifier, token])
 }
