@@ -8,7 +8,7 @@ export default function SubmitButton({ showSpinner, ...props }: ButtonProps & { 
   const { pending } = useFormStatus();
 
   return (
-    <Button {...props} type="submit" disabled={pending}>
+    <Button {...props} type="submit" disabled={pending || props.disabled}>
       {pending && showSpinner !== false && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
       {props.children}
     </Button>

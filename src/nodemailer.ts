@@ -1,6 +1,6 @@
 import type { NodemailerUserConfig } from "@auth/core/providers/nodemailer";
 
-export const options = {
+export const options: NodemailerUserConfig = {
   // dmarc
   from: process.env.EMAIL_FROM,
   server: {

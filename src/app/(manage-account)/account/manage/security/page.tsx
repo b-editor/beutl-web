@@ -1,10 +1,12 @@
 import { prisma } from "@/prisma";
-import { Form, List } from "./components";
+import { Form, List, PasskeysList } from "./components";
 import authOrSignIn from "@/lib/auth-guard";
 import * as jose from 'jose';
 import type { SignInPageErrorParam } from "@auth/core/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { translateNextAuthError } from "@/lib/error-description";
+import type { ComponentProps } from "react";
+import { Separator } from "@/components/ui/separator";
 
 export default async function Page({
   searchParams: {
@@ -51,20 +53,50 @@ export default async function Page({
       emailOrUserName,
     });
   }));
+  const authenticators = (await Promise.all(
+    accounts.filter(i => i.provider === "passkey")
+      .map(async (account) => {
+        const authenticator = await prisma.authenticator.findFirst({
+          where: {
+            providerAccountId: account.providerAccountId
+          }
+        });
+        if (!authenticator) return null;
+        return ({
+          id: authenticator.credentialID,
+          deviceType: authenticator.credentialDeviceType,
+          backedUp: authenticator.credentialBackedUp,
+          name: authenticator.name,
+          createdAt: authenticator.createdAt,
+          usedAt: authenticator.usedAt
+        });
+      })
+  )).filter(i => i) as ComponentProps<typeof PasskeysList>["authenticators"];
 
   return (
     <div>
       <h2 className="font-bold text-2xl">セキュリティ</h2>
-      <h3 className="font-bold text-md mt-4">外部アカウント</h3>
-      <Form accounts={safeAccounts} className="mt-2" />
+
+      <div className="mt-4 rounded-lg border text-card-foreground">
+        <h3 className="font-bold text-md m-6 mb-4">サインイン方法を追加</h3>
+        <Separator />
+        <Form className="py-4 px-6" />
+      </div>
+
       {error && (
         <Alert variant="destructive" className="mt-2">
           <AlertTitle>エラー</AlertTitle>
           <AlertDescription>{translateNextAuthError(error)}</AlertDescription>
         </Alert>
       )}
-      <h3 className="font-bold text-md mt-4">リンク済み</h3>
-      <List className="mt-2" accounts={safeAccounts} />
+
+      <div className="mt-4 rounded-lg border text-card-foreground">
+        <h3 className="font-bold text-md m-6 mb-4">リンク済み</h3>
+        <Separator />
+        <List accounts={safeAccounts} />
+        {authenticators.length && <Separator />}
+        <PasskeysList authenticators={authenticators} />
+      </div>
 
     </div>
   )

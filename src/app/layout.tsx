@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Noto_Sans_JP } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { SessionProvider } from "next-auth/react";
 
 const notoSansJP = Noto_Sans_JP({
   subsets: ["latin"],
@@ -24,8 +25,10 @@ export default function RootLayout({
       <body
         className={`${notoSansJP.variable} antialiased`}
       >
-        {children}
-        <Toaster />
+        <SessionProvider>
+          {children}
+          <Toaster />
+        </SessionProvider>
       </body>
     </html>
   );

@@ -83,7 +83,7 @@ model ConfirmationToken {
 
 // Optional for WebAuthn support
 model Authenticator {
-  credentialID         String  @unique
+  credentialID         String    @unique
   userId               String
   providerAccountId    String
   credentialPublicKey  String
@@ -91,6 +91,10 @@ model Authenticator {
   credentialDeviceType String
   credentialBackedUp   Boolean
   transports           String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  usedAt               DateTime?
+  name                 String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

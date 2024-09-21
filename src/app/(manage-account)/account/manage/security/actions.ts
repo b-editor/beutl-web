@@ -3,6 +3,7 @@
 import { auth, signIn } from "@/auth";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 
 export type State = {
@@ -13,7 +14,7 @@ export type State = {
 export async function addAccount(state: State, formData: FormData): Promise<State> {
   const type = formData.get("type") as string | null;
 
-  if (!type || (type !== "google" && type !== "github")) {
+  if (!type || (type !== "google" && type !== "github" && type !== "passkey")) {
     return { message: "入力内容に誤りがあります", success: false };
   }
 
@@ -26,7 +27,7 @@ export async function addAccount(state: State, formData: FormData): Promise<Stat
       url: url.toString(),
     }),
   );
-  await signIn(type, { redirectTo: "/account/manage/security" });
+  await signIn(type, { redirectTo: `${url.origin}/account/manage/security` });
   return { success: true };
 }
 
@@ -83,6 +84,97 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       },
     },
   });
+  if (provider === "passkey") {
+    await prisma.authenticator.delete({
+      where: {
+        userId_credentialID: {
+          userId,
+          credentialID: providerAccountId,
+        }
+      }
+    });
+  }
   revalidatePath("/account/manage/security");
   return { success: true };
+}
+
+export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    throw new Error("ログインしてください");
+  }
+
+  await prisma.authenticator.update({
+    where: {
+      userId_credentialID: {
+        userId,
+        credentialID: id,
+      },
+    },
+    data: {
+      name,
+    },
+  });
+  revalidatePath("/account/manage/security");
+  redirect("/account/manage/security");
+}
+
+export async function deleteAuthenticator({ id }: { id: string }): Promise<void> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) {
+    throw new Error("ログインしてください");
+  }
+
+  const user = await prisma.user.findFirst({
+    where: {
+      id: userId,
+    },
+    select: {
+      emailVerified: true,
+      accounts: {
+        select: {
+          providerAccountId: true,
+          provider: true,
+        },
+      },
+    },
+  });
+  if (!user) {
+    throw new Error("アカウントが見つかりません");
+  }
+
+  const remain = user.accounts
+    .filter((account) => !(account.providerAccountId === id && account.provider === "passkey"));
+  if (remain.length === user.accounts.length) {
+    throw new Error("アカウントが見つかりません");
+  }
+
+  if (remain.length === 0) {
+    console.log("Deleting the last account");
+    if (!user.emailVerified) {
+      console.log("The user is not verified");
+      throw new Error("サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。");
+    }
+  }
+
+  await prisma.account.delete({
+    where: {
+      provider_providerAccountId: {
+        providerAccountId: id,
+        provider: "passkey",
+      },
+    },
+  });
+  await prisma.authenticator.delete({
+    where: {
+      userId_credentialID: {
+        userId,
+        credentialID: id,
+      }
+    }
+  });
+  revalidatePath("/account/manage/security");
+  redirect("/account/manage/security");
 }

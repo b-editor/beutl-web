@@ -4,8 +4,10 @@ import { prisma } from "@/prisma"
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import Nodemailer from "@auth/core/providers/nodemailer";
+import Passkey from "@auth/core/providers/passkey";
 import { options as nodemailerOptions } from "./nodemailer";
 import Credentials from "@auth/core/providers/credentials";
+import { headers } from "next/headers";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -34,7 +36,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         return user;
       },
-    })
+    }),
+    Passkey
   ],
   events: {
     async createUser(message) {
@@ -47,6 +50,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           userName: userName,
         }
       });
+    },
+    signIn: async (message) => {
+      if (message.account?.provider === "passkey") {
+        console.log(message.profile);
+        console.log(message.account);
+        headers().get("")
+        await prisma.authenticator.update({
+          where: {
+            credentialID: message.account.providerAccountId
+          },
+          data: {
+            usedAt: new Date(Date.now())
+          }
+        });
+      }
     }
   },
   pages: {
@@ -59,5 +77,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     logo: "/img/logo_dark.svg",
     colorScheme: "dark",
     brandColor: "#3F34F0",
+  },
+  experimental: {
+    enableWebAuthn: true,
   }
 })
