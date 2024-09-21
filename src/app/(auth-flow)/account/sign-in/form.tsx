@@ -11,14 +11,18 @@ import { signInAction } from "./actions";
 import { useFormState } from "react-dom";
 import SubmitButton from "@/components/submit-button";
 import type { SignInPageErrorParam } from "@auth/core/types";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { translateNextAuthError } from "@/lib/error-description";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { useToast } from "@/hooks/use-toast";
+import { signIn } from "next-auth/webauthn"
 
 export default function Form({ returnUrl, error }: { returnUrl?: string, error?: SignInPageErrorParam }) {
   const [state, dispatch] = useFormState(signInAction, {});
   const authError = useMemo(() => translateNextAuthError(error), [error]);
+  const [passkeyVerifying, setPasskeyVerifying] = useState(false);
+  const { toast } = useToast();
 
   return (
     <form action={dispatch}>
@@ -46,7 +50,8 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </CardContent>
             <CardFooter className="block">
-              <SubmitButton className="w-full" name="type" value="email">サインイン</SubmitButton>
+              <SubmitButton forceSpinner={passkeyVerifying} disabled={passkeyVerifying}
+                className="w-full" name="type" value="email">サインイン</SubmitButton>
               <Link href="/account/sign-up" className="text-sm font-medium inline-block mt-6">アカウント作成</Link>
             </CardFooter>
           </Card>
@@ -54,20 +59,33 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
             <CardContent className="p-6">
               <div className="flex gap-4">
                 <div className="flex-1">
-                  <SubmitButton variant="outline" className="p-2 w-full" name="type" value="google" showSpinner={false}>
+                  <SubmitButton variant="outline" className="p-2 w-full" name="type" value="google" showSpinner={false} disabled={passkeyVerifying}>
                     <GoogleLogo />
                   </SubmitButton>
                 </div>
 
                 <div className="flex-1">
-                  <SubmitButton variant="outline" className="p-2 w-full" name="type" value="github" showSpinner={false}>
+                  <SubmitButton variant="outline" className="p-2 w-full" name="type" value="github" showSpinner={false} disabled={passkeyVerifying}>
                     <GitHubLogo />
                   </SubmitButton>
                 </div>
 
                 <div className="flex-1">
-                  <input type="hidden" name="returnUrl" value={returnUrl} />
-                  <SubmitButton variant="outline" className="p-2 w-full" name="type" value="passkey" showSpinner={false}>
+                  <SubmitButton variant="outline" className="p-2 w-full" type="button" showSpinner={false}
+                    disabled={passkeyVerifying} onClick={async () => {
+                      setPasskeyVerifying(true);
+                      try {
+                        await signIn("passkey");
+                      } catch {
+                        toast({
+                          title: "エラー",
+                          description: "パスキーでサインインできませんでした",
+                          variant: "destructive",
+                        });
+                      } finally {
+                        setPasskeyVerifying(false);
+                      }
+                    }}>
                     <KeyRound className="w-5 h-5" />
                   </SubmitButton>
                 </div>

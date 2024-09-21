@@ -94,7 +94,7 @@ export default async function Page({
         <h3 className="font-bold text-md m-6 mb-4">リンク済み</h3>
         <Separator />
         <List accounts={safeAccounts} />
-        {authenticators.length && <Separator />}
+        {authenticators.length !== 0 && <Separator />}
         <PasskeysList authenticators={authenticators} />
       </div>
 

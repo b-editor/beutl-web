@@ -53,9 +53,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     signIn: async (message) => {
       if (message.account?.provider === "passkey") {
-        console.log(message.profile);
-        console.log(message.account);
-        headers().get("")
         await prisma.authenticator.update({
           where: {
             credentialID: message.account.providerAccountId
