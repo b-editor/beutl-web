@@ -28,7 +28,7 @@ const extensions = [
 export default function Page() {
   return (
     <>
-      <div className="border-b" style={{ background: "color-mix(in hsl, hsl(var(--secondary)), hsl(var(--background)) 90%)" }}>
+      <div className="border-b bg-card">
         <div className="container max-w-7xl mx-auto py-6 flex flex-col">
           <h2 className="text-3xl font-semibold mx-4">拡張機能を探す</h2>
           <Input className="my-4 mx-4 max-md:w-auto md:max-w-md" />
@@ -55,7 +55,7 @@ export default function Page() {
                   <div className="overflow-x-clip relative h-6">
                     <div className="flex gap-2 absolute">
                       <Badge variant="secondary" className="text-nowrap">無料</Badge>
-                      <Separator orientation="vertical" />
+                      <Separator orientation="vertical" className="h-auto my-1" />
                       <Badge variant="outline" className="border-input text-nowrap">ツール</Badge>
                       <Badge variant="outline" className="border-input text-nowrap">ツール</Badge>
                     </div>
