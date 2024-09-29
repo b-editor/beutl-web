@@ -1,5 +1,3 @@
-"use server";
-
 import { cookies } from 'next/headers';
 import * as Api from './generated';
 import { parseSetCookie } from 'next/dist/compiled/@edge-runtime/cookies';

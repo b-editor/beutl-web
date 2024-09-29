@@ -8,7 +8,7 @@ generator client {
 }
 
 model User {
-  id            String          @id @default(cuid())
+  id            String          @id @default(uuid())
   name          String?
   email         String          @unique
   emailVerified DateTime?
@@ -24,6 +24,9 @@ model User {
   Profile           Profile?
   File              File[]
   ConfirmationToken ConfirmationToken[]
+  Package           Package[]
+  UserPackage       UserPackage[]
+  NativeAppAuth     NativeAppAuth[]
 }
 
 model Account {
@@ -106,8 +109,10 @@ model Profile {
   userName    String
   displayName String
   bio         String?
+  iconFileId  String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  iconFile File? @relation(fields: [iconFileId], references: [id], onDelete: SetNull)
 
   @@id([userId])
 }
@@ -124,7 +129,7 @@ model SocialProfile {
 }
 
 model SocialProfileProvider {
-  id            String          @id @default(cuid())
+  id            String          @id @default(uuid())
   provider      String
   name          String
   urlTemplate   String
@@ -132,14 +137,121 @@ model SocialProfileProvider {
 }
 
 model File {
-  id        String   @id @default(cuid())
-  name      String
-  size      Int
-  mimeType  String
-  url       String
-  userId    String
+  id         String         @id @default(uuid())
+  name       String
+  size       BigInt
+  mimeType   String
+  objectKey  String
+  userId     String
+  visibility FileVisibility
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Package           Package[]
+  PackageScreenshot PackageScreenshot[]
+  Release           Release[]
+  Profile           Profile[]
+  CompatFile        CompatFile?
+}
+
+enum FileVisibility {
+  PUBLIC
+  PRIVATE
+  DEDICATED
+}
+
+model Package {
+  id               String   @id @default(uuid())
+  name             String   @unique
+  displayName      String?
+  description      String
+  shortDescription String
+  published        Boolean
+  webSite          String
+  tags             String[]
+  iconFileId       String?
+  userId           String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  iconFile          File?               @relation(fields: [iconFileId], references: [id], onDelete: SetNull)
+  UserPackage       UserPackage[]
+  PackageScreenshot PackageScreenshot[]
+  Release           Release[]
+  CompatPackage     CompatPackage?
+}
+
+model PackageScreenshot {
+  packageId String
+  fileId    String
+  order     Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  file    File    @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, fileId])
+}
+
+model UserPackage {
+  userId    String
+  packageId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@id([userId, packageId])
+}
+
+model Release {
+  id            String   @id @default(uuid())
+  packageId     String
+  version       String
+  targetVersion String
+  title         String
+  description   String
+  fileId        String
+  published     Boolean
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  file          File           @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  CompatRelease CompatRelease?
+}
+
+model CompatPackage {
+  id        BigInt @id @default(autoincrement())
+  packageId String @unique
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+}
+
+model CompatRelease {
+  id        BigInt @id @default(autoincrement())
+  releaseId String @unique
+
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+}
+
+model CompatFile {
+  id     BigInt @id @default(autoincrement())
+  fileId String @unique
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}
+
+model NativeAppAuth {
+  id          String    @id @default(uuid())
+  continueUrl String
+  sessionId   String    @default(uuid())
+  userId      String?
+  code        String?
+  codeExpires DateTime?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
