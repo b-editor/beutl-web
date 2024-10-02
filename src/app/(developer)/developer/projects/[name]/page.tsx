@@ -10,16 +10,15 @@ import { Edit, EyeOff, MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { PackageInfoForm } from "./component";
-
-const extension = {
-  name: "FFmpeg配置ツール",
-  description: "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
-  image: "https://beutl.beditor.net/api/v1/assets/b-editor/ffmpeg-locator.png/download",
-  borderGradient: "linear-gradient(135deg, #5C9A55 0%, #5E84E7 50%, #7B59F6 100%)"
-};
+import { prisma } from "@/prisma";
+import { notFound } from "next/navigation";
+import { retrievePackage } from "./actions";
 
 export default async function Page({ params: { name } }: { params: { name: string } }) {
-  const pkg = await api.packages.getPackage(name);
+  const pkg = await retrievePackage(name);
+  if (!pkg) {
+    notFound();
+  }
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">

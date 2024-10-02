@@ -1,6 +1,8 @@
 import { cookies } from 'next/headers';
 import * as Api from './generated';
 import { parseSetCookie } from 'next/dist/compiled/@edge-runtime/cookies';
+import { auth } from '@/auth';
+import { ProduceJWT } from 'jose';
 
 const _baseUrl = process.env.API_URL;
 export const baseUrl = _baseUrl;
@@ -10,31 +12,26 @@ export class http {
   token: string | null = null;
 
   async fetch(url: RequestInfo, init?: RequestInit): Promise<Response> {
+    const session = await auth();
+    if (session?.user?.id) {
+      // ProduceJWT
+    }
+
     let _init = init;
     if (_init == null) {
       _init = {};
     }
 
-    const cookiesStore = cookies();
-    const cookieString = cookiesStore.toString();
     _init = {
       ..._init,
       cache: 'no-store',
       headers: {
         ..._init.headers,
-        Cookie: cookieString,
+        "Authorization": `Bearer ${this.token}`
       }
     };
 
-    const response = await fetch(url, _init);
-    for (const setCookie of response.headers.getSetCookie()) {
-      const parsedCookie = parseSetCookie(setCookie);
-      if (parsedCookie) {
-        cookiesStore.set(parsedCookie.name, parsedCookie.value, parsedCookie);
-      }
-    }
-
-    return response;
+    return await fetch(url, _init);
   }
 }
 
