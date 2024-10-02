@@ -1,6 +1,6 @@
 import { Progress } from "@/components/ui/progress";
 import authOrSignIn from "@/lib/auth-guard";
-import { cn } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { prisma } from "@/prisma";
 import { File, Image } from "lucide-react";
 import { retrieveFiles } from "./actions";
@@ -11,7 +11,7 @@ export default async function Page() {
   const files = await retrieveFiles();
   let totalSize = 0;
   for (const file of files) {
-    totalSize += Number(file.size) / (1024 * 1024);
+    totalSize += Number(file.size);
   }
 
   return (
@@ -23,8 +23,8 @@ export default async function Page() {
           <div className="flex gap-2 flex-col">
             {/* <Button>新しい拡張機能を作成</Button>
             <Button variant="outline">ドキュメント</Button> */}
-            <p>1.00GB 中 {totalSize.toFixed(2)}MB使用</p>
-            <Progress value={totalSize} max={1024} />
+            <p>1.00GB 中 {formatBytes(totalSize)}使用</p>
+            <Progress value={(totalSize / (1024 * 1024 * 1024)) * 100} max={100} />
           </div>
         </div>
       </div>

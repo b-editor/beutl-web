@@ -1,7 +1,6 @@
 "use client";
 
-import type { retrieveFiles } from "./actions";
-import * as React from "react"
+import { deleteFile, getTemporaryUrl, uploadFile, type retrieveFiles } from "./actions";
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -14,7 +13,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { ArrowUpDown, ChevronDown, File as FileIcon, Image as ImageIcon, MoreHorizontal, Upload } from "lucide-react"
+import { ArrowUpDown, ChevronDown, Delete, File as FileIcon, Image as ImageIcon, Loader2, MoreHorizontal, Trash, Upload } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -36,8 +35,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { cn } from "@/lib/utils";
-import { FileVisibility } from "@prisma/client";
+import { cn, formatBytes } from "@/lib/utils";
+import type { FileVisibility } from "@prisma/client";
+import { useCallback, useMemo, useState, useTransition } from "react";
+import { useToast } from "@/hooks/use-toast";
 
 type Files = Awaited<ReturnType<typeof retrieveFiles>>;
 type File = Files[number];
@@ -57,6 +58,7 @@ const columns: ColumnDef<File>[] = [
     ),
     cell: ({ row }) => (
       <Checkbox
+        className="block"
         checked={row.getIsSelected()}
         onCheckedChange={(value) => row.toggleSelected(!!value)}
         aria-label="Select row"
@@ -80,9 +82,30 @@ const columns: ColumnDef<File>[] = [
     },
     cell: ({ row }) => {
       const mimeType = row.original.mimeType;
+      const { toast } = useToast();
+      const [pending, startTransition] = useTransition();
+      const handleClick = useCallback(() => {
+        startTransition(async () => {
+          const res = await getTemporaryUrl(row.original.id);
+          if (!res.success) {
+            toast({
+              title: "エラー",
+              content: res.message,
+              variant: "destructive",
+            });
+            return;
+          }
+
+          window.open(res.url, "_blank");
+        });
+      }, [row.original.id, toast]);
+
       return (
         <div className="flex gap-2 items-center">
-          {mimeType?.startsWith("image/") ? <ImageIcon /> : <FileIcon />}
+          <Button variant="ghost" size="icon" onClick={handleClick}>
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" />
+              : mimeType.startsWith("image/") ? <ImageIcon className="h-4 w-4" /> : <FileIcon className="h-4 w-4" />}
+          </Button>
           {row.getValue("name")}
         </div>
       );
@@ -94,7 +117,7 @@ const columns: ColumnDef<File>[] = [
     cell: ({ row }) => {
       const size = Number.parseFloat(row.getValue("size"))
 
-      return <div className="text-right font-medium">{(size / (1024 * 1024)).toFixed(2)}KB</div>
+      return <div className="text-right font-medium">{formatBytes(size)}</div>
     },
   },
   {
@@ -144,13 +167,14 @@ const columns: ColumnDef<File>[] = [
 ]
 
 export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>> }) {
-  const [sorting, setSorting] = React.useState<SortingState>([])
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
-    []
-  )
-  const [columnVisibility, setColumnVisibility] =
-    React.useState<VisibilityState>({})
-  const [rowSelection, setRowSelection] = React.useState({})
+  const [sorting, setSorting] = useState<SortingState>([])
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [rowSelection, setRowSelection] = useState({})
+  const [uploading, startUpload] = useTransition()
+  const [deleting, startDelete] = useTransition()
+  const pending = useMemo(() => uploading || deleting, [uploading, deleting]);
+  const { toast } = useToast();
 
   const table = useReactTable({
     data,
@@ -170,6 +194,52 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
       rowSelection,
     },
   })
+  const showOpenFileDialog = useCallback(() => new Promise<FileList | null>(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.onchange = () => { resolve(input.files); };
+    input.click();
+  }), []);
+
+  const handleUploadClick = useCallback(async () => {
+    const files = await showOpenFileDialog();
+
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    startUpload(async () => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await uploadFile(formData);
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          content: res.message,
+          variant: "destructive",
+        });
+      }
+    });
+  }, [showOpenFileDialog, toast]);
+
+  const handleDeleteClick = useCallback(() => {
+    const selectedRows = table.getFilteredSelectedRowModel().rows;
+    if (!selectedRows.length) {
+      return;
+    }
+    startDelete(async () => {
+      const res = await deleteFile(selectedRows.map(row => row.original.id));
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          content: res.message,
+          variant: "destructive",
+        });
+      }else{
+        setRowSelection({});
+      }
+    });
+  }, [table, toast]);
 
   return (
     <div className="w-full px-4">
@@ -182,9 +252,22 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
           }
           className="max-w-sm"
         />
-        <Button variant="outline" size="icon" className="ml-auto">
-          <Upload className="w-4 h-4" />
-        </Button>
+        <div className="ml-auto flex gap-4">
+
+          <Button
+            variant="destructive"
+            size="icon"
+            className={cn(Object.keys(rowSelection).length ? "opacity-100" : "!opacity-0", "transition-opacity")}
+            onClick={handleDeleteClick}
+            disabled={pending}
+          >
+            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash className="w-4 h-4" />}
+          </Button>
+
+          <Button variant="outline" size="icon" onClick={handleUploadClick} disabled={pending}>
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          </Button>
+        </div>
       </div>
       <div className="rounded-md border">
         <Table>
@@ -194,7 +277,7 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
                 {headerGroup.headers.map((header) => {
                   return (
                     <TableHead key={header.id}
-                      className={cn(header.id === "select" && "w-12", header.id === "actions" && "w-16", header.id ==="visibility"&&"w-24")}>
+                      className={cn(header.id === "select" && "w-12", header.id === "actions" && "w-16", header.id === "visibility" && "w-24")}>
                       {header.isPlaceholder
                         ? null
                         : flexRender(
