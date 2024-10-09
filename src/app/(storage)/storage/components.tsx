@@ -1,6 +1,6 @@
 "use client";
 
-import { deleteFile, getTemporaryUrl, uploadFile, type retrieveFiles } from "./actions";
+import { changeFileVisibility, deleteFile, getTemporaryUrl, uploadFile, type retrieveFiles } from "./actions";
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -13,13 +13,12 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { ArrowUpDown, ChevronDown, Delete, File as FileIcon, Image as ImageIcon, Loader2, MoreHorizontal, Trash, Upload } from "lucide-react"
+import { ArrowUpDown, File as FileIcon, Image as ImageIcon, Loader2, MoreHorizontal, Trash, Upload } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -39,6 +38,7 @@ import { cn, formatBytes } from "@/lib/utils";
 import type { FileVisibility } from "@prisma/client";
 import { useCallback, useMemo, useState, useTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { showOpenFileDialog } from "@/lib/fileDialog";
 
 type Files = Awaited<ReturnType<typeof retrieveFiles>>;
 type File = Files[number];
@@ -90,7 +90,7 @@ const columns: ColumnDef<File>[] = [
           if (!res.success) {
             toast({
               title: "エラー",
-              content: res.message,
+              description: res.message,
               variant: "destructive",
             });
             return;
@@ -139,26 +139,54 @@ const columns: ColumnDef<File>[] = [
     id: "actions",
     enableHiding: false,
     cell: ({ row }) => {
-      const payment = row.original
+      const file = row.original;
+      const [pending, startTransition] = useTransition();
+      const { toast } = useToast();
+
+      function handleDeleteClick() {
+        startTransition(async () => {
+          const res = await deleteFile([file.id])
+          if (!res.success) {
+            toast({
+              title: "エラー",
+              description: res.message,
+              variant: "destructive",
+            });
+          }
+        });
+      }
+
+      function handleChangeVisibilityClick(visibility: "PRIVATE" | "PUBLIC") {
+        return () => {
+          startTransition(async () => {
+            const res = await changeFileVisibility([file.id], visibility);
+            if (!res.success) {
+              toast({
+                title: "エラー",
+                description: res.message,
+                variant: "destructive",
+              });
+            }
+          });
+        }
+      }
 
       return (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 p-0">
+            <Button variant="ghost" className="h-8 w-8 p-0" disabled={pending}>
               <span className="sr-only">Open menu</span>
-              <MoreHorizontal className="h-4 w-4" />
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem
-              onClick={() => navigator.clipboard.writeText(payment.id)}
-            >
-              Copy payment ID
+            <DropdownMenuItem onClick={handleDeleteClick}>
+              削除
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>View customer</DropdownMenuItem>
-            <DropdownMenuItem>View payment details</DropdownMenuItem>
+            {file.visibility === "PUBLIC" && <DropdownMenuItem onClick={handleChangeVisibilityClick("PRIVATE")}>非公開にする</DropdownMenuItem>}
+            {file.visibility === "PRIVATE" && <DropdownMenuItem onClick={handleChangeVisibilityClick("PUBLIC")}>公開する</DropdownMenuItem>}
           </DropdownMenuContent>
         </DropdownMenu>
       )
@@ -194,13 +222,6 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
       rowSelection,
     },
   })
-  const showOpenFileDialog = useCallback(() => new Promise<FileList | null>(resolve => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.onchange = () => { resolve(input.files); };
-    input.click();
-  }), []);
-
   const handleUploadClick = useCallback(async () => {
     const files = await showOpenFileDialog();
 
@@ -215,12 +236,12 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
       if (!res.success) {
         toast({
           title: "エラー",
-          content: res.message,
+          description: res.message,
           variant: "destructive",
         });
       }
     });
-  }, [showOpenFileDialog, toast]);
+  }, [toast]);
 
   const handleDeleteClick = useCallback(() => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
@@ -232,10 +253,10 @@ export function List({ data }: { data: Awaited<ReturnType<typeof retrieveFiles>>
       if (!res.success) {
         toast({
           title: "エラー",
-          content: res.message,
+          description: res.message,
           variant: "destructive",
         });
-      }else{
+      } else {
         setRowSelection({});
       }
     });

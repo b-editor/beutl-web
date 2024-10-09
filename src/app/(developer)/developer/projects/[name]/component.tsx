@@ -1,15 +1,17 @@
 "use client";
 
-import { Edit, Loader2, MoreVertical, Save } from "lucide-react";
+import { ArrowLeft, ArrowRight, Edit, Loader2, MoreVertical, Plus, Save, Trash } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { useCallback, useState } from "react";
+import { useCallback, useOptimistic, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { type State, updateDisplayNameAndShortDescription, type retrievePackage } from "./actions";
+import { type State, type retrievePackage, updateDisplayNameAndShortDescription, addScreenshot, moveScreenshot } from "./actions";
 import { ErrorDisplay } from "@/components/error-display";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import { showOpenFileDialog } from "@/lib/fileDialog";
+import { useToast } from "@/hooks/use-toast";
 
 export type Package = NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
 
@@ -41,7 +43,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
     setShortDescription(pkg.shortDescription);
     setState({});
     setEdit(false);
-  } , [pkg.displayName, pkg.shortDescription]);
+  }, [pkg.displayName, pkg.shortDescription]);
 
   return (
     <>
@@ -56,8 +58,8 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
             <div className="flex-1">
               <h2 className={cn("font-bold text-2xl", edit && "hidden")}>{pkg.displayName || pkg.name}</h2>
               <Input className={cn(!edit && "hidden")}
-                defaultValue={pkg.displayName || ""}
                 value={displayName}
+                type="text"
                 placeholder="表示名 (空白の場合IDが表示されます)"
                 onChange={(e) => setDisplayName(e.target.value)}
               />
@@ -89,7 +91,6 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
       <p className={cn("mt-4 text-foreground/70", edit && "hidden")}>{pkg.shortDescription}</p>
       <Input
         className={cn("mt-4", !edit && "hidden")}
-        defaultValue={pkg.shortDescription}
         value={shortDescription}
         onChange={e => setShortDescription(e.target.value)}
       />
@@ -121,20 +122,103 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
 }
 
 export function ScreenshotForm({ pkg }: { pkg: Package }) {
+  const [screenshots, moveOptimisticScreenshot] = useOptimistic<Package["PackageScreenshot"], { delta: number, item: Package["PackageScreenshot"][number] }
+  >(pkg.PackageScreenshot, (state, req) => {
+    const index = state.indexOf(req.item);
+    if (index === 0 && req.delta < 0)
+      return state;
+    if (index === state.length - 1 && req.delta > 0)
+      return state;
+    if (index === -1)
+      return state;
+
+    const newState = state.slice();
+    newState.splice(index, 1);
+    newState.splice(index + req.delta, 0, req.item);
+    return newState;
+  })
+
+  const [adding, startAdd] = useTransition()
+  const { toast } = useToast();
+  const handleAddClick = useCallback(async () => {
+    const files = await showOpenFileDialog({ accept: "image/*" });
+
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    startAdd(async () => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("id", pkg.id);
+      const res = await addScreenshot(formData);
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          description: res.message,
+          variant: "destructive",
+        });
+      }
+    });
+  }, [toast, pkg.id]);
+  const handleMove = useCallback(async (delta: number, item: Package["PackageScreenshot"][number]) => {
+    moveOptimisticScreenshot({ delta, item })
+    const res = await moveScreenshot({ delta, packageId: pkg.id, fileId: item.file.id });
+    if (!res.success) {
+      toast({
+        title: "エラー",
+        description: res.message,
+        variant: "destructive",
+      });
+    }
+  }, [pkg.id, moveOptimisticScreenshot, toast]);
+
   return (
     <>
       <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
-      {/* <Carousel className="mt-4">
+      <Carousel className="mt-4">
         <CarouselContent>
-          {Object.entries(pkg.PackageScreenshot).map((item) => (
-            <CarouselItem className="w-min max-w-min min-w-min" key={item[0]}>
-              <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item[1]} />
+          {screenshots.map((item) => (
+            <CarouselItem className="w-min max-w-min min-w-min group relative" key={item.file.id}>
+              <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />
+              <div className="absolute top-2 right-2">
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="icon" variant="ghost" className="invisible group-hover:visible max-lg:visible">
+                      <MoreVertical className="w-4 h-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    <DropdownMenuItem onClick={() => handleMove(-1, item)}>
+                      <ArrowLeft className="w-4 h-4 mr-2" />
+                      左に移動
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleMove(1, item)}>
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      右に移動
+                    </DropdownMenuItem>
+                    <DropdownMenuItem>
+                      <Trash className="w-4 h-4 mr-2" />
+                      削除
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </CarouselItem>
           ))}
+          <CarouselItem className="w-min max-w-min min-w-min">
+            <Button variant="secondary" className="rounded w-80 h-80" onClick={handleAddClick}>
+              <div className="flex gap-2 items-center justify-center h-full">
+                {adding ? <Loader2 className="w-8 h-8" /> : <Plus className="w-8 h-8" />}
+                追加
+              </div>
+            </Button>
+          </CarouselItem>
         </CarouselContent>
         <CarouselPrevious className="max-lg:hidden left-0 -translate-x-1/2 w-8 h-8" />
         <CarouselNext className="max-lg:hidden right-0 translate-x-1/2 w-8 h-8" />
-      </Carousel> */}
+      </Carousel>
     </>
   )
 }

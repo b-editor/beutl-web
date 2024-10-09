@@ -6,15 +6,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-
-const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT as string,
-  region: process.env.S3_REGION as string,
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
-    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
-  },
-});
+import { s3 } from "@/lib/storage";
 
 export type DeleteFileResponse = {
   success: boolean;
@@ -55,6 +47,62 @@ export async function deleteFile(ids: string[]) {
       }
     });
     await s3.send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET as string, Key: file.objectKey }));
+  });
+  await Promise.all(promises);
+
+  revalidatePath("/storage");
+  return {
+    success: true
+  }
+}
+
+export type ChangeFileVisibilityResponse = {
+  success: boolean;
+  message?: string;
+}
+export async function changeFileVisibility(ids: string[], visibility: "PRIVATE" | "PUBLIC") {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
+    return {
+      success: false,
+      message: "不正な値です"
+    }
+  }
+
+  const files = await prisma.file.findMany({
+    where: {
+      id: {
+        in: ids
+      },
+      userId: session.user.id
+    },
+    select: {
+      objectKey: true,
+      id: true
+    }
+  });
+  if (!files.length) {
+    return {
+      success: false,
+      message: "ファイルが見つかりません"
+    }
+  }
+
+  const promises = files.map(async file => {
+    await prisma.file.update({
+      where: {
+        id: file.id
+      },
+      data: {
+        visibility: visibility
+      }
+    });
   });
   await Promise.all(promises);
 
@@ -179,6 +227,9 @@ export async function uploadFile(formData: FormData): Promise<UploadFileResponse
 
 export async function retrieveFiles() {
   const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("ログインしてください");
+  }
   return await prisma.file.findMany({
     where: {
       userId: session?.user?.id

@@ -1,19 +1,10 @@
-import Logo from '@/public/img/logo.svg';
-import { Minus, Plus, Menu } from "lucide-react"
-
+import { Menu } from "lucide-react"
+import Image from "next/image";
 import { Button } from "@/components/ui/button"
-import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerDescription,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerOverlay,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer"
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
+import { NavigationMenu, NavigationMenuLink, NavigationMenuList, navigationMenuTriggerStyle } from './ui/navigation-menu';
+import Link from 'next/link';
+import { cn } from '@/lib/utils';
 
 export function StandardDrawer() {
   return (
@@ -24,67 +15,67 @@ export function StandardDrawer() {
         </Button>
       </SheetTrigger>
       <SheetContent side="left">
-        <div>
-          <SheetHeader>
-            <SheetTitle>
-              <img className='align-bottom ml-2' src="/img/logo_dark.svg" alt="Logo" />
-              Beutl
-            </SheetTitle>
-            <SheetDescription>Set your daily activity goal.</SheetDescription>
-          </SheetHeader>
-          {/* <div className="p-4 pb-0">
-            <div className="flex items-center justify-center space-x-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8 shrink-0 rounded-full"
-                onClick={() => onClick(-10)}
-                disabled={goal <= 200}
-              >
-                <Minus className="h-4 w-4" />
-                <span className="sr-only">Decrease</span>
-              </Button>
-              <div className="flex-1 text-center">
-                <div className="text-7xl font-bold tracking-tighter">
-                  {goal}
-                </div>
-                <div className="text-[0.70rem] uppercase text-muted-foreground">
-                  Calories/day
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8 shrink-0 rounded-full"
-                onClick={() => onClick(10)}
-                disabled={goal >= 400}
-              >
-                <Plus className="h-4 w-4" />
-                <span className="sr-only">Increase</span>
-              </Button>
-            </div>
-            <div className="mt-3 h-[120px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data}>
-                  <Bar
-                    dataKey="goal"
-                    style={
-                      {
-                        fill: "hsl(var(--foreground))",
-                        opacity: 0.9,
-                      } as React.CSSProperties
-                    }
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div> */}
-          <SheetFooter>
-            <Button>Submit</Button>
-            <SheetClose asChild>
-              <Button variant="outline">Cancel</Button>
-            </SheetClose>
-          </SheetFooter>
+        <div className='h-full flex flex-col justify-between'>
+          <div>
+            <SheetHeader>
+              <SheetTitle className='flex gap-2'>
+                <img className='align-bottom ml-2' src="/img/logo_dark.svg" alt="Logo" />
+                <p className='font-semibold text-xl mt-1'>Beutl</p>
+              </SheetTitle>
+            </SheetHeader>
+
+            <NavigationMenu className='flex-col items-stretch max-w-full pt-4'>
+              <NavigationMenuList className='flex-col items-stretch space-x-0'>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="/docs">
+                    ドキュメント
+                  </Link>
+                </NavigationMenuLink>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="/store">
+                    ストア
+                  </Link>
+                </NavigationMenuLink>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="/docs/privacy">
+                    プライバシーポリシー
+                  </Link>
+                </NavigationMenuLink>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="/docs/telemetry">
+                    テレメトリーポリシー
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuList>
+            </NavigationMenu>
+          </div>
+
+          <div>
+
+            <h3>ソーシャル</h3>
+            <NavigationMenu className='flex-col items-stretch max-w-full'>
+              <NavigationMenuList className='flex-col items-stretch space-x-0'>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="https://github.com/b-editor">
+                    <Image width={24} height={24} alt="GitHub" className="w-5 h-5 invert mr-2" src="/img/github-color.svg" />
+                    GitHub
+                  </Link>
+                </NavigationMenuLink>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="https://x.com/yuto_daisensei">
+                    <Image width={24} height={24} alt="GitHub" className="w-5 h-5 invert mr-2" src="/img/x.svg" />
+                    X
+                  </Link>
+                </NavigationMenuLink>
+                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
+                  <Link href="https://discord.gg/Bm3pnVc928">
+                    <Image width={24} height={24} alt="GitHub" className="w-5 h-5 invert mr-2" src="/img/discord.svg" />
+                    Discord
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuList>
+            </NavigationMenu>
+          </div>
         </div>
       </SheetContent>
     </Sheet>

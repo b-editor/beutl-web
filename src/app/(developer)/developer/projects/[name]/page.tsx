@@ -9,7 +9,7 @@ import api from "@/lib/api";
 import { Edit, EyeOff, MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { PackageInfoForm } from "./component";
+import { PackageInfoForm, ScreenshotForm } from "./component";
 import { prisma } from "@/prisma";
 import { notFound } from "next/navigation";
 import { retrievePackage } from "./actions";
@@ -24,22 +24,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
       <PackageInfoForm pkg={pkg} />
 
-      {/* {pkg.screenshots && Object.entries(pkg.screenshots).length > 0 && (
-        <>
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
-          <Carousel className="mt-4">
-            <CarouselContent>
-              {Object.entries(pkg.screenshots).map((item) => (
-                <CarouselItem className="w-min max-w-min min-w-min" key={item[0]}>
-                  <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item[1]} />
-                </CarouselItem>
-              ))}
-            </CarouselContent>
-            <CarouselPrevious className="max-lg:hidden left-0 -translate-x-1/2 w-8 h-8" />
-            <CarouselNext className="max-lg:hidden right-0 translate-x-1/2 w-8 h-8" />
-          </Carousel>
-        </>
-      )} */}
+      <ScreenshotForm pkg={pkg} />
 
       <div className="flex max-lg:flex-col mt-6">
         {/* <div className="lg:basis-2/3 lg:pr-6">
