@@ -1,17 +1,18 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, Edit, Loader2, MoreVertical, Plus, Save, Trash } from "lucide-react";
+import { ArrowLeft, ArrowRight, Edit, Loader2, MoreVertical, Plus, Save, Trash, Upload } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useCallback, useOptimistic, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { type State, type retrievePackage, updateDisplayNameAndShortDescription, addScreenshot, moveScreenshot } from "./actions";
+import { type State, type retrievePackage, updateDisplayNameAndShortDescription, addScreenshot, moveScreenshot, deleteScreenshot, deletePackage, changePackageVisibility, uploadIcon } from "./actions";
 import { ErrorDisplay } from "@/components/error-display";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
+import { uploadFile } from "@/app/(storage)/storage/actions";
 
 export type Package = NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
 
@@ -21,6 +22,9 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
   const [displayName, setDisplayName] = useState(pkg.displayName || "");
   const [shortDescription, setShortDescription] = useState(pkg.shortDescription);
   const [state, setState] = useState<State>({});
+  const [pendingActions, startDropdownActions] = useTransition();
+  const [pendingIcon, startUploadIcon] = useTransition();
+  const { toast } = useToast();
 
   const submit = useCallback(async () => {
     try {
@@ -45,15 +49,70 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
     setEdit(false);
   }, [pkg.displayName, pkg.shortDescription]);
 
+  const handleDelete = useCallback(async () => {
+    startDropdownActions(async () => {
+      const res = await deletePackage(pkg.id);
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          description: res.message,
+          variant: "destructive",
+        });
+      }
+    });
+  }, [pkg.id, toast]);
+  const handleChangeVisibility = useCallback(async () => {
+    startDropdownActions(async () => {
+      const res = await changePackageVisibility(pkg.id, !pkg.published);
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          description: res.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "成功",
+          description: "変更しました",
+        });
+      }
+    });
+  }, [pkg.id, pkg.published, toast]);
+  const handleUploadIconClick = useCallback(async () => {
+    const files = await showOpenFileDialog({ accept: "image/*" });
+
+    const file = files?.[0];
+    if (!file) {
+      return;
+    }
+    startUploadIcon(async () => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("id", pkg.id);
+      const res = await uploadIcon(formData);
+      if (!res.success) {
+        toast({
+          title: "エラー",
+          description: res.message,
+          variant: "destructive",
+        });
+      }
+    });
+  }, [toast, pkg.id]);
+
   return (
     <>
       <div className="sm:flex sm:gap-2">
         <div className="w-full flex justify-between gap-4">
           <div className="flex gap-4 w-full">
-            {pkg.iconFile && <Image width={64} height={64}
-              className="w-16 h-16 max-w-fit rounded-md"
-              alt="Package icon" src={""} />}
-            {!pkg.iconFile && <div className="w-16 h-16 rounded-md bg-secondary" />}
+            <Button className="group p-0 w-16 h-16 bg-secondary hover:bg-secondary/90 relative" variant="ghost" onClick={handleUploadIconClick}>
+              {pkg.iconFileUrl && <Image width={64} height={64}
+                className="w-16 h-16 max-w-fit rounded-md group-hover:opacity-80"
+                alt="Package icon" src={pkg.iconFileUrl} />}
+              {pendingIcon
+                ? <Loader2 className="w-6 h-6 animate-spin absolute" />
+                : <Upload className="w-6 h-6 group-hover:visible invisible absolute" />}
+            </Button>
 
             <div className="flex-1">
               <h2 className={cn("font-bold text-2xl", edit && "hidden")}>{pkg.displayName || pkg.name}</h2>
@@ -75,14 +134,15 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon">
-                    <MoreVertical className="w-4 h-4" />
+                  <Button variant="ghost" size="icon" disabled={pendingActions}>
+                    {pendingActions ? <Loader2 className="w-4 h-4 animate-spin" /> : <MoreVertical className="w-4 h-4" />}
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
                   <DropdownMenuLabel>操作</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem>削除</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDelete}>削除</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleChangeVisibility}>{pkg.published ? "非公開にする" : "公開する"}</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>}
@@ -134,7 +194,10 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
 
     const newState = state.slice();
     newState.splice(index, 1);
-    newState.splice(index + req.delta, 0, req.item);
+    // req.deltaが0の場合は削除
+    if (req.delta !== 0) {
+      newState.splice(index + req.delta, 0, req.item);
+    }
     return newState;
   })
 
@@ -172,6 +235,17 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
       });
     }
   }, [pkg.id, moveOptimisticScreenshot, toast]);
+  const handleDelete = useCallback(async (item: Package["PackageScreenshot"][number]) => {
+    moveOptimisticScreenshot({ delta: 0, item })
+    const res = await deleteScreenshot({ packageId: pkg.id, fileId: item.file.id });
+    if (!res.success) {
+      toast({
+        title: "エラー",
+        description: res.message,
+        variant: "destructive",
+      });
+    }
+  }, [pkg.id, moveOptimisticScreenshot, toast]);
 
   return (
     <>
@@ -180,7 +254,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
         <CarouselContent>
           {screenshots.map((item) => (
             <CarouselItem className="w-min max-w-min min-w-min group relative" key={item.file.id}>
-              <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />
+              <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} priority />
               <div className="absolute top-2 right-2">
 
                 <DropdownMenu>
@@ -198,7 +272,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
                       <ArrowRight className="w-4 h-4 mr-2" />
                       右に移動
                     </DropdownMenuItem>
-                    <DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDelete(item)}>
                       <Trash className="w-4 h-4 mr-2" />
                       削除
                     </DropdownMenuItem>

@@ -174,13 +174,12 @@ const columns: ColumnDef<File>[] = [
       return (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 p-0" disabled={pending}>
+            <Button variant="ghost" className="h-8 w-8 p-0" disabled={pending || file.visibility === "DEDICATED"}>
               <span className="sr-only">Open menu</span>
               {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
             <DropdownMenuItem onClick={handleDeleteClick}>
               削除
             </DropdownMenuItem>

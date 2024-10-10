@@ -11,9 +11,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
-import { handleGet } from "./actions";
+import { handleGet, type retrievePackage } from "./actions";
 
-function GetButton({pkgName}: {pkgName: string}) {
+function GetButton({ pkgName }: { pkgName: string }) {
   const [pending, setPending] = useState(false);
 
   return (
@@ -31,29 +31,30 @@ function GetButton({pkgName}: {pkgName: string}) {
   )
 }
 
-export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: ReleaseResponse[] }) {
-  const defaultVersion = useMemo(() => releases.length > 0 ? releases[0].version : undefined, [releases]);
+export function ClientPage({ pkg }: { pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>> }) {
+  const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedVersion = useMemo(() => searchParams.get("v") || defaultVersion, [searchParams, defaultVersion]);
   const selectedRelease = useMemo(() => {
     if (selectedVersion) {
-      return releases.find(v => v.version === selectedVersion);
+      return pkg.Release.find(v => v.version === selectedVersion);
     }
-  }, [selectedVersion, releases]);
+  }, [selectedVersion, pkg.Release]);
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
       <div className="max-sm:relative sm:flex sm:gap-2">
         <div className="w-full flex justify-between gap-4 max-sm:flex-col">
           <div className="flex gap-4">
-            <Image width={64} height={64}
+            {pkg.iconFileUrl && <Image width={64} height={64}
               className="w-16 h-16 max-w-fit rounded-md"
-              alt="Package icon" src={pkg.logo_url ?? ""} />
+              alt="Package icon" src={pkg.iconFileUrl} />}
+            {!pkg.iconFileUrl && <div className="w-16 h-16 rounded-md bg-secondary" />}
             <div>
-              <h2 className="font-bold text-2xl">{pkg.display_name}</h2>
+              <h2 className="font-bold text-2xl">{pkg.displayName || pkg.name}</h2>
               <Button asChild variant="link" className="p-0 h-auto text-muted-foreground">
-                <Link href="/">{pkg.owner.name}</Link>
+                <Link href="/">{pkg.user.Profile?.userName}</Link>
               </Button>
             </div>
           </div>
@@ -79,7 +80,7 @@ export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: 
 
                 router.push(url.toString());
               }}>
-              {releases.map((release) => (
+              {pkg.Release.map((release) => (
                 <DropdownMenuRadioItem value={release.version} key={release.id}>
                   {release.version}
                 </DropdownMenuRadioItem>
@@ -90,16 +91,16 @@ export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: 
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <p className="mt-4 text-foreground/70">{pkg.short_description}</p>
+      <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
 
-      {pkg.screenshots && Object.entries(pkg.screenshots).length > 0 && (
+      {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
         <>
           <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
           <Carousel className="mt-4">
             <CarouselContent>
-              {Object.entries(pkg.screenshots).map((item) => (
-                <CarouselItem className="w-min max-w-min min-w-min" key={item[0]}>
-                  <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item[1]} />
+              {pkg.PackageScreenshot.map((item) => (
+                <CarouselItem className="w-min max-w-min min-w-min" key={item.file.id}>
+                  <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />
                 </CarouselItem>
               ))}
             </CarouselContent>
@@ -120,7 +121,7 @@ export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: 
               <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? "最新のリリース" : "選択されているリリース"}</h3>
               <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
                 {selectedRelease.title}<br />
-                {selectedRelease.body}
+                {selectedRelease.description}
               </p>
             </>
           )}
@@ -137,7 +138,7 @@ export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: 
           <div className="flex gap-2 my-4 justify-between">
             <h4>作者</h4>
             <Button asChild variant="link" className="p-0 h-auto" >
-              <Link href="/">{pkg.owner.name}</Link>
+              <Link href="/">{pkg.user.Profile?.userName}</Link>
             </Button>
           </div>
           <Separator />
@@ -148,7 +149,7 @@ export function ClientPage({ pkg, releases }: { pkg: PackageResponse, releases: 
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
             <h4>ターゲットバージョン</h4>
-            <p>{selectedRelease?.target_version}</p>
+            <p>{selectedRelease?.targetVersion}</p>
           </div>
         </div>
       </div>

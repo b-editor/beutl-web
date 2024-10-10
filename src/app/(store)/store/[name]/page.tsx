@@ -1,19 +1,19 @@
 import api, { type ReleaseResponse } from "@/lib/api";
 import { ClientPage } from "./components";
+import { retrievePackage } from "./actions";
+import { notFound } from "next/navigation";
+import { SemVer } from "semver";
 
 export default async function Page({ params: { name } }: { params: { name: string } }) {
-  const pkg = await api.packages.getPackage(name);
-  const releases: ReleaseResponse[] = [];
-  let start = 0;
-  let getCount = 0;
-  do {
-    const items = await api.releases.getReleases(name, start, 30);
-    releases.push(...items);
-    start += items.length;
-    getCount = items.length;
-  } while (getCount === 30)
+  const pkg = await retrievePackage(name);
+  if (!pkg) {
+    notFound();
+  }
+  pkg.Release.sort((a, b) => {
+    return new SemVer(a.version).compare(b.version);
+  });
 
   return (
-    <ClientPage pkg={pkg} releases={releases} />
+    <ClientPage pkg={pkg} />
   )
 }

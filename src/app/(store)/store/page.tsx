@@ -23,7 +23,7 @@ export default async function Page({ searchParams: { query } }: { searchParams: 
       <div className="container max-w-6xl mx-auto py-6 px-2">
         <div className="flex flex-wrap">
           {packages.map(item => (
-            <a href="/" className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3" key={item.id}>
+            <a href={`/store/${item.name}`} className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3" key={item.id}>
               <Card className="h-full">
                 <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
                   <div>
@@ -32,9 +32,10 @@ export default async function Page({ searchParams: { query } }: { searchParams: 
                         <h4 className="text-xl font-semibold">{item.displayName || item.name}</h4>
                         <span className="text-muted">{item.userName}</span>
                       </div>
-                      <Image width={64} height={64}
+                      {item.iconFileUrl && <Image width={64} height={64}
                         className="flex-1 w-16 h-16 max-w-fit rounded-md"
-                        alt="Package icon" src={item.iconFileUrl || ""} />
+                        alt="Package icon" src={item.iconFileUrl} />}
+                      {!item.iconFileUrl && <div className="w-16 h-16 rounded-md bg-secondary" />}
                     </div>
                     <p className="text-sm mt-4">{item.shortDescription}</p>
                   </div>

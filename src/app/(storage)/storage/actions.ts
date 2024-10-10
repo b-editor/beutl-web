@@ -30,13 +30,20 @@ export async function deleteFile(ids: string[]) {
     },
     select: {
       objectKey: true,
-      id: true
+      id: true,
+      visibility: true
     }
   });
   if (!files.length) {
     return {
       success: false,
       message: "ファイルが見つかりません"
+    }
+  }
+  if (files.some(f => f.visibility === "DEDICATED")) {
+    return {
+      success: false,
+      message: "いずれかのファイルは占有されているため削除できません"
     }
   }
 
@@ -84,13 +91,20 @@ export async function changeFileVisibility(ids: string[], visibility: "PRIVATE" 
     },
     select: {
       objectKey: true,
-      id: true
+      id: true,
+      visibility: true
     }
   });
   if (!files.length) {
     return {
       success: false,
       message: "ファイルが見つかりません"
+    }
+  }
+  if (files.some(f => f.visibility === "DEDICATED")) {
+    return {
+      success: false,
+      message: "いずれかのファイルは占有されています"
     }
   }
 

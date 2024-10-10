@@ -3,9 +3,10 @@
 import { auth } from "@/auth";
 import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -125,7 +126,222 @@ export async function retrievePackage(name: string) {
 
   return {
     ...pkg,
+    iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
     PackageScreenshot: screenshots
+  }
+}
+
+export async function deletePackage(id: string) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  const pkg = await prisma.package.findFirst({
+    where: {
+      id,
+      userId: session.user.id
+    },
+    select: {
+      id: true,
+      PackageScreenshot: {
+        select: {
+          file: {
+            select: {
+              id: true,
+              objectKey: true
+            }
+          }
+        }
+      },
+      iconFile: {
+        select: {
+          id: true,
+          objectKey: true
+        }
+      },
+      Release: {
+        select: {
+          file: {
+            select: {
+              id: true,
+              objectKey: true
+            }
+          }
+        }
+      }
+    }
+  });
+  if (!pkg) {
+    return {
+      success: false,
+      message: "IDが見つかりません",
+    };
+  }
+  const files = pkg.PackageScreenshot.map((item) => item.file)
+    .concat(pkg.Release.map((item) => item.file));
+  if (pkg.iconFile) {
+    files.push(pkg.iconFile);
+  }
+  await prisma.package.delete({
+    where: {
+      id
+    }
+  });
+  const promises = files.map(async (file) => {
+    await prisma.file.delete({
+      where: {
+        id: file.id,
+      },
+    });
+    await s3.send(
+      new GetObjectCommand({
+        Bucket: process.env.S3_BUCKET as string,
+        Key: file.objectKey,
+      }),
+    );
+  });
+
+  await Promise.all(promises);
+  revalidatePath("/developer");
+  redirect("/developer");
+}
+export async function changePackageVisibility(id: string, published: boolean) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  const pkg = await prisma.package.findFirst({
+    where: {
+      id,
+      userId: session.user.id
+    }
+  });
+  if (!pkg) {
+    return {
+      success: false,
+      message: "IDが見つかりません"
+    }
+  }
+  await prisma.package.update({
+    where: {
+      id
+    },
+    data: {
+      published
+    }
+  });
+  revalidatePath(`/developer/projects/${pkg.name}`);
+  return {
+    success: true
+  }
+}
+
+export async function uploadIcon(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  const file = formData.get("file") as File;
+  if (!file) {
+    return {
+      success: false,
+      message: "ファイルが見つかりません"
+    }
+  }
+  const id = formData.get("id") as string;
+  const pkg = await prisma.package.findFirst({
+    where: { id, userId: session.user.id },
+    select: { id: true, name: true, iconFile: { select: { id: true, objectKey: true, size: true } } }
+  });
+  if (!pkg) {
+    return {
+      success: false,
+      message: "IDが見つかりません"
+    }
+  }
+
+  let files = await prisma.file.findMany({
+    where: {
+      userId: session.user.id
+    },
+    select: {
+      size: true,
+      name: true,
+      id: true
+    }
+  });
+  if (pkg.iconFile) {
+    files = files.filter(f => f.id !== pkg.iconFile?.id);
+  }
+
+  const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
+  let totalSize = BigInt(0);
+  for (const file of files) {
+    totalSize += BigInt(file.size);
+  }
+
+  if (totalSize + BigInt(file.size) > maxSize) {
+    return {
+      success: false,
+      message: "ストレージ容量が足りません"
+    }
+  }
+
+  let filename = file.name;
+  const ext = file.name.split(".").pop();
+  for (let i = 1; files.some(f => f.name === filename); i++) {
+    filename = ext ? file.name.replace(`.${ext}`, ` (${i}).${ext}`) : `${file.name} (${i})`;
+  }
+
+  if (pkg.iconFile) {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.S3_BUCKET as string,
+      Key: pkg.iconFile?.objectKey
+    }));
+    await prisma.file.delete({
+      where: {
+        id: pkg.iconFile.id
+      }
+    });
+  }
+
+  const objectKey = randomUUID();
+  await s3.send(new PutObjectCommand({
+    Bucket: process.env.S3_BUCKET as string,
+    Key: objectKey,
+    Body: new Uint8Array(await file.arrayBuffer()),
+    ServerSideEncryption: "AES256",
+  }));
+  const record = await prisma.file.create({
+    data: {
+      objectKey,
+      name: filename,
+      size: file.size,
+      mimeType: file.type,
+      userId: session.user.id,
+      visibility: "DEDICATED"
+    }
+  });
+  await prisma.package.update({
+    where: {
+      id
+    },
+    data: {
+      iconFileId: record.id
+    }
+  });
+  revalidatePath(`/developer/projects/${pkg.name}`);
+  return {
+    success: true
   }
 }
 
@@ -304,6 +520,45 @@ export async function moveScreenshot({ delta, packageId, fileId }: { delta: numb
       });
     });
   await Promise.all(promises);
+  revalidatePath(`/developer/projects/${pkg.name}`);
+  return {
+    success: true
+  }
+}
+
+export async function deleteScreenshot({ packageId, fileId }: { packageId: string, fileId: string }) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  const pkg = await prisma.package.findFirst({
+    where: {
+      id: packageId,
+      userId: session.user.id,
+    },
+  });
+  if (!pkg) {
+    return {
+      success: false,
+      message: "IDが見つかりません"
+    }
+  }
+  await prisma.packageScreenshot.delete({
+    where: {
+      packageId_fileId: {
+        packageId,
+        fileId
+      }
+    }
+  });
+  await prisma.file.delete({
+    where: {
+      id: fileId
+    }
+  });
   revalidatePath(`/developer/projects/${pkg.name}`);
   return {
     success: true
