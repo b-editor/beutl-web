@@ -60,6 +60,40 @@ export async function updateDisplayNameAndShortDescription(state: State, formDat
   };
 }
 
+export async function updateDescription({ packageId, description }: { packageId: string, description: string }) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      message: "ログインしてください",
+      success: false,
+    };
+  }
+
+  if (description.length > 1000) {
+    return {
+      message: "説明は1000文字以下である必要があります",
+      success: false,
+    };
+  }
+
+  const result = await prisma.package.update({
+    where: {
+      id: packageId,
+      userId: session.user.id,
+    },
+    data: {
+      description
+    },
+    select: {
+      name: true
+    }
+  });
+  revalidatePath(`/developer/projects/${result.name}`);
+  return {
+    success: true
+  };
+}
+
 export async function retrievePackage(name: string) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -558,6 +592,40 @@ export async function deleteScreenshot({ packageId, fileId }: { packageId: strin
     where: {
       id: fileId
     }
+  });
+  revalidatePath(`/developer/projects/${pkg.name}`);
+  return {
+    success: true
+  }
+}
+
+export async function updateTag({ packageId, tags }: { packageId: string, tags: string[] }) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      success: false,
+      message: "ログインしてください"
+    }
+  }
+  const pkg = await prisma.package.findFirst({
+    where: {
+      id: packageId,
+      userId: session.user.id,
+    },
+  });
+  if (!pkg) {
+    return {
+      success: false,
+      message: "IDが見つかりません"
+    }
+  }
+  await prisma.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      tags,
+    },
   });
   revalidatePath(`/developer/projects/${pkg.name}`);
   return {

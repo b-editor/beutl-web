@@ -1,18 +1,9 @@
-import NavBar from "@/components/nav-bar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Carousel, CarouselContent, CarouselItem, CarouselPrevious } from "@/components/ui/carousel";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
-import api from "@/lib/api";
-import { Edit, EyeOff, MoreVertical } from "lucide-react";
-import Image from "next/image";
-import Link from "next/link";
-import { PackageInfoForm, ScreenshotForm } from "./component";
-import { prisma } from "@/prisma";
+import { ScreenshotForm } from "./screenshot-form";
 import { notFound } from "next/navigation";
 import { retrievePackage } from "./actions";
+import { PackageInfoForm } from "./package-info-form";
+import { PackageDescriptionForm } from "./package-description-form";
+import { PackageDetailsForm } from "./package-details-form";
 
 export default async function Page({ params: { name } }: { params: { name: string } }) {
   const pkg = await retrievePackage(name);
@@ -27,6 +18,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
       <ScreenshotForm pkg={pkg} />
 
       <div className="flex max-lg:flex-col mt-6">
+        <PackageDescriptionForm pkg={pkg} />
         {/* <div className="lg:basis-2/3 lg:pr-6">
           <h3 className="font-bold text-xl mt-6 border-b pb-2">説明</h3>
           <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
@@ -42,6 +34,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
             </>
           )}
         </div> */}
+        <PackageDetailsForm pkg={pkg} />
         {/* <div className="lg:basis-1/3">
           <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
           <div className="flex gap-2 flex-col my-4">
