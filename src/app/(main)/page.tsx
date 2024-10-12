@@ -130,7 +130,7 @@ export default function Home() {
               キーフレームとイージングを使用して、フェードインアウト、スライドインなど基本的なアニメーションや、
               さまざまなオブジェクトをアニメーションすることができます。
             </p>
-            <Button className="mt-8" variant="outline">利用可能なアニメーション</Button>
+            {/* <Button className="mt-8" variant="outline">利用可能なアニメーション</Button> */}
           </div>
 
           <div className="lg:flex-1">

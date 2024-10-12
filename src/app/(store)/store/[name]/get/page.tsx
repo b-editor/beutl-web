@@ -3,12 +3,11 @@ import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import type { NextRequest } from "next/server";
 
-export async function GET(request: NextRequest, { params: { name } }: { params: { name: string } }) {
+export default async function Page({ params: { name } }: { params: { name: string } }) {
   const session = await auth();
+  const xurl = headers().get("x-url") as string;
   if (!session?.user?.id) {
-    const xurl = headers().get("x-url") as string;
     redirect(`/account/sign-in?returnUrl=${encodeURIComponent(xurl)}`);
   }
 

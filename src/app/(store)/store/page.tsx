@@ -1,9 +1,7 @@
-import { retrieveFiles } from "@/app/(storage)/storage/actions";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { prisma } from "@/prisma";
 import Image from "next/image";
 import { retrievePackages } from "./actions";
 

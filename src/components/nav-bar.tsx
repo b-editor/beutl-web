@@ -9,7 +9,7 @@ import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu"
 export default async function NavBar() {
   const session = await auth();
   return (
-    <nav className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-10">
+    <nav className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-20">
       <div className="gap-2 flex">
         <StandardDrawer />
 

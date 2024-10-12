@@ -3,20 +3,20 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
-import type { retrievePackage } from "./actions";
+import { addToLibrary, removeFromLibrary, type retrievePackage } from "./actions";
 
-function GetButton({ pkgName, owned }: { pkgName: string, owned: boolean }) {
+function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
   const router = useRouter();
 
   return (
-    <Button disabled={owned} onClick={() => router.push(`/store/${pkgName}/get`)}>
+    <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
       {owned ? "入手済" : "入手"}
     </Button>
   )
@@ -49,7 +49,7 @@ export function ClientPage({ pkg, owned }: { pkg: NonNullable<Awaited<ReturnType
               </Button>
             </div>
           </div>
-          <GetButton pkgName={pkg.name} owned={owned} />
+          <GetButton pkgId={pkg.id} owned={owned} />
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -58,6 +58,9 @@ export function ClientPage({ pkg, owned }: { pkg: NonNullable<Awaited<ReturnType
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
+            {owned && (
+              <DropdownMenuItem onClick={async () => await removeFromLibrary(pkg.id)}>ライブラリから削除</DropdownMenuItem>
+            )}
             <DropdownMenuLabel>バージョン</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuRadioGroup value={selectedRelease?.version}
