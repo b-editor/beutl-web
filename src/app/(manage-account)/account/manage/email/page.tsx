@@ -1,4 +1,4 @@
-import authOrSignIn from "@/lib/auth-guard";
+import { authOrSignIn } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { Form } from "./components";
 import { updateEmail } from "./actions";

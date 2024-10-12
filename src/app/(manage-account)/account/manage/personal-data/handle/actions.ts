@@ -1,10 +1,8 @@
 "use server";
 
-import { signOut } from "@/auth";
 import { createHash } from "@/lib/create-hash";
 import { prisma } from "@/prisma";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { redirect, RedirectType } from "next/navigation";
 
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;

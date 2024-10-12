@@ -1,8 +1,8 @@
 import { auth } from "@/auth";
-import { redirect } from "next/navigation";
 import Form from "./form";
 import type { SignInPageErrorParam } from "@auth/core/types";
 import { cookies } from "next/headers";
+import { localRedirect } from "@/lib/localRedirect";
 
 export default async function Page({
   searchParams: {
@@ -23,13 +23,13 @@ export default async function Page({
       if (error) {
         url.searchParams.set("error", error);
       }
-      redirect(url.toString());
+      localRedirect(url.toString());
     }
   }
 
   const session = await auth();
   if (session) {
-    redirect(returnUrl || "/");
+    localRedirect(returnUrl || "/");
   }
 
   return (

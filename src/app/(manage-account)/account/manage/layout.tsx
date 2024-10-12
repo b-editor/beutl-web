@@ -1,4 +1,4 @@
-import { Navigation } from "@/app/components";
+import { Navigation } from "./components";
 import { auth } from "@/auth";
 import NavBar from "@/components/nav-bar";
 import { Button } from "@/components/ui/button";

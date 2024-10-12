@@ -1,8 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import Image from "next/image";
-import { notFound } from "next/navigation";
-import { auth } from "@/auth";
 
 export default async function Page() {
   return (
@@ -20,7 +18,7 @@ export default async function Page() {
             <p>サインイン用のリンクをあなたのメールアドレスに送りました</p>
           </CardContent>
         </Card>
-        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="docs/privacy">プライバシーポリシー</Link>
+        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
       </div>
     </div>
   )

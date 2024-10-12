@@ -23,7 +23,7 @@ export async function retrievePackages(): Promise<Package[]> {
   }
   const packages = await prisma.package.findMany({
     where: {
-      userId: session?.user?.id
+      userId: session.user.id
     },
     select: {
       id: true,

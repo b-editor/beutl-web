@@ -1,14 +1,12 @@
 "use client";
 
-import { Button, type ButtonProps } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { signUpAction } from "./actions";
-import { useFormState, useFormStatus } from "react-dom";
+import { useFormState } from "react-dom";
 import SubmitButton from "@/components/submit-button";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
@@ -62,7 +60,7 @@ export default function Form({ returnUrl, email }: { returnUrl?: string, email?:
               </div>
             </CardContent>
           </Card>
-          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="docs/privacy">プライバシーポリシー</Link>
+          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
         </div>
       </div>
     </form>

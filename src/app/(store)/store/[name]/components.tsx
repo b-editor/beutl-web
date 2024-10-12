@@ -3,35 +3,26 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import type { ReleaseResponse, PackageResponse } from "@/lib/api";
-import { Loader2, MoreVertical } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
-import { handleGet, type retrievePackage } from "./actions";
+import { useMemo } from "react";
+import type { retrievePackage } from "./actions";
 
-function GetButton({ pkgName }: { pkgName: string }) {
-  const [pending, setPending] = useState(false);
+function GetButton({ pkgName, owned }: { pkgName: string, owned: boolean }) {
+  const router = useRouter();
 
   return (
-    <Button onClick={async () => {
-      setPending(true);
-      try {
-        await handleGet(pkgName);
-      } finally {
-        setPending(false);
-      }
-    }}>
-      {pending && <Loader2 className="mr-2 w-4 h-4 animate-spin" />}
-      入手
+    <Button disabled={owned} onClick={() => router.push(`/store/${pkgName}/get`)}>
+      {owned ? "入手済" : "入手"}
     </Button>
   )
 }
 
-export function ClientPage({ pkg }: { pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>> }) {
+export function ClientPage({ pkg, owned }: { pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>>, owned: boolean }) {
   const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -58,7 +49,7 @@ export function ClientPage({ pkg }: { pkg: NonNullable<Awaited<ReturnType<typeof
               </Button>
             </div>
           </div>
-          <GetButton pkgName={pkg.name} />
+          <GetButton pkgName={pkg.name} owned={owned} />
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -86,8 +77,8 @@ export function ClientPage({ pkg }: { pkg: NonNullable<Awaited<ReturnType<typeof
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>コンテンツを報告</DropdownMenuItem>
+            {/* <DropdownMenuSeparator />
+            <DropdownMenuItem>コンテンツを報告</DropdownMenuItem> */}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

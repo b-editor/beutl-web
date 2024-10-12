@@ -1,7 +1,7 @@
 "use server";
 
 import { createTransport } from "nodemailer";
-import authOrSignIn from "@/lib/auth-guard";
+import { authenticated, authOrSignIn } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
@@ -48,64 +48,67 @@ async function sendEmail(email: string, token: string) {
 }
 
 export async function submit(state: State, formData: FormData): Promise<State> {
-  const session = await authOrSignIn();
-  const validated = emailSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!validated.success) {
-    console.error(validated.error);
-    return {
-      message: "入力内容に誤りがあります",
-      success: false,
-    };
-  }
+  return await authenticated(async (session) => {
+    const validated = emailSchema.safeParse(
+      Object.fromEntries(formData.entries()),
+    );
+    if (!validated.success) {
+      console.error(validated.error);
+      return {
+        message: "入力内容に誤りがあります",
+        success: false,
+      };
+    }
 
-  if (validated.data.cancel) {
-    await prisma.confirmationToken.deleteMany({
+    if (validated.data.cancel) {
+      await prisma.confirmationToken.deleteMany({
+        where: {
+          userId: session.user.id,
+          purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
+        },
+      });
+      revalidatePath("/account/manage/personal-data");
+      return {
+        message: "アカウント削除をキャンセルしました",
+        success: true,
+      };
+    }
+
+    const user = await prisma.user.findFirst({
       where: {
-        userId: session.user.id,
-        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-      }
+        id: session.user.id,
+      },
+      select: {
+        email: true,
+      },
     });
+    if (!user) {
+      throw new Error("User not found");
+    }
+    const maxAge = 24 * 60 * 60;
+    const ONE_DAY_IN_SECONDS = 86400;
+    const expires = new Date(
+      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000,
+    );
+    const secret = process.env.AUTH_SECRET;
+    const token = randomString(32);
+    const sendRequest = sendEmail(user.email, token);
+    const createToken = prisma.confirmationToken.create({
+      data: {
+        token: await createHash(`${token}${secret}`),
+        identifier: user.email,
+        userId: session.user.id,
+        expires,
+        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
+      },
+    });
+
+    await Promise.all([sendRequest, createToken]);
+
     revalidatePath("/account/manage/personal-data");
     return {
-      message: "アカウント削除をキャンセルしました",
+      message: "アカウントを削除するためのリンクを送信しました",
       success: true,
     };
-  }
-  
-  const user = await prisma.user.findFirst({
-    where: {
-      id: session.user.id,
-    },
-    select: {
-      email: true,
-    }
   });
-  if (!user) {
-    throw new Error("User not found");
-  }
-  const maxAge = 24 * 60 * 60;
-  const ONE_DAY_IN_SECONDS = 86400
-  const expires = new Date(
-    Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000
-  )
-  const secret = process.env.AUTH_SECRET;
-  const token = randomString(32);
-  const sendRequest = sendEmail(user.email, token);
-  const createToken = prisma.confirmationToken.create({
-    data: {
-      token: await createHash(`${token}${secret}`),
-      identifier: user.email,
-      userId: session.user.id,
-      expires,
-      purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE
-    },
-  });
-
-  await Promise.all([sendRequest, createToken]);
-
-  revalidatePath("/account/manage/personal-data");
-  return {
-    message: "アカウントを削除するためのリンクを送信しました",
-    success: true,
-  };
 }

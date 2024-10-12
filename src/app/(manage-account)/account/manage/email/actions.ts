@@ -1,15 +1,15 @@
 "use server";
 
 import { createTransport } from "nodemailer";
-import authOrSignIn from "@/lib/auth-guard";
+import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { options as nodemailerOptions } from "@/nodemailer";
 import { redirect, RedirectType } from "next/navigation";
-import { auth, signIn } from "@/auth";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
+import { createHash, randomString } from "@/lib/create-hash";
 
 type State = {
   message?: string;
@@ -47,68 +47,53 @@ async function sendEmail(email: string, token: string) {
   }
 }
 
-function randomString(size: number) {
-  const i2hex = (i: number) => (`0${i.toString(16)}`).slice(-2)
-  const r = (a: string, i: number): string => a + i2hex(i)
-  const bytes = crypto.getRandomValues(new Uint8Array(size))
-  return Array.from(bytes).reduce(r, "")
-}
-
-export async function createHash(message: string) {
-  const data = new TextEncoder().encode(message)
-  const hash = await crypto.subtle.digest("SHA-256", data)
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .toString()
-}
-
 export async function sendConfirmationEmail(state: State, formData: FormData): Promise<State> {
-  const session = await authOrSignIn();
-  const validated = emailSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!validated.success) {
-    return {
-      message: "入力内容に誤りがあります",
-      success: false,
-    };
-  }
-
-  // メールアドレス更新
-  const user = await prisma.user.findFirst({
-    where: {
-      id: session.user.id,
-    },
-    select: {
-      email: true,
+  return await authenticated(async session => {
+    const validated = emailSchema.safeParse(Object.fromEntries(formData.entries()));
+    if (!validated.success) {
+      return {
+        message: "入力内容に誤りがあります",
+        success: false,
+      };
     }
-  });
-  if (!user) {
-    throw new Error("User not found");
-  }
-  const maxAge = 24 * 60 * 60;
-  const ONE_DAY_IN_SECONDS = 86400
-  const expires = new Date(
-    Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000
-  )
-  const secret = process.env.AUTH_SECRET;
-  const token = randomString(32);
-  const sendRequest = sendEmail(validated.data.newEmail, token);
-  const createToken = prisma.confirmationToken.create({
-    data: {
-      token: await createHash(`${token}${secret}`),
-      identifier: validated.data.newEmail,
-      userId: session.user.id,
-      expires,
-      purpose: ConfirmationTokenPurpose.EMAIL_UPDATE
-    },
-  });
 
-  await Promise.all([sendRequest, createToken]);
+    // メールアドレス更新
+    const user = await prisma.user.findFirst({
+      where: {
+        id: session.user.id,
+      },
+      select: {
+        email: true,
+      }
+    });
+    if (!user) {
+      throw new Error("User not found");
+    }
+    const maxAge = 24 * 60 * 60;
+    const ONE_DAY_IN_SECONDS = 86400
+    const expires = new Date(
+      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000
+    )
+    const secret = process.env.AUTH_SECRET;
+    const token = randomString(32);
+    const sendRequest = sendEmail(validated.data.newEmail, token);
+    const createToken = prisma.confirmationToken.create({
+      data: {
+        token: await createHash(`${token}${secret}`),
+        identifier: validated.data.newEmail,
+        userId: session.user.id,
+        expires,
+        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE
+      },
+    });
 
-  return {
-    message: "メールアドレスを変更するためのリンクを送信しました",
-    success: true,
-  };
+    await Promise.all([sendRequest, createToken]);
+
+    return {
+      message: "メールアドレスを変更するためのリンクを送信しました",
+      success: true,
+    };
+  });
 }
 
 export async function updateEmail(token: string, identifier: string) {

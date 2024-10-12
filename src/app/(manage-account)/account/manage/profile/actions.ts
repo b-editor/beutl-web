@@ -1,6 +1,6 @@
 "use server";
 
-import authOrSignIn from "@/lib/auth-guard";
+import { authenticated, authOrSignIn } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { z } from "zod";
 
@@ -30,104 +30,111 @@ export type State = {
 };
 
 export async function updateProfile(state: State, formData: FormData): Promise<State> {
-  const session = await authOrSignIn();
+  return await authenticated(async (session) => {
+    const validated = profileSchema.safeParse(
+      Object.fromEntries(formData.entries()),
+    );
+    if (!validated.success) {
+      return {
+        errors: validated.error.flatten().fieldErrors,
+        message: "入力内容に誤りがあります",
+        success: false,
+      };
+    }
 
-  const validated = profileSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!validated.success) {
-    return {
-      errors: validated.error.flatten().fieldErrors,
-      message: "入力内容に誤りがあります",
-      success: false,
-    };
-  }
+    const { displayName, userName, bio, x, github, youtube, custom } =
+      validated.data;
 
-  const {
-    displayName,
-    userName,
-    bio,
-    x,
-    github,
-    youtube,
-    custom,
-  } = validated.data;
-
-  const promises: Promise<unknown>[] = [];
-  // プロフィール更新
-  promises.push(
-    prisma.profile.upsert({
+    const promises: Promise<unknown>[] = [];
+    // プロフィール更新
+    promises.push(
+      prisma.profile.upsert({
+        where: {
+          userId: session.user.id,
+        },
+        update: {
+          displayName,
+          userName,
+          bio,
+        },
+        create: {
+          userId: session.user.id,
+          displayName,
+          userName,
+          bio,
+        },
+      }),
+    );
+    const providers = await prisma.socialProfileProvider.findMany({
       where: {
-        userId: session.user.id,
+        name: {
+          in: ["x", "github", "youtube", "custom"],
+        },
       },
-      update: {
-        displayName,
-        userName,
-        bio,
+      select: {
+        id: true,
+        name: true,
       },
-      create: {
-        userId: session.user.id,
-        displayName,
-        userName,
-        bio,
+    });
+    const socials = [
+      {
+        providerId: providers.find((p) => p.name === "x")?.id,
+        value: x
       },
-    }),
-  );
-  const providers = await prisma.socialProfileProvider.findMany({
-    where: {
-      name: {
-        in: ["x", "github", "youtube", "custom"],
+      {
+        providerId: providers.find((p) => p.name === "github")?.id,
+        value: github,
       },
-    },
-    select: {
-      id: true,
-      name: true,
-    }
-  });
-  const socials = [
-    { providerId: providers.find(p => p.name === "x")?.id, value: x },
-    { providerId: providers.find(p => p.name === "github")?.id, value: github },
-    { providerId: providers.find(p => p.name === "youtube")?.id, value: youtube },
-    { providerId: providers.find(p => p.name === "custom")?.id, value: custom },
-  ]
-  for (const social of socials) {
-    if (!social.providerId) {
-      continue;
-    }
-    if (social.value) {
-      promises.push(
-        prisma.socialProfile.upsert({
-          where: {
-            userId_providerId: {
+      {
+        providerId: providers.find((p) => p.name === "youtube")?.id,
+        value: youtube,
+      },
+      {
+        providerId: providers.find((p) => p.name === "custom")?.id,
+        value: custom,
+      },
+    ];
+    for (const social of socials) {
+      if (!social.providerId) {
+        continue;
+      }
+      if (social.value) {
+        promises.push(
+          prisma.socialProfile.upsert({
+            where: {
+              userId_providerId: {
+                userId: session.user.id,
+                providerId: social.providerId,
+              },
+            },
+            update: {
+              value: social.value,
+            },
+            create: {
               userId: session.user.id,
               providerId: social.providerId,
+              value: social.value,
             },
-          },
-          update: {
-            value: social.value,
-          },
-          create: {
-            userId: session.user.id,
-            providerId: social.providerId,
-            value: social.value,
-          },
-        })
-      );
-    } else {
-      promises.push(
-        prisma.socialProfile.delete({
-          where: {
-            userId_providerId: {
-              userId: session.user.id,
-              providerId: social.providerId,
+          }),
+        );
+      } else {
+        promises.push(
+          prisma.socialProfile.delete({
+            where: {
+              userId_providerId: {
+                userId: session.user.id,
+                providerId: social.providerId,
+              },
             },
-          },
-        })
-      );
+          }),
+        );
+      }
     }
-  }
 
-  await Promise.all(promises);
-  return {
-    success: true,
-    message: "プロフィールを更新しました",
-  };
+    await Promise.all(promises);
+    return {
+      success: true,
+      message: "プロフィールを更新しました",
+    };
+  });
 }

@@ -1,10 +1,9 @@
 "use client";
 
-import { Button, type ButtonProps } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { signInAction } from "./actions";
@@ -92,7 +91,7 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
               </div>
             </CardContent>
           </Card>
-          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="docs/privacy">プライバシーポリシー</Link>
+          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
         </div>
       </div>
     </form>

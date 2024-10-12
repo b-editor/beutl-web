@@ -14,11 +14,11 @@ export default async function Page({
   const session = await auth();
   if (token && identifier) {
     if (!session?.user) {
-      const url = new URL("/account/manage/personal-data/handle");
-      url.searchParams.set("token", token);
-      url.searchParams.set("identifier", identifier);
+      const searchParams = new URLSearchParams();
+      searchParams.set("token", token);
+      searchParams.set("identifier", identifier);
       signOut({
-        redirectTo: url.toString(),
+        redirectTo: `/account/manage/personal-data/handle?${searchParams.toString()}`,
       });
     }
 

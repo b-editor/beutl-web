@@ -2,7 +2,6 @@ import { auth } from "@/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { headers } from "next/headers";
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -13,11 +12,7 @@ export default async function Page({
 ) {
   const session = await auth();
   if (!session?.user) {
-    const xurl = headers().get("x-url") as string;
-    const origin = new URL(xurl).origin;
-    const url = new URL("/account/native-auth/sign-in", origin);
-    url.searchParams.set("returnUrl", returnUrl);
-    redirect(url.toString());
+    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`);
   }
   const user = session.user;
 
@@ -52,7 +47,7 @@ export default async function Page({
             <Link href="/account/sign-up" className="text-sm font-medium inline-block mt-6">他のアカウントを使う</Link>
           </CardFooter>
         </Card>
-        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="docs/privacy">プライバシーポリシー</Link>
+        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
       </div>
     </div>
   )

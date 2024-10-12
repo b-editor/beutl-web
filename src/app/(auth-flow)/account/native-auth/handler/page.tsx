@@ -9,14 +9,9 @@ export default async function Page({ searchParams: { identifier } }: { searchPar
 
   if (!session?.user) {
     const xurl = headers().get("x-url") as string;
-    const origin = new URL(xurl).origin;
-    const continueUrl = new URL("/account/native-auth/continue", origin);
-    continueUrl.searchParams.set("returnUrl", xurl);
+    const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
-    const url = new URL("/account/sign-in");
-    url.searchParams.set("returnUrl", continueUrl.toString());
-
-    redirect(url.toString());
+    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
   } else {
     if (!session.user.id) {
       throw new Error("User id is not found");
@@ -36,6 +31,10 @@ export default async function Page({ searchParams: { identifier } }: { searchPar
 
     const continueUrl = new URL(obj.continueUrl);
     continueUrl.searchParams.set("code", code);
+    // localhostかを判定
+    if (continueUrl.hostname !== "localhost") {
+      throw new Error("Invalid continue URL");
+    }
     redirect(continueUrl.toString());
   }
 }

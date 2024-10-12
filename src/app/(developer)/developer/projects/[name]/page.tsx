@@ -12,14 +12,19 @@ export default async function Page({ params: { name } }: { params: { name: strin
   }
 
   return (
-    <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
-      <PackageInfoForm pkg={pkg} />
+    <>
+      <div className="bg-secondary py-4 *:text-center">
+        <p>この画面は実装途中です</p>
+        <p>詳細な編集はデスクトップアプリをご利用ください</p>
+      </div>
+      <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
+        <PackageInfoForm pkg={pkg} />
 
-      <ScreenshotForm pkg={pkg} />
+        <ScreenshotForm pkg={pkg} />
 
-      <div className="flex max-lg:flex-col mt-6">
-        <PackageDescriptionForm pkg={pkg} />
-        {/* <div className="lg:basis-2/3 lg:pr-6">
+        <div className="flex max-lg:flex-col mt-6">
+          <PackageDescriptionForm pkg={pkg} />
+          {/* <div className="lg:basis-2/3 lg:pr-6">
           <h3 className="font-bold text-xl mt-6 border-b pb-2">説明</h3>
           <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
             {pkg.description}
@@ -34,8 +39,8 @@ export default async function Page({ params: { name } }: { params: { name: strin
             </>
           )}
         </div> */}
-        <PackageDetailsForm pkg={pkg} />
-        {/* <div className="lg:basis-1/3">
+          <PackageDetailsForm pkg={pkg} />
+          {/* <div className="lg:basis-1/3">
           <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
           <div className="flex gap-2 flex-col my-4">
             <h4>タグ</h4>
@@ -61,7 +66,8 @@ export default async function Page({ params: { name } }: { params: { name: strin
             <p>{selectedRelease?.target_version}</p>
           </div>
         </div> */}
+        </div>
       </div>
-    </div>
+    </>
   )
 }

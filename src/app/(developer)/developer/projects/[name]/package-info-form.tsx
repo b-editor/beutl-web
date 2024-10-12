@@ -140,7 +140,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
                 <DropdownMenuContent>
                   <DropdownMenuLabel>操作</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleDelete}>削除</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleDelete} disabled>削除</DropdownMenuItem>
                   <DropdownMenuItem onClick={handleChangeVisibility}>{pkg.published ? "非公開にする" : "公開する"}</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

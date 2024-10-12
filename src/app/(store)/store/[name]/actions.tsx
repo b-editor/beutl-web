@@ -1,12 +1,6 @@
 "use server";
 
-import { auth } from "@/auth";
 import { prisma } from "@/prisma";
-
-export async function handleGet(name: string) {
-  const session = await auth();
-  await new Promise(resolve => setTimeout(resolve, 1000));
-}
 
 export async function retrievePackage(name: string) {
   const pkg = await prisma.package.findFirst({

@@ -37,14 +37,14 @@ export default async function Page({ searchParams: { query } }: { searchParams: 
                         alt="Package icon" src={item.iconFileUrl} />}
                       {!item.iconFileUrl && <div className="w-16 h-16 rounded-md bg-secondary" />}
                     </div>
-                    <p className="text-sm mt-4">{item.shortDescription}</p>
+                    <p className="text-sm mt-2">{item.shortDescription}</p>
                   </div>
                   <div className="overflow-x-clip relative h-6">
                     <div className="flex gap-2 absolute">
                       <Badge variant="secondary" className="text-nowrap">無料</Badge>
                       <Separator orientation="vertical" className="h-auto my-1" />
                       {item.tags.map(tag => (
-                        <Badge variant="outline" className="border-input text-nowrap" key={tag}>ツール</Badge>
+                        <Badge variant="outline" className="border-input text-nowrap" key={tag}>{tag}</Badge>
                       ))}
                     </div>
                   </div>

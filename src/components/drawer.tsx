@@ -37,11 +37,6 @@ export function StandardDrawer() {
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
-                  <Link href="/developer">
-                    デベロッパー
-                  </Link>
-                </NavigationMenuLink>
-                <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
                   <Link href="/docs/privacy">
                     プライバシーポリシー
                   </Link>

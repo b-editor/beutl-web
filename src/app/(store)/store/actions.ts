@@ -23,22 +23,22 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
         OR: [
           {
             name: {
-              search: query,
+              contains: query,
             },
           },
           {
             displayName: {
-              search: query,
+              contains: query,
             },
           },
           {
             description: {
-              search: query,
+              contains: query,
             },
           },
           {
             shortDescription: {
-              search: query,
+              contains: query,
             },
           },
           {

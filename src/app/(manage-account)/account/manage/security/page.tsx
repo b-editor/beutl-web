@@ -1,6 +1,6 @@
 import { prisma } from "@/prisma";
 import { Form, List, PasskeysList } from "./components";
-import authOrSignIn from "@/lib/auth-guard";
+import { authOrSignIn } from "@/lib/auth-guard";
 import * as jose from 'jose';
 import type { SignInPageErrorParam } from "@auth/core/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

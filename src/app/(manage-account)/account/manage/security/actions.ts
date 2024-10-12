@@ -5,6 +5,7 @@ import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
+import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 
 export type State = {
   success?: boolean;
@@ -32,149 +33,153 @@ export async function addAccount(state: State, formData: FormData): Promise<Stat
 }
 
 export async function removeAccount(state: State, formData: FormData): Promise<State> {
-  const providerAccountId = formData.get("providerAccountId") as string | null;
-  const provider = formData.get("provider") as string | null;
-  const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) {
-    return { success: false, message: "ログインしてください" };
-  }
+  return await authenticated(async (session) => {
+    const providerAccountId = formData.get("providerAccountId") as
+      | string
+      | null;
+    const provider = formData.get("provider") as string | null;
 
-  if (!providerAccountId || !provider) {
-    return { success: false, message: "入力内容に誤りがあります" };
-  }
+    if (!providerAccountId || !provider) {
+      return { success: false, message: "入力内容に誤りがあります" };
+    }
 
-  const user = await prisma.user.findFirst({
-    where: {
-      id: userId,
-    },
-    select: {
-      emailVerified: true,
-      accounts: {
-        select: {
-          providerAccountId: true,
-          provider: true,
+    const user = await prisma.user.findFirst({
+      where: {
+        id: session.user.id,
+      },
+      select: {
+        emailVerified: true,
+        accounts: {
+          select: {
+            providerAccountId: true,
+            provider: true,
+          },
         },
       },
-    },
-  });
-  if (!user) {
-    return { success: false, message: "アカウントが見つかりません" };
-  }
-
-  const remain = user.accounts
-    .filter((account) => !(account.providerAccountId === providerAccountId && account.provider === provider));
-  if (remain.length === user.accounts.length) {
-    return { success: false, message: "アカウントが見つかりません" };
-  }
-
-  if (remain.length === 0) {
-    console.log("Deleting the last account");
-    if (!user.emailVerified) {
-      console.log("The user is not verified");
-      return { success: false, message: "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。" };
-    }
-  }
-
-  await prisma.account.delete({
-    where: {
-      provider_providerAccountId: {
-        providerAccountId,
-        provider,
-      },
-    },
-  });
-  if (provider === "passkey") {
-    await prisma.authenticator.delete({
-      where: {
-        userId_credentialID: {
-          userId,
-          credentialID: providerAccountId,
-        }
-      }
     });
-  }
-  revalidatePath("/account/manage/security");
-  return { success: true };
+    if (!user) {
+      return { success: false, message: "アカウントが見つかりません" };
+    }
+
+    const remain = user.accounts.filter(
+      (account) =>
+        !(
+          account.providerAccountId === providerAccountId &&
+          account.provider === provider
+        ),
+    );
+    if (remain.length === user.accounts.length) {
+      return { success: false, message: "アカウントが見つかりません" };
+    }
+
+    if (remain.length === 0) {
+      console.log("Deleting the last account");
+      if (!user.emailVerified) {
+        console.log("The user is not verified");
+        return {
+          success: false,
+          message:
+            "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。",
+        };
+      }
+    }
+
+    await prisma.account.delete({
+      where: {
+        provider_providerAccountId: {
+          providerAccountId,
+          provider,
+        },
+      },
+    });
+    if (provider === "passkey") {
+      await prisma.authenticator.delete({
+        where: {
+          userId_credentialID: {
+            userId: session.user.id,
+            credentialID: providerAccountId,
+          },
+        },
+      });
+    }
+    revalidatePath("/account/manage/security");
+    return { success: true };
+  });
 }
 
 export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
-  const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) {
-    throw new Error("ログインしてください");
-  }
-
-  await prisma.authenticator.update({
-    where: {
-      userId_credentialID: {
-        userId,
-        credentialID: id,
+  return await throwIfUnauth(async (session) => {
+    await prisma.authenticator.update({
+      where: {
+        userId_credentialID: {
+          userId: session.user.id,
+          credentialID: id,
+        },
       },
-    },
-    data: {
-      name,
-    },
+      data: {
+        name,
+      },
+    });
+    revalidatePath("/account/manage/security");
+    redirect("/account/manage/security");
   });
-  revalidatePath("/account/manage/security");
-  redirect("/account/manage/security");
 }
 
 export async function deleteAuthenticator({ id }: { id: string }): Promise<void> {
-  const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) {
-    throw new Error("ログインしてください");
-  }
-
-  const user = await prisma.user.findFirst({
-    where: {
-      id: userId,
-    },
-    select: {
-      emailVerified: true,
-      accounts: {
-        select: {
-          providerAccountId: true,
-          provider: true,
+  return await throwIfUnauth(async (session) => {
+    const user = await prisma.user.findFirst({
+      where: {
+        id: session.user.id,
+      },
+      select: {
+        emailVerified: true,
+        accounts: {
+          select: {
+            providerAccountId: true,
+            provider: true,
+          },
         },
       },
-    },
-  });
-  if (!user) {
-    throw new Error("アカウントが見つかりません");
-  }
-
-  const remain = user.accounts
-    .filter((account) => !(account.providerAccountId === id && account.provider === "passkey"));
-  if (remain.length === user.accounts.length) {
-    throw new Error("アカウントが見つかりません");
-  }
-
-  if (remain.length === 0) {
-    console.log("Deleting the last account");
-    if (!user.emailVerified) {
-      console.log("The user is not verified");
-      throw new Error("サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。");
+    });
+    if (!user) {
+      throw new Error("アカウントが見つかりません");
     }
-  }
 
-  await prisma.account.delete({
-    where: {
-      provider_providerAccountId: {
-        providerAccountId: id,
-        provider: "passkey",
-      },
-    },
-  });
-  await prisma.authenticator.delete({
-    where: {
-      userId_credentialID: {
-        userId,
-        credentialID: id,
+    const remain = user.accounts.filter(
+      (account) =>
+        !(account.providerAccountId === id && account.provider === "passkey"),
+    );
+    if (remain.length === user.accounts.length) {
+      throw new Error("アカウントが見つかりません");
+    }
+
+    if (remain.length === 0) {
+      console.log("Deleting the last account");
+      if (!user.emailVerified) {
+        console.log("The user is not verified");
+        throw new Error(
+          "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。",
+        );
       }
     }
+
+    await prisma.account.delete({
+      where: {
+        provider_providerAccountId: {
+          providerAccountId: id,
+          provider: "passkey",
+        },
+      },
+    });
+    await prisma.authenticator.delete({
+      where: {
+        userId_credentialID: {
+          userId: session.user.id,
+          credentialID: id,
+        },
+      },
+    });
+    revalidatePath("/account/manage/security");
+    redirect("/account/manage/security");
   });
-  revalidatePath("/account/manage/security");
-  redirect("/account/manage/security");
 }

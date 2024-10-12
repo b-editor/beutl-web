@@ -6,9 +6,7 @@ export default async function Page() {
   const session = await auth();
   const url = headers().get("x-url") || "/";
   if (!session?.user) {
-    const searchParams = new URLSearchParams();
-    searchParams.set("returnUrl", url);
-    redirect(`/account/sign-in?${searchParams.toString()}`);
+    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
   redirect("/account/manage/profile");

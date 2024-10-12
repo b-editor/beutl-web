@@ -2,32 +2,11 @@ import NavBar from "@/components/nav-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import authOrSignIn from "@/lib/auth-guard";
+import { authOrSignIn } from "@/lib/auth-guard";
 import { Eye, EyeOff } from "lucide-react";
 import Image from "next/image";
 import { retrievePackages } from "./actions";
 import Link from "next/link";
-
-const extensions = [
-  {
-    name: "FFmpeg配置ツール",
-    description: "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
-    image: "https://beutl.beditor.net/api/v1/assets/b-editor/ffmpeg-locator.png/download",
-    borderGradient: "linear-gradient(135deg, #5C9A55 0%, #5E84E7 50%, #7B59F6 100%)"
-  },
-  {
-    name: "Sugar Shaker",
-    description: "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
-    image: "https://beutl.beditor.net/api/v1/assets/b-editor/sugar-shaker-logo.jpg/download",
-    borderGradient: "linear-gradient(135deg, #ffffff 0%, #090C1D 50%, #ffffff 100%)"
-  },
-  {
-    name: "Cefサンプル",
-    description: "Cefを使ったブラウザをページに追加します。",
-    image: "https://beutl.beditor.net/api/v1/assets/b-editor/icon/download",
-    borderGradient: "linear-gradient(135deg, #693AF4 0%, #D0D2D2 100%)"
-  }
-];
 
 export default async function Page() {
   const session = await authOrSignIn();
@@ -40,7 +19,7 @@ export default async function Page() {
           <h2 className="text-3xl font-semibold">拡張機能を開発する</h2>
           <div className="flex gap-2">
             <Button asChild><Link href="/developer/new/project">新しい拡張機能を作成</Link></Button>
-            <Button variant="outline">ドキュメント</Button>
+            <Button variant="outline" disabled>ドキュメント</Button>
           </div>
         </div>
       </div>
@@ -69,7 +48,6 @@ export default async function Page() {
                       {item.latestVersion && <Badge variant="secondary">{item.latestVersion}</Badge>}
                       <Badge variant="secondary">{item.published ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</Badge>
                     </div>
-                    {/* <p className="text-sm mt-4">{item.description}</p> */}
                   </div>
                 </CardContent>
               </Card>

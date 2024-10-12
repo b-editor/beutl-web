@@ -7,14 +7,14 @@ import Nodemailer from "@auth/core/providers/nodemailer";
 import Passkey from "@auth/core/providers/passkey";
 import { options as nodemailerOptions } from "./nodemailer";
 import Credentials from "@auth/core/providers/credentials";
-import { headers } from "next/headers";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
   providers: [
     Google,
     GitHub,
-    Nodemailer(nodemailerOptions),
+    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    Nodemailer(nodemailerOptions) as any,
     // サーバー内部で使う
     //  - src/app/(manage-account)/account/manage/email/actions.ts
     Credentials({
@@ -41,8 +41,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   events: {
     async createUser(message) {
-      const userName = message.user.email?.split("@")[0];
+      let userName = message.user.email?.split("@")[0];
       if (!userName || !message.user.id) return;
+      const original = userName;
+
+      let exists = await prisma.profile.findFirst({
+        where: {
+          userName: original
+        }
+      });
+      for (let i = 1; exists; i++) {
+        userName = `${original}${i}`;
+        exists = await prisma.profile.findFirst({
+          where: {
+            userName: userName
+          }
+        });
+      }
+
       await prisma.profile.create({
         data: {
           userId: message.user.id,

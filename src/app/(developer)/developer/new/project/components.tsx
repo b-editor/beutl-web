@@ -30,10 +30,10 @@ export function Form() {
             <SubmitButton>
               作成
             </SubmitButton>
-            <Button variant="outline">
+            {/* <Button variant="outline">
               <Upload className="w-4 h-4 mr-2" />
               パッケージファイルから作成
-            </Button>
+            </Button> */}
           </div>
         </div>
       </form>

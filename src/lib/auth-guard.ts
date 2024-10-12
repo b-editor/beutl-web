@@ -1,22 +1,44 @@
-"use server";
-
+import "server-only";
 import { auth } from "@/auth";
-import type { Session } from "next-auth";
+import type { Session, User } from "next-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-export default async function authOrSignIn() {
+export interface SafeUser extends User {
+  id: string
+}
+
+export interface SafeSession extends Session {
+  user: SafeUser
+}
+
+export async function authOrSignIn(): Promise<SafeSession> {
   const session = await auth();
-  const url = headers().get("x-url") || "/";
-  if (!session?.user) {
-    const searchParams = new URLSearchParams();
-    searchParams.set("returnUrl", url);
-    redirect(`/account/sign-in?${searchParams.toString()}`);
+  if (!session?.user?.id) {
+    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(headers().get("x-url") || "/")}`);
   }
 
-  if (session.user.id === undefined) {
-    throw new Error("User ID is missing in session");
+  return session as SafeSession;
+}
+
+export async function authenticated<TResult>(
+  fnc: (session: SafeSession) => Promise<TResult>
+) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { message: "Unauthenticated", success: false };
   }
 
-  return session as Session & { user: NonNullable<Session["user"]> & { id: string } };
+  return await fnc(session as SafeSession);
+}
+
+export async function throwIfUnauth<TResult>(
+  fnc: (session: SafeSession) => Promise<TResult>
+) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("Unauthenticated");
+  }
+
+  return await fnc(session as SafeSession);
 }
