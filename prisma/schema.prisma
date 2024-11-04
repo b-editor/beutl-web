@@ -4,7 +4,7 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   previewFeatures = ["fullTextSearch"]
 }
 
@@ -145,6 +145,7 @@ model File {
   mimeType   String
   objectKey  String
   userId     String
+  sha256     String?
   visibility FileVisibility
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
@@ -216,13 +217,13 @@ model Release {
   targetVersion String
   title         String
   description   String
-  fileId        String
+  fileId        String?
   published     Boolean
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
-  file          File           @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  file          File?          @relation(fields: [fileId], references: [id], onDelete: SetNull)
   CompatRelease CompatRelease?
 }
 
