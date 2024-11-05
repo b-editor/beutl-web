@@ -101,6 +101,7 @@ export default function Home() {
                     </h5>
                     <ul className="list-disc list-inside mt-2">
                       <li className="text-sm">macOS Sonoma 14.6.1</li>
+                      <li className="text-sm">macOS Sequoia 15.1</li>
                     </ul>
                     <h5 className="border-b pb-2 text-lg font-semibold tracking-tight mt-4">
                       Linux
