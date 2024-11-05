@@ -22,7 +22,13 @@ function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
   )
 }
 
-export function ClientPage({ pkg, owned }: { pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>>, owned: boolean }) {
+type Props = {
+  pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
+  owned: boolean;
+  message?: "PleaseOpenDesktopApp";
+}
+
+export function ClientPage({ pkg, owned, message }: Props) {
   const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -49,7 +55,10 @@ export function ClientPage({ pkg, owned }: { pkg: NonNullable<Awaited<ReturnType
               </Button>
             </div>
           </div>
+          <div className="flex flex-col gap-2 sm:items-end">
           <GetButton pkgId={pkg.id} owned={owned} />
+          {message && <p>インストールするにはデスクトップアプリを開いてください</p>}
+          </div>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

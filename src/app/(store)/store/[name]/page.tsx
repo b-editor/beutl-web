@@ -5,7 +5,16 @@ import { SemVer } from "semver";
 import { auth } from "@/auth";
 import { prisma } from "@/prisma";
 
-export default async function Page({ params: { name } }: { params: { name: string } }) {
+type Props = {
+  params: {
+    name: string;
+  };
+  searchParams: {
+    message?: "PleaseOpenDesktopApp";
+  }
+}
+
+export default async function Page({ params: { name }, searchParams: { message } }: Props) {
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
@@ -26,6 +35,6 @@ export default async function Page({ params: { name } }: { params: { name: strin
   }
 
   return (
-    <ClientPage pkg={pkg} owned={owned} />
+    <ClientPage pkg={pkg} owned={owned} message={message} />
   )
 }

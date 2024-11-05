@@ -34,7 +34,7 @@ export async function addToLibrary(packageId: string) {
     });
   }
   revalidatePath(`/store/${name}`);
-  redirect(`/store/${name}`);
+  redirect(`/store/${name}?message=PleaseOpenDesktopApp`);
 }
 
 export async function removeFromLibrary(packageId: string) {

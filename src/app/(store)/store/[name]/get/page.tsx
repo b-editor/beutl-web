@@ -36,5 +36,5 @@ export default async function Page({ params: { name } }: { params: { name: strin
     })
   }
   revalidatePath(`/store/${name}`);
-  redirect(`/store/${name}`);
+  redirect(`/store/${name}?message=PleaseOpenDesktopApp`);
 }
