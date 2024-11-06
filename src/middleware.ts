@@ -19,8 +19,10 @@ export function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  if (["/img", "/robots.txt", "/_next"].find(i => pathname.startsWith(i))) {
-    return NextResponse.next();
+  if (["/img", "/robots.txt", "/_next", "/api"].find(i => pathname.startsWith(i))) {
+    return NextResponse.next({
+      headers: headers
+    });
   }
 
   const pathnameIsMissingLocale = availableLanguages.every(
@@ -38,7 +40,9 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  return NextResponse.next();
+  return NextResponse.next({
+    headers: headers
+  });
 }
 
 export const config = {
