@@ -19,5 +19,8 @@ export function formatBytes(bytes: number, decimals = 2) {
 }
 
 export function getUrl(request: NextRequest) {
-  return `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}`;
+  const url = new URL(request.url);
+  url.protocol = request.headers.get("x-forwarded-proto") || url.protocol;
+  url.host = request.headers.get("x-forwarded-host") || url.host;
+  return url.toString();
 }
