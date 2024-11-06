@@ -19,8 +19,8 @@ export function formatBytes(bytes: number, decimals = 2) {
 }
 
 export function getUrl(request: NextRequest) {
-  const url = new URL(request.url);
+  const url = new URL(request.referrer);
   url.protocol = request.headers.get("x-forwarded-proto") || url.protocol;
-  url.host = request.headers.get("x-forwarded-host") || url.host;
+  url.hostname = request.headers.get("x-forwarded-host") || url.hostname;
   return url.toString();
 }
