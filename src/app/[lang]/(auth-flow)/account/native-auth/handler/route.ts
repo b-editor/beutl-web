@@ -1,17 +1,17 @@
 import { auth } from "@/auth";
 import { randomString } from "@/lib/create-hash";
 import { prisma } from "@/prisma";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { NextRequest, NextResponse } from "next/server";
 
-export default async function Page({ searchParams: { identifier } }: { searchParams: { identifier: string } }) {
+export async function GET(request: NextRequest) {
+  const identifier = request.nextUrl.searchParams.get("identifier") as string;
   const session = await auth();
 
-  const xurl = headers().get("x-url") as string;
+  const xurl = request.headers.get("x-url") as string;
   if (!session?.user) {
     const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
-    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
+    return NextResponse.redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
   } else {
     if (!session.user.id) {
       throw new Error("User id is not found");
@@ -35,6 +35,6 @@ export default async function Page({ searchParams: { identifier } }: { searchPar
     if (continueUrl.hostname !== "localhost") {
       throw new Error("Invalid continue URL");
     }
-    redirect(continueUrl.toString());
+    return NextResponse.redirect(continueUrl.toString());
   }
 }
