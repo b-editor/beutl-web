@@ -228,7 +228,7 @@ export async function deletePackage(id: string): Promise<Response> {
       });
 
       const files = pkg.PackageScreenshot.map((item) => item.file).concat(
-        pkg.Release.map((item) => item.file),
+        pkg.Release.map((item) => item.file as NonNullable<typeof item.file>),
       );
       if (pkg.iconFile) {
         files.push(pkg.iconFile);

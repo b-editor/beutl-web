@@ -3,12 +3,16 @@ import NavBar from "@/components/nav-bar";
 
 export default async function Layout({
   children,
+  params: { lang },
 }: {
-  children: React.ReactNode;
+    children: React.ReactNode;
+    params: {
+      lang: string;
+    };
 }) {
   return (
     <div>
-      <NavBar />
+      <NavBar lang={lang} />
       {children}
       <Footer />
     </div>

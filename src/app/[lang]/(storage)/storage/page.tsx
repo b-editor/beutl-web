@@ -2,7 +2,7 @@ import { Progress } from "@/components/ui/progress";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { formatBytes } from "@/lib/utils";
 import { retrieveFiles } from "./actions";
-import { List } from "@/app/(storage)/storage/list";
+import { List } from "@/app/[lang]/(storage)/storage/list";
 
 export default async function Page() {
   await authOrSignIn();

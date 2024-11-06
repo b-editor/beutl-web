@@ -1,6 +1,6 @@
 "use client";
 
-import { changeFileVisibility, deleteFile, getTemporaryUrl } from "@/app/(storage)/storage/actions";
+import { changeFileVisibility, deleteFile, getTemporaryUrl } from "@/app/[lang]/(storage)/storage/actions";
 import type { ColumnDef } from "@tanstack/react-table"
 import { ArrowUpDown, File as FileIcon, Image as ImageIcon, Loader2, MoreHorizontal } from "lucide-react"
 

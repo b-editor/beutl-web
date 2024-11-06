@@ -1,6 +1,6 @@
 "use client";
 
-import { deleteFile, uploadFile } from "@/app/(storage)/storage/actions";
+import { deleteFile, uploadFile } from "@/app/[lang]/(storage)/storage/actions";
 import {
   type ColumnFiltersState,
   type SortingState,
