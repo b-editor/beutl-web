@@ -7,8 +7,8 @@ import { redirect } from "next/navigation";
 export default async function Page({ searchParams: { identifier } }: { searchParams: { identifier: string } }) {
   const session = await auth();
 
+  const xurl = headers().get("x-url") as string;
   if (!session?.user) {
-    const xurl = headers().get("x-url") as string;
     const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
     redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
@@ -29,7 +29,7 @@ export default async function Page({ searchParams: { identifier } }: { searchPar
       }
     });
 
-    const continueUrl = new URL(obj.continueUrl);
+    const continueUrl = new URL(obj.continueUrl, xurl);
     continueUrl.searchParams.set("code", code);
     // localhostかを判定
     if (continueUrl.hostname !== "localhost") {

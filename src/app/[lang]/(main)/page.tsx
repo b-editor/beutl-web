@@ -50,7 +50,7 @@ export default async function Home({ params: { lang } }: { params: { lang: strin
 
         <div className="container mx-auto px-6 pt-12 md:px-12">
 
-          <h1 className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl lg:mt-8 overflow-hidden">
+          <h1 className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl lg:mt-8">
             {t("main:unleashCreativity")}
           </h1>
           <h2 className="scroll-m-20 mt-8 pb-2 text-xl md:text-3xl font-medium tracking-tight">
