@@ -15,5 +15,8 @@ export function GET(request: NextRequest): NextResponse {
     }
   }
 
+  // console.log("Redirecting to", request.nextUrl);
+  // console.log("Redirecting to", request.headers);
+  // console.log("Redirecting to", requestUrl.toString());
   return NextResponse.redirect(requestUrl.toString());
 }
