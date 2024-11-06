@@ -10,7 +10,7 @@ const getNegotiatedLanguage = (
 
 export function middleware(request: NextRequest) {
   const newRequest = request.clone();
-  const url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}`;
+  const url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}${request.nextUrl.search}`;
   console.log("url", url);  
   newRequest.headers.set('x-url', url);
   newRequest.headers.set('x-pathname', request.nextUrl.pathname);
@@ -20,7 +20,7 @@ export function middleware(request: NextRequest) {
   };
   const preferredLanguage = getNegotiatedLanguage(headers) || defaultLanguage;
 
-  const pathname = request.nextUrl.pathname;
+  const pathname = `${request.nextUrl.pathname}${request.nextUrl.search}`;
 
   if (["/img", "/robots.txt", "/_next", "/api"].find(i => pathname.startsWith(i))) {
     return NextResponse.next({
