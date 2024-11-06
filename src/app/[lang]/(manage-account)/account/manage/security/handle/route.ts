@@ -1,11 +1,10 @@
-import { getUrl } from "@/lib/utils";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
 export function GET(request: NextRequest): NextResponse {
   const cookieStore = cookies();
   const authFlow = cookieStore.get("beutl.auth-flow");
-  const requestUrl = new URL(getUrl(request));
+  const requestUrl = new URL(headers().get("x-url") as string);
   requestUrl.pathname = "/account/manage/security";
 
   if (authFlow?.value) {
@@ -15,8 +14,5 @@ export function GET(request: NextRequest): NextResponse {
     }
   }
 
-  // console.log("Redirecting to", request.nextUrl);
-  // console.log("Redirecting to", request.headers);
-  // console.log("Redirecting to", requestUrl.toString());
   return NextResponse.redirect(requestUrl.toString());
 }

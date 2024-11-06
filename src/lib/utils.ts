@@ -17,11 +17,3 @@ export function formatBytes(bytes: number, decimals = 2) {
 
   return `${Number.parseFloat((bytes / k ** i).toFixed(dm))} ${sizes[i]}`
 }
-
-export function getUrl(request: NextRequest) {
-  const url = new URL(request.url);
-  url.protocol = request.headers.get("x-forwarded-proto") || url.protocol;
-  url.hostname = request.headers.get("x-forwarded-host") || url.hostname;
-  console.log("URL", url);
-  return url.toString();
-}
