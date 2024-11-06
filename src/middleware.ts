@@ -9,8 +9,9 @@ const getNegotiatedLanguage = (
 };
 
 export function middleware(request: NextRequest) {
-  request.headers.set('x-url', request.url);
-  request.headers.set('x-pathname', request.nextUrl.pathname);
+  const newRequest = request.clone();
+  newRequest.headers.set('x-url', request.url);
+  newRequest.headers.set('x-pathname', request.nextUrl.pathname);
 
   const headers = {
     'accept-language': request.headers.get('accept-language') ?? '',
@@ -22,7 +23,7 @@ export function middleware(request: NextRequest) {
   if (["/img", "/robots.txt", "/_next", "/api"].find(i => pathname.startsWith(i))) {
     return NextResponse.next({
       request: {
-        headers: request.headers
+        headers: newRequest.headers
       }
     });
   }
@@ -38,7 +39,9 @@ export function middleware(request: NextRequest) {
       );
     } else {
       const newPathname = `/${defaultLanguage}${pathname}`;
-      return NextResponse.rewrite(new URL(newPathname, request.url));
+      return NextResponse.rewrite(new URL(newPathname, request.url), {
+        headers: newRequest.headers
+      });
     }
   }
 
