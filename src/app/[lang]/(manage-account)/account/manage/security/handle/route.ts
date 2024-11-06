@@ -1,10 +1,11 @@
+import { getUrl } from "@/lib/utils";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
 export function GET(request: NextRequest): NextResponse {
   const cookieStore = cookies();
   const authFlow = cookieStore.get("beutl.auth-flow");
-  const requestUrl = new URL(request.url);
+  const requestUrl = new URL(getUrl(request));
   requestUrl.pathname = "/account/manage/security";
 
   if (authFlow?.value) {
