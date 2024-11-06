@@ -21,7 +21,9 @@ export function middleware(request: NextRequest) {
 
   if (["/img", "/robots.txt", "/_next", "/api"].find(i => pathname.startsWith(i))) {
     return NextResponse.next({
-      headers: headers
+      request: {
+        headers: request.headers
+      }
     });
   }
 
@@ -41,7 +43,9 @@ export function middleware(request: NextRequest) {
   }
 
   return NextResponse.next({
-    headers: headers
+    request: {
+      headers: request.headers
+    }
   });
 }
 
