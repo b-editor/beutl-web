@@ -10,7 +10,8 @@ const getNegotiatedLanguage = (
 
 export function middleware(request: NextRequest) {
   const newRequest = request.clone();
-  newRequest.headers.set('x-url', `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}`);
+  const url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}`;
+  newRequest.headers.set('x-url', url);
   newRequest.headers.set('x-pathname', request.nextUrl.pathname);
   console.dir(newRequest.headers, { depth: null });
 
@@ -36,12 +37,14 @@ export function middleware(request: NextRequest) {
   if (pathnameIsMissingLocale) {
     if (preferredLanguage !== defaultLanguage) {
       return NextResponse.redirect(
-        new URL(`/${preferredLanguage}${pathname}`, request.url),
+        new URL(`/${preferredLanguage}${pathname}`, url),
       );
     } else {
       const newPathname = `/${defaultLanguage}${pathname}`;
       return NextResponse.rewrite(new URL(newPathname, request.url), {
-        headers: newRequest.headers
+        request: {
+          headers: newRequest.headers
+        }
       });
     }
   }
