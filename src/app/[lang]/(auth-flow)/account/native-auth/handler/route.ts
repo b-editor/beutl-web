@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   if (!session?.user) {
     const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
-    return NextResponse.redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
+    return NextResponse.redirect(new URL(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`, xurl));
   } else {
     if (!session.user.id) {
       throw new Error("User id is not found");
