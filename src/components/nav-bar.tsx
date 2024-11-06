@@ -5,13 +5,16 @@ import { CircleUser } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { auth } from "@/auth";
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu"
+import { getTranslation } from "@/app/i18n/server";
 
-export default async function NavBar() {
+export default async function NavBar({ lang }: { lang: string }) {
+  const { t } = await getTranslation(lang);
   const session = await auth();
+
   return (
     <nav className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-20">
       <div className="gap-2 flex">
-        <StandardDrawer />
+        <StandardDrawer lang={lang} />
 
         <Link className="decoration-0 flex gap-2 my-auto" href="/">
           <img className='align-bottom' src="/img/logo_dark.svg" alt="Logo" />
@@ -28,12 +31,12 @@ export default async function NavBar() {
           <NavigationMenuList>
             <Link href="/docs" legacyBehavior passHref>
               <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
-                ドキュメント
+                {t("docs")}
               </NavigationMenuLink>
             </Link>
             <Link href="/store" legacyBehavior passHref className="max-sm:hidden">
               <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
-                ストア
+                {t("store")}
               </NavigationMenuLink>
             </Link>
             {session?.user
@@ -51,7 +54,7 @@ export default async function NavBar() {
                             href="/account"
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
-                            アカウント
+                            {t("account")}
                           </Link>
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
@@ -59,7 +62,7 @@ export default async function NavBar() {
                             href="/storage"
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
-                            ストレージ
+                            {t("storage")}
                           </Link>
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
@@ -67,7 +70,7 @@ export default async function NavBar() {
                             href="/developer"
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
-                            デベロッパー
+                            {t("developer")}
                           </Link>
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
@@ -75,7 +78,7 @@ export default async function NavBar() {
                             href="/library"
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
-                            ライブラリ
+                            {t("library")}
                           </Link>
                         </NavigationMenuLink>
                       </li>

@@ -14,13 +14,18 @@ import SubmitButton from "@/components/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ErrorDisplay } from "@/components/error-display";
 import { Separator } from "@/components/ui/separator";
+import { useTranslation } from "@/app/i18n/client";
 
-function ChangeUserName({ profile, state }: { profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">, state: State }) {
+function ChangeUserName(
+  { profile, state, lang }:
+    { profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">, state: State, lang: string }
+) {
   const [locked, setLocked] = useState(true);
+  const { t } = useTranslation(lang);
 
   return (
     <div className="rounded-lg border text-card-foreground flex flex-col">
-      <Label className="font-bold text-md m-6 mb-4" htmlFor="userName">ユーザーID</Label>
+      <Label className="font-bold text-md m-6 mb-4" htmlFor="userName">{t("account:userId")}</Label>
       <Separator />
       <div className="flex gap-2 mx-6 mt-4">
         <Input className="max-w-sm" type="text" id="userName" name="userName" defaultValue={profile?.userName} readOnly={locked} />
@@ -33,25 +38,25 @@ function ChangeUserName({ profile, state }: { profile: Prisma.Result<PrismaClien
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>ユーザーIDを変更しますか？</AlertDialogTitle>
+              <AlertDialogTitle>{t("account:userIdDialog.title")}</AlertDialogTitle>
               <AlertDialogDescription className="text-foreground">
-                <p>ユーザー識別に使う一意なIDを変更できます。</p>
-                <p>以下の点をご確認ください。</p>
+                <p>{t("account:userIdDialog.p1")}</p>
+                <p>{t("account:userIdDialog.p2")}</p>
                 <ul className="list-disc list-inside ml-4 mt-2">
-                  <li>変更後、元のIDに戻すことができなくなる可能性があります。</li>
-                  <li>変更後、他のユーザーが元のIDを使う可能性があります。</li>
-                  <li>元のIDを使用して、あなたのプロフィールにアクセスできなくなります。</li>
+                  <li>{t("account:userIdDialog.li1")}</li>
+                  <li>{t("account:userIdDialog.li2")}</li>
+                  <li>{t("account:userIdDialog.li3")}</li>
                 </ul>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>キャンセル</AlertDialogCancel>
-              <AlertDialogAction onClick={() => setLocked(false)}>続ける</AlertDialogAction>
+              <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => setLocked(false)}>{t("continue")}</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
       </div>
-      <p className="text-sm text-muted-foreground m-6 mt-2">ユーザー識別に使う一意なIDを変更できます。 変更するとブックマークされているURLなどが使えなくなる可能性があります。</p>
+      <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:userIdDescription")}</p>
       {state.errors?.userName && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.userName} />}
     </div>
   )
@@ -77,34 +82,35 @@ type FormProps = ComponentProps<"form"> & {
   >
 }
 
-export function Form({ profile, socials, ...props }: FormProps) {
+export function Form({ profile, socials, lang, ...props }: FormProps & { lang: string }) {
   const xProfile = useMemo(() => socials.find(social => social.provider.name === "x"), [socials]);
   const ghProfile = useMemo(() => socials.find(social => social.provider.name === "github"), [socials]);
   const ytProfile = useMemo(() => socials.find(social => social.provider.name === "youtube"), [socials]);
   const customProfile = useMemo(() => socials.find(social => social.provider.name === "custom"), [socials]);
   const [state, dispatch] = useFormState(updateProfile, {});
+  const { t } = useTranslation(lang);
 
   return (
     <form {...props} action={dispatch}>
       <div className="flex flex-col gap-4">
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <Label className="font-bold text-md m-6 mb-4" htmlFor="displayName">表示名</Label>
+          <Label className="font-bold text-md m-6 mb-4" htmlFor="displayName">{t("account:displayName")}</Label>
           <Separator />
           <Input className="max-w-sm w-auto mt-4 mx-6" type="text" id="displayName" name="displayName" defaultValue={profile?.displayName} maxLength={50} />
-          <p className="text-sm text-muted-foreground m-6 mt-2">50文字以下</p>
+          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:maxCharacters", { max: 50 })}</p>
           {state.errors?.displayName && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.displayName} />}
         </div>
-        <ChangeUserName profile={profile} state={state} />
+        <ChangeUserName profile={profile} state={state} lang={lang} />
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <Label className="font-bold text-md m-6 mb-4" htmlFor="bio">自己紹介</Label>
+          <Label className="font-bold text-md m-6 mb-4" htmlFor="bio">{t("account:bio")}</Label>
           <Separator />
           <Textarea className="max-w-sm w-auto mt-4 mx-6" id="bio" name="bio" defaultValue={profile?.bio || undefined} maxLength={150} />
-          <p className="text-sm text-muted-foreground m-6 mt-2">拡張機能を公開したとき、このプロフィールが表示されます。150文字以下</p>
+          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:bioDescription")}</p>
           {state.errors?.bio && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.bio} />}
         </div>
 
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <h3 className="font-bold text-md m-6 mb-4">ソーシャル</h3>
+          <h3 className="font-bold text-md m-6 mb-4">{t("account:socials")}</h3>
           <Separator />
           <div className="mx-6 mt-4 my-2">
             <div className="flex gap-4 max-w-xs items-center">
@@ -139,7 +145,7 @@ export function Form({ profile, socials, ...props }: FormProps) {
         {state.message && (
           <Alert variant={!state.success ? "destructive" : "default"}>
             {!state.success ? <AlertCircle className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
-            <AlertTitle>{!state.success ? "エラー" : "成功"}</AlertTitle>
+            <AlertTitle>{!state.success ? t("error") : t("success")}</AlertTitle>
             <AlertDescription>
               {state.message}
             </AlertDescription>
@@ -147,8 +153,8 @@ export function Form({ profile, socials, ...props }: FormProps) {
         )}
 
         <div className="flex gap-4 my-6">
-          <SubmitButton>保存</SubmitButton>
-          <Button variant="outline" type="reset">変更を破棄</Button>
+          <SubmitButton>{t("save")}</SubmitButton>
+          <Button variant="outline" type="reset">{t("discardChanges")}</Button>
         </div>
       </div>
     </form>

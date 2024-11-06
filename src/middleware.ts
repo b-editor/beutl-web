@@ -1,15 +1,52 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import Negotiator from 'negotiator';
+import { defaultLanguage, availableLanguages } from '@/app/i18n/settings';
 
-export function middleware(request: Request) {
+const getNegotiatedLanguage = (
+  headers: Negotiator.Headers,
+): string | undefined => {
+  return new Negotiator({ headers }).language([...availableLanguages]);
+};
 
-  // Store current request url in a custom header, which you can read later
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set('x-url', request.url);
+export function middleware(request: NextRequest) {
+  request.headers.set('x-url', request.url);
+  request.headers.set('x-pathname', request.nextUrl.pathname);
 
-  return NextResponse.next({
-    request: {
-      // Apply new request headers
-      headers: requestHeaders,
+  const headers = {
+    'accept-language': request.headers.get('accept-language') ?? '',
+  };
+  const preferredLanguage = getNegotiatedLanguage(headers) || defaultLanguage;
+
+  const pathname = request.nextUrl.pathname;
+
+  if (["/img", "/robots.txt", "/_next"].find(i => pathname.startsWith(i))) {
+    return NextResponse.next();
+  }
+
+  const pathnameIsMissingLocale = availableLanguages.every(
+    (lang) => !pathname.startsWith(`/${lang}/`) && pathname !== `/${lang}`,
+  );
+
+  if (pathnameIsMissingLocale) {
+    if (preferredLanguage !== defaultLanguage) {
+      return NextResponse.redirect(
+        new URL(`/${preferredLanguage}${pathname}`, request.url),
+      );
+    } else {
+      const newPathname = `/${defaultLanguage}${pathname}`;
+      return NextResponse.rewrite(new URL(newPathname, request.url));
     }
-  });
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: [
+    // Skip all internal paths (_next)
+    '/((?!_next).*)',
+    // "/((?!api|static|.*\\..*|_next).*)",
+    // Optional: only run on root (/) URL
+    // '/'
+  ],
 }

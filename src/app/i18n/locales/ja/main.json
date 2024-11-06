@@ -1,0 +1,23 @@
+{
+  "unleashCreativity": "創造力を解き放つ",
+  "freeAndOpenSource": "無料でオープンソースの動画編集ソフト",
+  "download": "ダウンロード",
+  "crossPlatform": "クロスプラットフォーム",
+  "crossPlatformText1": "Windows専用のソフトにはうんざりしていませんか？",
+  "crossPlatformText2": "Beutl は常に最新の .NET を使用しているため、いろいろな OS で動作します。 Windows, Linux, macOSをサポートしています。",
+  "verifiedOS": "動作確認済みOS",
+  "animation": "アニメーション",
+  "animationText": "キーフレームとイージングを使用して、フェードインアウト、スライドインなど基本的なアニメーションや、さまざまなオブジェクトをアニメーションすることができます。",
+  "richEffects": "豊富なエフェクト",
+  "richEffectsText": "色フィルター、ぼかし、シャドウ、LUT などの基本的なエフェクトから 縁取り、内側シャドウ、ロングシャドウなどのマイナーなエフェクトがあります。もちろんこれらは拡張機能で増やすことができます。",
+  "extensible": "拡張性",
+  "extensibleText": "Beutl アカウントを作成して、拡張機能を取得したり、自身で開発した拡張機能を公開できます。拡張機能では、エフェクト、オブジェクト、コーデック、UIなどを追加できます。",
+  "officialPackage": "公式パッケージ",
+  "stillWorking": "まだまだ開発中！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！",
+  "ffmpegLocator": "FFmpeg配置ツール",
+  "ffmpegLocatorDescription": "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
+  "sugarShaker": "Sugar Shaker",
+  "sugarShakerDescription": "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
+  "cefSample": "Cefサンプル",
+  "cefSampleDescription": "Cefを使ったブラウザをページに追加します。試験中"
+}

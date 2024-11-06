@@ -1,0 +1,8 @@
+{
+  "profile": "プロフィール",
+  "email": "メールアドレス",
+  "security": "セキュリティ",
+  "data": "個人データ",
+  "displayName": "表示名",
+  "maxCharacters": "最大{{max}}文字"
+}

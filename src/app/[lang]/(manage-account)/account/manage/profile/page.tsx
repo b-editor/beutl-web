@@ -3,8 +3,9 @@ import { prisma } from "@/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
+import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page() {
+export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await auth();
   if (!session?.user) {
     const url = headers().get("x-url") || "/";
@@ -31,11 +32,12 @@ export default async function Page() {
       }
     }
   });
+  const { t } = await getTranslation(lang);
 
   return (
     <div>
-      <h2 className="font-bold text-2xl">プロフィール</h2>
-      <Form profile={profile} socials={socials} className="mt-4" />
+      <h2 className="font-bold text-2xl">{t("account:profile")}</h2>
+      <Form lang={lang} profile={profile} socials={socials} className="mt-4" />
     </div>
   )
 }

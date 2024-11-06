@@ -5,8 +5,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui
 import { NavigationMenu, NavigationMenuLink, NavigationMenuList, navigationMenuTriggerStyle } from './ui/navigation-menu';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import { getTranslation } from "@/app/i18n/server";
 
-export function StandardDrawer() {
+export async function StandardDrawer({ lang }: { lang: string }) {
+  const { t } = await getTranslation(lang);
   return (
     <Sheet>
       <SheetTrigger asChild>
@@ -28,22 +30,22 @@ export function StandardDrawer() {
               <NavigationMenuList className='flex-col items-stretch space-x-0'>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
                   <Link href="/docs">
-                    ドキュメント
+                    {t("docs")}
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
                   <Link href="/store">
-                    ストア
+                    {t("store")}
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
                   <Link href="/docs/privacy">
-                    プライバシーポリシー
+                    {t("privacy")}
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
                   <Link href="/docs/telemetry">
-                    テレメトリーポリシー
+                    {t("telemetry")}
                   </Link>
                 </NavigationMenuLink>
               </NavigationMenuList>
@@ -52,7 +54,7 @@ export function StandardDrawer() {
 
           <div>
 
-            <h3>ソーシャル</h3>
+            <h3>{t("socials")}</h3>
             <NavigationMenu className='flex-col items-stretch max-w-full'>
               <NavigationMenuList className='flex-col items-stretch space-x-0'>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>

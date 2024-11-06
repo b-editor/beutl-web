@@ -1,0 +1,20 @@
+{
+  "signIn": "Sign in",
+  "signUp": "Sign up",
+  "signOut": "Sign out",
+  "docs": "Documents",
+  "store": "Store",
+  "account": "Account",
+  "storage": "Storage",
+  "developer": "Developer",
+  "library": "Library",
+  "privacy": "Privacy Policy",
+  "telemetry": "Telemetry Policy",
+  "socials": "Socials",
+  "error": "Error",
+  "success": "Success",
+  "save": "Save",
+  "discardChanges": "Discard changes",
+  "cancel": "Cancel",
+  "continue": "Continue"
+}

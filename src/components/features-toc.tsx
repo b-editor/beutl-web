@@ -4,27 +4,32 @@ import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react
 import { remToPx } from "@/lib/client-utils";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
+import { useTranslation } from "@/app/i18n/client";
 
-const features = [
-  {
-    name: "features-cross-platform",
-    text: "クロスプラットフォーム"
-  },
-  {
-    name: "features-animation",
-    text: "アニメーション"
-  },
-  {
-    name: "features-effects",
-    text: "エフェクト"
-  },
-  {
-    name: "features-extensions",
-    text: "拡張機能"
-  }
-];
+function getFeatures(t: ReturnType<typeof useTranslation>["t"]) {
+  return [
+    {
+      name: "features-cross-platform",
+      text: t("main:crossPlatform")
+    },
+    {
+      name: "features-animation",
+      text: t("main:animation")
+    },
+    {
+      name: "features-effects",
+      text: t("main:richEffects")
+    },
+    {
+      name: "features-extensions",
+      text: t("main:extensible")
+    }
+  ];
+}
 
-export default function FeaturesToc() {
+export default function FeaturesToc({ lang }: { lang: string }) {
+  const { t } = useTranslation(lang);
+  const features = getFeatures(t);
   const [selected, setSelected] = useState<string | undefined>();
   const ticking = useRef(false);
   const router = useRouter();

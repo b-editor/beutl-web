@@ -1,3 +1,4 @@
+import { getTranslation } from "@/app/i18n/server";
 import { Navigation } from "./components";
 import { auth } from "@/auth";
 import NavBar from "@/components/nav-bar";
@@ -9,8 +10,12 @@ import { redirect } from "next/navigation";
 
 export default async function Layout({
   children,
+  params: { lang },
 }: {
   children: React.ReactNode;
+  params: {
+    lang: string;
+  }
 }) {
   const session = await auth();
   const url = headers().get("x-url") || "/";
@@ -19,10 +24,11 @@ export default async function Layout({
     searchParams.set("returnUrl", url);
     redirect(`/account/sign-in?${searchParams.toString()}`);
   }
+  const { t } = await getTranslation(lang);
 
   return (
     <div>
-      <NavBar />
+      <NavBar lang={lang} />
       <div className="max-w-7xl mx-auto pt-4 md:pt-12 px-4 md:px-[52px]">
         <div className="mb-6 flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -31,12 +37,12 @@ export default async function Layout({
           </div>
           <Link href="/account/sign-out" legacyBehavior passHref>
             <Button variant="outline">
-              サインアウト
+              {t("signOut")}
             </Button>
           </Link>
         </div>
         <div className="flex flex-col md:grid md:grid-cols-[max-content,1fr] gap-6 items-start">
-          <Navigation />
+          <Navigation lang={lang} />
           <div className="w-full">
             {children}
           </div>

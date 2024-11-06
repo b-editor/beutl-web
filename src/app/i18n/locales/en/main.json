@@ -1,0 +1,23 @@
+{
+  "unleashCreativity": "Unleash Creativity",
+  "freeAndOpenSource": "Free and Open Source Video Editing Software",
+  "download": "Download",
+  "crossPlatform": "Cross-Platform",
+  "crossPlatformText1": "Tired of software that only works on Windows?",
+  "crossPlatformText2": "Beutl uses the latest .NET, so it works on various OS. Supports Windows, Linux, and macOS.",
+  "verifiedOS": "Verified OS",
+  "animation": "Animation",
+  "animationText": "Using keyframes and easing, you can create basic animations like fade in/out, slide in, and animate various objects.",
+  "richEffects": "Rich Effects",
+  "richEffectsText": "From basic effects like color filters, blur, shadow, LUT to minor effects like outline, inner shadow, long shadow. Of course, these can be increased with extensions.",
+  "extensible": "Extensible",
+  "extensibleText": "Create a Beutl account to get extensions or publish your own developed extensions. Extensions can add effects, objects, codecs, UI, etc.",
+  "officialPackage": "Official Package",
+  "stillWorking": "Still under development!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+  "ffmpegLocator": "FFmpeg Locator",
+  "ffmpegLocatorDescription": "Automatically places FFmpeg libraries and executables.",
+  "sugarShaker": "Sugar Shaker",
+  "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes.",
+  "cefSample": "Cef Sample",
+  "cefSampleDescription": "Adds a browser using Cef to the page. Experimental"
+}

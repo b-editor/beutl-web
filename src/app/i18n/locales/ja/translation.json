@@ -1,0 +1,20 @@
+{
+  "signIn": "サインイン",
+  "signUp": "サインアップ",
+  "signOut": "サインアウト",
+  "docs": "ドキュメント",
+  "store": "ストア",
+  "account": "アカウント",
+  "storage": "ストレージ",
+  "developer": "デベロッパー",
+  "library": "ライブラリ",
+  "privacy": "プライバシーポリシー",
+  "telemetry": "テレメトリーポリシー",
+  "socials": "ソーシャル",
+  "error": "エラー",
+  "success": "成功",
+  "save": "保存",
+  "discardChanges": "変更を破棄",
+  "cancel": "キャンセル",
+  "continue": "続行"
+}
