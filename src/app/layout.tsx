@@ -14,11 +14,14 @@ export const metadata: Metadata = {
   title: "Beutl"
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
+type Props = {
   children: React.ReactNode;
-}>) {
+  params: {
+    lang: string;
+  }
+}
+
+export default function RootLayout({ children }: Props) {
   return (
     <html lang="ja" className="dark">
       <body
