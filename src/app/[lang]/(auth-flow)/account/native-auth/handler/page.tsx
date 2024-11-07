@@ -7,8 +7,9 @@ import { ClientRedirect } from "./components";
 
 export default async function Page({ searchParams: { identifier } }: { searchParams: { identifier: string } }) {
   const session = await auth();
-
   const xurl = headers().get("x-url") as string;
+  console.dir(headers().entries(), { depth: null });
+  console.dir(session, { depth: null });
   if (!session?.user) {
     const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
