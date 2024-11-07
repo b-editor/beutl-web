@@ -44,7 +44,7 @@ export default async function Page({
             <Button className="w-full" asChild>
               <Link href={returnUrl}>続行</Link>
             </Button>
-            <Link href={`/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`} className="text-sm font-medium inline-block mt-6">他のアカウントを使う</Link>
+            <Link href={`/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`} prefetch={false} className="text-sm font-medium inline-block mt-6">他のアカウントを使う</Link>
           </CardFooter>
         </Card>
         <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
