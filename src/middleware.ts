@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Negotiator from 'negotiator';
 import { defaultLanguage, availableLanguages } from '@/app/i18n/settings';
+import { auth } from './auth';
 
 const getNegotiatedLanguage = (
   headers: Negotiator.Headers,
@@ -8,7 +9,7 @@ const getNegotiatedLanguage = (
   return new Negotiator({ headers }).language([...availableLanguages]);
 };
 
-export function middleware(request: NextRequest) {
+export default auth((request: NextRequest) => {
   const newRequest = request.clone();
   const url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}${request.nextUrl.search}`;
   newRequest.headers.set('x-url', url);
@@ -53,14 +54,4 @@ export function middleware(request: NextRequest) {
       headers: newRequest.headers
     }
   });
-}
-
-export const config = {
-  matcher: [
-    // Skip all internal paths (_next)
-    '/((?!_next).*)',
-    // "/((?!api|static|.*\\..*|_next).*)",
-    // Optional: only run on root (/) URL
-    // '/'
-  ],
-}
+});
