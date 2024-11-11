@@ -29,7 +29,7 @@ export default async function NavBar({ lang }: { lang: string }) {
           )}
         >
           <NavigationMenuList>
-            <Link href="/docs" legacyBehavior passHref>
+            <Link href={`https://beutl-docs.beditor.net/${lang}`} prefetch={false} legacyBehavior passHref>
               <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
                 {t("docs")}
               </NavigationMenuLink>

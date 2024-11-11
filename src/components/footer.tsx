@@ -19,7 +19,7 @@ export default function Footer() {
         <div className="mt-8 flex gap-3 flex-wrap">
           <Link href="/docs/privacy">プライバシーポリシー</Link>
           <Link href="/docs/telemetry">テレメトリー</Link>
-          <Link href="/docs">ドキュメント</Link>
+          <Link href={`https://beutl-docs.beditor.net`}>ドキュメント</Link>
         </div>
         <p className="text-end mt-6">© 2020-2024 b-editor</p>
       </div>
