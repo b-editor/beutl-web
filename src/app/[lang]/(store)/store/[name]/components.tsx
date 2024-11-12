@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { addToLibrary, removeFromLibrary, type retrievePackage } from "./actions";
+import { useMatchMedia } from "@/hooks/use-match-media";
 
 function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
   const router = useRouter();
@@ -38,6 +39,7 @@ export function ClientPage({ pkg, owned, message }: Props) {
       return pkg.Release.find(v => v.version === selectedVersion);
     }
   }, [selectedVersion, pkg.Release]);
+  const maxLg = useMatchMedia("(min-width: 1024px)", false);
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
@@ -99,8 +101,8 @@ export function ClientPage({ pkg, owned, message }: Props) {
       {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
         <>
           <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
-          <Carousel className="mt-4">
-            <CarouselContent>
+          <Carousel className="mt-4" opts={{ active: maxLg }}>
+            <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
               {pkg.PackageScreenshot.map((item) => (
                 <CarouselItem className="w-min max-w-min min-w-min" key={item.file.id}>
                   <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />

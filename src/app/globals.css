@@ -25,8 +25,15 @@
   .text-balance {
     text-wrap: balance;
   }
+  
+  .hidden-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .hidden-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
-
 /* @layer base {
   :root {
     --background: 270 8% 95%;

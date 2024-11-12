@@ -10,6 +10,7 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
 import type { Package } from "./types";
+import { useMatchMedia } from "@/hooks/use-match-media";
 
 export function ScreenshotForm({ pkg }: { pkg: Package }) {
   const [screenshots, moveOptimisticScreenshot] = useOptimistic<Package["PackageScreenshot"], { delta: number, item: Package["PackageScreenshot"][number] }
@@ -32,6 +33,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
   });
   const [adding, startAdd] = useTransition();
   const { toast } = useToast();
+  const maxLg = useMatchMedia("(min-width: 1024px)", false);
 
   const handleAddClick = useCallback(async () => {
     const files = await showOpenFileDialog({ accept: "image/*" });
@@ -82,8 +84,8 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
   return (
     <>
       <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
-      <Carousel className="mt-4">
-        <CarouselContent>
+      <Carousel className="mt-4" opts={{ active: maxLg }}>
+        <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
           {screenshots.map((item) => (
             <CarouselItem className="w-min max-w-min min-w-min group relative" key={item.file.id}>
               <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} priority />
