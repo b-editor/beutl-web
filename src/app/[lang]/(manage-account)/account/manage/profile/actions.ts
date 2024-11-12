@@ -1,18 +1,19 @@
 "use server";
 
+import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated, authOrSignIn } from "@/lib/auth-guard";
+import { getLanguage } from "@/lib/lang-utils";
 import { prisma } from "@/prisma";
-import { z } from "zod";
 
-const emptyStringToUndefined = z.literal('').transform(() => undefined);
-const profileSchema = z.object({
-  displayName: z.string().max(50, "表示名は50文字以下である必要があります"),
-  userName: z.string().regex(/^[a-zA-Z0-9-_]*$/, "ユーザー名は半角英数字とハイフン、アンダースコアのみ使用できます"),
-  bio: z.string().max(150, "自己紹介は150文字以下である必要があります").optional().or(z.literal('')),
-  x: z.string().startsWith("@").optional().or(emptyStringToUndefined),
-  github: z.string().optional().or(emptyStringToUndefined),
-  youtube: z.string().startsWith("@").optional().or(emptyStringToUndefined),
-  custom: z.string().url("有効なURLを入力してください").optional().or(emptyStringToUndefined),
+const emptyStringToUndefined = (z: Zod) => z.literal('').transform(() => undefined);
+const profileSchema = (z: Zod) => z.object({
+  displayName: z.string().max(50),
+  userName: z.string().regex(/^[a-zA-Z0-9-_]*$/),
+  bio: z.string().max(150).optional().or(z.literal('')),
+  x: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
+  github: z.string().optional().or(emptyStringToUndefined(z)),
+  youtube: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
+  custom: z.string().url().optional().or(emptyStringToUndefined(z)),
 });
 
 export type State = {
@@ -31,13 +32,14 @@ export type State = {
 
 export async function updateProfile(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
-    const validated = profileSchema.safeParse(
+    const { t, z } = await getTranslation(getLanguage());
+    const validated = profileSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
     );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
-        message: "入力内容に誤りがあります",
+        message: t("invalidRequest"),
         success: false,
       };
     }
@@ -134,7 +136,7 @@ export async function updateProfile(state: State, formData: FormData): Promise<S
     await Promise.all(promises);
     return {
       success: true,
-      message: "プロフィールを更新しました",
+      message: t("account:profileUpdated"),
     };
   });
 }

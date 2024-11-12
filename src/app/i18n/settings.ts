@@ -1,6 +1,6 @@
 export const defaultLanguage = 'ja';
 export const availableLanguages = [defaultLanguage, 'en'];
-export const namespaces = ['translation', 'main', 'effects', 'docs', 'store', 'storage', 'account', 'auth', 'developer'];
+export const namespaces = ['translation', 'main', 'effects', 'docs', 'store', 'storage', 'account', 'auth', 'authjs', 'developer', "zod"];
 
 export function getOptions(lng = defaultLanguage) {
   return {

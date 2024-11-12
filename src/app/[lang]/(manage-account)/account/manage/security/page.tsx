@@ -7,15 +7,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { translateNextAuthError } from "@/lib/error-description";
 import type { ComponentProps } from "react";
 import { Separator } from "@/components/ui/separator";
+import { getTranslation } from "@/app/i18n/server";
 
 export default async function Page({
-  searchParams: {
-    error
-  }
+  searchParams: { error },
+  params: { lang },
 }: {
-  searchParams: {
-    error?: SignInPageErrorParam
-  }
+  searchParams: { error?: SignInPageErrorParam },
+  params: { lang: string }
 }) {
   const session = await authOrSignIn();
 
@@ -72,30 +71,31 @@ export default async function Page({
         });
       })
   )).filter(i => i) as ComponentProps<typeof PasskeysList>["authenticators"];
+  const { t } = await getTranslation(lang);
 
   return (
     <div>
-      <h2 className="font-bold text-2xl">セキュリティ</h2>
+      <h2 className="font-bold text-2xl">{t("account:security.title")}</h2>
 
       <div className="mt-4 rounded-lg border text-card-foreground">
-        <h3 className="font-bold text-md m-6 mb-4">サインイン方法を追加</h3>
+        <h3 className="font-bold text-md m-6 mb-4">{t("account:security.addSignInMethod")}</h3>
         <Separator />
-        <Form className="py-4 px-6" />
+        <Form className="py-4 px-6" lang={lang} />
       </div>
 
       {error && (
         <Alert variant="destructive" className="mt-2">
-          <AlertTitle>エラー</AlertTitle>
-          <AlertDescription>{translateNextAuthError(error)}</AlertDescription>
+          <AlertTitle>{t("error")}</AlertTitle>
+          <AlertDescription>{translateNextAuthError(t, error)}</AlertDescription>
         </Alert>
       )}
 
       <div className="mt-4 rounded-lg border text-card-foreground">
-        <h3 className="font-bold text-md m-6 mb-4">リンク済み</h3>
+        <h3 className="font-bold text-md m-6 mb-4">{t("account:security.linkedAccounts")}</h3>
         <Separator />
-        <List accounts={safeAccounts} />
+        <List lang={lang} accounts={safeAccounts} />
         {authenticators.length !== 0 && <Separator />}
-        <PasskeysList authenticators={authenticators} />
+        <PasskeysList lang={lang} authenticators={authenticators} />
       </div>
 
     </div>

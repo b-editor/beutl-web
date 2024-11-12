@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import { getLanguage } from "@/lib/lang-utils";
+import { getTranslation } from "@/app/i18n/server";
 
 export type State = {
   success?: boolean;
@@ -14,13 +16,15 @@ export type State = {
 
 export async function addAccount(state: State, formData: FormData): Promise<State> {
   const type = formData.get("type") as string | null;
+  const lang = getLanguage();
+  const { t } = await getTranslation(lang);
 
   if (!type || (type !== "google" && type !== "github" && type !== "passkey")) {
-    return { message: "入力内容に誤りがあります", success: false };
+    return { message: t("invalidRequest"), success: false };
   }
 
   const url = new URL(headers().get("x-url") as string);
-  url.pathname = "/account/manage/security/handle";
+  url.pathname = `/${lang}/account/manage/security/handle`;
   cookies().set(
     "beutl.auth-flow",
     JSON.stringify({
@@ -28,19 +32,21 @@ export async function addAccount(state: State, formData: FormData): Promise<Stat
       url: url.toString(),
     }),
   );
-  await signIn(type, { redirectTo: `${url.origin}/account/manage/security` });
+  await signIn(type, { redirectTo: `${url.origin}/${lang}/account/manage/security` });
   return { success: true };
 }
 
 export async function removeAccount(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const providerAccountId = formData.get("providerAccountId") as
       | string
       | null;
     const provider = formData.get("provider") as string | null;
 
     if (!providerAccountId || !provider) {
-      return { success: false, message: "入力内容に誤りがあります" };
+      return { success: false, message: t("invalidRequest") };
     }
 
     const user = await prisma.user.findFirst({
@@ -58,7 +64,7 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       },
     });
     if (!user) {
-      return { success: false, message: "アカウントが見つかりません" };
+      return { success: false, message: "Account not found" };
     }
 
     const remain = user.accounts.filter(
@@ -69,7 +75,7 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
         ),
     );
     if (remain.length === user.accounts.length) {
-      return { success: false, message: "アカウントが見つかりません" };
+      return { success: false, message: "Account not found" };
     }
 
     if (remain.length === 0) {
@@ -78,8 +84,7 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
         console.log("The user is not verified");
         return {
           success: false,
-          message:
-            "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。",
+          message: t("account:security.cannotRemoveAccount"),
         };
       }
     }
@@ -102,13 +107,14 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
         },
       });
     }
-    revalidatePath("/account/manage/security");
+    revalidatePath(`/${lang}/account/manage/security`);
     return { success: true };
   });
 }
 
 export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
   return await throwIfUnauth(async (session) => {
+    const lang = getLanguage();
     await prisma.authenticator.update({
       where: {
         userId_credentialID: {
@@ -120,13 +126,15 @@ export async function renameAuthenticator({ id, name }: { id: string, name: stri
         name,
       },
     });
-    revalidatePath("/account/manage/security");
-    redirect("/account/manage/security");
+    revalidatePath(`/${lang}/account/manage/security`);
+    redirect(`${lang}/account/manage/security`);
   });
 }
 
 export async function deleteAuthenticator({ id }: { id: string }): Promise<void> {
   return await throwIfUnauth(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const user = await prisma.user.findFirst({
       where: {
         id: session.user.id,
@@ -142,7 +150,7 @@ export async function deleteAuthenticator({ id }: { id: string }): Promise<void>
       },
     });
     if (!user) {
-      throw new Error("アカウントが見つかりません");
+      throw new Error("Account not found");
     }
 
     const remain = user.accounts.filter(
@@ -150,16 +158,14 @@ export async function deleteAuthenticator({ id }: { id: string }): Promise<void>
         !(account.providerAccountId === id && account.provider === "passkey"),
     );
     if (remain.length === user.accounts.length) {
-      throw new Error("アカウントが見つかりません");
+      throw new Error("Account not found");
     }
 
     if (remain.length === 0) {
       console.log("Deleting the last account");
       if (!user.emailVerified) {
         console.log("The user is not verified");
-        throw new Error(
-          "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。",
-        );
+        throw new Error(t("account:security.cannotRemoveAccount"),);
       }
     }
 
@@ -179,7 +185,7 @@ export async function deleteAuthenticator({ id }: { id: string }): Promise<void>
         },
       },
     });
-    revalidatePath("/account/manage/security");
-    redirect("/account/manage/security");
+    revalidatePath(`/${lang}/account/manage/security`);
+    redirect(`/${lang}/account/manage/security`);
   });
 }

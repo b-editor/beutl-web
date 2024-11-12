@@ -15,12 +15,14 @@ import { Badge } from "@/components/ui/badge";
 import { getRelativeTimeDifference } from "@/lib/relative-time";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useTranslation } from "@/app/i18n/client";
 
-export function Form({ ...props }: ComponentProps<"form">) {
+export function Form({ lang, ...props }: ComponentProps<"form"> & { lang: string }) {
   const [state, dispatch] = useFormState(addAccount, {});
   const { toast } = useToast();
   const [spinnerType, setSpinnerType] = useState<0 | 1 | 2>(0);
   const [registering, setRegistering] = useState(false);
+  const { t } = useTranslation(lang);
 
   return (
     <form {...props} action={dispatch}>
@@ -53,13 +55,13 @@ export function Form({ ...props }: ComponentProps<"form">) {
               try {
                 await signIn("passkey", { action: "register" });
                 toast({
-                  title: "成功",
-                  description: "パスキーを登録しました"
+                  title: t("success"),
+                  description: t("account:security.passkeyRegistered"),
                 });
               } catch {
                 toast({
-                  title: "エラー",
-                  description: "パスキーを登録できませんでした",
+                  title: t("error"),
+                  description: t("account:security.passkeyRegisterFailed"),
                   variant: "destructive",
                 });
               } finally {
@@ -68,7 +70,7 @@ export function Form({ ...props }: ComponentProps<"form">) {
             }}
           >
             {registering ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <KeyRound className="w-5 h-5 mr-2" />}
-            パスキー
+            {t("account:security.passkey")}
           </SubmitButton>
         </div>
       </div>
@@ -76,9 +78,19 @@ export function Form({ ...props }: ComponentProps<"form">) {
   )
 }
 
-function ListItem({ account }: { account: { provider: string, providerAccountId: string, emailOrUserName?: string } }) {
+function ListItem({
+  account, lang
+}: {
+  account: {
+    provider: string,
+    providerAccountId: string,
+    emailOrUserName?: string
+  },
+  lang: string
+}) {
   const [pending, setPending] = useState(false);
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   return (
     <li className="flex items-center py-4 px-6 gap-2 border-b">
@@ -119,12 +131,12 @@ function ListItem({ account }: { account: { provider: string, providerAccountId:
                 const state = await removeAccount({}, data);
                 if (state.success) {
                   toast({
-                    title: "成功",
-                    description: "アカウントを削除しました"
+                    title: t("success"),
+                    description: t("account:security.accountRemoved"),
                   });
                 } else {
                   toast({
-                    title: "エラー",
+                    title: t("error"),
                     description: state.message,
                     variant: "destructive",
                   });
@@ -132,7 +144,7 @@ function ListItem({ account }: { account: { provider: string, providerAccountId:
               } catch (e) {
                 if (e instanceof Error) {
                   toast({
-                    title: "エラー",
+                    title: t("error"),
                     description: e.message,
                     variant: "destructive",
                   });
@@ -142,7 +154,7 @@ function ListItem({ account }: { account: { provider: string, providerAccountId:
               }
             }}>
               {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash className="w-4 h-4 mr-2" />}
-              削除
+              {t("remove")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -151,23 +163,24 @@ function ListItem({ account }: { account: { provider: string, providerAccountId:
   )
 }
 
-export function List({ accounts, ...props }: ComponentProps<"ul"> & {
+export function List({ accounts, lang, ...props }: ComponentProps<"ul"> & {
   accounts: {
     provider: string,
     providerAccountId: string,
     emailOrUserName?: string
   }[],
+  lang: string
 }) {
   return (
     <ul {...props} className={cn(props.className, "[&_li:last-child]:border-0")}>
       {accounts.filter(i => i.provider !== "passkey").map((account) => (
-        <ListItem key={account.providerAccountId} account={account} />
+        <ListItem key={account.providerAccountId} account={account} lang={lang} />
       ))}
     </ul>
   )
 }
 
-function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
+function PasskeyListItem({ authenticator, lang, ...props }: ComponentProps<"li"> & {
   authenticator: {
     id: string,
     deviceType: "singleDevice" | "multiDevice",
@@ -176,11 +189,13 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
     createdAt: Date,
     usedAt: Date,
   },
+  lang: string
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(authenticator.name ?? "Unnamed");
   const [pending, setPending] = useState(false);
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   return (
     <li {...props} className="flex items-center py-4 px-6 gap-2 border-b">
@@ -193,16 +208,16 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
             <h4 className="font-bold text-lg">{name}</h4>
             {authenticator.deviceType === "multiDevice" && (
               <Badge variant={authenticator.backedUp ? "default" : "outline"}>
-                {authenticator.backedUp ? "同期されています" : "同期可能です"}
+                {authenticator.backedUp ? t("account:security.syncStatus.synced") : t("account:security.syncStatus.syncable")}
               </Badge>
             )}
           </div>
           <p className="text-sm text-muted">
-            {getRelativeTimeDifference(authenticator.createdAt)} に作成 {authenticator.usedAt && <> | {getRelativeTimeDifference(authenticator.usedAt)} に使用</>}
+            {t("account:security.createdAt")}: {getRelativeTimeDifference(authenticator.createdAt)} {authenticator.usedAt && <> | {t("account:security.usedAt")}: {getRelativeTimeDifference(authenticator.usedAt)}</>}
           </p>
         </>}
         {editing &&
-          <Input name="name" autoComplete="off" placeholder="名前" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input name="name" autoComplete="off" placeholder={t("account:security.name")} value={name} onChange={(e) => setName(e.target.value)} />
         }
       </div>
 
@@ -217,7 +232,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
             <DropdownMenuContent>
               <DropdownMenuItem onClick={() => setEditing(true)} disabled={pending}>
                 <Edit className="w-4 h-4 mr-2" />
-                編集
+                {t("edit")}
               </DropdownMenuItem>
               <DropdownMenuItem disabled={pending} onClick={async () => {
                 setPending(true);
@@ -226,7 +241,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
                 } catch (e) {
                   if (e instanceof Error) {
                     toast({
-                      title: "エラー",
+                      title: t("error"),
                       description: e.message,
                       variant: "destructive",
                     });
@@ -236,7 +251,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
                 }
               }}>
                 {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash className="w-4 h-4 mr-2" />}
-                削除
+                {t("remove")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -254,7 +269,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
               }
             }}>
             {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-            保存
+            {t("save")}
           </Button>
 
           <Button size="sm" variant="outline" type="reset"
@@ -263,7 +278,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
               setName(authenticator.name ?? "Unnamed");
               setEditing(false);
             }}>
-            キャンセル
+            {t("cancel")}
           </Button>
         </>}
 
@@ -272,7 +287,7 @@ function PasskeyListItem({ authenticator, ...props }: ComponentProps<"li"> & {
   )
 }
 
-export function PasskeysList({ authenticators, ...props }: ComponentProps<"ul"> & {
+export function PasskeysList({ authenticators, lang, ...props }: ComponentProps<"ul"> & {
   authenticators: {
     id: string,
     deviceType: "singleDevice" | "multiDevice",
@@ -281,11 +296,12 @@ export function PasskeysList({ authenticators, ...props }: ComponentProps<"ul"> 
     createdAt: Date,
     usedAt: Date,
   }[],
+  lang: string
 }) {
   return (
     <ul {...props} className={cn(props.className, "[&_li:last-child]:border-0")}>
       {authenticators.map((auth) => (
-        <PasskeyListItem key={auth.id} authenticator={auth} />
+        <PasskeyListItem key={auth.id} authenticator={auth} lang={lang} />
       ))}
     </ul>
   )

@@ -1,3 +1,4 @@
+import { getTranslation } from "@/app/i18n/server";
 import { auth } from "@/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -7,14 +8,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export default async function Page({
-  searchParams: { returnUrl }
-}: { searchParams: { returnUrl: string } }
+  searchParams: { returnUrl },
+  params: { lang }
+}: { searchParams: { returnUrl: string }, params: { lang: string } }
 ) {
   const session = await auth();
   if (!session?.user) {
-    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`);
+    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`);
   }
   const user = session.user;
+  const { t } = await getTranslation(lang);
 
   return (
     <div className="h-screen flex items-center justify-center">
@@ -25,8 +28,8 @@ export default async function Page({
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>確認</CardTitle>
-            <CardDescription>このアカウントで続行しますか</CardDescription>
+            <CardTitle>{t("auth:confirmation")}</CardTitle>
+            <CardDescription>{t("auth:doYouWantToContinue")}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="w-full flex gap-4">
@@ -42,12 +45,12 @@ export default async function Page({
           </CardContent>
           <CardFooter className="block">
             <Button className="w-full" asChild>
-              <Link href={returnUrl}>続行</Link>
+              <Link href={returnUrl}>{t("continue")}</Link>
             </Button>
-            <Link href={`/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`} prefetch={false} className="text-sm font-medium inline-block mt-6">他のアカウントを使う</Link>
+            <Link href={`/${lang}/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`} prefetch={false} className="text-sm font-medium inline-block mt-6">{t("auth:useAnotherAccount")}</Link>
           </CardFooter>
         </Card>
-        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
+        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href={`/${lang}/docs/privacy`}>{t("privacy")}</Link>
       </div>
     </div>
   )

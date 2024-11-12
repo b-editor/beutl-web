@@ -15,28 +15,28 @@ export function Navigation({ lang }: { lang: string }) {
   return (
     <ToggleGroup type="single" className="flex-col items-stretch w-full md:min-w-72"
       value={slug}>
-      <Link href="/account/manage/profile" passHref className="contents">
-        <ToggleGroupItem value="profile" aria-label="Toggle bold" className="justify-start">
+      <Link href={`/${lang}/account/manage/profile`} passHref className="contents">
+        <ToggleGroupItem value="profile" aria-label="Profile" className="justify-start">
           <CircleUser className="w-4 h-4 mr-2" />
-          {t("account:profile")}
+          {t("account:profile.title")}
         </ToggleGroupItem>
       </Link>
-      <Link href="/account/manage/email" passHref className="contents">
-        <ToggleGroupItem value="email" aria-label="Toggle bold" className="justify-start">
+      <Link href={`/${lang}/account/manage/email`} passHref className="contents">
+        <ToggleGroupItem value="email" aria-label="Email Address" className="justify-start">
           <Mail className="w-4 h-4 mr-2" />
-          {t("account:email")}
+          {t("account:email.title")}
         </ToggleGroupItem>
       </Link>
-      <Link href="/account/manage/security" passHref className="contents">
-        <ToggleGroupItem value="security" aria-label="Toggle bold" className="justify-start">
+      <Link href={`/${lang}/account/manage/security`} passHref className="contents">
+        <ToggleGroupItem value="security" aria-label="Security Settings" className="justify-start">
           <Shield className="w-4 h-4 mr-2" />
-          {t("account:security")}
+          {t("account:security.title")}
         </ToggleGroupItem>
       </Link>
-      <Link href="/account/manage/personal-data" passHref className="contents">
-        <ToggleGroupItem value="personal-data" aria-label="Toggle bold" className="justify-start">
+      <Link href={`/${lang}/account/manage/personal-data`} passHref className="contents">
+        <ToggleGroupItem value="personal-data" aria-label="Personal Data" className="justify-start">
           <Trash className="w-4 h-4 mr-2" />
-          {t("account:data")}
+          {t("account:data.title")}
         </ToggleGroupItem>
       </Link>
     </ToggleGroup>

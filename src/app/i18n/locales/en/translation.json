@@ -16,5 +16,10 @@
   "save": "Save",
   "discardChanges": "Discard changes",
   "cancel": "Cancel",
-  "continue": "Continue"
+  "continue": "Continue",
+  "invalidRequest": "Invalid request",
+  "change": "Change",
+  "edit": "Edit",
+  "delete": "Delete",
+  "remove": "Remove"
 }

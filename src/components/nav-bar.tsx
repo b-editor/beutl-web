@@ -34,7 +34,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                 {t("docs")}
               </NavigationMenuLink>
             </Link>
-            <Link href="/store" legacyBehavior passHref className="max-sm:hidden">
+            <Link href={`/${lang}/store`} legacyBehavior passHref className="max-sm:hidden">
               <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
                 {t("store")}
               </NavigationMenuLink>
@@ -51,7 +51,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                       <li>
                         <NavigationMenuLink asChild>
                           <Link
-                            href="/account"
+                            href={`/${lang}/account`}
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
                             {t("account")}
@@ -59,7 +59,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
                           <Link
-                            href="/storage"
+                            href={`/${lang}/storage`}
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
                             {t("storage")}
@@ -67,7 +67,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
                           <Link
-                            href="/developer"
+                            href={`/${lang}/developer`}
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
                             {t("developer")}
@@ -75,7 +75,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                         </NavigationMenuLink>
                         <NavigationMenuLink asChild>
                           <Link
-                            href="/library"
+                            href={`/${lang}/library`}
                             className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                           >
                             {t("library")}
@@ -87,7 +87,7 @@ export default async function NavBar({ lang }: { lang: string }) {
                 </NavigationMenuItem>
               )
               : (
-                <Link href="/account" legacyBehavior passHref>
+                <Link href={`/${lang}/account`} legacyBehavior passHref>
                   <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}>
                     <CircleUser className="w-5 h-5" />
                   </NavigationMenuLink>

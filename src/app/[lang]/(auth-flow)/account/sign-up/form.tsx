@@ -10,9 +10,11 @@ import { useFormState } from "react-dom";
 import SubmitButton from "@/components/submit-button";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { useTranslation } from "@/app/i18n/client";
 
-export default function Form({ returnUrl, email }: { returnUrl?: string, email?: string }) {
+export default function Form({ returnUrl, email, lang }: { returnUrl?: string, email?: string, lang: string }) {
   const [state, dispatch] = useFormState(signUpAction, {});
+  const { t } = useTranslation(lang);
 
   return (
     <form action={dispatch}>
@@ -24,12 +26,12 @@ export default function Form({ returnUrl, email }: { returnUrl?: string, email?:
           </div>
           <Card>
             <CardHeader>
-              <CardTitle>アカウントを作成</CardTitle>
+              <CardTitle>{t("auth:createAccount")}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid w-full items-center gap-4">
                 <div className="flex flex-col space-y-1.5">
-                  <Label htmlFor="email">メールアドレス</Label>
+                  <Label htmlFor="email">{t("auth:email")}</Label>
                   <Input name="email" id="email" placeholder="me@example.com" defaultValue={email} />
                   {state.errors?.email && <ErrorDisplay errors={state.errors.email} />}
                 </div>
@@ -38,8 +40,8 @@ export default function Form({ returnUrl, email }: { returnUrl?: string, email?:
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </CardContent>
             <CardFooter className="block">
-              <SubmitButton className="w-full" name="type" value="email">サインアップ</SubmitButton>
-              <Link href="/account/sign-in" className="text-sm font-medium inline-block mt-6">アカウントをお持ちですか？</Link>
+              <SubmitButton className="w-full" name="type" value="email">{t("auth:signUp")}</SubmitButton>
+              <Link href="/account/sign-in" className="text-sm font-medium inline-block mt-6">{t("auth:doYouHaveAnAccount")}</Link>
             </CardFooter>
           </Card>
           <Card>
@@ -60,7 +62,7 @@ export default function Form({ returnUrl, email }: { returnUrl?: string, email?:
               </div>
             </CardContent>
           </Card>
-          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
+          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">{t("privacy")}</Link>
         </div>
       </div>
     </form>

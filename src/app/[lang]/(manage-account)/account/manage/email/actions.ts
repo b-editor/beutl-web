@@ -5,28 +5,32 @@ import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { options as nodemailerOptions } from "@/nodemailer";
+import { options as nodemailerOptions, renderUnsafeEmailTemplate } from "@/nodemailer";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
+import { getTranslation, Zod } from "@/app/i18n/server";
+import { getLanguage } from "@/lib/lang-utils";
 
 type State = {
   message?: string;
   success?: boolean;
 }
 
-const emailSchema = z.object({
-  newEmail: z.string().email("メールアドレスが正しくありません"),
+const emailSchema = (z: Zod) => z.object({
+  newEmail: z.string().email(),
 });
 
 async function sendEmail(email: string, token: string) {
+  const lang = getLanguage();
+  const { t } = await getTranslation(lang);
   const urlstr = headers().get("x-url");
   if (!urlstr) {
     throw new Error("URL is missing in headers");
   }
   const url = new URL(urlstr);
-  url.pathname = "/account/manage/email";
+  url.pathname = `/${lang}/account/manage/email`;
   url.searchParams.forEach((_, key) => url.searchParams.delete(key));
   url.searchParams.set("token", token);
   url.searchParams.set("identifier", email);
@@ -35,11 +39,11 @@ async function sendEmail(email: string, token: string) {
   const result = await transport.sendMail({
     to: email,
     from: nodemailerOptions.from,
-    subject: "メールアドレスの変更",
-    html: `
-      <p>以下のリンクをクリックしてメールアドレスを変更してください。</p>
-      <a href="${url.toString()}">メールアドレスを変更</a>
-    `,
+    subject: t("account:email.changeEmail"),
+    html: renderUnsafeEmailTemplate(`
+      <p>${t("account:email.clickOnTheLink")}</p>
+      <a href="${url.toString()}">${t("change")}</a>
+    `),
   })
   const failed = result.rejected.concat(result.pending).filter(Boolean)
   if (failed.length) {
@@ -49,10 +53,12 @@ async function sendEmail(email: string, token: string) {
 
 export async function sendConfirmationEmail(state: State, formData: FormData): Promise<State> {
   return await authenticated(async session => {
-    const validated = emailSchema.safeParse(Object.fromEntries(formData.entries()));
+    const lang = getLanguage();
+    const { t, z } = await getTranslation(lang);
+    const validated = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
     if (!validated.success) {
       return {
-        message: "入力内容に誤りがあります",
+        message: t("invalidRequest"),
         success: false,
       };
     }
@@ -90,13 +96,15 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
     await Promise.all([sendRequest, createToken]);
 
     return {
-      message: "メールアドレスを変更するためのリンクを送信しました",
+      message: t("account:email.emailSent"),
       success: true,
     };
   });
 }
 
 export async function updateEmail(token: string, identifier: string) {
+  const lang = getLanguage();
+  const { t } = await getTranslation(lang);
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`)
   const tokenData = await prisma.confirmationToken.delete({
@@ -114,11 +122,11 @@ export async function updateEmail(token: string, identifier: string) {
     }
   });
   if (!tokenData || tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE) {
-    throw new Error("トークンが無効です");
+    throw new Error("Invalid token");
   }
 
   if (tokenData.expires.valueOf() < Date.now()) {
-    throw new Error("トークンの有効期限が切れています");
+    throw new Error("Token has expired");
   }
 
   const updated = await prisma.user.update({
@@ -130,9 +138,9 @@ export async function updateEmail(token: string, identifier: string) {
     },
   });
   if (!updated) {
-    throw new Error("メールアドレスを更新できませんでした");
+    throw new Error(t("account:email.emailUpdateFailed"));
   }
 
-  revalidatePath("/account/manage/email");
-  redirect("/account/manage/email?emailUpdated=true", RedirectType.replace);
+  revalidatePath(`/${lang}/account/manage/email`);
+  redirect(`/${lang}/account/manage/email?emailUpdated=true`, RedirectType.replace);
 }

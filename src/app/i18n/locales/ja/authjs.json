@@ -1,0 +1,13 @@
+{
+  "default": "サインインできません。",
+  "signin": "別のアカウントでサインインしてみてください。",
+  "oauthSignin": "別のアカウントでサインインしてみてください。",
+  "oauthCallbackError": "別のアカウントでサインインしてみてください。",
+  "oauthCreateAccount": "別のアカウントでサインインしてみてください。",
+  "emailCreateAccount": "別のアカウントでサインインしてみてください。",
+  "callback": "別のアカウントでサインインしてみてください。",
+  "oauthAccountNotLinked": "本人確認のため、最初に使用したアカウントでサインインしてください。",
+  "emailSignin": "メールを送信できませんでした。",
+  "credentialsSignin": "サインインに失敗しました。入力した情報が正しいことを確認してください。",
+  "sessionRequired": "このページにアクセスするにはサインインしてください。"
+}

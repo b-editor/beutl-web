@@ -55,7 +55,8 @@
     "tailwind-merge": "^2.5.3",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.0.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zod-i18n-map": "^2.27.0"
   },
   "devDependencies": {
     "@types/negotiator": "^0.6.3",

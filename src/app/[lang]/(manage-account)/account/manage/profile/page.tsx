@@ -8,8 +8,8 @@ import { getTranslation } from "@/app/i18n/server";
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await auth();
   if (!session?.user) {
-    const url = headers().get("x-url") || "/";
-    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
+    const url = headers().get("x-url") || `/${lang}`;
+    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
   const profile = await prisma.profile.findFirst({
@@ -36,7 +36,7 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
 
   return (
     <div>
-      <h2 className="font-bold text-2xl">{t("account:profile")}</h2>
+      <h2 className="font-bold text-2xl">{t("account:profile.title")}</h2>
       <Form lang={lang} profile={profile} socials={socials} className="mt-4" />
     </div>
   )

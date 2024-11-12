@@ -25,7 +25,7 @@ function ChangeUserName(
 
   return (
     <div className="rounded-lg border text-card-foreground flex flex-col">
-      <Label className="font-bold text-md m-6 mb-4" htmlFor="userName">{t("account:userId")}</Label>
+      <Label className="font-bold text-md m-6 mb-4" htmlFor="userName">{t("account:profile.userId")}</Label>
       <Separator />
       <div className="flex gap-2 mx-6 mt-4">
         <Input className="max-w-sm" type="text" id="userName" name="userName" defaultValue={profile?.userName} readOnly={locked} />
@@ -38,14 +38,14 @@ function ChangeUserName(
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>{t("account:userIdDialog.title")}</AlertDialogTitle>
+              <AlertDialogTitle>{t("account:profile.userIdDialog.title")}</AlertDialogTitle>
               <AlertDialogDescription className="text-foreground">
-                <p>{t("account:userIdDialog.p1")}</p>
-                <p>{t("account:userIdDialog.p2")}</p>
+                <p>{t("account:profile.userIdDialog.p1")}</p>
+                <p>{t("account:profile.userIdDialog.p2")}</p>
                 <ul className="list-disc list-inside ml-4 mt-2">
-                  <li>{t("account:userIdDialog.li1")}</li>
-                  <li>{t("account:userIdDialog.li2")}</li>
-                  <li>{t("account:userIdDialog.li3")}</li>
+                  <li>{t("account:profile.userIdDialog.li1")}</li>
+                  <li>{t("account:profile.userIdDialog.li2")}</li>
+                  <li>{t("account:profile.userIdDialog.li3")}</li>
                 </ul>
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -56,7 +56,7 @@ function ChangeUserName(
           </AlertDialogContent>
         </AlertDialog>
       </div>
-      <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:userIdDescription")}</p>
+      <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:profile.userIdDescription")}</p>
       {state.errors?.userName && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.userName} />}
     </div>
   )
@@ -94,23 +94,23 @@ export function Form({ profile, socials, lang, ...props }: FormProps & { lang: s
     <form {...props} action={dispatch}>
       <div className="flex flex-col gap-4">
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <Label className="font-bold text-md m-6 mb-4" htmlFor="displayName">{t("account:displayName")}</Label>
+          <Label className="font-bold text-md m-6 mb-4" htmlFor="displayName">{t("account:profile.displayName")}</Label>
           <Separator />
           <Input className="max-w-sm w-auto mt-4 mx-6" type="text" id="displayName" name="displayName" defaultValue={profile?.displayName} maxLength={50} />
-          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:maxCharacters", { max: 50 })}</p>
+          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:profile.maxCharacters", { max: 50 })}</p>
           {state.errors?.displayName && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.displayName} />}
         </div>
         <ChangeUserName profile={profile} state={state} lang={lang} />
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <Label className="font-bold text-md m-6 mb-4" htmlFor="bio">{t("account:bio")}</Label>
+          <Label className="font-bold text-md m-6 mb-4" htmlFor="bio">{t("account:profile.bio")}</Label>
           <Separator />
           <Textarea className="max-w-sm w-auto mt-4 mx-6" id="bio" name="bio" defaultValue={profile?.bio || undefined} maxLength={150} />
-          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:bioDescription")}</p>
+          <p className="text-sm text-muted-foreground m-6 mt-2">{t("account:profile.bioDescription")}</p>
           {state.errors?.bio && <ErrorDisplay className="mx-6 mb-6 -mt-2" errors={state.errors.bio} />}
         </div>
 
         <div className="rounded-lg border text-card-foreground flex flex-col">
-          <h3 className="font-bold text-md m-6 mb-4">{t("account:socials")}</h3>
+          <h3 className="font-bold text-md m-6 mb-4">{t("account:profile.socials")}</h3>
           <Separator />
           <div className="mx-6 mt-4 my-2">
             <div className="flex gap-4 max-w-xs items-center">

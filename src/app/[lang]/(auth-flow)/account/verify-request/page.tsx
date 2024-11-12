@@ -1,8 +1,10 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import Image from "next/image";
+import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page() {
+export default async function Page({ params: { lang } }: { params: { lang: string } }) {
+  const { t } = await getTranslation(lang);
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">
@@ -12,13 +14,13 @@ export default async function Page() {
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>メールを確認してください</CardTitle>
+            <CardTitle>{t("auth:checkYourEmail")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p>サインイン用のリンクをあなたのメールアドレスに送りました</p>
+            <p>{t("auth:emailSent")}</p>
           </CardContent>
         </Card>
-        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
+        <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href={`/${lang}/docs/privacy`}>{t("privacy")}</Link>
       </div>
     </div>
   )

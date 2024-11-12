@@ -14,6 +14,8 @@ import {
 } from 'react-i18next';
 import resourcesToBackend from 'i18next-resources-to-backend';
 import { getOptions } from './settings';
+import { z } from 'zod';
+import { zodI18nMap } from 'zod-i18n-map';
 
 i18next
   .use(initReactI18next)
@@ -24,6 +26,9 @@ i18next
     ),
   )
   .init(getOptions());
+
+z.setErrorMap(zodI18nMap);
+export { z };
 
 export function useTranslation(lang: string) {
   const { t, i18n } = useTranslationOrigin();

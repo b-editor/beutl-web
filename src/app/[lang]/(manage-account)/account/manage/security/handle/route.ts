@@ -1,3 +1,4 @@
+import { getLanguage } from "@/lib/lang-utils";
 import { cookies, headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -5,7 +6,7 @@ export function GET(request: NextRequest): NextResponse {
   const cookieStore = cookies();
   const authFlow = cookieStore.get("beutl.auth-flow");
   const requestUrl = new URL(headers().get("x-url") as string);
-  requestUrl.pathname = "/account/manage/security";
+  requestUrl.pathname = `/${getLanguage()}/account/manage/security`;
 
   if (authFlow?.value) {
     const json = JSON.parse(authFlow?.value);

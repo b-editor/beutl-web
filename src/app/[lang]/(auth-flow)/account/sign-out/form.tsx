@@ -5,10 +5,12 @@ import Image from "next/image";
 import { useFormState } from "react-dom";
 import { signOutAction } from "./actions";
 import SubmitButton from "@/components/submit-button";
+import { useTranslation } from "@/app/i18n/client";
 
-export default function Form(){
+export default function Form({ lang }: { lang: string }) {
   const [, dispatch] = useFormState(signOutAction, undefined);
-  
+  const { t } = useTranslation(lang);
+
   return (
     <div className="h-screen flex items-center justify-center">
       <div className="w-[350px] flex flex-col gap-4 relative">
@@ -18,14 +20,14 @@ export default function Form(){
         </div>
         <Card>
           <CardHeader>
-            <CardTitle>サインアウト</CardTitle>
+            <CardTitle>{t("auth:signOut")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p>サインアウトしますか？</p>
+            <p>{t("auth:wouldYouLikeToSignOut")}</p>
           </CardContent>
           <CardFooter className="block">
             <form action={dispatch} className="w-full">
-              <SubmitButton className="w-full" type="submit">サインアウト</SubmitButton>
+              <SubmitButton className="w-full" type="submit">{t("auth:signOut")}</SubmitButton>
             </form>
           </CardFooter>
         </Card>

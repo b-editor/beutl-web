@@ -5,13 +5,19 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
 
-export default async function Page({ searchParams: { identifier } }: { searchParams: { identifier: string } }) {
+export default async function Page({
+  searchParams: { identifier },
+  params: { lang }
+}: {
+  searchParams: { identifier: string },
+  params: { lang: string }
+}) {
   const session = await auth();
   const xurl = headers().get("x-url") as string;
   if (!session?.user) {
-    const continueUrl = `/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
+    const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
-    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
+    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
   } else {
     if (!session.user.id) {
       throw new Error("User id is not found");

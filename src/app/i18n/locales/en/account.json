@@ -1,8 +1,53 @@
 {
-  "profile": "プロフィール",
-  "email": "メールアドレス",
-  "security": "セキュリティ",
-  "data": "個人データ",
-  "displayName": "表示名",
-  "maxCharacters": "最大{{max}}文字"
+  "profile": {
+    "title": "Profile",
+    "displayName": "Display Name",
+    "maxCharacters": "Maximum {{max}} characters",
+    "bio": "Bio",
+    "bioDescription": "This profile will be displayed when you publish extensions. Up to 150 characters.",
+    "socials": "Socials",
+    "userId": "User ID",
+    "userIdDescription": "You can change the unique ID used to identify the user. Changing it may cause bookmarked URLs to become unusable.",
+    "userIdDialog": {
+      "title": "Change User ID",
+      "p1": "You can change the unique ID used to identify the user.",
+      "p2": "Please confirm the following points.",
+      "li1": "After changing, you may not be able to revert to the original ID.",
+      "li2": "After changing, other users may use the original ID.",
+      "li3": "You will not be able to access your profile using the original ID."
+    },
+    "profileUpdated": "Profile updated"
+  },
+  "email": {
+    "title": "Email Address",
+    "email": "Email Address",
+    "changeEmail": "Change Email Address",
+    "currentEmail": "Current Email Address",
+    "newEmail": "New Email Address",
+    "emailUpdated": "Email address updated",
+    "clickOnTheLink": "Click on the link in the email we sent you to confirm your new email address.",
+    "emailSent": "We have sent a link to change your email address",
+    "emailUpdateFailed": "Failed to change email address"
+  },
+  "security": {
+    "title": "Security",
+    "addSignInMethod": "Add Sign-in Method",
+    "linkedAccounts": "Linked Accounts",
+    "passkey": "Passkey",
+    "createdAt": "Created At",
+    "usedAt": "Used At",
+    "syncStatus": {
+      "synced": "Synced",
+      "syncable": "Syncable"
+    },
+    "name": "Name",
+    "passkeyRegistered": "Passkey registered",
+    "passkeyRegisterFailed": "Failed to register passkey",
+    "accountRemoved": "Account removed",
+    "cannotRemoveAccount": "This account cannot be removed because it will lose the sign-in method. Please verify your email address or add a sign-in method."
+  },
+  "data": {
+    "title": "Personal Data",
+    "deleteAccount": "Delete Account"
+  }
 }

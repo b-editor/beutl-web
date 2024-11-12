@@ -16,10 +16,12 @@ import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { useToast } from "@/hooks/use-toast";
 import { signIn } from "next-auth/webauthn"
+import { useTranslation } from "@/app/i18n/client";
 
-export default function Form({ returnUrl, error }: { returnUrl?: string, error?: SignInPageErrorParam }) {
+export default function Form({ returnUrl, error, lang }: { returnUrl?: string, error?: SignInPageErrorParam, lang: string }) {
   const [state, dispatch] = useFormState(signInAction, {});
-  const authError = useMemo(() => translateNextAuthError(error), [error]);
+  const { t } = useTranslation(lang);
+  const authError = translateNextAuthError(t, error);
   const [passkeyVerifying, setPasskeyVerifying] = useState(false);
   const { toast } = useToast();
 
@@ -33,13 +35,13 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
           </div>
           <Card>
             <CardHeader>
-              <CardTitle>サインイン</CardTitle>
-              <CardDescription>お使いのアカウントを使用</CardDescription>
+              <CardTitle>{t("auth:signIn")}</CardTitle>
+              <CardDescription>{t("auth:useYourAccount")}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid w-full items-center gap-4">
                 <div className="flex flex-col space-y-1.5">
-                  <Label htmlFor="email">メールアドレス</Label>
+                  <Label htmlFor="email">{t("auth:email")}</Label>
                   <Input name="email" id="email" placeholder="me@example.com" />
                   {state.errors?.email && <ErrorDisplay errors={state.errors.email} />}
                 </div>
@@ -50,8 +52,8 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
             </CardContent>
             <CardFooter className="block">
               <SubmitButton forceSpinner={passkeyVerifying} disabled={passkeyVerifying}
-                className="w-full" name="type" value="email">サインイン</SubmitButton>
-              <Link href="/account/sign-up" className="text-sm font-medium inline-block mt-6">アカウント作成</Link>
+                className="w-full" name="type" value="email">{t("auth:signIn")}</SubmitButton>
+              <Link href={`/${lang}/account/sign-up`} className="text-sm font-medium inline-block mt-6">{t("auth:createAccount")}</Link>
             </CardFooter>
           </Card>
           <Card>
@@ -77,8 +79,8 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
                         await signIn("passkey");
                       } catch {
                         toast({
-                          title: "エラー",
-                          description: "パスキーでサインインできませんでした",
+                          title: t("error"),
+                          description: t("auth:errors.passkey"),
                           variant: "destructive",
                         });
                       } finally {
@@ -91,7 +93,7 @@ export default function Form({ returnUrl, error }: { returnUrl?: string, error?:
               </div>
             </CardContent>
           </Card>
-          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href="/docs/privacy">プライバシーポリシー</Link>
+          <Link className="ml-auto text-sm absolute top-full right-0 translate-y-4" href={`/${lang}/docs/privacy`}>{t("privacy")}</Link>
         </div>
       </div>
     </form>

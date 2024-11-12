@@ -1,22 +1,26 @@
+import { useTranslation } from "@/app/i18n/client";
+import { Translator } from "@/app/i18n/server";
 import type { SignInPageErrorParam } from "@auth/core/types"
 
 const signinErrors = {
-  default: "Unable to sign in.",
-  Signin: "Try signing in with a different account.",
-  OAuthSignin: "Try signing in with a different account.",
-  OAuthCallbackError: "Try signing in with a different account.",
-  OAuthCreateAccount: "Try signing in with a different account.",
-  EmailCreateAccount: "Try signing in with a different account.",
-  Callback: "Try signing in with a different account.",
-  OAuthAccountNotLinked:
-    "To confirm your identity, sign in with the same account you used originally.",
-  EmailSignin: "The e-mail could not be sent.",
-  CredentialsSignin:
-    "Sign in failed. Check the details you provided are correct.",
-  SessionRequired: "Please sign in to access this page.",
+  default: "authjs:default",
+  Signin: "authjs:signin",
+  OAuthSignin: "authjs:oauthSignin",
+  OAuthCallbackError: "authjs:oauthCallbackError",
+  OAuthCreateAccount: "authjs:oauthCreateAccount",
+  EmailCreateAccount: "authjs:emailCreateAccount",
+  Callback: "authjs:callback",
+  OAuthAccountNotLinked: "authjs:oauthAccountNotLinked",
+  EmailSignin: "authjs:emailSignin",
+  CredentialsSignin: "authjs:credentialsSignin",
+  SessionRequired: "authjs:sessionRequired",
 }
 
 
-export function translateNextAuthError(errorType?: SignInPageErrorParam) {
-  return errorType && (signinErrors[errorType] ?? signinErrors.default)
+export function translateNextAuthError(t: Translator, errorType?: SignInPageErrorParam) {
+  if (!errorType) {
+    return;
+  }
+
+  return errorType && (t(signinErrors[errorType]) ?? t(signinErrors.default))
 }

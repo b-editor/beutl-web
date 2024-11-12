@@ -3,10 +3,11 @@
 import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/prisma";
-import { z } from "zod";
+import { getTranslation, Zod } from "@/app/i18n/server";
+import { getLanguage } from "@/lib/lang-utils";
 
-const emailSchema = z.object({
-  email: z.string().email("メールアドレスが正しくありません"),
+const emailSchema = (z: Zod) => z.object({
+  email: z.string().email(),
   returnUrl: z.string().optional(),
 });
 
@@ -32,7 +33,8 @@ export async function signInAction(state: State, formData: FormData): Promise<St
     return await signInWithProvider("github", formData.get("returnUrl") as string | undefined);
   }
 
-  return { message: "無効なリクエストです" }
+  const { t } = await getTranslation(getLanguage());
+  return { message: t("invalidRequest") }
 }
 
 async function signInWithProvider(provider: string, returnUrl?: string): Promise<State> {
@@ -41,7 +43,9 @@ async function signInWithProvider(provider: string, returnUrl?: string): Promise
 }
 
 async function signInWithEmail(state: State, formData: FormData): Promise<State> {
-  const validationResult = emailSchema.safeParse(Object.fromEntries(formData.entries()));
+  const lang= getLanguage();
+  const { z } = await getTranslation(lang);
+  const validationResult = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
   if (!validationResult.success) {
     return { errors: validationResult.error.flatten().fieldErrors };
   }
@@ -56,9 +60,9 @@ async function signInWithEmail(state: State, formData: FormData): Promise<State>
     if (returnUrl) {
       params.append("returnUrl", returnUrl);
     }
-    redirect(`/account/sign-up?${params.toString()}`);
+    redirect(`/${lang}/account/sign-up?${params.toString()}`);
   }
 
-  await signIn("nodemailer", { email, redirectTo: returnUrl || "/" });
+  await signIn("nodemailer", { email, redirectTo: returnUrl || `/${lang}` });
   return {};
 }

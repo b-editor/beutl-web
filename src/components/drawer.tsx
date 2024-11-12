@@ -34,17 +34,17 @@ export async function StandardDrawer({ lang }: { lang: string }) {
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
-                  <Link href="/store">
+                  <Link href={`/${lang}/store`}>
                     {t("store")}
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
-                  <Link href="/docs/privacy">
+                  <Link href={`/${lang}/docs/privacy`}>
                     {t("privacy")}
                   </Link>
                 </NavigationMenuLink>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
-                  <Link href="/docs/telemetry">
+                  <Link href={`/${lang}/docs/telemetry`}>
                     {t("telemetry")}
                   </Link>
                 </NavigationMenuLink>

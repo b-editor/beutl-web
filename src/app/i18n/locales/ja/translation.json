@@ -16,5 +16,10 @@
   "save": "保存",
   "discardChanges": "変更を破棄",
   "cancel": "キャンセル",
-  "continue": "続行"
+  "continue": "続行",
+  "invalidRequest": "無効なリクエスト",
+  "change": "変更",
+  "edit": "編集",
+  "delete": "削除",
+  "remove": "削除"
 }

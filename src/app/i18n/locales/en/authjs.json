@@ -1,0 +1,13 @@
+{
+  "default": "Unable to sign in.",
+  "signin": "Try signing in with a different account.",
+  "oauthSignin": "Try signing in with a different account.",
+  "oauthCallbackError": "Try signing in with a different account.",
+  "oauthCreateAccount": "Try signing in with a different account.",
+  "emailCreateAccount": "Try signing in with a different account.",
+  "callback": "Try signing in with a different account.",
+  "oauthAccountNotLinked": "To confirm your identity, sign in with the same account you used originally.",
+  "emailSignin": "The e-mail could not be sent.",
+  "credentialsSignin": "Sign in failed. Check the details you provided are correct.",
+  "sessionRequired": "Please sign in to access this page."
+}

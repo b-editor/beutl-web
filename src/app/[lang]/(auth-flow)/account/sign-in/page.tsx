@@ -8,11 +8,17 @@ export default async function Page({
   searchParams: {
     returnUrl,
     error
+  },
+  params: {
+    lang
   }
 }: {
   searchParams: {
     returnUrl?: string,
     error?: SignInPageErrorParam
+  },
+  params: {
+    lang: string
   }
 }) {
   const authFlow = cookies().get("beutl.auth-flow");
@@ -29,10 +35,10 @@ export default async function Page({
 
   const session = await auth();
   if (session) {
-    localRedirect(returnUrl || "/");
+    localRedirect(returnUrl || `/${lang}`);
   }
 
   return (
-    <Form returnUrl={returnUrl} error={error} />
+    <Form returnUrl={returnUrl} error={error} lang={lang} />
   )
 }

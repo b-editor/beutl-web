@@ -1,21 +1,53 @@
 {
-  "profile": "プロフィール",
-  "email": "メールアドレス",
-  "security": "セキュリティ",
-  "data": "個人データ",
-  "displayName": "表示名",
-  "maxCharacters": "最大{{max}}文字",
-  "bio": "自己紹介",
-  "bioDescription": "拡張機能を公開したとき、このプロフィールが表示されます。150文字以下",
-  "socials": "ソーシャル",
-  "userId": "ユーザーID",
-  "userIdDescription": "ユーザー識別に使う一意なIDを変更できます。 変更するとブックマークされているURLなどが使えなくなる可能性があります。",
-  "userIdDialog":{
-    "title": "ユーザーIDを変更",
-    "p1": "ユーザー識別に使う一意なIDを変更できます。",
-    "p2": "以下の点をご確認ください。",
-    "li1": "変更後、元のIDに戻すことができなくなる可能性があります。",
-    "li2": "変更後、他のユーザーが元のIDを使う可能性があります。",
-    "li3": "元のIDを使用して、あなたのプロフィールにアクセスできなくなります。"
+  "profile": {
+    "title": "プロフィール",
+    "displayName": "表示名",
+    "maxCharacters": "最大{{max}}文字",
+    "bio": "自己紹介",
+    "bioDescription": "拡張機能を公開したとき、このプロフィールが表示されます。150文字以下",
+    "socials": "ソーシャル",
+    "userId": "ユーザーID",
+    "userIdDescription": "ユーザー識別に使う一意なIDを変更できます。 変更するとブックマークされているURLなどが使えなくなる可能性があります。",
+    "userIdDialog": {
+      "title": "ユーザーIDを変更",
+      "p1": "ユーザー識別に使う一意なIDを変更できます。",
+      "p2": "以下の点をご確認ください。",
+      "li1": "変更後、元のIDに戻すことができなくなる可能性があります。",
+      "li2": "変更後、他のユーザーが元のIDを使う可能性があります。",
+      "li3": "元のIDを使用して、あなたのプロフィールにアクセスできなくなります。"
+    },
+    "profileUpdated": "プロフィールが更新されました"
+  },
+  "email": {
+    "title": "メールアドレス",
+    "email": "メールアドレス",
+    "changeEmail": "メールアドレスを変更",
+    "currentEmail": "現在のメールアドレス",
+    "newEmail": "新しいメールアドレス",
+    "emailUpdated": "メールアドレスが更新されました",
+    "clickOnTheLink": "以下のリンクをクリックしてメールアドレスを変更してください。",
+    "emailSent": "メールアドレスを変更するためのリンクを送信しました",
+    "emailUpdateFailed": "メールアドレスの変更に失敗しました"
+  },
+  "security": {
+    "title": "セキュリティ",
+    "addSignInMethod": "サインイン方法を追加",
+    "linkedAccounts": "リンク済み",
+    "passkey": "パスキー",
+    "createdAt": "作成日時",
+    "usedAt": "使用日時",
+    "syncStatus": {
+      "synced": "同期されています",
+      "syncable": "同期可能です"
+    },
+    "name": "名前",
+    "passkeyRegistered": "パスキーが登録されました",
+    "passkeyRegisterFailed": "パスキーの登録に失敗しました",
+    "accountRemoved": "アカウントを削除しました",
+    "cannotRemoveAccount": "サインイン方法がなくなるため、このアカウントは削除できません。メールアドレスが確認するか、サインイン方法を追加してください。"
+  },
+  "data": {
+    "title": "個人データ",
+    "deleteAccount": "アカウントを削除"
   }
 }

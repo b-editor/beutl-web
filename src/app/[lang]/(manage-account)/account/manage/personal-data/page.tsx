@@ -3,8 +3,9 @@ import { prisma } from "@/prisma";
 import { Form } from "./components";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { Separator } from "@/components/ui/separator";
+import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page() {
+export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
 
   const user = await prisma.user.findFirst({
@@ -13,7 +14,7 @@ export default async function Page() {
     },
   });
   if (!user) {
-    throw new Error("ユーザーが見つかりませんでした");
+    throw new Error("User not found");
   }
   const tokens = await prisma.confirmationToken.findMany({
     where: {
@@ -21,15 +22,16 @@ export default async function Page() {
       purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
     }
   });
+  const { t } = await getTranslation(lang);
 
   return (
     <div>
-      <h2 className="font-bold text-2xl">個人情報</h2>
+      <h2 className="font-bold text-2xl">{t("account:data.title")}</h2>
 
       <div className="mt-4 rounded-lg border text-card-foreground">
-        <h2 className="font-bold text-md m-6 mb-4">アカウントを削除</h2>
+        <h2 className="font-bold text-md m-6 mb-4">{t("account:data.deleteAccount")}</h2>
         <Separator />
-        <Form email={user.email} className="mx-6 mt-4" cancelable={tokens.some((i) => i.expires.valueOf() >= Date.now())} />
+        <Form lang={lang} email={user.email} className="mx-6 mt-4" cancelable={tokens.some((i) => i.expires.valueOf() >= Date.now())} />
       </div>
     </div>
   )
