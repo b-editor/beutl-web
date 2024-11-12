@@ -14,7 +14,7 @@ export default async function Layout({
     <div>
       <NavBar lang={lang} />
       {children}
-      <Footer />
+      <Footer lang={lang} />
     </div>
   )
 }
