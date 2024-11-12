@@ -20,7 +20,7 @@ export default async function Page({ params: { name }, searchParams: { message }
     notFound();
   }
   pkg.Release.sort((a, b) => {
-    return new SemVer(a.version).compare(b.version);
+    return new SemVer(b.version).compare(a.version);
   });
   const session = await auth();
   let owned = false;
