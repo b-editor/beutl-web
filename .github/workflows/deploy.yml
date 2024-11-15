@@ -1,0 +1,24 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Deploy
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST_NAME }}
+        username: ${{ secrets.USER_NAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          set -e
+          cd /var/www/beutl-clientapp-v3
+          git fetch && git pull
+          systemctl stop nextjs-beutl-client-v3
+          pnpm build
+          systemctl start nextjs-beutl-client-v3
