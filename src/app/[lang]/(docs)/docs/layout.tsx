@@ -5,10 +5,10 @@ export default async function Layout({
   children,
   params: { lang },
 }: {
-    children: React.ReactNode;
-    params: {
-      lang: string;
-    };
+  children: React.ReactNode;
+  params: {
+    lang: string;
+  };
 }) {
   return (
     <div>

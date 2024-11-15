@@ -8,5 +8,5 @@ type Props = {
 }
 
 export default function Page({ params: { slug, lang } }: Props) { 
-  redirect(`https://beutl-docs.beditor.net/${lang}/${slug.join('/')}`)
+  redirect(`https://docs.beutl.beditor.net/${lang}/${slug.join('/')}`)
 }

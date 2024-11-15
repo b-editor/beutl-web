@@ -29,7 +29,7 @@ export async function StandardDrawer({ lang }: { lang: string }) {
             <NavigationMenu className='flex-col items-stretch max-w-full pt-4'>
               <NavigationMenuList className='flex-col items-stretch space-x-0'>
                 <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "w-full justify-start")} asChild>
-                  <Link href={`https://beutl-docs.beditor.net/${lang}`} prefetch={false}>
+                  <Link href={`https://docs.beutl.beditor.net/${lang}`} prefetch={false}>
                     {t("docs")}
                   </Link>
                 </NavigationMenuLink>
