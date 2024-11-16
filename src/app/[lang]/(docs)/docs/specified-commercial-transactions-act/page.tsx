@@ -101,6 +101,21 @@ export default function Page() {
       <p className="leading-7 [&:not(:first-child)]:mt-6">
         上記の場合は、商品購入後7日以内にサポート窓口（contact@mail.beditor.net）までご連絡ください。
       </p>
+      
+      <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
+        ソフトウェアの動作環境
+      </h3>
+      <ul className="my-6 ml-6 list-disc [&>li]:mt-2">
+        <li>
+          Windows 10 以上, x64
+        </li>
+        <li>
+          macOS 14.0 以上
+        </li>
+        <li>
+          Ubuntu 22.04
+        </li>
+      </ul>
     </div>
   )
 }
