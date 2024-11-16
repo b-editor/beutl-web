@@ -19,6 +19,11 @@ jobs:
           set -e
           cd /var/www/beutl-clientapp-v3
           git fetch && git pull
-          systemctl stop nextjs-beutl-client-v3
+          cp -R ./ ../beutl-clientapp-tmp
+          cd ../beutl-clientapp-tmp
           pnpm build
+          systemctl stop nextjs-beutl-client-v3
+          cd /var/www
+          rm -rf beutl-clientapp-v3
+          mv beutl-clientapp-tmp beutl-clientapp-v3
           systemctl start nextjs-beutl-client-v3
