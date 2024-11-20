@@ -7,7 +7,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
-  const session = await auth();
   const { name } = await prisma.package.findFirstOrThrow({
     where: {
       id: packageId,
@@ -16,25 +15,7 @@ export async function addToLibrary(packageId: string) {
       name: true,
     }
   });
-  if (!session?.user?.id) {
-    redirect(`/store/${name}/get`);
-  }
-  const existing = await prisma.userPackage.findFirst({
-    where: {
-      userId: session.user.id,
-      packageId,
-    }
-  });
-  if (!existing) {
-    await prisma.userPackage.create({
-      data: {
-        userId: session.user.id,
-        packageId,
-      }
-    });
-  }
-  revalidatePath(`/store/${name}`);
-  redirect(`/store/${name}?message=PleaseOpenDesktopApp`);
+  redirect(`/store/${name}/get`);
 }
 
 export async function removeFromLibrary(packageId: string) {

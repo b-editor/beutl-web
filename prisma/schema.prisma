@@ -19,15 +19,17 @@ model User {
   // Optional for WebAuthn support
   Authenticator Authenticator[]
 
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  SocialProfile     SocialProfile[]
-  Profile           Profile?
-  File              File[]
-  ConfirmationToken ConfirmationToken[]
-  Package           Package[]
-  UserPackage       UserPackage[]
-  NativeAppAuth     NativeAppAuth[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  SocialProfile      SocialProfile[]
+  Profile            Profile?
+  File               File[]
+  ConfirmationToken  ConfirmationToken[]
+  Package            Package[]
+  UserPackage        UserPackage[]
+  NativeAppAuth      NativeAppAuth[]
+  UserPaymentHistory UserPaymentHistory[]
+  Customer           Customer?
 }
 
 model Account {
@@ -165,8 +167,8 @@ enum FileVisibility {
 }
 
 model Package {
-  id               String   @id @default(uuid())
-  name             String   @unique
+  id               String           @id @default(uuid())
+  name             String           @unique
   displayName      String?
   description      String
   shortDescription String
@@ -175,8 +177,9 @@ model Package {
   tags             String[]
   iconFileId       String?
   userId           String
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  interval         PaymentInterval?
 
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   iconFile          File?               @relation(fields: [iconFileId], references: [id], onDelete: SetNull)
@@ -184,6 +187,49 @@ model Package {
   PackageScreenshot PackageScreenshot[]
   Release           Release[]
   CompatPackage     CompatPackage?
+  packagePricing    PackagePricing[]
+}
+
+model PackagePricing {
+  id        String   @id @default(uuid())
+  packageId String
+  name      String
+  price     Int
+  currency  String
+  fallback  Boolean
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  userPaymentHistory UserPaymentHistory[]
+}
+
+enum PaymentInterval {
+  ONCE
+  MONTHLY
+  YEARLY
+}
+
+model UserPaymentHistory {
+  id        String   @id @default(uuid())
+  userId    String
+  paymentId String
+  pricingId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pricing PackagePricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
+}
+
+model Customer {
+  userId    String   @id
+  stripeId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PackageScreenshot {

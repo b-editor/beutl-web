@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { SemVer } from "semver";
 import { auth } from "@/auth";
 import { prisma } from "@/prisma";
+import { guessCurrency } from "@/lib/currency";
 
 type Props = {
   params: {
@@ -33,6 +34,7 @@ export default async function Page({ params: { name }, searchParams: { message }
     });
     owned = up !== null;
   }
+  await guessCurrency();
 
   return (
     <ClientPage pkg={pkg} owned={owned} message={message} />
