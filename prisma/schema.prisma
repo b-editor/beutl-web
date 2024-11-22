@@ -193,7 +193,6 @@ model Package {
 model PackagePricing {
   id        String   @id @default(uuid())
   packageId String
-  name      String
   price     Int
   currency  String
   fallback  Boolean

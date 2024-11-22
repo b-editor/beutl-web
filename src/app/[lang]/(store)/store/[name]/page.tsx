@@ -34,7 +34,6 @@ export default async function Page({ params: { name }, searchParams: { message }
     });
     owned = up !== null;
   }
-  await guessCurrency();
 
   return (
     <ClientPage pkg={pkg} owned={owned} message={message} />
