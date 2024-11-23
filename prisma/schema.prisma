@@ -200,8 +200,6 @@ model PackagePricing {
   updatedAt DateTime @updatedAt
 
   package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
-
-  userPaymentHistory UserPaymentHistory[]
 }
 
 enum PaymentInterval {
@@ -214,12 +212,11 @@ model UserPaymentHistory {
   id        String   @id @default(uuid())
   userId    String
   paymentId String
-  pricingId String
+  packageId String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pricing PackagePricing @relation(fields: [pricingId], references: [id], onDelete: Cascade)
 }
 
 model Customer {

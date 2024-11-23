@@ -10,8 +10,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
-import { addToLibrary, removeFromLibrary, type retrievePackage } from "./actions";
+import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
+import { Package } from "@/lib/store-utils";
 
 function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
   const router = useRouter();
@@ -24,7 +25,7 @@ function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
 }
 
 type Props = {
-  pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
+  pkg: Package;
   owned: boolean;
   message?: "PleaseOpenDesktopApp";
 }

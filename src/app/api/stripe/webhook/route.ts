@@ -4,13 +4,14 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const sig = request.headers.get("Stripe-Signature");
+  const sig = request.headers.get("stripe-signature");
   if (!sig) {
     return NextResponse.json({ message: "No signature" }, { status: 400 });
   }
 
   // 署名を確認する
-  const event = stripe.webhooks.constructEvent(await request.text(), sig, process.env.STRIPE_WEBHOOK_SECRET as string);
+  const body = await request.text();
+  const event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_ENDPOINT_SECRET as string);
 
   switch (event.type) {
     case "payment_intent.succeeded": {
@@ -47,6 +48,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           packageId: pkg.id
         }
       });
+      await prisma.userPaymentHistory.create({
+        data: {
+          userId: userId.userId,
+          packageId: pkg.id,
+          paymentId: paymentIntent.id,
+        }
+      })
       break;
     }
   }

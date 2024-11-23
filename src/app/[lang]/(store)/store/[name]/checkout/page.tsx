@@ -2,47 +2,9 @@ import { authOrSignIn } from "@/lib/auth-guard";
 import { createOrRetrieveCustomerId } from "@/lib/customer";
 import { stripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
-import { retrievePackage } from "../actions";
 import { notFound, redirect } from "next/navigation";
-import { prisma } from "@/prisma";
 import { guessCurrency } from "@/lib/currency";
-
-async function packageOwned(pkgId: string, userId: string) {
-  return !!await prisma.userPackage.findFirst({
-    where: {
-      userId: userId,
-      packageId: pkgId
-    }
-  });
-}
-
-async function retrievePrices(pkgId: string) {
-  return await prisma.packagePricing.findMany({
-    where: {
-      packageId: pkgId
-    },
-    select: {
-      currency: true,
-      price: true,
-      fallback: true
-    }
-  });
-}
-
-const zeroDecimalCurrencies = ["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"];
-
-function formatAmount(amount: number, currency: string, lang: string) {
-  const formatter = new Intl.NumberFormat(lang, {
-    style: 'currency',
-    currency: currency,
-  });
-
-  if (zeroDecimalCurrencies.includes(currency.toUpperCase())) {
-    return formatter.format(amount);
-  } else {
-    return formatter.format(amount / 100);
-  }
-}
+import { packageOwned, retrievePackage, retrievePrices } from "@/lib/store-utils";
 
 export default async function Page({
   params: { name, lang },
@@ -88,23 +50,23 @@ export default async function Page({
   const clientSecret = paymentIntent.client_secret;
 
   return (
-    <div className="max-w-5xl mx-auto py-10 lg:py-6 pr-2 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
-      <div className="max-sm:relative md:flex sm:gap-2">
-        <div className="flex-1 mx-3">
+    <div className="max-w-5xl mx-auto py-10 lg:py-6 px-2 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
+      <div className="max-sm:relative flex max-md:flex-col gap-2">
+        <div className="md:flex-1 mx-3">
           <PackageDetails
             pkg={pkg}
+            price={price.price}
+            currency={price.currency}
+            lang={lang}
           />
         </div>
-        <div className="border w-[1px]" />
-        <div className="flex-1 flex flex-col">
-          <p className="max-lg:mt-4 mb-4 mx-3 font-bold text-3xl">{formatAmount(price.price, currency, lang)}</p>
-          <div className="flex-1">
-            <ClientPage
-              name={name}
-              lang={lang}
-              clientSecret={clientSecret}
-            />
-          </div>
+        <div className="border max-md:h-[1px] md:w-[1px]" />
+        <div className="md:flex-1">
+          <ClientPage
+            name={name}
+            lang={lang}
+            clientSecret={clientSecret}
+          />
         </div>
       </div>
     </div>

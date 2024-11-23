@@ -4,17 +4,24 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { retrievePackage } from "../actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import Image from "next/image";
 import Link from "next/link";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import { formatAmount } from "@/lib/currency-formatter";
+import { Package } from "@/lib/store-utils";
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string);
 
-export function PackageDetails({ pkg }: { pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>> }) {
+export function PackageDetails({
+  pkg, price, currency, lang
+}: {
+  pkg: Package,
+  price: number,
+  currency: string
+  lang: string
+}) {
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
-
   return (
     <>
       <div className="max-sm:relative sm:flex sm:gap-2">
@@ -34,6 +41,7 @@ export function PackageDetails({ pkg }: { pkg: NonNullable<Awaited<ReturnType<ty
         </div>
       </div>
       <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
+      <div className="mt-4 text-3xl font-bold">{formatAmount(price, currency, lang)}</div>
       <div className="max-lg:hidden">
         {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
           <>
@@ -74,7 +82,6 @@ export function ClientPage({
               variables: {
                 colorPrimary: 'hsl(300 9% 98%)',
                 colorBackground: "hsl(240 7% 8%)",
-                // gridColumnSpacing: "8px",
               },
               rules: {
                 ".AccordionItem": {
@@ -106,7 +113,15 @@ export function ClientPage({
                   outlineOffset: "2px",
                   boxShadow: "0 0 0 2px hsl(240 7% 8%), 0 0 0 4px hsl(243 86% 40%), #00000000 0 0 0 0",
                   borderColor: "hsl(248 9% 18%)",
-                }
+                },
+                ".PickerItem--selected": {
+                  marginLeft: "0.75rem",
+                  marginRight: "0.75rem",
+                },
+                ".TermsText": {
+                  marginLeft: "0.75rem",
+                  marginRight: "0.75rem",
+                },
               }
             }
           }}
@@ -155,12 +170,12 @@ function CheckoutForm({ lang, name }: { lang: string, name: string }) {
     <form id="payment-form" onSubmit={handleSubmit} className="h-full flex flex-col justify-between">
 
       <PaymentElement id="payment-element" options={{ layout: "accordion" }} />
-      <div className="mx-3 mt-2 flex flex-col">
+      <div className="mx-3 mt-2 flex flex-col gap-2">
+        {message && <div>{message}</div>}
         <Button size="lg" variant="default" disabled={isLoading || !stripe || !elements} id="submit">
           {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
           支払う
         </Button>
-        {message && <div id="payment-message">{message}</div>}
       </div>
     </form>
   );
