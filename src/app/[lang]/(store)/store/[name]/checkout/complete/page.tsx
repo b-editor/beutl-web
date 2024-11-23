@@ -1,36 +1,8 @@
-import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveCustomerId } from "@/lib/customer";
 import { stripe } from "@/lib/stripe/config";
 import { ClientPage } from "./components";
-import { notFound, redirect } from "next/navigation";
-import { SemVer } from "semver";
-import { prisma } from "@/prisma";
-import { guessCurrency } from "@/lib/currency";
+import { notFound } from "next/navigation";
 import { PackageDetails } from "../components";
-import { formatAmount } from "@/lib/currency-formatter";
 import { retrievePackage } from "@/lib/store-utils";
-
-async function packageOwned(pkgId: string, userId: string) {
-  return !!await prisma.userPackage.findFirst({
-    where: {
-      userId: userId,
-      packageId: pkgId
-    }
-  });
-}
-
-async function retrievePrices(pkgId: string) {
-  return await prisma.packagePricing.findMany({
-    where: {
-      packageId: pkgId
-    },
-    select: {
-      currency: true,
-      price: true,
-      fallback: true
-    }
-  });
-}
 
 export default async function Page({
   params: { name, lang },
@@ -39,13 +11,9 @@ export default async function Page({
   params: { name: string, lang: string },
   searchParams: { payment_intent: string }
 }) {
-  const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
-  }
-  if (await packageOwned(pkg.id, session.user.id)) {
-    redirect(`/store/${name}`);
   }
 
   const intent = await stripe.paymentIntents.retrieve(payment_intent);

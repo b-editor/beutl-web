@@ -13,24 +13,44 @@ import { useMemo } from "react";
 import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import { Package } from "@/lib/store-utils";
+import { formatAmount } from "@/lib/currency-formatter";
 
-function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
-  const router = useRouter();
+type Price = {
+  price: number;
+  currency: string;
+}
 
+type PageProps = {
+  pkg: Package;
+  owned: boolean;
+  paied: boolean;
+  message?: "PleaseOpenDesktopApp";
+  price?: Price;
+  lang: string;
+}
+
+type GetButtonProps = {
+  pkgId: string;
+  owned: boolean;
+  price?: Price;
+  paied: boolean;
+  lang: string;
+}
+
+function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
   return (
     <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
-      {owned ? "入手済" : "入手"}
+      {owned ? "入手済"
+        : paied ? "入手 (購入済)"
+          : price ? formatAmount(price.price, price.currency, lang)
+            : "入手"}
     </Button>
   )
 }
 
-type Props = {
-  pkg: Package;
-  owned: boolean;
-  message?: "PleaseOpenDesktopApp";
-}
-
-export function ClientPage({ pkg, owned, message }: Props) {
+export function ClientPage({
+  pkg, owned, message, price, paied, lang
+}: PageProps) {
   const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -59,8 +79,14 @@ export function ClientPage({ pkg, owned, message }: Props) {
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
-          <GetButton pkgId={pkg.id} owned={owned} />
-          {message && <p>インストールするにはデスクトップアプリを開いてください</p>}
+            <GetButton
+              pkgId={pkg.id}
+              owned={owned}
+              price={price}
+              paied={paied}
+              lang={lang}
+            />
+            {message && <p>インストールするにはデスクトップアプリを開いてください</p>}
           </div>
         </div>
         <DropdownMenu>

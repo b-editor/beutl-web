@@ -2,12 +2,13 @@
 
 import { Button } from "@/components/ui/button";
 import { CheckCircle, CircleSlash, Info } from "lucide-react";
+import Link from "next/link";
 import Stripe from "stripe";
 
 const STATUS_CONTENT_MAP: any = {
   succeeded: {
     title: "決済完了",
-    text: "ご注文ありがとうございます。決済が正常に完了しました。",
+    text: "ご注文ありがとうございます。決済が正常に完了しました。インストールするにはデスクトップアプリを開いてください。",
     icon: () => <CheckCircle className="min-w-9 min-h-9 text-green-500" />,
   },
   processing: {
@@ -44,7 +45,11 @@ export function ClientPage({
         </div>
       </div>
       <div className="flex flex-col gap-2">
-        <Button>商品ページに戻る</Button>
+        <Button asChild>
+          <Link href={`/${lang}/store/${name}`}>
+            商品ページに戻る
+          </Link>
+        </Button>
       </div>
     </div>
   )

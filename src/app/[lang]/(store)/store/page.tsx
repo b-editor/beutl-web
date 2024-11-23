@@ -2,10 +2,17 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { formatAmount } from "@/lib/currency-formatter";
+import { retrievePackages } from "@/lib/store-utils";
 import Image from "next/image";
-import { retrievePackages } from "./actions";
 
-export default async function Page({ searchParams: { query } }: { searchParams: { query?: string } }) {
+export default async function Page({
+  searchParams: { query },
+  params: { lang }
+}: {
+  searchParams: { query?: string },
+  params: { lang: string }
+}) {
   const packages = await retrievePackages(query);
 
   return (
@@ -39,7 +46,9 @@ export default async function Page({ searchParams: { query } }: { searchParams: 
                   </div>
                   <div className="overflow-x-clip relative h-6">
                     <div className="flex gap-2 absolute">
-                      <Badge variant="secondary" className="text-nowrap">無料</Badge>
+                      <Badge variant="secondary" className="text-nowrap">
+                        {item.price ? formatAmount(item.price.price, item.price.currency, lang) : "無料"}
+                      </Badge>
                       <Separator orientation="vertical" className="h-auto my-1" />
                       {item.tags.map(tag => (
                         <Badge variant="outline" className="border-input text-nowrap" key={tag}>{tag}</Badge>

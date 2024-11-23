@@ -1,8 +1,18 @@
-import { prisma } from "@/prisma";
 import "server-only";
+import { prisma } from "@/prisma";
+import { guessCurrency } from "./currency";
 
 export async function packageOwned(pkgId: string, userId: string) {
   return !!await prisma.userPackage.findFirst({
+    where: {
+      userId: userId,
+      packageId: pkgId
+    }
+  });
+}
+
+export async function packagePaied(pkgId: string, userId: string) {
+  return !!await prisma.userPaymentHistory.findFirst({
     where: {
       userId: userId,
       packageId: pkgId
@@ -102,4 +112,185 @@ export async function retrievePackage(name: string) {
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
     PackageScreenshot: screenshots
   }
+}
+
+export type ListedPackage = {
+  id: string;
+  name: string;
+  displayName?: string;
+  shortDescription: string;
+  userName?: string;
+  iconFileUrl?: string;
+  tags: string[];
+  price?: {
+    price: number;
+    currency: string;
+  }
+};
+
+export async function retrievePackages(query?: string): Promise<ListedPackage[]> {
+  const currency = await guessCurrency();
+
+  if (query) {
+    const tmp = await prisma.package.findMany({
+      where: {
+        published: true,
+        OR: [
+          {
+            name: {
+              contains: query,
+            },
+          },
+          {
+            displayName: {
+              contains: query,
+            },
+          },
+          {
+            description: {
+              contains: query,
+            },
+          },
+          {
+            shortDescription: {
+              contains: query,
+            },
+          },
+          {
+            tags: {
+              hasSome: [query],
+            },
+          },
+        ],
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      select: {
+        id: true,
+        displayName: true,
+        name: true,
+        shortDescription: true,
+        tags: true,
+        iconFile: {
+          select: {
+            id: true,
+          },
+        },
+        user: {
+          select: {
+            Profile: {
+              select: {
+                userName: true,
+              },
+            },
+          },
+        },
+        packagePricing: {
+          where: {
+            OR: [
+              {
+                currency: {
+                  equals: currency,
+                  mode: "insensitive"
+                }
+              },
+              {
+                fallback: true
+              }
+            ]
+          },
+          select: {
+            price: true,
+            currency: true,
+            fallback: true
+          }
+        }
+      },
+    });
+
+    return Promise.all(
+      tmp.map(async (pkg) => {
+        const url = pkg.iconFile && `/api/contents/${pkg.iconFile?.id}`;
+
+        return {
+          id: pkg.id,
+          name: pkg.name,
+          displayName: pkg.displayName || undefined,
+          shortDescription: pkg.shortDescription,
+          userName: pkg.user.Profile?.userName || undefined,
+          iconFileUrl: url || undefined,
+          tags: pkg.tags,
+          price: pkg.packagePricing.find(p => p.currency === currency)
+            || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
+        };
+      }),
+    );
+  }
+  const tmp = await prisma.package.findMany({
+    where: {
+      published: true,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+    select: {
+      id: true,
+      displayName: true,
+      name: true,
+      shortDescription: true,
+      tags: true,
+      iconFile: {
+        select: {
+          id: true,
+        },
+      },
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive"
+              }
+            },
+            {
+              fallback: true
+            }
+          ]
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true
+        }
+      }
+    },
+  });
+
+
+  return Promise.all(tmp.map(async (pkg) => {
+    const url = pkg.iconFile && `/api/contents/${pkg.iconFile?.id}`;
+
+    return {
+      id: pkg.id,
+      name: pkg.name,
+      displayName: pkg.displayName || undefined,
+      shortDescription: pkg.shortDescription,
+      userName: pkg.user.Profile?.userName || undefined,
+      iconFileUrl: url || undefined,
+      tags: pkg.tags,
+      price: pkg.packagePricing.find(p => p.currency === currency)
+        || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
+    }
+  }));
 }
