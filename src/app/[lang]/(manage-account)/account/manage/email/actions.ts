@@ -4,7 +4,6 @@ import { createTransport } from "nodemailer";
 import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
-import { z } from "zod";
 import { options as nodemailerOptions, renderUnsafeEmailTemplate } from "@/nodemailer";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -12,6 +11,7 @@ import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
+import { stripe } from "@/lib/stripe/config";
 
 type State = {
   message?: string;
@@ -137,6 +137,19 @@ export async function updateEmail(token: string, identifier: string) {
       email: tokenData.identifier,
     },
   });
+  const customer = await prisma.customer.findFirst({
+    where: {
+      userId: tokenData.userId,
+    },
+    select: {
+      stripeId: true,
+    }
+  });
+  if (customer) {
+    await stripe.customers.update(customer.stripeId, {
+      email: tokenData.identifier,
+    });
+  }
   if (!updated) {
     throw new Error(t("account:email.emailUpdateFailed"));
   }

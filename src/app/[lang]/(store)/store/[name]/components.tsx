@@ -9,11 +9,12 @@ import { MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import { Package } from "@/lib/store-utils";
 import { formatAmount } from "@/lib/currency-formatter";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 type Price = {
   price: number;
@@ -48,6 +49,40 @@ function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
   )
 }
 
+function RemoveFromLibraryDialog({
+  pkgId, open, onClose, price, paied, lang
+}: {
+  pkgId: string,
+  open: boolean,
+  onClose: () => void
+  price?: Price,
+  paied: boolean,
+  lang: string
+}) {
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={onClose}
+    >
+      <AlertDialogContent className="sm:max-w-[425px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>ライブラリから削除しますか？</AlertDialogTitle>
+        </AlertDialogHeader>
+        <div>
+          <p>ライブラリから削除すると、再度入手するまで利用できなくなります。</p>
+          {(!paied && price) && (
+            <p>再度入手するには、{formatAmount(price.price, price.currency, lang)}かかります。</p>
+          )}
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>キャンセル</AlertDialogCancel>
+          <AlertDialogAction onClick={async () => await removeFromLibrary(pkgId)}>削除</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 export function ClientPage({
   pkg, owned, message, price, paied, lang
 }: PageProps) {
@@ -61,6 +96,7 @@ export function ClientPage({
     }
   }, [selectedVersion, pkg.Release]);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
@@ -97,7 +133,9 @@ export function ClientPage({
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             {owned && (
-              <DropdownMenuItem onClick={async () => await removeFromLibrary(pkg.id)}>ライブラリから削除</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setOpen(true)}>
+                ライブラリから削除
+              </DropdownMenuItem>
             )}
             <DropdownMenuLabel>バージョン</DropdownMenuLabel>
             <DropdownMenuSeparator />
@@ -122,6 +160,14 @@ export function ClientPage({
             <DropdownMenuItem>コンテンツを報告</DropdownMenuItem> */}
           </DropdownMenuContent>
         </DropdownMenu>
+        <RemoveFromLibraryDialog
+          pkgId={pkg.id}
+          open={open}
+          onClose={() => setOpen(false)}
+          price={price}
+          paied={paied}
+          lang={lang}
+        />
       </div>
       <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
 

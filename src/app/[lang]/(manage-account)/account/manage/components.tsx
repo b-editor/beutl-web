@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@/app/i18n/client";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { CircleUser, Mail, Shield, Trash } from "lucide-react";
+import { CircleUser, CreditCard, Mail, Shield, Trash } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMemo } from "react";
@@ -25,6 +25,12 @@ export function Navigation({ lang }: { lang: string }) {
         <ToggleGroupItem value="email" aria-label="Email Address" className="justify-start">
           <Mail className="w-4 h-4 mr-2" />
           {t("account:email.title")}
+        </ToggleGroupItem>
+      </Link>
+      <Link href={`/${lang}/account/manage/billing`} passHref className="contents">
+        <ToggleGroupItem value="billing" aria-label="Billing Settings" className="justify-start">
+          <CreditCard className="w-4 h-4 mr-2" />
+          {t("account:billing.title")}
         </ToggleGroupItem>
       </Link>
       <Link href={`/${lang}/account/manage/security`} passHref className="contents">

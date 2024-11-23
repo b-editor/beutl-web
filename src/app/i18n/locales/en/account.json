@@ -49,5 +49,9 @@
   "data": {
     "title": "Personal Data",
     "deleteAccount": "Delete Account"
+  },
+  "billing":{
+    "title": "Billing",
+    "paymentHistory": "Payment History"
   }
 }

@@ -64,6 +64,7 @@ export default async function Page({
         <div className="md:flex-1">
           <ClientPage
             name={name}
+            email={session.user.email as string}
             lang={lang}
             clientSecret={clientSecret}
           />

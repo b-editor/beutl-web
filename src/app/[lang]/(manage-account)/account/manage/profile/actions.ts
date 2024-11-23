@@ -136,7 +136,7 @@ export async function updateProfile(state: State, formData: FormData): Promise<S
     await Promise.all(promises);
     return {
       success: true,
-      message: t("account:profileUpdated"),
+      message: t("account:profile.profileUpdated"),
     };
   });
 }

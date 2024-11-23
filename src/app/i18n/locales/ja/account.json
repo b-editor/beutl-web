@@ -49,5 +49,9 @@
   "data": {
     "title": "個人データ",
     "deleteAccount": "アカウントを削除"
+  },
+  "billing":{
+    "title": "請求",
+    "paymentHistory": "支払い履歴"
   }
 }

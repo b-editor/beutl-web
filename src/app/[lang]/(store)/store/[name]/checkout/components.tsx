@@ -65,9 +65,10 @@ export function PackageDetails({
 }
 
 export function ClientPage({
-  clientSecret, lang, name
+  clientSecret, email, lang, name
 }: {
   clientSecret: string | null;
+  email: string;
   lang: string;
   name: string
 }) {
@@ -127,14 +128,14 @@ export function ClientPage({
           }}
           stripe={stripePromise}
         >
-          <CheckoutForm name={name} lang={lang} />
+          <CheckoutForm email={email} name={name} lang={lang} />
         </Elements>
       )}
     </>
   )
 }
 
-function CheckoutForm({ lang, name }: { lang: string, name: string }) {
+function CheckoutForm({ lang, name, email }: { lang: string, name: string, email: string }) {
   const stripe = useStripe();
   const elements = useElements();
 
@@ -169,7 +170,17 @@ function CheckoutForm({ lang, name }: { lang: string, name: string }) {
   return (
     <form id="payment-form" onSubmit={handleSubmit} className="h-full flex flex-col justify-between">
 
-      <PaymentElement id="payment-element" options={{ layout: "accordion" }} />
+      <PaymentElement
+        id="payment-element"
+        options={{
+          layout: "accordion",
+          defaultValues: {
+            billingDetails: {
+              email,
+            },
+          }
+        }}
+      />
       <div className="mx-3 mt-2 flex flex-col gap-2">
         {message && <div>{message}</div>}
         <Button size="lg" variant="default" disabled={isLoading || !stripe || !elements} id="submit">
