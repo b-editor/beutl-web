@@ -36,8 +36,14 @@ export async function GET(request: NextRequest, { params: { fileId } }: { params
           published: true,
           package: {
             select: {
+              id: true,
               userId: true,
               published: true,
+              packagePricing: {
+                select: {
+                  id: true
+                }
+              }
             },
           },
         }
@@ -72,6 +78,27 @@ export async function GET(request: NextRequest, { params: { fileId } }: { params
     }
     if (file.Release.length !== 0) {
       allowed = file.Release.some(release => (release.published && release.package.published) || release.package.userId === session?.user?.id);
+      if (allowed) {
+        const pkg = file.Release.find(r => r.package)?.package;
+        // 価格が設定されている時、購入者のみアクセス可能
+        if (pkg?.packagePricing[0]?.id) {
+          if (!await prisma.userPaymentHistory.findFirst({
+            where: {
+              userId: session?.user?.id,
+              packageId: pkg.id,
+            }
+          })) {
+            return NextResponse.json(
+              {
+                message: "支払いが必要です"
+              },
+              {
+                status: 403
+              }
+            );
+          }
+        }
+      }
     }
   }
 
