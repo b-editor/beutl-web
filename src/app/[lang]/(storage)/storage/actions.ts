@@ -222,19 +222,18 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 }
 
 export async function retrieveFiles() {
-  return await throwIfUnauth(async session => {
-    return await prisma.file.findMany({
-      where: {
-        userId: session?.user?.id
-      },
-      select: {
-        id: true,
-        objectKey: true,
-        name: true,
-        size: true,
-        mimeType: true,
-        visibility: true,
-      }
-    });
+  const session = await throwIfUnauth();
+  return await prisma.file.findMany({
+    where: {
+      userId: session?.user?.id
+    },
+    select: {
+      id: true,
+      objectKey: true,
+      name: true,
+      size: true,
+      mimeType: true,
+      visibility: true,
+    }
   });
 }
