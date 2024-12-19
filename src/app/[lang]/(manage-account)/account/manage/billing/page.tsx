@@ -5,6 +5,9 @@ import { stripe } from "@/lib/stripe/config";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getUserPaymentHistory } from "@/lib/db/userPaymentHistory";
+import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { ExternalLink } from "lucide-react";
 
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
@@ -46,6 +49,19 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
   return (
     <div>
       <h2 className="font-bold text-2xl">{t("account:billing.title")}</h2>
+      <div className="mt-4 rounded-lg border text-card-foreground">
+        <h3 className="font-bold text-md m-6 mb-4">{t("account:billing.paymentMethod")}</h3>
+        <Separator />
+
+        <div className="py-4 px-6">
+          <Button asChild>
+            <Link href="https://app.link.com/">
+              <ExternalLink className="w-4 h-4 mr-2" />
+              {t("account:billing.changePaymentMethod")}
+            </Link>
+          </Button>
+        </div>
+      </div>
       <div className="mt-4 rounded-lg border text-card-foreground">
         <h3 className="font-bold text-md m-6 mb-4">{t("account:billing.paymentHistory")}</h3>
         <Separator />
