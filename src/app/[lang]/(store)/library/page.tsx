@@ -4,8 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import Image from "next/image";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { formatAmount } from "@/lib/currency-formatter";
 
-export default async function Page() {
+export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
   const packages = await retrievePackages(session.user.id);
 
@@ -32,7 +33,9 @@ export default async function Page() {
                 </div>
                 <div className="overflow-x-clip relative h-6">
                   <div className="flex gap-2 absolute">
-                    <Badge variant="secondary" className="text-nowrap">無料</Badge>
+                    <Badge variant="secondary" className="text-nowrap">
+                      {item.price ? formatAmount(item.price.price, item.price.currency, lang) : "無料"}
+                    </Badge>
                     <Separator orientation="vertical" className="h-auto my-1" />
                     {item.tags.map(tag => (
                       <Badge variant="outline" className="border-input text-nowrap" key={tag}>{tag}</Badge>

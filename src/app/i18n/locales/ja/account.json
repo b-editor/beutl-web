@@ -52,6 +52,8 @@
   },
   "billing":{
     "title": "請求",
-    "paymentHistory": "支払い履歴"
+    "paymentHistory": "支払い履歴",
+    "paymentMethod": "支払い方法",
+    "changePaymentMethod": "支払い方法を変更"
   }
 }

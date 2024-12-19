@@ -52,6 +52,8 @@
   },
   "billing":{
     "title": "Billing",
-    "paymentHistory": "Payment History"
+    "paymentHistory": "Payment History",
+    "paymentMethod": "Payment Method",
+    "changePaymentMethod": "Change Payment Method"
   }
 }
