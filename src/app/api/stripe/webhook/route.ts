@@ -1,3 +1,4 @@
+import { createUserPaymentHistory } from "@/lib/db/userPaymentHistory";
 import { stripe } from "@/lib/stripe/config";
 import { prisma } from "@/prisma";
 import { NextRequest, NextResponse } from "next/server";
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return NextResponse.json({ message: "paymentIntent.customer is not string" }, { status: 400 });
       }
 
-      const userId = await prisma.customer.findFirst({
+      const customer = await prisma.customer.findFirst({
         where: {
           stripeId: paymentIntent.customer
         },
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           userId: true
         }
       });
-      if (!userId) {
+      if (!customer) {
         return NextResponse.json({ message: "User not found" }, { status: 404 });
       }
       const pkg = await prisma.package.findFirst({
@@ -44,17 +45,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
       await prisma.userPackage.create({
         data: {
-          userId: userId.userId,
+          userId: customer.userId,
           packageId: pkg.id
         }
       });
-      await prisma.userPaymentHistory.create({
-        data: {
-          userId: userId.userId,
-          packageId: pkg.id,
-          paymentId: paymentIntent.id,
-        }
-      })
+      await createUserPaymentHistory({ userId: customer.userId, packageId: pkg.id, paymentIntentId: paymentIntent.id });
       break;
     }
   }

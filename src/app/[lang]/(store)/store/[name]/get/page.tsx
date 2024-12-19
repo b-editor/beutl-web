@@ -1,4 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
+import { existsUserPaymentHistory } from "@/lib/db/userPaymentHistory";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
@@ -25,15 +26,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
 
   if (pkg.packagePricing.length > 0) {
     // すでに支払いをしている場合、支払わずにuserPackageを作成する
-    const record = await prisma.userPaymentHistory.findFirst({
-      where: {
-        userId: session.user.id,
-        packageId: pkg.id
-      },
-      select: {
-        id: true
-      }
-    });
+    const record = await existsUserPaymentHistory({ userId: session.user.id, packageId: pkg.id });
     if (!record) {
       redirect(`/store/${name}/checkout`);
     }
@@ -47,7 +40,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
       }
     })
   }
-  
+
   revalidatePath(`/store/${name}`);
   redirect(`/store/${name}?message=PleaseOpenDesktopApp`);
 }

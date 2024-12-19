@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { existsUserPaymentHistory } from "@/lib/db/userPaymentHistory";
 import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
@@ -82,12 +83,7 @@ export async function GET(request: NextRequest, { params: { fileId } }: { params
         const pkg = file.Release.find(r => r.package)?.package;
         // 価格が設定されている時、購入者のみアクセス可能
         if (pkg?.packagePricing[0]?.id) {
-          if (!await prisma.userPaymentHistory.findFirst({
-            where: {
-              userId: session?.user?.id,
-              packageId: pkg.id,
-            }
-          })) {
+          if (!await existsUserPaymentHistory({ userId: session?.user?.id, packageId: pkg.id })) {
             return NextResponse.json(
               {
                 message: "支払いが必要です"

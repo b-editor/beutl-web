@@ -4,18 +4,12 @@ import { authOrSignIn } from "@/lib/auth-guard";
 import { stripe } from "@/lib/stripe/config";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
+import { getUserPaymentHistory } from "@/lib/db/userPaymentHistory";
 
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
 
-  const history = await prisma.userPaymentHistory.findMany({
-    where: {
-      userId: session.user.id,
-    },
-    orderBy: {
-      createdAt: "desc",
-    }
-  });
+  const history = await getUserPaymentHistory(session.user.id);
   const items = await Promise.all(history.map(async item => {
     const p1 = prisma.package.findFirst({
       where: {
