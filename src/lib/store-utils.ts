@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/prisma";
 import { guessCurrency } from "./currency";
+import { existsUserPaymentHistory } from "./db/userPaymentHistory";
 
 export async function packageOwned(pkgId: string, userId: string) {
   return !!await prisma.userPackage.findFirst({
@@ -12,12 +13,7 @@ export async function packageOwned(pkgId: string, userId: string) {
 }
 
 export async function packagePaied(pkgId: string, userId: string) {
-  return !!await prisma.userPaymentHistory.findFirst({
-    where: {
-      userId: userId,
-      packageId: pkgId
-    }
-  });
+  return existsUserPaymentHistory({ userId, packageId: pkgId });
 }
 
 export async function retrievePrices(pkgId: string) {
