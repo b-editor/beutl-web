@@ -110,7 +110,7 @@ export function ClientPage({
             <div>
               <h2 className="font-bold text-2xl">{pkg.displayName || pkg.name}</h2>
               <Button asChild variant="link" className="p-0 h-auto text-muted-foreground">
-                <Link href="/">{pkg.user.Profile?.userName}</Link>
+                <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
               </Button>
             </div>
           </div>
@@ -216,7 +216,7 @@ export function ClientPage({
           <div className="flex gap-2 my-4 justify-between">
             <h4>作者</h4>
             <Button asChild variant="link" className="p-0 h-auto" >
-              <Link href="/">{pkg.user.Profile?.userName}</Link>
+              <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
             </Button>
           </div>
           <Separator />
