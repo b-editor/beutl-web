@@ -167,6 +167,15 @@ export async function retrievePackage(name: string) {
         orderBy: {
           order: "asc"
         }
+      },
+      Release: {
+        select: {
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          id: true,
+        }
       }
     }
   });
