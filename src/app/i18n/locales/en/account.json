@@ -48,7 +48,13 @@
   },
   "data": {
     "title": "Personal Data",
-    "deleteAccount": "Delete Account"
+    "deleteAccount": "Delete Account",
+    "confirmationAccountDeletion":{
+      "title": "Confirmation of account deletion",
+      "body": "<p>以下のリンクをクリックしてアカウントを削除できます</p><br/><a href=\"{{url}}\">アカウントを削除</a>"
+    },
+    "canceledAccountDeletion": "Account deletion canceled",
+    "sentEmail": "We have sent an email to confirm account deletion"
   },
   "billing":{
     "title": "Billing",

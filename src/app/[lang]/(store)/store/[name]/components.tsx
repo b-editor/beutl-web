@@ -15,6 +15,7 @@ import { useMatchMedia } from "@/hooks/use-match-media";
 import { Package } from "@/lib/store-utils";
 import { formatAmount } from "@/lib/currency-formatter";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { useTranslation } from "@/app/i18n/client";
 
 type Price = {
   price: number;
@@ -39,12 +40,13 @@ type GetButtonProps = {
 }
 
 function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
+  const { t } = useTranslation(lang);
   return (
     <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
-      {owned ? "入手済"
-        : paied ? "入手 (購入済)"
+      {owned ? t("store:owned")
+        : paied ? t("store:addedToLibrary")
           : price ? formatAmount(price.price, price.currency, lang)
-            : "入手"}
+            : t("store:aqcuire")}
     </Button>
   )
 }
@@ -59,6 +61,7 @@ function RemoveFromLibraryDialog({
   paied: boolean,
   lang: string
 }) {
+  const { t } = useTranslation(lang);
   return (
     <AlertDialog
       open={open}
@@ -66,17 +69,17 @@ function RemoveFromLibraryDialog({
     >
       <AlertDialogContent className="sm:max-w-[425px]">
         <AlertDialogHeader>
-          <AlertDialogTitle>ライブラリから削除しますか？</AlertDialogTitle>
+          <AlertDialogTitle>{t("store:confirmRemoveFromLibrary")}</AlertDialogTitle>
         </AlertDialogHeader>
         <div>
-          <p>ライブラリから削除すると、再度入手するまで利用できなくなります。</p>
+          <p>{t("store:removeWarning")}</p>
           {(!paied && price) && (
-            <p>再度入手するには、{formatAmount(price.price, price.currency, lang)}かかります。</p>
+            <p>{t("store:reacquireCost", { amount: formatAmount(price.price, price.currency, lang) })}</p>
           )}
         </div>
         <AlertDialogFooter>
-          <AlertDialogCancel>キャンセル</AlertDialogCancel>
-          <AlertDialogAction onClick={async () => await removeFromLibrary(pkgId)}>削除</AlertDialogAction>
+          <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+          <AlertDialogAction onClick={async () => await removeFromLibrary(pkgId)}>{t("remove")}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -86,6 +89,7 @@ function RemoveFromLibraryDialog({
 export function ClientPage({
   pkg, owned, message, price, paied, lang
 }: PageProps) {
+  const { t } = useTranslation(lang);
   const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -122,7 +126,7 @@ export function ClientPage({
               paied={paied}
               lang={lang}
             />
-            {message && <p>インストールするにはデスクトップアプリを開いてください</p>}
+            {message && <p>{t("store:openDesktopAppToInstall")}</p>}
           </div>
         </div>
         <DropdownMenu>
@@ -134,10 +138,10 @@ export function ClientPage({
           <DropdownMenuContent>
             {owned && (
               <DropdownMenuItem onClick={() => setOpen(true)}>
-                ライブラリから削除
+                {t("store:removeFromLibrary")}
               </DropdownMenuItem>
             )}
-            <DropdownMenuLabel>バージョン</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("store:version")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuRadioGroup value={selectedRelease?.version}
               onValueChange={(v) => {
@@ -173,7 +177,7 @@ export function ClientPage({
 
       {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
         <>
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:screenshots")}</h3>
           <Carousel className="mt-4" opts={{ active: maxLg }}>
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
               {pkg.PackageScreenshot.map((item) => (
@@ -190,13 +194,13 @@ export function ClientPage({
 
       <div className="flex max-lg:flex-col mt-6">
         <div className="lg:basis-2/3 lg:pr-6">
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">説明</h3>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:description")}</h3>
           <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
             {pkg.description}
           </p>
           {selectedRelease && (
             <>
-              <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? "最新のリリース" : "選択されているリリース"}</h3>
+              <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? t("store:latestRelease") : t("store:selectedRelease")}</h3>
               <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
                 {selectedRelease.title}<br />
                 {selectedRelease.description}
@@ -205,28 +209,28 @@ export function ClientPage({
           )}
         </div>
         <div className="lg:basis-1/3">
-          <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
+          <h4 className="font-bold text-lg mt-6 border-b pb-2">{t("store:details")}</h4>
           <div className="flex gap-2 flex-col my-4">
-            <h4>タグ</h4>
+            <h4>{t("store:tags")}</h4>
             <div className="flex gap-1 flex-wrap">
               {pkg.tags.map((tag) => (<Badge key={tag}>{tag}</Badge>))}
             </div>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>作者</h4>
+            <h4>{t("store:author")}</h4>
             <Button asChild variant="link" className="p-0 h-auto" >
               <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
             </Button>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>{selectedVersion === defaultVersion ? "最新のバージョン" : "選択されているバージョン"}</h4>
+            <h4>{selectedVersion === defaultVersion ? t("store:latestVersion") : t("store:selectedVersion")}</h4>
             <p>{selectedVersion}</p>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>ターゲットバージョン</h4>
+            <h4>{t("store:targetVersion")}</h4>
             <p>{selectedRelease?.targetVersion}</p>
           </div>
         </div>

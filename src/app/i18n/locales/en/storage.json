@@ -1,0 +1,17 @@
+{
+  "fileNotFound": "File not found",
+  "cannotDeleteFileInUse": "Cannot delete because one or more files are in use",
+  "cannotChangeVisibilityOfFileInUse": "Cannot change visibility because one or more files are in use",
+  "insufficientStorageSpace": "Insufficient storage space",
+  "fileName": "File name",
+  "size": "Size",
+  "visibilitySettings": "Visibility settings",
+  "public": "Public",
+  "private": "Private",
+  "dedicated": "Dedicated",
+  "setToPrivate": "Set to private",
+  "setToPublic": "Set to public",
+  "searchByFileName": "Search by file name",
+  "storage": "Storage",
+  "storageUsage": "Using {{totalSize}} of 1.00GB"
+}

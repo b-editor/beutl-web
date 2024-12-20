@@ -69,30 +69,30 @@ export async function updateProfile(state: State, formData: FormData): Promise<S
     );
     const providers = await prisma.socialProfileProvider.findMany({
       where: {
-        name: {
+        provider: {
           in: ["x", "github", "youtube", "custom"],
         },
       },
       select: {
         id: true,
-        name: true,
+        provider: true,
       },
     });
     const socials = [
       {
-        providerId: providers.find((p) => p.name === "x")?.id,
+        providerId: providers.find((p) => p.provider === "x")?.id,
         value: x
       },
       {
-        providerId: providers.find((p) => p.name === "github")?.id,
+        providerId: providers.find((p) => p.provider === "github")?.id,
         value: github,
       },
       {
-        providerId: providers.find((p) => p.name === "youtube")?.id,
+        providerId: providers.find((p) => p.provider === "youtube")?.id,
         value: youtube,
       },
       {
-        providerId: providers.find((p) => p.name === "custom")?.id,
+        providerId: providers.find((p) => p.provider === "custom")?.id,
         value: custom,
       },
     ];

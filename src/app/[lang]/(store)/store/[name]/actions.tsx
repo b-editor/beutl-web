@@ -1,12 +1,14 @@
 "use server";
 
-import { auth } from "@/auth";
+import { getTranslation } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
+import { getLanguage } from "@/lib/lang-utils";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
+  const lang = getLanguage();
   const { name } = await prisma.package.findFirstOrThrow({
     where: {
       id: packageId,
@@ -15,11 +17,13 @@ export async function addToLibrary(packageId: string) {
       name: true,
     }
   });
-  redirect(`/store/${name}/get`);
+  redirect(`/${lang}/store/${name}/get`);
 }
 
 export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const { package: { name } } = await prisma.userPackage.delete({
       where: {
         userId_packageId: {
@@ -38,7 +42,7 @@ export async function removeFromLibrary(packageId: string) {
     revalidatePath(`/store/${name}`);
     return {
       success: true,
-      message: "ライブラリから削除しました",
+      message: t("store:removedFromLibrary"),
     }
   });
 }

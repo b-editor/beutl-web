@@ -10,6 +10,7 @@ import Link from "next/link";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { formatAmount } from "@/lib/currency-formatter";
 import { Package } from "@/lib/store-utils";
+import { useTranslation } from "@/app/i18n/client";
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string);
 
@@ -20,7 +21,8 @@ export function PackageDetails({
   price: number,
   currency: string
   lang: string
-}) {
+  }) {
+  const { t } = useTranslation(lang);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
   return (
     <>
@@ -45,7 +47,7 @@ export function PackageDetails({
       <div className="max-lg:hidden">
         {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
           <>
-            <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
+            <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:screenshots")}</h3>
             <Carousel className="mt-4" opts={{ active: maxLg }}>
               <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
                 {pkg.PackageScreenshot.map((item) => (
@@ -136,6 +138,7 @@ export function ClientPage({
 }
 
 function CheckoutForm({ lang, name, email }: { lang: string, name: string, email: string }) {
+  const { t } = useTranslation(lang);
   const stripe = useStripe();
   const elements = useElements();
 
@@ -185,7 +188,7 @@ function CheckoutForm({ lang, name, email }: { lang: string, name: string, email
         {message && <div>{message}</div>}
         <Button size="lg" variant="default" disabled={isLoading || !stripe || !elements} id="submit">
           {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-          支払う
+          {t("store:pay")}
         </Button>
       </div>
     </form>

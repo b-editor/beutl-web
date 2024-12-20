@@ -5,14 +5,16 @@ import Image from "next/image";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { formatAmount } from "@/lib/currency-formatter";
+import { getTranslation } from "@/app/i18n/server";
 
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
   const packages = await retrievePackages(session.user.id);
+  const { t } = await getTranslation(lang);
 
   return (
     <div className="container max-w-6xl mx-auto px-2">
-      <h2 className="text-3xl font-semibold mx-4 py-6">ライブラリ</h2>
+      <h2 className="text-3xl font-semibold mx-4 py-6">{t("store:library")}</h2>
       <div className="flex flex-wrap">
         {packages.map(item => (
           <a href={`/store/${item.name}`} className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3" key={item.id}>
@@ -34,7 +36,7 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
                 <div className="overflow-x-clip relative h-6">
                   <div className="flex gap-2 absolute">
                     <Badge variant="secondary" className="text-nowrap">
-                      {item.price ? formatAmount(item.price.price, item.price.currency, lang) : "無料"}
+                      {item.price ? formatAmount(item.price.price, item.price.currency, lang) : t("store:free")}
                     </Badge>
                     <Separator orientation="vertical" className="h-auto my-1" />
                     {item.tags.map(tag => (

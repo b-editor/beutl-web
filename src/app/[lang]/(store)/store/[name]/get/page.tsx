@@ -4,7 +4,7 @@ import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-export default async function Page({ params: { name } }: { params: { name: string } }) {
+export default async function Page({ params: { name, lang } }: { params: { name: string, lang: string } }) {
   const session = await authOrSignIn();
 
   const pkg = await prisma.package.findFirst({
@@ -28,7 +28,7 @@ export default async function Page({ params: { name } }: { params: { name: strin
     // すでに支払いをしている場合、支払わずにuserPackageを作成する
     const record = await existsUserPaymentHistory({ userId: session.user.id, packageId: pkg.id });
     if (!record) {
-      redirect(`/store/${name}/checkout`);
+      redirect(`/${lang}/store/${name}/checkout`);
     }
   }
 
@@ -42,5 +42,5 @@ export default async function Page({ params: { name } }: { params: { name: strin
   }
 
   revalidatePath(`/store/${name}`);
-  redirect(`/store/${name}?message=PleaseOpenDesktopApp`);
+  redirect(`/${lang}/store/${name}?message=PleaseOpenDesktopApp`);
 }

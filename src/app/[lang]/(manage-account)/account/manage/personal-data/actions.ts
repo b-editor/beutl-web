@@ -9,6 +9,8 @@ import { options as nodemailerOptions } from "@/nodemailer";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
+import { getTranslation } from "@/app/i18n/server";
+import { getLanguage } from "@/lib/lang-utils";
 
 type State = {
   message?: string;
@@ -20,7 +22,8 @@ const emailSchema = z.object({
   cancel: z.literal("true").optional().or(emptyStringToUndefined),
 });
 
-async function sendEmail(email: string, token: string) {
+async function sendEmail(email: string, token: string, lang: string) {
+  const { t } = await getTranslation(lang);
   const urlstr = headers().get("x-url");
   if (!urlstr) {
     throw new Error("URL is missing in headers");
@@ -35,11 +38,8 @@ async function sendEmail(email: string, token: string) {
   const result = await transport.sendMail({
     to: email,
     from: nodemailerOptions.from,
-    subject: "アカウント削除の確認",
-    html: `
-      <p>以下のリンクをクリックしてアカウントを削除できます</p>
-      <a href="${url.toString()}">アカウントを削除</a>
-    `,
+    subject: t("account:data.confirmationAccountDeletion.title"),
+    html: t("account:data.confirmationAccountDeletion.body", { url: url.toString() }),
   })
   const failed = result.rejected.concat(result.pending).filter(Boolean)
   if (failed.length) {
@@ -49,13 +49,15 @@ async function sendEmail(email: string, token: string) {
 
 export async function submit(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const validated = emailSchema.safeParse(
       Object.fromEntries(formData.entries()),
     );
     if (!validated.success) {
       console.error(validated.error);
       return {
-        message: "入力内容に誤りがあります",
+        message: t("zod:custom"),
         success: false,
       };
     }
@@ -69,7 +71,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
       });
       revalidatePath("/account/manage/personal-data");
       return {
-        message: "アカウント削除をキャンセルしました",
+        message: t("account:data.cancelAccountDeletion"),
         success: true,
       };
     }
@@ -92,7 +94,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     );
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
-    const sendRequest = sendEmail(user.email, token);
+    const sendRequest = sendEmail(user.email, token, lang);
     const createToken = prisma.confirmationToken.create({
       data: {
         token: await createHash(`${token}${secret}`),
@@ -107,7 +109,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
 
     revalidatePath("/account/manage/personal-data");
     return {
-      message: "アカウントを削除するためのリンクを送信しました",
+      message: t("account:data.sentEmail"),
       success: true,
     };
   });

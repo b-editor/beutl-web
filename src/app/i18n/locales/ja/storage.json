@@ -1,0 +1,17 @@
+{
+  "fileNotFound": "ファイルが見つかりません",
+  "cannotDeleteFileInUse": "いずれかのファイルは占有されているため削除できません",
+  "cannotChangeVisibilityOfFileInUse": "いずれかのファイルは占有されています",
+  "insufficientStorageSpace": "ストレージ容量が足りません",
+  "fileName": "ファイル名",
+  "size": "サイズ",
+  "visibilitySettings": "公開設定",
+  "public": "公開",
+  "private": "非公開",
+  "dedicated": "専用",
+  "setToPrivate": "非公開にする",
+  "setToPublic": "公開にする",
+  "searchByFileName": "ファイル名で検索",
+  "storage": "ストレージ",
+  "storageUsage": "1.00GB 中 {{totalSize}}使用"
+}

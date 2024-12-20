@@ -1,6 +1,6 @@
 "use client";
 
-import { deleteFile, uploadFile } from "@/app/[lang]/(storage)/storage/actions";
+import { deleteFile, uploadFile } from "./actions";
 import {
   type ColumnFiltersState,
   type SortingState,
@@ -29,9 +29,11 @@ import { useCallback, useMemo, useState, useTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import type { File } from "./types";
-import { columns } from "./columns";
+import { getColumns } from "./columns";
+import { useTranslation } from "@/app/i18n/client";
 
-export function List({ data }: { data: File[] }) {
+export function List({ data, lang }: { data: File[], lang: string }) {
+  const { t } = useTranslation(lang);
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -40,6 +42,7 @@ export function List({ data }: { data: File[] }) {
   const [deleting, startDelete] = useTransition()
   const pending = useMemo(() => uploading || deleting, [uploading, deleting]);
   const { toast } = useToast();
+  const columns = useMemo(() => getColumns(lang), []);
 
   const table = useReactTable({
     data,
@@ -72,7 +75,7 @@ export function List({ data }: { data: File[] }) {
       const res = await uploadFile(formData);
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("error"),
           description: res.message,
           variant: "destructive",
         });
@@ -89,7 +92,7 @@ export function List({ data }: { data: File[] }) {
       const res = await deleteFile(selectedRows.map(row => row.original.id));
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("error"),
           description: res.message,
           variant: "destructive",
         });
@@ -103,7 +106,7 @@ export function List({ data }: { data: File[] }) {
     <div className="w-full px-4">
       <div className="flex items-center py-4 gap-4">
         <Input
-          placeholder="ファイル名で検索"
+          placeholder={t("storage:searchByFileName")}
           value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
           onChange={(event) =>
             table.getColumn("name")?.setFilterValue(event.target.value)

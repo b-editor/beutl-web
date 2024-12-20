@@ -4,14 +4,16 @@ import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
+import { getTranslation } from "@/app/i18n/server";
 
 export default async function Page({ params: { lang, name } }: { params: { lang: string, name: string } }) {
   const { items: packages, displayName } = await retrievePublishedPackages(name);
+  const { t } = await getTranslation(lang);
 
   return (
     <div className="container max-w-6xl mx-auto px-2">
       <h2 className="text-3xl font-semibold mx-4 py-6">
-        {displayName}が作成したパッケージ
+        {t("store:packagesCreatedByName", { name: displayName })}
       </h2>
       <div className="flex flex-wrap">
         {packages.map(item => (
@@ -34,7 +36,7 @@ export default async function Page({ params: { lang, name } }: { params: { lang:
                 <div className="overflow-x-clip relative h-6">
                   <div className="flex gap-2 absolute">
                     <Badge variant="secondary" className="text-nowrap">
-                      {item.price ? formatAmount(item.price.price, item.price.currency, lang) : "無料"}
+                      {item.price ? formatAmount(item.price.price, item.price.currency, lang) : t("store:free")}
                     </Badge>
                     <Separator orientation="vertical" className="h-auto my-1" />
                     {item.tags.map(tag => (
