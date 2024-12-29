@@ -14,7 +14,7 @@ export default async function Page({
 }) {
   const session = await authOrSignIn();
   if (token && identifier) {
-    updateEmail(token, identifier);
+    await updateEmail(token, identifier);
   }
 
   const user = await prisma.user.findFirst({
