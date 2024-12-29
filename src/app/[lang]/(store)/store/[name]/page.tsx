@@ -1,12 +1,14 @@
 import { ClientPage } from "./components";
-import { retrievePackage } from "./actions";
 import { notFound } from "next/navigation";
 import { SemVer } from "semver";
 import { auth } from "@/auth";
 import { prisma } from "@/prisma";
+import { guessCurrency } from "@/lib/currency";
+import { packageOwned, packagePaied, retrievePackage, retrievePrices } from "@/lib/store-utils";
 
 type Props = {
   params: {
+    lang: string;
     name: string;
   };
   searchParams: {
@@ -14,7 +16,7 @@ type Props = {
   }
 }
 
-export default async function Page({ params: { name }, searchParams: { message } }: Props) {
+export default async function Page({ params: { lang, name }, searchParams: { message } }: Props) {
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
@@ -22,19 +24,25 @@ export default async function Page({ params: { name }, searchParams: { message }
   pkg.Release.sort((a, b) => {
     return new SemVer(b.version).compare(a.version);
   });
+  const currencyP = guessCurrency();
+  const prices = await retrievePrices(pkg.id);
+  const currency = await currencyP;
+  const price = prices.find(p => p.currency === currency) || prices.find(p => p.fallback) || prices[0];
   const session = await auth();
   let owned = false;
+  let paied = false;
   if (session?.user?.id) {
-    const up = await prisma.userPackage.findFirst({
-      where: {
-        userId: session.user.id,
-        packageId: pkg.id
-      }
-    });
-    owned = up !== null;
+    [owned, paied] = await Promise.all([packageOwned(pkg.id, session.user.id), packagePaied(pkg.id, session.user.id)]);
   }
 
   return (
-    <ClientPage pkg={pkg} owned={owned} message={message} />
+    <ClientPage
+      pkg={pkg}
+      owned={owned}
+      message={message}
+      lang={lang}
+      price={price}
+      paied={paied}
+    />
   )
 }

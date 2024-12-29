@@ -16,7 +16,7 @@ export default async function NavBar({ lang }: { lang: string }) {
       <div className="gap-2 flex">
         <StandardDrawer lang={lang} />
 
-        <Link className="decoration-0 flex gap-2 my-auto" href="/">
+        <Link className="decoration-0 flex gap-2 my-auto" href={`/${lang}`}>
           <img className='align-bottom' src="/img/logo_dark.svg" alt="Logo" />
           <h1 className="font-semibold text-xl mt-1">Beutl</h1>
         </Link>

@@ -27,6 +27,7 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
         select: {
           id: true,
           name: true,
+          provider: true,
           urlTemplate: true,
         }
       }

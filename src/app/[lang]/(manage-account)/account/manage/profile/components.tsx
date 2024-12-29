@@ -73,6 +73,7 @@ type FormProps = ComponentProps<"form"> & {
           select: {
             id: true,
             name: true,
+            provider: true,
             urlTemplate: true
           }
         }
@@ -83,10 +84,10 @@ type FormProps = ComponentProps<"form"> & {
 }
 
 export function Form({ profile, socials, lang, ...props }: FormProps & { lang: string }) {
-  const xProfile = useMemo(() => socials.find(social => social.provider.name === "x"), [socials]);
-  const ghProfile = useMemo(() => socials.find(social => social.provider.name === "github"), [socials]);
-  const ytProfile = useMemo(() => socials.find(social => social.provider.name === "youtube"), [socials]);
-  const customProfile = useMemo(() => socials.find(social => social.provider.name === "custom"), [socials]);
+  const xProfile = useMemo(() => socials.find(social => social.provider.provider === "x"), [socials]);
+  const ghProfile = useMemo(() => socials.find(social => social.provider.provider === "github"), [socials]);
+  const ytProfile = useMemo(() => socials.find(social => social.provider.provider === "youtube"), [socials]);
+  const customProfile = useMemo(() => socials.find(social => social.provider.provider === "custom"), [socials]);
   const [state, dispatch] = useFormState(updateProfile, {});
   const { t } = useTranslation(lang);
 

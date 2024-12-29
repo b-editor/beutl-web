@@ -237,12 +237,11 @@ function PasskeyListItem({ authenticator, lang, ...props }: ComponentProps<"li">
               <DropdownMenuItem disabled={pending} onClick={async () => {
                 setPending(true);
                 try {
-                  await deleteAuthenticator({ id: authenticator.id })
-                } catch (e) {
-                  if (e instanceof Error) {
+                  const { error } = await deleteAuthenticator({ id: authenticator.id })
+                  if (error) {
                     toast({
                       title: t("error"),
-                      description: e.message,
+                      description: error,
                       variant: "destructive",
                     });
                   }

@@ -7,6 +7,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sd
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import { SemVer } from "semver";
 import { z } from "zod";
 
 export type State = {
@@ -121,72 +122,82 @@ export async function updateDescription({ packageId, description }: { packageId:
 }
 
 export async function retrievePackage(name: string) {
-  return await throwIfUnauth(async session => {
-    const pkg = await prisma.package.findFirst({
-      where: {
-        name: {
-          equals: name,
-          mode: "insensitive"
-        },
-        userId: session.user.id
+  const session = await throwIfUnauth();
+  const pkg = await prisma.package.findFirst({
+    where: {
+      name: {
+        equals: name,
+        mode: "insensitive"
       },
-      select: {
-        id: true,
-        name: true,
-        displayName: true,
-        description: true,
-        shortDescription: true,
-        published: true,
-        webSite: true,
-        tags: true,
-        user: {
-          select: {
-            Profile: {
-              select: {
-                userName: true,
-              }
+      userId: session.user.id
+    },
+    select: {
+      id: true,
+      name: true,
+      displayName: true,
+      description: true,
+      shortDescription: true,
+      published: true,
+      webSite: true,
+      tags: true,
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
             }
-          }
-        },
-        iconFile: {
-          select: {
-            id: true,
-            objectKey: true,
-          }
-        },
-        PackageScreenshot: {
-          select: {
-            order: true,
-            file: {
-              select: {
-                id: true,
-                objectKey: true,
-              }
-            }
-          },
-          orderBy: {
-            order: "asc"
           }
         }
+      },
+      iconFile: {
+        select: {
+          id: true,
+          objectKey: true,
+        }
+      },
+      PackageScreenshot: {
+        select: {
+          order: true,
+          file: {
+            select: {
+              id: true,
+              objectKey: true,
+            }
+          }
+        },
+        orderBy: {
+          order: "asc"
+        }
+      },
+      Release: {
+        select: {
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          id: true,
+        }
       }
-    });
-    if (!pkg) {
-      return null;
-    }
-
-    const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
-      return {
-        ...item,
-        url: `/api/contents/${item.file.id}`
-      }
-    }));
-
-    return {
-      ...pkg,
-      iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
-      PackageScreenshot: screenshots
     }
   });
+  if (!pkg) {
+    return null;
+  }
+  pkg.Release.sort((a, b) => {
+    return new SemVer(b.version).compare(a.version);
+  });
+  const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
+    return {
+      ...item,
+      url: `/api/contents/${item.file.id}`
+    }
+  }));
+
+  return {
+    ...pkg,
+    iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
+    PackageScreenshot: screenshots
+  };
 }
 
 export async function deletePackage(id: string): Promise<Response> {

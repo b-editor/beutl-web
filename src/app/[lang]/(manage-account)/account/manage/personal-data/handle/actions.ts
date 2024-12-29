@@ -1,5 +1,4 @@
-"use server";
-
+import "server-only";
 import { createHash } from "@/lib/create-hash";
 import { prisma } from "@/prisma";
 import { ConfirmationTokenPurpose } from "@prisma/client";
@@ -22,11 +21,11 @@ export async function deleteUser(token: string, identifier: string) {
     },
   });
   if (!tokenData || tokenData.purpose !== ConfirmationTokenPurpose.ACCOUNT_DELETE) {
-    throw new Error("トークンが無効です");
+    throw new Error("Invalid token");
   }
 
   if (tokenData.expires.valueOf() < Date.now()) {
-    throw new Error("トークンの有効期限が切れています");
+    throw new Error("Token has expired");
   }
 
   await prisma.user.delete({

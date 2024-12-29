@@ -80,6 +80,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
     }
   },
+  callbacks: {
+    session: async ({session, user}) => {
+      // user.nameをprofile.displayNameにする
+      const profile = await prisma.profile.findFirst({
+        where: {
+          userId: user.id
+        },
+        select: {
+          displayName: true
+        }
+      });
+      if (profile) {
+        session.user.name = profile.displayName;
+      }
+      return session;
+    },
+  },
   pages: {
     signIn: "/account/sign-in",
     signOut: "/account/sign-out",

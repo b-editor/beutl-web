@@ -7,6 +7,8 @@ import { revalidatePath } from "next/cache";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/storage";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import { getLanguage } from "@/lib/lang-utils";
+import { getTranslation } from "@/app/i18n/server";
 
 type Response = {
   success: boolean;
@@ -14,6 +16,8 @@ type Response = {
 }
 export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const files = await prisma.file.findMany({
       where: {
         id: {
@@ -30,13 +34,13 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     if (!files.length) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("storage:fileNotFound"),
       };
     }
     if (files.some((f) => f.visibility === "DEDICATED")) {
       return {
         success: false,
-        message: "いずれかのファイルは占有されているため削除できません",
+        message: t("storage:cannotDeleteFileInUse"),
       };
     }
 
@@ -64,10 +68,12 @@ export async function deleteFile(ids: string[]): Promise<Response> {
 
 export async function changeFileVisibility(ids: string[], visibility: "PRIVATE" | "PUBLIC"): Promise<Response> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
       return {
         success: false,
-        message: "不正な値です",
+        message: t("zod:custom"),
       };
     }
 
@@ -87,13 +93,13 @@ export async function changeFileVisibility(ids: string[], visibility: "PRIVATE" 
     if (!files.length) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("storage:fileNotFound"),
       };
     }
     if (files.some((f) => f.visibility === "DEDICATED")) {
       return {
         success: false,
-        message: "いずれかのファイルは占有されています",
+        message: t("storage:cannotChangeVisibilityOfFileInUse"),
       };
     }
 
@@ -123,6 +129,8 @@ type GetTemporaryUrlResponse = {
 }
 export async function getTemporaryUrl(id: string): Promise<GetTemporaryUrlResponse> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const file = await prisma.file.findUnique({
       where: {
         id,
@@ -135,7 +143,7 @@ export async function getTemporaryUrl(id: string): Promise<GetTemporaryUrlRespon
     if (!file) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("storage:fileNotFound"),
       };
     }
 
@@ -156,11 +164,13 @@ export async function getTemporaryUrl(id: string): Promise<GetTemporaryUrlRespon
 
 export async function uploadFile(formData: FormData): Promise<Response> {
   return await authenticated(async (session) => {
+    const lang = getLanguage();
+    const { t } = await getTranslation(lang);
     const file = formData.get("file") as File;
     if (!file) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("storage:fileNotFound"),
       };
     }
 
@@ -183,7 +193,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
     if (totalSize + BigInt(file.size) > maxSize) {
       return {
         success: false,
-        message: "ストレージ容量が足りません",
+        message: t("storage:insufficientStorageSpace"),
       };
     }
 
@@ -222,19 +232,18 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 }
 
 export async function retrieveFiles() {
-  return await throwIfUnauth(async session => {
-    return await prisma.file.findMany({
-      where: {
-        userId: session?.user?.id
-      },
-      select: {
-        id: true,
-        objectKey: true,
-        name: true,
-        size: true,
-        mimeType: true,
-        visibility: true,
-      }
-    });
+  const session = await throwIfUnauth();
+  return await prisma.file.findMany({
+    where: {
+      userId: session?.user?.id
+    },
+    select: {
+      id: true,
+      objectKey: true,
+      name: true,
+      size: true,
+      mimeType: true,
+      visibility: true,
+    }
   });
 }

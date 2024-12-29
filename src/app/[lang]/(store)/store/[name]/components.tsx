@@ -9,27 +9,87 @@ import { MoreVertical } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
-import { addToLibrary, removeFromLibrary, type retrievePackage } from "./actions";
+import { useMemo, useState } from "react";
+import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
+import { Package } from "@/lib/store-utils";
+import { formatAmount } from "@/lib/currency-formatter";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { useTranslation } from "@/app/i18n/client";
 
-function GetButton({ pkgId, owned }: { pkgId: string, owned: boolean }) {
-  const router = useRouter();
+type Price = {
+  price: number;
+  currency: string;
+}
 
+type PageProps = {
+  pkg: Package;
+  owned: boolean;
+  paied: boolean;
+  message?: "PleaseOpenDesktopApp";
+  price?: Price;
+  lang: string;
+}
+
+type GetButtonProps = {
+  pkgId: string;
+  owned: boolean;
+  price?: Price;
+  paied: boolean;
+  lang: string;
+}
+
+function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
+  const { t } = useTranslation(lang);
   return (
     <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
-      {owned ? "入手済" : "入手"}
+      {owned ? t("store:owned")
+        : paied ? t("store:addedToLibrary")
+          : price ? formatAmount(price.price, price.currency, lang)
+            : t("store:aqcuire")}
     </Button>
   )
 }
 
-type Props = {
-  pkg: NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
-  owned: boolean;
-  message?: "PleaseOpenDesktopApp";
+function RemoveFromLibraryDialog({
+  pkgId, open, onClose, price, paied, lang
+}: {
+  pkgId: string,
+  open: boolean,
+  onClose: () => void
+  price?: Price,
+  paied: boolean,
+  lang: string
+}) {
+  const { t } = useTranslation(lang);
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={onClose}
+    >
+      <AlertDialogContent className="sm:max-w-[425px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("store:confirmRemoveFromLibrary")}</AlertDialogTitle>
+        </AlertDialogHeader>
+        <div>
+          <p>{t("store:removeWarning")}</p>
+          {(!paied && price) && (
+            <p>{t("store:reacquireCost", { amount: formatAmount(price.price, price.currency, lang) })}</p>
+          )}
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+          <AlertDialogAction onClick={async () => await removeFromLibrary(pkgId)}>{t("remove")}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
 }
 
-export function ClientPage({ pkg, owned, message }: Props) {
+export function ClientPage({
+  pkg, owned, message, price, paied, lang
+}: PageProps) {
+  const { t } = useTranslation(lang);
   const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -40,6 +100,7 @@ export function ClientPage({ pkg, owned, message }: Props) {
     }
   }, [selectedVersion, pkg.Release]);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
@@ -53,13 +114,19 @@ export function ClientPage({ pkg, owned, message }: Props) {
             <div>
               <h2 className="font-bold text-2xl">{pkg.displayName || pkg.name}</h2>
               <Button asChild variant="link" className="p-0 h-auto text-muted-foreground">
-                <Link href="/">{pkg.user.Profile?.userName}</Link>
+                <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
               </Button>
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
-          <GetButton pkgId={pkg.id} owned={owned} />
-          {message && <p>インストールするにはデスクトップアプリを開いてください</p>}
+            <GetButton
+              pkgId={pkg.id}
+              owned={owned}
+              price={price}
+              paied={paied}
+              lang={lang}
+            />
+            {message && <p>{t("store:openDesktopAppToInstall")}</p>}
           </div>
         </div>
         <DropdownMenu>
@@ -70,9 +137,11 @@ export function ClientPage({ pkg, owned, message }: Props) {
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             {owned && (
-              <DropdownMenuItem onClick={async () => await removeFromLibrary(pkg.id)}>ライブラリから削除</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setOpen(true)}>
+                {t("store:removeFromLibrary")}
+              </DropdownMenuItem>
             )}
-            <DropdownMenuLabel>バージョン</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("store:version")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuRadioGroup value={selectedRelease?.version}
               onValueChange={(v) => {
@@ -95,12 +164,20 @@ export function ClientPage({ pkg, owned, message }: Props) {
             <DropdownMenuItem>コンテンツを報告</DropdownMenuItem> */}
           </DropdownMenuContent>
         </DropdownMenu>
+        <RemoveFromLibraryDialog
+          pkgId={pkg.id}
+          open={open}
+          onClose={() => setOpen(false)}
+          price={price}
+          paied={paied}
+          lang={lang}
+        />
       </div>
       <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
 
       {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
         <>
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">スクリーンショット</h3>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:screenshots")}</h3>
           <Carousel className="mt-4" opts={{ active: maxLg }}>
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
               {pkg.PackageScreenshot.map((item) => (
@@ -117,13 +194,13 @@ export function ClientPage({ pkg, owned, message }: Props) {
 
       <div className="flex max-lg:flex-col mt-6">
         <div className="lg:basis-2/3 lg:pr-6">
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">説明</h3>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:description")}</h3>
           <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
             {pkg.description}
           </p>
           {selectedRelease && (
             <>
-              <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? "最新のリリース" : "選択されているリリース"}</h3>
+              <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? t("store:latestRelease") : t("store:selectedRelease")}</h3>
               <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
                 {selectedRelease.title}<br />
                 {selectedRelease.description}
@@ -132,28 +209,28 @@ export function ClientPage({ pkg, owned, message }: Props) {
           )}
         </div>
         <div className="lg:basis-1/3">
-          <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
+          <h4 className="font-bold text-lg mt-6 border-b pb-2">{t("store:details")}</h4>
           <div className="flex gap-2 flex-col my-4">
-            <h4>タグ</h4>
+            <h4>{t("store:tags")}</h4>
             <div className="flex gap-1 flex-wrap">
               {pkg.tags.map((tag) => (<Badge key={tag}>{tag}</Badge>))}
             </div>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>作者</h4>
+            <h4>{t("store:author")}</h4>
             <Button asChild variant="link" className="p-0 h-auto" >
-              <Link href="/">{pkg.user.Profile?.userName}</Link>
+              <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
             </Button>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>{selectedVersion === defaultVersion ? "最新のバージョン" : "選択されているバージョン"}</h4>
+            <h4>{selectedVersion === defaultVersion ? t("store:latestVersion") : t("store:selectedVersion")}</h4>
             <p>{selectedVersion}</p>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>ターゲットバージョン</h4>
+            <h4>{t("store:targetVersion")}</h4>
             <p>{selectedRelease?.targetVersion}</p>
           </div>
         </div>

@@ -32,13 +32,11 @@ export async function authenticated<TResult>(
   return await fnc(session as SafeSession);
 }
 
-export async function throwIfUnauth<TResult>(
-  fnc: (session: SafeSession) => Promise<TResult>
-) {
+export async function throwIfUnauth() {
   const session = await auth();
   if (!session?.user?.id) {
     throw new Error("Unauthenticated");
   }
 
-  return await fnc(session as SafeSession);
+  return session as SafeSession;
 }

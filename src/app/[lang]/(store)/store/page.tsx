@@ -1,27 +1,36 @@
+import { getTranslation } from "@/app/i18n/server";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { formatAmount } from "@/lib/currency-formatter";
+import { retrievePackages } from "@/lib/store-utils";
 import Image from "next/image";
-import { retrievePackages } from "./actions";
 
-export default async function Page({ searchParams: { query } }: { searchParams: { query?: string } }) {
+export default async function Page({
+  searchParams: { query },
+  params: { lang }
+}: {
+  searchParams: { query?: string },
+  params: { lang: string }
+  }) {
+  const { t } = await getTranslation(lang);
   const packages = await retrievePackages(query);
 
   return (
     <>
       <div className="border-b bg-card">
         <div className="container max-w-6xl mx-auto py-6 flex flex-col">
-          <h2 className="text-3xl font-semibold mx-4">拡張機能を探す</h2>
+          <h2 className="text-3xl font-semibold mx-4">{t("store:searchForExtensions")}</h2>
           <form method="GET">
-            <Input name="query" className="my-4 mx-4 max-md:w-auto md:max-w-md" type="search" placeholder="検索" defaultValue={query} />
+            <Input name="query" className="my-4 mx-4 max-md:w-auto md:max-w-md" type="search" placeholder={t("store:search")} defaultValue={query} />
           </form>
         </div>
       </div>
       <div className="container max-w-6xl mx-auto py-6 px-2">
         <div className="flex flex-wrap">
           {packages.map(item => (
-            <a href={`/store/${item.name}`} className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3" key={item.id}>
+            <a href={`/${lang}/store/${item.name}`} className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3" key={item.id}>
               <Card className="h-full">
                 <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
                   <div>
@@ -39,7 +48,9 @@ export default async function Page({ searchParams: { query } }: { searchParams: 
                   </div>
                   <div className="overflow-x-clip relative h-6">
                     <div className="flex gap-2 absolute">
-                      <Badge variant="secondary" className="text-nowrap">無料</Badge>
+                      <Badge variant="secondary" className="text-nowrap">
+                        {item.price ? formatAmount(item.price.price, item.price.currency, lang) : t("store:free")}
+                      </Badge>
                       <Separator orientation="vertical" className="h-auto my-1" />
                       {item.tags.map(tag => (
                         <Badge variant="outline" className="border-input text-nowrap" key={tag}>{tag}</Badge>

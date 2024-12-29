@@ -30,7 +30,7 @@ export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
   }, [description, pkg.id, toast]);
 
   return (
-    <div className="lg:basis-2/3 lg:pr-6">
+    <div>
       <div className="flex justify-between items-center mt-6 border-b pb-2">
         <h3 className="font-bold text-xl">
           説明
@@ -50,29 +50,22 @@ export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
-          <Button onClick={handleSave} disabled={pending}>
-            {pending
-              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              : <Save className="w-4 h-4 mr-2" />}
-            保存
-          </Button>
-          <Button variant="outline" className="ml-2" onClick={() => {
-            toggleEdit();
-            setDescription(pkg.description);
-          }}>
-            キャンセル
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={handleSave} disabled={pending}>
+              {pending
+                ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                : <Save className="w-4 h-4 mr-2" />}
+              保存
+            </Button>
+            <Button variant="outline" onClick={() => {
+              toggleEdit();
+              setDescription(pkg.description);
+            }}>
+              キャンセル
+            </Button>
+          </div>
         </>
       )}
-      {/* {selectedRelease && (
-        <>
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? "最新のリリース" : "選択されているリリース"}</h3>
-          <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
-            {selectedRelease.title}<br />
-            {selectedRelease.body}
-          </p>
-        </>
-      )} */}
     </div>
   )
 }

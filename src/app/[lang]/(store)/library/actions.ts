@@ -1,8 +1,6 @@
 import "server-only";
-import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { guessCurrency } from "@/lib/currency";
 
 type ListedPackage = {
   id: string;
@@ -12,9 +10,14 @@ type ListedPackage = {
   userName?: string;
   iconFileUrl?: string;
   tags: string[];
+  price?: {
+    price: number;
+    currency: string;
+  }
 };
 
 export async function retrievePackages(userId: string): Promise<ListedPackage[]> {
+  const currency = await guessCurrency();
   const tmp = (await prisma.userPackage.findMany({
     where: {
       userId: userId,
@@ -44,6 +47,26 @@ export async function retrievePackages(userId: string): Promise<ListedPackage[]>
               },
             },
           },
+          packagePricing: {
+            where: {
+              OR: [
+                {
+                  currency: {
+                    equals: currency,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  fallback: true
+                }
+              ]
+            },
+            select: {
+              price: true,
+              currency: true,
+              fallback: true
+            }
+          }
         }
       }
     }
@@ -60,6 +83,8 @@ export async function retrievePackages(userId: string): Promise<ListedPackage[]>
       userName: pkg.user.Profile?.userName || undefined,
       iconFileUrl: url || undefined,
       tags: pkg.tags,
+      price: pkg.packagePricing.find(p => p.currency === currency)
+        || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
     }
   }));
 }

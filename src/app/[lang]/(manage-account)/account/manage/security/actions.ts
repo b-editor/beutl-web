@@ -113,79 +113,77 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
 }
 
 export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
-  return await throwIfUnauth(async (session) => {
-    const lang = getLanguage();
-    await prisma.authenticator.update({
-      where: {
-        userId_credentialID: {
-          userId: session.user.id,
-          credentialID: id,
-        },
+  const session = await throwIfUnauth();
+  const lang = getLanguage();
+  await prisma.authenticator.update({
+    where: {
+      userId_credentialID: {
+        userId: session.user.id,
+        credentialID: id,
       },
-      data: {
-        name,
-      },
-    });
-    revalidatePath(`/${lang}/account/manage/security`);
-    redirect(`${lang}/account/manage/security`);
+    },
+    data: {
+      name,
+    },
   });
+  revalidatePath(`/${lang}/account/manage/security`);
+  redirect(`${lang}/account/manage/security`);
 }
 
-export async function deleteAuthenticator({ id }: { id: string }): Promise<void> {
-  return await throwIfUnauth(async (session) => {
-    const lang = getLanguage();
-    const { t } = await getTranslation(lang);
-    const user = await prisma.user.findFirst({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        emailVerified: true,
-        accounts: {
-          select: {
-            providerAccountId: true,
-            provider: true,
-          },
+export async function deleteAuthenticator({ id }: { id: string }): Promise<{error?: string}> {
+  const session = await throwIfUnauth();
+  const lang = getLanguage();
+  const { t } = await getTranslation(lang);
+  const user = await prisma.user.findFirst({
+    where: {
+      id: session.user.id,
+    },
+    select: {
+      emailVerified: true,
+      accounts: {
+        select: {
+          providerAccountId: true,
+          provider: true,
         },
       },
-    });
-    if (!user) {
-      throw new Error("Account not found");
-    }
-
-    const remain = user.accounts.filter(
-      (account) =>
-        !(account.providerAccountId === id && account.provider === "passkey"),
-    );
-    if (remain.length === user.accounts.length) {
-      throw new Error("Account not found");
-    }
-
-    if (remain.length === 0) {
-      console.log("Deleting the last account");
-      if (!user.emailVerified) {
-        console.log("The user is not verified");
-        throw new Error(t("account:security.cannotRemoveAccount"),);
-      }
-    }
-
-    await prisma.account.delete({
-      where: {
-        provider_providerAccountId: {
-          providerAccountId: id,
-          provider: "passkey",
-        },
-      },
-    });
-    await prisma.authenticator.delete({
-      where: {
-        userId_credentialID: {
-          userId: session.user.id,
-          credentialID: id,
-        },
-      },
-    });
-    revalidatePath(`/${lang}/account/manage/security`);
-    redirect(`/${lang}/account/manage/security`);
+    },
   });
+  if (!user) {
+    return { error: "Account not found" };
+  }
+
+  const remain = user.accounts.filter(
+    (account) =>
+      !(account.providerAccountId === id && account.provider === "passkey"),
+  );
+  if (remain.length === user.accounts.length) {
+    return { error: "Account not found" };
+  }
+
+  if (remain.length === 0) {
+    console.log("Deleting the last account");
+    if (!user.emailVerified) {
+      console.log("The user is not verified");
+      return { error: t("account:security.cannotRemoveAccount") };
+    }
+  }
+
+  await prisma.account.delete({
+    where: {
+      provider_providerAccountId: {
+        providerAccountId: id,
+        provider: "passkey",
+      },
+    },
+  });
+  await prisma.authenticator.delete({
+    where: {
+      userId_credentialID: {
+        userId: session.user.id,
+        credentialID: id,
+      },
+    },
+  });
+  revalidatePath(`/${lang}/account/manage/security`);
+  redirect(`/${lang}/account/manage/security`);
 }
