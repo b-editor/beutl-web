@@ -121,12 +121,10 @@ export async function updateProfile(state: State, formData: FormData): Promise<S
         );
       } else {
         promises.push(
-          prisma.socialProfile.delete({
+          prisma.socialProfile.deleteMany({
             where: {
-              userId_providerId: {
-                userId: session.user.id,
-                providerId: social.providerId,
-              },
+              userId: session.user.id,
+              providerId: social.providerId,
             },
           }),
         );
