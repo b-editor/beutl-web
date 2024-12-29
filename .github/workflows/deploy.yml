@@ -23,15 +23,14 @@ jobs:
         cp -r ./.next/static ./build/.next/static
         cp -r ./public ./build/public
         cp ./next.config.mjs ./build
-        cd ./build
-        zip -r build.zip ./
+        zip -r build.zip ./build
 
     - uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.HOST_NAME }}
         username: ${{ secrets.USER_NAME }}
         key: ${{ secrets.SSH_KEY }}
-        source: "build/build.zip,prisma/schema.prisma"
+        source: "build.zip,prisma/schema.prisma"
         target: /var/www/
 
     - name: Deploy
@@ -43,18 +42,22 @@ jobs:
         script: |
           set -e
           cd /var/www
-          mkdir -p beutl-clientapp-tmp
-          rm -rf beutl-clientapp-tmp/*
+          rm -rf beutl-clientapp-tmp
+          mkdir beutl-clientapp-tmp
+
           cd beutl-clientapp-tmp
-          unzip ../build.zip
-          cp ../beutl-clientapp-v3/.env ./
+          unzip /var/www/build.zip
+
+          cd build
+          cp /var/www/beutl-clientapp-v3/.env ./
           pnpm i
           mkdir prisma
-          mv ../schema.prisma ./prisma/
+          mv /var/www/schema.prisma ./prisma/
           pnpm dlx prisma generate
           systemctl stop nextjs-beutl-client-v3
+
           cd /var/www
           rm -rf beutl-clientapp-v3
-          mv beutl-clientapp-tmp beutl-clientapp-v3
+          mv beutl-clientapp-tmp/build beutl-clientapp-v3
           chmod -R 777 beutl-clientapp-v3
           systemctl start nextjs-beutl-client-v3
