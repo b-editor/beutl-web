@@ -1,4 +1,4 @@
-import { stripe } from "@/lib/stripe/config";
+import { createStripe } from "@/lib/stripe/config";
 import { ClientPage } from "./components";
 import { notFound } from "next/navigation";
 import { PackageDetails } from "../components";
@@ -16,6 +16,7 @@ export default async function Page({
     notFound();
   }
 
+  const stripe = createStripe();
   const intent = await stripe.paymentIntents.retrieve(payment_intent);
 
   return (

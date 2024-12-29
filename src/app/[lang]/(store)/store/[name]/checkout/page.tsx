@@ -1,6 +1,6 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createOrRetrieveCustomerId } from "@/lib/customer";
-import { stripe } from "@/lib/stripe/config";
+import { createStripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
@@ -28,6 +28,7 @@ export default async function Page({
   }
 
   const customerId = await createOrRetrieveCustomerId(session.user.email as string, session.user.id);
+  const stripe = createStripe();
   const intents = await stripe.paymentIntents.search({
     query: `customer:"${customerId}" AND metadata["packageId"]:"${pkg.id}" AND amount:${price.price} AND currency:"${price.currency}" AND status:"requires_payment_method"`,
     limit: 1

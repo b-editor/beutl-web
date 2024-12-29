@@ -1,7 +1,7 @@
 import { prisma } from "@/prisma";
 import { getTranslation } from "@/app/i18n/server";
 import { authOrSignIn } from "@/lib/auth-guard";
-import { stripe } from "@/lib/stripe/config";
+import { createStripe } from "@/lib/stripe/config";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getUserPaymentHistory } from "@/lib/db/userPaymentHistory";
@@ -33,6 +33,7 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
         }
       }
     });
+    const stripe = createStripe();
     const p2 = stripe.paymentIntents.retrieve(item.paymentId);
     const [pkg, payment] = await Promise.all([p1, p2]);
     return {

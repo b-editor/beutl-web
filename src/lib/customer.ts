@@ -1,6 +1,6 @@
 import { prisma } from "@/prisma";
 import "server-only";
-import { stripe } from "./stripe/config";
+import { createStripe } from "./stripe/config";
 
 export async function createOrRetrieveCustomerId(email: string, userId: string) {
   const customer = await prisma.customer.findFirst({
@@ -8,6 +8,7 @@ export async function createOrRetrieveCustomerId(email: string, userId: string) 
       userId: userId
     }
   });
+  const stripe = createStripe();
   let customerId = customer?.stripeId;
   if (customerId) {
     const c = await stripe.customers.retrieve(customerId);

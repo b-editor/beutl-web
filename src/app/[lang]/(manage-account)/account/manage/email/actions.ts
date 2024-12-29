@@ -11,7 +11,7 @@ import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
-import { stripe } from "@/lib/stripe/config";
+import { createStripe } from "@/lib/stripe/config";
 
 type State = {
   message?: string;
@@ -146,6 +146,7 @@ export async function updateEmail(token: string, identifier: string) {
     }
   });
   if (customer) {
+    const stripe = createStripe();
     await stripe.customers.update(customer.stripeId, {
       email: tokenData.identifier,
     });

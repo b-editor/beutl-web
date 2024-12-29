@@ -1,10 +1,11 @@
 import { createUserPaymentHistory } from "@/lib/db/userPaymentHistory";
-import { stripe } from "@/lib/stripe/config";
+import { createStripe } from "@/lib/stripe/config";
 import { prisma } from "@/prisma";
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const stripe = createStripe();
   const sig = request.headers.get("stripe-signature");
   if (!sig) {
     return NextResponse.json({ message: "No signature" }, { status: 400 });
