@@ -9,6 +9,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v3
+      with:
+        node-version: 20.x
+        cache: 'pnpm'
+        cache-dependency-path: pnpm-lock.yaml
+
+    - run: pnpm install
+
+    - run: pnpm run build
+
+    - run: |
+        mkdir ./build
+        cp -r ./.next/standalone/. ./build
+        cp -r ./.next/static ./build/.next/static
+        cp -r ./public ./build/public
+        cp ./next.config.mjs ./build
+        zip -r build.zip ./build
+
+    - uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.HOST_NAME }}
+        username: ${{ secrets.USER_NAME }}
+        key: ${{ secrets.SSH_KEY }}
+        source: "build/build.zip"
+        target: /var/www/
+
     - name: Deploy
       uses: appleboy/ssh-action@master
       with:
@@ -17,12 +45,12 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         script: |
           set -e
-          cd /var/www/beutl-clientapp-v3
-          git fetch && git pull
-          cp -R ./ ../beutl-clientapp-tmp
-          cd ../beutl-clientapp-tmp
-          pnpm install
-          pnpm build
+          cd /var/www
+          mkdir -p beutl-clientapp-tmp
+          rm -rf beutl-clientapp-tmp/*
+          cd beutl-clientapp-tmp
+          unzip ../build.zip
+          cp ../beutl-clientapp-v3/.env ./
           systemctl stop nextjs-beutl-client-v3
           cd /var/www
           rm -rf beutl-clientapp-v3
