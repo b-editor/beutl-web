@@ -31,7 +31,7 @@ jobs:
         host: ${{ secrets.HOST_NAME }}
         username: ${{ secrets.USER_NAME }}
         key: ${{ secrets.SSH_KEY }}
-        source: "build/build.zip"
+        source: "build/build.zip,prisma/schema.prisma"
         target: /var/www/
 
     - name: Deploy
@@ -48,6 +48,10 @@ jobs:
           cd beutl-clientapp-tmp
           unzip ../build.zip
           cp ../beutl-clientapp-v3/.env ./
+          pnpm i
+          mkdir prisma
+          mv ../schema.prisma ./prisma/
+          pnpm dlx prisma generate
           systemctl stop nextjs-beutl-client-v3
           cd /var/www
           rm -rf beutl-clientapp-v3
