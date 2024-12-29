@@ -30,7 +30,7 @@ jobs:
         host: ${{ secrets.HOST_NAME }}
         username: ${{ secrets.USER_NAME }}
         key: ${{ secrets.SSH_KEY }}
-        source: "build/build.zip"
+        source: "build.zip"
         target: /var/www/
 
     - name: Deploy
