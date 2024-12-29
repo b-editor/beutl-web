@@ -29,32 +29,6 @@ export default async function Page({ params: { name } }: { params: { name: strin
             <ReleaseForm pkg={pkg} />
           </div>
           <PackageDetailsForm pkg={pkg} />
-          {/* <div className="lg:basis-1/3">
-          <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
-          <div className="flex gap-2 flex-col my-4">
-            <h4>タグ</h4>
-            <div className="flex gap-1 flex-wrap">
-              {pkg.tags.map((tag) => (<Badge key={tag}>{tag}</Badge>))}
-            </div>
-          </div>
-          <Separator />
-          <div className="flex gap-2 my-4 justify-between">
-            <h4>作者</h4>
-            <Button asChild variant="link" className="p-0 h-auto" >
-              <Link href="/">{pkg.owner.name}</Link>
-            </Button>
-          </div>
-          <Separator />
-          <div className="flex gap-2 my-4 justify-between">
-            <h4>{selectedVersion === defaultVersion ? "最新のバージョン" : "選択されているバージョン"}</h4>
-            <p>{selectedVersion}</p>
-          </div>
-          <Separator />
-          <div className="flex gap-2 my-4 justify-between">
-            <h4>ターゲットバージョン</h4>
-            <p>{selectedRelease?.target_version}</p>
-          </div>
-        </div> */}
         </div>
       </div>
     </>

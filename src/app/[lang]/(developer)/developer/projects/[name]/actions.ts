@@ -7,6 +7,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sd
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import { SemVer } from "semver";
 import { z } from "zod";
 
 export type State = {
@@ -182,7 +183,9 @@ export async function retrievePackage(name: string) {
   if (!pkg) {
     return null;
   }
-
+  pkg.Release.sort((a, b) => {
+    return new SemVer(b.version).compare(a.version);
+  });
   const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
     return {
       ...item,
