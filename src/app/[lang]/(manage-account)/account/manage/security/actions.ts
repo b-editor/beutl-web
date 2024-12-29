@@ -127,7 +127,7 @@ export async function renameAuthenticator({ id, name }: { id: string, name: stri
     },
   });
   revalidatePath(`/${lang}/account/manage/security`);
-  redirect(`${lang}/account/manage/security`);
+  redirect(`/${lang}/account/manage/security`);
 }
 
 export async function deleteAuthenticator({ id }: { id: string }): Promise<{error?: string}> {
