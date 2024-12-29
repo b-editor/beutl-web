@@ -23,14 +23,15 @@ jobs:
         cp -r ./.next/static ./build/.next/static
         cp -r ./public ./build/public
         cp ./next.config.mjs ./build
-        zip -r build.zip ./build
+        cd ./build
+        zip -r build.zip ./
 
     - uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.HOST_NAME }}
         username: ${{ secrets.USER_NAME }}
         key: ${{ secrets.SSH_KEY }}
-        source: "build.zip"
+        source: "build/build.zip"
         target: /var/www/
 
     - name: Deploy
@@ -51,4 +52,5 @@ jobs:
           cd /var/www
           rm -rf beutl-clientapp-v3
           mv beutl-clientapp-tmp beutl-clientapp-v3
+          chmod -R 777 beutl-clientapp-v3
           systemctl start nextjs-beutl-client-v3
