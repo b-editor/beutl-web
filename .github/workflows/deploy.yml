@@ -17,21 +17,34 @@ jobs:
 
     - run: pnpm run build
 
+    - uses: actions/cache@v4
+      with:
+        # See here for caching with `yarn` https://github.com/actions/cache/blob/main/examples.md#node---yarn or you can leverage caching with actions/setup-node https://github.com/actions/setup-node
+        path: |
+          ~/.pnpm
+          ${{ github.workspace }}/.next/cache
+        # Generate a new cache whenever packages or source files change.
+        key: ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+        # If source files changed but packages didn't, rebuild from a prior cache.
+        restore-keys: |
+          ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
     - run: |
         mkdir ./build
         cp -r ./.next/standalone/. ./build
         cp -r ./.next/static ./build/.next/static
         cp -r ./public ./build/public
         cp ./next.config.mjs ./build
-        zip -r build.zip ./build
+        cd build
+        zip -r build.zip ./
 
     - uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.HOST_NAME }}
         username: ${{ secrets.USER_NAME }}
         key: ${{ secrets.SSH_KEY }}
-        source: "build.zip,prisma/schema.prisma"
-        target: /var/www/
+        source: "build/build.zip,prisma/schema.prisma"
+        target: /var/www/dropzone
 
     - name: Deploy
       uses: appleboy/ssh-action@master
@@ -46,13 +59,11 @@ jobs:
           mkdir beutl-clientapp-tmp
 
           cd beutl-clientapp-tmp
-          unzip /var/www/build.zip
-
-          cd build
+          unzip /var/www/dropzone/build/build.zip
           cp /var/www/beutl-clientapp-v3/.env ./
           pnpm i
           mkdir prisma
-          mv /var/www/schema.prisma ./prisma/
+          mv /var/www/dropzone/prisma/schema.prisma ./prisma/
           pnpm dlx prisma generate
           systemctl stop nextjs-beutl-client-v3
 
