@@ -13,10 +13,6 @@ jobs:
 
     - uses: pnpm/action-setup@v4
 
-    - run: pnpm install
-
-    - run: pnpm run build
-
     - uses: actions/cache@v4
       with:
         # See here for caching with `yarn` https://github.com/actions/cache/blob/main/examples.md#node---yarn or you can leverage caching with actions/setup-node https://github.com/actions/setup-node
@@ -28,6 +24,10 @@ jobs:
         # If source files changed but packages didn't, rebuild from a prior cache.
         restore-keys: |
           ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+    - run: pnpm install
+
+    - run: pnpm run build
 
     - run: |
         mkdir ./build
@@ -69,6 +69,7 @@ jobs:
 
           cd /var/www
           rm -rf beutl-clientapp-v3
-          mv beutl-clientapp-tmp/build beutl-clientapp-v3
+          mv beutl-clientapp-tmp beutl-clientapp-v3
           chmod -R 777 beutl-clientapp-v3
           systemctl start nextjs-beutl-client-v3
+          rm -rf dropzone
