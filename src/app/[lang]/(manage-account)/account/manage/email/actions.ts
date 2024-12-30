@@ -58,7 +58,7 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
     const validated = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
     if (!validated.success) {
       return {
-        message: t("invalidRequest"),
+        message: t("zod:errors.invalid_string.email", { validation: t("zod:validations.email") }),
         success: false,
       };
     }
@@ -73,7 +73,24 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
       }
     });
     if (!user) {
-      throw new Error("User not found");
+      return {
+        message: t("userNotFound"),
+        success: false,
+      };
+    }
+    const exists = await prisma.user.findFirst({
+      where: {
+        email: validated.data.newEmail,
+      },
+      select: {
+        id: true,
+      }
+    });
+    if (exists) { 
+      return {
+        message: t("account:email.emailExists"),
+        success: false,
+      };
     }
     const maxAge = 24 * 60 * 60;
     const ONE_DAY_IN_SECONDS = 86400
@@ -152,9 +169,9 @@ export async function updateEmail(token: string, identifier: string) {
     });
   }
   if (!updated) {
-    throw new Error(t("account:email.emailUpdateFailed"));
+    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
   }
 
   revalidatePath(`/${lang}/account/manage/email`);
-  redirect(`/${lang}/account/manage/email?emailUpdated=true`, RedirectType.replace);
+  redirect(`/${lang}/account/manage/email?status=emailUpdated`, RedirectType.replace);
 }

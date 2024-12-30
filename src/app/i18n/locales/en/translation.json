@@ -21,5 +21,6 @@
   "change": "Change",
   "edit": "Edit",
   "delete": "Delete",
-  "remove": "Remove"
+  "remove": "Remove",
+  "userNotFound": "User not found"
 }

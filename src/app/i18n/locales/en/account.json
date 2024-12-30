@@ -27,7 +27,8 @@
     "emailUpdated": "Email address updated",
     "clickOnTheLink": "Click on the link in the email we sent you to confirm your new email address.",
     "emailSent": "We have sent a link to change your email address",
-    "emailUpdateFailed": "Failed to change email address"
+    "emailUpdateFailed": "Failed to change email address",
+    "emailExists": "This email address is already in use"
   },
   "security": {
     "title": "Security",

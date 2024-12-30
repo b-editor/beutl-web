@@ -85,7 +85,10 @@ export async function submit(state: State, formData: FormData): Promise<State> {
       },
     });
     if (!user) {
-      throw new Error("User not found");
+      return {
+        message: t("userNotFound"),
+        success: false,
+      };
     }
     const maxAge = 24 * 60 * 60;
     const ONE_DAY_IN_SECONDS = 86400;

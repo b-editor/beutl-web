@@ -6,10 +6,14 @@ import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
 
 export default async function Page({
-  searchParams: { token, identifier, emailUpdated },
+  searchParams: { token, identifier, status },
   params: { lang },
 }: {
-  searchParams: { token?: string, identifier?: string, emailUpdated?: boolean },
+  searchParams: {
+    token?: string,
+    identifier?: string,
+    status?: "emailUpdated" | "emailExists" | "emailUpdateFailed"
+  },
   params: { lang: string },
 }) {
   const session = await authOrSignIn();
@@ -34,7 +38,7 @@ export default async function Page({
       <div className="mt-4 rounded-lg border text-card-foreground">
         <h2 className="font-bold text-md m-6 mb-4">{t("account:email.changeEmail")}</h2>
         <Separator />
-        <Form email={user.email} className="mx-6 mt-4 mb-0" emailUpdated={emailUpdated} lang={lang} />
+        <Form email={user.email} className="mx-6 mt-4 mb-0" status={status} lang={lang} />
       </div>
     </div>
   )

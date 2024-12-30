@@ -9,7 +9,13 @@ import SubmitButton from "@/components/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useTranslation } from "@/app/i18n/client";
 
-export function Form({ email, emailUpdated, lang, ...props }: ComponentProps<"form"> & { email: string, emailUpdated?: boolean,lang:string }) {
+export function Form({
+  email, status, lang, ...props
+}: ComponentProps<"form"> & {
+  email: string,
+  status?: "emailUpdated" | "emailExists" | "emailUpdateFailed",
+  lang: string
+}) {
   const [state, dispatch] = useFormState(sendConfirmationEmail, {})
   const { t } = useTranslation(lang);
 
@@ -31,10 +37,22 @@ export function Form({ email, emailUpdated, lang, ...props }: ComponentProps<"fo
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>
         )}
-        {emailUpdated && (
-          <Alert  className="my-4">
+        {status === "emailUpdated" && (
+          <Alert className="my-4">
             <AlertTitle>{t("success")}</AlertTitle>
             <AlertDescription>{t("account:email.emailUpdated")}</AlertDescription>
+          </Alert>
+        )}
+        {status === "emailExists" && (
+          <Alert className="my-4">
+            <AlertTitle>{t("error")}</AlertTitle>
+            <AlertDescription>{t("account:email.emailExists")}</AlertDescription>
+          </Alert>
+        )}
+        {status === "emailUpdateFailed" && (
+          <Alert className="my-4">
+            <AlertTitle>{t("error")}</AlertTitle>
+            <AlertDescription>{t("account:email.emailUpdateFailed")}</AlertDescription>
           </Alert>
         )}
 

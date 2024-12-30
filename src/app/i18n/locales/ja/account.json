@@ -27,7 +27,8 @@
     "emailUpdated": "メールアドレスが更新されました",
     "clickOnTheLink": "以下のリンクをクリックしてメールアドレスを変更してください。",
     "emailSent": "メールアドレスを変更するためのリンクを送信しました",
-    "emailUpdateFailed": "メールアドレスの変更に失敗しました"
+    "emailUpdateFailed": "メールアドレスの変更に失敗しました",
+    "emailExists": "このメールアドレスはすでに使用されています"
   },
   "security": {
     "title": "セキュリティ",
