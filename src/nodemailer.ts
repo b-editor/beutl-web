@@ -97,7 +97,7 @@ export function renderUnsafeEmailTemplate(content: string): string {
                     <td valign="middle" style="padding: 20px 0 10px;">
                       <a href="https://beutl.beditor.net" class="logo-url"
                         style="text-decoration: none !important;">
-                        <img src="https://beutl.beditor.net/images/logo.png" width="28" height="28"
+                        <img src="https://beutl.beditor.net/img/logo.png" width="28" height="28"
                           style="vertical-align: bottom; margin-right: 4px;">
                         <span style="font-size: 20px; font-weight: 600; color: #242424;">Beutl</span>
                       </a>
@@ -124,19 +124,19 @@ export function renderUnsafeEmailTemplate(content: string): string {
                         <tr>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://github.com/b-editor/beutl" target="_blank">
-                              <img src="https://beutl.beditor.net/images/social/github-logo-black.png"
+                              <img src="https://beutl.beditor.net/img/github.svg"
                                 width="24" height="24">
                             </a>
                           </td>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://twitter.com/yuto_daisensei" target="_blank">
-                              <img src="https://beutl.beditor.net/images/social/x-logo-black.png"
+                              <img src="https://beutl.beditor.net/img/x.svg"
                                 width="24" height="24">
                             </a>
                           </td>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://twitter.com/yuto_daisensei" target="_blank">
-                              <img src="https://beutl.beditor.net/images/social/discord-logo-black.png"
+                              <img src="https://beutl.beditor.net/img/discord.svg"
                                 style="margin-top: 2px;" width="24">
                             </a>
                           </td>
