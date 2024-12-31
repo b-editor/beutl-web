@@ -152,7 +152,7 @@ export function renderUnsafeEmailTemplate(content: string): string {
                       margin: 0;
                       padding: 15px 0 0 0;
                       text-align: end;">
-                      &copy; 2020-2024 b-editor
+                      &copy; 2020-2025 b-editor
                     </td>
                   </tr>
                 </table>
