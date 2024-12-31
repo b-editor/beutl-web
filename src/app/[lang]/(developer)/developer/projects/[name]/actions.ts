@@ -1,13 +1,15 @@
 "use server";
 
+import { uploadFile } from "@/app/[lang]/(storage)/storage/actions";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
 import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
-import { SemVer } from "semver";
+import SemVer from "semver";
 import { z } from "zod";
 
 export type State = {
@@ -27,6 +29,15 @@ const displayNameAndShortDescriptionSchema = z.object({
   displayName: z.string().max(50, "表示名は50文字以下である必要があります"),
   shortDescription: z.string().max(200, "短い説明は200文字以下である必要があります"),
   id: z.string().uuid("IDが不正です"),
+});
+
+const releaseSchema = z.object({
+  title: z.string().max(50, "タイトルは50文字以下である必要があります"),
+  description: z.string().max(1000, "説明は1000文字以下である必要があります"),
+  id: z.string().uuid("IDが不正です"),
+  targetVersion: z.string().refine((v) => SemVer.valid(v) || isValidNuGetVersionRange(v), "バージョンが不正です"),
+  published: z.coerce.boolean(),
+  file: z.optional(z.instanceof(File)),
 });
 
 async function sameUser<TResult>(
@@ -57,6 +68,65 @@ async function sameUser<TResult>(
   }
 
   return await fnc();
+}
+
+async function createDedicatedFile(userId: string, file: File, size: bigint) {
+  const files = await prisma.file.findMany({
+    where: {
+      userId: userId,
+    },
+    select: {
+      size: true,
+      name: true,
+    },
+  });
+
+  const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
+  let totalSize = BigInt(0);
+  for (const file of files) {
+    totalSize += BigInt(file.size);
+  }
+  totalSize -= size;
+
+  if (totalSize + BigInt(file.size) > maxSize) {
+    return {
+      success: false,
+      message: "ストレージ容量が足りません",
+    };
+  }
+
+  let filename = file.name;
+  const ext = file.name.split(".").pop();
+  for (let i = 1; files.some((f) => f.name === filename); i++) {
+    filename = ext
+      ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
+      : `${file.name} (${i})`;
+  }
+
+  const objectKey = randomUUID();
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET as string,
+      Key: objectKey,
+      Body: new Uint8Array(await file.arrayBuffer()),
+      ServerSideEncryption: "AES256",
+    }),
+  );
+  const record = await prisma.file.create({
+    data: {
+      objectKey,
+      name: filename,
+      size: file.size,
+      mimeType: file.type,
+      userId: userId,
+      visibility: "DEDICATED",
+    },
+  });
+
+  return {
+    success: true,
+    record
+  };
 }
 
 export async function updateDisplayNameAndShortDescription(state: State, formData: FormData): Promise<State> {
@@ -176,6 +246,12 @@ export async function retrievePackage(name: string) {
           description: true,
           targetVersion: true,
           id: true,
+          published: true,
+          file: {
+            select: {
+              name: true
+            }
+          }
         }
       }
     }
@@ -184,7 +260,7 @@ export async function retrievePackage(name: string) {
     return null;
   }
   pkg.Release.sort((a, b) => {
-    return new SemVer(b.version).compare(a.version);
+    return new SemVer.SemVer(b.version).compare(a.version);
   });
   const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
     return {
@@ -256,7 +332,7 @@ export async function deletePackage(id: string): Promise<Response> {
           },
         });
         await s3.send(
-          new GetObjectCommand({
+          new DeleteObjectCommand({
             Bucket: process.env.S3_BUCKET as string,
             Key: file.objectKey,
           }),
@@ -308,44 +384,22 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
         select: {
           name: true,
           iconFile: {
-            select: { id: true, objectKey: true, size: true },
+            select: {
+              id: true,
+              objectKey: true,
+              size: true
+            },
           },
         },
       });
 
-      let files = await prisma.file.findMany({
-        where: {
-          userId: session.user.id,
-        },
-        select: {
-          size: true,
-          name: true,
-          id: true,
-        },
-      });
-      if (iconFile) {
-        files = files.filter((f) => f.id !== iconFile?.id);
-      }
-
-      const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
-      let totalSize = BigInt(0);
-      for (const file of files) {
-        totalSize += BigInt(file.size);
-      }
-
-      if (totalSize + BigInt(file.size) > maxSize) {
+      const deletedSize = iconFile ? BigInt(iconFile.size) : BigInt(0);
+      const result = await createDedicatedFile(session.user.id, file, deletedSize);
+      if (!result.success) {
         return {
-          success: false,
-          message: "ストレージ容量が足りません",
-        };
-      }
-
-      let filename = file.name;
-      const ext = file.name.split(".").pop();
-      for (let i = 1; files.some((f) => f.name === filename); i++) {
-        filename = ext
-          ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-          : `${file.name} (${i})`;
+          success: result.success,
+          message: result.message
+        }
       }
 
       if (iconFile) {
@@ -362,31 +416,13 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
         });
       }
 
-      const objectKey = randomUUID();
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: process.env.S3_BUCKET as string,
-          Key: objectKey,
-          Body: new Uint8Array(await file.arrayBuffer()),
-          ServerSideEncryption: "AES256",
-        }),
-      );
-      const record = await prisma.file.create({
-        data: {
-          objectKey,
-          name: filename,
-          size: file.size,
-          mimeType: file.type,
-          userId: session.user.id,
-          visibility: "DEDICATED",
-        },
-      });
       await prisma.package.update({
         where: {
           id,
         },
         data: {
-          iconFileId: record.id,
+          // biome-ignore lint/style/noNonNullAssertion: <explanation>
+          iconFileId: result.record!.id,
         },
       });
       revalidatePath(`/developer/projects/${name}`);
@@ -413,56 +449,10 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
         select: { id: true, name: true },
       });
 
-      const files = await prisma.file.findMany({
-        where: {
-          userId: session.user.id,
-        },
-        select: {
-          size: true,
-          name: true,
-        },
-      });
-
-      const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
-      let totalSize = BigInt(0);
-      for (const file of files) {
-        totalSize += BigInt(file.size);
+      const result = await createDedicatedFile(session.user.id, file, BigInt(0));
+      if (!result.success) {
+        return result;
       }
-
-      if (totalSize + BigInt(file.size) > maxSize) {
-        return {
-          success: false,
-          message: "ストレージ容量が足りません",
-        };
-      }
-
-      let filename = file.name;
-      const ext = file.name.split(".").pop();
-      for (let i = 1; files.some((f) => f.name === filename); i++) {
-        filename = ext
-          ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-          : `${file.name} (${i})`;
-      }
-
-      const objectKey = randomUUID();
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: process.env.S3_BUCKET as string,
-          Key: objectKey,
-          Body: new Uint8Array(await file.arrayBuffer()),
-          ServerSideEncryption: "AES256",
-        }),
-      );
-      const record = await prisma.file.create({
-        data: {
-          objectKey,
-          name: filename,
-          size: file.size,
-          mimeType: file.type,
-          userId: session.user.id,
-          visibility: "DEDICATED",
-        },
-      });
       const lastScreenshot = await prisma.packageScreenshot.findFirst({
         where: {
           packageId: id,
@@ -478,7 +468,8 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
         data: {
           order: (lastScreenshot?.order || 0) + 1,
           packageId: id,
-          fileId: record.id,
+          // biome-ignore lint/style/noNonNullAssertion: <explanation>
+          fileId: result.record!.id,
         },
       });
       revalidatePath(`/developer/projects/${name}`);
@@ -606,6 +597,190 @@ export async function updateTag({ packageId, tags }: { packageId: string, tags: 
         }
       });
       revalidatePath(`/developer/projects/${name}`);
+      return {
+        success: true,
+      };
+    });
+  });
+}
+
+export async function updateRelease(formData: FormData) {
+  return await authenticated(async (session) => {
+    const validated = releaseSchema.safeParse(Object.fromEntries(formData.entries()));
+    if (!validated.success) {
+      return {
+        errors: validated.error.flatten().fieldErrors,
+        message: "入力内容に誤りがあります",
+        success: false,
+      };
+    }
+    const release = await prisma.release.findFirst({
+      where: {
+        id: validated.data.id,
+      },
+      select: {
+        packageId: true,
+        file: {
+          select: {
+            id: true,
+            objectKey: true,
+            size: true
+          }
+        }
+      }
+    });
+    if (!release?.packageId) {
+      return {
+        success: false,
+        message: "IDが見つかりません",
+      };
+    }
+
+    return await sameUser(release.packageId, session.user.id, async () => {
+      let fileId = release.file?.id;
+      if (validated.data.file) {
+        const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
+        const result = await createDedicatedFile(session.user.id, validated.data.file, deletedSize);
+        if (!result.success) {
+          return {
+            success: result.success,
+            message: result.message
+          }
+        }
+
+        if (release.file) {
+          await s3.send(
+            new DeleteObjectCommand({
+              Bucket: process.env.S3_BUCKET as string,
+              Key: release.file.objectKey,
+            }),
+          );
+          await prisma.file.delete({
+            where: {
+              id: release.file.id,
+            },
+          });
+        }
+        // biome-ignore lint/style/noNonNullAssertion: <explanation>
+        fileId = result.record!.id;
+      }
+
+      const data = await prisma.release.update({
+        where: {
+          id: validated.data.id,
+        },
+        data: {
+          title: validated.data.title,
+          description: validated.data.description,
+          targetVersion: validated.data.targetVersion,
+          published: validated.data.published,
+          fileId: fileId
+        },
+        select: {
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          id: true,
+          published: true,
+          file: {
+            select: {
+              name: true
+            }
+          }
+        }
+      });
+
+      return {
+        success: true,
+        data
+      };
+    });
+  });
+}
+
+export async function createRelease({ packageId, version }: { packageId: string, version: string }) {
+  return await authenticated(async (session) => {
+    return await sameUser(packageId, session.user.id, async () => {
+      if (SemVer.valid(version) === null) {
+        return {
+          success: false,
+          message: "バージョンが不正です"
+        };
+      }
+
+      const release = await prisma.release.create({
+        data: {
+          packageId,
+          version,
+          title: "新しいリリース",
+          description: "",
+          targetVersion: "1.0.0-preview.10",
+          published: false
+        },
+        select: {
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          id: true,
+          published: true,
+          file: {
+            select: {
+              name: true
+            }
+          }
+        }
+      });
+      return {
+        success: true,
+        data: release
+      };
+    });
+  });
+}
+
+export async function deleteRelease({ releaseId }: { releaseId: string }) {
+  return await authenticated(async (session) => {
+    const release = await prisma.release.findFirst({
+      where: {
+        id: releaseId,
+      },
+      select: {
+        packageId: true,
+        file: {
+          select: {
+            id: true,
+            objectKey: true,
+          }
+        }
+      }
+    });
+    if (!release?.packageId) {
+      return {
+        success: false,
+        message: "IDが見つかりません",
+      };
+    }
+    return await sameUser(release.packageId, session.user.id, async () => {
+      if (release.file) {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.S3_BUCKET as string,
+            Key: release.file.objectKey,
+          }),
+        );
+        await prisma.file.delete({
+          where: {
+            id: release.file.id,
+          },
+        });
+      }
+      await prisma.release.delete({
+        where: {
+          id: releaseId,
+        },
+      });
       return {
         success: true,
       };

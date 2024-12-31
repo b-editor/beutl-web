@@ -42,7 +42,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
   const [deleting, startDelete] = useTransition()
   const pending = useMemo(() => uploading || deleting, [uploading, deleting]);
   const { toast } = useToast();
-  const columns = useMemo(() => getColumns(lang), []);
+  const columns = useMemo(() => getColumns(lang), [lang]);
 
   const table = useReactTable({
     data,
@@ -81,7 +81,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
         });
       }
     });
-  }, [toast]);
+  }, [toast, t]);
 
   const handleDeleteClick = useCallback(() => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
@@ -100,7 +100,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
         setRowSelection({});
       }
     });
-  }, [table, toast]);
+  }, [table, toast, t]);
 
   return (
     <div className="w-full px-4">

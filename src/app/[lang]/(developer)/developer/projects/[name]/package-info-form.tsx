@@ -12,9 +12,11 @@ import { ErrorDisplay } from "@/components/error-display";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
 import type { Package } from "./types";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 export function PackageInfoForm({ pkg }: { pkg: Package }) {
   const [edit, setEdit] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState(false);
   const [pending, setPending] = useState(false);
   const [displayName, setDisplayName] = useState(pkg.displayName || "");
   const [shortDescription, setShortDescription] = useState(pkg.shortDescription);
@@ -140,7 +142,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
                 <DropdownMenuContent>
                   <DropdownMenuLabel>操作</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleDelete} disabled>削除</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDeleteDialog(true)}>削除</DropdownMenuItem>
                   <DropdownMenuItem onClick={handleChangeVisibility}>{pkg.published ? "非公開にする" : "公開する"}</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -176,6 +178,21 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
           キャンセル
         </Button>
       </div>
+
+      <AlertDialog open={deleteDialog} onOpenChange={setDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>本当に削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              この操作は取り消せません。このパッケージに関連するすべてのデータが削除されます。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>削除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
