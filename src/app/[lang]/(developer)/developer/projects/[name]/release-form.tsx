@@ -17,7 +17,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { cn } from "@/lib/utils";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { set } from "zod";
 
 export function ReleaseForm({ pkg }: { pkg: Package }) {
   const [edit, setEdit] = useState(false);
