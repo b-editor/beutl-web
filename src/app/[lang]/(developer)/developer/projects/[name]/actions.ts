@@ -52,7 +52,7 @@ const releaseSchema = z.object({
   description: z.string().max(1000, "説明は1000文字以下である必要があります"),
   id: z.string().uuid("IDが不正です"),
   targetVersion: z.string().refine((v) => SemVer.valid(v) || isValidNuGetVersionRange(v), "バージョンが不正です"),
-  published: z.coerce.boolean(),
+  published: z.string().refine((v) => v === "on" || v === "off", "公開設定が不正です"),
   file: z.optional(z.instanceof(File)),
 });
 
@@ -482,7 +482,7 @@ export async function updateRelease(formData: FormData) {
           title: validated.data.title,
           description: validated.data.description,
           targetVersion: validated.data.targetVersion,
-          published: validated.data.published,
+          published: validated.data.published === "on",
           fileId: fileId
         },
         select: {

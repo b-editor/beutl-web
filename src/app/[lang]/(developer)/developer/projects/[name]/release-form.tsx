@@ -61,7 +61,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         const data: Package["Release"][number] = (result as any).data;
         if (data) {
           setRelease(data);
-          setReleases(pkg.Release.map((r) => r.id === release.id ? data : r));
+          setReleases(releases.map((r) => r.id === release.id ? data : r));
         }
         toast({
           variant: "default",
@@ -76,7 +76,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         })
       }
     });
-  }, [description, file, pkg.Release, published, release, targetVersion.value, title, toast]);
+  }, [description, file, published, release, releases, targetVersion.value, title, toast]);
 
   const handleSelectFile = useCallback(async () => {
     const files = await showOpenFileDialog();
