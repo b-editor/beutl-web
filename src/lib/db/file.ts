@@ -16,7 +16,7 @@ export async function retrieveFilesByUserId({
 }
 
 export async function createFile({
-  userId, name, objectKey, size, mimeType, visibility, prisma
+  userId, name, objectKey, size, mimeType, visibility, prisma, sha256
 }: {
   userId: string,
   name: string,
@@ -24,7 +24,8 @@ export async function createFile({
   size: number,
   mimeType: string,
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED",
-  prisma?: PrismaTransaction
+  prisma?: PrismaTransaction,
+  sha256?: string
 }) {
   return await (prisma || sharedPrisma).file.create({
     data: {
@@ -34,6 +35,7 @@ export async function createFile({
       mimeType,
       userId,
       visibility,
+      sha256
     },
   });
 }
