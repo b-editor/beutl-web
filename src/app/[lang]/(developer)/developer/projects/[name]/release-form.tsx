@@ -154,7 +154,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         {releases.length > 0 ? (
           <>
             {/* biome-ignore lint/style/noNonNullAssertion: <explanation> */}
-            <Select value={release?.id} onValueChange={(e) => setRelease(pkg.Release.find((r) => r.id === e)!)}>
+            <Select value={release?.id} onValueChange={(e) => setRelease(releases.find((r) => r.id === e)!)}>
               <SelectTrigger className="font-bold text-xl border-none bg-transparent px-0 pr-3 flex-1">
                 <SelectValue />
               </SelectTrigger>
