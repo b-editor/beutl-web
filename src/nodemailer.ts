@@ -13,6 +13,11 @@ export const options: NodemailerUserConfig = {
       user: process.env.EMAIL_SERVER_USER,
       pass: process.env.EMAIL_SERVER_PASSWORD,
     },
+    dkim: {
+      domainName: process.env.EMAIL_DKIM_DOMAIN as string,
+      keySelector: process.env.EMAIL_DKIM_SELECTOR as string,
+      privateKey: process.env.EMAIL_DKIM_PRIVATE_KEY as string
+    }
   },
   sendVerificationRequest: async ({ identifier, url, provider }) => {
     const { host } = new URL(url)
@@ -124,19 +129,19 @@ export function renderUnsafeEmailTemplate(content: string): string {
                         <tr>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://github.com/b-editor/beutl" target="_blank">
-                              <img src="https://beutl.beditor.net/img/github.svg"
+                              <img src="https://beutl.beditor.net/img/github.png"
                                 width="24" height="24">
                             </a>
                           </td>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://twitter.com/yuto_daisensei" target="_blank">
-                              <img src="https://beutl.beditor.net/img/x.svg"
+                              <img src="https://beutl.beditor.net/img/x.png"
                                 width="24" height="24">
                             </a>
                           </td>
                           <td style="margin: 0; padding: 0 10px;" valign="top">
                             <a href="https://twitter.com/yuto_daisensei" target="_blank">
-                              <img src="https://beutl.beditor.net/img/discord.svg"
+                              <img src="https://beutl.beditor.net/img/discord.png"
                                 style="margin-top: 2px;" width="24">
                             </a>
                           </td>
