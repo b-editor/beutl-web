@@ -1,10 +1,7 @@
 "use server"
 
 import { auth } from "@/auth";
-import { s3 } from "@/lib/storage";
-import { prisma } from "@/prisma";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { retrieveDevPackagesByUserId } from "@/lib/db/package";
 import { SemVer } from "semver";
 
 export type Package = {
@@ -21,36 +18,9 @@ export async function retrievePackages(): Promise<Package[]> {
   if (!session?.user?.id) {
     return [];
   }
-  const packages = await prisma.package.findMany({
-    where: {
-      userId: session.user.id
-    },
-    select: {
-      id: true,
-      name: true,
-      displayName: true,
-      published: true,
-      iconFile: {
-        select: {
-          objectKey: true
-        }
-      },
-      Release: {
-        select: {
-          version: true
-        }
-      }
-    }
-  });
+  const packages = await retrieveDevPackagesByUserId({ userId: session.user.id });
 
   return await Promise.all(packages.map(async (pkg) => {
-    const iconFileUrl = pkg.iconFile && await getSignedUrl(
-      s3,
-      new GetObjectCommand({
-        Bucket: process.env.S3_BUCKET as string,
-        Key: pkg.iconFile.objectKey,
-      }),
-    );
     pkg.Release.sort((a, b) => {
       return new SemVer(a.version).compare(b.version);
     });
@@ -58,7 +28,7 @@ export async function retrievePackages(): Promise<Package[]> {
       id: pkg.id,
       name: pkg.name,
       displayName: pkg.displayName || undefined,
-      iconFileUrl: iconFileUrl || undefined,
+      iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}` || undefined,
       latestVersion: pkg.Release[0]?.version,
       published: pkg.published
     };

@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/prisma";
 import { guessCurrency } from "./currency";
-import { existsUserPaymentHistory } from "./db/userPaymentHistory";
+import { existsUserPaymentHistory } from "./db/user-payment-history";
 
 export async function packageOwned(pkgId: string, userId: string) {
   return !!await prisma.userPackage.findFirst({

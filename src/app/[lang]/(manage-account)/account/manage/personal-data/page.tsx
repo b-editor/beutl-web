@@ -4,15 +4,12 @@ import { Form } from "./components";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
+import { findEmailByUserId } from "@/lib/db/user";
 
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
 
-  const user = await prisma.user.findFirst({
-    where: {
-      id: session.user.id,
-    },
-  });
+  const user = await findEmailByUserId({ userId: session.user.id });
   if (!user) {
     throw new Error("User not found");
   }

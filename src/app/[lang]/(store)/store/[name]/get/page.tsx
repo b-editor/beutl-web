@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { existsUserPaymentHistory } from "@/lib/db/userPaymentHistory";
+import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";

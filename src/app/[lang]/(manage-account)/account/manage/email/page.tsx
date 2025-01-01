@@ -1,9 +1,9 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
 import { Form } from "./components";
 import { updateEmail } from "./actions";
 import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
+import { findEmailByUserId } from "@/lib/db/user";
 
 export default async function Page({
   searchParams: { token, identifier, status },
@@ -21,11 +21,7 @@ export default async function Page({
     await updateEmail(token, identifier);
   }
 
-  const user = await prisma.user.findFirst({
-    where: {
-      id: session.user.id,
-    },
-  });
+  const user = await findEmailByUserId({ userId: session.user.id });
   if (!user) {
     throw new Error("User not found");
   }

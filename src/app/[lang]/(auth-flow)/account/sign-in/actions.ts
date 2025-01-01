@@ -2,9 +2,9 @@
 
 import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
-import { prisma } from "@/prisma";
-import { getTranslation, Zod } from "@/app/i18n/server";
+import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
+import { existsUserByEmail } from "@/lib/db/user";
 
 const emailSchema = (z: Zod) => z.object({
   email: z.string().email(),
@@ -43,7 +43,7 @@ async function signInWithProvider(provider: string, returnUrl?: string): Promise
 }
 
 async function signInWithEmail(state: State, formData: FormData): Promise<State> {
-  const lang= getLanguage();
+  const lang = getLanguage();
   const { z } = await getTranslation(lang);
   const validationResult = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
   if (!validationResult.success) {
@@ -51,7 +51,7 @@ async function signInWithEmail(state: State, formData: FormData): Promise<State>
   }
   const { email, returnUrl } = validationResult.data;
 
-  const userResult = await prisma.user.findFirst({ where: { email: email } });
+  const userResult = await existsUserByEmail({ email });
 
   if (!userResult) {
     // アカウント未作成

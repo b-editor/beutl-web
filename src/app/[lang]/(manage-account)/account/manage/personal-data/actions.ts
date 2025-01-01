@@ -11,6 +11,7 @@ import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
+import { findEmailByUserId } from "@/lib/db/user";
 
 type State = {
   message?: string;
@@ -76,14 +77,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
       };
     }
 
-    const user = await prisma.user.findFirst({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        email: true,
-      },
-    });
+    const user = await findEmailByUserId({ userId: session.user.id });
     if (!user) {
       return {
         message: t("userNotFound"),

@@ -4,7 +4,7 @@ import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
-import { getUserPaymentHistory } from "@/lib/db/userPaymentHistory";
+import { getUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
@@ -12,7 +12,7 @@ import { ExternalLink } from "lucide-react";
 export default async function Page({ params: { lang } }: { params: { lang: string } }) {
   const session = await authOrSignIn();
 
-  const history = await getUserPaymentHistory(session.user.id);
+  const history = await getUserPaymentHistory({ userId: session.user.id });
   const items = await Promise.all(history.map(async item => {
     const p1 = prisma.package.findFirst({
       where: {

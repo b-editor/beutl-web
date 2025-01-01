@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "@/lib/create-hash";
 import { prisma } from "@/prisma";
 import { ConfirmationTokenPurpose } from "@prisma/client";
+import { deleteUserById } from "@/lib/db/user";
 
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
@@ -28,9 +29,5 @@ export async function deleteUser(token: string, identifier: string) {
     throw new Error("Token has expired");
   }
 
-  await prisma.user.delete({
-    where: {
-      id: tokenData.userId,
-    }
-  });
+  await deleteUserById({ userId: tokenData.userId });
 }

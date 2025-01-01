@@ -1,4 +1,4 @@
-import { createUserPaymentHistory } from "@/lib/db/userPaymentHistory";
+import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { createStripe } from "@/lib/stripe/config";
 import { prisma } from "@/prisma";
 import { NextRequest, NextResponse } from "next/server";

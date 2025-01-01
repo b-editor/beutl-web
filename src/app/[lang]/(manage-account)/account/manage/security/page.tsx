@@ -1,4 +1,3 @@
-import { prisma } from "@/prisma";
 import { Form, List, PasskeysList } from "./components";
 import { authOrSignIn } from "@/lib/auth-guard";
 import * as jose from 'jose';
@@ -8,6 +7,8 @@ import { translateNextAuthError } from "@/lib/error-description";
 import type { ComponentProps } from "react";
 import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
+import { retrieveAccountsWithIdToken } from "@/lib/db/account";
+import { findAuthenticatorByAccountId } from "@/lib/db/authenticator";
 
 export default async function Page({
   searchParams: { error },
@@ -18,16 +19,7 @@ export default async function Page({
 }) {
   const session = await authOrSignIn();
 
-  const accounts = await prisma.account.findMany({
-    where: {
-      userId: session.user.id
-    },
-    select: {
-      providerAccountId: true,
-      provider: true,
-      id_token: true,
-    }
-  });
+  const accounts = await retrieveAccountsWithIdToken({ userId: session.user.id });
   const safeAccounts = await Promise.all(accounts.map(async (account) => {
     let emailOrUserName: string | undefined;
     if (account.id_token) {
@@ -55,11 +47,7 @@ export default async function Page({
   const authenticators = (await Promise.all(
     accounts.filter(i => i.provider === "passkey")
       .map(async (account) => {
-        const authenticator = await prisma.authenticator.findFirst({
-          where: {
-            providerAccountId: account.providerAccountId
-          }
-        });
+        const authenticator = await findAuthenticatorByAccountId({ providerAccountId: account.providerAccountId });
         if (!authenticator) return null;
         return ({
           id: authenticator.credentialID,

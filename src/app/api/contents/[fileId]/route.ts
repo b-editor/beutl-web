@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { existsUserPaymentHistory } from "@/lib/db/userPaymentHistory";
+import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
 import { GetObjectCommand } from "@aws-sdk/client-s3";

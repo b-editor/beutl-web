@@ -8,6 +8,10 @@ import { cookies, headers } from "next/headers";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
+import { getEmailVerifiedByUserId } from "@/lib/db/user";
+import { deleteAccount, retrieveAccounts } from "@/lib/db/account";
+import { deleteAuthenticator as deleteDbAuthenticator, updateAuthenticatorName } from "@/lib/db/authenticator";
+import { startTransaction } from "@/lib/db/transaction";
 
 export type State = {
   success?: boolean;
@@ -49,38 +53,25 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       return { success: false, message: t("invalidRequest") };
     }
 
-    const user = await prisma.user.findFirst({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        emailVerified: true,
-        accounts: {
-          select: {
-            providerAccountId: true,
-            provider: true,
-          },
-        },
-      },
-    });
-    if (!user) {
+    const accounts = await retrieveAccounts({ userId: session.user.id });
+    if (!accounts.length) {
       return { success: false, message: "Account not found" };
     }
 
-    const remain = user.accounts.filter(
+    const remain = accounts.filter(
       (account) =>
         !(
           account.providerAccountId === providerAccountId &&
           account.provider === provider
         ),
     );
-    if (remain.length === user.accounts.length) {
+    if (remain.length === accounts.length) {
       return { success: false, message: "Account not found" };
     }
 
     if (remain.length === 0) {
       console.log("Deleting the last account");
-      if (!user.emailVerified) {
+      if (!await getEmailVerifiedByUserId({ userId: session.user.id })) {
         console.log("The user is not verified");
         return {
           success: false,
@@ -89,22 +80,11 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       }
     }
 
-    await prisma.account.delete({
-      where: {
-        provider_providerAccountId: {
-          providerAccountId,
-          provider,
-        },
-      },
-    });
+    await deleteAccount({ providerAccountId, provider });
     if (provider === "passkey") {
-      await prisma.authenticator.delete({
-        where: {
-          userId_credentialID: {
-            userId: session.user.id,
-            credentialID: providerAccountId,
-          },
-        },
+      await deleteDbAuthenticator({
+        userId: session.user.id,
+        credentialID: providerAccountId,
       });
     }
     revalidatePath(`/${lang}/account/manage/security`);
@@ -115,74 +95,51 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
 export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
   const session = await throwIfUnauth();
   const lang = getLanguage();
-  await prisma.authenticator.update({
-    where: {
-      userId_credentialID: {
-        userId: session.user.id,
-        credentialID: id,
-      },
-    },
-    data: {
-      name,
-    },
+  await updateAuthenticatorName({
+    credentialID: id,
+    userId: session.user.id,
+    name
   });
   revalidatePath(`/${lang}/account/manage/security`);
   redirect(`/${lang}/account/manage/security`);
 }
 
-export async function deleteAuthenticator({ id }: { id: string }): Promise<{error?: string}> {
+export async function deleteAuthenticator({ id }: { id: string }): Promise<{ error?: string }> {
   const session = await throwIfUnauth();
   const lang = getLanguage();
   const { t } = await getTranslation(lang);
-  const user = await prisma.user.findFirst({
-    where: {
-      id: session.user.id,
-    },
-    select: {
-      emailVerified: true,
-      accounts: {
-        select: {
-          providerAccountId: true,
-          provider: true,
-        },
-      },
-    },
-  });
-  if (!user) {
+  const accounts = await retrieveAccounts({ userId: session.user.id, });
+  if (!accounts.length) {
     return { error: "Account not found" };
   }
 
-  const remain = user.accounts.filter(
+  const remain = accounts.filter(
     (account) =>
       !(account.providerAccountId === id && account.provider === "passkey"),
   );
-  if (remain.length === user.accounts.length) {
+  if (remain.length === accounts.length) {
     return { error: "Account not found" };
   }
 
   if (remain.length === 0) {
     console.log("Deleting the last account");
-    if (!user.emailVerified) {
+    if (!await getEmailVerifiedByUserId({ userId: session.user.id })) {
       console.log("The user is not verified");
       return { error: t("account:security.cannotRemoveAccount") };
     }
   }
 
-  await prisma.account.delete({
-    where: {
-      provider_providerAccountId: {
-        providerAccountId: id,
-        provider: "passkey",
-      },
-    },
-  });
-  await prisma.authenticator.delete({
-    where: {
-      userId_credentialID: {
-        userId: session.user.id,
-        credentialID: id,
-      },
-    },
+  await startTransaction(async p => {
+    await deleteAccount({
+      providerAccountId: id,
+      provider: "passkey",
+      prisma: p
+    });
+    await deleteDbAuthenticator({
+      userId: session.user.id,
+      credentialID: id,
+      prisma: p
+    });
   });
   revalidatePath(`/${lang}/account/manage/security`);
   redirect(`/${lang}/account/manage/security`);

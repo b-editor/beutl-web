@@ -7,6 +7,7 @@ import Nodemailer from "@auth/core/providers/nodemailer";
 import Passkey from "@auth/core/providers/passkey";
 import { options as nodemailerOptions } from "./nodemailer";
 import Credentials from "@auth/core/providers/credentials";
+import { updateAuthenticatorUsedAt } from "./lib/db/authenticator";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -69,13 +70,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     signIn: async (message) => {
       if (message.account?.provider === "passkey") {
-        await prisma.authenticator.update({
-          where: {
-            credentialID: message.account.providerAccountId
-          },
-          data: {
-            usedAt: new Date(Date.now())
-          }
+        await updateAuthenticatorUsedAt({
+          credentialID: message.account.providerAccountId,
+          usedAt: new Date(Date.now())
         });
       }
     }

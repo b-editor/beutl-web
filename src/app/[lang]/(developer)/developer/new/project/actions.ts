@@ -1,8 +1,7 @@
 "use server";
 
-import { auth } from "@/auth";
 import { authenticated } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
+import { createDevPackage, existsPackageName } from "@/lib/db/package";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
@@ -33,15 +32,7 @@ export async function createNewProject(state: State, formData: FormData): Promis
     }
 
     const { packageId } = validated.data;
-    const existing = await prisma.package.count({
-      where: {
-        name: {
-          equals: packageId,
-          mode: "insensitive",
-        }
-      },
-    });
-    if (existing) {
+    if (await existsPackageName({ name: packageId })) {
       return {
         errors: {
           packageId: ["このパッケージIDは既に使用されています"],
@@ -50,16 +41,7 @@ export async function createNewProject(state: State, formData: FormData): Promis
         success: false,
       };
     }
-    await prisma.package.create({
-      data: {
-        name: packageId,
-        userId: session.user.id,
-        description: "",
-        shortDescription: "",
-        webSite: "",
-        published: false,
-      }
-    });
+    await createDevPackage({ name: packageId, userId: session.user.id });
     redirect(`/developer/projects/${packageId}`);
   });
 }

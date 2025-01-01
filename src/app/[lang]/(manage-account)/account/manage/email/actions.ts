@@ -9,9 +9,12 @@ import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
-import { getTranslation, Zod } from "@/app/i18n/server";
+import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { createStripe } from "@/lib/stripe/config";
+import { existsUserByEmail, existsUserById, updateUserEmail } from "@/lib/db/user";
+import { updateCustomerEmailIfExist } from "@/lib/db/customer";
+import { startTransaction } from "@/lib/db/transaction";
 
 type State = {
   message?: string;
@@ -64,29 +67,13 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
     }
 
     // メールアドレス更新
-    const user = await prisma.user.findFirst({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        email: true,
-      }
-    });
-    if (!user) {
+    if (!await existsUserById({ id: session.user.id })) {
       return {
         message: t("userNotFound"),
         success: false,
       };
     }
-    const exists = await prisma.user.findFirst({
-      where: {
-        email: validated.data.newEmail,
-      },
-      select: {
-        id: true,
-      }
-    });
-    if (exists) { 
+    if (await existsUserByEmail({ email: validated.data.newEmail })) {
       return {
         message: t("account:email.emailExists"),
         success: false,
@@ -121,9 +108,8 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
 
 export async function updateEmail(token: string, identifier: string) {
   const lang = getLanguage();
-  const { t } = await getTranslation(lang);
   const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`)
+  const hash = await createHash(`${token}${secret}`);
   const tokenData = await prisma.confirmationToken.delete({
     where: {
       identifier_token: {
@@ -139,35 +125,33 @@ export async function updateEmail(token: string, identifier: string) {
     }
   });
   if (!tokenData || tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE) {
-    throw new Error("Invalid token");
+    console.error("Invalid token");
+    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
   }
 
   if (tokenData.expires.valueOf() < Date.now()) {
-    throw new Error("Token has expired");
+    console.error("Token has expired");
+    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
   }
 
-  const updated = await prisma.user.update({
-    where: {
-      id: tokenData.userId,
-    },
-    data: {
-      email: tokenData.identifier,
-    },
-  });
-  const customer = await prisma.customer.findFirst({
-    where: {
+  const updated = await startTransaction(async (p) => {
+    await updateUserEmail({
       userId: tokenData.userId,
-    },
-    select: {
-      stripeId: true,
-    }
-  });
-  if (customer) {
-    const stripe = createStripe();
-    await stripe.customers.update(customer.stripeId, {
       email: tokenData.identifier,
+      prisma: p
     });
-  }
+
+    await updateCustomerEmailIfExist({
+      userId: tokenData.userId,
+      email: tokenData.identifier,
+      prisma: p
+    });
+    return true;
+  }).catch((e) => {
+    console.error("Failed to update email", e);
+    return false;
+  });
+
   if (!updated) {
     redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
   }
