@@ -30,6 +30,8 @@ model User {
   NativeAppAuth      NativeAppAuth[]
   UserPaymentHistory UserPaymentHistory[]
   Customer           Customer?
+
+  AuditLog AuditLog[]
 }
 
 model Account {
@@ -299,4 +301,16 @@ model NativeAppAuth {
   codeExpires DateTime?
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  details   String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

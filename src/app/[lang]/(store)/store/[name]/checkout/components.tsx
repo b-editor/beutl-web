@@ -1,7 +1,7 @@
 "use client";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
-import { FormEvent, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { useMatchMedia } from "@/hooks/use-match-media";
@@ -9,7 +9,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { formatAmount } from "@/lib/currency-formatter";
-import { Package } from "@/lib/store-utils";
+import type { Package } from "@/lib/store-utils";
 import { useTranslation } from "@/app/i18n/client";
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string);
@@ -21,7 +21,7 @@ export function PackageDetails({
   price: number,
   currency: string
   lang: string
-  }) {
+}) {
   const { t } = useTranslation(lang);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
   return (

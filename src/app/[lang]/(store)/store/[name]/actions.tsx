@@ -1,6 +1,7 @@
 "use server";
 
 import { getTranslation } from "@/app/i18n/server";
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { prisma } from "@/prisma";
@@ -38,6 +39,11 @@ export async function removeFromLibrary(packageId: string) {
           }
         }
       }
+    });
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.store.removeFromLibrary,
+      details: `packageId: ${packageId}`,
     });
     revalidatePath(`/store/${name}`);
     return {

@@ -1,5 +1,6 @@
 "use server";
 
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import {
   createDevPackageScreenshot,
@@ -120,6 +121,11 @@ export async function updateDisplayNameAndShortDescription(state: State, formDat
         displayName,
         shortDescription
       });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${id}`,
+      });
       revalidatePath(`/developer/projects/${name}`);
       return {
         success: true
@@ -141,6 +147,11 @@ export async function updateDescription({ packageId, description }: { packageId:
       const { name } = await updateDevPackageDescription({
         packageId,
         description
+      });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${packageId}`,
       });
       revalidatePath(`/developer/projects/${name}`);
       return {
@@ -185,6 +196,11 @@ export async function deletePackage(id: string): Promise<Response> {
       });
 
       await Promise.all(promises);
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.deletePackage,
+        details: `packageId: ${id}`,
+      });
       revalidatePath("/developer");
       redirect("/developer");
     });
@@ -194,7 +210,22 @@ export async function deletePackage(id: string): Promise<Response> {
 export async function changePackageVisibility(id: string, published: boolean): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
+      const { published: oldPublished } = await prisma.package.findFirstOrThrow({
+        where: {
+          id
+        },
+        select: {
+          published: true
+        }
+      });
       const { name } = await updateDevPackagePublished({ packageId: id, published });
+      if (oldPublished !== published) {
+        await addAuditLog({
+          userId: session.user.id,
+          action: published ? auditLogActions.developer.publishPackage : auditLogActions.developer.unpublishPackage,
+          details: `packageId: ${id}`,
+        });
+      }
       revalidatePath(`/developer/projects/${name}`);
       return {
         success: true,
@@ -236,6 +267,11 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId: result.record!.id
       });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${id}`,
+      });
       revalidatePath(`/developer/projects/${name}`);
       return {
         success: true,
@@ -266,6 +302,11 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId: result.record!.id,
         order: (lastScreenshot?.order || 0) + 1,
+      });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${id}`,
       });
       revalidatePath(`/developer/projects/${name}`);
       return {
@@ -320,6 +361,11 @@ export async function moveScreenshot({ delta, packageId, fileId }: { delta: numb
           });
         });
       await Promise.all(promises);
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${packageId}`,
+      });
       revalidatePath(`/developer/projects/${name}`);
       return {
         success: true,
@@ -334,6 +380,11 @@ export async function deleteScreenshot({ packageId, fileId }: { packageId: strin
       const name = await getPackageNameFromPackageId({ packageId });
       await deleteDevPackageScreenshot({ packageId, fileId });
       await deleteStorageFile({ fileId });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${packageId}`,
+      });
       revalidatePath(`/developer/projects/${name}`);
       return {
         success: true,
@@ -348,6 +399,11 @@ export async function updateTag({ packageId, tags }: { packageId: string, tags: 
       const { name } = await updateDevPackageTags({
         packageId,
         tags
+      });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updatePackage,
+        details: `packageId: ${packageId}`,
       });
       revalidatePath(`/developer/projects/${name}`);
       return {
@@ -410,6 +466,14 @@ export async function updateRelease(formData: FormData) {
         fileId = result.record!.id;
       }
 
+      const { published: oldPublished } = await prisma.release.findFirstOrThrow({
+        where: {
+          id: validated.data.id
+        },
+        select: {
+          published: true
+        }
+      });
       const data = await prisma.release.update({
         where: {
           id: validated.data.id,
@@ -435,6 +499,18 @@ export async function updateRelease(formData: FormData) {
           }
         }
       });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.updateRelease,
+        details: `releaseId: ${data.id}`,
+      });
+      if (oldPublished !== data.published) {
+        await addAuditLog({
+          userId: session.user.id,
+          action: data.published ? auditLogActions.developer.publishRelease : auditLogActions.developer.unpublishRelease,
+          details: `releaseId: ${data.id}`,
+        });
+      }
 
       return {
         success: true,
@@ -477,6 +553,11 @@ export async function createRelease({ packageId, version }: { packageId: string,
           }
         }
       });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.createRelease,
+        details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
+      });
       return {
         success: true,
         data: release
@@ -513,6 +594,11 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
           id: releaseId,
         },
       });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.developer.deleteRelease,
+        details: `releaseId: ${releaseId}`,
+      })
       return {
         success: true,
       };

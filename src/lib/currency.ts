@@ -24,6 +24,7 @@ export async function guessCurrency() {
   const country = h.get("CF-IPCountry") || await getCountry(ipAddress);
   console.log("Country:", country);
   if (!country) return null;
+  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
   const currency = (countryToCurrency as any)[country]
   console.log("Currency:", currency);
   return currency;

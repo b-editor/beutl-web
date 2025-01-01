@@ -11,10 +11,10 @@ import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
-import { createStripe } from "@/lib/stripe/config";
 import { existsUserByEmail, existsUserById, updateUserEmail } from "@/lib/db/user";
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
 import { startTransaction } from "@/lib/db/transaction";
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 type State = {
   message?: string;
@@ -98,7 +98,11 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
     });
 
     await Promise.all([sendRequest, createToken]);
-
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.account.sentEmailChangeConfirmation,
+      details: `email: ${validated.data.newEmail}`
+    });
     return {
       message: t("account:email.emailSent"),
       success: true,
@@ -156,6 +160,11 @@ export async function updateEmail(token: string, identifier: string) {
     redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
   }
 
+  await addAuditLog({
+    userId: tokenData.userId,
+    action: auditLogActions.account.emailChanged,
+    details: `email: ${tokenData.identifier}`
+  });
   revalidatePath(`/${lang}/account/manage/email`);
   redirect(`/${lang}/account/manage/email?status=emailUpdated`, RedirectType.replace);
 }

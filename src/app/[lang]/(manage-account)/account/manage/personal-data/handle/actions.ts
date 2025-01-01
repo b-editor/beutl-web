@@ -3,6 +3,7 @@ import { createHash } from "@/lib/create-hash";
 import { prisma } from "@/prisma";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { deleteUserById } from "@/lib/db/user";
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
@@ -30,4 +31,8 @@ export async function deleteUser(token: string, identifier: string) {
   }
 
   await deleteUserById({ userId: tokenData.userId });
+  await addAuditLog({
+    userId: tokenData.userId,
+    action: auditLogActions.account.accountDeleted,
+  });
 }

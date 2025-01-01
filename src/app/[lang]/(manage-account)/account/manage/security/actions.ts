@@ -12,6 +12,7 @@ import { getEmailVerifiedByUserId } from "@/lib/db/user";
 import { deleteAccount, retrieveAccounts } from "@/lib/db/account";
 import { deleteAuthenticator as deleteDbAuthenticator, updateAuthenticatorName } from "@/lib/db/authenticator";
 import { startTransaction } from "@/lib/db/transaction";
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 export type State = {
   success?: boolean;
@@ -88,6 +89,11 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       });
     }
     revalidatePath(`/${lang}/account/manage/security`);
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.account.signInMethodDeleted,
+      details: `provider: ${provider}, providerAccountId: ${providerAccountId}`,
+    })
     return { success: true };
   });
 }
@@ -141,6 +147,11 @@ export async function deleteAuthenticator({ id }: { id: string }): Promise<{ err
       prisma: p
     });
   });
+  await addAuditLog({
+    userId: session.user.id,
+    action: auditLogActions.account.signInMethodDeleted,
+    details: `provider: passkey, providerAccountId: ${id}`,
+  })
   revalidatePath(`/${lang}/account/manage/security`);
   redirect(`/${lang}/account/manage/security`);
 }

@@ -12,7 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
-import { Package } from "@/lib/store-utils";
+import type { Package } from "@/lib/store-utils";
 import { formatAmount } from "@/lib/currency-formatter";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useTranslation } from "@/app/i18n/client";
@@ -46,7 +46,7 @@ function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
       {owned ? t("store:owned")
         : paied ? t("store:addedToLibrary")
           : price ? formatAmount(price.price, price.currency, lang)
-            : t("store:aqcuire")}
+            : t("store:acquire")}
     </Button>
   )
 }

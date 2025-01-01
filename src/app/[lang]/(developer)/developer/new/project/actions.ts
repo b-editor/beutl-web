@@ -1,5 +1,6 @@
 "use server";
 
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { createDevPackage, existsPackageName } from "@/lib/db/package";
 import { redirect } from "next/navigation";
@@ -41,7 +42,12 @@ export async function createNewProject(state: State, formData: FormData): Promis
         success: false,
       };
     }
-    await createDevPackage({ name: packageId, userId: session.user.id });
+    const { id } = await createDevPackage({ name: packageId, userId: session.user.id });
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.developer.createPackage,
+      details: `packageId: ${id}, name: ${packageId}`,
+    });
     redirect(`/developer/projects/${packageId}`);
   });
 }

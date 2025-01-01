@@ -12,6 +12,7 @@ import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { findEmailByUserId } from "@/lib/db/user";
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 type State = {
   message?: string;
@@ -103,7 +104,11 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     });
 
     await Promise.all([sendRequest, createToken]);
-
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.account.sentDeleteAccountConfirmation,
+      details: "",
+    });
     revalidatePath("/account/manage/personal-data");
     return {
       message: t("account:data.sentEmail"),

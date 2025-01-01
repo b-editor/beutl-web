@@ -1,3 +1,4 @@
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { prisma } from "@/prisma";
@@ -38,6 +39,11 @@ export default async function Page({ params: { name, lang } }: { params: { name:
         userId: session.user.id,
         packageId: pkg.id
       }
+    });
+    await addAuditLog({
+      userId: session.user.id,
+      action: auditLogActions.store.addToLibrary,
+      details: `packageId: ${pkg.id}`
     })
   }
 

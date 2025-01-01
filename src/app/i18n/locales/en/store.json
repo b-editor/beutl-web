@@ -14,7 +14,7 @@
   "removedFromLibrary": "Removed from library",
   "owned": "Owned",
   "addedToLibrary": "Added to library",
-  "acquire": "Acquire",
+  "acquire": "Get",
   "confirmRemoveFromLibrary": "Remove from library?",
   "removeWarning": "Removing from the library will make it unavailable until you add it back.",
   "reacquireCost": "It will cost {{amount}} to reacquire.",

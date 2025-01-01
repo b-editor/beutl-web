@@ -1,8 +1,9 @@
+import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { createStripe } from "@/lib/stripe/config";
 import { prisma } from "@/prisma";
-import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
+import { type NextRequest, NextResponse } from "next/server";
+import type Stripe from "stripe";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const stripe = createStripe();
@@ -51,6 +52,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       });
       await createUserPaymentHistory({ userId: customer.userId, packageId: pkg.id, paymentIntentId: paymentIntent.id });
+      await addAuditLog({
+        userId: customer.userId,
+        action: auditLogActions.store.paymentSucceeded,
+        details: `packageId: ${pkg.id}`
+      })
       break;
     }
   }
