@@ -114,6 +114,16 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
+  if (!prisma.confirmationToken.count({
+    where: {
+      identifier: identifier,
+      token: hash
+    }
+  })) {
+    console.error("Invalid token");
+    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace,);
+  }
+
   const tokenData = await prisma.confirmationToken.delete({
     where: {
       identifier_token: {
