@@ -127,10 +127,10 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         setReleases(filtered);
         const data = filtered[0];
         setRelease(data);
-        setTitle(data.title);
-        setDescription(data.description);
-        setTargetVersion({ value: data.targetVersion, message: "" });
-        setPublished(data.published);
+        setTitle(data?.title || "");
+        setDescription(data?.description || "");
+        setTargetVersion({ value: data?.targetVersion || "", message: "" });
+        setPublished(data?.published || false);
         setFile(undefined);
         setEdit(false);
         toast({
