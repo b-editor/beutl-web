@@ -116,7 +116,9 @@ export type ListedPackage = {
   displayName?: string;
   shortDescription: string;
   userName?: string;
+  userId: string;
   iconFileUrl?: string;
+  iconFileId?: string;
   tags: string[];
   price?: {
     price: number;
@@ -168,11 +170,8 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
         name: true,
         shortDescription: true,
         tags: true,
-        iconFile: {
-          select: {
-            id: true,
-          },
-        },
+        iconFileId: true,
+        userId: true,
         user: {
           select: {
             Profile: {
@@ -207,7 +206,7 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
 
     return Promise.all(
       tmp.map(async (pkg) => {
-        const url = pkg.iconFile && `/api/contents/${pkg.iconFile?.id}`;
+        const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
 
         return {
           id: pkg.id,
@@ -215,7 +214,9 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
           displayName: pkg.displayName || undefined,
           shortDescription: pkg.shortDescription,
           userName: pkg.user.Profile?.userName || undefined,
+          userId: pkg.userId,
           iconFileUrl: url || undefined,
+          iconFileId: pkg.iconFileId || undefined,
           tags: pkg.tags,
           price: pkg.packagePricing.find(p => p.currency === currency)
             || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
@@ -236,11 +237,8 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
       name: true,
       shortDescription: true,
       tags: true,
-      iconFile: {
-        select: {
-          id: true,
-        },
-      },
+      iconFileId: true,
+      userId: true,
       user: {
         select: {
           Profile: {
@@ -275,7 +273,7 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
 
 
   return Promise.all(tmp.map(async (pkg) => {
-    const url = pkg.iconFile && `/api/contents/${pkg.iconFile?.id}`;
+    const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
 
     return {
       id: pkg.id,
@@ -283,7 +281,9 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
       displayName: pkg.displayName || undefined,
       shortDescription: pkg.shortDescription,
       userName: pkg.user.Profile?.userName || undefined,
+      userId: pkg.userId,
       iconFileUrl: url || undefined,
+      iconFileId: pkg.iconFileId || undefined,
       tags: pkg.tags,
       price: pkg.packagePricing.find(p => p.currency === currency)
         || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
