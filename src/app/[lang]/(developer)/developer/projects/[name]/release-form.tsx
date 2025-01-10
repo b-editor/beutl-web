@@ -239,9 +239,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             onClick={handleSelectFile}
             disabled={saving}
           >
-            {!release.file?.name ? "ファイルを選択"
-              : file ? file.name
-                : release.file.name}
+            {file ? file.name
+              : release?.file?.name ? release.file.name
+                : "ファイルを選択"}
           </Button>
           <div className="flex items-center space-x-2 mt-2">
             <Checkbox
