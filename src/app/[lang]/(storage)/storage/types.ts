@@ -7,4 +7,4 @@ export interface File {
   visibility: FileVisibility;
   mimeType: string;
   objectKey: string;
-};
+}

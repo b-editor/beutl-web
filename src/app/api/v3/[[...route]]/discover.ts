@@ -1,4 +1,4 @@
-import "server-only"; 
+import "server-only";
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
@@ -7,7 +7,7 @@ import {
   type ListedPackage,
   packageOwned,
   packagePaied,
-  retrievePackages
+  retrievePackages,
 } from "@/lib/store-utils";
 import { getUserId } from "./auth";
 
@@ -20,14 +20,14 @@ const searchQuerySchema = z.object({
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
   const profile = await prisma.profile.findFirst({
     where: {
-      userId: pkg.userId
+      userId: pkg.userId,
     },
     select: {
       userName: true,
       displayName: true,
       bio: true,
       iconFileId: true,
-    }
+    },
   });
   let paid = false;
   let owned = false;
@@ -43,7 +43,9 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
     shortDescription: pkg.shortDescription,
     tags: pkg.tags,
     logoId: pkg.iconFileId,
-    logoUrl: pkg.iconFileId ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}` : undefined,
+    logoUrl: pkg.iconFileId
+      ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
+      : undefined,
     currency: pkg.price?.currency,
     price: pkg.price?.price,
     paid: paid,
@@ -54,9 +56,11 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
       displayName: profile?.displayName || "",
       bio: profile?.bio,
       iconId: profile?.iconFileId,
-      iconUrl: profile?.iconFileId ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}` : undefined,
-    }
-  }
+      iconUrl: profile?.iconFileId
+        ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}`
+        : undefined,
+    },
+  };
 }
 
 const app = new Hono()
@@ -65,17 +69,21 @@ const app = new Hono()
     const userId = await getUserId(c);
 
     const packages = await retrievePackages(query.query);
-    const result = await Promise.all(packages.map(async pkg => await mapPackage(pkg, userId)));
+    const result = await Promise.all(
+      packages.map(async (pkg) => await mapPackage(pkg, userId)),
+    );
 
-    return c.json(result)
+    return c.json(result);
   })
   .get("/featured", async (c) => {
     const userId = await getUserId(c);
 
     const packages = await retrievePackages();
-    const result = await Promise.all(packages.map(async pkg => await mapPackage(pkg, userId)));
+    const result = await Promise.all(
+      packages.map(async (pkg) => await mapPackage(pkg, userId)),
+    );
 
-    return c.json(result)
+    return c.json(result);
   });
 
-export default app
+export default app;

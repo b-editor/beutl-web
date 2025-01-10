@@ -5,21 +5,16 @@ import { cookies } from "next/headers";
 import { localRedirect } from "@/lib/localRedirect";
 
 export default async function Page({
-  searchParams: {
-    returnUrl,
-    error
-  },
-  params: {
-    lang
-  }
+  searchParams: { returnUrl, error },
+  params: { lang },
 }: {
   searchParams: {
-    returnUrl?: string,
-    error?: SignInPageErrorParam
-  },
+    returnUrl?: string;
+    error?: SignInPageErrorParam;
+  };
   params: {
-    lang: string
-  }
+    lang: string;
+  };
 }) {
   const authFlow = cookies().get("beutl.auth-flow");
   if (authFlow?.value) {
@@ -38,7 +33,5 @@ export default async function Page({
     localRedirect(returnUrl || `/${lang}`);
   }
 
-  return (
-    <Form returnUrl={returnUrl} error={error} lang={lang} />
-  )
+  return <Form returnUrl={returnUrl} error={error} lang={lang} />;
 }

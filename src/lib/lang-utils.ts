@@ -13,11 +13,11 @@ export function getLanguage() {
   const h = headers();
 
   const sim = {
-    'accept-language': h.get('accept-language') ?? '',
+    "accept-language": h.get("accept-language") ?? "",
   };
   const preferredLanguage = getNegotiatedLanguage(sim) || defaultLanguage;
 
-  const pathname = new URL(h.get('x-url') as string).pathname;
+  const pathname = new URL(h.get("x-url") as string).pathname;
   const pathnameIsMissingLocale = availableLanguages.every(
     (lang) => !pathname.startsWith(`/${lang}/`) && pathname !== `/${lang}`,
   );
@@ -26,5 +26,5 @@ export function getLanguage() {
     return preferredLanguage;
   }
 
-  return pathname.split('/')[1];
+  return pathname.split("/")[1];
 }

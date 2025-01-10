@@ -1,4 +1,4 @@
-import "server-only"; 
+import "server-only";
 import { getTranslation } from "@/app/i18n/server";
 
 export const errorCodes = {
@@ -53,7 +53,9 @@ export type ApiErrorResponse = {
   message: string;
 };
 
-export async function apiErrorResponse(errorCode: keyof typeof errorCodes): Promise<ApiErrorResponse> {
+export async function apiErrorResponse(
+  errorCode: keyof typeof errorCodes,
+): Promise<ApiErrorResponse> {
   const { t } = await getTranslation();
   return {
     error_code: errorCode,

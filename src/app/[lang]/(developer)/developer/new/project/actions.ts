@@ -15,15 +15,24 @@ export type State = {
 };
 
 const formSchema = z.object({
-  packageId: z.string().regex(/^[a-zA-Z0-9_.]*$/, "パッケージIDは半角英数字とピリオド、アンダースコアのみ使用できます")
+  packageId: z
+    .string()
+    .regex(
+      /^[a-zA-Z0-9_.]*$/,
+      "パッケージIDは半角英数字とピリオド、アンダースコアのみ使用できます",
+    )
     .and(z.string().max(50, "パッケージIDは50文字以下である必要があります"))
     .and(z.string().min(3, "パッケージIDは3文字以上である必要があります")),
 });
 
-
-export async function createNewProject(state: State, formData: FormData): Promise<State> {
-  return await authenticated(async session => {
-    const validated = formSchema.safeParse(Object.fromEntries(formData.entries()));
+export async function createNewProject(
+  state: State,
+  formData: FormData,
+): Promise<State> {
+  return await authenticated(async (session) => {
+    const validated = formSchema.safeParse(
+      Object.fromEntries(formData.entries()),
+    );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
@@ -42,7 +51,10 @@ export async function createNewProject(state: State, formData: FormData): Promis
         success: false,
       };
     }
-    const { id } = await createDevPackage({ name: packageId, userId: session.user.id });
+    const { id } = await createDevPackage({
+      name: packageId,
+      userId: session.user.id,
+    });
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.developer.createPackage,

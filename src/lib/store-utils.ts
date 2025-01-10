@@ -4,12 +4,12 @@ import { guessCurrency } from "./currency";
 import { existsUserPaymentHistory } from "./db/user-payment-history";
 
 export async function packageOwned(pkgId: string, userId: string) {
-  return !!await prisma.userPackage.findFirst({
+  return !!(await prisma.userPackage.findFirst({
     where: {
       userId: userId,
-      packageId: pkgId
-    }
-  });
+      packageId: pkgId,
+    },
+  }));
 }
 
 export async function packagePaied(pkgId: string, userId: string) {
@@ -19,13 +19,13 @@ export async function packagePaied(pkgId: string, userId: string) {
 export async function retrievePrices(pkgId: string) {
   return await prisma.packagePricing.findMany({
     where: {
-      packageId: pkgId
+      packageId: pkgId,
     },
     select: {
       currency: true,
       price: true,
-      fallback: true
-    }
+      fallback: true,
+    },
   });
 }
 
@@ -36,9 +36,9 @@ export async function retrievePackage(name: string) {
     where: {
       name: {
         equals: name,
-        mode: "insensitive"
+        mode: "insensitive",
       },
-      published: true
+      published: true,
     },
     select: {
       id: true,
@@ -54,15 +54,15 @@ export async function retrievePackage(name: string) {
           Profile: {
             select: {
               userName: true,
-            }
-          }
-        }
+            },
+          },
+        },
       },
       iconFile: {
         select: {
           id: true,
           objectKey: true,
-        }
+        },
       },
       PackageScreenshot: {
         select: {
@@ -71,12 +71,12 @@ export async function retrievePackage(name: string) {
             select: {
               id: true,
               objectKey: true,
-            }
-          }
+            },
+          },
         },
         orderBy: {
-          order: "asc"
-        }
+          order: "asc",
+        },
       },
       Release: {
         select: {
@@ -87,27 +87,29 @@ export async function retrievePackage(name: string) {
           id: true,
         },
         where: {
-          published: true
-        }
-      }
-    }
+          published: true,
+        },
+      },
+    },
   });
   if (!pkg) {
     return null;
   }
 
-  const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
-    return {
-      ...item,
-      url: `/api/contents/${item.file.id}`
-    }
-  }));
+  const screenshots = await Promise.all(
+    pkg.PackageScreenshot.map(async (item) => {
+      return {
+        ...item,
+        url: `/api/contents/${item.file.id}`,
+      };
+    }),
+  );
 
   return {
     ...pkg,
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
-    PackageScreenshot: screenshots
-  }
+    PackageScreenshot: screenshots,
+  };
 }
 
 export type ListedPackage = {
@@ -123,10 +125,12 @@ export type ListedPackage = {
   price?: {
     price: number;
     currency: string;
-  }
+  };
 };
 
-export async function retrievePackages(query?: string): Promise<ListedPackage[]> {
+export async function retrievePackages(
+  query?: string,
+): Promise<ListedPackage[]> {
   const currency = await guessCurrency();
 
   if (query) {
@@ -187,20 +191,20 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
               {
                 currency: {
                   equals: currency,
-                  mode: "insensitive"
-                }
+                  mode: "insensitive",
+                },
               },
               {
-                fallback: true
-              }
-            ]
+                fallback: true,
+              },
+            ],
           },
           select: {
             price: true,
             currency: true,
-            fallback: true
-          }
-        }
+            fallback: true,
+          },
+        },
       },
     });
 
@@ -218,8 +222,10 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
           iconFileUrl: url || undefined,
           iconFileId: pkg.iconFileId || undefined,
           tags: pkg.tags,
-          price: pkg.packagePricing.find(p => p.currency === currency)
-            || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
+          price:
+            pkg.packagePricing.find((p) => p.currency === currency) ||
+            pkg.packagePricing.find((p) => p.fallback) ||
+            pkg.packagePricing[0],
         };
       }),
     );
@@ -254,39 +260,42 @@ export async function retrievePackages(query?: string): Promise<ListedPackage[]>
             {
               currency: {
                 equals: currency,
-                mode: "insensitive"
-              }
+                mode: "insensitive",
+              },
             },
             {
-              fallback: true
-            }
-          ]
+              fallback: true,
+            },
+          ],
         },
         select: {
           price: true,
           currency: true,
-          fallback: true
-        }
-      }
+          fallback: true,
+        },
+      },
     },
   });
 
+  return Promise.all(
+    tmp.map(async (pkg) => {
+      const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
 
-  return Promise.all(tmp.map(async (pkg) => {
-    const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
-
-    return {
-      id: pkg.id,
-      name: pkg.name,
-      displayName: pkg.displayName || undefined,
-      shortDescription: pkg.shortDescription,
-      userName: pkg.user.Profile?.userName || undefined,
-      userId: pkg.userId,
-      iconFileUrl: url || undefined,
-      iconFileId: pkg.iconFileId || undefined,
-      tags: pkg.tags,
-      price: pkg.packagePricing.find(p => p.currency === currency)
-        || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
-    }
-  }));
+      return {
+        id: pkg.id,
+        name: pkg.name,
+        displayName: pkg.displayName || undefined,
+        shortDescription: pkg.shortDescription,
+        userName: pkg.user.Profile?.userName || undefined,
+        userId: pkg.userId,
+        iconFileUrl: url || undefined,
+        iconFileId: pkg.iconFileId || undefined,
+        tags: pkg.tags,
+        price:
+          pkg.packagePricing.find((p) => p.currency === currency) ||
+          pkg.packagePricing.find((p) => p.fallback) ||
+          pkg.packagePricing[0],
+      };
+    }),
+  );
 }

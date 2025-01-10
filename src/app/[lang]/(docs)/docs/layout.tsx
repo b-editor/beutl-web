@@ -16,5 +16,5 @@ export default async function Layout({
       {children}
       <Footer lang={lang} />
     </div>
-  )
+  );
 }

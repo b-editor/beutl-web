@@ -10,7 +10,10 @@ import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
 import { getEmailVerifiedByUserId } from "@/lib/db/user";
 import { deleteAccount, retrieveAccounts } from "@/lib/db/account";
-import { deleteAuthenticator as deleteDbAuthenticator, updateAuthenticatorName } from "@/lib/db/authenticator";
+import {
+  deleteAuthenticator as deleteDbAuthenticator,
+  updateAuthenticatorName,
+} from "@/lib/db/authenticator";
 import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
@@ -19,7 +22,10 @@ export type State = {
   message?: string | null;
 };
 
-export async function addAccount(state: State, formData: FormData): Promise<State> {
+export async function addAccount(
+  state: State,
+  formData: FormData,
+): Promise<State> {
   const type = formData.get("type") as string | null;
   const lang = getLanguage();
   const { t } = await getTranslation(lang);
@@ -37,11 +43,16 @@ export async function addAccount(state: State, formData: FormData): Promise<Stat
       url: url.toString(),
     }),
   );
-  await signIn(type, { redirectTo: `${url.origin}/${lang}/account/manage/security` });
+  await signIn(type, {
+    redirectTo: `${url.origin}/${lang}/account/manage/security`,
+  });
   return { success: true };
 }
 
-export async function removeAccount(state: State, formData: FormData): Promise<State> {
+export async function removeAccount(
+  state: State,
+  formData: FormData,
+): Promise<State> {
   return await authenticated(async (session) => {
     const lang = getLanguage();
     const { t } = await getTranslation(lang);
@@ -72,7 +83,7 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
 
     if (remain.length === 0) {
       console.log("Deleting the last account");
-      if (!await getEmailVerifiedByUserId({ userId: session.user.id })) {
+      if (!(await getEmailVerifiedByUserId({ userId: session.user.id }))) {
         console.log("The user is not verified");
         return {
           success: false,
@@ -93,28 +104,33 @@ export async function removeAccount(state: State, formData: FormData): Promise<S
       userId: session.user.id,
       action: auditLogActions.account.signInMethodDeleted,
       details: `provider: ${provider}, providerAccountId: ${providerAccountId}`,
-    })
+    });
     return { success: true };
   });
 }
 
-export async function renameAuthenticator({ id, name }: { id: string, name: string }): Promise<void> {
+export async function renameAuthenticator({
+  id,
+  name,
+}: { id: string; name: string }): Promise<void> {
   const session = await throwIfUnauth();
   const lang = getLanguage();
   await updateAuthenticatorName({
     credentialID: id,
     userId: session.user.id,
-    name
+    name,
   });
   revalidatePath(`/${lang}/account/manage/security`);
   redirect(`/${lang}/account/manage/security`);
 }
 
-export async function deleteAuthenticator({ id }: { id: string }): Promise<{ error?: string }> {
+export async function deleteAuthenticator({
+  id,
+}: { id: string }): Promise<{ error?: string }> {
   const session = await throwIfUnauth();
   const lang = getLanguage();
   const { t } = await getTranslation(lang);
-  const accounts = await retrieveAccounts({ userId: session.user.id, });
+  const accounts = await retrieveAccounts({ userId: session.user.id });
   if (!accounts.length) {
     return { error: "Account not found" };
   }
@@ -129,29 +145,29 @@ export async function deleteAuthenticator({ id }: { id: string }): Promise<{ err
 
   if (remain.length === 0) {
     console.log("Deleting the last account");
-    if (!await getEmailVerifiedByUserId({ userId: session.user.id })) {
+    if (!(await getEmailVerifiedByUserId({ userId: session.user.id }))) {
       console.log("The user is not verified");
       return { error: t("account:security.cannotRemoveAccount") };
     }
   }
 
-  await startTransaction(async p => {
+  await startTransaction(async (p) => {
     await deleteAccount({
       providerAccountId: id,
       provider: "passkey",
-      prisma: p
+      prisma: p,
     });
     await deleteDbAuthenticator({
       userId: session.user.id,
       credentialID: id,
-      prisma: p
+      prisma: p,
     });
   });
   await addAuditLog({
     userId: session.user.id,
     action: auditLogActions.account.signInMethodDeleted,
     details: `provider: passkey, providerAccountId: ${id}`,
-  })
+  });
   revalidatePath(`/${lang}/account/manage/security`);
   redirect(`/${lang}/account/manage/security`);
 }

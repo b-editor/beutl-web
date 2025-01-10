@@ -1,6 +1,6 @@
-import NextAuth from "next-auth"
-import { PrismaAdapter } from "@auth/prisma-adapter"
-import { prisma } from "@/prisma"
+import NextAuth from "next-auth";
+import { PrismaAdapter } from "@auth/prisma-adapter";
+import { prisma } from "@/prisma";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import Nodemailer from "@auth/core/providers/nodemailer";
@@ -22,7 +22,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       credentials: {
         userId: {},
-        secret: {}
+        secret: {},
       },
       async authorize(credentials) {
         const user = await prisma.user.findFirst({
@@ -39,7 +39,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return user;
       },
     }),
-    Passkey
+    Passkey,
   ],
   events: {
     async createUser(message) {
@@ -49,15 +49,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       let exists = await prisma.profile.findFirst({
         where: {
-          userName: original
-        }
+          userName: original,
+        },
       });
       for (let i = 1; exists; i++) {
         userName = `${original}${i}`;
         exists = await prisma.profile.findFirst({
           where: {
-            userName: userName
-          }
+            userName: userName,
+          },
         });
       }
 
@@ -66,27 +66,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           userId: message.user.id,
           displayName: message.user.name || userName,
           userName: userName,
-        }
+        },
       });
       await addAuditLog({
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         userId: message.user.id!,
         action: auditLogActions.authjs.createUser,
-        details: `userName: ${userName}, email: ${message.user.email}`
+        details: `userName: ${userName}, email: ${message.user.email}`,
       });
     },
     signIn: async (message) => {
       if (message.account?.provider === "passkey") {
         await updateAuthenticatorUsedAt({
           credentialID: message.account.providerAccountId,
-          usedAt: new Date(Date.now())
+          usedAt: new Date(Date.now()),
         });
       }
       await addAuditLog({
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         userId: message.user.id!,
         action: auditLogActions.authjs.signIn,
-        details: `provider: ${message.account?.provider}`
+        details: `provider: ${message.account?.provider}`,
       });
     },
     signOut: async (message) => {
@@ -114,20 +114,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         userId: message.user.id!,
         action: auditLogActions.authjs.linkAccount,
-        details: `provider: ${message.account.provider}`
+        details: `provider: ${message.account.provider}`,
       });
-    }
+    },
   },
   callbacks: {
     session: async ({ session, user }) => {
       // user.nameをprofile.displayNameにする
       const profile = await prisma.profile.findFirst({
         where: {
-          userId: user.id
+          userId: user.id,
         },
         select: {
-          displayName: true
-        }
+          displayName: true,
+        },
       });
       if (profile) {
         session.user.name = profile.displayName;
@@ -148,5 +148,5 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   experimental: {
     enableWebAuthn: true,
-  }
-})
+  },
+});

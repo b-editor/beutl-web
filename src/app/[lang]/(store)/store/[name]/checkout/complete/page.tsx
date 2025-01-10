@@ -6,10 +6,10 @@ import { retrievePackage } from "@/lib/store-utils";
 
 export default async function Page({
   params: { name, lang },
-  searchParams: { payment_intent }
+  searchParams: { payment_intent },
 }: {
-  params: { name: string, lang: string },
-  searchParams: { payment_intent: string }
+  params: { name: string; lang: string };
+  searchParams: { payment_intent: string };
 }) {
   const pkg = await retrievePackage(name);
   if (!pkg) {
@@ -32,13 +32,9 @@ export default async function Page({
         </div>
         <div className="border max-md:h-[1px] md:w-[1px]" />
         <div className="md:flex-1 mx-2 max-md:mt-4">
-          <ClientPage
-            status={intent.status}
-            name={name}
-            lang={lang}
-          />
+          <ClientPage status={intent.status} name={name} lang={lang} />
         </div>
       </div>
     </div>
-  )
+  );
 }

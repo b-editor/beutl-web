@@ -4,57 +4,57 @@ import type { PrismaTransaction } from "./transaction";
 
 export async function retrieveAccounts({
   userId,
-  prisma
+  prisma,
 }: {
-  userId: string,
-  prisma?: PrismaTransaction
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).account.findMany({
     where: {
-      userId: userId
+      userId: userId,
     },
     select: {
       providerAccountId: true,
-      provider: true
-    }
+      provider: true,
+    },
   });
 }
 
 export async function retrieveAccountsWithIdToken({
   userId,
-  prisma
+  prisma,
 }: {
-  userId: string,
-  prisma?: PrismaTransaction
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).account.findMany({
     where: {
-      userId: userId
+      userId: userId,
     },
     select: {
       providerAccountId: true,
       provider: true,
-      id_token: true
-    }
+      id_token: true,
+    },
   });
 }
 
 export async function deleteAccount({
   providerAccountId,
   provider,
-  prisma
+  prisma,
 }: {
-  providerAccountId: string,
-  provider: string,
-  prisma?: PrismaTransaction
+  providerAccountId: string;
+  provider: string;
+  prisma?: PrismaTransaction;
 }) {
   await (prisma || sharedPrisma).account.delete({
     where: {
       provider_providerAccountId: {
         providerAccountId,
-        provider
-      }
+        provider,
+      },
     },
-    select: {}
+    select: {},
   });
 }

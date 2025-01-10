@@ -1,4 +1,4 @@
-import semver from "semver"; 
+import semver from "semver";
 
 export function isValidNuGetVersionRange(range: string): boolean {
   const trimmedRange = range.trim();
@@ -14,16 +14,20 @@ export function isValidNuGetVersionRange(range: string): boolean {
   const [, startSymbol, minVersionStr, maxVersionStr, endSymbol] = match;
 
   // 開始と終了の記号が正しいか確認
-  const validStartSymbol = startSymbol === "[" || startSymbol === "(" || startSymbol === undefined;
-  const validEndSymbol = endSymbol === "]" || endSymbol === ")" || endSymbol === undefined;
+  const validStartSymbol =
+    startSymbol === "[" || startSymbol === "(" || startSymbol === undefined;
+  const validEndSymbol =
+    endSymbol === "]" || endSymbol === ")" || endSymbol === undefined;
 
   if (!validStartSymbol || !validEndSymbol) {
     return false;
   }
 
   // バージョン部分が空文字列か正しいSemantic Version形式かを確認
-  const isValidMinVersion = !minVersionStr || semver.valid(minVersionStr) !== null;
-  const isValidMaxVersion = !maxVersionStr || semver.valid(maxVersionStr) !== null;
+  const isValidMinVersion =
+    !minVersionStr || semver.valid(minVersionStr) !== null;
+  const isValidMaxVersion =
+    !maxVersionStr || semver.valid(maxVersionStr) !== null;
 
   return isValidMinVersion && isValidMaxVersion;
 }

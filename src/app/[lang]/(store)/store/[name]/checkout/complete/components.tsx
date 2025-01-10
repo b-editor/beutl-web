@@ -4,7 +4,10 @@ import { CheckCircle, CircleSlash, Info } from "lucide-react";
 import Link from "next/link";
 import Stripe from "stripe";
 
-async function getStatusContent(status: Stripe.PaymentIntent["status"], t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
+async function getStatusContent(
+  status: Stripe.PaymentIntent["status"],
+  t: Awaited<ReturnType<typeof getTranslation>>["t"],
+) {
   const STATUS_CONTENT_MAP: any = {
     succeeded: {
       title: t("store:paymentCompleted"),
@@ -25,17 +28,21 @@ async function getStatusContent(status: Stripe.PaymentIntent["status"], t: Await
       title: t("error"),
       text: t("store:somethingWentWrong"),
       icon: () => <CircleSlash className="min-w-9 min-h-9 text-red-500" />,
-    }
+    },
   };
 
   return STATUS_CONTENT_MAP[status];
 }
 
 export async function ClientPage({
-  lang, name, status
+  lang,
+  name,
+  status,
 }: {
-  lang: string, name: string, status: Stripe.PaymentIntent["status"]
-  }) {
+  lang: string;
+  name: string;
+  status: Stripe.PaymentIntent["status"];
+}) {
   const { t } = await getTranslation(lang);
   const statusContent = await getStatusContent(status, t);
   return (
@@ -43,11 +50,11 @@ export async function ClientPage({
       <div>
         <div className="flex gap-2 items-center">
           {statusContent.icon()}
-          <h2 className="text-2xl font-bold text-wrap">{statusContent.title}</h2>
+          <h2 className="text-2xl font-bold text-wrap">
+            {statusContent.title}
+          </h2>
         </div>
-        <div className="mt-4">
-          {statusContent.text}
-        </div>
+        <div className="mt-4">{statusContent.text}</div>
       </div>
       <div className="flex flex-col gap-2">
         <Button asChild>
@@ -57,5 +64,5 @@ export async function ClientPage({
         </Button>
       </div>
     </div>
-  )
+  );
 }

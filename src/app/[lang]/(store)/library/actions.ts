@@ -13,17 +13,19 @@ type ListedPackage = {
   price?: {
     price: number;
     currency: string;
-  }
+  };
 };
 
-export async function retrievePackages(userId: string): Promise<ListedPackage[]> {
+export async function retrievePackages(
+  userId: string,
+): Promise<ListedPackage[]> {
   const currency = await guessCurrency();
-  const tmp = (await prisma.userPackage.findMany({
+  const tmp = await prisma.userPackage.findMany({
     where: {
       userId: userId,
       package: {
         published: true,
-      }
+      },
     },
     select: {
       package: {
@@ -53,38 +55,44 @@ export async function retrievePackages(userId: string): Promise<ListedPackage[]>
                 {
                   currency: {
                     equals: currency,
-                    mode: "insensitive"
-                  }
+                    mode: "insensitive",
+                  },
                 },
                 {
-                  fallback: true
-                }
-              ]
+                  fallback: true,
+                },
+              ],
             },
             select: {
               price: true,
               currency: true,
-              fallback: true
-            }
-          }
-        }
-      }
-    }
-  }));
+              fallback: true,
+            },
+          },
+        },
+      },
+    },
+  });
 
-  return Promise.all(tmp.map((up) => up.package).map(async (pkg) => {
-    const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
+  return Promise.all(
+    tmp
+      .map((up) => up.package)
+      .map(async (pkg) => {
+        const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
 
-    return {
-      id: pkg.id,
-      name: pkg.name,
-      displayName: pkg.displayName || undefined,
-      shortDescription: pkg.shortDescription,
-      userName: pkg.user.Profile?.userName || undefined,
-      iconFileUrl: url || undefined,
-      tags: pkg.tags,
-      price: pkg.packagePricing.find(p => p.currency === currency)
-        || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
-    }
-  }));
+        return {
+          id: pkg.id,
+          name: pkg.name,
+          displayName: pkg.displayName || undefined,
+          shortDescription: pkg.shortDescription,
+          userName: pkg.user.Profile?.userName || undefined,
+          iconFileUrl: url || undefined,
+          tags: pkg.tags,
+          price:
+            pkg.packagePricing.find((p) => p.currency === currency) ||
+            pkg.packagePricing.find((p) => p.fallback) ||
+            pkg.packagePricing[0],
+        };
+      }),
+  );
 }

@@ -12,7 +12,11 @@
   /* 高さいっぱい */
   display: block;
   /* 高さを指定するためにブロック要素にする */
-  background: linear-gradient(hsl(var(--background)) 0%, rgba(255, 255, 255, 0) 10%, hsl(var(--background)) 90%);
+  background: linear-gradient(
+    hsl(var(--background)) 0%,
+    rgba(255, 255, 255, 0) 10%,
+    hsl(var(--background)) 90%
+  );
   /* 徐々に透明にする */
   position: absolute;
   /*  */

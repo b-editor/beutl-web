@@ -5,7 +5,9 @@ import { retrieveFiles } from "./actions";
 import { List } from "./list";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({ params: { lang } }: { params: { lang: string } }) {
+export default async function Page({
+  params: { lang },
+}: { params: { lang: string } }) {
   await authOrSignIn();
   const { t } = await getTranslation(lang);
   const files = await retrieveFiles();
@@ -15,14 +17,18 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
   }
 
   return (
-
     <div>
       <div className="border-b bg-card">
         <div className="container max-w-6xl mx-auto py-12 px-4 flex flex-col gap-12">
           <h2 className="text-3xl font-semibold">{t("storage:storage")}</h2>
           <div className="flex gap-2 flex-col">
-            <p>{t("storage:storageUsage", { totalSize: formatBytes(totalSize) })}</p>
-            <Progress value={(totalSize / (1024 * 1024 * 1024)) * 100} max={100} />
+            <p>
+              {t("storage:storageUsage", { totalSize: formatBytes(totalSize) })}
+            </p>
+            <Progress
+              value={(totalSize / (1024 * 1024 * 1024)) * 100}
+              max={100}
+            />
           </div>
         </div>
       </div>
@@ -32,5 +38,5 @@ export default async function Page({ params: { lang } }: { params: { lang: strin
         </div>
       </div>
     </div>
-  )
+  );
 }

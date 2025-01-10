@@ -16,12 +16,12 @@ export const options: NodemailerUserConfig = {
     dkim: {
       domainName: process.env.EMAIL_DKIM_DOMAIN as string,
       keySelector: process.env.EMAIL_DKIM_SELECTOR as string,
-      privateKey: process.env.EMAIL_DKIM_PRIVATE_KEY as string
-    }
+      privateKey: process.env.EMAIL_DKIM_PRIVATE_KEY as string,
+    },
   },
   sendVerificationRequest: async ({ identifier, url, provider }) => {
-    const { host } = new URL(url)
-    const transport = createTransport(provider.server)
+    const { host } = new URL(url);
+    const transport = createTransport(provider.server);
     const result = await transport.sendMail({
       to: identifier,
       from: provider.from,
@@ -31,14 +31,14 @@ export const options: NodemailerUserConfig = {
         <p>Click the link below to sign in:</p>
         <a href="${url}">Sign in</a>
       `),
-    })
-    const rejected = result.rejected || []
-    const pending = result.pending || []
-    const failed = rejected.concat(pending).filter(Boolean)
+    });
+    const rejected = result.rejected || [];
+    const pending = result.pending || [];
+    const failed = rejected.concat(pending).filter(Boolean);
     if (failed.length) {
-      throw new Error(`Email (${failed.join(", ")}) could not be sent`)
+      throw new Error(`Email (${failed.join(", ")}) could not be sent`);
     }
-  }
+  },
 } satisfies NodemailerUserConfig;
 
 export function renderUnsafeEmailTemplate(content: string): string {

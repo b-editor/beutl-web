@@ -32,18 +32,21 @@ export const auditLogActions = {
     addToLibrary: "store.addToLibrary",
     removeFromLibrary: "store.removeFromLibrary",
     paymentSucceeded: "store.paymentSucceeded",
-  }
-}
+  },
+};
 
 export async function addAuditLog({
-  userId, action, details
+  userId,
+  action,
+  details,
 }: {
   userId: string;
   action: string;
   details?: string;
 }) {
   const h = headers();
-  const ipAddress = h.get("CF-Connecting-IP") || h.get("X-Forwarded-For")?.split(",")[0];
+  const ipAddress =
+    h.get("CF-Connecting-IP") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");
   await prisma.auditLog.create({
     data: {

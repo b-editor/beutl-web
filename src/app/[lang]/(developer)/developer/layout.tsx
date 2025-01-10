@@ -14,5 +14,5 @@ export default async function Layout({
       <NavBar lang={lang} />
       {children}
     </div>
-  )
+  );
 }

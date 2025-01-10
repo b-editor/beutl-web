@@ -1,5 +1,9 @@
 import "server-only";
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import type { PrismaTransaction } from "./db/transaction";
 import { createFile, deleteFile, retrieveFilesByUserId } from "./db/file";
 import { randomUUID, createHash } from "node:crypto";
@@ -15,14 +19,14 @@ export const s3 = new S3Client({
 
 export async function deleteStorageFile({
   fileId,
-  prisma
+  prisma,
 }: {
-  fileId: string,
-  prisma?: PrismaTransaction
+  fileId: string;
+  prisma?: PrismaTransaction;
 }) {
   const record = await deleteFile({
     fileId: fileId,
-    prisma
+    prisma,
   });
   await s3.send(
     new DeleteObjectCommand({
@@ -34,10 +38,11 @@ export async function deleteStorageFile({
 }
 
 export async function calcTotalFileSize({
-  userId, prisma
+  userId,
+  prisma,
 }: {
-  userId: string,
-  prisma?: PrismaTransaction
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   const files = await retrieveFilesByUserId({ userId, prisma });
   let totalSize = BigInt(0);
@@ -48,14 +53,17 @@ export async function calcTotalFileSize({
 }
 
 export async function createStorageFile({
-  file, prisma, visibility, userId
+  file,
+  prisma,
+  visibility,
+  userId,
 }: {
-  file: File,
-  prisma?: PrismaTransaction,
-  visibility: "PUBLIC" | "PRIVATE" | "DEDICATED",
-  userId: string
+  file: File;
+  prisma?: PrismaTransaction;
+  visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
+  userId: string;
 }) {
-  const files = await retrieveFilesByUserId({ userId,prisma });
+  const files = await retrieveFilesByUserId({ userId, prisma });
 
   let filename = file.name;
   const ext = file.name.split(".").pop();

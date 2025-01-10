@@ -7,26 +7,24 @@ import { LanguageProvider } from "./i18n/client";
 
 const notoSansJP = Noto_Sans_JP({
   subsets: ["latin"],
-  variable: '--font-noto-sans-jp'
+  variable: "--font-noto-sans-jp",
 });
 
 export const metadata: Metadata = {
-  title: "Beutl"
+  title: "Beutl",
 };
 
 type Props = {
   children: React.ReactNode;
   params: {
     lang: string;
-  }
-}
+  };
+};
 
 export default function RootLayout({ children, params: { lang } }: Props) {
   return (
     <html lang={lang} className="dark">
-      <body
-        className={`${notoSansJP.variable} antialiased`}
-      >
+      <body className={`${notoSansJP.variable} antialiased`}>
         <LanguageProvider initialLanguage={lang}>
           <SessionProvider>
             {children}

@@ -4,14 +4,21 @@ import { createTransport } from "nodemailer";
 import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
-import { options as nodemailerOptions, renderUnsafeEmailTemplate } from "@/nodemailer";
+import {
+  options as nodemailerOptions,
+  renderUnsafeEmailTemplate,
+} from "@/nodemailer";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
-import { existsUserByEmail, existsUserById, updateUserEmail } from "@/lib/db/user";
+import {
+  existsUserByEmail,
+  existsUserById,
+  updateUserEmail,
+} from "@/lib/db/user";
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
 import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
@@ -19,11 +26,12 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 type State = {
   message?: string;
   success?: boolean;
-}
+};
 
-const emailSchema = (z: Zod) => z.object({
-  newEmail: z.string().email(),
-});
+const emailSchema = (z: Zod) =>
+  z.object({
+    newEmail: z.string().email(),
+  });
 
 async function sendEmail(email: string, token: string) {
   const lang = getLanguage();
@@ -38,7 +46,7 @@ async function sendEmail(email: string, token: string) {
   url.searchParams.set("token", token);
   url.searchParams.set("identifier", email);
   // nodemailerを使ってメールを送信する
-  const transport = createTransport(nodemailerOptions.server)
+  const transport = createTransport(nodemailerOptions.server);
   const result = await transport.sendMail({
     to: email,
     from: nodemailerOptions.from,
@@ -47,27 +55,34 @@ async function sendEmail(email: string, token: string) {
       <p>${t("account:email.clickOnTheLink")}</p>
       <a href="${url.toString()}">${t("change")}</a>
     `),
-  })
-  const failed = result.rejected.concat(result.pending).filter(Boolean)
+  });
+  const failed = result.rejected.concat(result.pending).filter(Boolean);
   if (failed.length) {
-    throw new Error(`Email (${failed.join(", ")}) could not be sent`)
+    throw new Error(`Email (${failed.join(", ")}) could not be sent`);
   }
 }
 
-export async function sendConfirmationEmail(state: State, formData: FormData): Promise<State> {
-  return await authenticated(async session => {
+export async function sendConfirmationEmail(
+  state: State,
+  formData: FormData,
+): Promise<State> {
+  return await authenticated(async (session) => {
     const lang = getLanguage();
     const { t, z } = await getTranslation(lang);
-    const validated = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
+    const validated = emailSchema(z).safeParse(
+      Object.fromEntries(formData.entries()),
+    );
     if (!validated.success) {
       return {
-        message: t("zod:errors.invalid_string.email", { validation: t("zod:validations.email") }),
+        message: t("zod:errors.invalid_string.email", {
+          validation: t("zod:validations.email"),
+        }),
         success: false,
       };
     }
 
     // メールアドレス更新
-    if (!await existsUserById({ id: session.user.id })) {
+    if (!(await existsUserById({ id: session.user.id }))) {
       return {
         message: t("userNotFound"),
         success: false,
@@ -80,10 +95,10 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
       };
     }
     const maxAge = 24 * 60 * 60;
-    const ONE_DAY_IN_SECONDS = 86400
+    const ONE_DAY_IN_SECONDS = 86400;
     const expires = new Date(
-      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000
-    )
+      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000,
+    );
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
@@ -93,7 +108,7 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
         identifier: validated.data.newEmail,
         userId: session.user.id,
         expires,
-        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE
+        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
       },
     });
 
@@ -101,7 +116,7 @@ export async function sendConfirmationEmail(state: State, formData: FormData): P
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.account.sentEmailChangeConfirmation,
-      details: `email: ${validated.data.newEmail}`
+      details: `email: ${validated.data.newEmail}`,
     });
     return {
       message: t("account:email.emailSent"),
@@ -114,14 +129,19 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  if (!prisma.confirmationToken.count({
-    where: {
-      identifier: identifier,
-      token: hash
-    }
-  })) {
+  if (
+    !prisma.confirmationToken.count({
+      where: {
+        identifier: identifier,
+        token: hash,
+      },
+    })
+  ) {
     console.error("Invalid token");
-    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace,);
+    redirect(
+      `/${lang}/account/manage/email?status=emailUpdateFailed`,
+      RedirectType.replace,
+    );
   }
 
   const tokenData = await prisma.confirmationToken.delete({
@@ -129,36 +149,45 @@ export async function updateEmail(token: string, identifier: string) {
       identifier_token: {
         identifier: identifier,
         token: hash,
-      }
+      },
     },
     select: {
       identifier: true,
       expires: true,
       userId: true,
       purpose: true,
-    }
+    },
   });
-  if (!tokenData || tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE) {
+  if (
+    !tokenData ||
+    tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE
+  ) {
     console.error("Invalid token");
-    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
+    redirect(
+      `/${lang}/account/manage/email?status=emailUpdateFailed`,
+      RedirectType.replace,
+    );
   }
 
   if (tokenData.expires.valueOf() < Date.now()) {
     console.error("Token has expired");
-    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
+    redirect(
+      `/${lang}/account/manage/email?status=emailUpdateFailed`,
+      RedirectType.replace,
+    );
   }
 
   const updated = await startTransaction(async (p) => {
     await updateUserEmail({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      prisma: p
+      prisma: p,
     });
 
     await updateCustomerEmailIfExist({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      prisma: p
+      prisma: p,
     });
     return true;
   }).catch((e) => {
@@ -167,14 +196,20 @@ export async function updateEmail(token: string, identifier: string) {
   });
 
   if (!updated) {
-    redirect(`/${lang}/account/manage/email?status=emailUpdateFailed`, RedirectType.replace);
+    redirect(
+      `/${lang}/account/manage/email?status=emailUpdateFailed`,
+      RedirectType.replace,
+    );
   }
 
   await addAuditLog({
     userId: tokenData.userId,
     action: auditLogActions.account.emailChanged,
-    details: `email: ${tokenData.identifier}`
+    details: `email: ${tokenData.identifier}`,
   });
   revalidatePath(`/${lang}/account/manage/email`);
-  redirect(`/${lang}/account/manage/email?status=emailUpdated`, RedirectType.replace);
+  redirect(
+    `/${lang}/account/manage/email?status=emailUpdated`,
+    RedirectType.replace,
+  );
 }

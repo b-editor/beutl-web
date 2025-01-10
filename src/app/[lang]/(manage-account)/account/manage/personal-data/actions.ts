@@ -17,9 +17,9 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 type State = {
   message?: string;
   success?: boolean;
-}
+};
 
-const emptyStringToUndefined = z.literal('').transform(() => undefined);
+const emptyStringToUndefined = z.literal("").transform(() => undefined);
 const emailSchema = z.object({
   cancel: z.literal("true").optional().or(emptyStringToUndefined),
 });
@@ -36,16 +36,18 @@ async function sendEmail(email: string, token: string, lang: string) {
   url.searchParams.set("token", token);
   url.searchParams.set("identifier", email);
   // nodemailerを使ってメールを送信する
-  const transport = createTransport(nodemailerOptions.server)
+  const transport = createTransport(nodemailerOptions.server);
   const result = await transport.sendMail({
     to: email,
     from: nodemailerOptions.from,
     subject: t("account:data.confirmationAccountDeletion.title"),
-    html: t("account:data.confirmationAccountDeletion.body", { url: url.toString() }),
-  })
-  const failed = result.rejected.concat(result.pending).filter(Boolean)
+    html: t("account:data.confirmationAccountDeletion.body", {
+      url: url.toString(),
+    }),
+  });
+  const failed = result.rejected.concat(result.pending).filter(Boolean);
   if (failed.length) {
-    throw new Error(`Email (${failed.join(", ")}) could not be sent`)
+    throw new Error(`Email (${failed.join(", ")}) could not be sent`);
   }
 }
 

@@ -6,7 +6,9 @@ import { PackageDescriptionForm } from "./package-description-form";
 import { PackageDetailsForm } from "./package-details-form";
 import { ReleaseForm } from "./release-form";
 
-export default async function Page({ params: { name } }: { params: { name: string } }) {
+export default async function Page({
+  params: { name },
+}: { params: { name: string } }) {
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
@@ -32,5 +34,5 @@ export default async function Page({ params: { name } }: { params: { name: strin
         </div>
       </div>
     </>
-  )
+  );
 }

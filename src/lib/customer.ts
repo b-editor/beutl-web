@@ -2,11 +2,14 @@ import { prisma } from "@/prisma";
 import "server-only";
 import { createStripe } from "./stripe/config";
 
-export async function createOrRetrieveCustomerId(email: string, userId: string) {
+export async function createOrRetrieveCustomerId(
+  email: string,
+  userId: string,
+) {
   const customer = await prisma.customer.findFirst({
     where: {
-      userId: userId
-    }
+      userId: userId,
+    },
   });
   const stripe = createStripe();
   let customerId = customer?.stripeId;
@@ -15,8 +18,8 @@ export async function createOrRetrieveCustomerId(email: string, userId: string) 
     if (c?.deleted) {
       prisma.customer.deleteMany({
         where: {
-          userId: userId
-        }
+          userId: userId,
+        },
       });
       customerId = undefined;
     }
@@ -30,8 +33,8 @@ export async function createOrRetrieveCustomerId(email: string, userId: string) 
       await prisma.customer.create({
         data: {
           userId: userId,
-          stripeId: customerId
-        }
+          stripeId: customerId,
+        },
       });
     }
   }

@@ -1,6 +1,12 @@
 "use client";
 
-import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { remToPx } from "@/lib/client-utils";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
@@ -10,20 +16,20 @@ function getFeatures(t: ReturnType<typeof useTranslation>["t"]) {
   return [
     {
       name: "features-cross-platform",
-      text: t("main:crossPlatform")
+      text: t("main:crossPlatform"),
     },
     {
       name: "features-animation",
-      text: t("main:animation")
+      text: t("main:animation"),
     },
     {
       name: "features-effects",
-      text: t("main:richEffects")
+      text: t("main:richEffects"),
     },
     {
       name: "features-extensions",
-      text: t("main:extensible")
-    }
+      text: t("main:extensible"),
+    },
   ];
 }
 
@@ -35,8 +41,9 @@ export default function FeaturesToc({ lang }: { lang: string }) {
   const router = useRouter();
 
   const onscroll = useCallback(() => {
-    const elms: [number, Element][] = Array.from(document.querySelectorAll(".features-header"))
-      .map(i => [i.getBoundingClientRect().top, i]);
+    const elms: [number, Element][] = Array.from(
+      document.querySelectorAll(".features-header"),
+    ).map((i) => [i.getBoundingClientRect().top, i]);
 
     const top = remToPx(3.5 + 4) + window.innerHeight / 2;
 
@@ -51,7 +58,7 @@ export default function FeaturesToc({ lang }: { lang: string }) {
         setSelected(undefined);
         break;
       }
-      if ((prevTop <= top && nextTop > top)) {
+      if (prevTop <= top && nextTop > top) {
         if (selected !== prevElm.id) {
           router.replace(`#${prevElm.id}`, { scroll: false });
         }
@@ -86,20 +93,26 @@ export default function FeaturesToc({ lang }: { lang: string }) {
     };
   }, [onscroll]);
 
-  const handleClick = useCallback((event: MouseEvent) => {
-    if (event.target instanceof HTMLElement) {
-      const value = event.target.getAttribute("value");
-      if (value) {
-        router.push(`#${value}`);
+  const handleClick = useCallback(
+    (event: MouseEvent) => {
+      if (event.target instanceof HTMLElement) {
+        const value = event.target.getAttribute("value");
+        if (value) {
+          router.push(`#${value}`);
+        }
       }
-    }
-  }, [router]);
+    },
+    [router],
+  );
 
   return (
     <div className="flex items-center justify-center md:sticky mx-auto p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-[hsl(var(--card)/60%)] gap-2 backdrop-blur-lg">
       {features.map((feature) => (
-        <Button key={feature.name} onClick={handleClick}
-          value={feature.name} variant={selected === feature.name ? "secondary" : "ghost"}
+        <Button
+          key={feature.name}
+          onClick={handleClick}
+          value={feature.name}
+          variant={selected === feature.name ? "secondary" : "ghost"}
         >
           {feature.text}
         </Button>

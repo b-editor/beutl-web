@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { StandardDrawer } from "./drawer";
-import { NavigationMenuContent, NavigationMenuItem, NavigationMenuLink, NavigationMenuList, navigationMenuTriggerStyle } from "./ui/navigation-menu";
+import {
+  NavigationMenuContent,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+  navigationMenuTriggerStyle,
+} from "./ui/navigation-menu";
 import { CircleUser } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { auth } from "@/auth";
-import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu"
+import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { getTranslation } from "@/app/i18n/server";
 
 export default async function NavBar({ lang }: { lang: string }) {
@@ -17,7 +23,7 @@ export default async function NavBar({ lang }: { lang: string }) {
         <StandardDrawer lang={lang} />
 
         <Link className="decoration-0 flex gap-2 my-auto" href={`/${lang}`}>
-          <img className='align-bottom' src="/img/logo_dark.svg" alt="Logo" />
+          <img className="align-bottom" src="/img/logo_dark.svg" alt="Logo" />
           <h1 className="font-semibold text-xl mt-1">Beutl</h1>
         </Link>
       </div>
@@ -29,71 +35,85 @@ export default async function NavBar({ lang }: { lang: string }) {
           )}
         >
           <NavigationMenuList>
-            <Link href={`https://docs.beutl.beditor.net/${lang}`} prefetch={false} legacyBehavior passHref>
-              <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
+            <Link
+              href={`https://docs.beutl.beditor.net/${lang}`}
+              prefetch={false}
+              legacyBehavior
+              passHref
+            >
+              <NavigationMenuLink
+                className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
+              >
                 {t("docs")}
               </NavigationMenuLink>
             </Link>
-            <Link href={`/${lang}/store`} legacyBehavior passHref className="max-sm:hidden">
-              <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}>
+            <Link
+              href={`/${lang}/store`}
+              legacyBehavior
+              passHref
+              className="max-sm:hidden"
+            >
+              <NavigationMenuLink
+                className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
+              >
                 {t("store")}
               </NavigationMenuLink>
             </Link>
-            {session?.user
-              ? (
-                <NavigationMenuItem>
-                  <NavigationMenuPrimitive.Trigger
-                    className={cn(navigationMenuTriggerStyle(), "group")}>
-                    <CircleUser className="w-5 h-5" />
-                  </NavigationMenuPrimitive.Trigger>
-                  <NavigationMenuContent>
-                    <ul className="flex flex-col gap-3 p-2 w-auto">
-                      <li>
-                        <NavigationMenuLink asChild>
-                          <Link
-                            href={`/${lang}/account`}
-                            className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                          >
-                            {t("account")}
-                          </Link>
-                        </NavigationMenuLink>
-                        <NavigationMenuLink asChild>
-                          <Link
-                            href={`/${lang}/storage`}
-                            className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                          >
-                            {t("storage")}
-                          </Link>
-                        </NavigationMenuLink>
-                        <NavigationMenuLink asChild>
-                          <Link
-                            href={`/${lang}/developer`}
-                            className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                          >
-                            {t("developer")}
-                          </Link>
-                        </NavigationMenuLink>
-                        <NavigationMenuLink asChild>
-                          <Link
-                            href={`/${lang}/library`}
-                            className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                          >
-                            {t("library")}
-                          </Link>
-                        </NavigationMenuLink>
-                      </li>
-                    </ul>
-                  </NavigationMenuContent>
-                </NavigationMenuItem>
-              )
-              : (
-                <Link href={`/${lang}/account`} legacyBehavior passHref>
-                  <NavigationMenuLink className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}>
-                    <CircleUser className="w-5 h-5" />
-                  </NavigationMenuLink>
-                </Link>
-              )
-            }
+            {session?.user ? (
+              <NavigationMenuItem>
+                <NavigationMenuPrimitive.Trigger
+                  className={cn(navigationMenuTriggerStyle(), "group")}
+                >
+                  <CircleUser className="w-5 h-5" />
+                </NavigationMenuPrimitive.Trigger>
+                <NavigationMenuContent>
+                  <ul className="flex flex-col gap-3 p-2 w-auto">
+                    <li>
+                      <NavigationMenuLink asChild>
+                        <Link
+                          href={`/${lang}/account`}
+                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                        >
+                          {t("account")}
+                        </Link>
+                      </NavigationMenuLink>
+                      <NavigationMenuLink asChild>
+                        <Link
+                          href={`/${lang}/storage`}
+                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                        >
+                          {t("storage")}
+                        </Link>
+                      </NavigationMenuLink>
+                      <NavigationMenuLink asChild>
+                        <Link
+                          href={`/${lang}/developer`}
+                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                        >
+                          {t("developer")}
+                        </Link>
+                      </NavigationMenuLink>
+                      <NavigationMenuLink asChild>
+                        <Link
+                          href={`/${lang}/library`}
+                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                        >
+                          {t("library")}
+                        </Link>
+                      </NavigationMenuLink>
+                    </li>
+                  </ul>
+                </NavigationMenuContent>
+              </NavigationMenuItem>
+            ) : (
+              <Link href={`/${lang}/account`} legacyBehavior passHref>
+                <NavigationMenuLink
+                  className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}
+                >
+                  <CircleUser className="w-5 h-5" />
+                </NavigationMenuLink>
+              </Link>
+            )}
           </NavigationMenuList>
 
           <div className={cn("absolute right-0 top-full flex justify-center")}>
@@ -103,9 +123,8 @@ export default async function NavBar({ lang }: { lang: string }) {
               )}
             />
           </div>
-
         </NavigationMenuPrimitive.Root>
       </div>
     </nav>
-  )
+  );
 }

@@ -1,4 +1,4 @@
-import "server-only"; 
+import "server-only";
 import { Hono } from "hono";
 import { prisma } from "@/prisma";
 import { getUserId } from "./auth";
@@ -17,7 +17,7 @@ async function createResponse(pkgId: string, userId: string | null) {
   const currency = await guessCurrency();
   const pkg = await prisma.package.findFirst({
     where: {
-      id: pkgId
+      id: pkgId,
     },
     select: {
       published: true,
@@ -36,9 +36,9 @@ async function createResponse(pkgId: string, userId: string | null) {
               displayName: true,
               bio: true,
               iconFileId: true,
-            }
-          }
-        }
+            },
+          },
+        },
       },
       packagePricing: {
         where: {
@@ -46,27 +46,27 @@ async function createResponse(pkgId: string, userId: string | null) {
             {
               currency: {
                 equals: currency,
-                mode: "insensitive"
-              }
+                mode: "insensitive",
+              },
             },
             {
-              fallback: true
-            }
-          ]
+              fallback: true,
+            },
+          ],
         },
         select: {
           price: true,
           currency: true,
-          fallback: true
-        }
+          fallback: true,
+        },
       },
       Release: {
         select: {
           id: true,
-          version: true
-        }
-      }
-    }
+          version: true,
+        },
+      },
+    },
   });
   if (!pkg || !pkg.published) {
     return null;
@@ -76,19 +76,21 @@ async function createResponse(pkgId: string, userId: string | null) {
     return new SemVer(b.version).compare(a.version);
   });
   const latestReleaseId = pkg.Release?.[0]?.id;
-  const latestRelease = latestReleaseId ? await prisma.release.findFirst({
-    where: {
-      id: latestReleaseId
-    },
-    select: {
-      id: true,
-      version: true,
-      title: true,
-      description: true,
-      targetVersion: true,
-      fileId: true,
-    }
-  }) : null;
+  const latestRelease = latestReleaseId
+    ? await prisma.release.findFirst({
+        where: {
+          id: latestReleaseId,
+        },
+        select: {
+          id: true,
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          fileId: true,
+        },
+      })
+    : null;
 
   let paid = false;
   let owned = false;
@@ -97,8 +99,10 @@ async function createResponse(pkgId: string, userId: string | null) {
     owned = await packageOwned(pkg.id, userId);
   }
 
-  const price = pkg.packagePricing.find(p => p.currency === currency)
-    || pkg.packagePricing.find(p => p.fallback) || pkg.packagePricing[0]
+  const price =
+    pkg.packagePricing.find((p) => p.currency === currency) ||
+    pkg.packagePricing.find((p) => p.fallback) ||
+    pkg.packagePricing[0];
 
   return {
     package: {
@@ -108,7 +112,9 @@ async function createResponse(pkgId: string, userId: string | null) {
       shortDescription: pkg.shortDescription,
       tags: pkg.tags,
       logoId: pkg.iconFileId,
-      logoUrl: pkg.iconFileId ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}` : undefined,
+      logoUrl: pkg.iconFileId
+        ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
+        : undefined,
       currency: price?.currency,
       price: price?.price,
       paid: paid,
@@ -119,19 +125,25 @@ async function createResponse(pkgId: string, userId: string | null) {
         displayName: profile?.displayName || "",
         bio: profile?.bio,
         iconId: profile?.iconFileId,
-        iconUrl: profile?.iconFileId ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}` : undefined,
-      }
+        iconUrl: profile?.iconFileId
+          ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}`
+          : undefined,
+      },
     },
-    latestRelease: latestRelease ? {
-      id: latestRelease.id,
-      version: latestRelease.version,
-      title: latestRelease.title,
-      description: latestRelease.description,
-      targetVersion: latestRelease.targetVersion,
-      fileId: latestRelease.fileId,
-      fileUrl: latestRelease.fileId ? `https://beutl.beditor.net/api/contents/${latestRelease.fileId}` : undefined,
-    } : null
-  }
+    latestRelease: latestRelease
+      ? {
+          id: latestRelease.id,
+          version: latestRelease.version,
+          title: latestRelease.title,
+          description: latestRelease.description,
+          targetVersion: latestRelease.targetVersion,
+          fileId: latestRelease.fileId,
+          fileUrl: latestRelease.fileId
+            ? `https://beutl.beditor.net/api/contents/${latestRelease.fileId}`
+            : undefined,
+        }
+      : null,
+  };
 }
 
 const app = new Hono()
@@ -139,16 +151,18 @@ const app = new Hono()
     const req = c.req.valid("json");
     const userId = await getUserId(c);
     if (!userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), { status: 401 });
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
     }
 
     const user = await prisma.user.findUnique({
       where: {
-        id: userId
+        id: userId,
       },
       select: {
         id: true,
-      }
+      },
     });
     if (!user) {
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
@@ -159,35 +173,39 @@ const app = new Hono()
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
 
-    const paymentRequired = !!await prisma.packagePricing.findFirst({
+    const paymentRequired = !!(await prisma.packagePricing.findFirst({
       where: {
         packageId: pkg.package.id,
         price: {
-          gt: 0
-        }
+          gt: 0,
+        },
       },
       select: {
         id: true,
-      }
-    });
+      },
+    }));
     if (paymentRequired) {
       const paied = await packagePaied(pkg.package.id, user.id);
       if (!paied) {
-        return c.json(await apiErrorResponse("packageIsPrivate"), { status: 402 });
+        return c.json(await apiErrorResponse("packageIsPrivate"), {
+          status: 402,
+        });
       }
     }
 
-    if (!await prisma.userPackage.findFirst({
-      where: {
-        userId: user.id,
-        packageId: pkg.package.id,
-      }
-    })) {
+    if (
+      !(await prisma.userPackage.findFirst({
+        where: {
+          userId: user.id,
+          packageId: pkg.package.id,
+        },
+      }))
+    ) {
       await prisma.userPackage.create({
         data: {
           userId: user.id,
           packageId: pkg.package.id,
-        }
+        },
       });
     }
 
@@ -196,7 +214,9 @@ const app = new Hono()
   .get("/", async (c) => {
     const userId = await getUserId(c);
     if (!userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), { status: 401 });
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
     }
 
     const packages = await prisma.userPackage.findMany({
@@ -205,16 +225,24 @@ const app = new Hono()
       },
       select: {
         packageId: true,
-      }
+      },
     });
 
-    return c.json(await Promise.all(packages.map(async pkg => await createResponse(pkg.packageId, userId))));
+    return c.json(
+      await Promise.all(
+        packages.map(
+          async (pkg) => await createResponse(pkg.packageId, userId),
+        ),
+      ),
+    );
   })
   .delete("/:name", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
     if (!userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), { status: 401 });
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
     }
 
     await prisma.userPackage.deleteMany({
@@ -222,11 +250,11 @@ const app = new Hono()
         userId: userId,
         package: {
           name: name,
-        }
-      }
+        },
+      },
     });
 
     return c.status(204);
   });
 
-export default app
+export default app;

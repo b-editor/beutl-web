@@ -4,17 +4,15 @@ import { localRedirect } from "@/lib/localRedirect";
 
 export default async function Page({
   searchParams: { returnUrl, email },
-  params: { lang }
+  params: { lang },
 }: {
-  searchParams: { returnUrl?: string, email?: string },
-  params: { lang: string }
+  searchParams: { returnUrl?: string; email?: string };
+  params: { lang: string };
 }) {
   const session = await auth();
   if (session) {
     localRedirect(returnUrl || "/");
   }
 
-  return (
-    <Form returnUrl={returnUrl} email={email} lang={lang} />
-  )
+  return <Form returnUrl={returnUrl} email={email} lang={lang} />;
 }
