@@ -127,10 +127,10 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         setReleases(filtered);
         const data = filtered[0];
         setRelease(data);
-        setTitle(data.title);
-        setDescription(data.description);
-        setTargetVersion({ value: data.targetVersion, message: "" });
-        setPublished(data.published);
+        setTitle(data?.title || "");
+        setDescription(data?.description || "");
+        setTargetVersion({ value: data?.targetVersion || "", message: "" });
+        setPublished(data?.published || false);
         setFile(undefined);
         setEdit(false);
         toast({
@@ -239,9 +239,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             onClick={handleSelectFile}
             disabled={saving}
           >
-            {!release.file?.name ? "ファイルを選択"
-              : file ? file.name
-                : release.file.name}
+            {file ? file.name
+              : release?.file?.name ? release.file.name
+                : "ファイルを選択"}
           </Button>
           <div className="flex items-center space-x-2 mt-2">
             <Checkbox
