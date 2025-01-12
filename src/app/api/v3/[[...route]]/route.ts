@@ -5,6 +5,7 @@ import discover from "./discover";
 import files from "./files";
 import library from "./library";
 import packages from "./packages";
+import users from "./users";
 
 export const runtime = "edge";
 
@@ -14,7 +15,8 @@ const route = app
   .route("/discover", discover)
   .route("/files", files)
   .route("/library", library)
-  .route("/packages", packages);
+  .route("/packages", packages)
+  .route("/users", users);
 
 export type AppType = typeof route;
 

@@ -9,7 +9,7 @@ import {
   packagePaied,
   retrievePackages,
 } from "@/lib/store-utils";
-import { getUserId } from "./auth";
+import { getUserId } from "@/lib/api/auth";
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),

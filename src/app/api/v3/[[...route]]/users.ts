@@ -1,11 +1,11 @@
 import "server-only";
 import { Hono } from "hono";
 import { prisma } from "@/prisma";
-import { apiErrorResponse } from "./error";
+import { apiErrorResponse } from "@/lib/api/error";
 import type { Prisma } from "@prisma/client";
-import { getUserId } from "./auth";
+import { getUserId } from "@/lib/api/auth";
 import { guessCurrency } from "@/lib/currency";
-import { getPackages, mapPackage } from "./packages-db";
+import { getPackages, mapPackage } from "@/lib/api/packages-db";
 
 async function getUserProfile(query: Prisma.ProfileWhereInput) {
   const profile = await prisma.profile.findFirst({

@@ -1,10 +1,10 @@
 import "server-only";
 import { Hono } from "hono";
 import { prisma } from "@/prisma";
-import { getUserId } from "./auth";
-import { apiErrorResponse } from "./error";
+import { getUserId } from "@/lib/api/auth";
+import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
-import { getPackage, mapPackage } from "./packages-db";
+import { getPackage, mapPackage } from "@/lib/api/packages-db";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -27,11 +27,13 @@ const app = new Hono()
       });
     }
 
-    return c.json(await mapPackage({
-      userId: userId ?? undefined,
-      currency,
-      pkg,
-    }));
+    return c.json(
+      await mapPackage({
+        userId: userId ?? undefined,
+        currency,
+        pkg,
+      }),
+    );
   })
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");

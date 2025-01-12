@@ -1,8 +1,8 @@
 import "server-only";
 import { Hono } from "hono";
 import { prisma } from "@/prisma";
-import { getUserId } from "./auth";
-import { apiErrorResponse } from "./error";
+import { getUserId } from "@/lib/api/auth";
+import { apiErrorResponse } from "@/lib/api/error";
 
 async function findFile(id: string) {
   return await prisma.file.findFirst({
