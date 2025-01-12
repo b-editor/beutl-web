@@ -3,78 +3,20 @@ import { Hono } from "hono";
 import { prisma } from "@/prisma";
 import { getUserId } from "./auth";
 import { apiErrorResponse } from "./error";
-import { packagePaied } from "@/lib/store-utils";
 import { guessCurrency } from "@/lib/currency";
+import { getPackage, mapPackage } from "./packages-db";
 
 const app = new Hono()
   .get("/:name", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
     const currency = await guessCurrency();
-    const pkg = await prisma.package.findFirst({
-      where: {
+    const pkg = await getPackage({
+      query: {
         name: name,
       },
-      select: {
-        id: true,
-        published: true,
-        userId: true,
-        user: {
-          select: {
-            Profile: {
-              select: {
-                displayName: true,
-                userName: true,
-                bio: true,
-                iconFileId: true,
-              },
-            },
-          },
-        },
-        name: true,
-        displayName: true,
-        description: true,
-        shortDescription: true,
-        webSite: true,
-        tags: true,
-        iconFileId: true,
-        PackageScreenshot: {
-          select: {
-            fileId: true,
-          },
-        },
-        packagePricing: {
-          where: {
-            OR: [
-              {
-                currency: {
-                  equals: currency,
-                  mode: "insensitive",
-                },
-              },
-              {
-                fallback: true,
-              },
-            ],
-          },
-          select: {
-            price: true,
-            currency: true,
-            fallback: true,
-          },
-        },
-        UserPackage: userId
-          ? {
-              where: {
-                userId: userId,
-              },
-              select: {
-                packageId: true,
-              },
-              take: 1,
-            }
-          : undefined,
-      },
+      userId: userId ?? undefined,
+      currency,
     });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
@@ -85,44 +27,11 @@ const app = new Hono()
       });
     }
 
-    const owned = pkg.UserPackage.length > 0;
-    let paied = false;
-    if (userId) {
-      paied = await packagePaied(pkg.id, userId);
-    }
-
-    const price =
-      pkg.packagePricing.find((p) => p.currency === currency) ||
-      pkg.packagePricing.find((p) => p.fallback) ||
-      pkg.packagePricing[0];
-
-    return c.json({
-      id: pkg.id,
-      name: pkg.name,
-      displayName: pkg.displayName,
-      description: pkg.description,
-      shortDescription: pkg.shortDescription,
-      website: pkg.webSite,
-      tags: pkg.tags,
-      logoId: pkg.iconFileId,
-      logoUrl: pkg.iconFileId
-        ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
-        : null,
-      currency: price.currency,
-      price: price,
-      owned: owned,
-      paied: paied,
-      owner: {
-        id: pkg.userId,
-        displayName: pkg.user.Profile?.displayName || "",
-        name: pkg.user.Profile?.userName || "",
-        bio: pkg.user.Profile?.bio,
-        iconId: pkg.user.Profile?.iconFileId,
-        iconUrl: pkg.user.Profile?.iconFileId
-          ? `https://beutl.beditor.net/api/contents/${pkg.user.Profile?.iconFileId}`
-          : null,
-      },
-    });
+    return c.json(await mapPackage({
+      userId: userId ?? undefined,
+      currency,
+      pkg,
+    }));
   })
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");
