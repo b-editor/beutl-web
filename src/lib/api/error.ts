@@ -3,7 +3,7 @@ import { getTranslation } from "@/app/i18n/server";
 
 export const errorCodes = {
   unknown: 0,
-  
+
   // 認証
   authenticationIsRequired: 1,
   doNotHavePermissions: 2,

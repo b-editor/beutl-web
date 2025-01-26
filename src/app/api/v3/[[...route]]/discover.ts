@@ -55,7 +55,7 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
       displayName: profile?.displayName || "",
       bio: profile?.bio,
       iconId: profile?.iconFileId,
-      iconUrl: getContentUrl(profile?.iconFileId)
+      iconUrl: getContentUrl(profile?.iconFileId),
     },
   };
 }
