@@ -58,7 +58,7 @@ async function signInWithEmail(formData: FormData, z: Zod): Promise<State> {
   }
   const { email, returnUrl } = validationResult.data;
 
-  await signIn("nodemailer", {
+  await signIn("resend", {
     email,
     redirectTo: returnUrl || `/${getLanguage()}`,
   });

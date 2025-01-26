@@ -1,13 +1,9 @@
 "use server";
 
-import { createTransport } from "nodemailer";
 import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
-import {
-  options as nodemailerOptions,
-  renderUnsafeEmailTemplate,
-} from "@/nodemailer";
+import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
@@ -45,21 +41,14 @@ async function sendEmail(email: string, token: string) {
   url.searchParams.forEach((_, key) => url.searchParams.delete(key));
   url.searchParams.set("token", token);
   url.searchParams.set("identifier", email);
-  // nodemailerを使ってメールを送信する
-  const transport = createTransport(nodemailerOptions.server);
-  const result = await transport.sendMail({
+  await sendEmailUsingResend({
     to: email,
-    from: nodemailerOptions.from,
     subject: t("account:email.changeEmail"),
-    html: renderUnsafeEmailTemplate(`
+    body: `
       <p>${t("account:email.clickOnTheLink")}</p>
       <a href="${url.toString()}">${t("change")}</a>
-    `),
+    `,
   });
-  const failed = result.rejected.concat(result.pending).filter(Boolean);
-  if (failed.length) {
-    throw new Error(`Email (${failed.join(", ")}) could not be sent`);
-  }
 }
 
 export async function sendConfirmationEmail(

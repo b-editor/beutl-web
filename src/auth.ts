@@ -3,9 +3,9 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/prisma";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
-import Nodemailer from "@auth/core/providers/nodemailer";
+import Resend from "@auth/core/providers/resend";
 import Passkey from "@auth/core/providers/passkey";
-import { options as nodemailerOptions } from "./nodemailer";
+import { options as resendOptions } from "./resend";
 import Credentials from "@auth/core/providers/credentials";
 import { updateAuthenticatorUsedAt } from "./lib/db/authenticator";
 import { addAuditLog, auditLogActions } from "./lib/audit-log";
@@ -16,7 +16,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Google,
     GitHub,
     // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-    Nodemailer(nodemailerOptions) as any,
+    Resend(resendOptions) as any,
     // サーバー内部で使う
     //  - src/app/(manage-account)/account/manage/email/actions.ts
     Credentials({

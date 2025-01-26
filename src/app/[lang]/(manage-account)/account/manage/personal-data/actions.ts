@@ -1,11 +1,10 @@
 "use server";
 
-import { createTransport } from "nodemailer";
-import { authenticated, authOrSignIn } from "@/lib/auth-guard";
+import { authenticated } from "@/lib/auth-guard";
 import { prisma } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { options as nodemailerOptions } from "@/nodemailer";
+import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
@@ -35,20 +34,13 @@ async function sendEmail(email: string, token: string, lang: string) {
   url.searchParams.forEach((_, key) => url.searchParams.delete(key));
   url.searchParams.set("token", token);
   url.searchParams.set("identifier", email);
-  // nodemailerを使ってメールを送信する
-  const transport = createTransport(nodemailerOptions.server);
-  const result = await transport.sendMail({
+  await sendEmailUsingResend({
     to: email,
-    from: nodemailerOptions.from,
     subject: t("account:data.confirmationAccountDeletion.title"),
-    html: t("account:data.confirmationAccountDeletion.body", {
+    body: t("account:data.confirmationAccountDeletion.body", {
       url: url.toString(),
     }),
   });
-  const failed = result.rejected.concat(result.pending).filter(Boolean);
-  if (failed.length) {
-    throw new Error(`Email (${failed.join(", ")}) could not be sent`);
-  }
 }
 
 export async function submit(state: State, formData: FormData): Promise<State> {

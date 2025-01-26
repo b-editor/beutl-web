@@ -81,6 +81,6 @@ async function signInWithEmail(
     redirect(`/${lang}/account/sign-up?${params.toString()}`);
   }
 
-  await signIn("nodemailer", { email, redirectTo: returnUrl || `/${lang}` });
+  await signIn("resend", { email, redirectTo: returnUrl || `/${lang}` });
   return {};
 }
