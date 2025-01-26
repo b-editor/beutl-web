@@ -115,17 +115,17 @@ export async function retrievePackage(name: string) {
 export type ListedPackage = {
   id: string;
   name: string;
-  displayName?: string;
+  displayName: string | null;
   shortDescription: string;
-  userName?: string;
+  userName: string | null;
   userId: string;
-  iconFileUrl?: string;
-  iconFileId?: string;
+  iconFileUrl: string | null;
+  iconFileId: string | null;
   tags: string[];
-  price?: {
+  price: {
     price: number;
     currency: string;
-  };
+  } | null;
 };
 
 export async function retrievePackages(
@@ -215,17 +215,17 @@ export async function retrievePackages(
         return {
           id: pkg.id,
           name: pkg.name,
-          displayName: pkg.displayName || undefined,
+          displayName: pkg.displayName,
           shortDescription: pkg.shortDescription,
-          userName: pkg.user.Profile?.userName || undefined,
+          userName: pkg.user.Profile?.userName || null,
           userId: pkg.userId,
-          iconFileUrl: url || undefined,
-          iconFileId: pkg.iconFileId || undefined,
+          iconFileUrl: url,
+          iconFileId: pkg.iconFileId,
           tags: pkg.tags,
           price:
             pkg.packagePricing.find((p) => p.currency === currency) ||
             pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing[0],
+            pkg.packagePricing?.[0],
         };
       }),
     );
@@ -284,12 +284,12 @@ export async function retrievePackages(
       return {
         id: pkg.id,
         name: pkg.name,
-        displayName: pkg.displayName || undefined,
+        displayName: pkg.displayName,
         shortDescription: pkg.shortDescription,
-        userName: pkg.user.Profile?.userName || undefined,
+        userName: pkg.user.Profile?.userName || null,
         userId: pkg.userId,
-        iconFileUrl: url || undefined,
-        iconFileId: pkg.iconFileId || undefined,
+        iconFileUrl: url,
+        iconFileId: pkg.iconFileId,
         tags: pkg.tags,
         price:
           pkg.packagePricing.find((p) => p.currency === currency) ||
