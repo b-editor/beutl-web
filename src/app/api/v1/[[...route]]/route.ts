@@ -1,27 +1,19 @@
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
-
-import discover from "./discover";
-import files from "./files";
-import library from "./library";
-import packages from "./packages";
-import users from "./users";
-import user from "./user";
-import { apiErrorResponse } from "@/lib/api/error";
 import { HTTPException } from "hono/http-exception";
+
+import app_ from "./app";
+import account from "./account";
+import { apiErrorResponse } from "@/lib/api/error";
 import { JwtTokenExpired } from "hono/utils/jwt/types";
 
 export const runtime = "edge";
 
-const app = new Hono().basePath("/api/v3");
+const app = new Hono().basePath("/api/v1");
 
 const route = app
-  .route("/discover", discover)
-  .route("/files", files)
-  .route("/account/library", library)
-  .route("/packages", packages)
-  .route("/users", users)
-  .route("/user", user)
+  .route("/app", app_)
+  .route("/account", account)
   .onError(async (err, c) => {
     console.error(err);
     if (err instanceof HTTPException) {
@@ -41,4 +33,3 @@ export type AppType = typeof route;
 
 export const GET = handle(app);
 export const POST = handle(app);
-export const DELETE = handle(app);

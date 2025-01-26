@@ -2,6 +2,8 @@ import "server-only";
 import { getTranslation } from "@/app/i18n/server";
 
 export const errorCodes = {
+  unknown: 0,
+  
   // 認証
   authenticationIsRequired: 1,
   doNotHavePermissions: 2,
@@ -51,6 +53,7 @@ export const errorCodes = {
 export type ApiErrorResponse = {
   error_code: keyof typeof errorCodes;
   message: string;
+  documentation_url: string | null;
 };
 
 export async function apiErrorResponse(
@@ -60,5 +63,6 @@ export async function apiErrorResponse(
   return {
     error_code: errorCode,
     message: t(`api-errors:${errorCode}`),
+    documentation_url: null,
   };
 }

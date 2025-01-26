@@ -2,42 +2,16 @@ import "server-only";
 import { Hono } from "hono";
 import { prisma } from "@/prisma";
 import { apiErrorResponse } from "@/lib/api/error";
-import type { Prisma } from "@prisma/client";
 import { getUserId } from "@/lib/api/auth";
 import { guessCurrency } from "@/lib/currency";
 import { getPackages, mapPackage } from "@/lib/api/packages-db";
-
-async function getUserProfile(query: Prisma.ProfileWhereInput) {
-  const profile = await prisma.profile.findFirst({
-    where: query,
-    select: {
-      userId: true,
-      displayName: true,
-      iconFileId: true,
-      userName: true,
-      bio: true,
-    },
-  });
-  if (!profile) {
-    return null;
-  }
-  return {
-    id: profile.userId,
-    name: profile.userName,
-    displayName: profile.displayName,
-    bio: profile.bio,
-    iconId: profile.iconFileId,
-    iconUrl: profile.iconFileId
-      ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}`
-      : null,
-  };
-}
+import { getUserProfile } from "./user";
 
 const app = new Hono()
   .get("/:name", async (c) => {
     const name = c.req.param("name");
     const profile = await getUserProfile({
-      userId: {
+      userName: {
         equals: name,
         mode: "insensitive",
       },
@@ -56,7 +30,7 @@ const app = new Hono()
     const userId = (
       await prisma.profile.findFirst({
         where: {
-          userId: {
+          userName: {
             equals: name,
             mode: "insensitive",
           },
@@ -90,21 +64,6 @@ const app = new Hono()
         ),
       ),
     );
-  })
-  .get("/", async (c) => {
-    const currentUserId = await getUserId(c);
-    if (!currentUserId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), {
-        status: 401,
-      });
-    }
-    const profile = await getUserProfile({
-      userId: currentUserId,
-    });
-    if (!profile) {
-      return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
-    }
-    return c.json(profile);
   });
 
 export default app;

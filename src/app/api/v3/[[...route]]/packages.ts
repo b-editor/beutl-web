@@ -5,6 +5,7 @@ import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
 import { getPackage, mapPackage } from "@/lib/api/packages-db";
+import { getContentUrl } from "@/lib/db/file";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -80,9 +81,7 @@ const app = new Hono()
         description: r.description,
         targetVersion: r.targetVersion,
         fileId: r.fileId,
-        fileUrl: r.fileId
-          ? `https://beutl.beditor.net/api/contents/${r.fileId}`
-          : null,
+        fileUrl: getContentUrl(r.fileId),
       })),
     );
   })
@@ -141,9 +140,7 @@ const app = new Hono()
       description: release.description,
       targetVersion: release.targetVersion,
       fileId: release.fileId,
-      fileUrl: release.fileId
-        ? `https://beutl.beditor.net/api/contents/${release.fileId}`
-        : null,
+      fileUrl: getContentUrl(release.fileId),
     });
   });
 

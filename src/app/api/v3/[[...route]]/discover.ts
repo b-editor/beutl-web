@@ -10,6 +10,7 @@ import {
   retrievePackages,
 } from "@/lib/store-utils";
 import { getUserId } from "@/lib/api/auth";
+import { getContentUrl } from "@/lib/db/file";
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),
@@ -42,12 +43,10 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
     displayName: pkg.displayName,
     shortDescription: pkg.shortDescription,
     tags: pkg.tags,
-    logoId: pkg.iconFileId,
-    logoUrl: pkg.iconFileId
-      ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
-      : undefined,
-    currency: pkg.price?.currency,
-    price: pkg.price?.price,
+    logoId: pkg.iconFileId || null,
+    logoUrl: getContentUrl(pkg.iconFileId),
+    currency: pkg.price?.currency || null,
+    price: pkg.price?.price || null,
     paid: paid,
     owned: owned,
     owner: {
@@ -56,9 +55,7 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
       displayName: profile?.displayName || "",
       bio: profile?.bio,
       iconId: profile?.iconFileId,
-      iconUrl: profile?.iconFileId
-        ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}`
-        : undefined,
+      iconUrl: getContentUrl(profile?.iconFileId)
     },
   };
 }

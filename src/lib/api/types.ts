@@ -3,8 +3,8 @@ export interface ProfileResponse {
   name: string;
   displayName: string;
   bio: string;
-  iconId?: string;
-  iconUrl?: string;
+  iconId: string | null;
+  iconUrl: string | null;
 }
 
 export interface SimplePackageResponse {
@@ -13,10 +13,10 @@ export interface SimplePackageResponse {
   displayName: string;
   shortDescription: string;
   tags: string[];
-  logoId?: string;
-  logoUrl?: string;
-  currency?: string;
-  price?: number;
+  logoId: string | null;
+  logoUrl: string | null;
+  currency: string | null;
+  price: number | null;
   owned: boolean;
   paied: boolean;
   owner: ProfileResponse;
@@ -30,11 +30,11 @@ export interface PackageResponse {
   shortDescription: string;
   website: string;
   tags: string[];
-  logoId?: string;
-  logoUrl?: string;
+  logoId: string | null;
+  logoUrl: string | null;
   screenshots: string[];
-  currency?: string;
-  price?: number;
+  currency: string | null;
+  price: number | null;
   paid: boolean;
   owned: boolean;
   owner: ProfileResponse;
@@ -45,14 +45,14 @@ export interface ReleaseResponse {
   version: string;
   title: string;
   description: string;
-  targetVersion?: string;
-  fileId?: string;
-  fileUrl?: string;
+  targetVersion: string | null;
+  fileId: string | null;
+  fileUrl: string | null;
 }
 
 export interface AcquirePackageResponse {
   package: SimplePackageResponse;
-  latestRelease?: ReleaseResponse;
+  latestRelease: ReleaseResponse | null;
 }
 
 export interface FileResponse {
@@ -61,5 +61,5 @@ export interface FileResponse {
   contentType: string;
   downloadUrl: string;
   size: bigint;
-  sha256?: string;
+  sha256: string | null;
 }

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { prisma } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
+import { getContentUrl } from "@/lib/db/file";
 
 async function findFile(id: string) {
   return await prisma.file.findFirst({
@@ -46,7 +47,7 @@ const app = new Hono().get("/:id", async (c) => {
     id: file.id,
     name: file.name,
     contentType: file.mimeType,
-    downloadUrl: `https://beutl.beditor.net/api/contents/${file.id}`,
+    downloadUrl: getContentUrl(file.id),
     size: file.size,
     sha256: file.sha256,
   });

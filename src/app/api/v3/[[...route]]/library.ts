@@ -8,6 +8,7 @@ import { zValidator } from "@hono/zod-validator";
 import { packageOwned, packagePaied } from "@/lib/store-utils";
 import { guessCurrency } from "@/lib/currency";
 import { SemVer } from "semver";
+import { getContentUrl } from "@/lib/db/file";
 
 const acquireSchema = z.object({
   packageId: z.string(),
@@ -112,22 +113,18 @@ async function createResponse(pkgId: string, userId: string | null) {
       shortDescription: pkg.shortDescription,
       tags: pkg.tags,
       logoId: pkg.iconFileId,
-      logoUrl: pkg.iconFileId
-        ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
-        : undefined,
-      currency: price?.currency,
-      price: price?.price,
+      logoUrl: getContentUrl(pkg.iconFileId),
+      currency: price?.currency || null,
+      price: price?.price || null,
       paid: paid,
       owned: owned,
       owner: {
         id: pkg.userId,
         name: profile?.userName || "",
         displayName: profile?.displayName || "",
-        bio: profile?.bio,
-        iconId: profile?.iconFileId,
-        iconUrl: profile?.iconFileId
-          ? `https://beutl.beditor.net/api/contents/${profile.iconFileId}`
-          : undefined,
+        bio: profile?.bio || null,
+        iconId: profile?.iconFileId || null,
+        iconUrl: getContentUrl(profile?.iconFileId),
       },
     },
     latestRelease: latestRelease
@@ -138,9 +135,7 @@ async function createResponse(pkgId: string, userId: string | null) {
           description: latestRelease.description,
           targetVersion: latestRelease.targetVersion,
           fileId: latestRelease.fileId,
-          fileUrl: latestRelease.fileId
-            ? `https://beutl.beditor.net/api/contents/${latestRelease.fileId}`
-            : undefined,
+          fileUrl: getContentUrl(latestRelease.fileId),
         }
       : null,
   };

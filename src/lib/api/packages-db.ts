@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/prisma";
 import type { Prisma } from "@prisma/client";
 import { packagePaied } from "@/lib/store-utils";
+import { getContentUrl } from "@/lib/db/file";
 
 export async function getPackage({
   userId,
@@ -12,7 +13,7 @@ export async function getPackage({
   query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
-  return prisma.package.findFirst({
+  const result = await prisma.package.findFirst({
     where: query,
     select: {
       id: true,
@@ -75,6 +76,13 @@ export async function getPackage({
         : undefined,
     },
   });
+
+  return (
+    result && {
+      ...result,
+      UserPackage: result.UserPackage as typeof result.UserPackage | undefined,
+    }
+  );
 }
 
 export async function getPackages({
@@ -160,7 +168,7 @@ export async function mapPackage({
   currency?: string;
   pkg: NonNullable<Awaited<ReturnType<typeof getPackage>>>;
 }) {
-  const owned = pkg.UserPackage.length > 0;
+  const owned = pkg.UserPackage && pkg.UserPackage.length > 0;
   let paied = false;
   if (userId) {
     paied = await packagePaied(pkg.id, userId);
@@ -179,23 +187,20 @@ export async function mapPackage({
     shortDescription: pkg.shortDescription,
     website: pkg.webSite,
     tags: pkg.tags,
+    screenshots: pkg.PackageScreenshot.map((i) => getContentUrl(i.fileId)),
     logoId: pkg.iconFileId,
-    logoUrl: pkg.iconFileId
-      ? `https://beutl.beditor.net/api/contents/${pkg.iconFileId}`
-      : null,
+    logoUrl: getContentUrl(pkg.iconFileId),
     currency: price.currency,
-    price: price,
+    price: price.price,
     owned: owned,
-    paied: paied,
+    paid: paied,
     owner: {
       id: pkg.userId,
       displayName: pkg.user.Profile?.displayName || "",
       name: pkg.user.Profile?.userName || "",
-      bio: pkg.user.Profile?.bio,
-      iconId: pkg.user.Profile?.iconFileId,
-      iconUrl: pkg.user.Profile?.iconFileId
-        ? `https://beutl.beditor.net/api/contents/${pkg.user.Profile?.iconFileId}`
-        : null,
+      bio: pkg.user.Profile?.bio || null,
+      iconId: pkg.user.Profile?.iconFileId || null,
+      iconUrl: getContentUrl(pkg.user.Profile?.iconFileId),
     },
   };
 }
