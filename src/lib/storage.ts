@@ -6,7 +6,6 @@ import {
 } from "@aws-sdk/client-s3";
 import type { PrismaTransaction } from "./db/transaction";
 import { createFile, deleteFile, retrieveFilesByUserId } from "./db/file";
-import { randomUUID, createHash } from "node:crypto";
 
 export const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT as string,
@@ -73,7 +72,7 @@ export async function createStorageFile({
       : `${file.name} (${i})`;
   }
 
-  const objectKey = randomUUID();
+  const objectKey = crypto.randomUUID();
   const array = new Uint8Array(await file.arrayBuffer());
   await s3.send(
     new PutObjectCommand({
@@ -84,9 +83,11 @@ export async function createStorageFile({
     }),
   );
   // sha256を計算
-  const hash = createHash("sha256");
-  hash.update(array);
-  const sha256 = hash.digest("hex");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", array);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
   return await createFile({
     objectKey,
@@ -95,6 +96,6 @@ export async function createStorageFile({
     mimeType: file.type,
     userId: userId,
     visibility: visibility,
-    sha256,
+    sha256: hashHex,
   });
 }

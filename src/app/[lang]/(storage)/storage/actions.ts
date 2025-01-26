@@ -7,7 +7,6 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/storage";
@@ -215,7 +214,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
         : `${file.name} (${i})`;
     }
 
-    const objectKey = randomUUID();
+    const objectKey = crypto.randomUUID();
     await s3.send(
       new PutObjectCommand({
         Bucket: process.env.S3_BUCKET as string,
