@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { SessionProvider } from "next-auth/react";
 import { LanguageProvider } from "./i18n/client";
 
+export const runtime = "edge";
+
 const notoSansJP = Noto_Sans_JP({
   subsets: ["latin"],
   variable: "--font-noto-sans-jp",
