@@ -65,14 +65,14 @@ export async function getPackage({
       },
       UserPackage: userId
         ? {
-            where: {
-              userId: userId,
-            },
-            select: {
-              packageId: true,
-            },
-            take: 1,
-          }
+          where: {
+            userId: userId,
+          },
+          select: {
+            packageId: true,
+          },
+          take: 1,
+        }
         : undefined,
     },
   });
@@ -146,14 +146,14 @@ export async function getPackages({
       },
       UserPackage: userId
         ? {
-            where: {
-              userId: userId,
-            },
-            select: {
-              packageId: true,
-            },
-            take: 1,
-          }
+          where: {
+            userId: userId,
+          },
+          select: {
+            packageId: true,
+          },
+          take: 1,
+        }
         : undefined,
     },
   });
@@ -190,8 +190,8 @@ export async function mapPackage({
     screenshots: pkg.PackageScreenshot.map((i) => getContentUrl(i.fileId)),
     logoId: pkg.iconFileId,
     logoUrl: getContentUrl(pkg.iconFileId),
-    currency: price.currency,
-    price: price.price,
+    currency: price?.currency || null,
+    price: price?.price || null,
     owned: owned,
     paid: paied,
     owner: {

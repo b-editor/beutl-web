@@ -225,7 +225,8 @@ export async function retrievePackages(
           price:
             pkg.packagePricing.find((p) => p.currency === currency) ||
             pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing?.[0],
+            pkg.packagePricing?.[0] ||
+            null,
         };
       }),
     );
@@ -294,7 +295,8 @@ export async function retrievePackages(
         price:
           pkg.packagePricing.find((p) => p.currency === currency) ||
           pkg.packagePricing.find((p) => p.fallback) ||
-          pkg.packagePricing[0],
+          pkg.packagePricing[0] ||
+          null,
       };
     }),
   );
