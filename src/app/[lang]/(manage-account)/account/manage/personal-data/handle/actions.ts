@@ -7,13 +7,13 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`)
+  const hash = await createHash(`${token}${secret}`);
   const tokenData = await prisma.confirmationToken.delete({
     where: {
       identifier_token: {
         identifier: identifier,
         token: hash,
-      }
+      },
     },
     select: {
       identifier: true,
@@ -22,7 +22,10 @@ export async function deleteUser(token: string, identifier: string) {
       purpose: true,
     },
   });
-  if (!tokenData || tokenData.purpose !== ConfirmationTokenPurpose.ACCOUNT_DELETE) {
+  if (
+    !tokenData ||
+    tokenData.purpose !== ConfirmationTokenPurpose.ACCOUNT_DELETE
+  ) {
     throw new Error("Invalid token");
   }
 

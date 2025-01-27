@@ -3,14 +3,15 @@ import { prisma as sharedPrisma } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function retrieveDevPackagesByUserId({
-  userId, prisma
+  userId,
+  prisma,
 }: {
-  userId: string,
-  prisma?: PrismaTransaction
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.findMany({
     where: {
-      userId: userId
+      userId: userId,
     },
     select: {
       id: true,
@@ -19,32 +20,34 @@ export async function retrieveDevPackagesByUserId({
       published: true,
       iconFile: {
         select: {
-          id: true
-        }
+          id: true,
+        },
       },
       Release: {
         select: {
-          version: true
-        }
-      }
-    }
+          version: true,
+        },
+      },
+    },
   });
 }
 
 export async function retrieveDevPackageByName({
-  name, userId, prisma
+  name,
+  userId,
+  prisma,
 }: {
-  name: string,
-  userId: string,
-  prisma?: PrismaTransaction
+  name: string;
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.findFirst({
     where: {
       name: {
         equals: name,
-        mode: "insensitive"
+        mode: "insensitive",
       },
-      userId: userId
+      userId: userId,
     },
     select: {
       id: true,
@@ -60,15 +63,15 @@ export async function retrieveDevPackageByName({
           Profile: {
             select: {
               userName: true,
-            }
-          }
-        }
+            },
+          },
+        },
       },
       iconFile: {
         select: {
           id: true,
           objectKey: true,
-        }
+        },
       },
       PackageScreenshot: {
         select: {
@@ -77,12 +80,12 @@ export async function retrieveDevPackageByName({
             select: {
               id: true,
               objectKey: true,
-            }
-          }
+            },
+          },
         },
         orderBy: {
-          order: "asc"
-        }
+          order: "asc",
+        },
       },
       Release: {
         select: {
@@ -94,37 +97,40 @@ export async function retrieveDevPackageByName({
           published: true,
           file: {
             select: {
-              name: true
-            }
-          }
-        }
-      }
-    }
+              name: true,
+            },
+          },
+        },
+      },
+    },
   });
 }
 
 export async function existsPackageName({
-  name, prisma
+  name,
+  prisma,
 }: {
-  name: string,
-  prisma?: PrismaTransaction
+  name: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.count({
     where: {
       name: {
         equals: name,
-        mode: "insensitive"
-      }
-    }
+        mode: "insensitive",
+      },
+    },
   });
 }
 
 export async function createDevPackage({
-  name, userId, prisma
+  name,
+  userId,
+  prisma,
 }: {
-  name: string,
-  userId: string,
-  prisma?: PrismaTransaction
+  name: string;
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.create({
     data: {
@@ -133,91 +139,104 @@ export async function createDevPackage({
       description: "",
       shortDescription: "",
       webSite: "",
-      published: false
-    }
+      published: false,
+    },
   });
 }
 
 export async function getUserIdFromPackageId({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
-  return (await (prisma || sharedPrisma).package.findFirst({
-    where: {
-      id: packageId
-    },
-    select: {
-      userId: true
-    }
-  }))?.userId;
+  return (
+    await (prisma || sharedPrisma).package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        userId: true,
+      },
+    })
+  )?.userId;
 }
 
 export async function getPackageNameFromPackageId({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
-  return (await (prisma || sharedPrisma).package.findFirst({
-    where: {
-      id: packageId
-    },
-    select: {
-      name: true
-    }
-  }))?.name;
+  return (
+    await (prisma || sharedPrisma).package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        name: true,
+      },
+    })
+  )?.name;
 }
 
 export async function updateDevPackageDisplay({
-  packageId, displayName, shortDescription, prisma
+  packageId,
+  displayName,
+  shortDescription,
+  prisma,
 }: {
-  packageId: string,
-  displayName: string,
-  shortDescription: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  displayName: string;
+  shortDescription: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.update({
     where: {
-      id: packageId
+      id: packageId,
     },
     data: {
       displayName: displayName,
-      shortDescription: shortDescription
+      shortDescription: shortDescription,
     },
     select: {
-      name: true
-    }
+      name: true,
+    },
   });
 }
 
 export async function updateDevPackageDescription({
-  packageId, description, prisma
+  packageId,
+  description,
+  prisma,
 }: {
-  packageId: string,
-  description: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  description: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.update({
     where: {
-      id: packageId
+      id: packageId,
     },
     data: {
-      description: description
+      description: description,
     },
     select: {
-      name: true
-    }
+      name: true,
+    },
   });
 }
 
 export async function updateDevPackagePublished({
-  published, packageId, prisma
+  published,
+  packageId,
+  prisma,
 }: {
-  published: boolean,
-  packageId: string,
-  prisma?: PrismaTransaction
+  published: boolean;
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.update({
     where: {
@@ -233,34 +252,37 @@ export async function updateDevPackagePublished({
 }
 
 export async function updateDevPackageIconFile({
-  packageId, fileId, prisma
+  packageId,
+  fileId,
+  prisma,
 }: {
-  packageId: string,
-  fileId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  fileId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.update({
     where: {
-      id: packageId
+      id: packageId,
     },
     data: {
-      iconFileId: fileId
+      iconFileId: fileId,
     },
     select: {
-      name: true
-    }
+      name: true,
+    },
   });
 }
 
 export async function retrieveDevPackageDependsFile({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
   const pkg = await (prisma || sharedPrisma).package.findFirstOrThrow({
     where: {
-      id: packageId
+      id: packageId,
     },
     select: {
       PackageScreenshot: {
@@ -301,150 +323,166 @@ export async function retrieveDevPackageDependsFile({
 }
 
 export async function retrieveDevPackageIconFile({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
-  return (await (prisma || sharedPrisma).package.findFirst({
-    where: {
-      id: packageId
-    },
-    select: {
-      iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-          size: true,
-        }
-      }
-    }
-  }))?.iconFile;
+  return (
+    await (prisma || sharedPrisma).package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        iconFile: {
+          select: {
+            id: true,
+            objectKey: true,
+            size: true,
+          },
+        },
+      },
+    })
+  )?.iconFile;
 }
 
 export async function retrieveDevPackageScreenshots({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).packageScreenshot.findMany({
     where: {
-      packageId: packageId
+      packageId: packageId,
     },
     select: {
       order: true,
-      fileId: true
+      fileId: true,
     },
     orderBy: {
-      order: "asc"
-    }
+      order: "asc",
+    },
   });
 }
 
 export async function retrieveDevPackageLastScreenshotOrder({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).packageScreenshot.findFirst({
     where: {
-      packageId: packageId
+      packageId: packageId,
     },
     select: {
-      order: true
+      order: true,
     },
     orderBy: {
-      order: "desc"
-    }
+      order: "desc",
+    },
   });
 }
 
 export async function createDevPackageScreenshot({
-  packageId, fileId, order, prisma
+  packageId,
+  fileId,
+  order,
+  prisma,
 }: {
-  packageId: string,
-  fileId: string,
-  order: number,
-  prisma?: PrismaTransaction
+  packageId: string;
+  fileId: string;
+  order: number;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).packageScreenshot.create({
     data: {
       packageId: packageId,
       fileId: fileId,
-      order: order
-    }
+      order: order,
+    },
   });
 }
 
 export async function updateDevPackageScreenshotOrder({
-  packageId, fileId, order, prisma
+  packageId,
+  fileId,
+  order,
+  prisma,
 }: {
-  packageId: string,
-  fileId: string,
-  order: number,
-  prisma?: PrismaTransaction
+  packageId: string;
+  fileId: string;
+  order: number;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).packageScreenshot.update({
     where: {
       packageId_fileId: {
         packageId: packageId,
-        fileId: fileId
-      }
+        fileId: fileId,
+      },
     },
     data: {
-      order: order
-    }
+      order: order,
+    },
   });
 }
 
 export async function updateDevPackageTags({
-  packageId, tags, prisma
+  packageId,
+  tags,
+  prisma,
 }: {
-  packageId: string,
-  tags: string[],
-  prisma?: PrismaTransaction
+  packageId: string;
+  tags: string[];
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.update({
     where: {
-      id: packageId
+      id: packageId,
     },
     data: {
-      tags: tags
+      tags: tags,
     },
     select: {
-      name: true
-    }
+      name: true,
+    },
   });
 }
 
 export async function deleteDevPackageScreenshot({
-  packageId, fileId, prisma
+  packageId,
+  fileId,
+  prisma,
 }: {
-  packageId: string,
-  fileId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  fileId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).packageScreenshot.delete({
     where: {
       packageId_fileId: {
         packageId: packageId,
-        fileId: fileId
-      }
-    }
+        fileId: fileId,
+      },
+    },
   });
 }
 
 export async function deleteDevPackage({
-  packageId, prisma
+  packageId,
+  prisma,
 }: {
-  packageId: string,
-  prisma?: PrismaTransaction
+  packageId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).package.delete({
     where: {
-      id: packageId
-    }
+      id: packageId,
+    },
   });
 }

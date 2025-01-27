@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 
-export default function Page({params:{lang}}: {params: {lang: string}}) {
+export default function Page({
+  params: { lang },
+}: { params: { lang: string } }) {
   redirect(`/${lang}/docs/telemetry`);
 }

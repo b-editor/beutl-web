@@ -1,18 +1,24 @@
 "use client";
 
 import { changeFileVisibility, deleteFile, getTemporaryUrl } from "./actions";
-import type { ColumnDef } from "@tanstack/react-table"
-import { ArrowUpDown, File as FileIcon, Image as ImageIcon, Loader2, MoreHorizontal } from "lucide-react"
+import type { ColumnDef } from "@tanstack/react-table";
+import {
+  ArrowUpDown,
+  File as FileIcon,
+  Image as ImageIcon,
+  Loader2,
+  MoreHorizontal,
+} from "lucide-react";
 
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+} from "@/components/ui/dropdown-menu";
 import { formatBytes } from "@/lib/utils";
 import type { FileVisibility } from "@prisma/client";
 import { useCallback, useTransition } from "react";
@@ -57,7 +63,7 @@ export function getColumns(lang: string): ColumnDef<File>[] {
             {t("storage:fileName")}
             <ArrowUpDown className="ml-2 h-4 w-4" />
           </Button>
-        )
+        );
       },
       cell: ({ row }) => {
         const mimeType = row.original.mimeType;
@@ -83,8 +89,13 @@ export function getColumns(lang: string): ColumnDef<File>[] {
         return (
           <div className="flex gap-2 items-center">
             <Button variant="ghost" size="icon" onClick={handleClick}>
-              {pending ? <Loader2 className="h-4 w-4 animate-spin" />
-                : mimeType.startsWith("image/") ? <ImageIcon className="h-4 w-4" /> : <FileIcon className="h-4 w-4" />}
+              {pending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : mimeType.startsWith("image/") ? (
+                <ImageIcon className="h-4 w-4" />
+              ) : (
+                <FileIcon className="h-4 w-4" />
+              )}
             </Button>
             {row.getValue("name")}
           </div>
@@ -98,27 +109,33 @@ export function getColumns(lang: string): ColumnDef<File>[] {
         return <div className="text-right">{t("storage:size")}</div>;
       },
       cell: ({ row }) => {
-        const size = Number.parseFloat(row.getValue("size"))
+        const size = Number.parseFloat(row.getValue("size"));
 
-        return <div className="text-right font-medium">{formatBytes(size)}</div>
+        return (
+          <div className="text-right font-medium">{formatBytes(size)}</div>
+        );
       },
     },
     {
       accessorKey: "visibility",
       header: () => {
         const { t } = useTranslation(lang);
-        return <div className="text-right">{t("storage:visibilitySettings")}</div>;
+        return (
+          <div className="text-right">{t("storage:visibilitySettings")}</div>
+        );
       },
       cell: ({ row }) => {
-        const visibility = row.getValue("visibility") as FileVisibility
+        const visibility = row.getValue("visibility") as FileVisibility;
         const { t } = useTranslation(lang);
         return (
           <div className="text-right font-medium">
-            {visibility === "PUBLIC" ? t("storage:public")
-              : visibility === "PRIVATE" ? t("storage:private")
-                : t("storage:dedicated") }
+            {visibility === "PUBLIC"
+              ? t("storage:public")
+              : visibility === "PRIVATE"
+                ? t("storage:private")
+                : t("storage:dedicated")}
           </div>
-        )
+        );
       },
     },
     {
@@ -131,7 +148,7 @@ export function getColumns(lang: string): ColumnDef<File>[] {
         const { t } = useTranslation(lang);
         function handleDeleteClick() {
           startTransition(async () => {
-            const res = await deleteFile([file.id])
+            const res = await deleteFile([file.id]);
             if (!res.success) {
               toast({
                 title: t("error"),
@@ -154,15 +171,23 @@ export function getColumns(lang: string): ColumnDef<File>[] {
                 });
               }
             });
-          }
+          };
         }
 
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0" disabled={pending || file.visibility === "DEDICATED"}>
+              <Button
+                variant="ghost"
+                className="h-8 w-8 p-0"
+                disabled={pending || file.visibility === "DEDICATED"}
+              >
                 <span className="sr-only">Open menu</span>
-                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                {pending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <MoreHorizontal className="h-4 w-4" />
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -170,12 +195,24 @@ export function getColumns(lang: string): ColumnDef<File>[] {
                 {t("delete")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {file.visibility === "PUBLIC" && <DropdownMenuItem onClick={handleChangeVisibilityClick("PRIVATE")}>{t("storage:setToPrivate")}</DropdownMenuItem>}
-              {file.visibility === "PRIVATE" && <DropdownMenuItem onClick={handleChangeVisibilityClick("PUBLIC")}>{t("storage:setToPublic")}</DropdownMenuItem>}
+              {file.visibility === "PUBLIC" && (
+                <DropdownMenuItem
+                  onClick={handleChangeVisibilityClick("PRIVATE")}
+                >
+                  {t("storage:setToPrivate")}
+                </DropdownMenuItem>
+              )}
+              {file.visibility === "PRIVATE" && (
+                <DropdownMenuItem
+                  onClick={handleChangeVisibilityClick("PUBLIC")}
+                >
+                  {t("storage:setToPublic")}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
-        )
+        );
       },
     },
-  ]
+  ];
 }

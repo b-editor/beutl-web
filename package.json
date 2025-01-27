@@ -6,7 +6,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "dev": "next dev"
+    "dev": "next dev",
+    "postinstall": "prisma generate --no-engine"
   },
   "dependencies": {
     "@auth/core": "^0.37.0",
@@ -14,10 +15,12 @@
     "@aws-sdk/client-s3": "^3.670.0",
     "@aws-sdk/s3-request-presigner": "^3.670.0",
     "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.27",
+    "@hono/zod-validator": "^0.4.2",
     "@hookform/resolvers": "^3.9.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/sdk-trace-base": "^1.27.0",
-    "@prisma/client": "^5.20.0",
+    "@prisma/client": "^6.2.1",
+    "@prisma/extension-accelerate": "^1.2.1",
     "@radix-ui/react-alert-dialog": "^1.1.2",
     "@radix-ui/react-avatar": "^1.1.1",
     "@radix-ui/react-checkbox": "^1.1.2",
@@ -44,6 +47,7 @@
     "dotenv": "^16.4.5",
     "embla-carousel-react": "^8.3.0",
     "express": "^4.21.1",
+    "hono": "^4.6.16",
     "http-proxy-middleware": "^3.0.3",
     "i18next": "^23.16.4",
     "i18next-resources-to-backend": "^1.2.1",
@@ -52,7 +56,7 @@
     "negotiator": "^1.0.0",
     "next": "14.2.10",
     "next-auth": "5.0.0-beta.20",
-    "nodemailer": "^6.9.15",
+    "next-nprogress-bar": "^2.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.53.0",
@@ -67,9 +71,9 @@
     "zod-i18n-map": "^2.27.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "1.9.4",
     "@types/negotiator": "^0.6.3",
     "@types/node": "^22.7.5",
-    "@types/nodemailer": "^6.4.16",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
@@ -77,7 +81,7 @@
     "eslint": "^9.12.0",
     "eslint-config-next": "14.2.10",
     "postcss": "^8.4.47",
-    "prisma": "^5.20.0",
+    "prisma": "^6.2.1",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.3"
   },

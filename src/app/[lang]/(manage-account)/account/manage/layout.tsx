@@ -15,7 +15,7 @@ export default async function Layout({
   children: React.ReactNode;
   params: {
     lang: string;
-  }
+  };
 }) {
   const session = await auth();
   const url = headers().get("x-url") || "/";
@@ -36,18 +36,14 @@ export default async function Layout({
             <span>{session.user?.name ?? session.user?.email}</span>
           </div>
           <Link href="/account/sign-out" legacyBehavior passHref>
-            <Button variant="outline">
-              {t("signOut")}
-            </Button>
+            <Button variant="outline">{t("signOut")}</Button>
           </Link>
         </div>
         <div className="flex flex-col md:grid md:grid-cols-[max-content,1fr] gap-6 items-start">
           <Navigation lang={lang} />
-          <div className="w-full">
-            {children}
-          </div>
+          <div className="w-full">{children}</div>
         </div>
       </div>
     </div>
-  )
+  );
 }

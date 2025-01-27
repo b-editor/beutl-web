@@ -7,17 +7,19 @@ import { ClientRedirect } from "./components";
 
 export default async function Page({
   searchParams: { identifier },
-  params: { lang }
+  params: { lang },
 }: {
-  searchParams: { identifier: string },
-  params: { lang: string }
+  searchParams: { identifier: string };
+  params: { lang: string };
 }) {
   const session = await auth();
   const xurl = headers().get("x-url") as string;
   if (!session?.user) {
     const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 
-    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`);
+    redirect(
+      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`,
+    );
   } else {
     if (!session.user.id) {
       throw new Error("User id is not found");
@@ -26,13 +28,13 @@ export default async function Page({
     const code = randomString(32);
     const obj = await prisma.nativeAppAuth.update({
       where: {
-        id: identifier
+        id: identifier,
       },
       data: {
         userId: session.user.id,
         codeExpires: new Date(Date.now() + 1000 * 60 * 30),
-        code
-      }
+        code,
+      },
     });
 
     const continueUrl = new URL(obj.continueUrl, xurl);

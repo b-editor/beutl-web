@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   createContext,
@@ -6,16 +6,16 @@ import {
   useEffect,
   useState,
   ReactNode,
-} from 'react';
-import i18next from 'i18next';
+} from "react";
+import i18next from "i18next";
 import {
   initReactI18next,
   useTranslation as useTranslationOrigin,
-} from 'react-i18next';
-import resourcesToBackend from 'i18next-resources-to-backend';
-import { getOptions } from './settings';
-import { z } from 'zod';
-import { zodI18nMap } from 'zod-i18n-map';
+} from "react-i18next";
+import resourcesToBackend from "i18next-resources-to-backend";
+import { getOptions } from "./settings";
+import { z } from "zod";
+import { zodI18nMap } from "zod-i18n-map";
 
 i18next
   .use(initReactI18next)
@@ -48,7 +48,9 @@ interface LanguageContextType {
   setLanguage: (language: string) => void;
 }
 
-const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
+const LanguageContext = createContext<LanguageContextType | undefined>(
+  undefined,
+);
 
 interface LanguageProviderProps {
   children: ReactNode;
@@ -71,7 +73,7 @@ export const LanguageProvider = ({
 export const useLanguage = (): LanguageContextType => {
   const context = useContext(LanguageContext);
   if (!context) {
-    throw new Error('useLanguage must be used within a LanguageProvider');
+    throw new Error("useLanguage must be used within a LanguageProvider");
   }
   return context;
 };

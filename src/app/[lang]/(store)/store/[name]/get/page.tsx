@@ -5,21 +5,23 @@ import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
-export default async function Page({ params: { name, lang } }: { params: { name: string, lang: string } }) {
+export default async function Page({
+  params: { name, lang },
+}: { params: { name: string; lang: string } }) {
   const session = await authOrSignIn();
 
   const pkg = await prisma.package.findFirst({
     where: {
       name: {
         equals: name,
-        mode: "insensitive"
+        mode: "insensitive",
       },
-      published: true
+      published: true,
     },
     select: {
       id: true,
       packagePricing: true,
-    }
+    },
   });
   if (!pkg) {
     notFound();
@@ -27,24 +29,31 @@ export default async function Page({ params: { name, lang } }: { params: { name:
 
   if (pkg.packagePricing.length > 0) {
     // すでに支払いをしている場合、支払わずにuserPackageを作成する
-    const record = await existsUserPaymentHistory({ userId: session.user.id, packageId: pkg.id });
+    const record = await existsUserPaymentHistory({
+      userId: session.user.id,
+      packageId: pkg.id,
+    });
     if (!record) {
       redirect(`/${lang}/store/${name}/checkout`);
     }
   }
 
-  if (!await prisma.userPackage.findFirst({ where: { userId: session.user.id, packageId: pkg.id } })) {
+  if (
+    !(await prisma.userPackage.findFirst({
+      where: { userId: session.user.id, packageId: pkg.id },
+    }))
+  ) {
     await prisma.userPackage.create({
       data: {
         userId: session.user.id,
-        packageId: pkg.id
-      }
+        packageId: pkg.id,
+      },
     });
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.store.addToLibrary,
-      details: `packageId: ${pkg.id}`
-    })
+      details: `packageId: ${pkg.id}`,
+    });
   }
 
   revalidatePath(`/store/${name}`);

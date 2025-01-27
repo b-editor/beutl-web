@@ -1,8 +1,12 @@
 "use server";
 
 import { prisma } from "@/prisma";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { randomUUID } from "node:crypto";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { revalidatePath } from "next/cache";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/storage";
@@ -13,7 +17,7 @@ import { getTranslation } from "@/app/i18n/server";
 type Response = {
   success: boolean;
   message?: string;
-}
+};
 export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = getLanguage();
@@ -66,7 +70,10 @@ export async function deleteFile(ids: string[]): Promise<Response> {
   });
 }
 
-export async function changeFileVisibility(ids: string[], visibility: "PRIVATE" | "PUBLIC"): Promise<Response> {
+export async function changeFileVisibility(
+  ids: string[],
+  visibility: "PRIVATE" | "PUBLIC",
+): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = getLanguage();
     const { t } = await getTranslation(lang);
@@ -126,8 +133,10 @@ type GetTemporaryUrlResponse = {
   success: boolean;
   message?: string;
   url?: string;
-}
-export async function getTemporaryUrl(id: string): Promise<GetTemporaryUrlResponse> {
+};
+export async function getTemporaryUrl(
+  id: string,
+): Promise<GetTemporaryUrlResponse> {
   return await authenticated(async (session) => {
     const lang = getLanguage();
     const { t } = await getTranslation(lang);
@@ -205,7 +214,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
         : `${file.name} (${i})`;
     }
 
-    const objectKey = randomUUID();
+    const objectKey = crypto.randomUUID();
     await s3.send(
       new PutObjectCommand({
         Bucket: process.env.S3_BUCKET as string,
@@ -235,7 +244,7 @@ export async function retrieveFiles() {
   const session = await throwIfUnauth();
   return await prisma.file.findMany({
     where: {
-      userId: session?.user?.id
+      userId: session?.user?.id,
     },
     select: {
       id: true,
@@ -244,6 +253,6 @@ export async function retrieveFiles() {
       size: true,
       mimeType: true,
       visibility: true,
-    }
+    },
   });
 }

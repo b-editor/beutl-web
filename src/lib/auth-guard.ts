@@ -5,24 +5,26 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export interface SafeUser extends User {
-  id: string
+  id: string;
 }
 
 export interface SafeSession extends Session {
-  user: SafeUser
+  user: SafeUser;
 }
 
 export async function authOrSignIn(): Promise<SafeSession> {
   const session = await auth();
   if (!session?.user?.id) {
-    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(headers().get("x-url") || "/")}`);
+    redirect(
+      `/account/sign-in?returnUrl=${encodeURIComponent(headers().get("x-url") || "/")}`,
+    );
   }
 
   return session as SafeSession;
 }
 
 export async function authenticated<TResult>(
-  fnc: (session: SafeSession) => Promise<TResult>
+  fnc: (session: SafeSession) => Promise<TResult>,
 ) {
   const session = await auth();
   if (!session?.user?.id) {

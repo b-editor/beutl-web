@@ -2,8 +2,23 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "@/components/ui/carousel";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { MoreVertical } from "lucide-react";
 import Image from "next/image";
@@ -14,13 +29,22 @@ import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import type { Package } from "@/lib/store-utils";
 import { formatAmount } from "@/lib/currency-formatter";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useTranslation } from "@/app/i18n/client";
 
 type Price = {
   price: number;
   currency: string;
-}
+};
 
 type PageProps = {
   pkg: Package;
@@ -29,7 +53,7 @@ type PageProps = {
   message?: "PleaseOpenDesktopApp";
   price?: Price;
   lang: string;
-}
+};
 
 type GetButtonProps = {
   pkgId: string;
@@ -37,66 +61,92 @@ type GetButtonProps = {
   price?: Price;
   paied: boolean;
   lang: string;
-}
+};
 
 function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
   const { t } = useTranslation(lang);
   return (
     <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
-      {owned ? t("store:owned")
-        : paied ? t("store:addedToLibrary")
-          : price ? formatAmount(price.price, price.currency, lang)
+      {owned
+        ? t("store:owned")
+        : paied
+          ? t("store:addedToLibrary")
+          : price
+            ? formatAmount(price.price, price.currency, lang)
             : t("store:acquire")}
     </Button>
-  )
+  );
 }
 
 function RemoveFromLibraryDialog({
-  pkgId, open, onClose, price, paied, lang
+  pkgId,
+  open,
+  onClose,
+  price,
+  paied,
+  lang,
 }: {
-  pkgId: string,
-  open: boolean,
-  onClose: () => void
-  price?: Price,
-  paied: boolean,
-  lang: string
+  pkgId: string;
+  open: boolean;
+  onClose: () => void;
+  price?: Price;
+  paied: boolean;
+  lang: string;
 }) {
   const { t } = useTranslation(lang);
   return (
-    <AlertDialog
-      open={open}
-      onOpenChange={onClose}
-    >
+    <AlertDialog open={open} onOpenChange={onClose}>
       <AlertDialogContent className="sm:max-w-[425px]">
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("store:confirmRemoveFromLibrary")}</AlertDialogTitle>
+          <AlertDialogTitle>
+            {t("store:confirmRemoveFromLibrary")}
+          </AlertDialogTitle>
         </AlertDialogHeader>
         <div>
           <p>{t("store:removeWarning")}</p>
-          {(!paied && price) && (
-            <p>{t("store:reacquireCost", { amount: formatAmount(price.price, price.currency, lang) })}</p>
+          {!paied && price && (
+            <p>
+              {t("store:reacquireCost", {
+                amount: formatAmount(price.price, price.currency, lang),
+              })}
+            </p>
           )}
         </div>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
-          <AlertDialogAction onClick={async () => await removeFromLibrary(pkgId)}>{t("remove")}</AlertDialogAction>
+          <AlertDialogAction
+            onClick={async () => await removeFromLibrary(pkgId)}
+          >
+            {t("remove")}
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  )
+  );
 }
 
 export function ClientPage({
-  pkg, owned, message, price, paied, lang
+  pkg,
+  owned,
+  message,
+  price,
+  paied,
+  lang,
 }: PageProps) {
   const { t } = useTranslation(lang);
-  const defaultVersion = useMemo(() => pkg.Release.length > 0 ? pkg.Release[0].version : undefined, [pkg.Release]);
+  const defaultVersion = useMemo(
+    () => (pkg.Release.length > 0 ? pkg.Release[0].version : undefined),
+    [pkg.Release],
+  );
   const router = useRouter();
   const searchParams = useSearchParams();
-  const selectedVersion = useMemo(() => searchParams.get("v") || defaultVersion, [searchParams, defaultVersion]);
+  const selectedVersion = useMemo(
+    () => searchParams.get("v") || defaultVersion,
+    [searchParams, defaultVersion],
+  );
   const selectedRelease = useMemo(() => {
     if (selectedVersion) {
-      return pkg.Release.find(v => v.version === selectedVersion);
+      return pkg.Release.find((v) => v.version === selectedVersion);
     }
   }, [selectedVersion, pkg.Release]);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
@@ -107,14 +157,32 @@ export function ClientPage({
       <div className="max-sm:relative sm:flex sm:gap-2">
         <div className="w-full flex justify-between gap-4 max-sm:flex-col">
           <div className="flex gap-4">
-            {pkg.iconFileUrl && <Image width={64} height={64}
-              className="w-16 h-16 max-w-fit rounded-md"
-              alt="Package icon" src={pkg.iconFileUrl} />}
-            {!pkg.iconFileUrl && <div className="w-16 h-16 rounded-md bg-secondary" />}
+            {pkg.iconFileUrl && (
+              <Image
+                width={64}
+                height={64}
+                className="w-16 h-16 max-w-fit rounded-md"
+                alt="Package icon"
+                src={pkg.iconFileUrl}
+              />
+            )}
+            {!pkg.iconFileUrl && (
+              <div className="w-16 h-16 rounded-md bg-secondary" />
+            )}
             <div>
-              <h2 className="font-bold text-2xl">{pkg.displayName || pkg.name}</h2>
-              <Button asChild variant="link" className="p-0 h-auto text-muted-foreground">
-                <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
+              <h2 className="font-bold text-2xl">
+                {pkg.displayName || pkg.name}
+              </h2>
+              <Button
+                asChild
+                variant="link"
+                className="p-0 h-auto text-muted-foreground"
+              >
+                <Link
+                  href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}
+                >
+                  {pkg.user.Profile?.userName}
+                </Link>
               </Button>
             </div>
           </div>
@@ -131,7 +199,11 @@ export function ClientPage({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="max-sm:absolute max-sm:right-0 top-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="max-sm:absolute max-sm:right-0 top-0"
+            >
               <MoreVertical className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -143,7 +215,8 @@ export function ClientPage({
             )}
             <DropdownMenuLabel>{t("store:version")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuRadioGroup value={selectedRelease?.version}
+            <DropdownMenuRadioGroup
+              value={selectedRelease?.version}
               onValueChange={(v) => {
                 const url = new URL(location.href);
                 if (v === defaultVersion) {
@@ -153,7 +226,8 @@ export function ClientPage({
                 }
 
                 router.push(url.toString());
-              }}>
+              }}
+            >
               {pkg.Release.map((release) => (
                 <DropdownMenuRadioItem value={release.version} key={release.id}>
                   {release.version}
@@ -177,12 +251,23 @@ export function ClientPage({
 
       {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
         <>
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:screenshots")}</h3>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">
+            {t("store:screenshots")}
+          </h3>
           <Carousel className="mt-4" opts={{ active: maxLg }}>
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
               {pkg.PackageScreenshot.map((item) => (
-                <CarouselItem className="w-min max-w-min min-w-min" key={item.file.id}>
-                  <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />
+                <CarouselItem
+                  className="w-min max-w-min min-w-min"
+                  key={item.file.id}
+                >
+                  <Image
+                    className="rounded max-w-min h-80 aspect-auto"
+                    alt="Screenshot"
+                    width={1280}
+                    height={720}
+                    src={item.url}
+                  />
                 </CarouselItem>
               ))}
             </CarouselContent>
@@ -194,38 +279,61 @@ export function ClientPage({
 
       <div className="flex max-lg:flex-col mt-6">
         <div className="lg:basis-2/3 lg:pr-6">
-          <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:description")}</h3>
-          <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
+          <h3 className="font-bold text-xl mt-6 border-b pb-2">
+            {t("store:description")}
+          </h3>
+          <p
+            className="mt-4 whitespace-pre-wrap"
+            style={{ wordWrap: "break-word" }}
+          >
             {pkg.description}
           </p>
           {selectedRelease && (
             <>
-              <h3 className="font-bold text-xl mt-6 border-b pb-2">{selectedVersion === defaultVersion ? t("store:latestRelease") : t("store:selectedRelease")}</h3>
-              <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
-                {selectedRelease.title}<br />
+              <h3 className="font-bold text-xl mt-6 border-b pb-2">
+                {selectedVersion === defaultVersion
+                  ? t("store:latestRelease")
+                  : t("store:selectedRelease")}
+              </h3>
+              <p
+                className="mt-4 whitespace-pre-wrap"
+                style={{ wordWrap: "break-word" }}
+              >
+                {selectedRelease.title}
+                <br />
                 {selectedRelease.description}
               </p>
             </>
           )}
         </div>
         <div className="lg:basis-1/3">
-          <h4 className="font-bold text-lg mt-6 border-b pb-2">{t("store:details")}</h4>
+          <h4 className="font-bold text-lg mt-6 border-b pb-2">
+            {t("store:details")}
+          </h4>
           <div className="flex gap-2 flex-col my-4">
             <h4>{t("store:tags")}</h4>
             <div className="flex gap-1 flex-wrap">
-              {pkg.tags.map((tag) => (<Badge key={tag}>{tag}</Badge>))}
+              {pkg.tags.map((tag) => (
+                <Badge key={tag}>{tag}</Badge>
+              ))}
             </div>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
             <h4>{t("store:author")}</h4>
-            <Button asChild variant="link" className="p-0 h-auto" >
-              <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>{pkg.user.Profile?.userName}</Link>
+            <Button asChild variant="link" className="p-0 h-auto">
+              <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>
+                {pkg.user.Profile?.userName}
+              </Link>
             </Button>
           </div>
           <Separator />
           <div className="flex gap-2 my-4 justify-between">
-            <h4>{selectedVersion === defaultVersion ? t("store:latestVersion") : t("store:selectedVersion")}</h4>
+            <h4>
+              {selectedVersion === defaultVersion
+                ? t("store:latestVersion")
+                : t("store:selectedVersion")}
+            </h4>
             <p>{selectedVersion}</p>
           </div>
           <Separator />
@@ -236,5 +344,5 @@ export function ClientPage({
         </div>
       </div>
     </div>
-  )
+  );
 }

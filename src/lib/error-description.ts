@@ -1,6 +1,6 @@
 import { useTranslation } from "@/app/i18n/client";
 import { Translator } from "@/app/i18n/server";
-import type { SignInPageErrorParam } from "@auth/core/types"
+import type { SignInPageErrorParam } from "@auth/core/types";
 
 const signinErrors = {
   default: "authjs:default",
@@ -14,13 +14,15 @@ const signinErrors = {
   EmailSignin: "authjs:emailSignin",
   CredentialsSignin: "authjs:credentialsSignin",
   SessionRequired: "authjs:sessionRequired",
-}
+};
 
-
-export function translateNextAuthError(t: Translator, errorType?: SignInPageErrorParam) {
+export function translateNextAuthError(
+  t: Translator,
+  errorType?: SignInPageErrorParam,
+) {
   if (!errorType) {
     return;
   }
 
-  return errorType && (t(signinErrors[errorType]) ?? t(signinErrors.default))
+  return errorType && (t(signinErrors[errorType]) ?? t(signinErrors.default));
 }

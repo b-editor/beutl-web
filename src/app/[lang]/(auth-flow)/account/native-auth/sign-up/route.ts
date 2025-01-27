@@ -8,8 +8,12 @@ export async function GET(request: NextRequest) {
   const lang = getLanguage();
 
   if (session?.user) {
-    await signOut({ redirectTo: `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}` });
+    await signOut({
+      redirectTo: `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
+    });
   }
 
-  return NextResponse.redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`);
+  return NextResponse.redirect(
+    `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
+  );
 }

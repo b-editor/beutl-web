@@ -6,19 +6,23 @@ import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { existsUserByEmail } from "@/lib/db/user";
 
-const emailSchema = (z: Zod) => z.object({
-  email: z.string().email(),
-  returnUrl: z.string().optional(),
-});
+const emailSchema = (z: Zod) =>
+  z.object({
+    email: z.string().email(),
+    returnUrl: z.string().optional(),
+  });
 
 type State = {
   errors?: {
     email?: string[];
   };
   message?: string;
-}
+};
 
-export async function signInAction(state: State, formData: FormData): Promise<State> {
+export async function signInAction(
+  state: State,
+  formData: FormData,
+): Promise<State> {
   const type = formData.get("type") as string;
 
   if (type === "email") {
@@ -26,26 +30,40 @@ export async function signInAction(state: State, formData: FormData): Promise<St
   }
 
   if (type === "google") {
-    return await signInWithProvider("google", formData.get("returnUrl") as string | undefined);
+    return await signInWithProvider(
+      "google",
+      formData.get("returnUrl") as string | undefined,
+    );
   }
 
   if (type === "github") {
-    return await signInWithProvider("github", formData.get("returnUrl") as string | undefined);
+    return await signInWithProvider(
+      "github",
+      formData.get("returnUrl") as string | undefined,
+    );
   }
 
   const { t } = await getTranslation(getLanguage());
-  return { message: t("invalidRequest") }
+  return { message: t("invalidRequest") };
 }
 
-async function signInWithProvider(provider: string, returnUrl?: string): Promise<State> {
+async function signInWithProvider(
+  provider: string,
+  returnUrl?: string,
+): Promise<State> {
   await signIn(provider, { redirectTo: returnUrl || "/" });
   return {};
 }
 
-async function signInWithEmail(state: State, formData: FormData): Promise<State> {
+async function signInWithEmail(
+  state: State,
+  formData: FormData,
+): Promise<State> {
   const lang = getLanguage();
   const { z } = await getTranslation(lang);
-  const validationResult = emailSchema(z).safeParse(Object.fromEntries(formData.entries()));
+  const validationResult = emailSchema(z).safeParse(
+    Object.fromEntries(formData.entries()),
+  );
   if (!validationResult.success) {
     return { errors: validationResult.error.flatten().fieldErrors };
   }
@@ -63,6 +81,6 @@ async function signInWithEmail(state: State, formData: FormData): Promise<State>
     redirect(`/${lang}/account/sign-up?${params.toString()}`);
   }
 
-  await signIn("nodemailer", { email, redirectTo: returnUrl || `/${lang}` });
+  await signIn("resend", { email, redirectTo: returnUrl || `/${lang}` });
   return {};
 }

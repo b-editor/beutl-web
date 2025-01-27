@@ -16,7 +16,7 @@ export async function addToLibrary(packageId: string) {
     },
     select: {
       name: true,
-    }
+    },
   });
   redirect(`/${lang}/store/${name}/get`);
 }
@@ -25,7 +25,9 @@ export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
     const lang = getLanguage();
     const { t } = await getTranslation(lang);
-    const { package: { name } } = await prisma.userPackage.delete({
+    const {
+      package: { name },
+    } = await prisma.userPackage.delete({
       where: {
         userId_packageId: {
           userId: session.user.id,
@@ -36,9 +38,9 @@ export async function removeFromLibrary(packageId: string) {
         package: {
           select: {
             name: true,
-          }
-        }
-      }
+          },
+        },
+      },
     });
     await addAuditLog({
       userId: session.user.id,
@@ -49,6 +51,6 @@ export async function removeFromLibrary(packageId: string) {
     return {
       success: true,
       message: t("store:removedFromLibrary"),
-    }
+    };
   });
 }

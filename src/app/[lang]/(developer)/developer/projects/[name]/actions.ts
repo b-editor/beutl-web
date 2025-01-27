@@ -18,10 +18,15 @@ import {
   updateDevPackageIconFile,
   updateDevPackagePublished,
   updateDevPackageScreenshotOrder,
-  updateDevPackageTags
+  updateDevPackageTags,
 } from "@/lib/db/package";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
-import { calcTotalFileSize, createStorageFile, deleteStorageFile, s3 } from "@/lib/storage";
+import {
+  calcTotalFileSize,
+  createStorageFile,
+  deleteStorageFile,
+  s3,
+} from "@/lib/storage";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -39,11 +44,13 @@ export type State = {
 type Response = {
   success: boolean;
   message?: string;
-}
+};
 
 const displayNameAndShortDescriptionSchema = z.object({
   displayName: z.string().max(50, "表示名は50文字以下である必要があります"),
-  shortDescription: z.string().max(200, "短い説明は200文字以下である必要があります"),
+  shortDescription: z
+    .string()
+    .max(200, "短い説明は200文字以下である必要があります"),
   id: z.string().uuid("IDが不正です"),
 });
 
@@ -51,15 +58,22 @@ const releaseSchema = z.object({
   title: z.string().max(50, "タイトルは50文字以下である必要があります"),
   description: z.string().max(1000, "説明は1000文字以下である必要があります"),
   id: z.string().uuid("IDが不正です"),
-  targetVersion: z.string().refine((v) => SemVer.valid(v) || isValidNuGetVersionRange(v), "バージョンが不正です"),
-  published: z.string().refine((v) => v === "on" || v === "off", "公開設定が不正です"),
+  targetVersion: z
+    .string()
+    .refine(
+      (v) => SemVer.valid(v) || isValidNuGetVersionRange(v),
+      "バージョンが不正です",
+    ),
+  published: z
+    .string()
+    .refine((v) => v === "on" || v === "off", "公開設定が不正です"),
   file: z.optional(z.instanceof(File)),
 });
 
 async function sameUser<TResult>(
   packageId: string,
   userId: string,
-  fnc: () => Promise<TResult>
+  fnc: () => Promise<TResult>,
 ) {
   const pkgUserId = await getUserIdFromPackageId({ packageId });
   if (!pkgUserId) {
@@ -87,25 +101,30 @@ async function createDedicatedFile(userId: string, file: File, size: bigint) {
   if (totalSize + BigInt(file.size) > maxSize) {
     return {
       success: false,
-      message: "ストレージ容量が足りません"
+      message: "ストレージ容量が足りません",
     };
   }
 
   const record = await createStorageFile({
     file,
     visibility: "DEDICATED",
-    userId
-  })
+    userId,
+  });
 
   return {
     success: true,
-    record
+    record,
   };
 }
 
-export async function updateDisplayNameAndShortDescription(state: State, formData: FormData): Promise<State> {
-  return await authenticated(async session => {
-    const validated = displayNameAndShortDescriptionSchema.safeParse(Object.fromEntries(formData.entries()));
+export async function updateDisplayNameAndShortDescription(
+  state: State,
+  formData: FormData,
+): Promise<State> {
+  return await authenticated(async (session) => {
+    const validated = displayNameAndShortDescriptionSchema.safeParse(
+      Object.fromEntries(formData.entries()),
+    );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
@@ -119,7 +138,7 @@ export async function updateDisplayNameAndShortDescription(state: State, formDat
       const { name } = await updateDevPackageDisplay({
         packageId: id,
         displayName,
-        shortDescription
+        shortDescription,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -128,14 +147,17 @@ export async function updateDisplayNameAndShortDescription(state: State, formDat
       });
       revalidatePath(`/developer/projects/${name}`);
       return {
-        success: true
+        success: true,
       };
     });
   });
 }
 
-export async function updateDescription({ packageId, description }: { packageId: string, description: string }): Promise<Response> {
-  return await authenticated(async session => {
+export async function updateDescription({
+  packageId,
+  description,
+}: { packageId: string; description: string }): Promise<Response> {
+  return await authenticated(async (session) => {
     if (description.length > 1000) {
       return {
         message: "説明は1000文字以下である必要があります",
@@ -146,7 +168,7 @@ export async function updateDescription({ packageId, description }: { packageId:
     return await sameUser(packageId, session.user.id, async () => {
       const { name } = await updateDevPackageDescription({
         packageId,
-        description
+        description,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -170,17 +192,19 @@ export async function retrievePackage(name: string) {
   pkg.Release.sort((a, b) => {
     return new SemVer.SemVer(b.version).compare(a.version);
   });
-  const screenshots = await Promise.all(pkg.PackageScreenshot.map(async (item) => {
-    return {
-      ...item,
-      url: `/api/contents/${item.file.id}`
-    }
-  }));
+  const screenshots = await Promise.all(
+    pkg.PackageScreenshot.map(async (item) => {
+      return {
+        ...item,
+        url: `/api/contents/${item.file.id}`,
+      };
+    }),
+  );
 
   return {
     ...pkg,
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
-    PackageScreenshot: screenshots
+    PackageScreenshot: screenshots,
   };
 }
 
@@ -191,7 +215,7 @@ export async function deletePackage(id: string): Promise<Response> {
       await deleteDevPackage({ packageId: id });
       const promises = files.map(async (file) => {
         await deleteStorageFile({
-          fileId: file.id
+          fileId: file.id,
         });
       });
 
@@ -207,22 +231,32 @@ export async function deletePackage(id: string): Promise<Response> {
   });
 }
 
-export async function changePackageVisibility(id: string, published: boolean): Promise<Response> {
+export async function changePackageVisibility(
+  id: string,
+  published: boolean,
+): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
-      const { published: oldPublished } = await prisma.package.findFirstOrThrow({
-        where: {
-          id
+      const { published: oldPublished } = await prisma.package.findFirstOrThrow(
+        {
+          where: {
+            id,
+          },
+          select: {
+            published: true,
+          },
         },
-        select: {
-          published: true
-        }
+      );
+      const { name } = await updateDevPackagePublished({
+        packageId: id,
+        published,
       });
-      const { name } = await updateDevPackagePublished({ packageId: id, published });
       if (oldPublished !== published) {
         await addAuditLog({
           userId: session.user.id,
-          action: published ? auditLogActions.developer.publishPackage : auditLogActions.developer.unpublishPackage,
+          action: published
+            ? auditLogActions.developer.publishPackage
+            : auditLogActions.developer.unpublishPackage,
           details: `packageId: ${id}`,
         });
       }
@@ -248,24 +282,28 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
       const iconFile = await retrieveDevPackageIconFile({ packageId: id });
 
       const deletedSize = iconFile ? BigInt(iconFile.size) : BigInt(0);
-      const result = await createDedicatedFile(session.user.id, file, deletedSize);
+      const result = await createDedicatedFile(
+        session.user.id,
+        file,
+        deletedSize,
+      );
       if (!result.success) {
         return {
           success: result.success,
-          message: result.message
-        }
+          message: result.message,
+        };
       }
 
       if (iconFile) {
         await deleteStorageFile({
-          fileId: iconFile.id
+          fileId: iconFile.id,
         });
       }
 
       const { name } = await updateDevPackageIconFile({
         packageId: id,
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
-        fileId: result.record!.id
+        fileId: result.record!.id,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -292,11 +330,17 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
     const id = formData.get("id") as string;
     return await sameUser(id, session.user.id, async () => {
       const name = await getPackageNameFromPackageId({ packageId: id });
-      const result = await createDedicatedFile(session.user.id, file, BigInt(0));
+      const result = await createDedicatedFile(
+        session.user.id,
+        file,
+        BigInt(0),
+      );
       if (!result.success) {
         return result;
       }
-      const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({ packageId: id });
+      const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({
+        packageId: id,
+      });
       await createDevPackageScreenshot({
         packageId: id,
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
@@ -316,7 +360,11 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
   });
 }
 
-export async function moveScreenshot({ delta, packageId, fileId }: { delta: number, packageId: string, fileId: string }): Promise<Response> {
+export async function moveScreenshot({
+  delta,
+  packageId,
+  fileId,
+}: { delta: number; packageId: string; fileId: string }): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const name = getPackageNameFromPackageId({ packageId });
@@ -374,7 +422,10 @@ export async function moveScreenshot({ delta, packageId, fileId }: { delta: numb
   });
 }
 
-export async function deleteScreenshot({ packageId, fileId }: { packageId: string, fileId: string }): Promise<Response> {
+export async function deleteScreenshot({
+  packageId,
+  fileId,
+}: { packageId: string; fileId: string }): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
@@ -393,12 +444,15 @@ export async function deleteScreenshot({ packageId, fileId }: { packageId: strin
   });
 }
 
-export async function updateTag({ packageId, tags }: { packageId: string, tags: string[] }): Promise<Response> {
+export async function updateTag({
+  packageId,
+  tags,
+}: { packageId: string; tags: string[] }): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const { name } = await updateDevPackageTags({
         packageId,
-        tags
+        tags,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -415,7 +469,9 @@ export async function updateTag({ packageId, tags }: { packageId: string, tags: 
 
 export async function updateRelease(formData: FormData) {
   return await authenticated(async (session) => {
-    const validated = releaseSchema.safeParse(Object.fromEntries(formData.entries()));
+    const validated = releaseSchema.safeParse(
+      Object.fromEntries(formData.entries()),
+    );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
@@ -433,10 +489,10 @@ export async function updateRelease(formData: FormData) {
           select: {
             id: true,
             objectKey: true,
-            size: true
-          }
-        }
-      }
+            size: true,
+          },
+        },
+      },
     });
     if (!release?.packageId) {
       return {
@@ -448,32 +504,40 @@ export async function updateRelease(formData: FormData) {
     return await sameUser(release.packageId, session.user.id, async () => {
       let fileId = release.file?.id;
       if (validated.data.file) {
-        const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
-        const result = await createDedicatedFile(session.user.id, validated.data.file, deletedSize);
+        const deletedSize = release.file
+          ? BigInt(release.file.size)
+          : BigInt(0);
+        const result = await createDedicatedFile(
+          session.user.id,
+          validated.data.file,
+          deletedSize,
+        );
         if (!result.success) {
           return {
             success: result.success,
-            message: result.message
-          }
+            message: result.message,
+          };
         }
 
         if (release.file) {
           await deleteStorageFile({
-            fileId: release.file.id
+            fileId: release.file.id,
           });
         }
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId = result.record!.id;
       }
 
-      const { published: oldPublished } = await prisma.release.findFirstOrThrow({
-        where: {
-          id: validated.data.id
+      const { published: oldPublished } = await prisma.release.findFirstOrThrow(
+        {
+          where: {
+            id: validated.data.id,
+          },
+          select: {
+            published: true,
+          },
         },
-        select: {
-          published: true
-        }
-      });
+      );
       const data = await prisma.release.update({
         where: {
           id: validated.data.id,
@@ -483,7 +547,7 @@ export async function updateRelease(formData: FormData) {
           description: validated.data.description,
           targetVersion: validated.data.targetVersion,
           published: validated.data.published === "on",
-          fileId: fileId
+          fileId: fileId,
         },
         select: {
           version: true,
@@ -494,10 +558,10 @@ export async function updateRelease(formData: FormData) {
           published: true,
           file: {
             select: {
-              name: true
-            }
-          }
-        }
+              name: true,
+            },
+          },
+        },
       });
       await addAuditLog({
         userId: session.user.id,
@@ -507,26 +571,31 @@ export async function updateRelease(formData: FormData) {
       if (oldPublished !== data.published) {
         await addAuditLog({
           userId: session.user.id,
-          action: data.published ? auditLogActions.developer.publishRelease : auditLogActions.developer.unpublishRelease,
+          action: data.published
+            ? auditLogActions.developer.publishRelease
+            : auditLogActions.developer.unpublishRelease,
           details: `releaseId: ${data.id}`,
         });
       }
 
       return {
         success: true,
-        data
+        data,
       };
     });
   });
 }
 
-export async function createRelease({ packageId, version }: { packageId: string, version: string }) {
+export async function createRelease({
+  packageId,
+  version,
+}: { packageId: string; version: string }) {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       if (SemVer.valid(version) === null) {
         return {
           success: false,
-          message: "バージョンが不正です"
+          message: "バージョンが不正です",
         };
       }
 
@@ -537,7 +606,7 @@ export async function createRelease({ packageId, version }: { packageId: string,
           title: "新しいリリース",
           description: "",
           targetVersion: "1.0.0-preview.10",
-          published: false
+          published: false,
         },
         select: {
           version: true,
@@ -548,10 +617,10 @@ export async function createRelease({ packageId, version }: { packageId: string,
           published: true,
           file: {
             select: {
-              name: true
-            }
-          }
-        }
+              name: true,
+            },
+          },
+        },
       });
       await addAuditLog({
         userId: session.user.id,
@@ -560,7 +629,7 @@ export async function createRelease({ packageId, version }: { packageId: string,
       });
       return {
         success: true,
-        data: release
+        data: release,
       };
     });
   });
@@ -575,7 +644,7 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
       select: {
         packageId: true,
         fileId: true,
-      }
+      },
     });
     if (!release?.packageId) {
       return {
@@ -586,8 +655,8 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
     return await sameUser(release.packageId, session.user.id, async () => {
       if (release.fileId) {
         await deleteStorageFile({
-          fileId: release.fileId
-        })
+          fileId: release.fileId,
+        });
       }
       await prisma.release.delete({
         where: {
@@ -598,7 +667,7 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
         userId: session.user.id,
         action: auditLogActions.developer.deleteRelease,
         details: `releaseId: ${releaseId}`,
-      })
+      });
       return {
         success: true,
       };

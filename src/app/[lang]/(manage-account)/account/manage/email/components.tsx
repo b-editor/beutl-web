@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,20 +10,25 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useTranslation } from "@/app/i18n/client";
 
 export function Form({
-  email, status, lang, ...props
+  email,
+  status,
+  lang,
+  ...props
 }: ComponentProps<"form"> & {
-  email: string,
-  status?: "emailUpdated" | "emailExists" | "emailUpdateFailed",
-  lang: string
+  email: string;
+  status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
+  lang: string;
 }) {
-  const [state, dispatch] = useFormState(sendConfirmationEmail, {})
+  const [state, dispatch] = useFormState(sendConfirmationEmail, {});
   const { t } = useTranslation(lang);
 
   return (
     <form {...props} action={dispatch}>
       <div className="flex flex-col gap-4">
         <div className="flex flex-col space-y-1.5 max-w-xs">
-          <Label htmlFor="currentEmail">{t("account:email.currentEmail")}</Label>
+          <Label htmlFor="currentEmail">
+            {t("account:email.currentEmail")}
+          </Label>
           <Input type="email" id="currentEmail" defaultValue={email} readOnly />
         </div>
         <div className="flex flex-col space-y-1.5 max-w-xs">
@@ -32,7 +37,10 @@ export function Form({
         </div>
 
         {state.message && (
-          <Alert variant={state.success ? "default" : "destructive"} className="my-4">
+          <Alert
+            variant={state.success ? "default" : "destructive"}
+            className="my-4"
+          >
             <AlertTitle>{state.success ? t("success") : t("error")}</AlertTitle>
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>
@@ -40,24 +48,30 @@ export function Form({
         {status === "emailUpdated" && (
           <Alert className="my-4">
             <AlertTitle>{t("success")}</AlertTitle>
-            <AlertDescription>{t("account:email.emailUpdated")}</AlertDescription>
+            <AlertDescription>
+              {t("account:email.emailUpdated")}
+            </AlertDescription>
           </Alert>
         )}
         {status === "emailExists" && (
           <Alert className="my-4">
             <AlertTitle>{t("error")}</AlertTitle>
-            <AlertDescription>{t("account:email.emailExists")}</AlertDescription>
+            <AlertDescription>
+              {t("account:email.emailExists")}
+            </AlertDescription>
           </Alert>
         )}
         {status === "emailUpdateFailed" && (
           <Alert className="my-4">
             <AlertTitle>{t("error")}</AlertTitle>
-            <AlertDescription>{t("account:email.emailUpdateFailed")}</AlertDescription>
+            <AlertDescription>
+              {t("account:email.emailUpdateFailed")}
+            </AlertDescription>
           </Alert>
         )}
 
         <SubmitButton className="my-6 self-start">{t("save")}</SubmitButton>
       </div>
     </form>
-  )
+  );
 }

@@ -5,8 +5,10 @@ export default function Page() {
         テレメトリー
       </h2>
       <p className="leading-7 [&:not(:first-child)]:mt-6">
-        この文書は Beutlデスクトップアプリを対象としています。<br />
-        Beutlを改善するために、匿名の使用状況データを収集します。<br />
+        この文書は Beutlデスクトップアプリを対象としています。
+        <br />
+        Beutlを改善するために、匿名の使用状況データを収集します。
+        <br />
         以下に、このテレメトリデータに関する重要な情報を示します。
       </p>
 
@@ -29,7 +31,8 @@ export default function Page() {
         3. データの保存場所
       </h3>
       <p className="leading-7 [&:not(:first-child)]:mt-6">
-        テレメトリデータは、Azure Monitorを介して収集され、マイクロソフトのサーバーに保存されます。
+        テレメトリデータは、Azure
+        Monitorを介して収集され、マイクロソフトのサーバーに保存されます。
         これらのサーバーは適切なセキュリティ対策が施されており、データの保護を確保するための対策が講じられています。
       </p>
 
@@ -39,7 +42,6 @@ export default function Page() {
       <p className="leading-7 [&:not(:first-child)]:mt-6">
         テレメトリデータの収集を個別に拒否する場合、&apos;設定&gt;情報&gt;テレメトリ&apos;から拒否できます。
       </p>
-
     </div>
-  )
+  );
 }

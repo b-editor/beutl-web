@@ -11,11 +11,11 @@ import {
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
-} from "@tanstack/react-table"
-import { Loader2, Trash, Upload } from "lucide-react"
+} from "@tanstack/react-table";
+import { Loader2, Trash, Upload } from "lucide-react";
 
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -23,7 +23,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useCallback, useMemo, useState, useTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
@@ -32,14 +32,14 @@ import type { File } from "./types";
 import { getColumns } from "./columns";
 import { useTranslation } from "@/app/i18n/client";
 
-export function List({ data, lang }: { data: File[], lang: string }) {
+export function List({ data, lang }: { data: File[]; lang: string }) {
   const { t } = useTranslation(lang);
-  const [sorting, setSorting] = useState<SortingState>([])
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-  const [rowSelection, setRowSelection] = useState({})
-  const [uploading, startUpload] = useTransition()
-  const [deleting, startDelete] = useTransition()
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [rowSelection, setRowSelection] = useState({});
+  const [uploading, startUpload] = useTransition();
+  const [deleting, startDelete] = useTransition();
   const pending = useMemo(() => uploading || deleting, [uploading, deleting]);
   const { toast } = useToast();
   const columns = useMemo(() => getColumns(lang), [lang]);
@@ -61,7 +61,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
       columnVisibility,
       rowSelection,
     },
-  })
+  });
   const handleUploadClick = useCallback(async () => {
     const files = await showOpenFileDialog();
 
@@ -89,7 +89,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
       return;
     }
     startDelete(async () => {
-      const res = await deleteFile(selectedRows.map(row => row.original.id));
+      const res = await deleteFile(selectedRows.map((row) => row.original.id));
       if (!res.success) {
         toast({
           title: t("error"),
@@ -114,19 +114,34 @@ export function List({ data, lang }: { data: File[], lang: string }) {
           className="max-w-sm"
         />
         <div className="ml-auto flex gap-4">
-
           <Button
             variant="destructive"
             size="icon"
-            className={cn(Object.keys(rowSelection).length ? "opacity-100" : "!opacity-0", "transition-opacity")}
+            className={cn(
+              Object.keys(rowSelection).length ? "opacity-100" : "!opacity-0",
+              "transition-opacity",
+            )}
             onClick={handleDeleteClick}
             disabled={pending}
           >
-            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash className="w-4 h-4" />}
+            {deleting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash className="w-4 h-4" />
+            )}
           </Button>
 
-          <Button variant="outline" size="icon" onClick={handleUploadClick} disabled={pending}>
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={handleUploadClick}
+            disabled={pending}
+          >
+            {uploading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4" />
+            )}
           </Button>
         </div>
       </div>
@@ -137,16 +152,22 @@ export function List({ data, lang }: { data: File[], lang: string }) {
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => {
                   return (
-                    <TableHead key={header.id}
-                      className={cn(header.id === "select" && "w-12", header.id === "actions" && "w-16", header.id === "visibility" && "w-24")}>
+                    <TableHead
+                      key={header.id}
+                      className={cn(
+                        header.id === "select" && "w-12",
+                        header.id === "actions" && "w-16",
+                        header.id === "visibility" && "w-24",
+                      )}
+                    >
                       {header.isPlaceholder
                         ? null
                         : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
+                            header.column.columnDef.header,
+                            header.getContext(),
+                          )}
                     </TableHead>
-                  )
+                  );
                 })}
               </TableRow>
             ))}
@@ -162,7 +183,7 @@ export function List({ data, lang }: { data: File[], lang: string }) {
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,
-                        cell.getContext()
+                        cell.getContext(),
                       )}
                     </TableCell>
                   ))}

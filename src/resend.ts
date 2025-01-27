@@ -1,45 +1,59 @@
-import type { NodemailerUserConfig } from "@auth/core/providers/nodemailer";
-import { createTransport } from "nodemailer";
+import type { EmailConfig } from "@auth/core/providers/email";
 
-export const options: NodemailerUserConfig = {
-  // dmarc
-  from: process.env.EMAIL_FROM as string,
-  server: {
-    host: process.env.EMAIL_SERVER_HOST,
-    port: Number.parseInt(process.env.EMAIL_SERVER_PORT as string),
-    secure: false,
-    requireTLS: true,
-    auth: {
-      user: process.env.EMAIL_SERVER_USER,
-      pass: process.env.EMAIL_SERVER_PASSWORD,
+export async function sendEmail(params: {
+  to: string;
+  subject: string;
+  body: string;
+}) {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.apiKey}`,
+      "Content-Type": "application/json",
     },
-    dkim: {
-      domainName: process.env.EMAIL_DKIM_DOMAIN as string,
-      keySelector: process.env.EMAIL_DKIM_SELECTOR as string,
-      privateKey: process.env.EMAIL_DKIM_PRIVATE_KEY as string
-    }
+    body: JSON.stringify({
+      from: options.from,
+      to: params.to,
+      subject: params.subject,
+      text: params.body,
+      html: renderUnsafeEmailTemplate(params.body),
+    }),
+  });
+
+  if (!res.ok)
+    throw new Error(`Resend error: ${JSON.stringify(await res.json())}`);
+}
+
+export const options = {
+  from: "Beutl <noreply@notifications.beditor.net>",
+  apiKey: process.env.AUTH_RESEND_KEY as string,
+  sendVerificationRequest: async (
+    params: Parameters<EmailConfig["sendVerificationRequest"]>[0],
+  ) => {
+    const { identifier: to, provider, url } = params;
+    const { host } = new URL(url);
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: provider.from,
+        to,
+        subject: `Sign in to ${host}`,
+        text: `Click the link below to sign in:\n${url}`,
+        html: renderUnsafeEmailTemplate(`
+          <p>Click the link below to sign in:</p>
+          <a href="${url}">Sign in</a>
+        `),
+      }),
+    });
+
+    if (!res.ok)
+      throw new Error(`Resend error: ${JSON.stringify(await res.json())}`);
   },
-  sendVerificationRequest: async ({ identifier, url, provider }) => {
-    const { host } = new URL(url)
-    const transport = createTransport(provider.server)
-    const result = await transport.sendMail({
-      to: identifier,
-      from: provider.from,
-      subject: `Sign in to ${host}`,
-      text: `Click the link below to sign in:\n${url}`,
-      html: renderUnsafeEmailTemplate(`
-        <p>Click the link below to sign in:</p>
-        <a href="${url}">Sign in</a>
-      `),
-    })
-    const rejected = result.rejected || []
-    const pending = result.pending || []
-    const failed = rejected.concat(pending).filter(Boolean)
-    if (failed.length) {
-      throw new Error(`Email (${failed.join(", ")}) could not be sent`)
-    }
-  }
-} satisfies NodemailerUserConfig;
+};
 
 export function renderUnsafeEmailTemplate(content: string): string {
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">

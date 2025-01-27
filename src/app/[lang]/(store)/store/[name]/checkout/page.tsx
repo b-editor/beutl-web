@@ -4,12 +4,16 @@ import { createStripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
-import { packageOwned, retrievePackage, retrievePrices } from "@/lib/store-utils";
+import {
+  packageOwned,
+  retrievePackage,
+  retrievePrices,
+} from "@/lib/store-utils";
 
 export default async function Page({
   params: { name, lang },
 }: {
-  params: { name: string, lang: string },
+  params: { name: string; lang: string };
 }) {
   const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
@@ -22,31 +26,39 @@ export default async function Page({
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);
   const currency = await currencyP;
-  const price = prices.find(p => p.currency === currency) || prices.find(p => p.fallback) || prices[0];
+  const price =
+    prices.find((p) => p.currency === currency) ||
+    prices.find((p) => p.fallback) ||
+    prices[0];
   if (!price) {
     throw new Error("No price found");
   }
 
-  const customerId = await createOrRetrieveCustomerId(session.user.email as string, session.user.id);
+  const customerId = await createOrRetrieveCustomerId(
+    session.user.email as string,
+    session.user.id,
+  );
   const stripe = createStripe();
   const intents = await stripe.paymentIntents.search({
     query: `customer:"${customerId}" AND metadata["packageId"]:"${pkg.id}" AND amount:${price.price} AND currency:"${price.currency}" AND status:"requires_payment_method"`,
-    limit: 1
+    limit: 1,
   });
 
-  const paymentIntent = intents.data[0] || await stripe.paymentIntents.create({
-    customer: customerId,
-    setup_future_usage: "off_session",
-    amount: price.price,
-    currency: price.currency,
-    metadata: {
-      packageId: pkg.id
-    },
-    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
-    automatic_payment_methods: {
-      enabled: true,
-    },
-  });
+  const paymentIntent =
+    intents.data[0] ||
+    (await stripe.paymentIntents.create({
+      customer: customerId,
+      setup_future_usage: "off_session",
+      amount: price.price,
+      currency: price.currency,
+      metadata: {
+        packageId: pkg.id,
+      },
+      // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+      automatic_payment_methods: {
+        enabled: true,
+      },
+    }));
 
   const clientSecret = paymentIntent.client_secret;
 
@@ -72,5 +84,5 @@ export default async function Page({
         </div>
       </div>
     </div>
-  )
+  );
 }

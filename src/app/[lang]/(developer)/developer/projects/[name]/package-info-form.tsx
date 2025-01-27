@@ -3,23 +3,48 @@
 import { Edit, Loader2, MoreVertical, Save, Upload } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useCallback, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { type State, updateDisplayNameAndShortDescription, deletePackage, changePackageVisibility, uploadIcon } from "./actions";
+import {
+  type State,
+  updateDisplayNameAndShortDescription,
+  deletePackage,
+  changePackageVisibility,
+  uploadIcon,
+} from "./actions";
 import { ErrorDisplay } from "@/components/error-display";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
 import type { Package } from "./types";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export function PackageInfoForm({ pkg }: { pkg: Package }) {
   const [edit, setEdit] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [pending, setPending] = useState(false);
   const [displayName, setDisplayName] = useState(pkg.displayName || "");
-  const [shortDescription, setShortDescription] = useState(pkg.shortDescription);
+  const [shortDescription, setShortDescription] = useState(
+    pkg.shortDescription,
+  );
   const [state, setState] = useState<State>({});
   const [pendingActions, startDropdownActions] = useTransition();
   const [pendingIcon, startUploadIcon] = useTransition();
@@ -106,29 +131,48 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
       <div className="sm:flex sm:gap-2">
         <div className="w-full flex justify-between gap-4">
           <div className="flex gap-4 w-full">
-            <Button className="group p-0 w-16 h-16 bg-secondary hover:bg-secondary/90 relative" variant="ghost" onClick={handleUploadIconClick}>
-              {pkg.iconFileUrl && <Image width={64} height={64}
-                className="w-16 h-16 max-w-fit rounded-md group-hover:opacity-80"
-                alt="Package icon" src={pkg.iconFileUrl} />}
-              {pendingIcon
-                ? <Loader2 className="w-6 h-6 animate-spin absolute" />
-                : <Upload className="w-6 h-6 group-hover:visible invisible absolute" />}
+            <Button
+              className="group p-0 w-16 h-16 bg-secondary hover:bg-secondary/90 relative"
+              variant="ghost"
+              onClick={handleUploadIconClick}
+            >
+              {pkg.iconFileUrl && (
+                <Image
+                  width={64}
+                  height={64}
+                  className="w-16 h-16 max-w-fit rounded-md group-hover:opacity-80"
+                  alt="Package icon"
+                  src={pkg.iconFileUrl}
+                />
+              )}
+              {pendingIcon ? (
+                <Loader2 className="w-6 h-6 animate-spin absolute" />
+              ) : (
+                <Upload className="w-6 h-6 group-hover:visible invisible absolute" />
+              )}
             </Button>
 
             <div className="flex-1">
-              <h2 className={cn("font-bold text-2xl", edit && "hidden")}>{pkg.displayName || pkg.name}</h2>
-              <Input className={cn(!edit && "hidden")}
+              <h2 className={cn("font-bold text-2xl", edit && "hidden")}>
+                {pkg.displayName || pkg.name}
+              </h2>
+              <Input
+                className={cn(!edit && "hidden")}
                 value={displayName}
                 type="text"
                 placeholder="表示名 (空白の場合IDが表示されます)"
                 onChange={(e) => setDisplayName(e.target.value)}
               />
-              {state?.errors?.displayName && <ErrorDisplay errors={state.errors.displayName} />}
-              <p className="text-muted-foreground text-sm font-medium">{pkg.name}</p>
+              {state?.errors?.displayName && (
+                <ErrorDisplay errors={state.errors.displayName} />
+              )}
+              <p className="text-muted-foreground text-sm font-medium">
+                {pkg.name}
+              </p>
             </div>
           </div>
 
-          {!edit &&
+          {!edit && (
             <div className="flex gap-2">
               <Button variant="ghost" size="icon" onClick={() => setEdit(true)}>
                 <Edit className="w-4 h-4" />
@@ -136,26 +180,39 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" disabled={pendingActions}>
-                    {pendingActions ? <Loader2 className="w-4 h-4 animate-spin" /> : <MoreVertical className="w-4 h-4" />}
+                    {pendingActions ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <MoreVertical className="w-4 h-4" />
+                    )}
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
                   <DropdownMenuLabel>操作</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setDeleteDialog(true)}>削除</DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleChangeVisibility}>{pkg.published ? "非公開にする" : "公開する"}</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDeleteDialog(true)}>
+                    削除
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleChangeVisibility}>
+                    {pkg.published ? "非公開にする" : "公開する"}
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>}
+            </div>
+          )}
         </div>
       </div>
-      <p className={cn("mt-4 text-foreground/70", edit && "hidden")}>{pkg.shortDescription}</p>
+      <p className={cn("mt-4 text-foreground/70", edit && "hidden")}>
+        {pkg.shortDescription}
+      </p>
       <Input
         className={cn("mt-4", !edit && "hidden")}
         value={shortDescription}
-        onChange={e => setShortDescription(e.target.value)}
+        onChange={(e) => setShortDescription(e.target.value)}
       />
-      {state?.errors?.shortDescription && <ErrorDisplay errors={state.errors.shortDescription} />}
+      {state?.errors?.shortDescription && (
+        <ErrorDisplay errors={state.errors.shortDescription} />
+      )}
 
       <div className="flex gap-2 justify-end mt-4">
         <Button
@@ -165,7 +222,11 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
           disabled={pending}
           onClick={handleSubmit}
         >
-          {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+          {pending ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4 mr-2" />
+          )}
           保存
         </Button>
         <Button
@@ -194,5 +255,5 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
         </AlertDialogContent>
       </AlertDialog>
     </>
-  )
+  );
 }

@@ -1,22 +1,49 @@
 "use client";
 
-import { useCallback, useReducer, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useReducer,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import type { Package } from "./types";
 import { Button } from "@/components/ui/button";
 import { Edit, Loader2, Plus, Save } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import SemVer from "semver";
 import { createRelease, deleteRelease, updateRelease } from "./actions";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export function ReleaseForm({ pkg }: { pkg: Package }) {
   const [edit, setEdit] = useState(false);
@@ -26,11 +53,16 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
   const [deleting, startDeleteTransition] = useTransition();
   const [creating, startCreateTransition] = useTransition();
   const [releases, setReleases] = useState(pkg.Release);
-  const [release, setRelease] = useState<Package["Release"][number] | undefined>(releases?.[0]);
+  const [release, setRelease] = useState<
+    Package["Release"][number] | undefined
+  >(releases?.[0]);
   const [title, setTitle] = useState(release?.title || "");
   const [file, setFile] = useState<File>();
   const [description, setDescription] = useState(release?.description || "");
-  const [targetVersion, setTargetVersion] = useState({ value: release?.targetVersion || "", message: "" });
+  const [targetVersion, setTargetVersion] = useState({
+    value: release?.targetVersion || "",
+    message: "",
+  });
   const [version, setVersion] = useState({ value: "", message: "" });
   const [published, setPublished] = useState(release?.published || false);
   const { toast } = useToast();
@@ -61,22 +93,31 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         const data: Package["Release"][number] = (result as any).data;
         if (data) {
           setRelease(data);
-          setReleases(releases.map((r) => r.id === release.id ? data : r));
+          setReleases(releases.map((r) => (r.id === release.id ? data : r)));
         }
         toast({
           variant: "default",
           title: "リリースを保存しました",
-        })
+        });
         setEdit(false);
       } else {
         toast({
           variant: "destructive",
           title: "リリースの保存に失敗しました",
           description: result.message,
-        })
+        });
       }
     });
-  }, [description, file, published, release, releases, targetVersion.value, title, toast]);
+  }, [
+    description,
+    file,
+    published,
+    release,
+    releases,
+    targetVersion.value,
+    title,
+    toast,
+  ]);
 
   const handleSelectFile = useCallback(async () => {
     const files = await showOpenFileDialog();
@@ -94,12 +135,17 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
 
   const handleCreate = useCallback(() => {
     startCreateTransition(async () => {
-      const result = await createRelease({ packageId: pkg.id, version: version.value });
+      const result = await createRelease({
+        packageId: pkg.id,
+        version: version.value,
+      });
       if (result.success) {
         // biome-ignore lint/suspicious/noExplicitAny: <explanation>
         const data: Package["Release"][number] = (result as any).data;
-        setReleases(releases => [...releases, data]
-          .toSorted((a, b) => new SemVer.SemVer(b.version).compare(a.version))
+        setReleases((releases) =>
+          [...releases, data].toSorted((a, b) =>
+            new SemVer.SemVer(b.version).compare(a.version),
+          ),
         );
         setRelease(data);
         setTitle(data.title);
@@ -110,7 +156,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         toast({
           variant: "default",
           title: "リリースを作成しました",
-        })
+        });
         handleClose();
       } else {
         setVersion({ ...version, message: result.message || "" });
@@ -136,25 +182,35 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         toast({
           variant: "default",
           title: "リリースを削除しました",
-        })
+        });
       } else {
         toast({
           variant: "destructive",
           title: "リリースの削除に失敗しました",
           // biome-ignore lint/suspicious/noExplicitAny: <explanation>
           description: (result as any).message,
-        })
+        });
       }
     });
   }, [release, releases, toast]);
 
   return (
     <div>
-      <div className={cn("flex items-center mt-6 border-b pb-2 gap-2", !releases.length && "flex-col items-stretch")}>
+      <div
+        className={cn(
+          "flex items-center mt-6 border-b pb-2 gap-2",
+          !releases.length && "flex-col items-stretch",
+        )}
+      >
         {releases.length > 0 ? (
           <>
             {/* biome-ignore lint/style/noNonNullAssertion: <explanation> */}
-            <Select value={release?.id} onValueChange={(e) => setRelease(releases.find((r) => r.id === e)!)}>
+            <Select
+              value={release?.id}
+              onValueChange={(e) =>
+                setRelease(releases.find((r) => r.id === e)!)
+              }
+            >
               <SelectTrigger className="font-bold text-xl border-none bg-transparent px-0 pr-3 flex-1">
                 <SelectValue />
               </SelectTrigger>
@@ -169,10 +225,20 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
 
             {!edit && (
               <>
-                <Button size="icon" variant="ghost" className="w-8 h-8" onClick={() => setOpen(true)}>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="w-8 h-8"
+                  onClick={() => setOpen(true)}
+                >
                   <Plus className="w-4 h-4" />
                 </Button>
-                <Button size="icon" variant="ghost" className="w-8 h-8" onClick={() => setEdit(true)}>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="w-8 h-8"
+                  onClick={() => setEdit(true)}
+                >
                   <Edit className="w-4 h-4" />
                 </Button>
               </>
@@ -185,23 +251,26 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
           </Button>
         )}
       </div>
-      {!edit &&
-        <p className="mt-4 whitespace-pre-wrap" style={{ wordWrap: "break-word" }}>
+      {!edit && (
+        <p
+          className="mt-4 whitespace-pre-wrap"
+          style={{ wordWrap: "break-word" }}
+        >
           {release ? (
             <>
               {release.title} <br />
               {release.description}
             </>
           ) : (
-            <>
-              リリースがありません
-            </>
+            <>リリースがありません</>
           )}
         </p>
-      }
-      {(edit && release) && (
+      )}
+      {edit && release && (
         <div className="flex flex-col gap-2">
-          <Label className="mt-2" htmlFor="release-title">タイトル</Label>
+          <Label className="mt-2" htmlFor="release-title">
+            タイトル
+          </Label>
           <Input
             id="release-title"
             placeholder="タイトル"
@@ -209,7 +278,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             disabled={saving}
             onChange={(e) => setTitle(e.target.value)}
           />
-          <Label className="mt-2" htmlFor="release-description">説明</Label>
+          <Label className="mt-2" htmlFor="release-description">
+            説明
+          </Label>
           <Textarea
             id="release-description"
             placeholder="説明"
@@ -218,7 +289,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             disabled={saving}
             onChange={(e) => setDescription(e.target.value)}
           />
-          <Label className="mt-2" htmlFor="release-target-version">ターゲットバージョン</Label>
+          <Label className="mt-2" htmlFor="release-target-version">
+            ターゲットバージョン
+          </Label>
           <Input
             id="release-target-version"
             placeholder="ターゲットバージョン"
@@ -227,11 +300,17 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             onChange={(e) =>
               setTargetVersion({
                 value: e.target.value,
-                message: SemVer.valid(e.target.value) || isValidNuGetVersionRange(e.target.value) ? "" : "バージョンが正しくありません"
+                message:
+                  SemVer.valid(e.target.value) ||
+                  isValidNuGetVersionRange(e.target.value)
+                    ? ""
+                    : "バージョンが正しくありません",
               })
             }
           />
-          {targetVersion.message && (<p className="text-sm text-red-300">{targetVersion.message}</p>)}
+          {targetVersion.message && (
+            <p className="text-sm text-red-300">{targetVersion.message}</p>
+          )}
           <Label className="mt-2">パッケージファイル</Label>
           <Button
             variant="outline"
@@ -239,8 +318,10 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             onClick={handleSelectFile}
             disabled={saving}
           >
-            {file ? file.name
-              : release?.file?.name ? release.file.name
+            {file
+              ? file.name
+              : release?.file?.name
+                ? release.file.name
                 : "ファイルを選択"}
           </Button>
           <div className="flex items-center space-x-2 mt-2">
@@ -255,9 +336,11 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
           <div className="flex gap-2 mt-4 flex-wrap justify-between">
             <div className="flex gap-2">
               <Button onClick={handleSave} disabled={saving || deleting}>
-                {saving
-                  ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  : <Save className="w-4 h-4 mr-2" />}
+                {saving ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4 mr-2" />
+                )}
                 保存
               </Button>
               <Button
@@ -288,7 +371,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             <DialogTitle>リリースを作成</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-2 py-4">
-            <Label className="mt-2" htmlFor="release-version">バージョン</Label>
+            <Label className="mt-2" htmlFor="release-version">
+              バージョン
+            </Label>
             <Input
               id="release-version"
               placeholder="バージョン"
@@ -297,19 +382,24 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
               onChange={(e) =>
                 setVersion({
                   value: e.target.value,
-                  message: SemVer.valid(e.target.value) ? "" : "バージョンが正しくありません"
+                  message: SemVer.valid(e.target.value)
+                    ? ""
+                    : "バージョンが正しくありません",
                 })
               }
             />
-            {version.message && (<p className="text-sm text-red-300">{version.message}</p>)}
+            {version.message && (
+              <p className="text-sm text-red-300">{version.message}</p>
+            )}
           </div>
           <DialogFooter>
-            <Button disabled={creating}
-              variant="outline"
-              onClick={handleClose}>
+            <Button disabled={creating} variant="outline" onClick={handleClose}>
               キャンセル
             </Button>
-            <Button disabled={!!version.message || creating} onClick={handleCreate}>
+            <Button
+              disabled={!!version.message || creating}
+              onClick={handleCreate}
+            >
               {creating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               作成
             </Button>
@@ -332,5 +422,5 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  )
+  );
 }

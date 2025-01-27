@@ -1,4 +1,3 @@
-
 .easingDemo {
   background: transparent;
 }
@@ -17,7 +16,6 @@
 }
 
 @keyframes bottom-to-top {
-
   0%,
   10% {
     top: 100%;

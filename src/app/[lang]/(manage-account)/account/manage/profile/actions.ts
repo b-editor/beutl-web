@@ -5,16 +5,22 @@ import { authenticated, authOrSignIn } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { prisma } from "@/prisma";
 
-const emptyStringToUndefined = (z: Zod) => z.literal('').transform(() => undefined);
-const profileSchema = (z: Zod) => z.object({
-  displayName: z.string().max(50),
-  userName: z.string().regex(/^[a-zA-Z0-9-_]*$/),
-  bio: z.string().max(150).optional().or(z.literal('')),
-  x: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
-  github: z.string().optional().or(emptyStringToUndefined(z)),
-  youtube: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
-  custom: z.string().url().optional().or(emptyStringToUndefined(z)),
-});
+const emptyStringToUndefined = (z: Zod) =>
+  z.literal("").transform(() => undefined);
+const profileSchema = (z: Zod) =>
+  z.object({
+    displayName: z.string().max(50),
+    userName: z.string().regex(/^[a-zA-Z0-9-_]*$/),
+    bio: z.string().max(150).optional().or(z.literal("")),
+    x: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
+    github: z.string().optional().or(emptyStringToUndefined(z)),
+    youtube: z
+      .string()
+      .startsWith("@")
+      .optional()
+      .or(emptyStringToUndefined(z)),
+    custom: z.string().url().optional().or(emptyStringToUndefined(z)),
+  });
 
 export type State = {
   errors?: {
@@ -30,7 +36,10 @@ export type State = {
   message?: string | null;
 };
 
-export async function updateProfile(state: State, formData: FormData): Promise<State> {
+export async function updateProfile(
+  state: State,
+  formData: FormData,
+): Promise<State> {
   return await authenticated(async (session) => {
     const { t, z } = await getTranslation(getLanguage());
     const validated = profileSchema(z).safeParse(
@@ -81,7 +90,7 @@ export async function updateProfile(state: State, formData: FormData): Promise<S
     const socials = [
       {
         providerId: providers.find((p) => p.provider === "x")?.id,
-        value: x
+        value: x,
       },
       {
         providerId: providers.find((p) => p.provider === "github")?.id,

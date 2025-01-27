@@ -7,5 +7,5 @@ export function ClientRedirect({ url }: { url: string }) {
     location.href = url;
   }, [url]);
 
-  return <></>
+  return <></>;
 }

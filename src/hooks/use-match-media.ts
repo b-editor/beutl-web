@@ -2,12 +2,12 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export function useMatchMedia(
   mediaQuery: string,
-  initialState = false
+  initialState = false,
 ): boolean {
   const matchMediaList = useMemo(
     () =>
       typeof window === "undefined" ? undefined : window.matchMedia(mediaQuery),
-    [mediaQuery]
+    [mediaQuery],
   );
 
   const subscribe = useCallback(
@@ -15,12 +15,12 @@ export function useMatchMedia(
       matchMediaList?.addEventListener("change", onStoreChange);
       return () => matchMediaList?.removeEventListener("change", onStoreChange);
     },
-    [matchMediaList]
+    [matchMediaList],
   );
 
   return useSyncExternalStore(
     subscribe,
     () => matchMediaList?.matches ?? initialState,
-    () => initialState
+    () => initialState,
   );
 }

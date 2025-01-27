@@ -1,26 +1,42 @@
 "use client";
 import { loadStripe } from "@stripe/stripe-js";
-import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
+import {
+  Elements,
+  PaymentElement,
+  useElements,
+  useStripe,
+} from "@stripe/react-stripe-js";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import Image from "next/image";
 import Link from "next/link";
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "@/components/ui/carousel";
 import { formatAmount } from "@/lib/currency-formatter";
 import type { Package } from "@/lib/store-utils";
 import { useTranslation } from "@/app/i18n/client";
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string);
+const stripePromise = loadStripe(
+  process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string,
+);
 
 export function PackageDetails({
-  pkg, price, currency, lang
+  pkg,
+  price,
+  currency,
+  lang,
 }: {
-  pkg: Package,
-  price: number,
-  currency: string
-  lang: string
+  pkg: Package;
+  price: number;
+  currency: string;
+  lang: string;
 }) {
   const { t } = useTranslation(lang);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
@@ -29,13 +45,27 @@ export function PackageDetails({
       <div className="max-sm:relative sm:flex sm:gap-2">
         <div className="w-full flex justify-between gap-4 max-sm:flex-col">
           <div className="flex gap-4">
-            {pkg.iconFileUrl && <Image width={64} height={64}
-              className="w-16 h-16 max-w-fit rounded-md"
-              alt="Package icon" src={pkg.iconFileUrl} />}
-            {!pkg.iconFileUrl && <div className="w-16 h-16 rounded-md bg-secondary" />}
+            {pkg.iconFileUrl && (
+              <Image
+                width={64}
+                height={64}
+                className="w-16 h-16 max-w-fit rounded-md"
+                alt="Package icon"
+                src={pkg.iconFileUrl}
+              />
+            )}
+            {!pkg.iconFileUrl && (
+              <div className="w-16 h-16 rounded-md bg-secondary" />
+            )}
             <div>
-              <h2 className="font-bold text-2xl">{pkg.displayName || pkg.name}</h2>
-              <Button asChild variant="link" className="p-0 h-auto text-muted-foreground">
+              <h2 className="font-bold text-2xl">
+                {pkg.displayName || pkg.name}
+              </h2>
+              <Button
+                asChild
+                variant="link"
+                className="p-0 h-auto text-muted-foreground"
+              >
                 <Link href="/">{pkg.user.Profile?.userName}</Link>
               </Button>
             </div>
@@ -43,16 +73,29 @@ export function PackageDetails({
         </div>
       </div>
       <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
-      <div className="mt-4 text-3xl font-bold">{formatAmount(price, currency, lang)}</div>
+      <div className="mt-4 text-3xl font-bold">
+        {formatAmount(price, currency, lang)}
+      </div>
       <div className="max-lg:hidden">
         {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
           <>
-            <h3 className="font-bold text-xl mt-6 border-b pb-2">{t("store:screenshots")}</h3>
+            <h3 className="font-bold text-xl mt-6 border-b pb-2">
+              {t("store:screenshots")}
+            </h3>
             <Carousel className="mt-4" opts={{ active: maxLg }}>
               <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
                 {pkg.PackageScreenshot.map((item) => (
-                  <CarouselItem className="w-min max-w-min min-w-min" key={item.file.id}>
-                    <Image className="rounded max-w-min h-80 aspect-auto" alt="Screenshot" width={1280} height={720} src={item.url} />
+                  <CarouselItem
+                    className="w-min max-w-min min-w-min"
+                    key={item.file.id}
+                  >
+                    <Image
+                      className="rounded max-w-min h-80 aspect-auto"
+                      alt="Screenshot"
+                      width={1280}
+                      height={720}
+                      src={item.url}
+                    />
                   </CarouselItem>
                 ))}
               </CarouselContent>
@@ -63,16 +106,19 @@ export function PackageDetails({
         )}
       </div>
     </>
-  )
+  );
 }
 
 export function ClientPage({
-  clientSecret, email, lang, name
+  clientSecret,
+  email,
+  lang,
+  name,
 }: {
   clientSecret: string | null;
   email: string;
   lang: string;
-  name: string
+  name: string;
 }) {
   return (
     <>
@@ -81,9 +127,9 @@ export function ClientPage({
           options={{
             clientSecret,
             appearance: {
-              theme: 'night',
+              theme: "night",
               variables: {
-                colorPrimary: 'hsl(300 9% 98%)',
+                colorPrimary: "hsl(300 9% 98%)",
                 colorBackground: "hsl(240 7% 8%)",
               },
               rules: {
@@ -114,7 +160,8 @@ export function ClientPage({
                 ".Input:focus": {
                   outline: "2px solid transparent",
                   outlineOffset: "2px",
-                  boxShadow: "0 0 0 2px hsl(240 7% 8%), 0 0 0 4px hsl(243 86% 40%), #00000000 0 0 0 0",
+                  boxShadow:
+                    "0 0 0 2px hsl(240 7% 8%), 0 0 0 4px hsl(243 86% 40%), #00000000 0 0 0 0",
                   borderColor: "hsl(248 9% 18%)",
                 },
                 ".PickerItem--selected": {
@@ -125,8 +172,8 @@ export function ClientPage({
                   marginLeft: "0.75rem",
                   marginRight: "0.75rem",
                 },
-              }
-            }
+              },
+            },
           }}
           stripe={stripePromise}
         >
@@ -134,10 +181,14 @@ export function ClientPage({
         </Elements>
       )}
     </>
-  )
+  );
 }
 
-function CheckoutForm({ lang, name, email }: { lang: string, name: string, email: string }) {
+function CheckoutForm({
+  lang,
+  name,
+  email,
+}: { lang: string; name: string; email: string }) {
   const { t } = useTranslation(lang);
   const stripe = useStripe();
   const elements = useElements();
@@ -171,8 +222,11 @@ function CheckoutForm({ lang, name, email }: { lang: string, name: string, email
   };
 
   return (
-    <form id="payment-form" onSubmit={handleSubmit} className="h-full flex flex-col justify-between">
-
+    <form
+      id="payment-form"
+      onSubmit={handleSubmit}
+      className="h-full flex flex-col justify-between"
+    >
       <PaymentElement
         id="payment-element"
         options={{
@@ -181,12 +235,17 @@ function CheckoutForm({ lang, name, email }: { lang: string, name: string, email
             billingDetails: {
               email,
             },
-          }
+          },
         }}
       />
       <div className="mx-3 mt-2 flex flex-col gap-2">
         {message && <div>{message}</div>}
-        <Button size="lg" variant="default" disabled={isLoading || !stripe || !elements} id="submit">
+        <Button
+          size="lg"
+          variant="default"
+          disabled={isLoading || !stripe || !elements}
+          id="submit"
+        >
           {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
           {t("store:pay")}
         </Button>

@@ -5,38 +5,38 @@ import type { PrismaTransaction } from "./transaction";
 export async function updateAuthenticatorUsedAt({
   credentialID,
   usedAt,
-  prisma
+  prisma,
 }: {
-  credentialID: string,
-  usedAt: Date,
-  prisma?: PrismaTransaction
+  credentialID: string;
+  usedAt: Date;
+  prisma?: PrismaTransaction;
 }) {
   await (prisma || sharedPrisma).authenticator.update({
     where: {
-      credentialID
+      credentialID,
     },
     data: {
-      usedAt: usedAt
-    }
+      usedAt: usedAt,
+    },
   });
 }
 
 export async function deleteAuthenticator({
   credentialID,
   userId,
-  prisma
+  prisma,
 }: {
-  credentialID: string,
-  userId: string,
-  prisma?: PrismaTransaction
+  credentialID: string;
+  userId: string;
+  prisma?: PrismaTransaction;
 }) {
   await (prisma || sharedPrisma).authenticator.delete({
     where: {
       userId_credentialID: {
         userId,
-        credentialID
-      }
-    }
+        credentialID,
+      },
+    },
   });
 }
 
@@ -44,36 +44,36 @@ export async function updateAuthenticatorName({
   credentialID,
   userId,
   name,
-  prisma
+  prisma,
 }: {
-  credentialID: string,
-  userId: string,
-  name: string,
-  prisma?: PrismaTransaction
+  credentialID: string;
+  userId: string;
+  name: string;
+  prisma?: PrismaTransaction;
 }) {
   await (prisma || sharedPrisma).authenticator.update({
     where: {
       userId_credentialID: {
         userId,
-        credentialID
-      }
+        credentialID,
+      },
     },
     data: {
-      name
-    }
+      name,
+    },
   });
 }
 
 export async function findAuthenticatorByAccountId({
   providerAccountId,
-  prisma
+  prisma,
 }: {
-    providerAccountId: string,
-  prisma?: PrismaTransaction
+  providerAccountId: string;
+  prisma?: PrismaTransaction;
 }) {
   return await (prisma || sharedPrisma).authenticator.findFirst({
     where: {
-      providerAccountId
-    }
+      providerAccountId,
+    },
   });
 }
