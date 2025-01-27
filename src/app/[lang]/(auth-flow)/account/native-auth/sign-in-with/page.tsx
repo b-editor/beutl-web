@@ -12,7 +12,7 @@ export default async function Page({
   const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(returnUrl)}`;
 
   if (!session?.user) {
-    signIn(provider.toLowerCase(), { redirectTo: continueUrl.toString() });
+    await signIn(provider.toLowerCase(), { redirectTo: continueUrl.toString() });
   } else {
     // アカウントが存在する
     redirect(continueUrl.toString());
