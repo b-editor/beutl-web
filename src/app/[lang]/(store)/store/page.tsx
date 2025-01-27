@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { retrievePackages } from "@/lib/store-utils";
 import Image from "next/image";
+import Link from "next/link";
 
 export default async function Page({
   searchParams: { query },
@@ -38,7 +39,7 @@ export default async function Page({
       <div className="container max-w-6xl mx-auto py-6 px-2">
         <div className="flex flex-wrap">
           {packages.map((item) => (
-            <a
+            <Link
               href={`/${lang}/store/${item.name}`}
               className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
               key={item.id}
@@ -96,7 +97,7 @@ export default async function Page({
                   </div>
                 </CardContent>
               </Card>
-            </a>
+            </Link>
           ))}
         </div>
       </div>
