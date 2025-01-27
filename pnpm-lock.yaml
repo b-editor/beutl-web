@@ -146,6 +146,9 @@ importers:
       next-auth:
         specifier: 5.0.0-beta.20
         version: 5.0.0-beta.20(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(next@14.2.10(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react@18.3.1)
+      next-nprogress-bar:
+        specifier: ^2.4.3
+        version: 2.4.3
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -2807,6 +2810,9 @@ packages:
       nodemailer:
         optional: true
 
+  next-nprogress-bar@2.4.3:
+    resolution: {integrity: sha512-069WmFALkpCyKiIy89q6dWcPiHhUmXh6EZz6oLpOS7zsIunNOYLscloKFALjIQNCOg3ZO9dWRPowYW4ULho4HQ==}
+
   next@14.2.10:
     resolution: {integrity: sha512-sDDExXnh33cY3RkS9JuFEKaS4HmlWmDKP1VJioucCG6z5KuA008DPsDZOzi8UfqEk3Ii+2NCQSJrfbEWtZZfww==}
     engines: {node: '>=18.17.0'}
@@ -2841,6 +2847,9 @@ packages:
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
     engines: {node: '>=0.10.0'}
+
+  nprogress-v2@1.0.4:
+    resolution: {integrity: sha512-HPhTEgqsQMFXXuaftvu6bevqEXvcQ/hogvkAswlcNyS9eRGjvo7wZY1O4H3aZS4Uq8oWSO6sL3dOj6Oq/ZJN5A==}
 
   oauth4webapi@2.17.0:
     resolution: {integrity: sha512-lbC0Z7uzAFNFyzEYRIC+pkSVvDHJTbEW+dYlSBAlCYDe6RxUkJ26bClhk8ocBZip1wfI9uKTe0fm4Ib4RHn6uQ==}
@@ -6840,6 +6849,10 @@ snapshots:
       '@simplewebauthn/server': 9.0.3
       nodemailer: 6.9.15
 
+  next-nprogress-bar@2.4.3:
+    dependencies:
+      nprogress-v2: 1.0.4
+
   next@14.2.10(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@next/env': 14.2.10
@@ -6875,6 +6888,8 @@ snapshots:
     optional: true
 
   normalize-path@3.0.0: {}
+
+  nprogress-v2@1.0.4: {}
 
   oauth4webapi@2.17.0: {}
 

@@ -4,6 +4,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SessionProvider } from "next-auth/react";
 import { LanguageProvider } from "./i18n/client";
+import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
 
 export const runtime = "edge";
 
@@ -27,12 +28,14 @@ export default function RootLayout({ children, params: { lang } }: Props) {
   return (
     <html lang={lang} className="dark">
       <body className={`${notoSansJP.variable} antialiased`}>
-        <LanguageProvider initialLanguage={lang}>
-          <SessionProvider>
-            {children}
-            <Toaster />
-          </SessionProvider>
-        </LanguageProvider>
+        <ProgressBarProvider>
+          <LanguageProvider initialLanguage={lang}>
+            <SessionProvider>
+              {children}
+              <Toaster />
+            </SessionProvider>
+          </LanguageProvider>
+        </ProgressBarProvider>
       </body>
     </html>
   );
