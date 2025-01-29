@@ -15,9 +15,6 @@ const nextConfig = {
         port: "",
       },
     ],
-  },
-  experimental: {
-    instrumentationHook: true,
   }
 };
 
