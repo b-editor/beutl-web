@@ -1,14 +1,16 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { auth, signIn } from "@/auth";
+import { getLanguage } from "@/lib/lang-utils";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const returnUrl = searchParams.get("returnUrl") || "";
   const provider = searchParams.get("provider") || "";
-  const lang = request.nextUrl.pathname.split('/')[1];
+  const lang = getLanguage();
 
   const session = await auth();
-  const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(returnUrl)}`;
+  const continueUrl = new URL(`/${lang}/account/native-auth/continue`, request.nextUrl.origin);
+  continueUrl.searchParams.set("returnUrl", returnUrl);
 
   if (!session?.user) {
     await signIn(provider.toLowerCase(), { redirectTo: continueUrl.toString() });
