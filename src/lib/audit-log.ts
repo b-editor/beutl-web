@@ -45,8 +45,8 @@ export async function addAuditLog({
   details?: string;
 }) {
   const h = headers();
-  const ipAddress =
-    h.get("CF-Connecting-IP") || h.get("X-Forwarded-For")?.split(",")[0];
+
+  const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");
   await prisma.auditLog.create({
     data: {
