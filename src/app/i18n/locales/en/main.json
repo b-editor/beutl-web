@@ -17,7 +17,5 @@
   "ffmpegLocator": "FFmpeg Locator",
   "ffmpegLocatorDescription": "Automatically places FFmpeg libraries and executables.",
   "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes.",
-  "cefSample": "Cef Sample",
-  "cefSampleDescription": "Adds a browser using Cef to the page. Experimental"
+  "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes."
 }

@@ -17,7 +17,5 @@
   "ffmpegLocator": "FFmpeg配置ツール",
   "ffmpegLocatorDescription": "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
   "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
-  "cefSample": "Cefサンプル",
-  "cefSampleDescription": "Cefを使ったブラウザをページに追加します。試験中"
+  "sugarShakerDescription": "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。"
 }

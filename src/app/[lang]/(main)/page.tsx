@@ -23,7 +23,6 @@ import Footer from "@/components/footer";
 import styles from "@/styles/fluid.module.css";
 import Link from "next/link";
 import { getTranslation } from "@/app/i18n/server";
-import { Awaited } from "@auth/core/types";
 
 function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
   return [
@@ -31,7 +30,7 @@ function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
       name: t("main:ffmpegLocator"),
       description: t("main:ffmpegLocatorDescription"),
       image:
-        "https://beutl.beditor.net/api/v1/assets/b-editor/ffmpeg-locator.png/download",
+        "https://beutl.beditor.net/api/contents/35750eb8-f9f6-43d2-8bd1-d54ad9589caf",
       borderGradient:
         "linear-gradient(135deg, #5C9A55 0%, #5E84E7 50%, #7B59F6 100%)",
     },
@@ -39,15 +38,9 @@ function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
       name: t("main:sugarShaker"),
       description: t("main:sugarShakerDescription"),
       image:
-        "https://beutl.beditor.net/api/v1/assets/b-editor/sugar-shaker-logo.jpg/download",
+        "https://beutl.beditor.net/api/contents/cf85aadd-6439-4635-ba6e-d78c73c4853a",
       borderGradient:
         "linear-gradient(135deg, #ffffff 0%, #090C1D 50%, #ffffff 100%)",
-    },
-    {
-      name: t("main:cefSample"),
-      description: t("main:cefSampleDescription"),
-      image: "https://beutl.beditor.net/api/v1/assets/b-editor/icon/download",
-      borderGradient: "linear-gradient(135deg, #693AF4 0%, #D0D2D2 100%)",
     },
   ];
 }
