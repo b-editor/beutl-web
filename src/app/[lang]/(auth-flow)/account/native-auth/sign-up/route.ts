@@ -1,19 +1,20 @@
 import { auth, signOut } from "@/auth";
 import { getLanguage } from "@/lib/lang-utils";
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
   const session = await auth();
   const returnUrl = request.nextUrl.searchParams.get("returnUrl") || "";
   const lang = getLanguage();
 
+  const continueUrl = new URL(`/${lang}/account/sign-in`, request.nextUrl.origin);
+  continueUrl.searchParams.set("returnUrl", returnUrl);
+
   if (session?.user) {
     await signOut({
-      redirectTo: `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
+      redirectTo: continueUrl.toString(),
     });
   }
 
-  return NextResponse.redirect(
-    `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
-  );
+  return NextResponse.redirect(continueUrl.toString());
 }
