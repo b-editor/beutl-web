@@ -54,6 +54,7 @@ export async function GET(
       },
     },
   });
+  let cacheControl = "private";
 
   if (!file) {
     return NextResponse.json(
@@ -75,9 +76,11 @@ export async function GET(
       allowed = file.Package.some(
         (pkg) => pkg.published || pkg.userId === session?.user?.id,
       );
+      cacheControl = file.Package.some((pkg) => pkg.published) ? "public" : "private";
     }
     if (file.Profile) {
       allowed = true;
+      cacheControl = "public";
     }
     if (file.PackageScreenshot.length !== 0) {
       allowed = file.PackageScreenshot.some(
@@ -85,8 +88,10 @@ export async function GET(
           screenshot.package.published ||
           screenshot.package.userId === session?.user?.id,
       );
+      cacheControl = file.PackageScreenshot.some((screenshot) => screenshot.package.published) ? "public" : "private";
     }
     if (file.Release.length !== 0) {
+      cacheControl = "no-store";
       allowed = file.Release.some(
         (release) =>
           (release.published && release.package.published) ||
@@ -137,6 +142,7 @@ export async function GET(
       headers: {
         "Content-Type": res.ContentType || "",
         "Content-Length": res.ContentLength?.toString() || "",
+        "Cache-Control": cacheControl !== "no-store" ? `${cacheControl}, max-age=31536000, immutable` : cacheControl,
       },
       status: 200,
     });
