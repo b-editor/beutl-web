@@ -51,8 +51,7 @@ export async function updateUserEmail({
     },
     data: {
       email: email,
-    },
-    select: {},
+    }
   });
 }
 

@@ -54,7 +54,6 @@ export async function deleteAccount({
         providerAccountId,
         provider,
       },
-    },
-    select: {},
+    }
   });
 }
