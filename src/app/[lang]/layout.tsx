@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { Noto_Sans_JP } from "next/font/google";
-import "./globals.css";
+import "../globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SessionProvider } from "next-auth/react";
-import { LanguageProvider } from "./i18n/client";
+import { LanguageProvider } from "../i18n/client";
 import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
-import { getTranslation } from "./i18n/server";
+import { getTranslation } from "../i18n/server";
 
 export const runtime = "edge";
 
@@ -24,7 +24,7 @@ type Props = {
 export async function generateMetadata({
   params: { lang },
 }: Props): Promise<Metadata> {
-  const { t } = await getTranslation();
+  const { t } = await getTranslation(lang);
   return {
     title: "Beutl",
     description: t("main:description"),
