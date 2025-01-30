@@ -14,10 +14,6 @@ const notoSansJP = Noto_Sans_JP({
   variable: "--font-noto-sans-jp",
 });
 
-export const metadata: Metadata = {
-  title: "Beutl",
-};
-
 type Props = {
   children: React.ReactNode;
   params: {
