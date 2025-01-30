@@ -40,7 +40,7 @@ export async function addAuditLog({
   action,
   details,
 }: {
-  userId: string;
+  userId: string | null;
   action: string;
   details?: string;
 }) {

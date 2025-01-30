@@ -35,7 +35,8 @@ export async function deleteUser(token: string, identifier: string) {
 
   await deleteUserById({ userId: tokenData.userId });
   await addAuditLog({
-    userId: tokenData.userId,
+    userId: null,
     action: auditLogActions.account.accountDeleted,
+    details: `User ${tokenData.userId} deleted their account`,
   });
 }

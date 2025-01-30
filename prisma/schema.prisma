@@ -1,6 +1,6 @@
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_DATABASE_URL")
 }
 
@@ -219,7 +219,7 @@ model UserPaymentHistory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Customer {
@@ -306,12 +306,12 @@ model NativeAppAuth {
 
 model AuditLog {
   id        String   @id @default(uuid())
-  userId    String
+  userId    String?
   action    String
   details   String?
   ipAddress String?
   userAgent String?
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
