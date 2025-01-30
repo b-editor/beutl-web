@@ -102,7 +102,6 @@ export async function deleteUserById({
   await (prisma || sharedPrisma).user.delete({
     where: {
       id: userId,
-    },
-    select: {},
+    }
   });
 }
