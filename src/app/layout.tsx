@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { SessionProvider } from "next-auth/react";
 import { LanguageProvider } from "./i18n/client";
 import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
+import { getTranslation } from "./i18n/server";
 
 export const runtime = "edge";
 
@@ -23,6 +24,28 @@ type Props = {
     lang: string;
   };
 };
+
+export async function generateMetadata({
+  params: { lang },
+}: Props): Promise<Metadata> {
+  const { t } = await getTranslation();
+  return {
+    title: "Beutl",
+    description: t("main:description"),
+    applicationName: "Beutl",
+    openGraph: {
+      title: "Beutl",
+      description: t("main:description"),
+      images: [
+        {
+          url: `/img/ogp-${lang}.png`,
+          width: 2400,
+          height: 1260,
+        },
+      ],
+    },
+  };
+}
 
 export default function RootLayout({ children, params: { lang } }: Props) {
   return (

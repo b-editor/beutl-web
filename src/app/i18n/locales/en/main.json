@@ -17,5 +17,6 @@
   "ffmpegLocator": "FFmpeg Locator",
   "ffmpegLocatorDescription": "Automatically places FFmpeg libraries and executables.",
   "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes."
+  "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes.",
+  "description": "Beutl: Free and Open Source Video Editing Software. Create videos with various animations and effects!"
 }

@@ -17,5 +17,6 @@
   "ffmpegLocator": "FFmpeg配置ツール",
   "ffmpegLocatorDescription": "FFmpegのライブラリ、実行ファイル群を自動で配置します。",
   "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。"
+  "sugarShakerDescription": "キーフレームを使わずに、フェードインアウトなどのアニメーション効果を付けられるようにします。",
+  "description": "Beutl: 無料でオープンソースの動画編集ソフト。 多様なアニメーションやエフェクトを使って、動画を作成しよう！"
 }
