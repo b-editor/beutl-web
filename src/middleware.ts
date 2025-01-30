@@ -22,7 +22,7 @@ export function middleware(request: NextRequest) {
   const pathname = `${request.nextUrl.pathname}${request.nextUrl.search}`;
 
   if (
-    ["/img", "/robots.txt", "/_next", "/api"].find((i) =>
+    ["/img", "/favicon.ico", "/robots.txt", "/_next", "/api"].find((i) =>
       pathname.startsWith(i),
     )
   ) {
