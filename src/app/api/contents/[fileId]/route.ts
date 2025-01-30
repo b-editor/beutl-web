@@ -67,7 +67,11 @@ export async function GET(
     );
   }
 
-  let allowed = file.visibility === "PUBLIC";
+  let allowed = false;
+  if (file.visibility === "PUBLIC") {
+    allowed = true;
+    cacheControl = "public";
+  }
   if (file.visibility === "PRIVATE") {
     allowed = session?.user?.id === file.userId;
   }
