@@ -31,8 +31,6 @@ export function Form({
           <Input type="email" id="email" defaultValue={email} readOnly />
         </div>
         <p>
-          {t("account:email.clickOnTheLink")}
-          <br />
           {t("account:data.deleteAccount")}
         </p>
 
