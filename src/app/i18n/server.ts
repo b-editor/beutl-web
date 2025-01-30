@@ -2,7 +2,7 @@ import { createInstance } from "i18next";
 import resourcesToBackend from "i18next-resources-to-backend";
 import { initReactI18next } from "react-i18next/initReactI18next";
 import { getOptions, defaultLanguage } from "./settings";
-import { makeZodI18nMap, zodI18nMap } from "zod-i18n-map";
+import { makeZodI18nMap } from "zod-i18n-map";
 import { z } from "zod";
 
 const initI18next = async (lang: string) => {

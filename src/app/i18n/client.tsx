@@ -5,7 +5,7 @@ import {
   useContext,
   useEffect,
   useState,
-  ReactNode,
+  type ReactNode,
 } from "react";
 import i18next from "i18next";
 import {
