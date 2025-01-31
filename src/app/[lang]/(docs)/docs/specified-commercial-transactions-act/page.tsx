@@ -35,7 +35,7 @@ export default function Page() {
               メールアドレス
             </td>
             <td className="border px-4 py-2 text-left [&[align=center]]:text-center [&[align=right]]:text-right">
-              contact@mail.beditor.net
+              contact@beditor.net
             </td>
           </tr>
           <tr className="m-0 border-t p-0">

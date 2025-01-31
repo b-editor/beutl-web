@@ -72,7 +72,7 @@ export default function Page() {
         プライバシーポリシーに関する質問や要望がある場合、以下の連絡先にご連絡ください。
       </p>
       <p className="leading-7 [&:not(:first-child)]:mt-6">
-        連絡先メールアドレス: contact@mail.beditor.net
+        連絡先メールアドレス: contact@beditor.net
       </p>
 
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
