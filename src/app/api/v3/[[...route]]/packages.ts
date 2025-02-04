@@ -6,6 +6,7 @@ import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
 import { getPackage, mapPackage } from "@/lib/api/packages-db";
 import { getContentUrl } from "@/lib/db/file";
+import { SemVer } from "semver";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -71,6 +72,9 @@ const app = new Hono()
         targetVersion: true,
         fileId: true,
       },
+    });
+    releases.sort((a, b) => {
+      return new SemVer(b.version).compare(a.version);
     });
 
     return c.json(
