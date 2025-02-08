@@ -315,3 +315,14 @@ model AuditLog {
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
+
+model AppReleaseAsset {
+  id         String  @id
+  version    String
+  minVersion String?
+  os         String
+  arch       String
+  type       String
+  standalone Boolean
+  url        String
+}
