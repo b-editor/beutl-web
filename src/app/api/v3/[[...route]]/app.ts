@@ -21,7 +21,7 @@ const app = new Hono()
     const version = c.req.param("version");
     const semver = SemVer.parse(version);
     if (!semver) {
-      return c.json(apiErrorResponse("invalidRequestBody"), { status: 400 });
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
     }
 
     const {
@@ -44,7 +44,7 @@ const app = new Hono()
 
     if (!latest) {
       console.error("latest version not found");
-      return c.json(apiErrorResponse("unknown"), { status: 404 });
+      return c.json(await apiErrorResponse("unknown"), { status: 404 });
     }
 
     if (SemVer.compare(latest, semver) <= 0) {
