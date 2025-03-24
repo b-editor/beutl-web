@@ -249,7 +249,7 @@ const app = new Hono()
       },
     });
 
-    c.status(204);
+    return c.text("Deleted");
   });
 
 export default app;
