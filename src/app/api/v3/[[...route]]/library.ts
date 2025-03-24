@@ -249,7 +249,8 @@ const app = new Hono()
       },
     });
 
-    return c.status(204);
+    c.status(204);
+    return c.text("Deleted");
   });
 
 export default app;
