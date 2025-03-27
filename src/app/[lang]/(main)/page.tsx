@@ -105,6 +105,17 @@ export default async function Home({
         <FeaturesToc lang={lang} />
         <div className="bg-[hsl(var(--card)/60%)] py-4" />
 
+        <div className="container mx-auto px-6 py-12 md:px-12 flex flex-col items-center gap-8">
+          <h3 className="scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight">お知らせ</h3>
+          <p className="mt-8 text-lg leading-8 max-w-3xl">
+            X (旧Twitter) で本ソフトウェアが他者のソフトウェアの後継であると流布されていますが、
+            本ソフトウェアは他者ソフトウェアの後継ではありません。
+            また、開発者である私は、現在、過去にそのようなことを主張していません。
+            本ソフトウェアは私個人のニーズに合わせて開発したソフトウェアです。
+            そのため、機能や特徴が似ていたとしても、他者のソフトウェアの後継を意図しているわけではありません。
+          </p>
+        </div>
+
         <div className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:items-center gap-8">
           <div className="lg:flex-1">
             <h3
