@@ -192,7 +192,7 @@ export async function mapPackage({
     logoUrl: getContentUrl(pkg.iconFileId),
     currency: price?.currency || null,
     price: price?.price || null,
-    owned: owned,
+    owned: !!owned,
     paid: paied,
     owner: {
       id: pkg.userId,
