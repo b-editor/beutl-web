@@ -32,7 +32,8 @@ export async function StandardDrawer({ lang }: { lang: string }) {
           <div>
             <SheetHeader>
               <SheetTitle className="flex gap-2">
-                <img
+                <Image
+                  unoptimized
                   className="align-bottom ml-2"
                   src="/img/logo_dark.svg"
                   alt="Logo"

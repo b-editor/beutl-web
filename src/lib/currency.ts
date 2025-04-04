@@ -24,7 +24,7 @@ export async function guessCurrency() {
   const country = h.get("x-vercel-ip-country") || (await getCountry(ipAddress));
   console.log("Country:", country);
   if (!country) return null;
-  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const currency = (countryToCurrency as any)[country];
   console.log("Currency:", currency);
   return currency;

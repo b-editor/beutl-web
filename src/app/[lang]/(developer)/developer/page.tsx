@@ -1,4 +1,3 @@
-import NavBar from "@/components/nav-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,7 +8,7 @@ import { retrievePackages } from "./actions";
 import Link from "next/link";
 
 export default async function Page() {
-  const session = await authOrSignIn();
+  await authOrSignIn();
   const packages = await retrievePackages();
 
   return (

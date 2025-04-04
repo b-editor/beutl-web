@@ -25,7 +25,6 @@ import {
   calcTotalFileSize,
   createStorageFile,
   deleteStorageFile,
-  s3,
 } from "@/lib/storage";
 import { prisma } from "@/prisma";
 import { revalidatePath } from "next/cache";

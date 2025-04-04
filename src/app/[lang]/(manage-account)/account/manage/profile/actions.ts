@@ -1,7 +1,7 @@
 "use server";
 
 import { getTranslation, Zod } from "@/app/i18n/server";
-import { authenticated, authOrSignIn } from "@/lib/auth-guard";
+import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { prisma } from "@/prisma";
 

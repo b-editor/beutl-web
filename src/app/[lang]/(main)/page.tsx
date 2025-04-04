@@ -86,7 +86,8 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
               asChild
             >
               <Link href="https://github.com/b-editor/beutl">
-                <img
+                <Image
+                  unoptimized
                   src="/img/github-color.svg"
                   alt="GitHub"
                   className="w-5 h-5 mr-2 invert"

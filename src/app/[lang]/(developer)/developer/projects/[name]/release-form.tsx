@@ -2,8 +2,6 @@
 
 import {
   useCallback,
-  useReducer,
-  useRef,
   useState,
   useTransition,
 } from "react";
@@ -89,7 +87,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data: Package["Release"][number] = (result as any).data;
         if (data) {
           setRelease(data);
@@ -140,7 +138,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         version: version.value,
       });
       if (result.success) {
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data: Package["Release"][number] = (result as any).data;
         setReleases((releases) =>
           [...releases, data].toSorted((a, b) =>
@@ -187,7 +185,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         toast({
           variant: "destructive",
           title: "リリースの削除に失敗しました",
-          // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           description: (result as any).message,
         });
       }
@@ -302,7 +300,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
                 value: e.target.value,
                 message:
                   SemVer.valid(e.target.value) ||
-                  isValidNuGetVersionRange(e.target.value)
+                    isValidNuGetVersionRange(e.target.value)
                     ? ""
                     : "バージョンが正しくありません",
               })

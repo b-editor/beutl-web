@@ -37,7 +37,7 @@ export function Form({
   lang,
   ...props
 }: ComponentProps<"form"> & { lang: string }) {
-  const [state, dispatch] = useActionState(addAccount, {});
+  const [, dispatch] = useActionState(addAccount, {});
   const { toast } = useToast();
   const [spinnerType, setSpinnerType] = useState<0 | 1 | 2>(0);
   const [registering, setRegistering] = useState(false);

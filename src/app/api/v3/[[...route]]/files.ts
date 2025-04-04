@@ -21,6 +21,7 @@ async function findFile(id: string) {
   });
 }
 
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function isAllowed(
   file: NonNullable<Awaited<ReturnType<typeof findFile>>>,
   userId: string | null,

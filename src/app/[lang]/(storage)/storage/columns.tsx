@@ -26,6 +26,8 @@ import { useToast } from "@/hooks/use-toast";
 import type { File } from "./types";
 import { useTranslation } from "@/app/i18n/client";
 
+/* eslint-disable react-hooks/rules-of-hooks */
+
 export function getColumns(lang: string): ColumnDef<File>[] {
   return [
     {
@@ -84,7 +86,7 @@ export function getColumns(lang: string): ColumnDef<File>[] {
 
             window.open(res.url, "_blank");
           });
-        }, [row.original.id, toast]);
+        }, [row.original.id, toast, t]);
 
         return (
           <div className="flex gap-2 items-center">

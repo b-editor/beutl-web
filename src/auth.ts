@@ -15,7 +15,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Google,
     GitHub,
-    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     Resend(resendOptions) as any,
     // サーバー内部で使う
     //  - src/app/(manage-account)/account/manage/email/actions.ts
@@ -91,13 +91,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     signOut: async (message) => {
       let userId = undefined;
-      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if ((message as any).session?.userId) {
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         userId = (message as any).session.userId;
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } else if ((message as any).jwt?.userId) {
-        // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         userId = (message as any).jwt.userId;
       }
 

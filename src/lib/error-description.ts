@@ -1,4 +1,3 @@
-import { useTranslation } from "@/app/i18n/client";
 import { Translator } from "@/app/i18n/server";
 import type { SignInPageErrorParam } from "@auth/core/types";
 

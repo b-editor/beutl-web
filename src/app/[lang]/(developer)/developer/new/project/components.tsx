@@ -1,10 +1,8 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Upload } from "lucide-react";
 import { createNewProject } from "./actions";
 import { useActionState } from "react";
 import { ErrorDisplay } from "@/components/error-display";

@@ -109,6 +109,6 @@ export async function retrievePublishedPackages(
 
   return {
     items: await items,
-    displayName: (await profile)?.displayName!,
+    displayName: (await profile)?.displayName || userName,
   };
 }

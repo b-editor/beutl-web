@@ -8,6 +8,7 @@ async function getStatusContent(
   status: Stripe.PaymentIntent["status"],
   t: Awaited<ReturnType<typeof getTranslation>>["t"],
 ) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const STATUS_CONTENT_MAP: any = {
     succeeded: {
       title: t("store:paymentCompleted"),

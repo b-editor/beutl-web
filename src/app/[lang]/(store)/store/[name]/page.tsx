@@ -2,7 +2,6 @@ import { ClientPage } from "./components";
 import { notFound } from "next/navigation";
 import { SemVer } from "semver";
 import { auth } from "@/auth";
-import { prisma } from "@/prisma";
 import { guessCurrency } from "@/lib/currency";
 import {
   packageOwned,
