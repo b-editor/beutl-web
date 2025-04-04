@@ -32,8 +32,8 @@ export async function StandardDrawer({ lang }: { lang: string }) {
           <div>
             <SheetHeader>
               <SheetTitle className="flex gap-2">
-                <Image
-                  unoptimized
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
                   className="align-bottom ml-2"
                   src="/img/logo_dark.svg"
                   alt="Logo"

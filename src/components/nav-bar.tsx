@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils";
 import { auth } from "@/auth";
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { getTranslation } from "@/app/i18n/server";
-import Image from "next/image";
 
 export default async function NavBar({ lang }: { lang: string }) {
   const { t } = await getTranslation(lang);
@@ -24,7 +23,11 @@ export default async function NavBar({ lang }: { lang: string }) {
         <StandardDrawer lang={lang} />
 
         <Link className="decoration-0 flex gap-2 my-auto" href={`/${lang}`}>
-          <Image unoptimized className="align-bottom" src="/img/logo_dark.svg" alt="Logo" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            className="align-bottom"
+            src="/img/logo_dark.svg"
+            alt="Logo" />
           <h1 className="font-semibold text-xl mt-1">Beutl</h1>
         </Link>
       </div>
