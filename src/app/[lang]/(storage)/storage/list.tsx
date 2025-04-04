@@ -118,7 +118,7 @@ export function List({ data, lang }: { data: File[]; lang: string }) {
             variant="destructive"
             size="icon"
             className={cn(
-              Object.keys(rowSelection).length ? "opacity-100" : "!opacity-0",
+              Object.keys(rowSelection).length ? "opacity-100" : "opacity-0!",
               "transition-opacity",
             )}
             onClick={handleDeleteClick}

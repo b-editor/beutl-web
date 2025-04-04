@@ -84,17 +84,17 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         交換および返品（返金ポリシー）
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         商品の性質上、返品・交換はお受けしておりません。
       </p>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         ただし、以下の場合には対応いたします：
       </p>
       <ul className="my-6 ml-6 list-disc [&>li]:mt-2">
         <li>ダウンロード商品が正常にダウンロードできない場合</li>
         <li>提供された商品が破損、または著しく異なる場合</li>
       </ul>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         上記の場合は、商品購入後7日以内にサポート窓口（contact@mail.beditor.net）までご連絡ください。
       </p>
 

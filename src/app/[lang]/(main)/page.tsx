@@ -263,7 +263,7 @@ export default async function Home({
                         />
                         <CardContent className="p-6">
                           <div className="flex">
-                            <div className="flex-[3]">
+                            <div className="flex-3">
                               <h4 className="text-xl font-semibold">
                                 {item.name}
                               </h4>

@@ -29,7 +29,7 @@ export default async function Page({
               <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
                 <div>
                   <div className="flex w-full">
-                    <div className="flex-[3]">
+                    <div className="flex-3">
                       <h4 className="text-xl font-semibold">
                         {item.displayName || item.name}
                       </h4>

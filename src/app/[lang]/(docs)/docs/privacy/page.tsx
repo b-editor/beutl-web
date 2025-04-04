@@ -7,7 +7,7 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         1. 収集する情報
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         運営者は、拡張機能のストアサービスを提供するために、以下の情報を収集する場合があります。
       </p>
       <ul className="my-6 ml-6 list-disc [&>li]:mt-2">
@@ -20,7 +20,7 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         2. 情報の使用
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         収集した情報は、以下の目的で使用されます。
       </p>
       <ul className="my-6 ml-6 list-disc [&>li]:mt-2">
@@ -34,7 +34,7 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         3. 情報の共有
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         運営者は、ユーザーの許可なしに個人情報を第三者と共有しません。ただし、以下の場合に情報を共有することがあります。
       </p>
       <ul className="my-6 ml-6 list-disc [&>li]:mt-2">
@@ -46,7 +46,7 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         4. クッキーとトラッキング技術
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         運営者は、クッキーや同様のトラッキング技術を使用することがあります。
         これらの技術は、ユーザーエクスペリエンスの向上や統計情報の収集に使用されます。
       </p>
@@ -54,31 +54,31 @@ export default function Page() {
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         5. セキュリティ
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         運営者は、ユーザー情報のセキュリティを確保するために適切な物理的、技術的、組織的対策を講じます。
       </p>
 
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         6. プライバシー設定
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         ユーザーは、アカウント設定からプライバシー設定をカスタマイズできます。
       </p>
 
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         8. お問い合わせ
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         プライバシーポリシーに関する質問や要望がある場合、以下の連絡先にご連絡ください。
       </p>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         連絡先メールアドレス: contact@beditor.net
       </p>
 
       <h3 className="mt-8 scroll-m-20 text-2xl font-semibold tracking-tight">
         9. プライバシーポリシーの変更
       </h3>
-      <p className="leading-7 [&:not(:first-child)]:mt-6">
+      <p className="leading-7 not-first:mt-6">
         運営者は、必要に応じてプライバシーポリシーを変更することがあります。
         運営者が別途定める場合を除いて、変更後のプライバシーポリシーは、本ページに掲載したときから効力を生じるものとします。
       </p>

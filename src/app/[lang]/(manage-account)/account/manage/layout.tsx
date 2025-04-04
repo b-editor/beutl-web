@@ -39,7 +39,7 @@ export default async function Layout({
             <Button variant="outline">{t("signOut")}</Button>
           </Link>
         </div>
-        <div className="flex flex-col md:grid md:grid-cols-[max-content,1fr] gap-6 items-start">
+        <div className="flex flex-col md:grid md:grid-cols-[max-content_1fr] gap-6 items-start">
           <Navigation lang={lang} />
           <div className="w-full">{children}</div>
         </div>
