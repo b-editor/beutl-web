@@ -39,7 +39,7 @@
     "@tanstack/react-table": "^8.20.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "country-to-currency": "^1.1.5",
+    "country-to-currency": "^2.0.2",
     "dotenv": "^16.4.7",
     "embla-carousel-react": "^8.5.2",
     "hono": "^4.6.19",
