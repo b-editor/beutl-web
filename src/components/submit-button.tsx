@@ -1,14 +1,15 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
-import { Button, type ButtonProps } from "./ui/button";
+import { Button } from "./ui/button";
 import { Loader2 } from "lucide-react";
+import { ComponentProps } from "react";
 
 export default function SubmitButton({
   showSpinner,
   forceSpinner,
   ...props
-}: ButtonProps & { showSpinner?: boolean; forceSpinner?: boolean }) {
+}: ComponentProps<typeof Button> & { showSpinner?: boolean; forceSpinner?: boolean }) {
   const { pending } = useFormStatus();
 
   return (
