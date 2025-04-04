@@ -43,7 +43,7 @@
     "dotenv": "^16.4.7",
     "embla-carousel-react": "^8.5.2",
     "hono": "^4.6.19",
-    "i18next": "^23.16.8",
+    "i18next": "^24.2.3",
     "i18next-resources-to-backend": "^1.2.1",
     "jose": "^5.9.6",
     "lucide-react": "^0.452.0",
