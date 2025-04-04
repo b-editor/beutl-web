@@ -81,11 +81,11 @@ importers:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@18.3.5(@types/react@18.3.18))(@types/react@18.3.18)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@stripe/react-stripe-js':
-        specifier: ^2.9.0
-        version: 2.9.0(@stripe/stripe-js@5.6.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^3.6.0
+        version: 3.6.0(@stripe/stripe-js@7.0.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@stripe/stripe-js':
-        specifier: ^5.6.0
-        version: 5.6.0
+        specifier: ^7.0.0
+        version: 7.0.0
       '@tanstack/react-table':
         specifier: ^8.20.6
         version: 8.20.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -147,8 +147,8 @@ importers:
         specifier: ^7.6.3
         version: 7.6.3
       stripe:
-        specifier: ^17.6.0
-        version: 17.6.0
+        specifier: ^18.0.0
+        version: 18.0.0
       tailwind-merge:
         specifier: ^2.6.0
         version: 2.6.0
@@ -1548,15 +1548,15 @@ packages:
     resolution: {integrity: sha512-JtaY3FxmD+te+KSI2FJuEcfNC9T/DGGVf551babM7fAaXhjJUt7oSYurH1Devxd2+BOSUACCgt3buinx4UnmEA==}
     engines: {node: '>=18.0.0'}
 
-  '@stripe/react-stripe-js@2.9.0':
-    resolution: {integrity: sha512-+/j2g6qKAKuWSurhgRMfdlIdKM+nVVJCy/wl0US2Ccodlqx0WqfIIBhUkeONkCG+V/b+bZzcj4QVa3E/rXtT4Q==}
+  '@stripe/react-stripe-js@3.6.0':
+    resolution: {integrity: sha512-zEnaUmTOsu7zhl3RWbZ0l1dRiad+QIbcAYzQfF+yYelURJowhAwesRHKWH+qGAIBEpkO6/VCLFHhVLH9DtPlnw==}
     peerDependencies:
-      '@stripe/stripe-js': ^1.44.1 || ^2.0.0 || ^3.0.0 || ^4.0.0
-      react: ^16.8.0 || ^17.0.0 || ^18.0.0
-      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0
+      '@stripe/stripe-js': '>=1.44.1 <8.0.0'
+      react: '>=16.8.0 <20.0.0'
+      react-dom: '>=16.8.0 <20.0.0'
 
-  '@stripe/stripe-js@5.6.0':
-    resolution: {integrity: sha512-w8CEY73X/7tw2KKlL3iOk679V9bWseE4GzNz3zlaYxcTjmcmWOathRb0emgo/QQ3eoNzmq68+2Y2gxluAv3xGw==}
+  '@stripe/stripe-js@7.0.0':
+    resolution: {integrity: sha512-0AWkP+hoIXB5O34FGY7jh687ZPlOqLqMkJDkiSXcp4TaWWidnxjsZSp0xkjyAWbIz4+j1BFXDAK01Rqb7ceBRA==}
     engines: {node: '>=12.16'}
 
   '@swc/counter@0.1.3':
@@ -3082,8 +3082,8 @@ packages:
     resolution: {integrity: sha512-6fPc+R4ihwqP6N/aIv2f1gMH8lOVtWQHoqC4yK6oSDVVocumAsfCqjkXnqiYMhmMwS/mEHLp7Vehlt3ql6lEig==}
     engines: {node: '>=8'}
 
-  stripe@17.6.0:
-    resolution: {integrity: sha512-+HB6+SManp0gSRB0dlPmXO+io18krlAe0uimXhhIkL/RG/VIRigkfoM3QDJPkqbuSW0XsA6uzsivNCJU1ELEDA==}
+  stripe@18.0.0:
+    resolution: {integrity: sha512-3Fs33IzKUby//9kCkCa1uRpinAoTvj6rJgQ2jrBEysoxEvfsclvXdna1amyEYbA2EKkjynuB4+L/kleCCaWTpA==}
     engines: {node: '>=12.*'}
 
   strnum@1.0.5:
@@ -4997,14 +4997,14 @@ snapshots:
       '@smithy/types': 4.2.0
       tslib: 2.8.1
 
-  '@stripe/react-stripe-js@2.9.0(@stripe/stripe-js@5.6.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+  '@stripe/react-stripe-js@3.6.0(@stripe/stripe-js@7.0.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
-      '@stripe/stripe-js': 5.6.0
+      '@stripe/stripe-js': 7.0.0
       prop-types: 15.8.1
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@stripe/stripe-js@5.6.0': {}
+  '@stripe/stripe-js@7.0.0': {}
 
   '@swc/counter@0.1.3': {}
 
@@ -6768,7 +6768,7 @@ snapshots:
 
   strip-json-comments@3.1.1: {}
 
-  stripe@17.6.0:
+  stripe@18.0.0:
     dependencies:
       '@types/node': 22.14.0
       qs: 6.14.0
