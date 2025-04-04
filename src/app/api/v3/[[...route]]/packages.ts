@@ -77,17 +77,17 @@ const app = new Hono()
       return new SemVer(b.version).compare(a.version);
     });
 
-    return c.json(
-      releases.map((r) => ({
+    return c.json(await Promise.all(
+      releases.map(async (r) => ({
         id: r.id,
         version: r.version,
         title: r.title,
         description: r.description,
         targetVersion: r.targetVersion,
         fileId: r.fileId,
-        fileUrl: getContentUrl(r.fileId),
+        fileUrl: await getContentUrl(r.fileId),
       })),
-    );
+    ));
   })
   .get("/:name/releases/:version", async (c) => {
     const name = c.req.param("name");
@@ -144,7 +144,7 @@ const app = new Hono()
       description: release.description,
       targetVersion: release.targetVersion,
       fileId: release.fileId,
-      fileUrl: getContentUrl(release.fileId),
+      fileUrl: await getContentUrl(release.fileId),
     });
   });
 

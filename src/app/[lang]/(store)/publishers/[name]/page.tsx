@@ -6,9 +6,14 @@ import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({
-  params: { lang, name },
-}: { params: { lang: string; name: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string; name: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang,
+    name
+  } = params;
+
   const { items: packages, displayName } =
     await retrievePublishedPackages(name);
   const { t } = await getTranslation(lang);

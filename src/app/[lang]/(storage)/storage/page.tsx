@@ -5,9 +5,13 @@ import { retrieveFiles } from "./actions";
 import { List } from "./list";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   await authOrSignIn();
   const { t } = await getTranslation(lang);
   const files = await retrieveFiles();

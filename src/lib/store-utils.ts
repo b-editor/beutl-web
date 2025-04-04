@@ -208,7 +208,7 @@ export async function retrievePackages(
       },
     });
 
-    return Promise.all(
+    return await Promise.all(
       tmp.map(async (pkg) => {
         const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
 
@@ -278,7 +278,7 @@ export async function retrievePackages(
     },
   });
 
-  return Promise.all(
+  return await Promise.all(
     tmp.map(async (pkg) => {
       const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
 

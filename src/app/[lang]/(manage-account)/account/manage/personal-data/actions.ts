@@ -25,7 +25,7 @@ const emailSchema = z.object({
 
 async function sendEmail(email: string, token: string, lang: string) {
   const { t } = await getTranslation(lang);
-  const urlstr = headers().get("x-url");
+  const urlstr = (await headers()).get("x-url");
   if (!urlstr) {
     throw new Error("URL is missing in headers");
   }
@@ -45,7 +45,7 @@ async function sendEmail(email: string, token: string, lang: string) {
 
 export async function submit(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const validated = emailSchema.safeParse(
       Object.fromEntries(formData.entries()),

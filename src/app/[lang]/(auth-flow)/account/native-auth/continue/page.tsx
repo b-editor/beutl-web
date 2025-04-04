@@ -14,10 +14,21 @@ import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-export default async function Page({
-  searchParams: { returnUrl },
-  params: { lang },
-}: { searchParams: { returnUrl: string }; params: { lang: string } }) {
+export default async function Page(
+  props: { searchParams: Promise<{ returnUrl: string }>; params: Promise<{ lang: string }> }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    returnUrl
+  } = searchParams;
+
   const session = await auth();
   if (!session?.user) {
     redirect(

@@ -10,11 +10,18 @@ import {
   retrievePrices,
 } from "@/lib/store-utils";
 
-export default async function Page({
-  params: { name, lang },
-}: {
-  params: { name: string; lang: string };
-}) {
+export default async function Page(
+  props: {
+    params: Promise<{ name: string; lang: string }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    name,
+    lang
+  } = params;
+
   const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
   if (!pkg) {

@@ -8,13 +8,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import Image from "next/image";
-import { useFormState } from "react-dom";
+import { useActionState } from "react";
 import { signOutAction } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { useTranslation } from "@/app/i18n/client";
 
 export default function Form({ lang }: { lang: string }) {
-  const [, dispatch] = useFormState(signOutAction, undefined);
+  const [, dispatch] = useActionState(signOutAction, undefined);
   const { t } = useTranslation(lang);
 
   return (

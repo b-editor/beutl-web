@@ -1,7 +1,11 @@
 import { redirect } from "next/navigation";
 
-export default function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   redirect(`/${lang}/account/manage/profile`);
 }

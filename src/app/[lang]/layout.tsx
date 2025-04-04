@@ -16,16 +16,21 @@ const notoSansJP = Noto_Sans_JP({
 
 type Props = {
   children: React.ReactNode;
-  params: {
+  params: Promise<{
     lang: string;
-  };
+  }>;
 };
 
-export async function generateMetadata({
-  params: { lang },
-}: Props): Promise<Metadata> {
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const { t } = await getTranslation(lang);
   return {
+    metadataBase: process.env.METADATA_BASE_URL ? new URL(process.env.METADATA_BASE_URL) : undefined,
     title: "Beutl",
     description: t("main:description"),
     applicationName: "Beutl",
@@ -43,7 +48,17 @@ export async function generateMetadata({
   };
 }
 
-export default function RootLayout({ children, params: { lang } }: Props) {
+export default async function RootLayout(props: Props) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const {
+    children
+  } = props;
+
   return (
     <html lang={lang} className="dark">
       <body className={`${notoSansJP.variable} antialiased`}>

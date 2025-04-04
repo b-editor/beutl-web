@@ -10,13 +10,24 @@ import { getTranslation } from "@/app/i18n/server";
 import { retrieveAccountsWithIdToken } from "@/lib/db/account";
 import { findAuthenticatorByAccountId } from "@/lib/db/authenticator";
 
-export default async function Page({
-  searchParams: { error },
-  params: { lang },
-}: {
-  searchParams: { error?: SignInPageErrorParam };
-  params: { lang: string };
-}) {
+export default async function Page(
+  props: {
+    searchParams: Promise<{ error?: SignInPageErrorParam }>;
+    params: Promise<{ lang: string }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    error
+  } = searchParams;
+
   const session = await authOrSignIn();
 
   const accounts = await retrieveAccountsWithIdToken({

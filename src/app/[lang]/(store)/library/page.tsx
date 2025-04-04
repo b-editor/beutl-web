@@ -7,9 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const session = await authOrSignIn();
   const packages = await retrievePackages(session.user.id);
   const { t } = await getTranslation(lang);

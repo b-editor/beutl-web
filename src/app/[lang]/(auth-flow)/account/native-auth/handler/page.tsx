@@ -5,15 +5,26 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
 
-export default async function Page({
-  searchParams: { identifier },
-  params: { lang },
-}: {
-  searchParams: { identifier: string };
-  params: { lang: string };
-}) {
+export default async function Page(
+  props: {
+    searchParams: Promise<{ identifier: string }>;
+    params: Promise<{ lang: string }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    identifier
+  } = searchParams;
+
   const session = await auth();
-  const xurl = headers().get("x-url") as string;
+  const xurl = (await headers()).get("x-url") as string;
   if (!session?.user) {
     const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 

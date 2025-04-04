@@ -17,8 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AlertCircle, CheckCircle, Link2, Lock, LockOpen } from "lucide-react";
-import { type ComponentProps, useMemo, useState } from "react";
-import { useFormState } from "react-dom";
+import { type ComponentProps, useMemo, useState, useActionState } from "react";
 import { type State, updateProfile } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -147,7 +146,7 @@ export function Form({
     () => socials.find((social) => social.provider.provider === "custom"),
     [socials],
   );
-  const [state, dispatch] = useFormState(updateProfile, {});
+  const [state, dispatch] = useActionState(updateProfile, {});
   const { t } = useTranslation(lang);
 
   return (

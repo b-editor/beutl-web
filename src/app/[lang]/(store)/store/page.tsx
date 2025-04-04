@@ -8,13 +8,24 @@ import { retrievePackages } from "@/lib/store-utils";
 import Image from "next/image";
 import Link from "next/link";
 
-export default async function Page({
-  searchParams: { query },
-  params: { lang },
-}: {
-  searchParams: { query?: string };
-  params: { lang: string };
-}) {
+export default async function Page(
+  props: {
+    searchParams: Promise<{ query?: string }>;
+    params: Promise<{ lang: string }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    query
+  } = searchParams;
+
   const { t } = await getTranslation(lang);
   const packages = await retrievePackages(query);
 

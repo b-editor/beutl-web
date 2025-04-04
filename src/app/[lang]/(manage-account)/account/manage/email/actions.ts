@@ -30,9 +30,9 @@ const emailSchema = (z: Zod) =>
   });
 
 async function sendEmail(email: string, token: string) {
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const { t } = await getTranslation(lang);
-  const urlstr = headers().get("x-url");
+  const urlstr = (await headers()).get("x-url");
   if (!urlstr) {
     throw new Error("URL is missing in headers");
   }
@@ -56,7 +56,7 @@ export async function sendConfirmationEmail(
   formData: FormData,
 ): Promise<State> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t, z } = await getTranslation(lang);
     const validated = emailSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
@@ -115,7 +115,7 @@ export async function sendConfirmationEmail(
 }
 
 export async function updateEmail(token: string, identifier: string) {
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
   if (

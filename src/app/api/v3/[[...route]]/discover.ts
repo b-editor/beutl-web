@@ -44,7 +44,7 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
     shortDescription: pkg.shortDescription,
     tags: pkg.tags,
     logoId: pkg.iconFileId || null,
-    logoUrl: getContentUrl(pkg.iconFileId),
+    logoUrl: await getContentUrl(pkg.iconFileId),
     currency: pkg.price?.currency || null,
     price: pkg.price?.price || null,
     paid: paid,
@@ -55,7 +55,7 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
       displayName: profile?.displayName || "",
       bio: profile?.bio,
       iconId: profile?.iconFileId,
-      iconUrl: getContentUrl(profile?.iconFileId),
+      iconUrl: await getContentUrl(profile?.iconFileId),
     },
   };
 }

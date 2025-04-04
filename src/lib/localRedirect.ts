@@ -2,7 +2,7 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect, type RedirectType } from "next/navigation";
 
-export function localRedirect(url: string, type?: RedirectType): never {
+export async function localRedirect(url: string, type?: RedirectType): Promise<never> {
   if (process.env.NODE_ENV !== "production") {
     redirect(url, type);
   }
@@ -12,7 +12,7 @@ export function localRedirect(url: string, type?: RedirectType): never {
   }
 
   // headersからホスト取得
-  const xurl = headers().get("x-url") as string;
+  const xurl = (await headers()).get("x-url") as string;
   const origin = new URL(xurl).origin;
   const urlObj = new URL(url);
   if (urlObj.origin !== origin) {

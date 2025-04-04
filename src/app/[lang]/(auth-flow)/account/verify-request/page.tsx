@@ -3,9 +3,13 @@ import Link from "next/link";
 import Image from "next/image";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const { t } = await getTranslation(lang);
   return (
     <div className="h-screen flex items-center justify-center">

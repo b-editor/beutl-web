@@ -45,9 +45,13 @@ function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
   ];
 }
 
-export default async function Home({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Home(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const { t } = await getTranslation(lang);
   const extensions = getExtensions(t);
 
@@ -69,26 +73,28 @@ export default async function Home({
           <h2 className="scroll-m-20 mt-8 pb-2 text-xl md:text-3xl font-medium tracking-tight">
             {t("main:freeAndOpenSource")}
           </h2>
-          <Button className="mt-6 border" asChild>
-            <Link href="https://github.com/b-editor/beutl/releases/latest">
-              <Download className="w-5 h-5 mr-2" />
-              {t("main:download")}
-            </Link>
-          </Button>
-          <Button
-            variant="link"
-            className="mt-6 text-foreground ml-4 border backdrop-brightness-75"
-            asChild
-          >
-            <Link href="https://github.com/b-editor/beutl">
-              <img
-                src="/img/github-color.svg"
-                alt="GitHub"
-                className="w-5 h-5 mr-2 invert"
-              />
-              GitHub
-            </Link>
-          </Button>
+          <div className="mt-6 flex gap-4">
+            <Button className="border" asChild>
+              <Link href="https://github.com/b-editor/beutl/releases/latest">
+                <Download className="w-5 h-5 mr-2" />
+                {t("main:download")}
+              </Link>
+            </Button>
+            <Button
+              variant="link"
+              className="text-foreground border backdrop-brightness-75"
+              asChild
+            >
+              <Link href="https://github.com/b-editor/beutl">
+                <img
+                  src="/img/github-color.svg"
+                  alt="GitHub"
+                  className="w-5 h-5 mr-2 invert"
+                />
+                GitHub
+              </Link>
+            </Button>
+          </div>
 
           <div className="mt-16 md:mt-8 mx-auto select-none pointer-events-none">
             <Image

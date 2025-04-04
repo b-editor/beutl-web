@@ -2,8 +2,7 @@
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ComponentProps } from "react";
-import { useFormState } from "react-dom";
+import { type ComponentProps, useActionState } from "react";
 import { sendConfirmationEmail } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,7 +18,7 @@ export function Form({
   status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
   lang: string;
 }) {
-  const [state, dispatch] = useFormState(sendConfirmationEmail, {});
+  const [state, dispatch] = useActionState(sendConfirmationEmail, {});
   const { t } = useTranslation(lang);
 
   return (

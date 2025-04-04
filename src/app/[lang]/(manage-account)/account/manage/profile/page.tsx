@@ -5,12 +5,16 @@ import { redirect } from "next/navigation";
 import { Form } from "./components";
 import { getTranslation } from "@/app/i18n/server";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const session = await auth();
   if (!session?.user) {
-    const url = headers().get("x-url") || `/${lang}`;
+    const url = (await headers()).get("x-url") || `/${lang}`;
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 

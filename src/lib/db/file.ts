@@ -3,9 +3,9 @@ import { prisma as sharedPrisma } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 import { headers } from "next/headers";
 
-export function getContentUrl(id?: string | null) {
+export async function getContentUrl(id?: string | null) {
   if (!id) return null;
-  const url = headers().get("x-url") as string;
+  const url = (await headers()).get("x-url") as string;
   const origin = new URL(url).origin;
   return `${origin}/api/contents/${id}`;
 }

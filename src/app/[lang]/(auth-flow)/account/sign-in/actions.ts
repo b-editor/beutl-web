@@ -43,7 +43,7 @@ export async function signInAction(
     );
   }
 
-  const { t } = await getTranslation(getLanguage());
+  const { t } = await getTranslation(await getLanguage());
   return { message: t("invalidRequest") };
 }
 
@@ -59,7 +59,7 @@ async function signInWithEmail(
   state: State,
   formData: FormData,
 ): Promise<State> {
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const { z } = await getTranslation(lang);
   const validationResult = emailSchema(z).safeParse(
     Object.fromEntries(formData.entries()),

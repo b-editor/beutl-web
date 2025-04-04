@@ -1,7 +1,6 @@
 "use client";
 
-import { type ComponentProps, useState } from "react";
-import { useFormState } from "react-dom";
+import { type ComponentProps, useState, useActionState } from "react";
 import {
   addAccount,
   deleteAuthenticator,
@@ -38,7 +37,7 @@ export function Form({
   lang,
   ...props
 }: ComponentProps<"form"> & { lang: string }) {
-  const [state, dispatch] = useFormState(addAccount, {});
+  const [state, dispatch] = useActionState(addAccount, {});
   const { toast } = useToast();
   const [spinnerType, setSpinnerType] = useState<0 | 1 | 2>(0);
   const [registering, setRegistering] = useState(false);

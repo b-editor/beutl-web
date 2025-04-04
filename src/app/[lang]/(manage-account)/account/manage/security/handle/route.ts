@@ -2,11 +2,11 @@ import { getLanguage } from "@/lib/lang-utils";
 import { cookies, headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
-export function GET(request: NextRequest): NextResponse {
-  const cookieStore = cookies();
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const cookieStore = await cookies();
   const authFlow = cookieStore.get("beutl.auth-flow");
-  const requestUrl = new URL(headers().get("x-url") as string);
-  requestUrl.pathname = `/${getLanguage()}/account/manage/security`;
+  const requestUrl = new URL((await headers()).get("x-url") as string);
+  requestUrl.pathname = `/${await getLanguage()}/account/manage/security`;
 
   if (authFlow?.value) {
     const json = JSON.parse(authFlow?.value);

@@ -8,17 +8,26 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-export default async function Layout({
-  children,
-  params: { lang },
-}: {
-  children: React.ReactNode;
-  params: {
-    lang: string;
-  };
-}) {
+export default async function Layout(
+  props: {
+    children: React.ReactNode;
+    params: Promise<{
+      lang: string;
+    }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const {
+    children
+  } = props;
+
   const session = await auth();
-  const url = headers().get("x-url") || "/";
+  const url = (await headers()).get("x-url") || "/";
   if (!session) {
     const searchParams = new URLSearchParams();
     searchParams.set("returnUrl", url);

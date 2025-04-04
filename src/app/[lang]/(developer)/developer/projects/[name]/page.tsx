@@ -6,9 +6,13 @@ import { PackageDescriptionForm } from "./package-description-form";
 import { PackageDetailsForm } from "./package-details-form";
 import { ReleaseForm } from "./release-form";
 
-export default async function Page({
-  params: { name },
-}: { params: { name: string } }) {
+export default async function Page(props: { params: Promise<{ name: string }> }) {
+  const params = await props.params;
+
+  const {
+    name
+  } = params;
+
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();

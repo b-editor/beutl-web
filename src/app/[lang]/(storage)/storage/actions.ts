@@ -20,7 +20,7 @@ type Response = {
 };
 export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const files = await prisma.file.findMany({
       where: {
@@ -75,7 +75,7 @@ export async function changeFileVisibility(
   visibility: "PRIVATE" | "PUBLIC",
 ): Promise<Response> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
       return {
@@ -138,7 +138,7 @@ export async function getTemporaryUrl(
   id: string,
 ): Promise<GetTemporaryUrlResponse> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const file = await prisma.file.findUnique({
       where: {
@@ -173,7 +173,7 @@ export async function getTemporaryUrl(
 
 export async function uploadFile(formData: FormData): Promise<Response> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const file = formData.get("file") as File;
     if (!file) {

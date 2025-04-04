@@ -14,10 +14,9 @@ import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { signInAction } from "./actions";
-import { useFormState } from "react-dom";
 import SubmitButton from "@/components/submit-button";
 import type { SignInPageErrorParam } from "@auth/core/types";
-import { useMemo, useState } from "react";
+import { useState, useActionState } from "react";
 import { translateNextAuthError } from "@/lib/error-description";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
@@ -30,7 +29,7 @@ export default function Form({
   error,
   lang,
 }: { returnUrl?: string; error?: SignInPageErrorParam; lang: string }) {
-  const [state, dispatch] = useFormState(signInAction, {});
+  const [state, dispatch] = useActionState(signInAction, {});
   const { t } = useTranslation(lang);
   const authError = translateNextAuthError(t, error);
   const [passkeyVerifying, setPasskeyVerifying] = useState(false);

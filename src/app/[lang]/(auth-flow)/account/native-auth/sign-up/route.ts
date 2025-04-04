@@ -5,7 +5,7 @@ import { type NextRequest, NextResponse } from "next/server";
 export async function GET(request: NextRequest) {
   const session = await auth();
   const returnUrl = request.nextUrl.searchParams.get("returnUrl") || "";
-  const lang = getLanguage();
+  const lang = await getLanguage();
 
   const continueUrl = new URL(`/${lang}/account/sign-in`, request.nextUrl.origin);
   continueUrl.searchParams.set("returnUrl", returnUrl);

@@ -17,7 +17,7 @@ async function getCountry(ipAddress: string) {
 
 export async function guessCurrency() {
   if (process.env.NODE_ENV === "development") return "JPY";
-  const h = headers();
+  const h = await headers();
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   console.log("IP Address:", ipAddress);
   if (!ipAddress) return null;

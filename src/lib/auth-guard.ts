@@ -16,7 +16,7 @@ export async function authOrSignIn(): Promise<SafeSession> {
   const session = await auth();
   if (!session?.user?.id) {
     redirect(
-      `/account/sign-in?returnUrl=${encodeURIComponent(headers().get("x-url") || "/")}`,
+      `/account/sign-in?returnUrl=${encodeURIComponent((await headers()).get("x-url") || "/")}`,
     );
   }
 

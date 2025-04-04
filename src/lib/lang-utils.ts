@@ -9,8 +9,8 @@ const getNegotiatedLanguage = (
   return new Negotiator({ headers }).language([...availableLanguages]);
 };
 
-export function getLanguage() {
-  const h = headers();
+export async function getLanguage() {
+  const h = await headers();
 
   const sim = {
     "accept-language": h.get("accept-language") ?? "",

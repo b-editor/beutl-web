@@ -41,7 +41,7 @@ export async function updateProfile(
   formData: FormData,
 ): Promise<State> {
   return await authenticated(async (session) => {
-    const { t, z } = await getTranslation(getLanguage());
+    const { t, z } = await getTranslation(await getLanguage());
     const validated = profileSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
     );

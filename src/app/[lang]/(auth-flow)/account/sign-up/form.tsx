@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import Image from "next/image";
 import { signUpAction } from "./actions";
-import { useFormState } from "react-dom";
+import { useActionState } from "react";
 import SubmitButton from "@/components/submit-button";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
@@ -23,7 +23,7 @@ export default function Form({
   email,
   lang,
 }: { returnUrl?: string; email?: string; lang: string }) {
-  const [state, dispatch] = useFormState(signUpAction, {});
+  const [state, dispatch] = useActionState(signUpAction, {});
   const { t } = useTranslation(lang);
 
   return (

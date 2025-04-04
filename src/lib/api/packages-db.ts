@@ -187,9 +187,9 @@ export async function mapPackage({
     shortDescription: pkg.shortDescription,
     website: pkg.webSite,
     tags: pkg.tags,
-    screenshots: pkg.PackageScreenshot.map((i) => getContentUrl(i.fileId)),
+    screenshots: await Promise.all(pkg.PackageScreenshot.map(async (i) => await getContentUrl(i.fileId))),
     logoId: pkg.iconFileId,
-    logoUrl: getContentUrl(pkg.iconFileId),
+    logoUrl: await getContentUrl(pkg.iconFileId),
     currency: price?.currency || null,
     price: price?.price || null,
     owned: !!owned,
@@ -200,7 +200,7 @@ export async function mapPackage({
       name: pkg.user.Profile?.userName || "",
       bio: pkg.user.Profile?.bio || null,
       iconId: pkg.user.Profile?.iconFileId || null,
-      iconUrl: getContentUrl(pkg.user.Profile?.iconFileId),
+      iconUrl: await getContentUrl(pkg.user.Profile?.iconFileId),
     },
   };
 }

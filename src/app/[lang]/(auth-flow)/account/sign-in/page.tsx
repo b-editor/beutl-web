@@ -4,19 +4,31 @@ import type { SignInPageErrorParam } from "@auth/core/types";
 import { cookies } from "next/headers";
 import { localRedirect } from "@/lib/localRedirect";
 
-export default async function Page({
-  searchParams: { returnUrl, error },
-  params: { lang },
-}: {
-  searchParams: {
-    returnUrl?: string;
-    error?: SignInPageErrorParam;
-  };
-  params: {
-    lang: string;
-  };
-}) {
-  const authFlow = cookies().get("beutl.auth-flow");
+export default async function Page(
+  props: {
+    searchParams: Promise<{
+      returnUrl?: string;
+      error?: SignInPageErrorParam;
+    }>;
+    params: Promise<{
+      lang: string;
+    }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    returnUrl,
+    error
+  } = searchParams;
+
+  const authFlow = (await cookies()).get("beutl.auth-flow");
   if (authFlow?.value) {
     const json = JSON.parse(authFlow?.value);
     if (json.type === "adding-account" && json.url) {
@@ -24,13 +36,13 @@ export default async function Page({
       if (error) {
         url.searchParams.set("error", error);
       }
-      localRedirect(url.toString());
+      await localRedirect(url.toString());
     }
   }
 
   const session = await auth();
   if (session) {
-    localRedirect(returnUrl || `/${lang}`);
+    await localRedirect(returnUrl || `/${lang}`);
   }
 
   return <Form returnUrl={returnUrl} error={error} lang={lang} />;

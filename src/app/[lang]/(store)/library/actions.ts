@@ -74,7 +74,7 @@ export async function retrievePackages(
     },
   });
 
-  return Promise.all(
+  return await Promise.all(
     tmp
       .map((up) => up.package)
       .map(async (pkg) => {

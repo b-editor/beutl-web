@@ -9,7 +9,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const { name } = await prisma.package.findFirstOrThrow({
     where: {
       id: packageId,
@@ -23,7 +23,7 @@ export async function addToLibrary(packageId: string) {
 
 export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const {
       package: { name },

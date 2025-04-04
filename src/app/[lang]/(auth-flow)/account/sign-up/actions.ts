@@ -21,7 +21,7 @@ export async function signUpAction(
   state: State,
   formData: FormData,
 ): Promise<State> {
-  const { t, z } = await getTranslation(getLanguage());
+  const { t, z } = await getTranslation(await getLanguage());
   const type = formData.get("type") as string;
 
   if (type === "email") {
@@ -45,7 +45,7 @@ async function signInWithProvider(
     return { message: t("invalidRequest") };
   }
 
-  await signIn(provider, { redirectTo: returnUrl || `/${getLanguage()}` });
+  await signIn(provider, { redirectTo: returnUrl || `/${await getLanguage()}` });
   return {};
 }
 
@@ -60,7 +60,7 @@ async function signInWithEmail(formData: FormData, z: Zod): Promise<State> {
 
   await signIn("resend", {
     email,
-    redirectTo: returnUrl || `/${getLanguage()}`,
+    redirectTo: returnUrl || `/${await getLanguage()}`,
   });
   return {};
 }

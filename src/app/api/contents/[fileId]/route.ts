@@ -5,10 +5,13 @@ import { prisma } from "@/prisma";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { NextResponse, type NextRequest } from "next/server";
 
-export async function GET(
-  request: NextRequest,
-  { params: { fileId } }: { params: { fileId: string } },
-) {
+export async function GET(request: NextRequest, props: { params: Promise<{ fileId: string }> }) {
+  const params = await props.params;
+
+  const {
+    fileId
+  } = params;
+
   const session = await auth();
   const file = await prisma.file.findFirst({
     where: {

@@ -79,18 +79,18 @@ async function createResponse(pkgId: string, userId: string | null) {
   const latestReleaseId = pkg.Release?.[0]?.id;
   const latestRelease = latestReleaseId
     ? await prisma.release.findFirst({
-        where: {
-          id: latestReleaseId,
-        },
-        select: {
-          id: true,
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          fileId: true,
-        },
-      })
+      where: {
+        id: latestReleaseId,
+      },
+      select: {
+        id: true,
+        version: true,
+        title: true,
+        description: true,
+        targetVersion: true,
+        fileId: true,
+      },
+    })
     : null;
 
   let paid = false;
@@ -113,7 +113,7 @@ async function createResponse(pkgId: string, userId: string | null) {
       shortDescription: pkg.shortDescription,
       tags: pkg.tags,
       logoId: pkg.iconFileId,
-      logoUrl: getContentUrl(pkg.iconFileId),
+      logoUrl: await getContentUrl(pkg.iconFileId),
       currency: price?.currency || null,
       price: price?.price || null,
       paid: paid,
@@ -124,19 +124,19 @@ async function createResponse(pkgId: string, userId: string | null) {
         displayName: profile?.displayName || "",
         bio: profile?.bio || null,
         iconId: profile?.iconFileId || null,
-        iconUrl: getContentUrl(profile?.iconFileId),
+        iconUrl: await getContentUrl(profile?.iconFileId),
       },
     },
     latestRelease: latestRelease
       ? {
-          id: latestRelease.id,
-          version: latestRelease.version,
-          title: latestRelease.title,
-          description: latestRelease.description,
-          targetVersion: latestRelease.targetVersion,
-          fileId: latestRelease.fileId,
-          fileUrl: getContentUrl(latestRelease.fileId),
-        }
+        id: latestRelease.id,
+        version: latestRelease.version,
+        title: latestRelease.title,
+        description: latestRelease.description,
+        targetVersion: latestRelease.targetVersion,
+        fileId: latestRelease.fileId,
+        fileUrl: await getContentUrl(latestRelease.fileId),
+      }
       : null,
   };
 }

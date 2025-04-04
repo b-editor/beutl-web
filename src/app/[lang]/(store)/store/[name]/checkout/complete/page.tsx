@@ -4,13 +4,25 @@ import { notFound } from "next/navigation";
 import { PackageDetails } from "../components";
 import { retrievePackage } from "@/lib/store-utils";
 
-export default async function Page({
-  params: { name, lang },
-  searchParams: { payment_intent },
-}: {
-  params: { name: string; lang: string };
-  searchParams: { payment_intent: string };
-}) {
+export default async function Page(
+  props: {
+    params: Promise<{ name: string; lang: string }>;
+    searchParams: Promise<{ payment_intent: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+
+  const {
+    payment_intent
+  } = searchParams;
+
+  const params = await props.params;
+
+  const {
+    name,
+    lang
+  } = params;
+
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();

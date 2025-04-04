@@ -26,7 +26,7 @@ export async function getUserProfile(query: Prisma.ProfileWhereInput) {
     displayName: profile.displayName,
     bio: profile.bio,
     iconId: profile.iconFileId,
-    iconUrl: getContentUrl(profile.iconFileId),
+    iconUrl: await getContentUrl(profile.iconFileId),
   };
 }
 

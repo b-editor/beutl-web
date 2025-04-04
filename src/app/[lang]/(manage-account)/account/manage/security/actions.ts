@@ -27,16 +27,16 @@ export async function addAccount(
   formData: FormData,
 ): Promise<State> {
   const type = formData.get("type") as string | null;
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const { t } = await getTranslation(lang);
 
   if (!type || (type !== "google" && type !== "github" && type !== "passkey")) {
     return { message: t("invalidRequest"), success: false };
   }
 
-  const url = new URL(headers().get("x-url") as string);
+  const url = new URL((await headers()).get("x-url") as string);
   url.pathname = `/${lang}/account/manage/security/handle`;
-  cookies().set(
+  (await cookies()).set(
     "beutl.auth-flow",
     JSON.stringify({
       type: "adding-account",
@@ -54,7 +54,7 @@ export async function removeAccount(
   formData: FormData,
 ): Promise<State> {
   return await authenticated(async (session) => {
-    const lang = getLanguage();
+    const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const providerAccountId = formData.get("providerAccountId") as
       | string
@@ -114,7 +114,7 @@ export async function renameAuthenticator({
   name,
 }: { id: string; name: string }): Promise<void> {
   const session = await throwIfUnauth();
-  const lang = getLanguage();
+  const lang = await getLanguage();
   await updateAuthenticatorName({
     credentialID: id,
     userId: session.user.id,
@@ -128,7 +128,7 @@ export async function deleteAuthenticator({
   id,
 }: { id: string }): Promise<{ error?: string }> {
   const session = await throwIfUnauth();
-  const lang = getLanguage();
+  const lang = await getLanguage();
   const { t } = await getTranslation(lang);
   const accounts = await retrieveAccounts({ userId: session.user.id });
   if (!accounts.length) {

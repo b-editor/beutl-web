@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const returnUrl = searchParams.get("returnUrl") || "";
   const provider = searchParams.get("provider") || "";
-  const lang = getLanguage();
+  const lang = await getLanguage();
 
   const session = await auth();
   const continueUrl = new URL(`/${lang}/account/native-auth/continue`, request.nextUrl.origin);

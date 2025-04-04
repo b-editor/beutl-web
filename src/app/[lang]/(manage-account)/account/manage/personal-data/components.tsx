@@ -2,8 +2,7 @@
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useState, type ComponentProps } from "react";
-import { useFormState } from "react-dom";
+import { useState, type ComponentProps, useActionState } from "react";
 import { submit } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,7 +18,7 @@ export function Form({
   cancelable?: boolean;
   lang: string;
 }) {
-  const [state, dispatch] = useFormState(submit, {});
+  const [state, dispatch] = useActionState(submit, {});
   const [spinnerType, setSpinnerType] = useState<0 | 1>(0);
   const { t } = useTranslation(lang);
 

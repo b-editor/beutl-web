@@ -7,5 +7,5 @@ export async function signOutAction(
   _: undefined,
   __: FormData,
 ): Promise<undefined> {
-  await signOut({ redirectTo: `/${getLanguage()}` });
+  await signOut({ redirectTo: `/${await getLanguage()}` });
 }

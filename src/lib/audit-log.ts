@@ -44,7 +44,7 @@ export async function addAuditLog({
   action: string;
   details?: string;
 }) {
-  const h = headers();
+  const h = await headers();
 
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");

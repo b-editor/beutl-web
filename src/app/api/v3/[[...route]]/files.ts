@@ -49,7 +49,7 @@ const app = new Hono().get("/:id", async (c) => {
     id: file.id,
     name: file.name,
     contentType: file.mimeType,
-    downloadUrl: getContentUrl(file.id),
+    downloadUrl: await getContentUrl(file.id),
     size: Number(file.size),
     sha256: file.sha256,
   });

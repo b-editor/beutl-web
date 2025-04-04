@@ -9,9 +9,13 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const session = await authOrSignIn();
 
   const history = await getUserPaymentHistory({ userId: session.user.id });

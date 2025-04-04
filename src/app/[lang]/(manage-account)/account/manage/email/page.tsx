@@ -5,17 +5,30 @@ import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
 import { findEmailByUserId } from "@/lib/db/user";
 
-export default async function Page({
-  searchParams: { token, identifier, status },
-  params: { lang },
-}: {
-  searchParams: {
-    token?: string;
-    identifier?: string;
-    status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
-  };
-  params: { lang: string };
-}) {
+export default async function Page(
+  props: {
+    searchParams: Promise<{
+      token?: string;
+      identifier?: string;
+      status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
+    }>;
+    params: Promise<{ lang: string }>;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const searchParams = await props.searchParams;
+
+  const {
+    token,
+    identifier,
+    status
+  } = searchParams;
+
   const session = await authOrSignIn();
   if (token && identifier) {
     await updateEmail(token, identifier);

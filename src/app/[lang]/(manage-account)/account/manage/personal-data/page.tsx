@@ -6,9 +6,13 @@ import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
 import { findEmailByUserId } from "@/lib/db/user";
 
-export default async function Page({
-  params: { lang },
-}: { params: { lang: string } }) {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
   const session = await authOrSignIn();
 
   const user = await findEmailByUserId({ userId: session.user.id });

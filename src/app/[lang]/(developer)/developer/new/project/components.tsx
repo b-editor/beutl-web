@@ -6,12 +6,12 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Upload } from "lucide-react";
 import { createNewProject } from "./actions";
-import { useFormState } from "react-dom";
+import { useActionState } from "react";
 import { ErrorDisplay } from "@/components/error-display";
 import SubmitButton from "@/components/submit-button";
 
 export function Form() {
-  const [state, dispatch] = useFormState(createNewProject, {});
+  const [state, dispatch] = useActionState(createNewProject, {});
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4">

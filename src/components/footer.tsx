@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 export default async function Footer({ lang }: { lang: string }) {
-  const url = new URL(headers().get("x-url") || "/");
+  const url = new URL((await headers()).get("x-url") || "/");
   const langUrl = url.pathname?.replace(/\/ja/, "").replace(/\/en/, "");
   const { t } = await getTranslation(lang);
 

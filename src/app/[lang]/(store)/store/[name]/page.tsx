@@ -12,19 +12,29 @@ import {
 } from "@/lib/store-utils";
 
 type Props = {
-  params: {
+  params: Promise<{
     lang: string;
     name: string;
-  };
-  searchParams: {
+  }>;
+  searchParams: Promise<{
     message?: "PleaseOpenDesktopApp";
-  };
+  }>;
 };
 
-export default async function Page({
-  params: { lang, name },
-  searchParams: { message },
-}: Props) {
+export default async function Page(props: Props) {
+  const searchParams = await props.searchParams;
+
+  const {
+    message
+  } = searchParams;
+
+  const params = await props.params;
+
+  const {
+    lang,
+    name
+  } = params;
+
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
