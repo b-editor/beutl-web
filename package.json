@@ -45,7 +45,7 @@
     "hono": "^4.7.5",
     "i18next": "^24.2.3",
     "i18next-resources-to-backend": "^1.2.1",
-    "jose": "^5.9.6",
+    "jose": "^6.0.10",
     "lucide-react": "^0.452.0",
     "negotiator": "^1.0.0",
     "next": "14.2.26",
