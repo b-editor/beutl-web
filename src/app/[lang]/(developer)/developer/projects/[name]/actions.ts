@@ -471,6 +471,7 @@ export async function updateRelease(formData: FormData) {
     const validated = releaseSchema.safeParse(
       Object.fromEntries(formData.entries()),
     );
+    console.log(formData.get("file"));
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
