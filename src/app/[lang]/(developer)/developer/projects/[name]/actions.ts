@@ -66,7 +66,7 @@ const releaseSchema = z.object({
   published: z
     .string()
     .refine((v) => v === "on" || v === "off", "公開設定が不正です"),
-  file: z.optional(z.instanceof(File)),
+  file: z.any()
 });
 
 async function sameUser<TResult>(
@@ -471,7 +471,6 @@ export async function updateRelease(formData: FormData) {
     const validated = releaseSchema.safeParse(
       Object.fromEntries(formData.entries()),
     );
-    console.log(formData.get("file"));
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
@@ -509,7 +508,7 @@ export async function updateRelease(formData: FormData) {
           : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
-          validated.data.file,
+          validated.data.file as File,
           deletedSize,
         );
         if (!result.success) {
