@@ -11,9 +11,13 @@ const getNegotiatedLanguage = (
 export function middleware(request: NextRequest) {
   const newRequest = request.clone();
   let url = request.url;
+  console.log("Request URL:", url);
   if (process.env.NODE_ENV === "development") {
     url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}${request.nextUrl.search}`;
+  } else {
+    url = `https://beutl.beditor.net${request.nextUrl.pathname}${request.nextUrl.search}`
   }
+  console.log("Request URL:", url);
   newRequest.headers.set("x-url", url);
   newRequest.headers.set("x-pathname", request.nextUrl.pathname);
 
