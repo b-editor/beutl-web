@@ -42,7 +42,7 @@ export default async function Page(props: { params: Promise<{ lang: string; name
                     {item.iconFileUrl && (
                       /* eslint-disable-next-line @next/next/no-img-element */
                       <img
-                        className="flex-1 w-16 h-16 max-w-fit rounded-md"
+                        className="flex-1 w-16 h-16 max-w-16 max-h-16 rounded-md"
                         alt="Package icon"
                         src={item.iconFileUrl}
                       />

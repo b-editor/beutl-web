@@ -48,7 +48,7 @@ export default async function Page() {
                       {item.iconFileUrl && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          className="flex-1 w-10 h-10 max-w-fit rounded-md"
+                          className="flex-1 w-10 h-10 max-w-10 max-h-10 rounded-md"
                           alt="Package icon"
                           src={item.iconFileUrl}
                         />
