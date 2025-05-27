@@ -145,7 +145,8 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
         },
       );
     }
-    return new NextResponse(await res.Body.transformToByteArray(), {
+    const stream = res.Body.transformToWebStream();
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": res.ContentType || "",
         "Content-Length": res.ContentLength?.toString() || "",
