@@ -20,10 +20,6 @@ export default async function Page(props: { params: Promise<{ name: string }> })
 
   return (
     <>
-      <div className="bg-secondary py-4 *:text-center">
-        <p>この画面は実装途中です</p>
-        <p>詳細な編集はデスクトップアプリをご利用ください</p>
-      </div>
       <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
         <PackageInfoForm pkg={pkg} />
 
