@@ -1,6 +1,6 @@
 "use client";
 
-import { changeFileVisibility, deleteFile, getTemporaryUrl } from "./actions";
+import { changeFileVisibility, deleteFile } from "./actions";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   ArrowUpDown,
@@ -71,29 +71,14 @@ export function getColumns(lang: string): ColumnDef<File>[] {
         const mimeType = row.original.mimeType;
         const { t } = useTranslation(lang);
         const { toast } = useToast();
-        const [pending, startTransition] = useTransition();
         const handleClick = useCallback(() => {
-          startTransition(async () => {
-            const res = await getTemporaryUrl(row.original.id);
-            if (!res.success) {
-              toast({
-                title: t("error"),
-                description: res.message,
-                variant: "destructive",
-              });
-              return;
-            }
-
-            window.open(res.url, "_blank");
-          });
+            window.open(`/api/contents/${row.original.id}`, "_blank");
         }, [row.original.id, toast, t]);
 
         return (
           <div className="flex gap-2 items-center">
             <Button variant="ghost" size="icon" onClick={handleClick}>
-              {pending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : mimeType.startsWith("image/") ? (
+              {mimeType.startsWith("image/") ? (
                 <ImageIcon className="h-4 w-4" />
               ) : (
                 <FileIcon className="h-4 w-4" />

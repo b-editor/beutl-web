@@ -1,8 +1,7 @@
 import { auth } from "@/auth";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
-import { s3 } from "@/lib/storage";
 import { prisma } from "@/prisma";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function GET(request: NextRequest, props: { params: Promise<{ fileId: string }> }) {
@@ -21,6 +20,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
       objectKey: true,
       visibility: true,
       userId: true,
+      mimeType: true,
       Package: {
         select: {
           userId: true,
@@ -129,13 +129,9 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   }
 
   if (allowed) {
-    const res = await s3.send(
-      new GetObjectCommand({
-        Bucket: process.env.S3_BUCKET as string,
-        Key: file.objectKey,
-      }),
-    );
-    if (!res?.Body) {
+    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+    const res = await bucket.get(file.objectKey);
+    if (!res) {
       return NextResponse.json(
         {
           message: "ファイルが見つかりません",
@@ -145,11 +141,11 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
         },
       );
     }
-    const stream = res.Body.transformToWebStream();
-    return new NextResponse(stream, {
+
+    return new NextResponse(res.body, {
       headers: {
-        "Content-Type": res.ContentType || "",
-        "Content-Length": res.ContentLength?.toString() || "",
+        "Content-Type": file.mimeType || "application/octet-stream",
+        "Content-Length": res.size.toString(),
         "Cache-Control": cacheControl !== "no-store" ? `${cacheControl}, max-age=31536000, immutable` : cacheControl,
       },
       status: 200,

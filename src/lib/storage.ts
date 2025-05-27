@@ -1,20 +1,7 @@
 import "server-only";
-import {
-  DeleteObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
 import type { PrismaTransaction } from "./db/transaction";
 import { createFile, deleteFile, retrieveFilesByUserId } from "./db/file";
-
-export const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT as string,
-  region: process.env.S3_REGION as string,
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
-    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
-  },
-});
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function deleteStorageFile({
   fileId,
@@ -27,12 +14,9 @@ export async function deleteStorageFile({
     fileId: fileId,
     prisma,
   });
-  await s3.send(
-    new DeleteObjectCommand({
-      Bucket: process.env.S3_BUCKET as string,
-      Key: record.objectKey,
-    }),
-  );
+  
+  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  bucket.delete(record.objectKey);
   return record;
 }
 
@@ -73,14 +57,11 @@ export async function createStorageFile({
   }
 
   const objectKey = crypto.randomUUID();
-  const array = new Uint8Array(await file.arrayBuffer());
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET as string,
-      Key: objectKey,
-      Body: array,
-      ServerSideEncryption: "AES256",
-    }),
+  const array = await file.arrayBuffer();
+  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  bucket.put(
+    objectKey,
+    array,
   );
   // sha256を計算
   const hashBuffer = await crypto.subtle.digest("SHA-256", array);

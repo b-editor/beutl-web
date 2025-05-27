@@ -22,11 +22,19 @@
       "service": "beutl-web",
     },
   ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "r2_buckets": [
     // Create a R2 binding with the binding name "NEXT_INC_CACHE_R2_BUCKET"
     {
       "binding": "NEXT_INC_CACHE_R2_BUCKET",
       "bucket_name": "beutl-web-inc-cache",
+    },
+    {
+      "binding": "BEUTL_R2_BUCKET",
+      "bucket_name": "beutl-dev",
     },
   ],
 }

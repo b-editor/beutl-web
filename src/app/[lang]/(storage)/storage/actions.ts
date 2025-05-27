@@ -1,17 +1,11 @@
 "use server";
 
 import { prisma } from "@/prisma";
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
 import { revalidatePath } from "next/cache";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { s3 } from "@/lib/storage";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 type Response = {
   success: boolean;
@@ -53,12 +47,9 @@ export async function deleteFile(ids: string[]): Promise<Response> {
           id: file.id,
         },
       });
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: process.env.S3_BUCKET as string,
-          Key: file.objectKey,
-        }),
-      );
+
+      const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+      await bucket.delete(file.objectKey);
     });
     await Promise.all(promises);
 
@@ -128,48 +119,6 @@ export async function changeFileVisibility(
   });
 }
 
-type GetTemporaryUrlResponse = {
-  success: boolean;
-  message?: string;
-  url?: string;
-};
-export async function getTemporaryUrl(
-  id: string,
-): Promise<GetTemporaryUrlResponse> {
-  return await authenticated(async (session) => {
-    const lang = await getLanguage();
-    const { t } = await getTranslation(lang);
-    const file = await prisma.file.findUnique({
-      where: {
-        id,
-        userId: session.user.id,
-      },
-      select: {
-        objectKey: true,
-      },
-    });
-    if (!file) {
-      return {
-        success: false,
-        message: t("storage:fileNotFound"),
-      };
-    }
-
-    const url = await getSignedUrl(
-      s3,
-      new GetObjectCommand({
-        Bucket: process.env.S3_BUCKET as string,
-        Key: file.objectKey,
-      }),
-      { expiresIn: 3600 },
-    );
-    return {
-      success: true,
-      url,
-    };
-  });
-}
-
 export async function uploadFile(formData: FormData): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
@@ -214,13 +163,10 @@ export async function uploadFile(formData: FormData): Promise<Response> {
     }
 
     const objectKey = crypto.randomUUID();
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: process.env.S3_BUCKET as string,
-        Key: objectKey,
-        Body: new Uint8Array(await file.arrayBuffer()),
-        ServerSideEncryption: "AES256",
-      }),
+    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+    bucket.put(
+      objectKey,
+      await file.arrayBuffer(),
     );
     await prisma.file.create({
       data: {
