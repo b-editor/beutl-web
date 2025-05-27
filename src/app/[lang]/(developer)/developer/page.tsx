@@ -33,14 +33,14 @@ export default async function Page() {
           {packages.map((item) => (
             <Link
               href={`/developer/projects/${item.name}`}
-              className="text-start p-2 basis-full md:basis-1/2 lg:basis-1/3"
+              className="text-start p-2 basis-full md:basis-1/2 lg:basis-1/3 min-w-0"
               key={item.name}
             >
               <Card className="h-full">
                 <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
                   <div>
                     <div className="flex w-full">
-                      <div className="flex-3">
+                      <div className="flex-3 overflow-hidden">
                         <h4 className="text-xl font-semibold">
                           {item.displayName || item.name}
                         </h4>
