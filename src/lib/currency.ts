@@ -21,7 +21,7 @@ export async function guessCurrency() {
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   console.log("IP Address:", ipAddress);
   if (!ipAddress) return null;
-  const country = h.get("x-vercel-ip-country") || (await getCountry(ipAddress));
+  const country = h.get("CF-IPCountry") || (await getCountry(ipAddress));
   console.log("Country:", country);
   if (!country) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
