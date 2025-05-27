@@ -7,8 +7,6 @@ import account from "./account";
 import { apiErrorResponse } from "@/lib/api/error";
 import { JwtTokenExpired } from "hono/utils/jwt/types";
 
-export const runtime = "edge";
-
 const app = new Hono().basePath("/api/v1");
 
 const route = app

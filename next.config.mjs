@@ -18,4 +18,12 @@ const nextConfig = {
   }
 };
 
-export default nextConfig;
+import analyzer from '@next/bundle-analyzer';
+const withBundleAnalyzer = analyzer({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+export default withBundleAnalyzer(nextConfig);
+
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+initOpenNextCloudflareForDev();

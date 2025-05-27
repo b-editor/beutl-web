@@ -7,8 +7,6 @@ import { LanguageProvider } from "../i18n/client";
 import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
 import { getTranslation } from "../i18n/server";
 
-export const runtime = "edge";
-
 const notoSansJP = Noto_Sans_JP({
   subsets: ["latin"],
   variable: "--font-noto-sans-jp",

@@ -12,8 +12,6 @@ import { apiErrorResponse } from "@/lib/api/error";
 import { HTTPException } from "hono/http-exception";
 import { JwtTokenExpired } from "hono/utils/jwt/types";
 
-export const runtime = "edge";
-
 const app = new Hono().basePath("/api/v3");
 
 const route = app
