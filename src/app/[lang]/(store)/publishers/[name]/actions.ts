@@ -28,66 +28,59 @@ export async function retrievePublishedPackages(
       displayName: true,
     },
   });
-  const tmp = await prisma.userPackage.findMany({
+  const tmp = await prisma.package.findMany({
     where: {
       user: {
         Profile: {
           userName: userName,
         },
       },
-      package: {
-        published: true,
-      },
+      published: true,
     },
     select: {
-      package: {
+      id: true,
+      displayName: true,
+      name: true,
+      shortDescription: true,
+      tags: true,
+      iconFile: {
         select: {
           id: true,
-          displayName: true,
-          name: true,
-          shortDescription: true,
-          tags: true,
-          iconFile: {
+        },
+      },
+      user: {
+        select: {
+          Profile: {
             select: {
-              id: true,
+              userName: true,
             },
           },
-          user: {
-            select: {
-              Profile: {
-                select: {
-                  userName: true,
-                },
+        },
+      },
+      packagePricing: {
+        where: {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
               },
             },
-          },
-          packagePricing: {
-            where: {
-              OR: [
-                {
-                  currency: {
-                    equals: currency,
-                    mode: "insensitive",
-                  },
-                },
-                {
-                  fallback: true,
-                },
-              ],
-            },
-            select: {
-              price: true,
-              currency: true,
+            {
               fallback: true,
             },
-          },
+          ],
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
         },
       },
     },
   });
   const items = Promise.all(
     tmp
-      .map((up) => up.package)
       .map(async (pkg) => {
         const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
 
