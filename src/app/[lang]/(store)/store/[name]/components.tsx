@@ -260,11 +260,10 @@ export function ClientPage({
                   className="w-min max-w-min min-w-min"
                   key={item.file.id}
                 >
-                  <Image
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
                     className="rounded max-w-min h-80 aspect-auto"
                     alt="Screenshot"
-                    width={1280}
-                    height={720}
                     src={item.url}
                   />
                 </CarouselItem>
