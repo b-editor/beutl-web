@@ -89,7 +89,7 @@ export function PackageDetails({
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */ }
                     <img
-                      className="rounded max-w-min h-80 aspect-auto"
+                      className="rounded h-80 aspect-auto"
                       alt="Screenshot"
                       src={item.url}
                     />
