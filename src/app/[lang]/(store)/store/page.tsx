@@ -66,9 +66,8 @@ export default async function Page(
                         <span className="text-muted">{item.userName}</span>
                       </div>
                       {item.iconFileUrl && (
-                        <Image
-                          width={64}
-                          height={64}
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
                           className="flex-1 w-16 h-16 max-w-fit rounded-md"
                           alt="Package icon"
                           src={item.iconFileUrl}
@@ -85,10 +84,10 @@ export default async function Page(
                       <Badge variant="secondary" className="text-nowrap">
                         {item.price
                           ? formatAmount(
-                              item.price.price,
-                              item.price.currency,
-                              lang,
-                            )
+                            item.price.price,
+                            item.price.currency,
+                            lang,
+                          )
                           : t("store:free")}
                       </Badge>
                       <Separator

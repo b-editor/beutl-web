@@ -47,9 +47,8 @@ export default async function Page() {
                         <span className="text-muted">{item.name}</span>
                       </div>
                       {item.iconFileUrl && (
-                        <Image
-                          width={40}
-                          height={40}
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
                           className="flex-1 w-10 h-10 max-w-fit rounded-md"
                           alt="Package icon"
                           src={item.iconFileUrl}

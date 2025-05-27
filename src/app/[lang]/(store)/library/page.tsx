@@ -39,9 +39,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
                       <span className="text-muted">{item.userName}</span>
                     </div>
                     {item.iconFileUrl && (
-                      <Image
-                        width={64}
-                        height={64}
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
                         className="flex-1 w-16 h-16 max-w-fit rounded-md"
                         alt="Package icon"
                         src={item.iconFileUrl}

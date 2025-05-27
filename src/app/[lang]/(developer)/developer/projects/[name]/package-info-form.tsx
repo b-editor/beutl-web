@@ -136,9 +136,8 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
               onClick={handleUploadIconClick}
             >
               {pkg.iconFileUrl && (
-                <Image
-                  width={64}
-                  height={64}
+                /* eslint-disable-next-line @next/next/no-img-element */ 
+                <img
                   className="w-16 h-16 max-w-fit rounded-md group-hover:opacity-80"
                   alt="Package icon"
                   src={pkg.iconFileUrl}
