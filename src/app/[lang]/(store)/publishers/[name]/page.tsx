@@ -1,6 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { retrievePublishedPackages } from "./actions";
-import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";

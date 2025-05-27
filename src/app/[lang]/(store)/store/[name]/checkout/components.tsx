@@ -10,7 +10,6 @@ import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { useMatchMedia } from "@/hooks/use-match-media";
-import Image from "next/image";
 import Link from "next/link";
 import {
   Carousel,

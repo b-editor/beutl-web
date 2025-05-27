@@ -1,7 +1,6 @@
 "use client";
 
 import { Edit, Loader2, MoreVertical, Save, Upload } from "lucide-react";
-import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,

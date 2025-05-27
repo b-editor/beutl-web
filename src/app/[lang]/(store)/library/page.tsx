@@ -1,7 +1,6 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { retrievePackages } from "./actions";
 import { Card, CardContent } from "@/components/ui/card";
-import Image from "next/image";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { formatAmount } from "@/lib/currency-formatter";

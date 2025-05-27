@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { retrievePackages } from "@/lib/store-utils";
-import Image from "next/image";
 import Link from "next/link";
 
 export default async function Page(

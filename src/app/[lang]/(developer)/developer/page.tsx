@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { Eye, EyeOff } from "lucide-react";
-import Image from "next/image";
 import { retrievePackages } from "./actions";
 import Link from "next/link";
 

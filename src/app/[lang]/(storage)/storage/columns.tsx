@@ -69,11 +69,9 @@ export function getColumns(lang: string): ColumnDef<File>[] {
       },
       cell: ({ row }) => {
         const mimeType = row.original.mimeType;
-        const { t } = useTranslation(lang);
-        const { toast } = useToast();
         const handleClick = useCallback(() => {
             window.open(`/api/contents/${row.original.id}`, "_blank");
-        }, [row.original.id, toast, t]);
+        }, [row.original.id]);
 
         return (
           <div className="flex gap-2 items-center">
