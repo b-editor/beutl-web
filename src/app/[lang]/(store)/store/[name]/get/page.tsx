@@ -2,7 +2,6 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { prisma } from "@/prisma";
-import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 export default async function Page(props: { params: Promise<{ name: string; lang: string }> }) {
@@ -61,6 +60,5 @@ export default async function Page(props: { params: Promise<{ name: string; lang
     });
   }
 
-  revalidatePath(`/store/${name}`);
   redirect(`/${lang}/store/${name}?message=PleaseOpenDesktopApp`);
 }
