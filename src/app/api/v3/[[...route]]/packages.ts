@@ -40,7 +40,8 @@ const app = new Hono()
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
-    const pkg = await prisma.package.findFirst({
+    const db = await prisma();
+    const pkg = await db.package.findFirst({
       where: {
         name: name,
       },
@@ -59,7 +60,7 @@ const app = new Hono()
       });
     }
 
-    const releases = await prisma.release.findMany({
+    const releases = await db.release.findMany({
       where: {
         packageId: pkg.id,
         published: pkg.userId === userId ? undefined : true,
@@ -93,8 +94,8 @@ const app = new Hono()
     const name = c.req.param("name");
     const version = c.req.param("version");
     const userId = await getUserId(c);
-
-    const pkg = await prisma.package.findFirst({
+    const db = await prisma();
+    const pkg = await db.package.findFirst({
       where: {
         name: name,
       },
@@ -113,7 +114,7 @@ const app = new Hono()
       });
     }
 
-    const release = await prisma.release.findFirst({
+    const release = await db.release.findFirst({
       where: {
         packageId: pkg.id,
         version: version,

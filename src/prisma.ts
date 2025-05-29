@@ -1,9 +1,8 @@
-import { PrismaClient } from "@prisma/client/edge";
-import { withAccelerate } from "@prisma/extension-accelerate";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma || new PrismaClient().$extends(withAccelerate());
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export async function prisma() {
+  return new PrismaClient({
+    datasourceUrl: (await getCloudflareContext({ async: true })).env.BEUTL_DATABASE_HYPERDRIVE.connectionString || process.env.DATABASE_URL,
+  });
+}

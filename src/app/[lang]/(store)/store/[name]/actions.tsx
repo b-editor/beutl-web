@@ -10,7 +10,8 @@ import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
   const lang = await getLanguage();
-  const { name } = await prisma.package.findFirstOrThrow({
+  const db = await prisma();
+  const { name } = await db.package.findFirstOrThrow({
     where: {
       id: packageId,
     },
@@ -25,9 +26,10 @@ export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
+    const db = await prisma();
     const {
       package: { name },
-    } = await prisma.userPackage.delete({
+    } = await db.userPackage.delete({
       where: {
         userId_packageId: {
           userId: session.user.id,

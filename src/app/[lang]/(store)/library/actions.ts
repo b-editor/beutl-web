@@ -20,7 +20,8 @@ export async function retrievePackages(
   userId: string,
 ): Promise<ListedPackage[]> {
   const currency = await guessCurrency();
-  const tmp = await prisma.userPackage.findMany({
+  const db = await prisma();
+  const tmp = await db.userPackage.findMany({
     where: {
       userId: userId,
       package: {

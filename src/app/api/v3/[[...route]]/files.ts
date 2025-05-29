@@ -6,7 +6,8 @@ import { apiErrorResponse } from "@/lib/api/error";
 import { getContentUrl } from "@/lib/db/file";
 
 async function findFile(id: string) {
-  return await prisma.file.findFirst({
+  const db = await prisma();
+  return await db.file.findFirst({
     where: {
       id: id,
     },

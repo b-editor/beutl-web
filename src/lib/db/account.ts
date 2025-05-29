@@ -9,7 +9,7 @@ export async function retrieveAccounts({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).account.findMany({
+  return await (prisma || await sharedPrisma()).account.findMany({
     where: {
       userId: userId,
     },
@@ -27,7 +27,7 @@ export async function retrieveAccountsWithIdToken({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).account.findMany({
+  return await (prisma || await sharedPrisma()).account.findMany({
     where: {
       userId: userId,
     },
@@ -48,7 +48,7 @@ export async function deleteAccount({
   provider: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).account.delete({
+  await (prisma || await sharedPrisma()).account.delete({
     where: {
       provider_providerAccountId: {
         providerAccountId,

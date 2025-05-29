@@ -11,7 +11,7 @@ export async function updateAuthenticatorUsedAt({
   usedAt: Date;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.update({
+  await (prisma || await sharedPrisma()).authenticator.update({
     where: {
       credentialID,
     },
@@ -30,7 +30,7 @@ export async function deleteAuthenticator({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.delete({
+  await (prisma || await sharedPrisma()).authenticator.delete({
     where: {
       userId_credentialID: {
         userId,
@@ -51,7 +51,7 @@ export async function updateAuthenticatorName({
   name: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.update({
+  await (prisma || await sharedPrisma()).authenticator.update({
     where: {
       userId_credentialID: {
         userId,
@@ -71,7 +71,7 @@ export async function findAuthenticatorByAccountId({
   providerAccountId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).authenticator.findFirst({
+  return await (prisma || await sharedPrisma()).authenticator.findFirst({
     where: {
       providerAccountId,
     },

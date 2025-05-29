@@ -13,8 +13,8 @@ import {
   deleteAuthenticator as deleteDbAuthenticator,
   updateAuthenticatorName,
 } from "@/lib/db/authenticator";
-import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { prisma } from "@/prisma";
 
 export type State = {
   success?: boolean;
@@ -150,7 +150,8 @@ export async function deleteAuthenticator({
     }
   }
 
-  await startTransaction(async (p) => {
+  const db = await prisma();
+  await db.$transaction(async (p) => {
     await deleteAccount({
       providerAccountId: id,
       provider: "passkey",

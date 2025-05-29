@@ -32,7 +32,8 @@ const app = new Hono()
       prerelease,
     } = c.req.valid("query");
 
-    const versions = (await prisma.appReleaseAsset.findMany({
+    const db = await prisma();
+    const versions = (await db.appReleaseAsset.findMany({
       select: {
         version: true,
       }
@@ -57,7 +58,7 @@ const app = new Hono()
       });
     }
 
-    const asset = await prisma.appReleaseAsset.findFirst({
+    const asset = await db.appReleaseAsset.findFirst({
       where: {
         version: latest.version,
         type,

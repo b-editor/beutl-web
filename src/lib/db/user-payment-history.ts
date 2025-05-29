@@ -9,7 +9,7 @@ export async function getUserPaymentHistory({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).userPaymentHistory.findMany({
+  return await (prisma || await sharedPrisma()).userPaymentHistory.findMany({
     where: {
       userId: userId,
     },
@@ -29,7 +29,7 @@ export async function existsUserPaymentHistory({
   prisma?: PrismaTransaction;
 }) {
   if (!userId) return false;
-  return !!(await (prisma || sharedPrisma).userPaymentHistory.findFirst({
+  return !!(await (prisma || await sharedPrisma()).userPaymentHistory.findFirst({
     where: {
       userId: userId,
       packageId: packageId,
@@ -51,7 +51,7 @@ export async function createUserPaymentHistory({
   paymentIntentId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).userPaymentHistory.create({
+  await (prisma || await sharedPrisma()).userPaymentHistory.create({
     data: {
       userId: userId,
       packageId: packageId,

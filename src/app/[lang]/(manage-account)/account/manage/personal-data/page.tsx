@@ -19,7 +19,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   if (!user) {
     throw new Error("User not found");
   }
-  const tokens = await prisma.confirmationToken.findMany({
+  const db = await prisma();
+  const tokens = await db.confirmationToken.findMany({
     where: {
       userId: session.user.id,
       purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,

@@ -20,7 +20,8 @@ export async function retrievePublishedPackages(
   userName: string,
 ): Promise<{ items: ListedPackage[]; displayName: string }> {
   const currency = await guessCurrency();
-  const profile = prisma.profile.findFirst({
+  const db = await prisma();
+  const profile = db.profile.findFirst({
     where: {
       userName: userName,
     },
@@ -28,7 +29,7 @@ export async function retrievePublishedPackages(
       displayName: true,
     },
   });
-  const tmp = await prisma.package.findMany({
+  const tmp = await db.package.findMany({
     where: {
       user: {
         Profile: {

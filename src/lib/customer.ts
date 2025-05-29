@@ -6,7 +6,8 @@ export async function createOrRetrieveCustomerId(
   email: string,
   userId: string,
 ) {
-  const customer = await prisma.customer.findFirst({
+  const db = await prisma();
+  const customer = await db.customer.findFirst({
     where: {
       userId: userId,
     },
@@ -16,7 +17,7 @@ export async function createOrRetrieveCustomerId(
   if (customerId) {
     const c = await stripe.customers.retrieve(customerId);
     if (c?.deleted) {
-      prisma.customer.deleteMany({
+      db.customer.deleteMany({
         where: {
           userId: userId,
         },
@@ -30,7 +31,7 @@ export async function createOrRetrieveCustomerId(
     if (!customerId) {
       const customer = await stripe.customers.create({ email: email });
       customerId = customer.id;
-      await prisma.customer.create({
+      await db.customer.create({
         data: {
           userId: userId,
           stripeId: customerId,

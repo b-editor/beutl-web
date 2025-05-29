@@ -18,12 +18,13 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  const profile = await prisma.profile.findFirst({
+  const db = await prisma();
+  const profile = await db.profile.findFirst({
     where: {
       userId: session.user.id,
     },
   });
-  const socials = await prisma.socialProfile.findMany({
+  const socials = await db.socialProfile.findMany({
     where: {
       userId: session.user.id,
     },

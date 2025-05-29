@@ -13,8 +13,8 @@ export default async function Page(props: { params: Promise<{ name: string; lang
   } = params;
 
   const session = await authOrSignIn();
-
-  const pkg = await prisma.package.findFirst({
+  const db = await prisma();
+  const pkg = await db.package.findFirst({
     where: {
       name: {
         equals: name,
@@ -43,11 +43,11 @@ export default async function Page(props: { params: Promise<{ name: string; lang
   }
 
   if (
-    !(await prisma.userPackage.findFirst({
+    !(await db.userPackage.findFirst({
       where: { userId: session.user.id, packageId: pkg.id },
     }))
   ) {
-    await prisma.userPackage.create({
+    await db.userPackage.create({
       data: {
         userId: session.user.id,
         packageId: pkg.id,

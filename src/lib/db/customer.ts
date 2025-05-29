@@ -12,7 +12,7 @@ export async function updateCustomerEmailIfExist({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  const p = prisma || sharedPrisma;
+  const p = prisma || await sharedPrisma();
   const customer = await p.customer.findFirst({
     where: {
       userId: userId,

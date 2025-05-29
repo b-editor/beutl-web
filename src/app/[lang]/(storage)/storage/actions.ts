@@ -15,7 +15,8 @@ export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const files = await prisma.file.findMany({
+    const db = await prisma();
+    const files = await db.file.findMany({
       where: {
         id: {
           in: ids,
@@ -42,13 +43,13 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     }
 
     const promises = files.map(async (file) => {
-      await prisma.file.delete({
+      await db.file.delete({
         where: {
           id: file.id,
         },
       });
 
-      const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+      const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
       await bucket.delete(file.objectKey);
     });
     await Promise.all(promises);
@@ -67,6 +68,7 @@ export async function changeFileVisibility(
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
+    const db = await prisma();
     if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
       return {
         success: false,
@@ -74,7 +76,7 @@ export async function changeFileVisibility(
       };
     }
 
-    const files = await prisma.file.findMany({
+    const files = await db.file.findMany({
       where: {
         id: {
           in: ids,
@@ -101,7 +103,7 @@ export async function changeFileVisibility(
     }
 
     const promises = files.map(async (file) => {
-      await prisma.file.update({
+      await db.file.update({
         where: {
           id: file.id,
         },
@@ -131,7 +133,8 @@ export async function uploadFile(formData: FormData): Promise<Response> {
       };
     }
 
-    const files = await prisma.file.findMany({
+    const db = await prisma();
+    const files = await db.file.findMany({
       where: {
         userId: session.user.id,
       },
@@ -163,12 +166,12 @@ export async function uploadFile(formData: FormData): Promise<Response> {
     }
 
     const objectKey = crypto.randomUUID();
-    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+    const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
     bucket.put(
       objectKey,
       await file.arrayBuffer(),
     );
-    await prisma.file.create({
+    await db.file.create({
       data: {
         objectKey,
         name: filename,
@@ -187,7 +190,8 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 
 export async function retrieveFiles() {
   const session = await throwIfUnauth();
-  return await prisma.file.findMany({
+  const db = await prisma();
+  return await db.file.findMany({
     where: {
       userId: session?.user?.id,
     },

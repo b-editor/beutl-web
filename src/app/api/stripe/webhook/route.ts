@@ -30,7 +30,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
-      const customer = await prisma.customer.findFirst({
+      const db = await prisma();
+      const customer = await db.customer.findFirst({
         where: {
           stripeId: paymentIntent.customer,
         },
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      const pkg = await prisma.package.findFirst({
+      const pkg = await db.package.findFirst({
         where: {
           id: paymentIntent.metadata.packageId,
         },
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      await prisma.userPackage.create({
+      await db.userPackage.create({
         data: {
           userId: customer.userId,
           packageId: pkg.id,
