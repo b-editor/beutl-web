@@ -37,4 +37,10 @@
       "bucket_name": "beutl-dev",
     },
   ],
+  "hyperdrive": [
+    {
+      "binding": "BEUTL_DATABASE_HYPERDRIVE",
+      "id": "7d25b2e6973340a6aec6fbc23ccceea0"
+    }
+  ]
 }
