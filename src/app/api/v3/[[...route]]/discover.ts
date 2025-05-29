@@ -19,7 +19,8 @@ const searchQuerySchema = z.object({
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
-  const profile = await prisma.profile.findFirst({
+  const db = await prisma();
+  const profile = await db.profile.findFirst({
     where: {
       userId: pkg.userId,
     },

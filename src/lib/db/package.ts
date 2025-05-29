@@ -9,7 +9,7 @@ export async function retrieveDevPackagesByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.findMany({
+  return await (prisma || await sharedPrisma()).package.findMany({
     where: {
       userId: userId,
     },
@@ -41,7 +41,7 @@ export async function retrieveDevPackageByName({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.findFirst({
+  return await (prisma || await sharedPrisma()).package.findFirst({
     where: {
       name: {
         equals: name,
@@ -113,7 +113,7 @@ export async function existsPackageName({
   name: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.count({
+  return await (prisma || await sharedPrisma()).package.count({
     where: {
       name: {
         equals: name,
@@ -132,7 +132,7 @@ export async function createDevPackage({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.create({
+  return await (prisma || await sharedPrisma()).package.create({
     data: {
       name: name,
       userId: userId,
@@ -152,7 +152,7 @@ export async function getUserIdFromPackageId({
   prisma?: PrismaTransaction;
 }) {
   return (
-    await (prisma || sharedPrisma).package.findFirst({
+    await (prisma || await sharedPrisma()).package.findFirst({
       where: {
         id: packageId,
       },
@@ -171,7 +171,7 @@ export async function getPackageNameFromPackageId({
   prisma?: PrismaTransaction;
 }) {
   return (
-    await (prisma || sharedPrisma).package.findFirst({
+    await (prisma || await sharedPrisma()).package.findFirst({
       where: {
         id: packageId,
       },
@@ -193,7 +193,7 @@ export async function updateDevPackageDisplay({
   shortDescription: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  return await (prisma || await sharedPrisma()).package.update({
     where: {
       id: packageId,
     },
@@ -216,7 +216,7 @@ export async function updateDevPackageDescription({
   description: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  return await (prisma || await sharedPrisma()).package.update({
     where: {
       id: packageId,
     },
@@ -238,7 +238,7 @@ export async function updateDevPackagePublished({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  return await (prisma || await sharedPrisma()).package.update({
     where: {
       id: packageId,
     },
@@ -260,7 +260,7 @@ export async function updateDevPackageIconFile({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  return await (prisma || await sharedPrisma()).package.update({
     where: {
       id: packageId,
     },
@@ -280,7 +280,7 @@ export async function retrieveDevPackageDependsFile({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  const pkg = await (prisma || sharedPrisma).package.findFirstOrThrow({
+  const pkg = await (prisma || await sharedPrisma()).package.findFirstOrThrow({
     where: {
       id: packageId,
     },
@@ -330,7 +330,7 @@ export async function retrieveDevPackageIconFile({
   prisma?: PrismaTransaction;
 }) {
   return (
-    await (prisma || sharedPrisma).package.findFirst({
+    await (prisma || await sharedPrisma()).package.findFirst({
       where: {
         id: packageId,
       },
@@ -354,7 +354,7 @@ export async function retrieveDevPackageScreenshots({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.findMany({
+  return await (prisma || await sharedPrisma()).packageScreenshot.findMany({
     where: {
       packageId: packageId,
     },
@@ -375,7 +375,7 @@ export async function retrieveDevPackageLastScreenshotOrder({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.findFirst({
+  return await (prisma || await sharedPrisma()).packageScreenshot.findFirst({
     where: {
       packageId: packageId,
     },
@@ -399,7 +399,7 @@ export async function createDevPackageScreenshot({
   order: number;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.create({
+  return await (prisma || await sharedPrisma()).packageScreenshot.create({
     data: {
       packageId: packageId,
       fileId: fileId,
@@ -419,7 +419,7 @@ export async function updateDevPackageScreenshotOrder({
   order: number;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.update({
+  return await (prisma || await sharedPrisma()).packageScreenshot.update({
     where: {
       packageId_fileId: {
         packageId: packageId,
@@ -441,7 +441,7 @@ export async function updateDevPackageTags({
   tags: string[];
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  return await (prisma || await sharedPrisma()).package.update({
     where: {
       id: packageId,
     },
@@ -463,7 +463,7 @@ export async function deleteDevPackageScreenshot({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.delete({
+  return await (prisma || await sharedPrisma()).packageScreenshot.delete({
     where: {
       packageId_fileId: {
         packageId: packageId,
@@ -480,7 +480,7 @@ export async function deleteDevPackage({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.delete({
+  return await (prisma || await sharedPrisma()).package.delete({
     where: {
       id: packageId,
     },

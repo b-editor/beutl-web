@@ -21,7 +21,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const history = await getUserPaymentHistory({ userId: session.user.id });
   const items = await Promise.all(
     history.map(async (item) => {
-      const p1 = prisma.package.findFirst({
+      const db = await prisma();
+      const p1 = db.package.findFirst({
         where: {
           id: item.packageId,
         },

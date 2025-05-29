@@ -16,7 +16,8 @@ const acquireSchema = z.object({
 
 async function createResponse(pkgId: string, userId: string | null) {
   const currency = await guessCurrency();
-  const pkg = await prisma.package.findFirst({
+  const db = await prisma();
+  const pkg = await db.package.findFirst({
     where: {
       id: pkgId,
     },
@@ -78,7 +79,7 @@ async function createResponse(pkgId: string, userId: string | null) {
   });
   const latestReleaseId = pkg.Release?.[0]?.id;
   const latestRelease = latestReleaseId
-    ? await prisma.release.findFirst({
+    ? await db.release.findFirst({
       where: {
         id: latestReleaseId,
       },
@@ -151,7 +152,8 @@ const app = new Hono()
       });
     }
 
-    const user = await prisma.user.findUnique({
+    const db = await prisma();
+    const user = await db.user.findUnique({
       where: {
         id: userId,
       },
@@ -168,7 +170,7 @@ const app = new Hono()
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
 
-    const paymentRequired = !!(await prisma.packagePricing.findFirst({
+    const paymentRequired = !!(await db.packagePricing.findFirst({
       where: {
         packageId: pkg.package.id,
         price: {
@@ -189,14 +191,14 @@ const app = new Hono()
     }
 
     if (
-      !(await prisma.userPackage.findFirst({
+      !(await db.userPackage.findFirst({
         where: {
           userId: user.id,
           packageId: pkg.package.id,
         },
       }))
     ) {
-      await prisma.userPackage.create({
+      await db.userPackage.create({
         data: {
           userId: user.id,
           packageId: pkg.package.id,
@@ -214,7 +216,8 @@ const app = new Hono()
       });
     }
 
-    const packages = await prisma.userPackage.findMany({
+    const db = await prisma();
+    const packages = await db.userPackage.findMany({
       where: {
         userId: userId,
       },
@@ -240,7 +243,8 @@ const app = new Hono()
       });
     }
 
-    await prisma.userPackage.deleteMany({
+    const db = await prisma();
+    await db.userPackage.deleteMany({
       where: {
         userId: userId,
         package: {

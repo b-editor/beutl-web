@@ -8,7 +8,8 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  const tokenData = await prisma.confirmationToken.delete({
+  const db = await prisma();
+  const tokenData = await db.confirmationToken.delete({
     where: {
       identifier_token: {
         identifier: identifier,

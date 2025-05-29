@@ -37,7 +37,8 @@ export default async function Page(
     }
 
     const code = randomString(32);
-    const obj = await prisma.nativeAppAuth.update({
+    const db = await prisma();
+    const obj = await db.nativeAppAuth.update({
       where: {
         id: identifier,
       },

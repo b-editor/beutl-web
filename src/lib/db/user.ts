@@ -9,7 +9,7 @@ export async function existsUserByEmail({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  return !!(await (prisma || sharedPrisma).user.findFirst({
+  return !!(await (prisma || await sharedPrisma()).user.findFirst({
     where: {
       email: email,
     },
@@ -26,7 +26,7 @@ export async function existsUserById({
   id: string;
   prisma?: PrismaTransaction;
 }) {
-  return !!(await (prisma || sharedPrisma).user.findFirst({
+  return !!(await (prisma || await sharedPrisma()).user.findFirst({
     where: {
       id: id,
     },
@@ -45,7 +45,7 @@ export async function updateUserEmail({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).user.update({
+  await (prisma || await sharedPrisma()).user.update({
     where: {
       id: userId,
     },
@@ -62,7 +62,7 @@ export async function findEmailByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return (prisma || sharedPrisma).user.findFirst({
+  return (prisma || await sharedPrisma()).user.findFirst({
     where: {
       id: userId,
     },
@@ -80,7 +80,7 @@ export async function getEmailVerifiedByUserId({
   prisma?: PrismaTransaction;
 }) {
   return (
-    await (prisma || sharedPrisma).user.findFirst({
+    await (prisma || await sharedPrisma()).user.findFirst({
       where: {
         id: userId,
       },
@@ -98,7 +98,7 @@ export async function deleteUserById({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).user.delete({
+  await (prisma || await sharedPrisma()).user.delete({
     where: {
       id: userId,
     }

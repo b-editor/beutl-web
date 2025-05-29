@@ -42,6 +42,7 @@ export async function updateProfile(
 ): Promise<State> {
   return await authenticated(async (session) => {
     const { t, z } = await getTranslation(await getLanguage());
+    const db = await prisma();
     const validated = profileSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
     );
@@ -59,7 +60,7 @@ export async function updateProfile(
     const promises: Promise<unknown>[] = [];
     // プロフィール更新
     promises.push(
-      prisma.profile.upsert({
+      db.profile.upsert({
         where: {
           userId: session.user.id,
         },
@@ -76,7 +77,7 @@ export async function updateProfile(
         },
       }),
     );
-    const providers = await prisma.socialProfileProvider.findMany({
+    const providers = await db.socialProfileProvider.findMany({
       where: {
         provider: {
           in: ["x", "github", "youtube", "custom"],
@@ -111,7 +112,7 @@ export async function updateProfile(
       }
       if (social.value) {
         promises.push(
-          prisma.socialProfile.upsert({
+          db.socialProfile.upsert({
             where: {
               userId_providerId: {
                 userId: session.user.id,
@@ -130,7 +131,7 @@ export async function updateProfile(
         );
       } else {
         promises.push(
-          prisma.socialProfile.deleteMany({
+          db.socialProfile.deleteMany({
             where: {
               userId: session.user.id,
               providerId: social.providerId,

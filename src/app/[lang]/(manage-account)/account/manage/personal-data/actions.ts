@@ -47,6 +47,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
+    const db = await prisma();
     const validated = emailSchema.safeParse(
       Object.fromEntries(formData.entries()),
     );
@@ -59,7 +60,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     }
 
     if (validated.data.cancel) {
-      await prisma.confirmationToken.deleteMany({
+      await db.confirmationToken.deleteMany({
         where: {
           userId: session.user.id,
           purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
@@ -87,7 +88,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(user.email, token, lang);
-    const createToken = prisma.confirmationToken.create({
+    const createToken = db.confirmationToken.create({
       data: {
         token: await createHash(`${token}${secret}`),
         identifier: user.email,

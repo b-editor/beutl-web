@@ -16,7 +16,6 @@ import {
   updateUserEmail,
 } from "@/lib/db/user";
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
-import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 type State = {
@@ -91,7 +90,8 @@ export async function sendConfirmationEmail(
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
-    const createToken = prisma.confirmationToken.create({
+    const db = await prisma();
+    const createToken = db.confirmationToken.create({
       data: {
         token: await createHash(`${token}${secret}`),
         identifier: validated.data.newEmail,
@@ -118,8 +118,9 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
+  const db = await prisma();
   if (
-    !prisma.confirmationToken.count({
+    !db.confirmationToken.count({
       where: {
         identifier: identifier,
         token: hash,
@@ -133,7 +134,7 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const tokenData = await prisma.confirmationToken.delete({
+  const tokenData = await db.confirmationToken.delete({
     where: {
       identifier_token: {
         identifier: identifier,
@@ -166,7 +167,7 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const updated = await startTransaction(async (p) => {
+  const updated = await db.$transaction(async (p) => {
     await updateUserEmail({
       userId: tokenData.userId,
       email: tokenData.identifier,

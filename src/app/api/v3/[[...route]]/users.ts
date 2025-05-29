@@ -27,8 +27,9 @@ const app = new Hono()
     const name = c.req.param("name");
     const currentUserId = await getUserId(c);
     const currency = await guessCurrency();
+    const db = await prisma();
     const userId = (
-      await prisma.profile.findFirst({
+      await db.profile.findFirst({
         where: {
           userName: {
             equals: name,

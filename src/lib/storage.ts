@@ -15,7 +15,7 @@ export async function deleteStorageFile({
     prisma,
   });
   
-  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
   bucket.delete(record.objectKey);
   return record;
 }
@@ -58,7 +58,7 @@ export async function createStorageFile({
 
   const objectKey = crypto.randomUUID();
   const array = await file.arrayBuffer();
-  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
   bucket.put(
     objectKey,
     array,

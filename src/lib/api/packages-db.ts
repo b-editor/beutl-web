@@ -13,7 +13,8 @@ export async function getPackage({
   query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
-  const result = await prisma.package.findFirst({
+  const db = await prisma();
+  const result = await db.package.findFirst({
     where: query,
     select: {
       id: true,
@@ -94,7 +95,8 @@ export async function getPackages({
   query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
-  return prisma.package.findMany({
+  const db = await prisma();
+  return db.package.findMany({
     where: query,
     select: {
       id: true,

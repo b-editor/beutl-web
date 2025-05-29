@@ -130,7 +130,8 @@ async function createRefreshToken(userId: string) {
         24 *
         Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
   );
-  await prisma.session.create({
+  const db = await prisma();
+  await db.session.create({
     data: {
       sessionToken: rawToken,
       expires: expires,
@@ -161,7 +162,8 @@ const app = new Hono()
           status: 400,
         });
       }
-      const auth = await prisma.nativeAppAuth.create({
+      const db = await prisma();
+      const auth = await db.nativeAppAuth.create({
         data: {
           continueUrl: continue_uri,
         },
@@ -181,7 +183,8 @@ const app = new Hono()
       });
     }
     const identifier = c.req.query("identifier");
-    const auth = await prisma.nativeAppAuth.findFirst({
+    const db = await prisma();
+    const auth = await db.nativeAppAuth.findFirst({
       where: { id: identifier },
     });
     if (!auth) {
@@ -190,7 +193,7 @@ const app = new Hono()
       });
     }
 
-    const { code, continueUrl } = await prisma.nativeAppAuth.update({
+    const { code, continueUrl } = await db.nativeAppAuth.update({
       where: { id: identifier },
       data: {
         userId,
@@ -223,7 +226,8 @@ const app = new Hono()
       });
     }
 
-    const oldRefreshTokens = await prisma.session.deleteMany({
+    const db = await prisma();
+    const oldRefreshTokens = await db.session.deleteMany({
       where: {
         sessionToken: oldDecryptedRefreshToken,
       },
@@ -247,7 +251,8 @@ const app = new Hono()
   })
   .post("/code2jwt", zValidator("json", exchangeSchema), async (c) => {
     const { session_id, code } = c.req.valid("json");
-    const auth = await prisma.nativeAppAuth.findFirst({
+    const db = await prisma();
+    const auth = await db.nativeAppAuth.findFirst({
       where: {
         sessionId: session_id,
       },
@@ -264,7 +269,7 @@ const app = new Hono()
         status: 401,
       });
     }
-    await prisma.nativeAppAuth.deleteMany({
+    await db.nativeAppAuth.deleteMany({
       where: {
         sessionId: session_id,
       },

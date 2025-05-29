@@ -17,7 +17,7 @@ export async function retrieveFilesByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).file.findMany({
+  return await (prisma || await sharedPrisma()).file.findMany({
     where: {
       userId: userId,
     },
@@ -43,7 +43,7 @@ export async function createFile({
   prisma?: PrismaTransaction;
   sha256?: string;
 }) {
-  return await (prisma || sharedPrisma).file.create({
+  return await (prisma || await sharedPrisma()).file.create({
     data: {
       objectKey,
       name,
@@ -63,7 +63,7 @@ export async function deleteFile({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).file.delete({
+  return await (prisma || await sharedPrisma()).file.delete({
     where: {
       id: fileId,
     },

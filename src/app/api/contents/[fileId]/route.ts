@@ -12,7 +12,8 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   } = params;
 
   const session = await auth();
-  const file = await prisma.file.findFirst({
+  const db = await prisma();
+  const file = await db.file.findFirst({
     where: {
       id: fileId,
     },
@@ -129,7 +130,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   }
 
   if (allowed) {
-    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+    const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
     const res = await bucket.get(file.objectKey);
     if (!res) {
       return NextResponse.json(

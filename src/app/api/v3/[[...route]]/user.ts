@@ -7,7 +7,8 @@ import { getUserId } from "@/lib/api/auth";
 import { getContentUrl } from "@/lib/db/file";
 
 export async function getUserProfile(query: Prisma.ProfileWhereInput) {
-  const profile = await prisma.profile.findFirst({
+  const db = await prisma();
+  const profile = await db.profile.findFirst({
     where: query,
     select: {
       userId: true,
