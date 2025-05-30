@@ -15,7 +15,15 @@ const nextConfig = {
         port: "",
       },
     ],
-  }
+  },
+  webpack: (config, { webpack }) => {
+    config.plugins.push(new webpack.IgnorePlugin({
+      resourceRegExp: /^pg-native$|^cloudflare:sockets$/,
+    }))
+
+    return config
+  },
+  serverExternalPackages: ["@prisma/client", ".prisma/client", "postgres"],
 };
 
 import analyzer from '@next/bundle-analyzer';
