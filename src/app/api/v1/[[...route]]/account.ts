@@ -181,6 +181,11 @@ const app = new Hono()
       });
     }
     const identifier = c.req.query("identifier");
+    if (!identifier) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
     const auth = await prisma.nativeAppAuth.findFirst({
       where: { id: identifier },
     });
