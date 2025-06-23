@@ -219,7 +219,7 @@ export async function retrievePackage(name: string) {
   return {
     ...pkg,
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
-    PackageScreenshot: screenshots,
+    screenshots: screenshots,
   };
 }
 

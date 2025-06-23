@@ -65,7 +65,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
         .where(
           and(
             eq(confirmationToken.userId, session.user.id),
-            eq(confirmationToken.purpose, ConfirmationTokenPurpose.ACCOUNT_DELETE),
+            eq(confirmationToken.purpose, 'ACCOUNT_DELETE'),
           ),
         );
       revalidatePath("/account/manage/personal-data");

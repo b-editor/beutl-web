@@ -71,7 +71,7 @@ export default async function Page(
           });
           if (!authenticator) return null;
           return {
-            id: authenticator.credentialID,
+            id: authenticator.credentialId,
             deviceType: authenticator.credentialDeviceType,
             backedUp: authenticator.credentialBackedUp,
             name: authenticator.name,

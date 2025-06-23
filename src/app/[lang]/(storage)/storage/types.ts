@@ -5,7 +5,7 @@ export type FileVisibility = typeof fileVisibility.enumValues[number];
 export interface File {
   id: string;
   name: string;
-  size: bigint;
+  size: number;
   visibility: FileVisibility;
   mimeType: string;
   objectKey: string;

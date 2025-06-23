@@ -38,7 +38,7 @@ export default async function Page(props: Props) {
   if (!pkg) {
     notFound();
   }
-  pkg.Release.sort((a, b) => {
+  pkg.releases.sort((a: typeof pkg.releases[number], b: typeof pkg.releases[number]) => {
     return new SemVer(b.version).compare(a.version);
   });
   const currencyP = guessCurrency();

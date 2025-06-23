@@ -20,7 +20,7 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
   const [tags, manipulateTags] = useOptimistic<
     string[],
     { type: "add" | "delete"; tag: string } | { type: "reset"; tags: string[] }
-  >(pkg.tags, (state, req) => {
+  >(pkg.tags ?? [], (state, req) => {
     if (req.type === "add") {
       return [...state, req.tag];
     }
@@ -90,7 +90,7 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
       <div className="flex gap-2 flex-col my-4">
         <h4>タグ</h4>
         <div className="flex gap-1 flex-wrap">
-          {pkg.tags.map((tag) => (
+          {(pkg.tags ?? []).map((tag) => (
             <Badge key={tag} onClick={() => handleDeleteTag(tag)}>
               {tag}
               <X className="ml-1 w-4 h-4" />

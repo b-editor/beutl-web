@@ -4,6 +4,8 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
 import { getTranslation } from "@/app/i18n/server";
+import { profile, socialProfile, socialProfileProvider } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
   const params = await props.params;
@@ -19,33 +21,31 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   }
 
   const db = await drizzle();
-  const profile = await db.profile.findFirst({
-    where: {
-      userId: session.user.id,
-    },
-  });
-  const socials = await db.socialProfile.findMany({
-    where: {
-      userId: session.user.id,
-    },
-    select: {
-      value: true,
+  const profileResult = await db
+    .select()
+    .from(profile)
+    .where(eq(profile.userId, session.user.id!))
+    .limit(1);
+  
+  const socials = await db
+    .select({
+      value: socialProfile.value,
       provider: {
-        select: {
-          id: true,
-          name: true,
-          provider: true,
-          urlTemplate: true,
-        },
+        id: socialProfileProvider.id,
+        name: socialProfileProvider.name,
+        provider: socialProfileProvider.provider,
+        urlTemplate: socialProfileProvider.urlTemplate,
       },
-    },
-  });
+    })
+    .from(socialProfile)
+    .innerJoin(socialProfileProvider, eq(socialProfile.providerId, socialProfileProvider.id))
+    .where(eq(socialProfile.userId, session.user.id!));
   const { t } = await getTranslation(lang);
 
   return (
     <div>
       <h2 className="font-bold text-2xl">{t("account:profile.title")}</h2>
-      <Form lang={lang} profile={profile} socials={socials} className="mt-4" />
+      <Form lang={lang} profile={profileResult[0]} socials={socials as any} className="mt-4" />
     </div>
   );
 }

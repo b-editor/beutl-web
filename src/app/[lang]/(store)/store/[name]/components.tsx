@@ -133,8 +133,8 @@ export function ClientPage({
 }: PageProps) {
   const { t } = useTranslation(lang);
   const defaultVersion = useMemo(
-    () => (pkg.Release.length > 0 ? pkg.Release[0].version : undefined),
-    [pkg.Release],
+    () => (pkg.releases.length > 0 ? pkg.releases[0].version : undefined),
+    [pkg.releases],
   );
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -144,9 +144,9 @@ export function ClientPage({
   );
   const selectedRelease = useMemo(() => {
     if (selectedVersion) {
-      return pkg.Release.find((v) => v.version === selectedVersion);
+      return pkg.releases.find((v: typeof pkg.releases[number]) => v.version === selectedVersion);
     }
-  }, [selectedVersion, pkg.Release]);
+  }, [selectedVersion, pkg.releases]);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
   const [open, setOpen] = useState(false);
 
@@ -176,9 +176,9 @@ export function ClientPage({
                 className="p-0 h-auto text-muted-foreground"
               >
                 <Link
-                  href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}
+                  href={`/${lang}/publishers/${pkg.userProfile?.userName}`}
                 >
-                  {pkg.user.Profile?.userName}
+                  {pkg.userProfile?.userName}
                 </Link>
               </Button>
             </div>
@@ -225,7 +225,7 @@ export function ClientPage({
                 router.push(url.toString());
               }}
             >
-              {pkg.Release.map((release) => (
+              {pkg.releases.map((release: typeof pkg.releases[number]) => (
                 <DropdownMenuRadioItem value={release.version} key={release.id}>
                   {release.version}
                 </DropdownMenuRadioItem>
@@ -246,17 +246,17 @@ export function ClientPage({
       </div>
       <p className="mt-4 text-foreground/70">{pkg.shortDescription}</p>
 
-      {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
+      {pkg.screenshots && pkg.screenshots.length > 0 && (
         <>
           <h3 className="font-bold text-xl mt-6 border-b pb-2">
             {t("store:screenshots")}
           </h3>
           <Carousel className="mt-4" opts={{ active: maxLg }}>
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
-              {pkg.PackageScreenshot.map((item) => (
+              {pkg.screenshots.map((item: typeof pkg.screenshots[number]) => (
                 <CarouselItem
                   className="w-min max-w-min min-w-min"
-                  key={item.file.id}
+                  key={item.fileId}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -309,7 +309,7 @@ export function ClientPage({
           <div className="flex gap-2 flex-col my-4">
             <h4>{t("store:tags")}</h4>
             <div className="flex gap-1 flex-wrap">
-              {pkg.tags.map((tag) => (
+              {(pkg.tags ?? []).map((tag) => (
                 <Badge key={tag}>{tag}</Badge>
               ))}
             </div>
@@ -318,8 +318,8 @@ export function ClientPage({
           <div className="flex gap-2 my-4 justify-between">
             <h4>{t("store:author")}</h4>
             <Button asChild variant="link" className="p-0 h-auto">
-              <Link href={`/${lang}/publishers/${pkg.user.Profile?.userName}`}>
-                {pkg.user.Profile?.userName}
+              <Link href={`/${lang}/publishers/${pkg.userProfile?.userName}`}>
+                {pkg.userProfile?.userName}
               </Link>
             </Button>
           </div>

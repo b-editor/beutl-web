@@ -151,7 +151,7 @@ export async function deleteAuthenticator({
   }
 
   const db = await drizzle();
-  await db.$transaction(async (p) => {
+  await db.transaction(async (p) => {
     await deleteAccount({
       providerAccountId: id,
       provider: "passkey",

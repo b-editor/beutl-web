@@ -64,7 +64,7 @@ export function PackageDetails({
                 variant="link"
                 className="p-0 h-auto text-muted-foreground"
               >
-                <Link href="/">{pkg.user.Profile?.userName}</Link>
+                <Link href="/">{pkg.userProfile?.userName}</Link>
               </Button>
             </div>
           </div>
@@ -75,17 +75,17 @@ export function PackageDetails({
         {formatAmount(price, currency, lang)}
       </div>
       <div className="max-lg:hidden">
-        {pkg.PackageScreenshot && pkg.PackageScreenshot.length > 0 && (
+        {pkg.screenshots && pkg.screenshots.length > 0 && (
           <>
             <h3 className="font-bold text-xl mt-6 border-b pb-2">
               {t("store:screenshots")}
             </h3>
             <Carousel className="mt-4" opts={{ active: maxLg }}>
               <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
-                {pkg.PackageScreenshot.map((item) => (
+                {pkg.screenshots.map((item) => (
                   <CarouselItem
                     className="w-min max-w-min min-w-min"
-                    key={item.file.id}
+                    key={item.fileId}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */ }
                     <img

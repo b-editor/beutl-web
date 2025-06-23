@@ -4,6 +4,8 @@ import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { drizzle } from "@/drizzle";
+import { profile, socialProfile, socialProfileProvider } from "@/drizzle/schema";
+import { and, eq, inArray } from "drizzle-orm";
 
 const emptyStringToUndefined = (z: Zod) =>
   z.literal("").transform(() => undefined);
@@ -60,34 +62,28 @@ export async function updateProfile(
     const promises: Promise<unknown>[] = [];
     // プロフィール更新
     promises.push(
-      db.profile.upsert({
-        where: {
-          userId: session.user.id,
-        },
-        update: {
-          displayName,
-          userName,
-          bio,
-        },
-        create: {
+      db.insert(profile)
+        .values({
           userId: session.user.id,
           displayName,
           userName,
           bio,
-        },
-      }),
+        })
+        .onConflictDoUpdate({
+          target: profile.userId,
+          set: {
+            displayName,
+            userName,
+            bio,
+          },
+        }),
     );
-    const providers = await db.socialProfileProvider.findMany({
-      where: {
-        provider: {
-          in: ["x", "github", "youtube", "custom"],
-        },
-      },
-      select: {
-        id: true,
-        provider: true,
-      },
-    });
+    const providers = await db.select({
+      id: socialProfileProvider.id,
+      provider: socialProfileProvider.provider,
+    })
+    .from(socialProfileProvider)
+    .where(inArray(socialProfileProvider.provider, ["x", "github", "youtube", "custom"]));
     const socials = [
       {
         providerId: providers.find((p) => p.provider === "x")?.id,
@@ -112,31 +108,28 @@ export async function updateProfile(
       }
       if (social.value) {
         promises.push(
-          db.socialProfile.upsert({
-            where: {
-              userId_providerId: {
-                userId: session.user.id,
-                providerId: social.providerId,
-              },
-            },
-            update: {
-              value: social.value,
-            },
-            create: {
+          db.insert(socialProfile)
+            .values({
               userId: session.user.id,
               providerId: social.providerId,
               value: social.value,
-            },
-          }),
+            })
+            .onConflictDoUpdate({
+              target: [socialProfile.userId, socialProfile.providerId],
+              set: {
+                value: social.value,
+              },
+            }),
         );
       } else {
         promises.push(
-          db.socialProfile.deleteMany({
-            where: {
-              userId: session.user.id,
-              providerId: social.providerId,
-            },
-          }),
+          db.delete(socialProfile)
+            .where(
+              and(
+                eq(socialProfile.userId, session.user.id),
+                eq(socialProfile.providerId, social.providerId)
+              )
+            ),
         );
       }
     }

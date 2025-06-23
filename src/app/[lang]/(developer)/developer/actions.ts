@@ -23,18 +23,18 @@ export async function retrievePackages(): Promise<Package[]> {
   });
 
   return await Promise.all(
-    packages.map(async (pkg) => {
+    Object.values(packages).map(async (pkg) => {
       pkg.Release.sort((a, b) => {
         return new SemVer(a.version).compare(b.version);
       });
       return {
-        id: pkg.id,
-        name: pkg.name,
-        displayName: pkg.displayName || undefined,
+        id: pkg.Package.id,
+        name: pkg.Package.name,
+        displayName: pkg.Package.displayName || undefined,
         iconFileUrl:
-          (pkg.iconFile && `/api/contents/${pkg.iconFile.id}`) || undefined,
+          (pkg.Package.iconFileId && `/api/contents/${pkg.Package.iconFileId}`) || undefined,
         latestVersion: pkg.Release[0]?.version,
-        published: pkg.published,
+        published: pkg.Package.published,
       };
     }),
   );

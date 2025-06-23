@@ -31,9 +31,9 @@ import { useMatchMedia } from "@/hooks/use-match-media";
 
 export function ScreenshotForm({ pkg }: { pkg: Package }) {
   const [screenshots, moveOptimisticScreenshot] = useOptimistic<
-    Package["PackageScreenshot"],
-    { delta: number; item: Package["PackageScreenshot"][number] }
-  >(pkg.PackageScreenshot, (state, req) => {
+    Package["screenshots"],
+    { delta: number; item: Package["screenshots"][number] }
+  >(pkg.screenshots, (state, req) => {
     const index = state.indexOf(req.item);
     if (index === 0 && req.delta < 0) return state;
     if (index === state.length - 1 && req.delta > 0) return state;
@@ -74,7 +74,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
   }, [toast, pkg.id]);
 
   const handleMove = useCallback(
-    async (delta: number, item: Package["PackageScreenshot"][number]) => {
+    async (delta: number, item: Package["screenshots"][number]) => {
       moveOptimisticScreenshot({ delta, item });
       const res = await moveScreenshot({
         delta,
@@ -93,7 +93,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
   );
 
   const handleDelete = useCallback(
-    async (item: Package["PackageScreenshot"][number]) => {
+    async (item: Package["screenshots"][number]) => {
       moveOptimisticScreenshot({ delta: 0, item });
       const res = await deleteScreenshot({
         packageId: pkg.id,

@@ -50,9 +50,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
   const [saving, startSaveTransition] = useTransition();
   const [deleting, startDeleteTransition] = useTransition();
   const [creating, startCreateTransition] = useTransition();
-  const [releases, setReleases] = useState(pkg.Release);
+  const [releases, setReleases] = useState(pkg.releases);
   const [release, setRelease] = useState<
-    Package["Release"][number] | undefined
+    Package["releases"][number] | undefined
   >(releases?.[0]);
   const [title, setTitle] = useState(release?.title || "");
   const [file, setFile] = useState<File>();
@@ -88,10 +88,10 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       const result = await updateRelease(formData);
       if (result.success) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
+        const data: Package["releases"][number] = (result as any).data;
         if (data) {
           setRelease(data);
-          setReleases(releases.map((r) => (r.id === release.id ? data : r)));
+          setReleases(releases.map((r: Package["releases"][number]) => (r.id === release.id ? data : r)));
         }
         toast({
           variant: "default",
@@ -139,8 +139,8 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       });
       if (result.success) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
-        setReleases((releases) =>
+        const data: Package["releases"][number] = (result as any).data;
+        setReleases((releases: Package["releases"]) =>
           [...releases, data].toSorted((a, b) =>
             new SemVer.SemVer(b.version).compare(a.version),
           ),
@@ -167,7 +167,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
     startDeleteTransition(async () => {
       const result = await deleteRelease({ releaseId: release.id });
       if (result.success) {
-        const filtered = releases.filter((r) => r.id !== release.id);
+        const filtered = releases.filter((r: Package["releases"][number]) => r.id !== release.id);
         setReleases(filtered);
         const data = filtered[0];
         setRelease(data);
@@ -206,14 +206,14 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
             <Select
               value={release?.id}
               onValueChange={(e) =>
-                setRelease(releases.find((r) => r.id === e)!)
+                setRelease(releases.find((r: Package["releases"][number]) => r.id === e)!)
               }
             >
               <SelectTrigger className="font-bold text-xl border-none bg-transparent px-0 pr-3 flex-1">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {releases.map((release) => (
+                {releases.map((release: Package["releases"][number]) => (
                   <SelectItem key={release.id} value={release.id}>
                     {release.version}
                   </SelectItem>

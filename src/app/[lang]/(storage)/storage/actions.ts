@@ -1,6 +1,8 @@
 "use server";
 
 import { drizzle } from "@/drizzle";
+import { file } from "@/drizzle/schema";
+import { eq, inArray, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
@@ -16,19 +18,19 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const db = await drizzle();
-    const files = await db.file.findMany({
-      where: {
-        id: {
-          in: ids,
-        },
-        userId: session.user.id,
-      },
-      select: {
-        objectKey: true,
-        id: true,
-        visibility: true,
-      },
-    });
+    const files = await db
+      .select({
+        objectKey: file.objectKey,
+        id: file.id,
+        visibility: file.visibility,
+      })
+      .from(file)
+      .where(
+        and(
+          eq(file.userId, session.user.id),
+          inArray(file.id, ids)
+        )
+      );
     if (!files.length) {
       return {
         success: false,
@@ -42,15 +44,11 @@ export async function deleteFile(ids: string[]): Promise<Response> {
       };
     }
 
-    const promises = files.map(async (file) => {
-      await db.file.delete({
-        where: {
-          id: file.id,
-        },
-      });
+    const promises = files.map(async (f) => {
+      await db.delete(file).where(eq(file.id, f.id));
 
       const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
-      await bucket.delete(file.objectKey);
+      await bucket.delete(f.objectKey);
     });
     await Promise.all(promises);
 
@@ -76,19 +74,19 @@ export async function changeFileVisibility(
       };
     }
 
-    const files = await db.file.findMany({
-      where: {
-        id: {
-          in: ids,
-        },
-        userId: session.user.id,
-      },
-      select: {
-        objectKey: true,
-        id: true,
-        visibility: true,
-      },
-    });
+    const files = await db
+      .select({
+        objectKey: file.objectKey,
+        id: file.id,
+        visibility: file.visibility,
+      })
+      .from(file)
+      .where(
+        and(
+          eq(file.userId, session.user.id),
+          inArray(file.id, ids)
+        )
+      );
     if (!files.length) {
       return {
         success: false,
@@ -102,15 +100,11 @@ export async function changeFileVisibility(
       };
     }
 
-    const promises = files.map(async (file) => {
-      await db.file.update({
-        where: {
-          id: file.id,
-        },
-        data: {
-          visibility: visibility,
-        },
-      });
+    const promises = files.map(async (f) => {
+      await db
+        .update(file)
+        .set({ visibility: visibility })
+        .where(eq(file.id, f.id));
     });
     await Promise.all(promises);
 
@@ -125,8 +119,8 @@ export async function uploadFile(formData: FormData): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const file = formData.get("file") as File;
-    if (!file) {
+    const uploadedFile = formData.get("file") as File;
+    if (!uploadedFile) {
       return {
         success: false,
         message: t("storage:fileNotFound"),
@@ -134,52 +128,48 @@ export async function uploadFile(formData: FormData): Promise<Response> {
     }
 
     const db = await drizzle();
-    const files = await db.file.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      select: {
-        size: true,
-        name: true,
-      },
-    });
+    const files = await db
+      .select({
+        size: file.size,
+        name: file.name,
+      })
+      .from(file)
+      .where(eq(file.userId, session.user.id));
 
     const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
     let totalSize = BigInt(0);
-    for (const file of files) {
-      totalSize += BigInt(file.size);
+    for (const f of files) {
+      totalSize += BigInt(f.size);
     }
 
-    if (totalSize + BigInt(file.size) > maxSize) {
+    if (totalSize + BigInt(uploadedFile.size) > maxSize) {
       return {
         success: false,
         message: t("storage:insufficientStorageSpace"),
       };
     }
 
-    let filename = file.name;
-    const ext = file.name.split(".").pop();
+    let filename = uploadedFile.name;
+    const ext = uploadedFile.name.split(".").pop();
     for (let i = 1; files.some((f) => f.name === filename); i++) {
       filename = ext
-        ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-        : `${file.name} (${i})`;
+        ? uploadedFile.name.replace(`.${ext}`, ` (${i}).${ext}`)
+        : `${uploadedFile.name} (${i})`;
     }
 
     const objectKey = crypto.randomUUID();
     const bucket = (await getCloudflareContext({ async: true })).env.BEUTL_R2_BUCKET;
     bucket.put(
       objectKey,
-      await file.arrayBuffer(),
+      await uploadedFile.arrayBuffer(),
     );
-    await db.file.create({
-      data: {
-        objectKey,
-        name: filename,
-        size: file.size,
-        mimeType: file.type,
-        userId: session.user.id,
-        visibility: "PRIVATE",
-      },
+    await db.insert(file).values({
+      objectKey,
+      name: filename,
+      size: uploadedFile.size,
+      mimeType: uploadedFile.type,
+      userId: session.user.id,
+      visibility: "PRIVATE",
     });
     revalidatePath("/storage");
     return {
@@ -190,18 +180,16 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 
 export async function retrieveFiles() {
   const session = await throwIfUnauth();
-  const db = await prisma();
-  return await db.file.findMany({
-    where: {
-      userId: session?.user?.id,
-    },
-    select: {
-      id: true,
-      objectKey: true,
-      name: true,
-      size: true,
-      mimeType: true,
-      visibility: true,
-    },
-  });
+  const db = await drizzle();
+  return await db
+    .select({
+      id: file.id,
+      objectKey: file.objectKey,
+      name: file.name,
+      size: file.size,
+      mimeType: file.mimeType,
+      visibility: file.visibility,
+    })
+    .from(file)
+    .where(eq(file.userId, session?.user?.id));
 }
