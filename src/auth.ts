@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
-import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@/prisma";
+import { DrizzleAdapter } from "@auth/drizzle-adapter";
+import { drizzle } from "@/drizzle";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import Resend from "@auth/core/providers/resend";
@@ -9,9 +9,11 @@ import { options as resendOptions } from "./resend";
 import Credentials from "@auth/core/providers/credentials";
 import { updateAuthenticatorUsedAt } from "./lib/db/authenticator";
 import { addAuditLog, auditLogActions } from "./lib/audit-log";
+import { eq } from "drizzle-orm";
+import { profile, user } from "./drizzle/schema";
 
 export const { handlers, auth, signIn, signOut } = NextAuth(async () => ({
-  adapter: PrismaAdapter(await prisma()),
+  adapter: DrizzleAdapter(await drizzle()),
   providers: [
     Google,
     GitHub,
@@ -25,19 +27,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => ({
         secret: {},
       },
       async authorize(credentials) {
-        const db = await prisma();
-        const user = await db.user.findFirst({
-          where: {
-            id: credentials.userId as string,
-          },
-        });
-        if (!user) {
+        const db = await drizzle();
+        const row = await db.select()
+          .from(user)
+          .where(eq(user.id, credentials?.userId as string))
+          .limit(1)
+          .then((rows) => rows.at(0));
+
+        if (!row) {
           return null;
         }
         if (credentials.secret !== process.env.AUTH_SECRET) {
           return null;
         }
-        return user;
+        return row;
       },
     }),
     Passkey,
@@ -48,28 +51,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => ({
       if (!userName || !message.user.id) return;
       const original = userName;
 
-      const db = await prisma();
-      let exists = await db.profile.findFirst({
-        where: {
-          userName: original,
-        },
-      });
+      const db = await drizzle();
+      const retrieve = async (userName: string) => await db.select()
+        .from(profile)
+        .where(eq(profile.userName, userName))
+        .limit(1)
+        .then((rows) => rows.at(0));
+      let exists = await retrieve(original);
       for (let i = 1; exists; i++) {
         userName = `${original}${i}`;
-        exists = await db.profile.findFirst({
-          where: {
-            userName: userName,
-          },
-        });
+        exists = await retrieve(userName);
       }
 
-      await db.profile.create({
-        data: {
+      await db.insert(profile)
+        .values({
           userId: message.user.id,
           displayName: message.user.name || userName,
           userName: userName,
-        },
-      });
+        });
       await addAuditLog({
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         userId: message.user.id!,
@@ -123,17 +122,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => ({
   callbacks: {
     session: async ({ session, user }) => {
       // user.nameをprofile.displayNameにする
-      const db = await prisma();
-      const profile = await db.profile.findFirst({
-        where: {
-          userId: user.id,
-        },
-        select: {
-          displayName: true,
-        },
-      });
-      if (profile) {
-        session.user.name = profile.displayName;
+      const db = await drizzle();
+      const row = await db.select({
+        displayName: profile.displayName,
+      })
+        .from(profile)
+        .where(eq(profile.userId, user.id))
+        .limit(1)
+        .then((rows) => rows.at(0));
+
+      if (row) {
+        session.user.name = row.displayName;
       }
       return session;
     },

@@ -1,29 +1,30 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { createStripe } from "../stripe/config";
-import type { PrismaTransaction } from "./transaction";
+import type { Transaction } from "./transaction";
+import { customer } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export async function updateCustomerEmailIfExist({
   userId,
   email,
-  prisma,
+  transaction,
 }: {
   userId: string;
   email: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  const p = prisma || await sharedPrisma();
-  const customer = await p.customer.findFirst({
-    where: {
-      userId: userId,
-    },
-    select: {
-      stripeId: true,
-    },
-  });
-  if (customer) {
+  const db = transaction || await drizzle();
+  const row = await db.select({
+    stripeId: customer.stripeId,
+  })
+    .from(customer)
+    .where(eq(customer.userId, userId))
+    .limit(1)
+    .then(r => r.at(0));
+  if (row) {
     const stripe = createStripe();
-    await stripe.customers.update(customer.stripeId, {
+    await stripe.customers.update(row.stripeId, {
       email: email,
     });
   }

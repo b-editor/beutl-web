@@ -1,6 +1,7 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { headers } from "next/headers";
+import { auditLog } from "@/drizzle/schema";
 
 export const auditLogActions = {
   authjs: {
@@ -48,14 +49,12 @@ export async function addAuditLog({
 
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");
-  const db = await prisma();
-  await db.auditLog.create({
-    data: {
-      userId,
-      action,
-      details,
-      ipAddress,
-      userAgent,
-    },
+  const db = await drizzle();
+  await db.insert(auditLog).values({
+    userId,
+    action,
+    details,
+    ipAddress,
+    userAgent,
   });
 }

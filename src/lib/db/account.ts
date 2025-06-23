@@ -1,59 +1,56 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { drizzle } from "@/drizzle";
+import type { Transaction } from "./transaction";
+import { account } from "@/drizzle/schema";
+import { and, eq } from "drizzle-orm";
 
 export async function retrieveAccounts({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).account.findMany({
-    where: {
-      userId: userId,
-    },
-    select: {
-      providerAccountId: true,
-      provider: true,
-    },
-  });
+  const db = transaction || await drizzle();
+  return await db.select({
+    providerAccountId: account.providerAccountId,
+    provider: account.provider,
+  })
+    .from(account)
+    .where(eq(account.userId, userId));
 }
 
 export async function retrieveAccountsWithIdToken({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).account.findMany({
-    where: {
-      userId: userId,
-    },
-    select: {
-      providerAccountId: true,
-      provider: true,
-      id_token: true,
-    },
-  });
+  const db = transaction || await drizzle();
+  return await db.select({
+    providerAccountId: account.providerAccountId,
+    provider: account.provider,
+    id_token: account.idToken,
+  })
+    .from(account)
+    .where(eq(account.userId, userId));
 }
 
 export async function deleteAccount({
   providerAccountId,
   provider,
-  prisma,
+  transaction,
 }: {
   providerAccountId: string;
   provider: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).account.delete({
-    where: {
-      provider_providerAccountId: {
-        providerAccountId,
-        provider,
-      },
-    }
-  });
+  const db = transaction || await drizzle();
+  await db.delete(account).where(
+    and(
+      eq(account.providerAccountId, providerAccountId),
+      eq(account.provider, provider)
+    )
+  );
 }

@@ -4,13 +4,13 @@ import { getTranslation } from "@/app/i18n/server";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
   const lang = await getLanguage();
-  const db = await prisma();
+  const db = await drizzle();
   const { name } = await db.package.findFirstOrThrow({
     where: {
       id: packageId,
@@ -26,7 +26,7 @@ export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await prisma();
+    const db = await drizzle();
     const {
       package: { name },
     } = await db.userPackage.delete({

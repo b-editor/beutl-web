@@ -1,12 +1,11 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { headers } from "next/headers";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
@@ -17,6 +16,8 @@ import {
 } from "@/lib/db/user";
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { confirmationToken } from "@/drizzle/schema";
+import { and, count, eq } from "drizzle-orm";
 
 type State = {
   message?: string;
@@ -90,15 +91,13 @@ export async function sendConfirmationEmail(
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
-    const db = await prisma();
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: validated.data.newEmail,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
-      },
+    const db = await drizzle();
+    const createToken = db.insert(confirmationToken).values({
+      token: await createHash(`${token}${secret}`),
+      identifier: validated.data.newEmail,
+      userId: session.user.id,
+      expires,
+      purpose: 'EMAIL_UPDATE',
     });
 
     await Promise.all([sendRequest, createToken]);
@@ -118,15 +117,14 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  const db = await prisma();
-  if (
-    !db.confirmationToken.count({
-      where: {
-        identifier: identifier,
-        token: hash,
-      },
-    })
-  ) {
+  const db = await drizzle();
+  const [{ cnt }] = await db.select({ cnt: count() })
+    .from(confirmationToken)
+    .where(and(
+      eq(confirmationToken.identifier, identifier),
+      eq(confirmationToken.token, hash),
+    ));
+  if (cnt === 0) {
     console.error("Invalid token");
     redirect(
       `/${lang}/account/manage/email?status=emailUpdateFailed`,
@@ -134,23 +132,23 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const tokenData = await db.confirmationToken.delete({
-    where: {
-      identifier_token: {
-        identifier: identifier,
-        token: hash,
-      },
-    },
-    select: {
-      identifier: true,
-      expires: true,
-      userId: true,
-      purpose: true,
-    },
-  });
+  const tokenData = await db.delete(confirmationToken)
+    .where(
+      and(
+        eq(confirmationToken.identifier, identifier),
+        eq(confirmationToken.token, hash),
+      ),
+    )
+    .returning({
+      identifier: confirmationToken.identifier,
+      expires: confirmationToken.expires,
+      userId: confirmationToken.userId,
+      purpose: confirmationToken.purpose,
+    })
+    .then((rows) => rows.at(0));
   if (
     !tokenData ||
-    tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE
+    tokenData.purpose !== 'EMAIL_UPDATE'
   ) {
     console.error("Invalid token");
     redirect(
@@ -167,17 +165,18 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const updated = await db.$transaction(async (p) => {
+
+  const updated = await db.transaction(async (p) => {
     await updateUserEmail({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      prisma: p,
+      transaction: p,
     });
 
     await updateCustomerEmailIfExist({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      prisma: p,
+      transaction: p,
     });
     return true;
   }).catch((e) => {

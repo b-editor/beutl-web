@@ -1,6 +1,6 @@
 "use server";
 
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
@@ -15,7 +15,7 @@ export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await prisma();
+    const db = await drizzle();
     const files = await db.file.findMany({
       where: {
         id: {
@@ -68,7 +68,7 @@ export async function changeFileVisibility(
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await prisma();
+    const db = await drizzle();
     if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
       return {
         success: false,
@@ -133,7 +133,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
       };
     }
 
-    const db = await prisma();
+    const db = await drizzle();
     const files = await db.file.findMany({
       where: {
         userId: session.user.id,

@@ -15,7 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { InferSelectModel } from "drizzle-orm";
+import type { profile, socialProfile, socialProfileProvider } from "@/drizzle/schema";
+
+type Profile = InferSelectModel<typeof profile>;
+type SocialProfile = InferSelectModel<typeof socialProfile> & {
+  provider: InferSelectModel<typeof socialProfileProvider>;
+};
 import { AlertCircle, CheckCircle, Link2, Lock, LockOpen } from "lucide-react";
 import { type ComponentProps, useMemo, useState, useActionState } from "react";
 import { type State, updateProfile } from "./actions";
@@ -30,7 +36,7 @@ function ChangeUserName({
   state,
   lang,
 }: {
-  profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">;
+  profile: Profile | null;
   state: State;
   lang: string;
 }) {
@@ -104,24 +110,8 @@ function ChangeUserName({
 }
 
 type FormProps = ComponentProps<"form"> & {
-  profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">;
-  socials: Prisma.Result<
-    PrismaClient["socialProfile"],
-    {
-      select: {
-        value: true;
-        provider: {
-          select: {
-            id: true;
-            name: true;
-            provider: true;
-            urlTemplate: true;
-          };
-        };
-      };
-    },
-    "findMany"
-  >;
+  profile: Profile | null;
+  socials: SocialProfile[];
 };
 
 export function Form({

@@ -1,9 +1,11 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { createStripe } from "@/lib/stripe/config";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
+import { eq } from "drizzle-orm";
+import { customer, packages, userPackage } from "@/drizzle/schema";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const stripe = createStripe();
@@ -30,48 +32,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
-      const db = await prisma();
-      const customer = await db.customer.findFirst({
-        where: {
-          stripeId: paymentIntent.customer,
-        },
-        select: {
-          userId: true,
-        },
-      });
-      if (!customer) {
+      const db = await drizzle();
+      const customerRow = await db
+        .select({ userId: customer.userId })
+        .from(customer)
+        .where(eq(customer.stripeId, paymentIntent.customer))
+        .limit(1)
+        .then((rows) => rows.at(0));
+      if (!customerRow) {
         return NextResponse.json(
           { message: "User not found" },
           { status: 404 },
         );
       }
-      const pkg = await db.package.findFirst({
-        where: {
-          id: paymentIntent.metadata.packageId,
-        },
-        select: {
-          id: true,
-        },
-      });
+      const pkg = await db.select({ id: packages.id })
+        .from(packages)
+        .where(eq(packages.id, paymentIntent.metadata.packageId))
+        .limit(1)
+        .then((rows) => rows.at(0));
       if (!pkg) {
         return NextResponse.json(
           { message: "Package not found" },
           { status: 404 },
         );
       }
-      await db.userPackage.create({
-        data: {
-          userId: customer.userId,
+      await db.insert(userPackage)
+        .values({
+          userId: customerRow.userId,
           packageId: pkg.id,
-        },
-      });
+        });
       await createUserPaymentHistory({
-        userId: customer.userId,
+        userId: customerRow.userId,
         packageId: pkg.id,
         paymentIntentId: paymentIntent.id,
       });
       await addAuditLog({
-        userId: customer.userId,
+        userId: customerRow.userId,
         action: auditLogActions.store.paymentSucceeded,
         details: `packageId: ${pkg.id}`,
       });

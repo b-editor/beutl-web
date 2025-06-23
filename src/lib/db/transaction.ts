@@ -1,5 +1,5 @@
-import type { PrismaClient } from "@prisma/client";
+import { drizzle } from "@/drizzle";
 
-export type PrismaTransaction = Parameters<
-  Parameters<typeof PrismaClient.prototype.$transaction>[0]
->[0];
+
+type Database = Awaited<ReturnType<typeof drizzle>>;
+export type Transaction = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];

@@ -1,4 +1,4 @@
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { getTranslation } from "@/app/i18n/server";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
@@ -8,6 +8,8 @@ import { getUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
+import { packages, profile, user } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
   const params = await props.params;
@@ -21,33 +23,28 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const history = await getUserPaymentHistory({ userId: session.user.id });
   const items = await Promise.all(
     history.map(async (item) => {
-      const db = await prisma();
-      const p1 = db.package.findFirst({
-        where: {
-          id: item.packageId,
-        },
-        select: {
-          name: true,
-          displayName: true,
-          user: {
-            select: {
-              name: true,
-              Profile: {
-                select: {
-                  displayName: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      const db = await drizzle();
+      const p1 = db.select({
+        name: packages.name,
+        displayName: packages.displayName,
+        user: {
+          name: user.name,
+          displayName: profile.displayName,
+        }
+      })
+        .from(packages)
+        .where(eq(packages.id, item.packageId))
+        .innerJoin(user, eq(user.id, packages.userId))
+        .innerJoin(profile, eq(profile.userId, user.id))
+        .limit(1)
+        .then((rows) => rows.at(0));
       const stripe = createStripe();
       const p2 = stripe.paymentIntents.retrieve(item.paymentId);
       const [pkg, payment] = await Promise.all([p1, p2]);
       return {
         product: pkg ? pkg.displayName || pkg.name : "不明なアイテム",
         seller:
-          pkg?.user.Profile?.displayName || pkg?.user.name || "不明なユーザー",
+          pkg?.user.displayName || pkg?.user.name || "不明なユーザー",
         amount: payment.amount,
         currency: payment.currency,
         paiedAt: item.createdAt,

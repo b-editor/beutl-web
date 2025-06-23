@@ -1,27 +1,25 @@
-import { prisma } from "@/prisma";
 import "server-only";
+import { drizzle } from "@/drizzle";
 import { createStripe } from "./stripe/config";
+import { customer } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export async function createOrRetrieveCustomerId(
   email: string,
   userId: string,
 ) {
-  const db = await prisma();
-  const customer = await db.customer.findFirst({
-    where: {
-      userId: userId,
-    },
-  });
+  const db = await drizzle();
+  const customerRow = await db.select().from(customer)
+    .where(eq(customer.userId, userId))
+    .limit(1)
+    .then((rows) => rows.at(0));
   const stripe = createStripe();
-  let customerId = customer?.stripeId;
+  let customerId = customerRow?.stripeId;
   if (customerId) {
     const c = await stripe.customers.retrieve(customerId);
     if (c?.deleted) {
-      db.customer.deleteMany({
-        where: {
-          userId: userId,
-        },
-      });
+      await db.delete(customer)
+        .where(eq(customer.userId, userId));
       customerId = undefined;
     }
   }
@@ -29,13 +27,11 @@ export async function createOrRetrieveCustomerId(
   if (!customerId) {
     customerId = (await stripe.customers.list({ email: email })).data[0]?.id;
     if (!customerId) {
-      const customer = await stripe.customers.create({ email: email });
-      customerId = customer.id;
-      await db.customer.create({
-        data: {
-          userId: userId,
-          stripeId: customerId,
-        },
+      const stripeCustomer = await stripe.customers.create({ email: email });
+      customerId = stripeCustomer.id;
+      await db.insert(customer).values({
+        userId: userId,
+        stripeId: customerId,
       });
     }
   }

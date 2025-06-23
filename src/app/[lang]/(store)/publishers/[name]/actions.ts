@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { guessCurrency } from "@/lib/currency";
 
 type ListedPackage = {
@@ -20,7 +20,7 @@ export async function retrievePublishedPackages(
   userName: string,
 ): Promise<{ items: ListedPackage[]; displayName: string }> {
   const currency = await guessCurrency();
-  const db = await prisma();
+  const db = await drizzle();
   const profile = db.profile.findFirst({
     where: {
       userName: userName,

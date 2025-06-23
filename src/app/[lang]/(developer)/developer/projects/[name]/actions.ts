@@ -1,5 +1,6 @@
 "use server";
 
+import { file, packages, release } from "@/drizzle/schema";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import {
@@ -26,11 +27,12 @@ import {
   createStorageFile,
   deleteStorageFile,
 } from "@/lib/storage";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import SemVer from "semver";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 
 export type State = {
   errors?: {
@@ -94,7 +96,7 @@ async function sameUser<TResult>(
 
 async function createDedicatedFile(userId: string, file: File, size: bigint) {
   const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
-  let totalSize = await calcTotalFileSize({ userId, prisma: await prisma() });
+  let totalSize = await calcTotalFileSize({ userId });
   totalSize -= size;
 
   if (totalSize + BigInt(file.size) > maxSize) {
@@ -134,11 +136,18 @@ export async function updateDisplayNameAndShortDescription(
 
     const { displayName, shortDescription, id } = validated.data;
     return await sameUser(id, session.user.id, async () => {
-      const { name } = await updateDevPackageDisplay({
+      const result = await updateDevPackageDisplay({
         packageId: id,
         displayName,
         shortDescription,
       });
+      if (!result) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+      const { name } = result;
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -165,10 +174,17 @@ export async function updateDescription({
     }
 
     return await sameUser(packageId, session.user.id, async () => {
-      const { name } = await updateDevPackageDescription({
+      const result = await updateDevPackageDescription({
         packageId,
         description,
       });
+      if (!result) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+      const { name } = result;
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -188,11 +204,11 @@ export async function retrievePackage(name: string) {
   if (!pkg) {
     return null;
   }
-  pkg.Release.sort((a, b) => {
+  pkg.releases.sort((a, b) => {
     return new SemVer.SemVer(b.version).compare(a.version);
   });
   const screenshots = await Promise.all(
-    pkg.PackageScreenshot.map(async (item) => {
+    pkg.screenshots.map(async (item) => {
       return {
         ...item,
         url: `/api/contents/${item.file.id}`,
@@ -236,21 +252,30 @@ export async function changePackageVisibility(
 ): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
-      const db = await prisma();
-      const { published: oldPublished } = await db.package.findFirstOrThrow(
-        {
-          where: {
-            id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
-      const { name } = await updateDevPackagePublished({
+      const db = await drizzle();
+      const [{ oldPublished }] = await db.select({ oldPublished: packages.published })
+        .from(packages)
+        .where(
+          eq(packages.id, id),
+        );
+      if (oldPublished === undefined) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+
+      const result = await updateDevPackagePublished({
         packageId: id,
         published,
       });
+      if (!result) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+      const { name } = result;
       if (oldPublished !== published) {
         await addAuditLog({
           userId: session.user.id,
@@ -300,11 +325,18 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
         });
       }
 
-      const { name } = await updateDevPackageIconFile({
+      const result2 = await updateDevPackageIconFile({
         packageId: id,
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId: result.record!.id,
       });
+      if (!result2) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+      const { name } = result2;
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -450,10 +482,17 @@ export async function updateTag({
 }: { packageId: string; tags: string[] }): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
-      const { name } = await updateDevPackageTags({
+      const result = await updateDevPackageTags({
         packageId,
         tags,
       });
+      if (!result) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+      const { name } = result;
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -479,34 +518,34 @@ export async function updateRelease(formData: FormData) {
         success: false,
       };
     }
-    const db=await prisma();
-    const release = await db.release.findFirst({
-      where: {
-        id: validated.data.id,
-      },
-      select: {
-        packageId: true,
-        file: {
-          select: {
-            id: true,
-            objectKey: true,
-            size: true,
-          },
-        },
-      },
-    });
-    if (!release?.packageId) {
+    const db = await drizzle();
+    const row = await db.select({
+      packageId: release.packageId,
+      published: release.published,
+      file: {
+        id: file.id,
+        objectKey: file.objectKey,
+        size: file.size,
+      }
+    })
+      .from(release)
+      .leftJoin(file, eq(release.fileId, file.id))
+      .where(eq(release.id, validated.data.id))
+      .limit(1)
+      .then((res) => res.at(0));
+
+    if (!row?.packageId) {
       return {
         success: false,
         message: "IDが見つかりません",
       };
     }
 
-    return await sameUser(release.packageId, session.user.id, async () => {
-      let fileId = release.file?.id;
+    return await sameUser(row.packageId, session.user.id, async () => {
+      let fileId = row.file?.id;
       if (validated.data.file) {
-        const deletedSize = release.file
-          ? BigInt(release.file.size)
+        const deletedSize = row.file
+          ? BigInt(row.file.size)
           : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
@@ -520,50 +559,44 @@ export async function updateRelease(formData: FormData) {
           };
         }
 
-        if (release.file) {
+        if (row.file) {
           await deleteStorageFile({
-            fileId: release.file.id,
+            fileId: row.file.id,
           });
         }
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId = result.record!.id;
       }
 
-      const { published: oldPublished } = await db.release.findFirstOrThrow(
-        {
-          where: {
-            id: validated.data.id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
-      const data = await db.release.update({
-        where: {
-          id: validated.data.id,
-        },
-        data: {
+      const oldPublished = row.published;
+      const data = await db.update(release)
+        .set({
           title: validated.data.title,
           description: validated.data.description,
           targetVersion: validated.data.targetVersion,
           published: validated.data.published === "on",
           fileId: fileId,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
+        })
+        .where(eq(release.id, validated.data.id))
+        .returning({
+          version: release.version,
+          title: release.title,
+          description: release.description,
+          targetVersion: release.targetVersion,
+          id: release.id,
+          published: release.published,
           file: {
-            select: {
-              name: true,
-            },
+            name: file.name,
           },
-        },
-      });
+        })
+        .then(res => res.at(0));
+      if (!data) {
+        return {
+          success: false,
+          message: "IDが見つかりません",
+        };
+      }
+
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updateRelease,
@@ -600,30 +633,18 @@ export async function createRelease({
         };
       }
 
-      const db = await prisma();
-      const release = await db.release.create({
-        data: {
+      const db = await drizzle();
+      const row = await db.insert(release)
+        .values({
           packageId,
           version,
           title: "新しいリリース",
           description: "",
           targetVersion: "1.0.0-preview.10",
           published: false,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
-          file: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      });
+        })
+        .returning()
+        .then((res) => res[0]);
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.createRelease,
@@ -631,7 +652,7 @@ export async function createRelease({
       });
       return {
         success: true,
-        data: release,
+        data: row,
       };
     });
   });
@@ -639,33 +660,30 @@ export async function createRelease({
 
 export async function deleteRelease({ releaseId }: { releaseId: string }) {
   return await authenticated(async (session) => {
-    const db = await prisma();
-    const release = await db.release.findFirst({
-      where: {
-        id: releaseId,
-      },
-      select: {
-        packageId: true,
-        fileId: true,
-      },
-    });
-    if (!release?.packageId) {
+    const db = await drizzle();
+    const row = await db.select({
+      packageId: release.packageId,
+      fileId: release.fileId,
+    })
+      .from(release)
+      .where(eq(release.id, releaseId))
+      .limit(1)
+      .then((res) => res.at(0));
+
+    if (!row?.packageId) {
       return {
         success: false,
         message: "IDが見つかりません",
       };
     }
-    return await sameUser(release.packageId, session.user.id, async () => {
-      if (release.fileId) {
+    return await sameUser(row.packageId, session.user.id, async () => {
+      if (row.fileId) {
         await deleteStorageFile({
-          fileId: release.fileId,
+          fileId: row.fileId,
         });
       }
-      await db.release.delete({
-        where: {
-          id: releaseId,
-        },
-      });
+      await db.delete(release)
+        .where(eq(release.id, releaseId));
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.deleteRelease,

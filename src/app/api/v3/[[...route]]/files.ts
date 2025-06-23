@@ -1,25 +1,27 @@
 import "server-only";
 import { Hono } from "hono";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { getContentUrl } from "@/lib/db/file";
+import { file } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 async function findFile(id: string) {
-  const db = await prisma();
-  return await db.file.findFirst({
-    where: {
-      id: id,
-    },
-    select: {
-      id: true,
-      name: true,
-      mimeType: true,
-      userId: true,
-      size: true,
-      sha256: true,
-    },
-  });
+  const db = await drizzle();
+  return await db
+    .select({
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      userId: file.userId,
+      size: file.size,
+      sha256: file.sha256,
+    })
+    .from(file)
+    .where(eq(file.id, id))
+    .limit(1)
+    .then(r => r.at(0));
 }
 
 /* eslint-disable @typescript-eslint/no-unused-vars */

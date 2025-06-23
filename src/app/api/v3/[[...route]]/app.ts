@@ -1,9 +1,11 @@
 import { apiErrorResponse } from "@/lib/api/error";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import SemVer from "semver";
 import { z } from "zod";
+import { appReleaseAsset } from "@/drizzle/schema";
+import { and, eq } from "drizzle-orm"
 
 const searchQuerySchema = z.object({
   // zip, debian, installer, appのいずれか
@@ -32,12 +34,13 @@ const app = new Hono()
       prerelease,
     } = c.req.valid("query");
 
-    const db = await prisma();
-    const versions = (await db.appReleaseAsset.findMany({
-      select: {
-        version: true,
-      }
-    })).map((asset) => asset.version);
+    const db = await drizzle();
+    const versions = await db
+      .select({
+        version: appReleaseAsset.version,
+      }).
+      from(appReleaseAsset)
+      .then((rows) => rows.map((row) => row.version))
     const latest = [...new Set(versions)]
       .map((v) => new SemVer.SemVer(v))
       .filter((v) => prerelease || v.prerelease.length === 0)
@@ -57,16 +60,20 @@ const app = new Hono()
         mustLatest: false,
       });
     }
-
-    const asset = await db.appReleaseAsset.findFirst({
-      where: {
-        version: latest.version,
-        type,
-        os,
-        arch,
-        standalone,
-      },
-    });
+    const asset = await db
+      .select()
+      .from(appReleaseAsset)
+      .where(
+        and(
+          eq(appReleaseAsset.version, latest.version),
+          eq(appReleaseAsset.type, type),
+          eq(appReleaseAsset.os, os),
+          eq(appReleaseAsset.arch, arch),
+          eq(appReleaseAsset.standalone, standalone),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows.at(0));
 
     if (!asset) {
       console.error("asset not found");

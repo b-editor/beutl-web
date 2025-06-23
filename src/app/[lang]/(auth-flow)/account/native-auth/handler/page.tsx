@@ -1,9 +1,11 @@
 import { auth } from "@/auth";
 import { randomString } from "@/lib/create-hash";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
+import { nativeAppAuth } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export default async function Page(
   props: {
@@ -37,17 +39,15 @@ export default async function Page(
     }
 
     const code = randomString(32);
-    const db = await prisma();
-    const obj = await db.nativeAppAuth.update({
-      where: {
-        id: identifier,
-      },
-      data: {
+    const db = await drizzle();
+    const [obj] = await db.update(nativeAppAuth)
+      .set({
         userId: session.user.id,
         codeExpires: new Date(Date.now() + 1000 * 60 * 30),
         code,
-      },
-    });
+      })
+      .where(eq(nativeAppAuth.id, identifier))
+      .returning();
 
     const continueUrl = new URL(obj.continueUrl, xurl);
     continueUrl.searchParams.set("code", code);

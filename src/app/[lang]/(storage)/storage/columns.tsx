@@ -20,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatBytes } from "@/lib/utils";
-import type { FileVisibility } from "@prisma/client";
+import type { FileVisibility } from "./types";
 import { useCallback, useTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
 import type { File } from "./types";

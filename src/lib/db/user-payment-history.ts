@@ -1,61 +1,59 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { drizzle } from "@/drizzle";
+import type { Transaction } from "./transaction";
+import { userPaymentHistory } from "@/drizzle/schema";
+import { and, desc, eq } from "drizzle-orm";
 
 export async function getUserPaymentHistory({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).userPaymentHistory.findMany({
-    where: {
-      userId: userId,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
+  const db = transaction || await drizzle();
+  return await db.select()
+    .from(userPaymentHistory)
+    .where(eq(userPaymentHistory.userId, userId))
+    .orderBy(desc(userPaymentHistory.createdAt));
 }
 
 export async function existsUserPaymentHistory({
   userId,
   packageId,
-  prisma,
+  transaction,
 }: {
   userId?: string;
   packageId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
   if (!userId) return false;
-  return !!(await (prisma || await sharedPrisma()).userPaymentHistory.findFirst({
-    where: {
-      userId: userId,
-      packageId: packageId,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = transaction || await drizzle();
+  return await db.select({
+    id: userPaymentHistory.id,
+  })
+    .from(userPaymentHistory)
+    .where(and(eq(userPaymentHistory.userId, userId), eq(userPaymentHistory.packageId, packageId)))
+    .limit(1)
+    .then((rows) => rows.length > 0);
 }
 
 export async function createUserPaymentHistory({
   userId,
   packageId,
   paymentIntentId,
-  prisma,
+  transaction,
 }: {
   userId: string;
   packageId: string;
   paymentIntentId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).userPaymentHistory.create({
-    data: {
+  const db = transaction || await drizzle();
+  await db.insert(userPaymentHistory)
+    .values({
       userId: userId,
       packageId: packageId,
       paymentId: paymentIntentId,
-    },
-  });
+    });
 }

@@ -2,7 +2,7 @@ import "server-only";
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import {
   type ListedPackage,
   packageOwned,
@@ -11,6 +11,8 @@ import {
 } from "@/lib/store-utils";
 import { getUserId } from "@/lib/api/auth";
 import { getContentUrl } from "@/lib/db/file";
+import { eq } from "drizzle-orm";
+import { profile } from "@/drizzle/schema";
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),
@@ -19,18 +21,18 @@ const searchQuerySchema = z.object({
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
-  const db = await prisma();
-  const profile = await db.profile.findFirst({
-    where: {
-      userId: pkg.userId,
-    },
-    select: {
-      userName: true,
-      displayName: true,
-      bio: true,
-      iconFileId: true,
-    },
-  });
+  const db = await drizzle();
+  const row = await db
+    .select({
+      userName: profile.userName,
+      displayName: profile.displayName,
+      bio: profile.bio,
+      iconFileId: profile.iconFileId,
+    })
+    .from(profile)
+    .where(eq(profile.userId, pkg.userId))
+    .limit(1)
+    .then((rows) => rows.at(0));
   let paid = false;
   let owned = false;
   if (userId != null) {
@@ -52,11 +54,11 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
     owned: owned,
     owner: {
       id: pkg.userId,
-      name: profile?.userName || "",
-      displayName: profile?.displayName || "",
-      bio: profile?.bio,
-      iconId: profile?.iconFileId,
-      iconUrl: await getContentUrl(profile?.iconFileId),
+      name: row?.userName || "",
+      displayName: row?.displayName || "",
+      bio: row?.bio,
+      iconId: row?.iconFileId,
+      iconUrl: await getContentUrl(row?.iconFileId),
     },
   };
 }

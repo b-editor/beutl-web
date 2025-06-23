@@ -1,79 +1,75 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { drizzle } from "@/drizzle";
+import type { Transaction } from "./transaction";
+import { authenticator } from "@/drizzle/schema";
+import { and, eq } from "drizzle-orm";
 
 export async function updateAuthenticatorUsedAt({
   credentialID,
   usedAt,
-  prisma,
+  transaction,
 }: {
   credentialID: string;
   usedAt: Date;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).authenticator.update({
-    where: {
-      credentialID,
-    },
-    data: {
+  const db = transaction || await drizzle();
+  await db.update(authenticator)
+    .set({
       usedAt: usedAt,
-    },
-  });
+    })
+    .where(eq(authenticator.credentialId, credentialID));
 }
 
 export async function deleteAuthenticator({
   credentialID,
   userId,
-  prisma,
+  transaction,
 }: {
   credentialID: string;
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).authenticator.delete({
-    where: {
-      userId_credentialID: {
-        userId,
-        credentialID,
-      },
-    },
-  });
+  const db = transaction || await drizzle();
+  await db.delete(authenticator)
+    .where(and(
+      eq(authenticator.userId, userId),
+      eq(authenticator.credentialId, credentialID),
+    ));
 }
 
 export async function updateAuthenticatorName({
   credentialID,
   userId,
   name,
-  prisma,
+  transaction,
 }: {
   credentialID: string;
   userId: string;
   name: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).authenticator.update({
-    where: {
-      userId_credentialID: {
-        userId,
-        credentialID,
-      },
-    },
-    data: {
+  const db = transaction || await drizzle();
+  await db.update(authenticator)
+    .set({
       name,
-    },
-  });
+    })
+    .where(and(
+      eq(authenticator.userId, userId),
+      eq(authenticator.credentialId, credentialID),
+    ));
 }
 
 export async function findAuthenticatorByAccountId({
   providerAccountId,
-  prisma,
+  transaction,
 }: {
   providerAccountId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).authenticator.findFirst({
-    where: {
-      providerAccountId,
-    },
-  });
+  const db = transaction || await drizzle();
+  return await db.select().from(authenticator)
+    .where(eq(authenticator.providerAccountId, providerAccountId))
+    .limit(1)
+    .then((rows) => rows.at(0));
 }

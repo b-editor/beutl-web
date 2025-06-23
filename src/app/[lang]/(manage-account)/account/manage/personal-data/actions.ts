@@ -1,17 +1,18 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
-import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { findEmailByUserId } from "@/lib/db/user";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { confirmationToken } from "@/drizzle/schema";
+import { and, eq } from "drizzle-orm";
 
 type State = {
   message?: string;
@@ -47,7 +48,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await prisma();
+    const db = await drizzle();
     const validated = emailSchema.safeParse(
       Object.fromEntries(formData.entries()),
     );
@@ -60,12 +61,13 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     }
 
     if (validated.data.cancel) {
-      await db.confirmationToken.deleteMany({
-        where: {
-          userId: session.user.id,
-          purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-        },
-      });
+      await db.delete(confirmationToken)
+        .where(
+          and(
+            eq(confirmationToken.userId, session.user.id),
+            eq(confirmationToken.purpose, ConfirmationTokenPurpose.ACCOUNT_DELETE),
+          ),
+        );
       revalidatePath("/account/manage/personal-data");
       return {
         message: t("account:data.cancelAccountDeletion"),
@@ -88,14 +90,12 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(user.email, token, lang);
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: user.email,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-      },
+    const createToken = db.insert(confirmationToken).values({
+      token: await createHash(`${token}${secret}`),
+      identifier: user.email,
+      userId: session.user.id,
+      expires,
+      purpose: 'ACCOUNT_DELETE',
     });
 
     await Promise.all([sendRequest, createToken]);

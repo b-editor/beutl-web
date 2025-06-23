@@ -1,106 +1,100 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { drizzle } from "@/drizzle";
+import type { Transaction } from "./transaction";
+import { user } from "@/drizzle/schema";
+import { count, eq } from "drizzle-orm";
 
 export async function existsUserByEmail({
   email,
-  prisma,
+  transaction,
 }: {
   email: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return !!(await (prisma || await sharedPrisma()).user.findFirst({
-    where: {
-      email: email,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = transaction || await drizzle();
+  return await db.select({
+    cnt: count(),
+  })
+    .from(user)
+    .where(eq(user.email, email))
+    .then((rows) => rows[0].cnt > 0);
 }
 
 export async function existsUserById({
   id,
-  prisma,
+  transaction,
 }: {
   id: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return !!(await (prisma || await sharedPrisma()).user.findFirst({
-    where: {
-      id: id,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = transaction || await drizzle();
+  return db.select({
+    cnt: count(),
+  })
+    .from(user)
+    .where(eq(user.id, id))
+    .then((rows) => rows[0].cnt > 0);
 }
 
 export async function updateUserEmail({
   userId,
   email,
-  prisma,
+  transaction,
 }: {
   userId: string;
   email: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).user.update({
-    where: {
-      id: userId,
-    },
-    data: {
+  const db = transaction || await drizzle();
+  await db.update(user)
+    .set({
       email: email,
-    }
-  });
+    })
+    .where(eq(user.id, userId));
 }
 
 export async function findEmailByUserId({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return (prisma || await sharedPrisma()).user.findFirst({
-    where: {
-      id: userId,
-    },
-    select: {
-      email: true,
-    },
-  });
+  const db = transaction || await drizzle();
+  return db.select({
+    email: user.email,
+  })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1)
+    .then((rows) => rows.at(0));
 }
 
 export async function getEmailVerifiedByUserId({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return (
-    await (prisma || await sharedPrisma()).user.findFirst({
-      where: {
-        id: userId,
-      },
-      select: {
-        emailVerified: true,
-      },
-    })
-  )?.emailVerified;
+  const db = transaction || await drizzle();
+  return await db.select({
+    emailVerified: user.emailVerified,
+  })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1)
+    .then((rows) => rows.at(0)?.emailVerified);
 }
 
 export async function deleteUserById({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  await (prisma || await sharedPrisma()).user.delete({
-    where: {
-      id: userId,
-    }
-  });
+  const db = transaction || await drizzle();
+  await db.delete(user)
+    .where(eq(user.id, userId));
 }

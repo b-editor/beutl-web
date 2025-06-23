@@ -23,7 +23,7 @@ const nextConfig = {
 
     return config
   },
-  serverExternalPackages: ["@prisma/client", ".prisma/client", "postgres"],
+  serverExternalPackages: ["postgres"],
 };
 
 import analyzer from '@next/bundle-analyzer';

@@ -1,7 +1,9 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { drizzle } from "@/drizzle";
+import type { Transaction } from "./transaction";
 import { headers } from "next/headers";
+import { file } from "@/drizzle/schema";
+import { eq } from "drizzle-orm";
 
 export async function getContentUrl(id?: string | null) {
   if (!id) return null;
@@ -12,16 +14,15 @@ export async function getContentUrl(id?: string | null) {
 
 export async function retrieveFilesByUserId({
   userId,
-  prisma,
+  transaction,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).file.findMany({
-    where: {
-      userId: userId,
-    },
-  });
+  const db = transaction || await drizzle();
+  return db.select()
+    .from(file)
+    .where(eq(file.userId, userId));
 }
 
 export async function createFile({
@@ -31,7 +32,7 @@ export async function createFile({
   size,
   mimeType,
   visibility,
-  prisma,
+  transaction,
   sha256,
 }: {
   userId: string;
@@ -40,11 +41,12 @@ export async function createFile({
   size: number;
   mimeType: string;
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
   sha256?: string;
 }) {
-  return await (prisma || await sharedPrisma()).file.create({
-    data: {
+  const db = transaction || await drizzle();
+  return await db.insert(file)
+    .values({
       objectKey,
       name,
       size,
@@ -52,20 +54,26 @@ export async function createFile({
       userId,
       visibility,
       sha256,
-    },
-  });
+    })
+    .returning()
+    .then((res) => res[0]);
 }
 
 export async function deleteFile({
   fileId,
-  prisma,
+  transaction,
 }: {
   fileId: string;
-  prisma?: PrismaTransaction;
+  transaction?: Transaction;
 }) {
-  return await (prisma || await sharedPrisma()).file.delete({
-    where: {
-      id: fileId,
-    },
-  });
+  const db = transaction || await drizzle();
+  return await db.delete(file)
+    .where(eq(file.id, fileId))
+    .returning()
+    .then((res) => {
+      if (res.length === 0) {
+        throw new Error("File not found");
+      }
+      return res[0];
+    })
 }

@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
@@ -18,7 +18,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  const db = await prisma();
+  const db = await drizzle();
   const profile = await db.profile.findFirst({
     where: {
       userId: session.user.id,

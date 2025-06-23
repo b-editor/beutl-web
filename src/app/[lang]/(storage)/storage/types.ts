@@ -1,4 +1,6 @@
-import type { FileVisibility } from "@prisma/client";
+import type { fileVisibility } from "@/drizzle/schema";
+
+export type FileVisibility = typeof fileVisibility.enumValues[number];
 
 export interface File {
   id: string;

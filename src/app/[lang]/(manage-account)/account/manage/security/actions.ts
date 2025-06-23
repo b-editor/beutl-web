@@ -14,7 +14,7 @@ import {
   updateAuthenticatorName,
 } from "@/lib/db/authenticator";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 
 export type State = {
   success?: boolean;
@@ -150,17 +150,17 @@ export async function deleteAuthenticator({
     }
   }
 
-  const db = await prisma();
+  const db = await drizzle();
   await db.$transaction(async (p) => {
     await deleteAccount({
       providerAccountId: id,
       provider: "passkey",
-      prisma: p,
+      transaction: p,
     });
     await deleteDbAuthenticator({
       userId: session.user.id,
       credentialID: id,
-      prisma: p,
+      transaction: p,
     });
   });
   await addAuditLog({

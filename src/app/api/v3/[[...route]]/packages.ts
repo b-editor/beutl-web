@@ -1,12 +1,14 @@
 import "server-only";
 import { Hono } from "hono";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
 import { getPackage, mapPackage } from "@/lib/api/packages-db";
 import { getContentUrl } from "@/lib/db/file";
 import { SemVer } from "semver";
+import { packages, release } from "@/drizzle/schema";
+import { eq, and } from "drizzle-orm";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -14,9 +16,7 @@ const app = new Hono()
     const userId = await getUserId(c);
     const currency = await guessCurrency();
     const pkg = await getPackage({
-      query: {
-        name: name,
-      },
+      name: name,
       userId: userId ?? undefined,
       currency,
     });
@@ -40,17 +40,15 @@ const app = new Hono()
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
-    const db = await prisma();
-    const pkg = await db.package.findFirst({
-      where: {
-        name: name,
-      },
-      select: {
-        id: true,
-        userId: true,
-        published: true,
-      },
-    });
+    const db = await drizzle();
+    const pkg = await db.select({
+      id: packages.id,
+      userId: packages.userId,
+      published: packages.published,
+    }).from(packages)
+      .where(eq(packages.name, name))
+      .limit(1)
+      .then((rows) => rows.at(0));
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -60,20 +58,17 @@ const app = new Hono()
       });
     }
 
-    const releases = await db.release.findMany({
-      where: {
-        packageId: pkg.id,
-        published: pkg.userId === userId ? undefined : true,
-      },
-      select: {
-        id: true,
-        version: true,
-        title: true,
-        description: true,
-        targetVersion: true,
-        fileId: true,
-      },
-    });
+    const releases = await db.select({
+      id: release.id,
+      version: release.version,
+      title: release.title,
+      description: release.description,
+      targetVersion: release.targetVersion,
+      fileId: release.fileId,
+    }).from(release)
+      .where(and(
+        eq(release.packageId, pkg.id),
+        pkg.userId === userId ? undefined : eq(release.published, true)));
     releases.sort((a, b) => {
       return new SemVer(b.version).compare(a.version);
     });
@@ -94,17 +89,15 @@ const app = new Hono()
     const name = c.req.param("name");
     const version = c.req.param("version");
     const userId = await getUserId(c);
-    const db = await prisma();
-    const pkg = await db.package.findFirst({
-      where: {
-        name: name,
-      },
-      select: {
-        id: true,
-        userId: true,
-        published: true,
-      },
-    });
+    const db = await drizzle();
+    const pkg = await db.select({
+      id: packages.id,
+      userId: packages.userId,
+      published: packages.published,
+    }).from(packages)
+      .where(eq(packages.name, name))
+      .limit(1)
+      .then((rows) => rows.at(0));
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -114,38 +107,38 @@ const app = new Hono()
       });
     }
 
-    const release = await db.release.findFirst({
-      where: {
-        packageId: pkg.id,
-        version: version,
-      },
-      select: {
-        id: true,
-        version: true,
-        title: true,
-        description: true,
-        targetVersion: true,
-        fileId: true,
-        published: true,
-      },
-    });
-    if (!release) {
-      return c.json(await apiErrorResponse("releaseNotFound"), { status: 404 });
-    }
-    if (!release.published && pkg.userId !== userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), {
-        status: 401,
-      });
-    }
-
-    return c.json({
+    const releaseRow = await db.select({
       id: release.id,
       version: release.version,
       title: release.title,
       description: release.description,
       targetVersion: release.targetVersion,
       fileId: release.fileId,
-      fileUrl: await getContentUrl(release.fileId),
+      published: release.published,
+    }).from(release)
+      .where(and(
+        eq(release.packageId, pkg.id),
+        eq(release.version, version),
+      ))
+      .limit(1)
+      .then((rows) => rows.at(0));
+    if (!releaseRow) {
+      return c.json(await apiErrorResponse("releaseNotFound"), { status: 404 });
+    }
+    if (!releaseRow.published && pkg.userId !== userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+
+    return c.json({
+      id: releaseRow.id,
+      version: releaseRow.version,
+      title: releaseRow.title,
+      description: releaseRow.description,
+      targetVersion: releaseRow.targetVersion,
+      fileId: releaseRow.fileId,
+      fileUrl: await getContentUrl(releaseRow.fileId),
     });
   });
 

@@ -1,31 +1,43 @@
 import "server-only";
 import { createHash } from "@/lib/create-hash";
-import { prisma } from "@/prisma";
-import { ConfirmationTokenPurpose } from "@prisma/client";
+import { drizzle } from "@/drizzle";
+import { confirmationToken } from "@/drizzle/schema";
+import { and, eq } from "drizzle-orm";
 import { deleteUserById } from "@/lib/db/user";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  const db = await prisma();
-  const tokenData = await db.confirmationToken.delete({
-    where: {
-      identifier_token: {
-        identifier: identifier,
-        token: hash,
-      },
-    },
-    select: {
-      identifier: true,
-      expires: true,
-      userId: true,
-      purpose: true,
-    },
-  });
+  const db = await drizzle();
+  
+  // First select the token data
+  const tokenData = await db
+    .select()
+    .from(confirmationToken)
+    .where(
+      and(
+        eq(confirmationToken.identifier, identifier),
+        eq(confirmationToken.token, hash)
+      )
+    )
+    .limit(1)
+    .then(rows => rows[0]);
+  
+  // Then delete it if found
+  if (tokenData) {
+    await db
+      .delete(confirmationToken)
+      .where(
+        and(
+          eq(confirmationToken.identifier, identifier),
+          eq(confirmationToken.token, hash)
+        )
+      );
+  }
   if (
     !tokenData ||
-    tokenData.purpose !== ConfirmationTokenPurpose.ACCOUNT_DELETE
+    tokenData.purpose !== 'ACCOUNT_DELETE'
   ) {
     throw new Error("Invalid token");
   }

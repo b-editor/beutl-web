@@ -3,7 +3,7 @@
 import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
-import { prisma } from "@/prisma";
+import { drizzle } from "@/drizzle";
 
 const emptyStringToUndefined = (z: Zod) =>
   z.literal("").transform(() => undefined);
@@ -42,7 +42,7 @@ export async function updateProfile(
 ): Promise<State> {
   return await authenticated(async (session) => {
     const { t, z } = await getTranslation(await getLanguage());
-    const db = await prisma();
+    const db = await drizzle();
     const validated = profileSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
     );
