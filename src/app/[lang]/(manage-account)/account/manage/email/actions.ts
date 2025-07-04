@@ -1,7 +1,7 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
@@ -91,7 +91,8 @@ export async function sendConfirmationEmail(
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
-    const createToken = prisma.confirmationToken.create({
+    const db = await getDbAsync();
+    const createToken = db.confirmationToken.create({
       data: {
         token: await createHash(`${token}${secret}`),
         identifier: validated.data.newEmail,
@@ -118,13 +119,14 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
+  const db = await getDbAsync();
   if (
-    !prisma.confirmationToken.count({
+    !(await db.confirmationToken.count({
       where: {
         identifier: identifier,
         token: hash,
       },
-    })
+    }))
   ) {
     console.error("Invalid token");
     redirect(
@@ -133,7 +135,7 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const tokenData = await prisma.confirmationToken.delete({
+  const tokenData = await db.confirmationToken.delete({
     where: {
       identifier_token: {
         identifier: identifier,

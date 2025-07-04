@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 import { headers } from "next/headers";
 
@@ -17,7 +17,8 @@ export async function retrieveFilesByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).file.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.file.findMany({
     where: {
       userId: userId,
     },
@@ -43,7 +44,8 @@ export async function createFile({
   prisma?: PrismaTransaction;
   sha256?: string;
 }) {
-  return await (prisma || sharedPrisma).file.create({
+  const db = prisma || await getDbAsync();
+  return await db.file.create({
     data: {
       objectKey,
       name,
@@ -63,7 +65,8 @@ export async function deleteFile({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).file.delete({
+  const db = prisma || await getDbAsync();
+  return await db.file.delete({
     where: {
       id: fileId,
     },

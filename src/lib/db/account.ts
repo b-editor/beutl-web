@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function retrieveAccounts({
@@ -9,7 +9,8 @@ export async function retrieveAccounts({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).account.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.account.findMany({
     where: {
       userId: userId,
     },
@@ -27,7 +28,8 @@ export async function retrieveAccountsWithIdToken({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).account.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.account.findMany({
     where: {
       userId: userId,
     },
@@ -48,7 +50,8 @@ export async function deleteAccount({
   provider: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).account.delete({
+  const db = prisma || await getDbAsync();
+  await db.account.delete({
     where: {
       provider_providerAccountId: {
         providerAccountId,

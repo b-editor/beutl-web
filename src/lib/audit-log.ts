@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 
 export const auditLogActions = {
@@ -44,11 +44,12 @@ export async function addAuditLog({
   action: string;
   details?: string;
 }) {
+  const db = await getDbAsync();
   const h = await headers();
 
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");
-  await prisma.auditLog.create({
+  await db.auditLog.create({
     data: {
       userId,
       action,

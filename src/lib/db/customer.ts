@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { createStripe } from "../stripe/config";
 import type { PrismaTransaction } from "./transaction";
 
@@ -12,8 +12,8 @@ export async function updateCustomerEmailIfExist({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  const p = prisma || sharedPrisma;
-  const customer = await p.customer.findFirst({
+  const db = prisma || await getDbAsync();
+  const customer = await db.customer.findFirst({
     where: {
       userId: userId,
     },

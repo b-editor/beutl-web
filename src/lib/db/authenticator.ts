@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function updateAuthenticatorUsedAt({
@@ -11,7 +11,8 @@ export async function updateAuthenticatorUsedAt({
   usedAt: Date;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.update({
+  const db = prisma || await getDbAsync();
+  await db.authenticator.update({
     where: {
       credentialID,
     },
@@ -30,7 +31,8 @@ export async function deleteAuthenticator({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.delete({
+  const db = prisma || await getDbAsync();
+  await db.authenticator.delete({
     where: {
       userId_credentialID: {
         userId,
@@ -51,7 +53,8 @@ export async function updateAuthenticatorName({
   name: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).authenticator.update({
+  const db = prisma || await getDbAsync();
+  await db.authenticator.update({
     where: {
       userId_credentialID: {
         userId,
@@ -71,7 +74,8 @@ export async function findAuthenticatorByAccountId({
   providerAccountId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).authenticator.findFirst({
+  const db = prisma || await getDbAsync();
+  return await db.authenticator.findFirst({
     where: {
       providerAccountId,
     },

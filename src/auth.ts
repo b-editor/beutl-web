@@ -25,7 +25,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         secret: {},
       },
       async authorize(credentials) {
-        const user = await prisma.user.findFirst({
+        const db = prisma;
+        const user = await db.user.findFirst({
           where: {
             id: credentials.userId as string,
           },
@@ -47,21 +48,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!userName || !message.user.id) return;
       const original = userName;
 
-      let exists = await prisma.profile.findFirst({
+      const db = prisma;
+      let exists = await db.profile.findFirst({
         where: {
           userName: original,
         },
       });
       for (let i = 1; exists; i++) {
         userName = `${original}${i}`;
-        exists = await prisma.profile.findFirst({
+        exists = await db.profile.findFirst({
           where: {
             userName: userName,
           },
         });
       }
 
-      await prisma.profile.create({
+      await db.profile.create({
         data: {
           userId: message.user.id,
           displayName: message.user.name || userName,
@@ -121,7 +123,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     session: async ({ session, user }) => {
       // user.nameをprofile.displayNameにする
-      const profile = await prisma.profile.findFirst({
+      const db = prisma;
+      const profile = await db.profile.findFirst({
         where: {
           userId: user.id,
         },

@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function existsUserByEmail({
@@ -9,7 +9,8 @@ export async function existsUserByEmail({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  return !!(await (prisma || sharedPrisma).user.findFirst({
+  const db = prisma || await getDbAsync();
+  return !!(await db.user.findFirst({
     where: {
       email: email,
     },
@@ -26,7 +27,8 @@ export async function existsUserById({
   id: string;
   prisma?: PrismaTransaction;
 }) {
-  return !!(await (prisma || sharedPrisma).user.findFirst({
+  const db = prisma || await getDbAsync();
+  return !!(await db.user.findFirst({
     where: {
       id: id,
     },
@@ -45,7 +47,8 @@ export async function updateUserEmail({
   email: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).user.update({
+  const db = prisma || await getDbAsync();
+  await db.user.update({
     where: {
       id: userId,
     },
@@ -62,7 +65,8 @@ export async function findEmailByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return (prisma || sharedPrisma).user.findFirst({
+  const db = prisma || await getDbAsync();
+  return db.user.findFirst({
     where: {
       id: userId,
     },
@@ -79,8 +83,9 @@ export async function getEmailVerifiedByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
+  const db = prisma || await getDbAsync();
   return (
-    await (prisma || sharedPrisma).user.findFirst({
+    await db.user.findFirst({
       where: {
         id: userId,
       },
@@ -98,7 +103,8 @@ export async function deleteUserById({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).user.delete({
+  const db = prisma || await getDbAsync();
+  await db.user.delete({
     where: {
       id: userId,
     }

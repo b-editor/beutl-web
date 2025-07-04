@@ -3,7 +3,7 @@
 import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 
 const emptyStringToUndefined = (z: Zod) =>
   z.literal("").transform(() => undefined);
@@ -57,9 +57,10 @@ export async function updateProfile(
       validated.data;
 
     const promises: Promise<unknown>[] = [];
+    const db = await getDbAsync();
     // プロフィール更新
     promises.push(
-      prisma.profile.upsert({
+      db.profile.upsert({
         where: {
           userId: session.user.id,
         },
@@ -76,7 +77,7 @@ export async function updateProfile(
         },
       }),
     );
-    const providers = await prisma.socialProfileProvider.findMany({
+    const providers = await db.socialProfileProvider.findMany({
       where: {
         provider: {
           in: ["x", "github", "youtube", "custom"],
@@ -111,7 +112,7 @@ export async function updateProfile(
       }
       if (social.value) {
         promises.push(
-          prisma.socialProfile.upsert({
+          db.socialProfile.upsert({
             where: {
               userId_providerId: {
                 userId: session.user.id,
@@ -130,7 +131,7 @@ export async function updateProfile(
         );
       } else {
         promises.push(
-          prisma.socialProfile.deleteMany({
+          db.socialProfile.deleteMany({
             where: {
               userId: session.user.id,
               providerId: social.providerId,
