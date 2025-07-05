@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import Resend from "@auth/core/providers/resend";
@@ -10,8 +10,10 @@ import Credentials from "@auth/core/providers/credentials";
 import { updateAuthenticatorUsedAt } from "./lib/db/authenticator";
 import { addAuditLog, auditLogActions } from "./lib/audit-log";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+export const { handlers, auth, signIn, signOut } = NextAuth(async () => {
+  const prisma = await getDbAsync();
+  return {
+    adapter: PrismaAdapter(prisma),
   providers: [
     Google,
     GitHub,
@@ -25,7 +27,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         secret: {},
       },
       async authorize(credentials) {
-        const user = await prisma.user.findFirst({
+        const db = await getDbAsync();
+        const user = await db.user.findFirst({
           where: {
             id: credentials.userId as string,
           },
@@ -47,21 +50,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!userName || !message.user.id) return;
       const original = userName;
 
-      let exists = await prisma.profile.findFirst({
+      const db = await getDbAsync();
+      let exists = await db.profile.findFirst({
         where: {
           userName: original,
         },
       });
       for (let i = 1; exists; i++) {
         userName = `${original}${i}`;
-        exists = await prisma.profile.findFirst({
+        exists = await db.profile.findFirst({
           where: {
             userName: userName,
           },
         });
       }
 
-      await prisma.profile.create({
+      await db.profile.create({
         data: {
           userId: message.user.id,
           displayName: message.user.name || userName,
@@ -121,7 +125,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     session: async ({ session, user }) => {
       // user.nameをprofile.displayNameにする
-      const profile = await prisma.profile.findFirst({
+      const db = await getDbAsync();
+      const profile = await db.profile.findFirst({
         where: {
           userId: user.id,
         },
@@ -149,4 +154,5 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   experimental: {
     enableWebAuthn: true,
   },
+  };
 });

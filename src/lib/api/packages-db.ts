@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { Prisma } from "@prisma/client";
 import { packagePaied } from "@/lib/store-utils";
 import { getContentUrl } from "@/lib/db/file";
@@ -13,7 +13,8 @@ export async function getPackage({
   query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
-  const result = await prisma.package.findFirst({
+  const db = await getDbAsync();
+  const result = await db.package.findFirst({
     where: query,
     select: {
       id: true,
@@ -94,7 +95,8 @@ export async function getPackages({
   query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
-  return prisma.package.findMany({
+  const db = await getDbAsync();
+  return db.package.findMany({
     where: query,
     select: {
       id: true,

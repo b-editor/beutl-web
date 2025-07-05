@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash } from "@/lib/create-hash";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { deleteUserById } from "@/lib/db/user";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
@@ -8,7 +8,8 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 export async function deleteUser(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  const tokenData = await prisma.confirmationToken.delete({
+  const db = await getDbAsync();
+  const tokenData = await db.confirmationToken.delete({
     where: {
       identifier_token: {
         identifier: identifier,

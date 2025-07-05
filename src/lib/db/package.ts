@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function retrieveDevPackagesByUserId({
@@ -9,7 +9,8 @@ export async function retrieveDevPackagesByUserId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.package.findMany({
     where: {
       userId: userId,
     },
@@ -41,7 +42,8 @@ export async function retrieveDevPackageByName({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.findFirst({
+  const db = prisma || await getDbAsync();
+  return await db.package.findFirst({
     where: {
       name: {
         equals: name,
@@ -113,7 +115,8 @@ export async function existsPackageName({
   name: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.count({
+  const db = prisma || await getDbAsync();
+  return await db.package.count({
     where: {
       name: {
         equals: name,
@@ -132,7 +135,8 @@ export async function createDevPackage({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.create({
+  const db = prisma || await getDbAsync();
+  return await db.package.create({
     data: {
       name: name,
       userId: userId,
@@ -151,16 +155,15 @@ export async function getUserIdFromPackageId({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return (
-    await (prisma || sharedPrisma).package.findFirst({
+  const db = prisma || await getDbAsync();
+  return (await db.package.findFirst({
       where: {
         id: packageId,
       },
       select: {
         userId: true,
       },
-    })
-  )?.userId;
+    }))?.userId;
 }
 
 export async function getPackageNameFromPackageId({
@@ -170,8 +173,8 @@ export async function getPackageNameFromPackageId({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return (
-    await (prisma || sharedPrisma).package.findFirst({
+  const db = prisma || await getDbAsync();
+  return (await db.package.findFirst({
       where: {
         id: packageId,
       },
@@ -193,7 +196,8 @@ export async function updateDevPackageDisplay({
   shortDescription: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
     where: {
       id: packageId,
     },
@@ -216,7 +220,8 @@ export async function updateDevPackageDescription({
   description: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
     where: {
       id: packageId,
     },
@@ -238,7 +243,8 @@ export async function updateDevPackagePublished({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
     where: {
       id: packageId,
     },
@@ -260,7 +266,8 @@ export async function updateDevPackageIconFile({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
     where: {
       id: packageId,
     },
@@ -280,7 +287,8 @@ export async function retrieveDevPackageDependsFile({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  const pkg = await (prisma || sharedPrisma).package.findFirstOrThrow({
+  const db = prisma || await getDbAsync();
+  const pkg = await db.package.findFirstOrThrow({
     where: {
       id: packageId,
     },
@@ -329,8 +337,8 @@ export async function retrieveDevPackageIconFile({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return (
-    await (prisma || sharedPrisma).package.findFirst({
+  const db = prisma || await getDbAsync();
+  return (await db.package.findFirst({
       where: {
         id: packageId,
       },
@@ -354,7 +362,8 @@ export async function retrieveDevPackageScreenshots({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.packageScreenshot.findMany({
     where: {
       packageId: packageId,
     },
@@ -375,7 +384,8 @@ export async function retrieveDevPackageLastScreenshotOrder({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.findFirst({
+  const db = prisma || await getDbAsync();
+  return await db.packageScreenshot.findFirst({
     where: {
       packageId: packageId,
     },
@@ -399,7 +409,8 @@ export async function createDevPackageScreenshot({
   order: number;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.create({
+  const db = prisma || await getDbAsync();
+  return await db.packageScreenshot.create({
     data: {
       packageId: packageId,
       fileId: fileId,
@@ -419,7 +430,8 @@ export async function updateDevPackageScreenshotOrder({
   order: number;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.update({
+  const db = prisma || await getDbAsync();
+  return await db.packageScreenshot.update({
     where: {
       packageId_fileId: {
         packageId: packageId,
@@ -441,7 +453,8 @@ export async function updateDevPackageTags({
   tags: string[];
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.update({
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
     where: {
       id: packageId,
     },
@@ -463,7 +476,8 @@ export async function deleteDevPackageScreenshot({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).packageScreenshot.delete({
+  const db = prisma || await getDbAsync();
+  return await db.packageScreenshot.delete({
     where: {
       packageId_fileId: {
         packageId: packageId,
@@ -480,7 +494,8 @@ export async function deleteDevPackage({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).package.delete({
+  const db = prisma || await getDbAsync();
+  return await db.package.delete({
     where: {
       id: packageId,
     },

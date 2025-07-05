@@ -26,7 +26,7 @@ import {
   createStorageFile,
   deleteStorageFile,
 } from "@/lib/storage";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import SemVer from "semver";
@@ -94,7 +94,7 @@ async function sameUser<TResult>(
 
 async function createDedicatedFile(userId: string, file: File, size: bigint) {
   const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
-  let totalSize = await calcTotalFileSize({ userId, prisma });
+  let totalSize = await calcTotalFileSize({ userId });
   totalSize -= size;
 
   if (totalSize + BigInt(file.size) > maxSize) {
@@ -236,7 +236,8 @@ export async function changePackageVisibility(
 ): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
-      const { published: oldPublished } = await prisma.package.findFirstOrThrow(
+      const db = await getDbAsync();
+      const { published: oldPublished } = await db.package.findFirstOrThrow(
         {
           where: {
             id,
@@ -478,7 +479,8 @@ export async function updateRelease(formData: FormData) {
         success: false,
       };
     }
-    const release = await prisma.release.findFirst({
+    const db = await getDbAsync();
+    const release = await db.release.findFirst({
       where: {
         id: validated.data.id,
       },
@@ -527,7 +529,8 @@ export async function updateRelease(formData: FormData) {
         fileId = result.record!.id;
       }
 
-      const { published: oldPublished } = await prisma.release.findFirstOrThrow(
+      const db = await getDbAsync();
+      const { published: oldPublished } = await db.release.findFirstOrThrow(
         {
           where: {
             id: validated.data.id,
@@ -537,7 +540,7 @@ export async function updateRelease(formData: FormData) {
           },
         },
       );
-      const data = await prisma.release.update({
+      const data = await db.release.update({
         where: {
           id: validated.data.id,
         },
@@ -598,7 +601,8 @@ export async function createRelease({
         };
       }
 
-      const release = await prisma.release.create({
+      const db = await getDbAsync();
+      const release = await db.release.create({
         data: {
           packageId,
           version,
@@ -636,7 +640,8 @@ export async function createRelease({
 
 export async function deleteRelease({ releaseId }: { releaseId: string }) {
   return await authenticated(async (session) => {
-    const release = await prisma.release.findFirst({
+    const db = await getDbAsync();
+    const release = await db.release.findFirst({
       where: {
         id: releaseId,
       },
@@ -657,7 +662,8 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
           fileId: release.fileId,
         });
       }
-      await prisma.release.delete({
+      const db = await getDbAsync();
+  await db.release.delete({
         where: {
           id: releaseId,
         },

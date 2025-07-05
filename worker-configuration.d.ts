@@ -6,6 +6,7 @@ declare namespace Cloudflare {
 		NEXT_INC_CACHE_R2_BUCKET: R2Bucket;
 		BEUTL_R2_BUCKET: R2Bucket;
 		WORKER_SELF_REFERENCE: Fetcher /* beutl-web */;
+    BEUTL_DATABASE_HYPERDRIVE: Hyperdrive;
 		ASSETS: Fetcher;
 	}
 }

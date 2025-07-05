@@ -1,10 +1,11 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { guessCurrency } from "./currency";
 import { existsUserPaymentHistory } from "./db/user-payment-history";
 
 export async function packageOwned(pkgId: string, userId: string) {
-  return !!(await prisma.userPackage.findFirst({
+  const db = await getDbAsync();
+  return !!(await db.userPackage.findFirst({
     where: {
       userId: userId,
       packageId: pkgId,
@@ -17,7 +18,8 @@ export async function packagePaied(pkgId: string, userId: string) {
 }
 
 export async function retrievePrices(pkgId: string) {
-  return await prisma.packagePricing.findMany({
+  const db = await getDbAsync();
+  return await db.packagePricing.findMany({
     where: {
       packageId: pkgId,
     },
@@ -32,7 +34,8 @@ export async function retrievePrices(pkgId: string) {
 export type Package = NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
 
 export async function retrievePackage(name: string) {
-  const pkg = await prisma.package.findFirst({
+  const db = await getDbAsync();
+  const pkg = await db.package.findFirst({
     where: {
       name: {
         equals: name,
@@ -131,10 +134,11 @@ export type ListedPackage = {
 export async function retrievePackages(
   query?: string,
 ): Promise<ListedPackage[]> {
+  const db = await getDbAsync();
   const currency = await guessCurrency();
 
   if (query) {
-    const tmp = await prisma.package.findMany({
+    const tmp = await db.package.findMany({
       where: {
         published: true,
         OR: [
@@ -231,7 +235,7 @@ export async function retrievePackages(
       }),
     );
   }
-  const tmp = await prisma.package.findMany({
+  const tmp = await db.package.findMany({
     where: {
       published: true,
     },

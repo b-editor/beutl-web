@@ -4,13 +4,14 @@ import { getTranslation } from "@/app/i18n/server";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
   const lang = await getLanguage();
-  const { name } = await prisma.package.findFirstOrThrow({
+  const db = await getDbAsync();
+  const { name } = await db.package.findFirstOrThrow({
     where: {
       id: packageId,
     },
@@ -25,9 +26,10 @@ export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
+    const db = await getDbAsync();
     const {
       package: { name },
-    } = await prisma.userPackage.delete({
+    } = await db.userPackage.delete({
       where: {
         userId_packageId: {
           userId: session.user.id,

@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma as sharedPrisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
 export async function getUserPaymentHistory({
@@ -9,7 +9,8 @@ export async function getUserPaymentHistory({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  return await (prisma || sharedPrisma).userPaymentHistory.findMany({
+  const db = prisma || await getDbAsync();
+  return await db.userPaymentHistory.findMany({
     where: {
       userId: userId,
     },
@@ -29,7 +30,8 @@ export async function existsUserPaymentHistory({
   prisma?: PrismaTransaction;
 }) {
   if (!userId) return false;
-  return !!(await (prisma || sharedPrisma).userPaymentHistory.findFirst({
+  const db = prisma || await getDbAsync();
+  return !!(await db.userPaymentHistory.findFirst({
     where: {
       userId: userId,
       packageId: packageId,
@@ -51,7 +53,8 @@ export async function createUserPaymentHistory({
   paymentIntentId: string;
   prisma?: PrismaTransaction;
 }) {
-  await (prisma || sharedPrisma).userPaymentHistory.create({
+  const db = prisma || await getDbAsync();
+  await db.userPaymentHistory.create({
     data: {
       userId: userId,
       packageId: packageId,

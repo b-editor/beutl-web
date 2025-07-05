@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { getUserId, getUserIdFromToken } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { sign } from "hono/jwt";
 
 const createAuthUriSchema = z.object({
@@ -130,7 +130,8 @@ async function createRefreshToken(userId: string) {
         24 *
         Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
   );
-  await prisma.session.create({
+  const db = await getDbAsync();
+  await db.session.create({
     data: {
       sessionToken: rawToken,
       expires: expires,
@@ -161,7 +162,8 @@ const app = new Hono()
           status: 400,
         });
       }
-      const auth = await prisma.nativeAppAuth.create({
+      const db = await getDbAsync();
+      const auth = await db.nativeAppAuth.create({
         data: {
           continueUrl: continue_uri,
         },
@@ -186,7 +188,8 @@ const app = new Hono()
         status: 400,
       });
     }
-    const auth = await prisma.nativeAppAuth.findFirst({
+    const db = await getDbAsync();
+    const auth = await db.nativeAppAuth.findFirst({
       where: { id: identifier },
     });
     if (!auth) {
@@ -195,7 +198,7 @@ const app = new Hono()
       });
     }
 
-    const { code, continueUrl } = await prisma.nativeAppAuth.update({
+    const { code, continueUrl } = await db.nativeAppAuth.update({
       where: { id: identifier },
       data: {
         userId,
@@ -228,7 +231,8 @@ const app = new Hono()
       });
     }
 
-    const oldRefreshTokens = await prisma.session.deleteMany({
+    const db = await getDbAsync();
+    const oldRefreshTokens = await db.session.deleteMany({
       where: {
         sessionToken: oldDecryptedRefreshToken,
       },
@@ -252,7 +256,8 @@ const app = new Hono()
   })
   .post("/code2jwt", zValidator("json", exchangeSchema), async (c) => {
     const { session_id, code } = c.req.valid("json");
-    const auth = await prisma.nativeAppAuth.findFirst({
+    const db = await getDbAsync();
+    const auth = await db.nativeAppAuth.findFirst({
       where: {
         sessionId: session_id,
       },
@@ -269,7 +274,7 @@ const app = new Hono()
         status: 401,
       });
     }
-    await prisma.nativeAppAuth.deleteMany({
+    await db.nativeAppAuth.deleteMany({
       where: {
         sessionId: session_id,
       },

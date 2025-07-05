@@ -15,7 +15,8 @@ const nextConfig = {
         port: "",
       },
     ],
-  }
+  },
+  serverExternalPackages: ["@prisma/client", ".prisma/client"],
 };
 
 import analyzer from '@next/bundle-analyzer';

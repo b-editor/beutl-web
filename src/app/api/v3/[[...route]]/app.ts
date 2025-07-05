@@ -1,5 +1,5 @@
 import { apiErrorResponse } from "@/lib/api/error";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import SemVer from "semver";
@@ -32,6 +32,7 @@ const app = new Hono()
       prerelease,
     } = c.req.valid("query");
 
+    const prisma = await getDbAsync();
     const versions = (await prisma.appReleaseAsset.findMany({
       select: {
         version: true,

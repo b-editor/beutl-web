@@ -1,7 +1,7 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { createStripe } from "@/lib/stripe/config";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 
@@ -30,7 +30,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
-      const customer = await prisma.customer.findFirst({
+      const db = await getDbAsync();
+      const customer = await db.customer.findFirst({
         where: {
           stripeId: paymentIntent.customer,
         },
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      const pkg = await prisma.package.findFirst({
+      const pkg = await db.package.findFirst({
         where: {
           id: paymentIntent.metadata.packageId,
         },
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      await prisma.userPackage.create({
+      await db.userPackage.create({
         data: {
           userId: customer.userId,
           packageId: pkg.id,

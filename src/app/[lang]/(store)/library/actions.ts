@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { guessCurrency } from "@/lib/currency";
 
 type ListedPackage = {
@@ -19,8 +19,9 @@ type ListedPackage = {
 export async function retrievePackages(
   userId: string,
 ): Promise<ListedPackage[]> {
+  const db = await getDbAsync();
   const currency = await guessCurrency();
-  const tmp = await prisma.userPackage.findMany({
+  const tmp = await db.userPackage.findMany({
     where: {
       userId: userId,
       package: {

@@ -1,6 +1,6 @@
 import "server-only";
 import { Hono } from "hono";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { apiErrorResponse } from "@/lib/api/error";
 import { getUserId } from "@/lib/api/auth";
 import { guessCurrency } from "@/lib/currency";
@@ -27,8 +27,9 @@ const app = new Hono()
     const name = c.req.param("name");
     const currentUserId = await getUserId(c);
     const currency = await guessCurrency();
+    const db = await getDbAsync();
     const userId = (
-      await prisma.profile.findFirst({
+      await db.profile.findFirst({
         where: {
           userName: {
             equals: name,

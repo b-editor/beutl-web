@@ -1,7 +1,7 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
-import { prisma } from "@/prisma";
+import { getDb } from "@/prisma";
 import { notFound, redirect } from "next/navigation";
 
 export default async function Page(props: { params: Promise<{ name: string; lang: string }> }) {
@@ -14,7 +14,8 @@ export default async function Page(props: { params: Promise<{ name: string; lang
 
   const session = await authOrSignIn();
 
-  const pkg = await prisma.package.findFirst({
+  const db = getDb();
+  const pkg = await db.package.findFirst({
     where: {
       name: {
         equals: name,
@@ -43,11 +44,11 @@ export default async function Page(props: { params: Promise<{ name: string; lang
   }
 
   if (
-    !(await prisma.userPackage.findFirst({
+    !(await db.userPackage.findFirst({
       where: { userId: session.user.id, packageId: pkg.id },
     }))
   ) {
-    await prisma.userPackage.create({
+    await db.userPackage.create({
       data: {
         userId: session.user.id,
         packageId: pkg.id,

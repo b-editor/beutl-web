@@ -1,7 +1,7 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
@@ -59,7 +59,8 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     }
 
     if (validated.data.cancel) {
-      await prisma.confirmationToken.deleteMany({
+      const db = await getDbAsync();
+  await db.confirmationToken.deleteMany({
         where: {
           userId: session.user.id,
           purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
@@ -87,7 +88,8 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(user.email, token, lang);
-    const createToken = prisma.confirmationToken.create({
+    const db = await getDbAsync();
+    const createToken = db.confirmationToken.create({
       data: {
         token: await createHash(`${token}${secret}`),
         identifier: user.email,
