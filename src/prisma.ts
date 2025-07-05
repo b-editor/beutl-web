@@ -34,11 +34,3 @@ export const getDbAsync = async () => {
   const adapter = new PrismaPg({ connectionString, maxUses: 1 });
   return new PrismaClient({ adapter });
 };
-
-// Global client for development and migrations
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma || new PrismaClient();
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
