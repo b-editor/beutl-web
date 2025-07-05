@@ -2,7 +2,7 @@ import "server-only";
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import {
   type ListedPackage,
   packageOwned,
@@ -19,6 +19,7 @@ const searchQuerySchema = z.object({
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
+  const prisma = await getDbAsync();
   const profile = await prisma.profile.findFirst({
     where: {
       userId: pkg.userId,

@@ -1,6 +1,6 @@
 import "server-only";
 import { Hono } from "hono";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { z } from "zod";
@@ -16,6 +16,7 @@ const acquireSchema = z.object({
 
 async function createResponse(pkgId: string, userId: string | null) {
   const currency = await guessCurrency();
+  const prisma = await getDbAsync();
   const pkg = await prisma.package.findFirst({
     where: {
       id: pkgId,
@@ -151,6 +152,7 @@ const app = new Hono()
       });
     }
 
+    const prisma = await getDbAsync();
     const user = await prisma.user.findUnique({
       where: {
         id: userId,
@@ -214,6 +216,7 @@ const app = new Hono()
       });
     }
 
+    const prisma = await getDbAsync();
     const packages = await prisma.userPackage.findMany({
       where: {
         userId: userId,
@@ -240,6 +243,7 @@ const app = new Hono()
       });
     }
 
+    const prisma = await getDbAsync();
     await prisma.userPackage.deleteMany({
       where: {
         userId: userId,

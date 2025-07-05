@@ -1,11 +1,12 @@
 import "server-only";
 import { Hono } from "hono";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { getContentUrl } from "@/lib/db/file";
 
 async function findFile(id: string) {
+  const prisma = await getDbAsync();
   return await prisma.file.findFirst({
     where: {
       id: id,

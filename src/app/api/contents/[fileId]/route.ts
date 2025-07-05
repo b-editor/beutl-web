@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
-import { prisma } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -12,6 +12,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   } = params;
 
   const session = await auth();
+  const prisma = await getDbAsync();
   const file = await prisma.file.findFirst({
     where: {
       id: fileId,
