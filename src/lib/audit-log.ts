@@ -49,6 +49,7 @@ export async function addAuditLog({
 
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
   const userAgent = h.get("User-Agent");
+  const port = h.get("Mod-CF-Client-Port");
   await db.auditLog.create({
     data: {
       userId,
@@ -56,6 +57,7 @@ export async function addAuditLog({
       details,
       ipAddress,
       userAgent,
+      port,
     },
   });
 }
