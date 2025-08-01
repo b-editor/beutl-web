@@ -17,7 +17,7 @@ importers:
         version: 0.38.0(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)
       '@auth/prisma-adapter':
         specifier: 2.10.0
-        version: 2.10.0(@prisma/client@6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3))(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)
+        version: 2.10.0(@prisma/client@6.11.1(prisma@6.11.1(typescript@5.9.2))(typescript@5.9.2))(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)
       '@hono/zod-validator':
         specifier: ^0.4.3
         version: 0.4.3(hono@4.7.5)(zod@3.24.2)
@@ -32,7 +32,7 @@ importers:
         version: 6.11.1
       '@prisma/client':
         specifier: ^6.11.1
-        version: 6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3)
+        version: 6.11.1(prisma@6.11.1(typescript@5.9.2))(typescript@5.9.2)
       '@radix-ui/react-alert-dialog':
         specifier: ^1.1.6
         version: 1.1.6(@types/react-dom@19.1.1(@types/react@19.1.0))(@types/react@19.1.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -110,7 +110,7 @@ importers:
         version: 4.7.5
       i18next:
         specifier: ^24.2.3
-        version: 24.2.3(typescript@5.7.3)
+        version: 24.2.3(typescript@5.9.2)
       i18next-resources-to-backend:
         specifier: ^1.2.1
         version: 1.2.1
@@ -146,7 +146,7 @@ importers:
         version: 7.55.0(react@19.1.0)
       react-i18next:
         specifier: ^15.4.1
-        version: 15.4.1(i18next@24.2.3(typescript@5.7.3))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+        version: 15.4.1(i18next@24.2.3(typescript@5.9.2))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       semver:
         specifier: ^7.7.1
         version: 7.7.1
@@ -167,7 +167,7 @@ importers:
         version: 3.24.2
       zod-i18n-map:
         specifier: ^2.27.0
-        version: 2.27.0(i18next@24.2.3(typescript@5.7.3))(zod@3.24.2)
+        version: 2.27.0(i18next@24.2.3(typescript@5.9.2))(zod@3.24.2)
     devDependencies:
       '@biomejs/biome':
         specifier: 1.9.4
@@ -201,19 +201,19 @@ importers:
         version: 9.30.1(jiti@2.4.2)
       eslint-config-next:
         specifier: 15.2.4
-        version: 15.2.4(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+        version: 15.2.4(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       postcss:
         specifier: ^8.5.3
         version: 8.5.3
       prisma:
         specifier: ^6.11.1
-        version: 6.11.1(typescript@5.7.3)
+        version: 6.11.1(typescript@5.9.2)
       tailwindcss:
         specifier: ^4.1.2
         version: 4.1.2
       typescript:
-        specifier: ^5.7.3
-        version: 5.7.3
+        specifier: ^5.9.2
+        version: 5.9.2
       wrangler:
         specifier: ^4.16.1
         version: 4.16.1
@@ -1241,20 +1241,20 @@ packages:
   '@panva/hkdf@1.2.1':
     resolution: {integrity: sha512-6oclG6Y3PiDFcoyk8srjLfVKyMfVCKJ27JwNPViuXziFpmdz+MZnZN/aKY0JGXgYuO/VghU0jcOAZgWXZ1Dmrw==}
 
-  '@peculiar/asn1-android@2.3.16':
-    resolution: {integrity: sha512-a1viIv3bIahXNssrOIkXZIlI2ePpZaNmR30d4aBL99mu2rO+mT9D6zBsp7H6eROWGtmwv0Ionp5olJurIo09dw==}
+  '@peculiar/asn1-android@2.4.0':
+    resolution: {integrity: sha512-YFueREq97CLslZZBI8dKzis7jMfEHSLxM+nr0Zdx1POiXFLjqqwoY5s0F1UimdBiEw/iKlHey2m56MRDv7Jtyg==}
 
-  '@peculiar/asn1-ecc@2.3.15':
-    resolution: {integrity: sha512-/HtR91dvgog7z/WhCVdxZJ/jitJuIu8iTqiyWVgRE9Ac5imt2sT/E4obqIVGKQw7PIy+X6i8lVBoT6wC73XUgA==}
+  '@peculiar/asn1-ecc@2.4.0':
+    resolution: {integrity: sha512-fJiYUBCJBDkjh347zZe5H81BdJ0+OGIg0X9z06v8xXUoql3MFeENUX0JsjCaVaU9A0L85PefLPGYkIoGpTnXLQ==}
 
-  '@peculiar/asn1-rsa@2.3.15':
-    resolution: {integrity: sha512-p6hsanvPhexRtYSOHihLvUUgrJ8y0FtOM97N5UEpC+VifFYyZa0iZ5cXjTkZoDwxJ/TTJ1IJo3HVTB2JJTpXvg==}
+  '@peculiar/asn1-rsa@2.4.0':
+    resolution: {integrity: sha512-6PP75voaEnOSlWR9sD25iCQyLgFZHXbmxvUfnnDcfL6Zh5h2iHW38+bve4LfH7a60x7fkhZZNmiYqAlAff9Img==}
 
-  '@peculiar/asn1-schema@2.3.15':
-    resolution: {integrity: sha512-QPeD8UA8axQREpgR5UTAfu2mqQmm97oUqahDtNdBcfj3qAnoXzFdQW+aNf/tD2WVXF8Fhmftxoj0eMIT++gX2w==}
+  '@peculiar/asn1-schema@2.4.0':
+    resolution: {integrity: sha512-umbembjIWOrPSOzEGG5vxFLkeM8kzIhLkgigtsOrfLKnuzxWxejAcUX+q/SoZCdemlODOcr5WiYa7+dIEzBXZQ==}
 
-  '@peculiar/asn1-x509@2.3.15':
-    resolution: {integrity: sha512-0dK5xqTqSLaxv1FHXIcd4Q/BZNuopg+u1l23hT9rOmQ1g4dNtw0g/RnEi+TboB0gOwGtrWn269v27cMgchFIIg==}
+  '@peculiar/asn1-x509@2.4.0':
+    resolution: {integrity: sha512-F7mIZY2Eao2TaoVqigGMLv+NDdpwuBKU1fucHPONfzaBS4JXXCNCmfO0Z3dsy7JzKGqtDcYC1mr9JjaZQZNiuw==}
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
@@ -4330,8 +4330,8 @@ packages:
     resolution: {integrity: sha512-3KS2b+kL7fsuk/eJZ7EQdnEmQoaho/r6KUef7hxvltNA5DR8NAUM+8wJMbJyZ4G9/7i3v5zPBIMN5aybAh2/Jg==}
     engines: {node: '>= 0.4'}
 
-  typescript@5.7.3:
-    resolution: {integrity: sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw==}
+  typescript@5.9.2:
+    resolution: {integrity: sha512-CWBzXQrc/qOkhidw1OzBTQuYRbfyxDXJMVJ1XNwUHGROVmuaeiEm3OslpZ1RV96d7SKKjZKrSJu3+t/xlw3R9A==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -4613,10 +4613,10 @@ snapshots:
       '@simplewebauthn/server': 9.0.3
       nodemailer: 6.9.15
 
-  '@auth/prisma-adapter@2.10.0(@prisma/client@6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3))(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)':
+  '@auth/prisma-adapter@2.10.0(@prisma/client@6.11.1(prisma@6.11.1(typescript@5.9.2))(typescript@5.9.2))(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)':
     dependencies:
       '@auth/core': 0.40.0(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)
-      '@prisma/client': 6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3)
+      '@prisma/client': 6.11.1(prisma@6.11.1(typescript@5.9.2))(typescript@5.9.2)
     transitivePeerDependencies:
       - '@simplewebauthn/browser'
       - '@simplewebauthn/server'
@@ -6087,39 +6087,39 @@ snapshots:
 
   '@panva/hkdf@1.2.1': {}
 
-  '@peculiar/asn1-android@2.3.16':
+  '@peculiar/asn1-android@2.4.0':
     dependencies:
-      '@peculiar/asn1-schema': 2.3.15
+      '@peculiar/asn1-schema': 2.4.0
       asn1js: 3.0.6
       tslib: 2.8.1
     optional: true
 
-  '@peculiar/asn1-ecc@2.3.15':
+  '@peculiar/asn1-ecc@2.4.0':
     dependencies:
-      '@peculiar/asn1-schema': 2.3.15
-      '@peculiar/asn1-x509': 2.3.15
+      '@peculiar/asn1-schema': 2.4.0
+      '@peculiar/asn1-x509': 2.4.0
       asn1js: 3.0.6
       tslib: 2.8.1
     optional: true
 
-  '@peculiar/asn1-rsa@2.3.15':
+  '@peculiar/asn1-rsa@2.4.0':
     dependencies:
-      '@peculiar/asn1-schema': 2.3.15
-      '@peculiar/asn1-x509': 2.3.15
+      '@peculiar/asn1-schema': 2.4.0
+      '@peculiar/asn1-x509': 2.4.0
       asn1js: 3.0.6
       tslib: 2.8.1
     optional: true
 
-  '@peculiar/asn1-schema@2.3.15':
+  '@peculiar/asn1-schema@2.4.0':
     dependencies:
       asn1js: 3.0.6
       pvtsutils: 1.3.6
       tslib: 2.8.1
     optional: true
 
-  '@peculiar/asn1-x509@2.3.15':
+  '@peculiar/asn1-x509@2.4.0':
     dependencies:
-      '@peculiar/asn1-schema': 2.3.15
+      '@peculiar/asn1-schema': 2.4.0
       asn1js: 3.0.6
       pvtsutils: 1.3.6
       tslib: 2.8.1
@@ -6135,10 +6135,10 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
 
-  '@prisma/client@6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3)':
+  '@prisma/client@6.11.1(prisma@6.11.1(typescript@5.9.2))(typescript@5.9.2)':
     optionalDependencies:
-      prisma: 6.11.1(typescript@5.7.3)
-      typescript: 5.7.3
+      prisma: 6.11.1(typescript@5.9.2)
+      typescript: 5.9.2
 
   '@prisma/config@6.11.1':
     dependencies:
@@ -6659,11 +6659,11 @@ snapshots:
     dependencies:
       '@hexagon/base64': 1.1.28
       '@levischuck/tiny-cbor': 0.2.11
-      '@peculiar/asn1-android': 2.3.16
-      '@peculiar/asn1-ecc': 2.3.15
-      '@peculiar/asn1-rsa': 2.3.15
-      '@peculiar/asn1-schema': 2.3.15
-      '@peculiar/asn1-x509': 2.3.15
+      '@peculiar/asn1-android': 2.4.0
+      '@peculiar/asn1-ecc': 2.4.0
+      '@peculiar/asn1-rsa': 2.4.0
+      '@peculiar/asn1-schema': 2.4.0
+      '@peculiar/asn1-x509': 2.4.0
       '@simplewebauthn/types': 9.0.1
       cross-fetch: 4.1.0
     transitivePeerDependencies:
@@ -7367,13 +7367,13 @@ snapshots:
 
   '@types/uuid@9.0.8': {}
 
-  '@typescript-eslint/eslint-plugin@7.2.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)':
+  '@typescript-eslint/eslint-plugin@7.2.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)':
     dependencies:
       '@eslint-community/regexpp': 4.12.1
-      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       '@typescript-eslint/scope-manager': 7.2.0
-      '@typescript-eslint/type-utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
-      '@typescript-eslint/utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/type-utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
+      '@typescript-eslint/utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       '@typescript-eslint/visitor-keys': 7.2.0
       debug: 4.4.1
       eslint: 9.30.1(jiti@2.4.2)
@@ -7381,22 +7381,22 @@ snapshots:
       ignore: 5.3.2
       natural-compare: 1.4.0
       semver: 7.7.1
-      ts-api-utils: 1.4.3(typescript@5.7.3)
+      ts-api-utils: 1.4.3(typescript@5.9.2)
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)':
+  '@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)':
     dependencies:
       '@typescript-eslint/scope-manager': 7.2.0
       '@typescript-eslint/types': 7.2.0
-      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.7.3)
+      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.9.2)
       '@typescript-eslint/visitor-keys': 7.2.0
       debug: 4.4.1
       eslint: 9.30.1(jiti@2.4.2)
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
     transitivePeerDependencies:
       - supports-color
 
@@ -7405,21 +7405,21 @@ snapshots:
       '@typescript-eslint/types': 7.2.0
       '@typescript-eslint/visitor-keys': 7.2.0
 
-  '@typescript-eslint/type-utils@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)':
+  '@typescript-eslint/type-utils@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)':
     dependencies:
-      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.7.3)
-      '@typescript-eslint/utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.9.2)
+      '@typescript-eslint/utils': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       debug: 4.4.1
       eslint: 9.30.1(jiti@2.4.2)
-      ts-api-utils: 1.4.3(typescript@5.7.3)
+      ts-api-utils: 1.4.3(typescript@5.9.2)
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
     transitivePeerDependencies:
       - supports-color
 
   '@typescript-eslint/types@7.2.0': {}
 
-  '@typescript-eslint/typescript-estree@7.2.0(typescript@5.7.3)':
+  '@typescript-eslint/typescript-estree@7.2.0(typescript@5.9.2)':
     dependencies:
       '@typescript-eslint/types': 7.2.0
       '@typescript-eslint/visitor-keys': 7.2.0
@@ -7428,20 +7428,20 @@ snapshots:
       is-glob: 4.0.3
       minimatch: 9.0.3
       semver: 7.7.1
-      ts-api-utils: 1.4.3(typescript@5.7.3)
+      ts-api-utils: 1.4.3(typescript@5.9.2)
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/utils@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)':
+  '@typescript-eslint/utils@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)':
     dependencies:
       '@eslint-community/eslint-utils': 4.7.0(eslint@9.30.1(jiti@2.4.2))
       '@types/json-schema': 7.0.15
       '@types/semver': 7.7.0
       '@typescript-eslint/scope-manager': 7.2.0
       '@typescript-eslint/types': 7.2.0
-      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.7.3)
+      '@typescript-eslint/typescript-estree': 7.2.0(typescript@5.9.2)
       eslint: 9.30.1(jiti@2.4.2)
       semver: 7.7.1
     transitivePeerDependencies:
@@ -7972,21 +7972,21 @@ snapshots:
 
   escape-string-regexp@4.0.0: {}
 
-  eslint-config-next@15.2.4(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3):
+  eslint-config-next@15.2.4(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2):
     dependencies:
       '@next/eslint-plugin-next': 15.2.4
       '@rushstack/eslint-patch': 1.10.5
-      '@typescript-eslint/eslint-plugin': 7.2.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
-      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/eslint-plugin': 7.2.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
+      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       eslint: 9.30.1(jiti@2.4.2)
       eslint-import-resolver-node: 0.3.9
       eslint-import-resolver-typescript: 3.7.0(eslint-plugin-import@2.31.0)(eslint@9.30.1(jiti@2.4.2))
-      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
+      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-react: 7.37.4(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-react-hooks: 5.2.0(eslint@9.30.1(jiti@2.4.2))
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
     transitivePeerDependencies:
       - eslint-import-resolver-webpack
       - eslint-plugin-import-x
@@ -8012,22 +8012,22 @@ snapshots:
       is-glob: 4.0.3
       stable-hash: 0.0.4
     optionalDependencies:
-      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
+      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-module-utils@2.12.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2)):
+  eslint-module-utils@2.12.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2)):
     dependencies:
       debug: 3.2.7
     optionalDependencies:
-      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
       eslint: 9.30.1(jiti@2.4.2)
       eslint-import-resolver-node: 0.3.9
       eslint-import-resolver-typescript: 3.7.0(eslint-plugin-import@2.31.0)(eslint@9.30.1(jiti@2.4.2))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2)):
+  eslint-plugin-import@2.31.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.8
@@ -8038,7 +8038,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 9.30.1(jiti@2.4.2)
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
+      eslint-module-utils: 2.12.0(@typescript-eslint/parser@7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.7.0)(eslint@9.30.1(jiti@2.4.2))
       hasown: 2.0.2
       is-core-module: 2.16.1
       is-glob: 4.0.3
@@ -8050,7 +8050,7 @@ snapshots:
       string.prototype.trimend: 1.0.9
       tsconfig-paths: 3.15.0
     optionalDependencies:
-      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.7.3)
+      '@typescript-eslint/parser': 7.2.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.9.2)
     transitivePeerDependencies:
       - eslint-import-resolver-typescript
       - eslint-import-resolver-webpack
@@ -8458,11 +8458,11 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.26.7
 
-  i18next@24.2.3(typescript@5.7.3):
+  i18next@24.2.3(typescript@5.9.2):
     dependencies:
       '@babel/runtime': 7.27.0
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
 
   iconv-lite@0.6.3:
     dependencies:
@@ -9119,12 +9119,12 @@ snapshots:
 
   printable-characters@1.0.42: {}
 
-  prisma@6.11.1(typescript@5.7.3):
+  prisma@6.11.1(typescript@5.9.2):
     dependencies:
       '@prisma/config': 6.11.1
       '@prisma/engines': 6.11.1
     optionalDependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
 
   prop-types@15.8.1:
     dependencies:
@@ -9175,11 +9175,11 @@ snapshots:
     dependencies:
       react: 19.1.0
 
-  react-i18next@15.4.1(i18next@24.2.3(typescript@5.7.3))(react-dom@19.1.0(react@19.1.0))(react@19.1.0):
+  react-i18next@15.4.1(i18next@24.2.3(typescript@5.9.2))(react-dom@19.1.0(react@19.1.0))(react@19.1.0):
     dependencies:
       '@babel/runtime': 7.26.7
       html-parse-stringify: 3.0.1
-      i18next: 24.2.3(typescript@5.7.3)
+      i18next: 24.2.3(typescript@5.9.2)
       react: 19.1.0
     optionalDependencies:
       react-dom: 19.1.0(react@19.1.0)
@@ -9582,9 +9582,9 @@ snapshots:
   tr46@0.0.3:
     optional: true
 
-  ts-api-utils@1.4.3(typescript@5.7.3):
+  ts-api-utils@1.4.3(typescript@5.9.2):
     dependencies:
-      typescript: 5.7.3
+      typescript: 5.9.2
 
   ts-tqdm@0.8.6: {}
 
@@ -9642,7 +9642,7 @@ snapshots:
       possible-typed-array-names: 1.0.0
       reflect.getprototypeof: 1.0.10
 
-  typescript@5.7.3: {}
+  typescript@5.9.2: {}
 
   ufo@1.6.1: {}
 
@@ -9842,9 +9842,9 @@ snapshots:
       mustache: 4.2.0
       stacktracey: 2.1.8
 
-  zod-i18n-map@2.27.0(i18next@24.2.3(typescript@5.7.3))(zod@3.24.2):
+  zod-i18n-map@2.27.0(i18next@24.2.3(typescript@5.9.2))(zod@3.24.2):
     dependencies:
-      i18next: 24.2.3(typescript@5.7.3)
+      i18next: 24.2.3(typescript@5.9.2)
       zod: 3.24.2
 
   zod@3.22.3: {}
