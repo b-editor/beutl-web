@@ -26,8 +26,9 @@ export async function getUserProfile(query: Prisma.ProfileWhereInput) {
     name: profile.userName,
     displayName: profile.displayName || profile.userName,
     bio: profile.bio,
-    iconId: profile.iconFileId,
-    iconUrl: await getContentUrl(profile.iconFileId),
+    // アプリ側でnullだと不具合が起きるため、ダミーのUUIDを入れておく
+    iconId: profile.iconFileId || "00000000-0000-0000-0000-000000000000",
+    iconUrl: await getContentUrl(profile.iconFileId) || "https://beutl.beditor.net/img/icon-placeholder.png",
   };
 }
 
