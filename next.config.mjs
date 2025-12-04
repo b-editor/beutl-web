@@ -26,5 +26,5 @@ const withBundleAnalyzer = analyzer({
 
 export default withBundleAnalyzer(nextConfig);
 
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
-initOpenNextCloudflareForDev();
+// import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+// initOpenNextCloudflareForDev();
