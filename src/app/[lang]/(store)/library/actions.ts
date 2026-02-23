@@ -51,7 +51,7 @@ export async function retrievePackages(
             },
           },
           packagePricing: {
-            where: {
+            where: currency ? {
               OR: [
                 {
                   currency: {
@@ -63,6 +63,8 @@ export async function retrievePackages(
                   fallback: true,
                 },
               ],
+            } : {
+              fallback: true,
             },
             select: {
               price: true,

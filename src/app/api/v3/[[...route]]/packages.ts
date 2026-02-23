@@ -18,7 +18,7 @@ const app = new Hono()
         name: name,
       },
       userId: userId ?? undefined,
-      currency,
+      currency: currency ?? undefined,
     });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
@@ -32,7 +32,7 @@ const app = new Hono()
     return c.json(
       await mapPackage({
         userId: userId ?? undefined,
-        currency,
+        currency: currency ?? undefined,
         pkg,
       }),
     );

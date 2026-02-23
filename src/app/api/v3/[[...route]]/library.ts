@@ -43,7 +43,7 @@ async function createResponse(pkgId: string, userId: string | null) {
         },
       },
       packagePricing: {
-        where: {
+        where: currency ? {
           OR: [
             {
               currency: {
@@ -55,6 +55,8 @@ async function createResponse(pkgId: string, userId: string | null) {
               fallback: true,
             },
           ],
+        } : {
+          fallback: true,
         },
         select: {
           price: true,

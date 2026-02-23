@@ -59,7 +59,7 @@ export async function retrievePublishedPackages(
         },
       },
       packagePricing: {
-        where: {
+        where: currency ? {
           OR: [
             {
               currency: {
@@ -71,6 +71,8 @@ export async function retrievePublishedPackages(
               fallback: true,
             },
           ],
+        } : {
+          fallback: true,
         },
         select: {
           price: true,

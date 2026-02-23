@@ -50,7 +50,7 @@ const app = new Hono()
         published: true,
       },
       userId: currentUserId ?? undefined,
-      currency,
+      currency: currency ?? undefined,
     });
 
     return c.json(
@@ -59,7 +59,7 @@ const app = new Hono()
           async (pkg) =>
             await mapPackage({
               userId: currentUserId ?? undefined,
-              currency,
+              currency: currency ?? undefined,
               pkg,
             }),
         ),
