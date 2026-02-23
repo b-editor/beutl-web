@@ -16,7 +16,7 @@
   "dependencies": {
     "@auth/core": "^0.38.0",
     "@auth/prisma-adapter": "2.10.0",
-    "@hono/zod-validator": "^0.4.3",
+    "@hono/zod-validator": "^0.7.6",
     "@hookform/resolvers": "^5.0.1",
     "@opennextjs/cloudflare": "^1.16.6",
     "@prisma/adapter-pg": "^7.4.1",
@@ -44,7 +44,7 @@
     "clsx": "^2.1.1",
     "country-to-currency": "^2.0.2",
     "embla-carousel-react": "^8.5.2",
-    "hono": "^4.10.2",
+    "hono": "^4.12.2",
     "i18next": "^25.8.13",
     "i18next-resources-to-backend": "^1.2.1",
     "jose": "^6.0.10",
