@@ -1,5 +1,6 @@
 export const defaultLanguage = "ja";
 export const availableLanguages = [defaultLanguage, "en"];
+export type AvailableLanguage = typeof availableLanguages[number];
 export const namespaces = [
   "translation",
   "main",
@@ -11,7 +12,6 @@ export const namespaces = [
   "auth",
   "authjs",
   "developer",
-  "zod",
   "api-errors",
 ];
 

@@ -20,7 +20,7 @@ importers:
         version: 2.10.0(@prisma/client@6.11.1(prisma@6.11.1(typescript@5.7.3))(typescript@5.7.3))(@simplewebauthn/browser@9.0.1)(@simplewebauthn/server@9.0.3)(nodemailer@6.9.15)
       '@hono/zod-validator':
         specifier: ^0.4.3
-        version: 0.4.3(hono@4.10.2)(zod@3.24.2)
+        version: 0.4.3(hono@4.10.2)(zod@4.3.6)
       '@hookform/resolvers':
         specifier: ^5.0.1
         version: 5.0.1(react-hook-form@7.55.0(react@19.1.0))
@@ -160,11 +160,8 @@ importers:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.1.1(@types/react@19.1.0))(@types/react@19.1.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       zod:
-        specifier: ^3.24.2
-        version: 3.24.2
-      zod-i18n-map:
-        specifier: ^2.27.0
-        version: 2.27.0(i18next@24.2.3(typescript@5.7.3))(zod@3.24.2)
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@biomejs/biome':
         specifier: 1.9.4
@@ -4946,14 +4943,8 @@ packages:
   youch@4.1.0-beta.10:
     resolution: {integrity: sha512-rLfVLB4FgQneDr0dv1oddCVZmKjcJ6yX6mS4pU82Mq/Dt9a3cLZQ62pDBL4AUO+uVrCvtWz3ZFUL2HFAFJ/BXQ==}
 
-  zod-i18n-map@2.27.0:
-    resolution: {integrity: sha512-ORu9XpiVh3WDiEUs5Cr9siGgnpeODoBsTIgSD8sQCH9B//f9KowlzqHUEdPYb3vFonaSH8yPvPCOFM4niwp3Sg==}
-    peerDependencies:
-      i18next: '>=21.3.0'
-      zod: '>=3.17.0'
-
-  zod@3.24.2:
-    resolution: {integrity: sha512-lY7CDW43ECgW9u1TcT3IoXHflywfVqDYze4waEz812jR/bZ8FHDsl7pFQoSZTz5N+2NqRXs8GBwnAwo3ZNxqhQ==}
+  zod@4.3.6:
+    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
 snapshots:
 
@@ -6099,10 +6090,10 @@ snapshots:
   '@hexagon/base64@1.1.28':
     optional: true
 
-  '@hono/zod-validator@0.4.3(hono@4.10.2)(zod@3.24.2)':
+  '@hono/zod-validator@0.4.3(hono@4.10.2)(zod@4.3.6)':
     dependencies:
       hono: 4.10.2
-      zod: 3.24.2
+      zod: 4.3.6
 
   '@hookform/resolvers@5.0.1(react-hook-form@7.55.0(react@19.1.0))':
     dependencies:
@@ -10332,9 +10323,4 @@ snapshots:
       cookie: 1.0.2
       youch-core: 0.3.3
 
-  zod-i18n-map@2.27.0(i18next@24.2.3(typescript@5.7.3))(zod@3.24.2):
-    dependencies:
-      i18next: 24.2.3(typescript@5.7.3)
-      zod: 3.24.2
-
-  zod@3.24.2: {}
+  zod@4.3.6: {}
