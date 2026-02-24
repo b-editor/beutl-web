@@ -50,7 +50,7 @@
     "jose": "^6.0.10",
     "lucide-react": "^0.575.0",
     "negotiator": "^1.0.0",
-    "next": "15.2.6",
+    "next": "15.5.12",
     "next-auth": "5.0.0-beta.25",
     "next-nprogress-bar": "^2.4.7",
     "pg": "^8.18.0",
@@ -67,7 +67,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
-    "@next/bundle-analyzer": "15.4.0-canary.51",
+    "@next/bundle-analyzer": "15.5.12",
     "@tailwindcss/postcss": "^4.1.11",
     "@types/negotiator": "^0.6.3",
     "@types/node": "^22.14.0",
