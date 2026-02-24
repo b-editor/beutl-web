@@ -31,7 +31,6 @@ export default async function NavBar({ lang }: { lang: string }) {
           <h1 className="font-semibold text-xl mt-1">Beutl</h1>
         </Link>
       </div>
-
       <div>
         <NavigationMenuPrimitive.Root
           className={cn(
@@ -39,30 +38,23 @@ export default async function NavBar({ lang }: { lang: string }) {
           )}
         >
           <NavigationMenuList>
-            <Link
-              href={`https://docs.beutl.beditor.net/${lang}`}
-              prefetch={false}
-              legacyBehavior
-              passHref
+
+            <NavigationMenuLink
+              asChild
+              className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
             >
-              <NavigationMenuLink
-                className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
-              >
+              <Link href={`https://docs.beutl.beditor.net/${lang}`} prefetch={false}>
                 {t("docs")}
-              </NavigationMenuLink>
-            </Link>
-            <Link
-              href={`/${lang}/store`}
-              legacyBehavior
-              passHref
-              className="max-sm:hidden"
+              </Link>
+            </NavigationMenuLink>
+            <NavigationMenuLink
+              asChild
+              className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
             >
-              <NavigationMenuLink
-                className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
-              >
+              <Link href={`/${lang}/store`}>
                 {t("store")}
-              </NavigationMenuLink>
-            </Link>
+              </Link>
+            </NavigationMenuLink>
             {session?.user ? (
               <NavigationMenuItem>
                 <NavigationMenuPrimitive.Trigger
@@ -110,13 +102,15 @@ export default async function NavBar({ lang }: { lang: string }) {
                 </NavigationMenuContent>
               </NavigationMenuItem>
             ) : (
-              <Link href={`/${lang}/account`} legacyBehavior passHref>
-                <NavigationMenuLink
-                  className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}
-                >
+
+              <NavigationMenuLink
+                className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}
+                asChild
+              >
+                <Link href={`/${lang}/account`}>
                   <CircleUser className="w-5 h-5" />
-                </NavigationMenuLink>
-              </Link>
+                </Link>
+              </NavigationMenuLink>
             )}
           </NavigationMenuList>
 

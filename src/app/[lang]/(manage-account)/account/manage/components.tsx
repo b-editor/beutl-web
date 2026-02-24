@@ -18,11 +18,7 @@ export function Navigation({ lang }: { lang: string }) {
       className="flex-col items-stretch w-full md:min-w-72"
       value={slug}
     >
-      <Link
-        href={`/${lang}/account/manage/profile`}
-        passHref
-        className="contents"
-      >
+      <Link href={`/${lang}/account/manage/profile`} className="contents">
         <ToggleGroupItem
           value="profile"
           aria-label="Profile"
@@ -32,11 +28,7 @@ export function Navigation({ lang }: { lang: string }) {
           {t("account:profile.title")}
         </ToggleGroupItem>
       </Link>
-      <Link
-        href={`/${lang}/account/manage/email`}
-        passHref
-        className="contents"
-      >
+      <Link href={`/${lang}/account/manage/email`} className="contents">
         <ToggleGroupItem
           value="email"
           aria-label="Email Address"
@@ -46,11 +38,7 @@ export function Navigation({ lang }: { lang: string }) {
           {t("account:email.title")}
         </ToggleGroupItem>
       </Link>
-      <Link
-        href={`/${lang}/account/manage/billing`}
-        passHref
-        className="contents"
-      >
+      <Link href={`/${lang}/account/manage/billing`} className="contents">
         <ToggleGroupItem
           value="billing"
           aria-label="Billing Settings"
@@ -60,11 +48,7 @@ export function Navigation({ lang }: { lang: string }) {
           {t("account:billing.title")}
         </ToggleGroupItem>
       </Link>
-      <Link
-        href={`/${lang}/account/manage/security`}
-        passHref
-        className="contents"
-      >
+      <Link href={`/${lang}/account/manage/security`} className="contents">
         <ToggleGroupItem
           value="security"
           aria-label="Security Settings"
@@ -74,11 +58,7 @@ export function Navigation({ lang }: { lang: string }) {
           {t("account:security.title")}
         </ToggleGroupItem>
       </Link>
-      <Link
-        href={`/${lang}/account/manage/personal-data`}
-        passHref
-        className="contents"
-      >
+      <Link href={`/${lang}/account/manage/personal-data`} className="contents">
         <ToggleGroupItem
           value="personal-data"
           aria-label="Personal Data"

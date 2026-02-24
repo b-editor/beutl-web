@@ -44,9 +44,11 @@ export default async function Layout(
             <UserCircle className="w-12 h-12" />
             <span>{session.user?.name ?? session.user?.email}</span>
           </div>
-          <Link href="/account/sign-out" legacyBehavior passHref>
-            <Button variant="outline">{t("signOut")}</Button>
-          </Link>
+          <Button variant="outline" asChild>
+            <Link href="/account/sign-out">
+              {t("signOut")}
+            </Link>
+          </Button>
         </div>
         <div className="flex flex-col md:grid md:grid-cols-[max-content_1fr] gap-6 items-start">
           <Navigation lang={lang} />
