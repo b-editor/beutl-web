@@ -2,7 +2,7 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
-export async function updateAuthenticatorUsedAt({
+export async function updatePasskeyUsedAt({
   credentialID,
   usedAt,
   prisma,
@@ -12,7 +12,7 @@ export async function updateAuthenticatorUsedAt({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
-  await db.authenticator.update({
+  await db.passkey.update({
     where: {
       credentialID,
     },
@@ -22,7 +22,7 @@ export async function updateAuthenticatorUsedAt({
   });
 }
 
-export async function deleteAuthenticator({
+export async function deletePasskey({
   credentialID,
   userId,
   prisma,
@@ -32,17 +32,15 @@ export async function deleteAuthenticator({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
-  await db.authenticator.delete({
+  await db.passkey.delete({
     where: {
-      userId_credentialID: {
-        userId,
-        credentialID,
-      },
+      credentialID,
+      userId,
     },
   });
 }
 
-export async function updateAuthenticatorName({
+export async function updatePasskeyName({
   credentialID,
   userId,
   name,
@@ -54,12 +52,10 @@ export async function updateAuthenticatorName({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
-  await db.authenticator.update({
+  await db.passkey.update({
     where: {
-      userId_credentialID: {
-        userId,
-        credentialID,
-      },
+      credentialID,
+      userId,
     },
     data: {
       name,
@@ -67,17 +63,41 @@ export async function updateAuthenticatorName({
   });
 }
 
-export async function findAuthenticatorByAccountId({
-  providerAccountId,
+export async function getPasskeysByUserId({
+  userId,
   prisma,
 }: {
-  providerAccountId: string;
+  userId: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
-  return await db.authenticator.findFirst({
+  return await db.passkey.findMany({
     where: {
-      providerAccountId,
+      userId,
+    },
+    select: {
+      id: true,
+      credentialID: true,
+      name: true,
+      deviceType: true,
+      backedUp: true,
+      createdAt: true,
+      usedAt: true,
+    },
+  });
+}
+
+export async function findPasskeyByCredentialId({
+  credentialID,
+  prisma,
+}: {
+  credentialID: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.passkey.findUnique({
+    where: {
+      credentialID,
     },
   });
 }

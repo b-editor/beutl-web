@@ -1,5 +1,6 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 export default async function Page(
   props: {
@@ -19,7 +20,7 @@ export default async function Page(
     returnUrl
   } = searchParams;
 
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(returnUrl)}`;
 
   if (!session?.user) {

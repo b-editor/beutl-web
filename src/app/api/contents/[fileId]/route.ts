@@ -1,8 +1,9 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { getDbAsync } from "@/prisma";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
+import { headers } from "next/headers";
 
 export async function GET(request: NextRequest, props: { params: Promise<{ fileId: string }> }) {
   const params = await props.params;
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
     fileId
   } = params;
 
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   const prisma = await getDbAsync();
   const file = await prisma.file.findFirst({
     where: {

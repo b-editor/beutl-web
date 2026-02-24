@@ -1,44 +1,51 @@
 import "server-only";
-import { auth } from "@/auth";
-import type { Session, User } from "next-auth";
+import { auth } from "@/lib/better-auth";
+import type { BetterAuthSession, BetterAuthUser } from "@/lib/better-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-export interface SafeUser extends User {
+export interface SafeUser extends BetterAuthUser {
   id: string;
 }
 
-export interface SafeSession extends Session {
+export interface SafeSession {
+  session: BetterAuthSession;
   user: SafeUser;
 }
 
+async function getSession() {
+  const headersList = await headers();
+  return auth.api.getSession({ headers: headersList });
+}
+
 export async function authOrSignIn(): Promise<SafeSession> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const result = await getSession();
+  if (!result?.user?.id) {
+    const headersList = await headers();
     redirect(
-      `/account/sign-in?returnUrl=${encodeURIComponent((await headers()).get("x-url") || "/")}`,
+      `/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`,
     );
   }
 
-  return session as SafeSession;
+  return result as SafeSession;
 }
 
 export async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const result = await getSession();
+  if (!result?.user?.id) {
     return { message: "Unauthenticated", success: false };
   }
 
-  return await fnc(session as SafeSession);
+  return await fnc(result as SafeSession);
 }
 
 export async function throwIfUnauth() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const result = await getSession();
+  if (!result?.user?.id) {
     throw new Error("Unauthenticated");
   }
 
-  return session as SafeSession;
+  return result as SafeSession;
 }

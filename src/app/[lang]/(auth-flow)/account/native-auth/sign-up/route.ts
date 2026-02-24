@@ -1,9 +1,11 @@
-import { auth, signOut } from "@/auth";
+import { getAuth } from "@/lib/better-auth";
 import { getLanguage } from "@/lib/lang-utils";
 import { type NextRequest, NextResponse } from "next/server";
+import { headers } from "next/headers";
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
+  const auth = await getAuth();
+  const session = await auth.api.getSession({ headers: await headers() });
   const returnUrl = request.nextUrl.searchParams.get("returnUrl") || "";
   const lang = await getLanguage();
 
@@ -11,9 +13,14 @@ export async function GET(request: NextRequest) {
   continueUrl.searchParams.set("returnUrl", returnUrl);
 
   if (session?.user) {
-    await signOut({
-      redirectTo: continueUrl.toString(),
+    // TODO: デバッグ必要
+    // Better Auth sign-out redirect
+    await auth.api.signOut({
+      headers: await headers(),
     });
+
+    // Clear cookies and redirect
+    return NextResponse.redirect(continueUrl.toString());
   }
 
   return NextResponse.redirect(continueUrl.toString());

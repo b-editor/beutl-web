@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { getDb } from "@/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -12,9 +12,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     lang
   } = params;
 
-  const session = await auth();
+  const headersList = await headers();
+  const session = await auth.api.getSession({ headers: headersList });
   if (!session?.user) {
-    const url = (await headers()).get("x-url") || `/${lang}`;
+    const url = headersList.get("x-url") || `/${lang}`;
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 

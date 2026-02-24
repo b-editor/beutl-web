@@ -1,8 +1,10 @@
 "use server";
 
-import { getTranslation, Translator, Zod } from "@/app/i18n/server";
-import { signIn } from "@/auth";
+import { getTranslation, type Zod } from "@/app/i18n/server";
+import { getAuth } from "@/lib/better-auth";
 import { getLanguage } from "@/lib/lang-utils";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 const emailSchema = (z: Zod) =>
   z.object({
@@ -17,39 +19,15 @@ type State = {
   message?: string;
 };
 
-export async function signUpAction(
+// サインアップはemailのみをサポート（OAuthは自動的にアカウント作成される）
+export async function signUpWithEmailAction(
   state: State,
   formData: FormData,
 ): Promise<State> {
-  const { t, z } = await getTranslation(await getLanguage());
-  const type = formData.get("type") as string;
+  const lang = await getLanguage();
+  const { t, z } = await getTranslation(lang);
+  const auth = await getAuth();
 
-  if (type === "email") {
-    return await signInWithEmail(formData, z);
-  }
-
-  if (type === "google" || type === "github") {
-    return await signInWithProvider(formData, t);
-  }
-
-  return { message: t("invalidRequest") };
-}
-
-async function signInWithProvider(
-  formData: FormData,
-  t: Translator,
-): Promise<State> {
-  const provider = formData.get("type") as string;
-  const returnUrl = formData.get("returnUrl") as string | undefined;
-  if (provider !== "google" && provider !== "github") {
-    return { message: t("invalidRequest") };
-  }
-
-  await signIn(provider, { redirectTo: returnUrl || `/${await getLanguage()}` });
-  return {};
-}
-
-async function signInWithEmail(formData: FormData, z: Zod): Promise<State> {
   const validationResult = emailSchema(z).safeParse(
     Object.fromEntries(formData.entries()),
   );
@@ -58,9 +36,20 @@ async function signInWithEmail(formData: FormData, z: Zod): Promise<State> {
   }
   const { email, returnUrl } = validationResult.data;
 
-  await signIn("resend", {
-    email,
-    redirectTo: returnUrl || `/${await getLanguage()}`,
-  });
-  return {};
+  // Better Auth magic link を送信
+  const response = await auth.api.signInMagicLink({
+      body: {
+        email: email,
+        callbackURL: returnUrl || `/${lang}`,
+        errorCallbackURL: "/account/error",
+      },
+      headers: await headers(),
+    });
+
+  if (!response.status) {
+    return { message: t("auth:errors.magicLink") };
+  }
+
+  // メール送信後、確認ページにリダイレクト
+  redirect(`/${lang}/account/verify-request`);
 }

@@ -13,27 +13,63 @@ import { Label } from "@/components/ui/label";
 import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
-import { signInAction } from "./actions";
+import { signInWithEmailAction } from "./actions";
 import SubmitButton from "@/components/submit-button";
-import type { SignInPageErrorParam } from "@auth/core/types";
 import { useState, useActionState } from "react";
-import { translateNextAuthError } from "@/lib/error-description";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { useToast } from "@/hooks/use-toast";
-import { signIn } from "next-auth/webauthn";
+import { authClient } from "@/lib/auth-client";
 import { useTranslation } from "@/app/i18n/client";
+import { useRouter } from "next/navigation";
 
 export default function Form({
   returnUrl,
-  error,
   lang,
-}: { returnUrl?: string; error?: SignInPageErrorParam; lang: string }) {
-  const [state, dispatch] = useActionState(signInAction, {});
+}: { returnUrl?: string; lang: string }) {
+  const [state, dispatch] = useActionState(signInWithEmailAction, {});
   const { t } = useTranslation(lang);
-  const authError = translateNextAuthError(t, error);
   const [passkeyVerifying, setPasskeyVerifying] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
+  const router = useRouter();
   const { toast } = useToast();
+
+  const handleOAuthSignIn = async (provider: "google" | "github") => {
+    setOauthLoading(provider);
+    try {
+      await authClient.signIn.social({
+        provider,
+        callbackURL: returnUrl || "/",
+      });
+    } catch {
+      toast({
+        title: t("error"),
+        description: t("auth:errors.oauth"),
+        variant: "destructive",
+      });
+      setOauthLoading(null);
+    }
+  };
+
+  const handlePasskeySignIn = async () => {
+    setPasskeyVerifying(true);
+    try {
+      const result = await authClient.signIn.passkey();
+      if (result?.error) {
+        throw new Error(result.error.message);
+      }
+      // Redirect after successful passkey sign-in
+      router.push(returnUrl || "/");
+    } catch {
+      toast({
+        title: t("error"),
+        description: t("auth:errors.passkey"),
+        variant: "destructive",
+      });
+    } finally {
+      setPasskeyVerifying(false);
+    }
+  };
 
   return (
     <form action={dispatch}>
@@ -68,21 +104,14 @@ export default function Form({
                     {state?.message}
                   </p>
                 )}
-                {authError && (
-                  <p className="text-sm font-medium text-destructive">
-                    {authError}
-                  </p>
-                )}
               </div>
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </CardContent>
             <CardFooter className="block">
               <SubmitButton
                 forceSpinner={passkeyVerifying}
-                disabled={passkeyVerifying}
+                disabled={passkeyVerifying || oauthLoading !== null}
                 className="w-full"
-                name="type"
-                value="email"
               >
                 {t("auth:signIn")}
               </SubmitButton>
@@ -101,10 +130,11 @@ export default function Form({
                   <SubmitButton
                     variant="outline"
                     className="p-2 w-full"
-                    name="type"
-                    value="google"
+                    type="button"
                     showSpinner={false}
-                    disabled={passkeyVerifying}
+                    forceSpinner={oauthLoading === "google"}
+                    disabled={passkeyVerifying || oauthLoading !== null}
+                    onClick={() => handleOAuthSignIn("google")}
                   >
                     <GoogleLogo />
                   </SubmitButton>
@@ -114,10 +144,11 @@ export default function Form({
                   <SubmitButton
                     variant="outline"
                     className="p-2 w-full"
-                    name="type"
-                    value="github"
+                    type="button"
                     showSpinner={false}
-                    disabled={passkeyVerifying}
+                    forceSpinner={oauthLoading === "github"}
+                    disabled={passkeyVerifying || oauthLoading !== null}
+                    onClick={() => handleOAuthSignIn("github")}
                   >
                     <GitHubLogo />
                   </SubmitButton>
@@ -129,21 +160,9 @@ export default function Form({
                     className="p-2 w-full"
                     type="button"
                     showSpinner={false}
-                    disabled={passkeyVerifying}
-                    onClick={async () => {
-                      setPasskeyVerifying(true);
-                      try {
-                        await signIn("passkey");
-                      } catch {
-                        toast({
-                          title: t("error"),
-                          description: t("auth:errors.passkey"),
-                          variant: "destructive",
-                        });
-                      } finally {
-                        setPasskeyVerifying(false);
-                      }
-                    }}
+                    forceSpinner={passkeyVerifying}
+                    disabled={passkeyVerifying || oauthLoading !== null}
+                    onClick={handlePasskeySignIn}
                   >
                     <KeyRound className="w-5 h-5" />
                   </SubmitButton>

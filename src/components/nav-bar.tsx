@@ -9,13 +9,14 @@ import {
 } from "./ui/navigation-menu";
 import { CircleUser } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { getTranslation } from "@/app/i18n/server";
+import { headers } from "next/headers";
 
 export default async function NavBar({ lang }: { lang: string }) {
   const { t } = await getTranslation(lang);
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
 
   return (
     <nav className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-20">

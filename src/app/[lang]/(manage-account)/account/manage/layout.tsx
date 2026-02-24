@@ -1,6 +1,6 @@
 import { getTranslation } from "@/app/i18n/server";
 import { Navigation } from "./components";
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import NavBar from "@/components/nav-bar";
 import { Button } from "@/components/ui/button";
 import { UserCircle } from "lucide-react";
@@ -26,8 +26,9 @@ export default async function Layout(
     children
   } = props;
 
-  const session = await auth();
-  const url = (await headers()).get("x-url") || "/";
+  const headersList = await headers();
+  const session = await auth.api.getSession({ headers: headersList });
+  const url = headersList.get("x-url") || "/";
   if (!session) {
     const searchParams = new URLSearchParams();
     searchParams.set("returnUrl", url);

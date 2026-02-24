@@ -2,6 +2,7 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
+// Better Auth uses accountId and providerId instead of providerAccountId and provider
 export async function retrieveAccounts({
   userId,
   prisma,
@@ -15,8 +16,8 @@ export async function retrieveAccounts({
       userId: userId,
     },
     select: {
-      providerAccountId: true,
-      provider: true,
+      accountId: true,
+      providerId: true,
     },
   });
 }
@@ -34,28 +35,28 @@ export async function retrieveAccountsWithIdToken({
       userId: userId,
     },
     select: {
-      providerAccountId: true,
-      provider: true,
-      id_token: true,
+      accountId: true,
+      providerId: true,
+      idToken: true,
     },
   });
 }
 
 export async function deleteAccount({
-  providerAccountId,
-  provider,
+  accountId,
+  providerId,
   prisma,
 }: {
-  providerAccountId: string;
-  provider: string;
+  accountId: string;
+  providerId: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
   await db.account.delete({
     where: {
-      provider_providerAccountId: {
-        providerAccountId,
-        provider,
+      providerId_accountId: {
+        accountId,
+        providerId,
       },
     }
   });

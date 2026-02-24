@@ -1,5 +1,3 @@
-import type { EmailConfig } from "@auth/core/providers/email";
-
 export async function sendEmail(params: {
   to: string;
   subject: string;
@@ -27,32 +25,6 @@ export async function sendEmail(params: {
 export const options = {
   from: "Beutl <noreply@notifications.beditor.net>",
   apiKey: process.env.AUTH_RESEND_KEY as string,
-  sendVerificationRequest: async (
-    params: Parameters<EmailConfig["sendVerificationRequest"]>[0],
-  ) => {
-    const { identifier: to, provider, url } = params;
-    const { host } = new URL(url);
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${provider.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: provider.from,
-        to,
-        subject: `Sign in to ${host}`,
-        text: `Click the link below to sign in:\n${url}`,
-        html: renderUnsafeEmailTemplate(`
-          <p>Click the link below to sign in:</p>
-          <a href="${url}">Sign in</a>
-        `),
-      }),
-    });
-
-    if (!res.ok)
-      throw new Error(`Resend error: ${JSON.stringify(await res.json())}`);
-  },
 };
 
 export function renderUnsafeEmailTemplate(content: string): string {

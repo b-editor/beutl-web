@@ -1,10 +1,11 @@
 "use server";
 
-import { signIn } from "@/auth";
+import { getAuth } from "@/lib/better-auth";
 import { redirect } from "next/navigation";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { existsUserByEmail } from "@/lib/db/user";
+import { headers } from "next/headers";
 
 const emailSchema = (z: Zod) =>
   z.object({
@@ -19,48 +20,12 @@ type State = {
   message?: string;
 };
 
-export async function signInAction(
-  state: State,
-  formData: FormData,
-): Promise<State> {
-  const type = formData.get("type") as string;
-
-  if (type === "email") {
-    return await signInWithEmail(state, formData);
-  }
-
-  if (type === "google") {
-    return await signInWithProvider(
-      "google",
-      formData.get("returnUrl") as string | undefined,
-    );
-  }
-
-  if (type === "github") {
-    return await signInWithProvider(
-      "github",
-      formData.get("returnUrl") as string | undefined,
-    );
-  }
-
-  const { t } = await getTranslation(await getLanguage());
-  return { message: t("invalidRequest") };
-}
-
-async function signInWithProvider(
-  provider: string,
-  returnUrl?: string,
-): Promise<State> {
-  await signIn(provider, { redirectTo: returnUrl || "/" });
-  return {};
-}
-
-async function signInWithEmail(
+export async function signInWithEmailAction(
   state: State,
   formData: FormData,
 ): Promise<State> {
   const lang = await getLanguage();
-  const { z } = await getTranslation(lang);
+  const { z, t } = await getTranslation(lang);
   const validationResult = emailSchema(z).safeParse(
     Object.fromEntries(formData.entries()),
   );
@@ -81,6 +46,22 @@ async function signInWithEmail(
     redirect(`/${lang}/account/sign-up?${params.toString()}`);
   }
 
-  await signIn("resend", { email, redirectTo: returnUrl || `/${lang}` });
-  return {};
+  // Better Auth magic link を送信
+  const auth = await getAuth();
+  // Magic link APIを呼び出す
+  const response = await auth.api.signInMagicLink({
+    body: {
+      email: email,
+      callbackURL: returnUrl || `/${lang}`,
+      errorCallbackURL: "/account/error",
+    },
+    headers: await headers(),
+  });
+
+  if (!response.status) {
+    return { message: t("auth:errors.magicLink") };
+  }
+
+  // メール送信後、確認ページにリダイレクト
+  redirect(`/${lang}/account/verify-request`);
 }

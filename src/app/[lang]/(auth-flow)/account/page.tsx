@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -9,8 +9,9 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     lang
   } = params;
 
-  const session = await auth();
-  const url = (await headers()).get("x-url") || `/${lang}`;
+  const headersList = await headers();
+  const session = await auth.api.getSession({ headers: headersList });
+  const url = headersList.get("x-url") || `/${lang}`;
   if (!session?.user) {
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
