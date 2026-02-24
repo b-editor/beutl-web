@@ -73,7 +73,7 @@ model Session {
 // Better Auth Verification model
 model Verification {
   id         String   @id @default(uuid())
-  identifier String
+  identifier String   @unique
   value      String
   expiresAt  DateTime
   createdAt  DateTime @default(now())

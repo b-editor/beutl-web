@@ -81,9 +81,6 @@ async function createAuthWithPrisma() {
         },
       },
     },
-    verification: {
-      
-    },
     account: {
       accountLinking: {
         enabled: true,
