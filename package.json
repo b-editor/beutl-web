@@ -60,7 +60,7 @@
     "react-i18next": "^16.5.4",
     "semver": "^7.7.1",
     "stripe": "^20.3.1",
-    "tailwind-merge": "^3.1.0",
+    "tailwind-merge": "^3.5.0",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.2",
     "zod": "^4.3.6"
@@ -68,7 +68,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
     "@next/bundle-analyzer": "15.5.12",
-    "@tailwindcss/postcss": "^4.1.11",
+    "@tailwindcss/postcss": "^4.2.1",
     "@types/negotiator": "^0.6.4",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.16.0",
@@ -79,7 +79,7 @@
     "eslint-config-next": "15.2.4",
     "postcss": "^8.5.3",
     "prisma": "^7.4.1",
-    "tailwindcss": "^4.1.2",
+    "tailwindcss": "^4.2.1",
     "typescript": "^5.7.3",
     "wrangler": "^4.67.0"
   },
