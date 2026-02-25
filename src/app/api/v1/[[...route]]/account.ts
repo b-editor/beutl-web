@@ -36,7 +36,7 @@ async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array) {
   return await crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: salt,
+      salt: salt as BufferSource,
       iterations: 100000,
       hash: "SHA-256",
     },
@@ -133,8 +133,8 @@ async function createRefreshToken(userId: string) {
   const db = await getDbAsync();
   await db.session.create({
     data: {
-      sessionToken: rawToken,
-      expires: expires,
+      token: rawToken,
+      expiresAt: expires,
       userId: userId,
     },
   });
@@ -234,7 +234,7 @@ const app = new Hono()
     const db = await getDbAsync();
     const oldRefreshTokens = await db.session.deleteMany({
       where: {
-        sessionToken: oldDecryptedRefreshToken,
+        token: oldDecryptedRefreshToken,
       },
     });
     if (!oldRefreshTokens.count) {
