@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import Form from "./form";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import { localRedirect } from "@/lib/localRedirect";
 
 export default async function Page(
