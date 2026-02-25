@@ -1,14 +1,12 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import Form from "./form";
-import type { SignInPageErrorParam } from "@auth/core/types";
-import { cookies } from "next/headers";
+import { headers } from "next/headers";
 import { localRedirect } from "@/lib/localRedirect";
 
 export default async function Page(
   props: {
     searchParams: Promise<{
       returnUrl?: string;
-      error?: SignInPageErrorParam;
     }>;
     params: Promise<{
       lang: string;
@@ -24,26 +22,13 @@ export default async function Page(
   const searchParams = await props.searchParams;
 
   const {
-    returnUrl,
-    error
+    returnUrl
   } = searchParams;
 
-  const authFlow = (await cookies()).get("beutl.auth-flow");
-  if (authFlow?.value) {
-    const json = JSON.parse(authFlow?.value);
-    if (json.type === "adding-account" && json.url) {
-      const url = new URL(json.url);
-      if (error) {
-        url.searchParams.set("error", error);
-      }
-      await localRedirect(url.toString());
-    }
-  }
-
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (session) {
     await localRedirect(returnUrl || `/${lang}`);
   }
 
-  return <Form returnUrl={returnUrl} error={error} lang={lang} />;
+  return <Form returnUrl={returnUrl} lang={lang} />;
 }

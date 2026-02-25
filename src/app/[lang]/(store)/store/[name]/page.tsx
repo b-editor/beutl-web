@@ -1,7 +1,7 @@
 import { ClientPage } from "./components";
 import { notFound } from "next/navigation";
 import { SemVer } from "semver";
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { guessCurrency } from "@/lib/currency";
 import {
   packageOwned,
@@ -9,6 +9,7 @@ import {
   retrievePackage,
   retrievePrices,
 } from "@/lib/store-utils";
+import { headers } from "next/headers";
 
 type Props = {
   params: Promise<{
@@ -48,7 +49,7 @@ export default async function Page(props: Props) {
     prices.find((p) => p.currency === currency) ||
     prices.find((p) => p.fallback) ||
     prices[0];
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   let owned = false;
   let paied = false;
   if (session?.user?.id) {

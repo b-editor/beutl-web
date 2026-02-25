@@ -7,19 +7,22 @@ generator client {
   previewFeatures = ["fullTextSearchPostgres", "driverAdapters"]
 }
 
+// Better Auth models
 model User {
-  id            String          @id @default(uuid())
+  id            String   @id @default(uuid())
   name          String?
-  email         String          @unique
-  emailVerified DateTime?
+  email         String   @unique
+  emailVerified Boolean  @default(false)
   image         String?
-  accounts      Account[]
-  sessions      Session[]
-  // Optional for WebAuthn support
-  Authenticator Authenticator[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  // Better Auth relations
+  accounts Account[]
+  sessions Session[]
+  passkeys Passkey[]
+
+  // Custom relations
   SocialProfile      SocialProfile[]
   Profile            Profile?
   File               File[]
@@ -29,50 +32,73 @@ model User {
   NativeAppAuth      NativeAppAuth[]
   UserPaymentHistory UserPaymentHistory[]
   Customer           Customer?
-
-  AuditLog AuditLog[]
+  AuditLog           AuditLog[]
 }
 
+// Better Auth Account model
 model Account {
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? @map("refreshToken")
-  access_token      String? @map("accessToken")
-  expires_at        Int?    @map("expiresAt")
-  token_type        String? @map("tokenType")
-  scope             String?
-  id_token          String? @map("idToken")
-  session_state     String? @map("sessionState")
+  id                    String    @id @default(uuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+}
+
+// Better Auth Session model
+model Session {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([provider, providerAccountId])
 }
 
-model Session {
-  id           String   @id @default(uuid())
-  sessionToken String   @unique
+// Better Auth Verification model
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String   @unique
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Better Auth Passkey model (was Authenticator)
+model Passkey {
+  id           String    @id @default(uuid())
+  name         String?
+  publicKey    String
   userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialID String    @unique
+  counter      Int
+  deviceType   String
+  backedUp     Boolean
+  transports   String?
+  createdAt    DateTime  @default(now())
+  aaguid       String?
+  usedAt       DateTime? // Custom: track last usage
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model VerificationToken {
-  identifier String
-  token      String
-  expires    DateTime
-
-  @@id([identifier, token])
-}
-
+// Custom models
 enum ConfirmationTokenPurpose {
   EMAIL_UPDATE
   ACCOUNT_DELETE
@@ -87,26 +113,6 @@ model ConfirmationToken {
   user       User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([identifier, token])
-}
-
-// Optional for WebAuthn support
-model Authenticator {
-  credentialID         String    @unique
-  userId               String
-  providerAccountId    String
-  credentialPublicKey  String
-  counter              Int
-  credentialDeviceType String
-  credentialBackedUp   Boolean
-  transports           String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  usedAt               DateTime?
-  name                 String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([userId, credentialID])
 }
 
 model Profile {

@@ -1,5 +1,5 @@
 import { getTranslation } from "@/app/i18n/server";
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
 export default async function Page(
   props: { searchParams: Promise<{ returnUrl: string }>; params: Promise<{ lang: string }> }
@@ -29,7 +30,7 @@ export default async function Page(
     returnUrl
   } = searchParams;
 
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) {
     redirect(
       `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,

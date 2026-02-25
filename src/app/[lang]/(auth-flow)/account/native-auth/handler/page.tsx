@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { randomString } from "@/lib/create-hash";
 import { getDb } from "@/prisma";
 import { headers } from "next/headers";
@@ -23,8 +23,9 @@ export default async function Page(
     identifier
   } = searchParams;
 
-  const session = await auth();
-  const xurl = (await headers()).get("x-url") as string;
+  const headersList = await headers();
+  const session = await auth.api.getSession({ headers: headersList });
+  const xurl = headersList.get("x-url") as string;
   if (!session?.user) {
     const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(xurl)}`;
 

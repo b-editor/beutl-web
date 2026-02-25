@@ -1,6 +1,7 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import Form from "./form";
 import { localRedirect } from "@/lib/localRedirect";
+import { headers } from "next/headers";
 
 export default async function Page(
   props: {
@@ -21,7 +22,7 @@ export default async function Page(
     email
   } = searchParams;
 
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (session) {
     await localRedirect(returnUrl || "/");
   }

@@ -11,20 +11,41 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import Image from "next/image";
-import { signUpAction } from "./actions";
-import { useActionState } from "react";
+import { signUpWithEmailAction } from "./actions";
+import { useState, useActionState } from "react";
 import SubmitButton from "@/components/submit-button";
 import { ErrorDisplay } from "@/components/error-display";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { useTranslation } from "@/app/i18n/client";
+import { authClient } from "@/lib/auth-client";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Form({
   returnUrl,
   email,
   lang,
 }: { returnUrl?: string; email?: string; lang: string }) {
-  const [state, dispatch] = useActionState(signUpAction, {});
+  const [state, dispatch] = useActionState(signUpWithEmailAction, {});
   const { t } = useTranslation(lang);
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  const handleOAuthSignIn = async (provider: "google" | "github") => {
+    setOauthLoading(provider);
+    try {
+      await authClient.signIn.social({
+        provider,
+        callbackURL: returnUrl || "/",
+      });
+    } catch {
+      toast({
+        title: t("error"),
+        description: t("auth:errors.oauth"),
+        variant: "destructive",
+      });
+      setOauthLoading(null);
+    }
+  };
 
   return (
     <form action={dispatch}>
@@ -67,11 +88,14 @@ export default function Form({
               <input type="hidden" name="returnUrl" value={returnUrl} />
             </CardContent>
             <CardFooter className="block">
-              <SubmitButton className="w-full" name="type" value="email">
+              <SubmitButton
+                className="w-full"
+                disabled={oauthLoading !== null}
+              >
                 {t("auth:signUp")}
               </SubmitButton>
               <Link
-                href="/account/sign-in"
+                href={`/${lang}/account/sign-in`}
                 className="text-sm font-medium inline-block mt-6"
               >
                 {t("auth:doYouHaveAnAccount")}
@@ -85,9 +109,11 @@ export default function Form({
                   <SubmitButton
                     variant="outline"
                     className="p-2 w-full"
-                    name="type"
-                    value="google"
+                    type="button"
                     showSpinner={false}
+                    forceSpinner={oauthLoading === "google"}
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuthSignIn("google")}
                   >
                     <GoogleLogo />
                   </SubmitButton>
@@ -97,9 +123,11 @@ export default function Form({
                   <SubmitButton
                     variant="outline"
                     className="p-2 w-full"
-                    name="type"
-                    value="github"
+                    type="button"
                     showSpinner={false}
+                    forceSpinner={oauthLoading === "github"}
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuthSignIn("github")}
                   >
                     <GitHubLogo />
                   </SubmitButton>
@@ -109,7 +137,7 @@ export default function Form({
           </Card>
           <Link
             className="ml-auto text-sm absolute top-full right-0 translate-y-4"
-            href="/docs/privacy"
+            href={`/${lang}/docs/privacy`}
           >
             {t("privacy")}
           </Link>

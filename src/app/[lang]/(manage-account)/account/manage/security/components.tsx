@@ -1,11 +1,10 @@
 "use client";
 
-import { type ComponentProps, useState, useActionState } from "react";
+import { type ComponentProps, useState } from "react";
 import {
-  addAccount,
-  deleteAuthenticator,
+  deletePasskey,
   removeAccount,
-  renameAuthenticator,
+  renamePasskey,
 } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
@@ -19,7 +18,7 @@ import {
   Trash,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { signIn } from "next-auth/webauthn";
+import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
@@ -32,28 +31,68 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useTranslation } from "@/app/i18n/client";
+import { useRouter } from "next/navigation";
 
 export function Form({
   lang,
   ...props
-}: ComponentProps<"form"> & { lang: string }) {
-  const [, dispatch] = useActionState(addAccount, {});
+}: ComponentProps<"div"> & { lang: string }) {
   const { toast } = useToast();
-  const [spinnerType, setSpinnerType] = useState<0 | 1 | 2>(0);
-  const [registering, setRegistering] = useState(false);
+  const [loading, setLoading] = useState<string | null>(null);
   const { t } = useTranslation(lang);
+  const router = useRouter();
+
+  const handleOAuthLink = async (provider: "google" | "github") => {
+    setLoading(provider);
+    try {
+      await authClient.linkSocial({
+        provider,
+        callbackURL: `/${lang}/account/manage/security`,
+      });
+    } catch {
+      toast({
+        title: t("error"),
+        description: t("auth:errors.oauth"),
+        variant: "destructive",
+      });
+      setLoading(null);
+    }
+  };
+
+  const handlePasskeyRegister = async () => {
+    setLoading("passkey");
+    try {
+      const result = await authClient.passkey.addPasskey();
+      if (result?.error) {
+        throw new Error(result.error.message);
+      }
+      toast({
+        title: t("success"),
+        description: t("account:security.passkeyRegistered"),
+      });
+      router.refresh();
+    } catch {
+      toast({
+        title: t("error"),
+        description: t("account:security.passkeyRegisterFailed"),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(null);
+    }
+  };
 
   return (
-    <form {...props} action={dispatch}>
+    <div {...props}>
       <div className="flex gap-4">
         <div>
           <SubmitButton
             variant="outline"
-            disabled={registering}
-            name="type"
-            value="google"
-            showSpinner={spinnerType === 0}
-            onClick={() => setSpinnerType(0)}
+            type="button"
+            disabled={loading !== null}
+            showSpinner={false}
+            forceSpinner={loading === "google"}
+            onClick={() => handleOAuthLink("google")}
           >
             <GoogleLogo />
           </SubmitButton>
@@ -62,11 +101,11 @@ export function Form({
         <div>
           <SubmitButton
             variant="outline"
-            disabled={registering}
-            name="type"
-            value="github"
-            showSpinner={spinnerType === 1}
-            onClick={() => setSpinnerType(1)}
+            type="button"
+            disabled={loading !== null}
+            showSpinner={false}
+            forceSpinner={loading === "github"}
+            onClick={() => handleOAuthLink("github")}
           >
             <GitHubLogo />
           </SubmitButton>
@@ -78,28 +117,12 @@ export function Form({
           <SubmitButton
             variant="outline"
             type="button"
-            disabled={registering}
+            disabled={loading !== null}
             showSpinner={false}
-            onClick={async () => {
-              setRegistering(true);
-              try {
-                await signIn("passkey", { action: "register" });
-                toast({
-                  title: t("success"),
-                  description: t("account:security.passkeyRegistered"),
-                });
-              } catch {
-                toast({
-                  title: t("error"),
-                  description: t("account:security.passkeyRegisterFailed"),
-                  variant: "destructive",
-                });
-              } finally {
-                setRegistering(false);
-              }
-            }}
+            forceSpinner={loading === "passkey"}
+            onClick={handlePasskeyRegister}
           >
-            {registering ? (
+            {loading === "passkey" ? (
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
             ) : (
               <KeyRound className="w-5 h-5 mr-2" />
@@ -108,7 +131,7 @@ export function Form({
           </SubmitButton>
         </div>
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -117,8 +140,8 @@ function ListItem({
   lang,
 }: {
   account: {
-    provider: string;
-    providerAccountId: string;
+    providerId: string;
+    accountId: string;
     emailOrUserName?: string;
   };
   lang: string;
@@ -126,13 +149,14 @@ function ListItem({
   const [pending, setPending] = useState(false);
   const { toast } = useToast();
   const { t } = useTranslation(lang);
+  const router = useRouter();
 
   return (
     <li className="flex items-center py-4 px-6 gap-2 border-b">
       <div className="border rounded-full p-2 mr-1">
-        {account.provider === "google" ? (
+        {account.providerId === "google" ? (
           <GoogleLogo />
-        ) : account.provider === "github" ? (
+        ) : account.providerId === "github" ? (
           <GitHubLogo />
         ) : (
           "unknown"
@@ -141,9 +165,9 @@ function ListItem({
       <div className="w-full">
         <div className="flex gap-2 items-center">
           <h4 className="font-bold text-lg">
-            {account.provider === "google"
+            {account.providerId === "google"
               ? "Google"
-              : account.provider === "github"
+              : account.providerId === "github"
                 ? "GitHub"
                 : "unknown"}
           </h4>
@@ -171,14 +195,15 @@ function ListItem({
                 setPending(true);
                 try {
                   const data = new FormData();
-                  data.append("provider", account.provider);
-                  data.append("providerAccountId", account.providerAccountId);
+                  data.append("providerId", account.providerId);
+                  data.append("accountId", account.accountId);
                   const state = await removeAccount({}, data);
                   if (state.success) {
                     toast({
                       title: t("success"),
                       description: t("account:security.accountRemoved"),
                     });
+                    router.refresh();
                   } else {
                     toast({
                       title: t("error"),
@@ -219,8 +244,8 @@ export function List({
   ...props
 }: ComponentProps<"ul"> & {
   accounts: {
-    provider: string;
-    providerAccountId: string;
+    providerId: string;
+    accountId: string;
     emailOrUserName?: string;
   }[];
   lang: string;
@@ -230,15 +255,13 @@ export function List({
       {...props}
       className={cn(props.className, "[&_li:last-child]:border-0")}
     >
-      {accounts
-        .filter((i) => i.provider !== "passkey")
-        .map((account) => (
-          <ListItem
-            key={account.providerAccountId}
-            account={account}
-            lang={lang}
-          />
-        ))}
+      {accounts.map((account) => (
+        <ListItem
+          key={account.accountId}
+          account={account}
+          lang={lang}
+        />
+      ))}
     </ul>
   );
 }
@@ -331,7 +354,7 @@ function PasskeyListItem({
                 onClick={async () => {
                   setPending(true);
                   try {
-                    const { error } = await deleteAuthenticator({
+                    const { error } = await deletePasskey({
                       id: authenticator.id,
                     });
                     if (error) {
@@ -365,7 +388,7 @@ function PasskeyListItem({
               onClick={async () => {
                 try {
                   setPending(true);
-                  await renameAuthenticator({ id: authenticator.id, name });
+                  await renamePasskey({ id: authenticator.id, name });
                   setEditing(false);
                 } finally {
                   setPending(false);

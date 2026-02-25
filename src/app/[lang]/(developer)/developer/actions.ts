@@ -1,8 +1,9 @@
 "use server";
 
-import { auth } from "@/auth";
+import { auth } from "@/lib/better-auth";
 import { retrieveDevPackagesByUserId } from "@/lib/db/package";
 import { SemVer } from "semver";
+import { headers } from "next/headers";
 
 export type Package = {
   id: string;
@@ -14,7 +15,7 @@ export type Package = {
 };
 
 export async function retrievePackages(): Promise<Package[]> {
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user?.id) {
     return [];
   }

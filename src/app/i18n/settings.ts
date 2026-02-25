@@ -10,7 +10,6 @@ export const namespaces = [
   "storage",
   "account",
   "auth",
-  "authjs",
   "developer",
   "api-errors",
 ];
