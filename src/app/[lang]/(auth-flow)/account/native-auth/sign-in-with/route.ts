@@ -1,9 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/better-auth";
+import { getAuth } from "@/lib/better-auth";
 import { getLanguage } from "@/lib/lang-utils";
 import { headers } from "next/headers";
 
 export async function GET(request: NextRequest) {
+  const auth = await getAuth();
   const searchParams = request.nextUrl.searchParams;
   const returnUrl = searchParams.get("returnUrl") || "";
   const provider = searchParams.get("provider") || "";
@@ -14,12 +15,17 @@ export async function GET(request: NextRequest) {
   continueUrl.searchParams.set("returnUrl", returnUrl);
 
   if (!session?.user) {
-    // TODO: デバッグ必要
-    // Better Auth OAuth sign-in redirect
-    const baseUrl = process.env.BETTER_AUTH_URL || request.nextUrl.origin;
-    const signInUrl = new URL(`/api/auth/sign-in/${provider.toLowerCase()}`, baseUrl);
-    signInUrl.searchParams.set("callbackURL", continueUrl.toString());
-    return NextResponse.redirect(signInUrl.toString());
+    const response = await auth.api.signInSocial({
+      body: {
+        provider: provider.toLowerCase(),
+        callbackURL: continueUrl.toString(),
+      }
+    });
+    if (response.url) {
+      return NextResponse.redirect(response.url);
+    } else {
+      return NextResponse.redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl.toString())}`);
+    }
   } else {
     // アカウントが存在する
     return NextResponse.redirect(continueUrl.toString());
