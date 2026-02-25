@@ -13,8 +13,6 @@ export async function GET(request: NextRequest) {
   continueUrl.searchParams.set("returnUrl", returnUrl);
 
   if (session?.user) {
-    // TODO: デバッグ必要
-    // Better Auth sign-out redirect
     await auth.api.signOut({
       headers: await headers(),
     });
