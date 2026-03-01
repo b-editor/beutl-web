@@ -2,7 +2,6 @@ import NavBar from "@/components/nav-bar";
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Download } from "lucide-react";
 import FeaturesToc from "@/components/features-toc";
 import {
   Popover,
@@ -20,9 +19,14 @@ import {
 } from "@/components/ui/carousel";
 import { Card, CardContent } from "@/components/ui/card";
 import Footer from "@/components/footer";
-import styles from "@/styles/fluid.module.css";
-import Link from "next/link";
 import { getTranslation } from "@/app/i18n/server";
+import { Code } from "lucide-react";
+
+import HeroSection from "@/components/landing/hero-section";
+import AnimatedSection from "@/components/landing/animated-section";
+import StaggerChildren from "@/components/landing/stagger-children";
+import PlatformIcons from "@/components/landing/platform-icons";
+import animatedBorderStyles from "@/styles/animated-border.module.css";
 
 function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
   return [
@@ -45,13 +49,11 @@ function getExtensions(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
   ];
 }
 
-export default async function Home(props: { params: Promise<{ lang: string }> }) {
+export default async function Home(props: {
+  params: Promise<{ lang: string }>;
+}) {
   const params = await props.params;
-
-  const {
-    lang
-  } = params;
-
+  const { lang } = params;
   const { t } = await getTranslation(lang);
   const extensions = getExtensions(t);
 
@@ -59,71 +61,20 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
     <div>
       <NavBar lang={lang} />
       <div>
-        <div
-          className={cn(
-            styles.fluid,
-            "m-auto w-[70vw] h-[70vw] md:w-[50vw] md:h-[50vw] blur-md md:blur-xl absolute top-0 left-1/2 -translate-x-1/2 max-md:translate-y-1/2 select-none pointer-events-none -z-10",
-          )}
+        {/* Hero Section */}
+        <HeroSection
+          texts={{
+            unleashCreativity: t("main:unleashCreativity"),
+            freeAndOpenSource: t("main:freeAndOpenSource"),
+            download: t("main:download"),
+          }}
         />
 
-        <div className="container mx-auto px-6 pt-12 md:px-12">
-          <h1 className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl lg:mt-8">
-            {t("main:unleashCreativity")}
-          </h1>
-          <h2 className="scroll-m-20 mt-8 pb-2 text-xl md:text-3xl font-medium tracking-tight">
-            {t("main:freeAndOpenSource")}
-          </h2>
-          <div className="mt-6 flex gap-4">
-            <Button className="border" asChild>
-              <Link href="https://github.com/b-editor/beutl/releases/latest">
-                <Download className="w-5 h-5 mr-2" />
-                {t("main:download")}
-              </Link>
-            </Button>
-            <Button
-              variant="link"
-              className="text-foreground border backdrop-brightness-75"
-              asChild
-            >
-              <Link href="https://github.com/b-editor/beutl">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/img/github-color.svg"
-                  alt="GitHub"
-                  className="w-5 h-5 mr-2 invert"
-                />
-                GitHub
-              </Link>
-            </Button>
-          </div>
-
-          <div className="mt-16 md:mt-8 mx-auto select-none pointer-events-none">
-            <Image
-              className="scale-[107.5%]"
-              src="/img/brand-image2.png"
-              alt="brand image"
-              width={1920}
-              height={1080}
-            />
-          </div>
-        </div>
-
-        <div className="bg-[hsl(var(--card)/60%)] py-4" />
+        {/* Features TOC */}
         <FeaturesToc lang={lang} />
-        <div className="bg-[hsl(var(--card)/60%)] py-4" />
 
-        <div className="container mx-auto px-6 py-12 md:px-12 flex flex-col items-center gap-8">
-          <h3 className="scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight">お知らせ</h3>
-          <p className="mt-8 text-lg leading-8 max-w-3xl">
-            X (旧Twitter) で本ソフトウェアが他者のソフトウェアの後継であると流布されていますが、
-            本ソフトウェアは他者ソフトウェアの後継ではありません。
-            また、開発者である私は、現在、過去にそのようなことを主張していません。
-            本ソフトウェアは私個人のニーズに合わせて開発したソフトウェアです。
-            そのため、機能や特徴が似ていたとしても、他者のソフトウェアの後継を意図しているわけではありません。
-          </p>
-        </div>
-
-        <div className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:items-center gap-8">
+        {/* Cross-Platform */}
+        <AnimatedSection className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:items-center gap-8">
           <div className="lg:flex-1">
             <h3
               id="features-cross-platform"
@@ -174,19 +125,24 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
                 </div>
               </PopoverContent>
             </Popover>
+            <StaggerChildren className="flex gap-4 md:gap-6 justify-start mt-8">
+              <PlatformIcons />
+            </StaggerChildren>
           </div>
 
-          <div className="lg:flex-1">
+          <AnimatedSection delay={0.15} className="lg:flex-1">
             <Image
-              className="rounded"
+              className="rounded-lg"
               src="/img/cross-platform.png"
               alt="Cross platform"
               width={1920}
               height={1315}
             />
-          </div>
-        </div>
-        <div className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:flex-row-reverse lg:items-center gap-8">
+          </AnimatedSection>
+        </AnimatedSection>
+
+        {/* Animation */}
+        <AnimatedSection className="container mx-auto px-6 py-12 md:px-12 flex max-lg:flex-col lg:flex-row-reverse lg:items-center gap-8">
           <div className="lg:flex-1">
             <h3
               id="features-animation"
@@ -194,8 +150,9 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
             >
               {t("main:animation")}
             </h3>
-            <p className="mt-8 text-lg leading-8">{t("main:animationText")}</p>
-            {/* <Button className="mt-8" variant="outline">利用可能なアニメーション</Button> */}
+            <p className="mt-8 text-lg leading-8">
+              {t("main:animationText")}
+            </p>
           </div>
 
           <div className="lg:flex-1">
@@ -232,18 +189,27 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
               />
             </div>
           </div>
-        </div>
-        <div className="container mx-auto px-6 pt-12 md:px-12 lg:items-center gap-8">
-          <h3
-            id="features-effects"
-            className="features-header text-center scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight"
-          >
-            {t("main:richEffects")}
-          </h3>
-          <p className="mt-8 text-lg leading-8 ">{t("main:richEffectsText")}</p>
+        </AnimatedSection>
+
+        {/* Effects */}
+        <AnimatedSection className="container mx-auto px-6 pt-12 md:px-12 lg:items-center gap-8">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
+            <h3
+              id="features-effects"
+              className="features-header text-center scroll-mt-20 md:scroll-mt-36 text-2xl md:text-4xl font-semibold tracking-tight"
+            >
+              {t("main:richEffects")}
+            </h3>
+            <span className="inline-flex items-center rounded-full bg-primary/10 border border-primary/20 px-3 py-1 text-xs font-semibold text-primary">
+              28+
+            </span>
+          </div>
+          <p className="mt-8 text-lg leading-8">{t("main:richEffectsText")}</p>
           <EffectsDemo lang={lang} />
-        </div>
-        <div className="container mx-auto px-6 pt-12 pb-20 md:px-12 flex flex-col lg:grid lg:grid-cols-2 lg:items-center gap-8">
+        </AnimatedSection>
+
+        {/* Extensions */}
+        <AnimatedSection className="container mx-auto px-6 pt-12 pb-20 md:px-12 flex flex-col lg:grid lg:grid-cols-2 lg:items-center gap-8">
           <div className="lg:col-start-2 lg:row-start-1">
             <h3
               id="features-extensions"
@@ -251,7 +217,9 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
             >
               {t("main:extensible")}
             </h3>
-            <p className="mt-8 text-lg leading-8">{t("main:extensibleText")}</p>
+            <p className="mt-8 text-lg leading-8">
+              {t("main:extensibleText")}
+            </p>
           </div>
 
           <div className="lg:col-start-1 lg:row-start-1">
@@ -274,7 +242,7 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
                               <h4 className="text-xl font-semibold">
                                 {item.name}
                               </h4>
-                              <span className="text-muted">
+                              <span className="text-muted-foreground text-sm">
                                 {t("main:officialPackage")}
                               </span>
                             </div>
@@ -294,16 +262,24 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
                 ))}
                 <CarouselItem className="basis-2/3 md:basis-1/2">
                   <div className="p-1 h-full">
-                    <Card className="h-full">
-                      <CardContent className="p-6">
-                        <p
-                          className="text-xl font-semibold text-wrap"
-                          style={{ overflowWrap: "anywhere" }}
-                        >
-                          {t("main:stillWorking")}
-                        </p>
-                      </CardContent>
-                    </Card>
+                    <div
+                      className={cn(
+                        animatedBorderStyles.animatedBorder,
+                        "h-full",
+                      )}
+                    >
+                      <Card className="h-full border-0 bg-card">
+                        <CardContent className="p-6 flex flex-col items-center justify-center h-full gap-3 text-center">
+                          <Code className="w-8 h-8 text-primary" />
+                          <p className="text-lg font-semibold">
+                            {t("main:buildExtensions")}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {t("main:buildExtensionsDescription")}
+                          </p>
+                        </CardContent>
+                      </Card>
+                    </div>
                   </div>
                 </CarouselItem>
               </CarouselContent>
@@ -311,15 +287,7 @@ export default async function Home(props: { params: Promise<{ lang: string }> })
               <CarouselNext className="right-1 top-[calc(100%+2rem)]" />
             </Carousel>
           </div>
-        </div>
-
-        {/* <div className="container mx-auto px-6 py-12 md:px-12">
-          <h3 className="text-2xl md:text-4xl font-semibold tracking-tight">新機能</h3>
-        </div>
-
-        <div className="container mx-auto px-6 py-12 md:px-12">
-          <h3 className="text-2xl md:text-4xl font-semibold tracking-tight">製品ニュース</h3>
-        </div> */}
+        </AnimatedSection>
       </div>
       <Footer lang={lang} />
     </div>

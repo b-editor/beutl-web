@@ -1,0 +1,132 @@
+.meshContainer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: -10;
+  pointer-events: none;
+}
+
+.blob1,
+.blob2,
+.blob3 {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.35;
+  mix-blend-mode: screen;
+}
+
+.blob1 {
+  width: 50vw;
+  height: 50vw;
+  max-width: 600px;
+  max-height: 600px;
+  background: hsl(244 86% 57%);
+  animation: float1 10s ease-in-out infinite;
+  top: -10%;
+  left: 20%;
+}
+
+.blob2 {
+  width: 45vw;
+  height: 45vw;
+  max-width: 540px;
+  max-height: 540px;
+  background: hsl(280 80% 55%);
+  animation: float2 15s ease-in-out infinite;
+  top: 10%;
+  right: -10%;
+}
+
+.blob3 {
+  width: 40vw;
+  height: 40vw;
+  max-width: 480px;
+  max-height: 480px;
+  background: hsl(190 80% 50%);
+  animation: float3 12s ease-in-out infinite;
+  bottom: -20%;
+  left: 40%;
+}
+
+@keyframes float1 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 50% 50% 50% 50%;
+  }
+  25% {
+    transform: translate(30px, -20px) scale(1.05);
+    border-radius: 60% 40% 70% 30%;
+  }
+  50% {
+    transform: translate(-20px, 20px) scale(0.95);
+    border-radius: 40% 60% 30% 70%;
+  }
+  75% {
+    transform: translate(10px, -10px) scale(1.02);
+    border-radius: 70% 30% 50% 50%;
+  }
+}
+
+@keyframes float2 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 50% 50% 50% 50%;
+  }
+  33% {
+    transform: translate(-40px, 30px) scale(1.08);
+    border-radius: 30% 70% 60% 40%;
+  }
+  66% {
+    transform: translate(20px, -30px) scale(0.92);
+    border-radius: 70% 30% 40% 60%;
+  }
+}
+
+@keyframes float3 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 50% 50% 50% 50%;
+  }
+  50% {
+    transform: translate(30px, -40px) scale(1.1);
+    border-radius: 60% 40% 50% 50%;
+  }
+}
+
+.floatSlow {
+  animation: floatUpDown 6s ease-in-out infinite;
+}
+
+.floatMedium {
+  animation: floatUpDown 4s ease-in-out infinite reverse;
+}
+
+.floatFast {
+  animation: floatUpDown 3s ease-in-out infinite;
+}
+
+@keyframes floatUpDown {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blob1,
+  .blob2,
+  .blob3,
+  .floatSlow,
+  .floatMedium,
+  .floatFast,
+  .shimmer {
+    animation: none;
+  }
+}

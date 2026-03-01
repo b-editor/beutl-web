@@ -13,10 +13,12 @@
   "extensible": "Extensible",
   "extensibleText": "Get extensions from the store or publish your own developed extensions. Extensions can add effects, objects, codecs, UI, etc.",
   "officialPackage": "Official Package",
-  "stillWorking": "Still under development!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
   "ffmpegLocator": "FFmpeg Locator",
   "ffmpegLocatorDescription": "Automatically places FFmpeg libraries and executables.",
   "sugarShaker": "Sugar Shaker",
   "sugarShakerDescription": "Allows you to add animation effects like fade in/out without using keyframes.",
-  "description": "Beutl: Free and Open Source Video Editing Software. Create videos with various animations and effects!"
+  "description": "Beutl: Free and Open Source Video Editing Software. Create videos with various animations and effects!",
+  "buildExtensions": "Want to build extensions?",
+  "buildExtensionsDescription": "Publish to the store and contribute to the Beutl community",
+  "showAll": "Show All"
 }

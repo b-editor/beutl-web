@@ -44,6 +44,7 @@
     "clsx": "^2.1.1",
     "country-to-currency": "^2.0.2",
     "embla-carousel-react": "^8.5.2",
+    "framer-motion": "^12.34.3",
     "hono": "^4.12.2",
     "i18next": "^25.8.13",
     "i18next-resources-to-backend": "^1.2.1",

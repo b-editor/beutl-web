@@ -99,6 +99,16 @@
   }
 }
 
+@utility glow-primary {
+  box-shadow: 0 0 20px hsl(244 86% 57% / 0.15), 0 0 40px hsl(244 86% 57% / 0.05);
+}
+
+@utility glass {
+  background: hsl(var(--card) / 0.4);
+  backdrop-filter: blur(16px);
+  border: 1px solid hsl(0 0% 100% / 0.05);
+}
+
 /* @layer base {
   :root {
     --background: 270 8% 95%;

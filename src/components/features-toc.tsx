@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { motion } from "framer-motion";
 import { remToPx } from "@/lib/client-utils";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
@@ -106,16 +107,25 @@ export default function FeaturesToc({ lang }: { lang: string }) {
   );
 
   return (
-    <div className="flex items-center justify-center md:sticky mx-auto p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-[hsl(var(--card)/60%)] gap-2 backdrop-blur-lg">
+    <div className="flex items-center justify-center md:sticky mx-auto p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-background/60 backdrop-blur-xl border-b border-white/5 gap-2">
       {features.map((feature) => (
-        <Button
-          key={feature.name}
-          onClick={handleClick}
-          value={feature.name}
-          variant={selected === feature.name ? "secondary" : "ghost"}
-        >
-          {feature.text}
-        </Button>
+        <div key={feature.name} className="relative">
+          {selected === feature.name && (
+            <motion.div
+              layoutId="features-indicator"
+              className="absolute inset-0 bg-secondary rounded-md"
+              transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+            />
+          )}
+          <Button
+            onClick={handleClick}
+            value={feature.name}
+            variant="ghost"
+            className="relative z-10"
+          >
+            {feature.text}
+          </Button>
+        </div>
       ))}
     </div>
   );

@@ -19,8 +19,6 @@ export default function EasingDemo({
             <linearGradient id="in" x1="0%" y1="100%" x2="100%" y2="0%">
               <stop offset="0%" stopColor="hsl(var(--foreground))" />
               <stop offset="50%" stopColor="hsl(var(--foreground))" />
-              {/* <stop offset="70%" stopColor="color-mix(in hsl, hsl(var(--primary)), white 15%)" />
-              <stop offset="100%" stopColor="color-mix(in hsl, hsl(var(--primary)), white 15%)" /> */}
               <stop offset="70%" stopColor="hsl(var(--primary))" />
               <stop offset="100%" stopColor="hsl(var(--primary))" />
             </linearGradient>
@@ -49,7 +47,7 @@ export default function EasingDemo({
             strokeWidth="2"
             fill="none"
             stroke="#ffffff"
-          ></path>
+          />
         </g>
         <path
           className="translate-x-[1px] translate-y-[-1px]"

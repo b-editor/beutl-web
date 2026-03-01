@@ -1,0 +1,47 @@
+@property --border-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.animatedBorder {
+  position: relative;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.animatedBorder::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--border-angle),
+    hsl(244 86% 57%),
+    hsl(280 80% 55%),
+    hsl(190 80% 50%),
+    hsl(244 86% 57%)
+  );
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: rotateBorder 4s linear infinite;
+}
+
+@keyframes rotateBorder {
+  to {
+    --border-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animatedBorder::before {
+    animation: none;
+    background: linear-gradient(
+      135deg,
+      hsl(244 86% 57%),
+      hsl(280 80% 55%),
+      hsl(190 80% 50%)
+    );
+  }
+}
