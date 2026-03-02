@@ -1,41 +1,34 @@
-datasource db {
-  provider = "postgresql"
-}
-
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["fullTextSearchPostgres", "driverAdapters"]
+  provider = "prisma-client-js"
 }
 
-// Better Auth models
+datasource db {
+  provider = "cockroachdb"
+}
+
 model User {
-  id            String   @id @default(uuid())
-  name          String?
-  email         String   @unique
-  emailVerified Boolean  @default(false)
-  image         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  // Better Auth relations
-  accounts Account[]
-  sessions Session[]
-  passkeys Passkey[]
-
-  // Custom relations
-  SocialProfile      SocialProfile[]
-  Profile            Profile?
-  File               File[]
-  ConfirmationToken  ConfirmationToken[]
-  Package            Package[]
-  UserPackage        UserPackage[]
-  NativeAppAuth      NativeAppAuth[]
-  UserPaymentHistory UserPaymentHistory[]
-  Customer           Customer?
+  id                 String               @id @default(uuid())
+  name               String?
+  email              String               @unique
+  image              String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  emailVerified      Boolean?             @default(false)
+  accounts           Account[]
   AuditLog           AuditLog[]
+  ConfirmationToken  ConfirmationToken[]
+  Customer           Customer?
+  File               File[]
+  NativeAppAuth      NativeAppAuth[]
+  Package            Package[]
+  passkeys           Passkey[]
+  Profile            Profile?
+  sessions           Session[]
+  SocialProfile      SocialProfile[]
+  UserPackage        UserPackage[]
+  UserPaymentHistory UserPaymentHistory[]
 }
 
-// Better Auth Account model
 model Account {
   id                    String    @id @default(uuid())
   userId                String
@@ -49,59 +42,47 @@ model Account {
   idToken               String?
   password              String?
   createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt             DateTime  @default(now()) @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([providerId, accountId])
 }
 
-// Better Auth Session model
 model Session {
   id        String   @id @default(uuid())
-  token     String   @unique
+  token     String   @unique(map: "Session_sessionToken_key")
   userId    String
   expiresAt DateTime
-  ipAddress String?
-  userAgent String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ipAddress String?
+  userAgent String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Better Auth Verification model
 model Verification {
   id         String   @id @default(uuid())
-  identifier String   @unique
+  identifier String
   value      String
   expiresAt  DateTime
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
 }
 
-// Better Auth Passkey model (was Authenticator)
 model Passkey {
   id           String    @id @default(uuid())
   name         String?
   publicKey    String
   userId       String
   credentialID String    @unique
-  counter      Int
+  counter      BigInt
   deviceType   String
   backedUp     Boolean
   transports   String?
   createdAt    DateTime  @default(now())
   aaguid       String?
-  usedAt       DateTime? // Custom: track last usage
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-// Custom models
-enum ConfirmationTokenPurpose {
-  EMAIL_UPDATE
-  ACCOUNT_DELETE
+  usedAt       DateTime?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model ConfirmationToken {
@@ -116,25 +97,21 @@ model ConfirmationToken {
 }
 
 model Profile {
-  userId      String
+  userId      String  @id
   userName    String
   displayName String
   bio         String?
   iconFileId  String?
-
-  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  iconFile File? @relation(fields: [iconFileId], references: [id], onDelete: SetNull)
-
-  @@id([userId])
+  iconFile    File?   @relation(fields: [iconFileId], references: [id])
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model SocialProfile {
   value      String
   userId     String
   providerId String
-
-  provider SocialProfileProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  user     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider   SocialProfileProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, providerId])
 }
@@ -148,71 +125,56 @@ model SocialProfileProvider {
 }
 
 model File {
-  id         String         @id @default(uuid())
-  name       String
-  size       BigInt
-  mimeType   String
-  objectKey  String
-  userId     String
-  sha256     String?
-  visibility FileVisibility
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
-
+  id                String              @id @default(uuid())
+  name              String
+  size              BigInt
+  mimeType          String
+  objectKey         String
+  userId            String
+  sha256            String?
+  visibility        FileVisibility
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  CompatFile        CompatFile?
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   Package           Package[]
   PackageScreenshot PackageScreenshot[]
-  Release           Release[]
   Profile           Profile[]
-  CompatFile        CompatFile?
-}
-
-enum FileVisibility {
-  PUBLIC
-  PRIVATE
-  DEDICATED
+  Release           Release[]
 }
 
 model Package {
-  id               String           @id @default(uuid())
-  name             String           @unique
-  displayName      String?
-  description      String
-  shortDescription String
-  published        Boolean
-  webSite          String
-  tags             String[]
-  iconFileId       String?
-  userId           String
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  interval         PaymentInterval?
-
+  id                String              @id @default(uuid())
+  name              String              @unique
+  displayName       String?
+  description       String
+  shortDescription  String
+  published         Boolean
+  webSite           String
+  tags              String[]
+  iconFileId        String?
+  userId            String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  interval          PaymentInterval?
+  CompatPackage     CompatPackage?
+  iconFile          File?               @relation(fields: [iconFileId], references: [id])
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  iconFile          File?               @relation(fields: [iconFileId], references: [id], onDelete: SetNull)
-  UserPackage       UserPackage[]
+  packagePricing    PackagePricing[]
   PackageScreenshot PackageScreenshot[]
   Release           Release[]
-  CompatPackage     CompatPackage?
-  packagePricing    PackagePricing[]
+  UserPackage       UserPackage[]
 }
 
 model PackagePricing {
   id        String   @id @default(uuid())
   packageId String
-  price     Int
+  price     BigInt
   currency  String
   fallback  Boolean
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
-}
-
-enum PaymentInterval {
-  ONCE
-  MONTHLY
-  YEARLY
+  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
 }
 
 model UserPaymentHistory {
@@ -222,8 +184,7 @@ model UserPaymentHistory {
   packageId String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Customer {
@@ -231,19 +192,17 @@ model Customer {
   stripeId  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PackageScreenshot {
   packageId String
   fileId    String
-  order     Int
+  order     BigInt
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
-  file    File    @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@id([packageId, fileId])
 }
@@ -252,15 +211,14 @@ model UserPackage {
   userId    String
   packageId String
   createdAt DateTime @default(now())
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, packageId])
 }
 
 model Release {
-  id            String   @id @default(uuid())
+  id            String         @id @default(uuid())
   packageId     String
   version       String
   targetVersion String
@@ -268,33 +226,29 @@ model Release {
   description   String
   fileId        String?
   published     Boolean
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
-  file          File?          @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
   CompatRelease CompatRelease?
+  file          File?          @relation(fields: [fileId], references: [id])
+  package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
 }
 
 model CompatPackage {
-  id        BigInt @id @default(autoincrement())
-  packageId String @unique
-
-  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  id        BigInt  @id @default(sequence())
+  packageId String  @unique
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
 }
 
 model CompatRelease {
-  id        BigInt @id @default(autoincrement())
-  releaseId String @unique
-
-  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  id        BigInt  @id @default(sequence())
+  releaseId String  @unique
+  release   Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
 }
 
 model CompatFile {
-  id     BigInt @id @default(autoincrement())
+  id     BigInt @id @default(sequence())
   fileId String @unique
-
-  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
 }
 
 model NativeAppAuth {
@@ -304,8 +258,7 @@ model NativeAppAuth {
   userId      String?
   code        String?
   codeExpires DateTime?
-
-  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AuditLog {
@@ -315,10 +268,9 @@ model AuditLog {
   details   String?
   ipAddress String?
   userAgent String?
-  port      String?
   createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  port      String?
+  user      User?    @relation(fields: [userId], references: [id])
 }
 
 model AppReleaseAsset {
@@ -330,4 +282,21 @@ model AppReleaseAsset {
   type       String
   standalone Boolean
   url        String
+}
+
+enum ConfirmationTokenPurpose {
+  EMAIL_UPDATE
+  ACCOUNT_DELETE
+}
+
+enum FileVisibility {
+  PUBLIC
+  PRIVATE
+  DEDICATED
+}
+
+enum PaymentInterval {
+  ONCE
+  MONTHLY
+  YEARLY
 }
