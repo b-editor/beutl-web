@@ -1,9 +1,3 @@
-create sequence "CompatFile_id_seq";
-
-create sequence "CompatPackage_id_seq";
-
-create sequence "CompatRelease_id_seq";
-
 create type "ConfirmationTokenPurpose" as enum ('EMAIL_UPDATE', 'ACCOUNT_DELETE');
 
 create type "FileVisibility" as enum ('PUBLIC', 'PRIVATE', 'DEDICATED');
@@ -100,16 +94,6 @@ create table "File"
     "updatedAt" timestamp(3)                             not null
 );
 
-create table "CompatFile"
-(
-    id       bigint default nextval('public."CompatFile_id_seq"'::REGCLASS) not null
-        primary key,
-    "fileId" text                                                           not null
-        unique
-        references "File"
-            on update cascade on delete cascade
-);
-
 create table "NativeAppAuth"
 (
     id            text not null
@@ -144,16 +128,6 @@ create table "Package"
     "createdAt"        timestamp(3) default current_timestamp() not null,
     "updatedAt"        timestamp(3)                             not null,
     interval           "PaymentInterval"
-);
-
-create table "CompatPackage"
-(
-    id          bigint default nextval('public."CompatPackage_id_seq"'::REGCLASS) not null
-        primary key,
-    "packageId" text                                                              not null
-        unique
-        references "Package"
-            on update cascade on delete cascade
 );
 
 create table "PackagePricing"
@@ -215,16 +189,6 @@ create table "Release"
     published       boolean                                  not null,
     "createdAt"     timestamp(3) default current_timestamp() not null,
     "updatedAt"     timestamp(3)                             not null
-);
-
-create table "CompatRelease"
-(
-    id          bigint default nextval('public."CompatRelease_id_seq"'::REGCLASS) not null
-        primary key,
-    "releaseId" text                                                              not null
-        unique
-        references "Release"
-            on update cascade on delete cascade
 );
 
 create table "Session"

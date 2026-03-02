@@ -135,7 +135,6 @@ model File {
   visibility        FileVisibility
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
-  CompatFile        CompatFile?
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   Package           Package[]
   PackageScreenshot PackageScreenshot[]
@@ -157,7 +156,6 @@ model Package {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   interval          PaymentInterval?
-  CompatPackage     CompatPackage?
   iconFile          File?               @relation(fields: [iconFileId], references: [id])
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   packagePricing    PackagePricing[]
@@ -228,27 +226,8 @@ model Release {
   published     Boolean
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  CompatRelease CompatRelease?
   file          File?          @relation(fields: [fileId], references: [id])
   package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
-}
-
-model CompatPackage {
-  id        BigInt  @id @default(sequence())
-  packageId String  @unique
-  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
-}
-
-model CompatRelease {
-  id        BigInt  @id @default(sequence())
-  releaseId String  @unique
-  release   Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
-}
-
-model CompatFile {
-  id     BigInt @id @default(sequence())
-  fileId String @unique
-  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
 }
 
 model NativeAppAuth {
