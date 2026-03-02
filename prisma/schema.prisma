@@ -169,7 +169,7 @@ model Package {
 model PackagePricing {
   id        String   @id @default(uuid())
   packageId String
-  price     BigInt
+  price     Int
   currency  String
   fallback  Boolean
   createdAt DateTime @default(now())
@@ -198,7 +198,7 @@ model Customer {
 model PackageScreenshot {
   packageId String
   fileId    String
-  order     BigInt
+  order     Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
