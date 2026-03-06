@@ -137,7 +137,7 @@ create table "PackagePricing"
     "packageId" text                                     not null
         references "Package"
             on update cascade on delete cascade,
-    price       bigint                                   not null,
+    price       INT4                                   not null,
     currency    text                                     not null,
     fallback    boolean                                  not null,
     "createdAt" timestamp(3) default current_timestamp() not null,
@@ -152,7 +152,7 @@ create table "PackageScreenshot"
     "fileId"    text                                     not null
         references "File"
             on update cascade on delete cascade,
-    "order"     bigint                                   not null,
+    "order"     INT4                                   not null,
     "createdAt" timestamp(3) default current_timestamp() not null,
     "updatedAt" timestamp(3)                             not null,
     primary key ("packageId", "fileId")
