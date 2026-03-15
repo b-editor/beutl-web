@@ -2,6 +2,7 @@
 
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import { isAdmin } from "@/lib/admin-guard";
 import {
   createDevPackageScreenshot,
   deleteDevPackage,
@@ -19,7 +20,10 @@ import {
   updateDevPackagePublished,
   updateDevPackageScreenshotOrder,
   updateDevPackageTags,
+  updatePackageInterval,
+  upsertPackagePricings,
 } from "@/lib/db/package";
+import type { PaymentInterval } from "@prisma/client";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
 import {
   calcTotalFileSize,
@@ -676,6 +680,92 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
       return {
         success: true,
       };
+    });
+  });
+}
+
+const pricingSchema = z.object({
+  packageId: z.string().uuid(),
+  pricings: z.array(
+    z.object({
+      currency: z.string().length(3, "通貨コードは3文字である必要があります"),
+      price: z.number().int().min(0, "価格は0以上である必要があります"),
+      fallback: z.boolean(),
+    }),
+  ).refine(
+    (pricings) => pricings.filter((p) => p.fallback).length <= 1,
+    "デフォルト通貨は1つまでです",
+  ),
+});
+
+export async function updatePricing({
+  packageId,
+  pricings,
+}: {
+  packageId: string;
+  pricings: { currency: string; price: number; fallback: boolean }[];
+}): Promise<Response> {
+  return await authenticated(async (session) => {
+    if (!isAdmin(session.user.id)) {
+      return { success: false, message: "権限がありません" };
+    }
+
+    const validated = pricingSchema.safeParse({ packageId, pricings });
+    if (!validated.success) {
+      return {
+        success: false,
+        message: validated.error.message ?? "入力内容に誤りがあります",
+      };
+    }
+
+    return await sameUser(packageId, session.user.id, async () => {
+      await upsertPackagePricings({ packageId, pricings });
+      const name = await getPackageNameFromPackageId({ packageId });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.updatePackagePricing,
+        details: `packageId: ${packageId}`,
+      });
+      revalidatePath(`/developer/projects/${name}`);
+      return { success: true };
+    });
+  });
+}
+
+const intervalSchema = z.object({
+  packageId: z.string().uuid(),
+  interval: z.enum(["ONCE", "MONTHLY", "YEARLY"]).nullable(),
+});
+
+export async function updateInterval({
+  packageId,
+  interval,
+}: {
+  packageId: string;
+  interval: PaymentInterval | null;
+}): Promise<Response> {
+  return await authenticated(async (session) => {
+    if (!isAdmin(session.user.id)) {
+      return { success: false, message: "権限がありません" };
+    }
+
+    const validated = intervalSchema.safeParse({ packageId, interval });
+    if (!validated.success) {
+      return {
+        success: false,
+        message: validated.error.message ?? "入力内容に誤りがあります",
+      };
+    }
+
+    return await sameUser(packageId, session.user.id, async () => {
+      const { name } = await updatePackageInterval({ packageId, interval });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.updatePackageInterval,
+        details: `packageId: ${packageId}, interval: ${interval}`,
+      });
+      revalidatePath(`/developer/projects/${name}`);
+      return { success: true };
     });
   });
 }

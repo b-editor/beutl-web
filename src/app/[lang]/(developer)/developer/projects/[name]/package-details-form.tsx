@@ -85,7 +85,7 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
   );
 
   return (
-    <div className="lg:basis-1/3">
+    <div>
       <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
       <div className="flex gap-2 flex-col my-4">
         <h4>タグ</h4>

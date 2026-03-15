@@ -1,5 +1,6 @@
 import "server-only";
 import { getDbAsync } from "@/prisma";
+import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
 export async function retrieveDevPackagesByUserId({
@@ -60,6 +61,15 @@ export async function retrieveDevPackageByName({
       published: true,
       webSite: true,
       tags: true,
+      interval: true,
+      packagePricing: {
+        select: {
+          id: true,
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
       user: {
         select: {
           Profile: {
@@ -499,5 +509,47 @@ export async function deleteDevPackage({
     where: {
       id: packageId,
     },
+  });
+}
+
+export async function upsertPackagePricings({
+  packageId,
+  pricings
+}: {
+  packageId: string;
+  pricings: { currency: string; price: number; fallback: boolean }[];
+}) {
+  const db = await getDbAsync();
+  await db.$transaction(async (tx) => {
+    await tx.packagePricing.deleteMany({
+      where: { packageId },
+    });
+    if (pricings.length > 0) {
+      await tx.packagePricing.createMany({
+        data: pricings.map((p) => ({
+          packageId,
+          currency: p.currency,
+          price: p.price,
+          fallback: p.fallback,
+        })),
+      });
+    }
+  });
+}
+
+export async function updatePackageInterval({
+  packageId,
+  interval,
+  prisma,
+}: {
+  packageId: string;
+  interval: PaymentInterval | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.update({
+    where: { id: packageId },
+    data: { interval },
+    select: { name: true },
   });
 }

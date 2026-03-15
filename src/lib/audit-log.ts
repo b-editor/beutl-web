@@ -33,6 +33,10 @@ export const auditLogActions = {
     removeFromLibrary: "store.removeFromLibrary",
     paymentSucceeded: "store.paymentSucceeded",
   },
+  admin: {
+    updatePackagePricing: "admin.updatePackagePricing",
+    updatePackageInterval: "admin.updatePackageInterval",
+  },
 };
 
 export async function addAuditLog({

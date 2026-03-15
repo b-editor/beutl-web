@@ -4,7 +4,10 @@ import { retrievePackage } from "./actions";
 import { PackageInfoForm } from "./package-info-form";
 import { PackageDescriptionForm } from "./package-description-form";
 import { PackageDetailsForm } from "./package-details-form";
+import { PackagePricingForm } from "./package-pricing-form";
 import { ReleaseForm } from "./release-form";
+import { isAdmin } from "@/lib/admin-guard";
+import { throwIfUnauth } from "@/lib/auth-guard";
 
 export default async function Page(props: { params: Promise<{ name: string }> }) {
   const params = await props.params;
@@ -13,6 +16,8 @@ export default async function Page(props: { params: Promise<{ name: string }> })
     name
   } = params;
 
+  const session = await throwIfUnauth();
+  const isAdminUser = isAdmin(session.user.id);
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
@@ -30,7 +35,10 @@ export default async function Page(props: { params: Promise<{ name: string }> })
             <PackageDescriptionForm pkg={pkg} />
             <ReleaseForm pkg={pkg} />
           </div>
-          <PackageDetailsForm pkg={pkg} />
+          <div className="lg:basis-1/3">
+            <PackageDetailsForm pkg={pkg} />
+            {isAdminUser && <PackagePricingForm pkg={pkg} />}
+          </div>
         </div>
       </div>
     </>
