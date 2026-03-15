@@ -20,10 +20,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { MoreVertical } from "lucide-react";
+import { Loader2, MoreVertical } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import type { Package } from "@/lib/store-utils";
@@ -62,9 +62,15 @@ type GetButtonProps = {
 };
 
 function GetButton({ pkgId, owned, price, paied, lang }: GetButtonProps) {
+  const [pending, startTransition] = useTransition();
   const { t } = useTranslation(lang);
   return (
-    <Button disabled={owned} onClick={() => addToLibrary(pkgId)}>
+    <Button disabled={owned || pending} onClick={() => {
+      startTransition(async () => {
+        await addToLibrary(pkgId);
+      });
+    }}>
+      {pending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
       {owned
         ? t("store:owned")
         : paied
