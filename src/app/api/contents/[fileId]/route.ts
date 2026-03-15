@@ -3,7 +3,7 @@ import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { getDbAsync } from "@/prisma";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
-import { headers } from "next/headers";
+import { tryGetUserIdFromHeaders } from "@/lib/api/auth";
 
 export async function GET(request: NextRequest, props: { params: Promise<{ fileId: string }> }) {
   const params = await props.params;
@@ -12,7 +12,9 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
     fileId
   } = params;
 
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await auth.api.getSession({ headers: request.headers });
+  let userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
+
   const prisma = await getDbAsync();
   const file = await prisma.file.findFirst({
     where: {
@@ -78,12 +80,12 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
     cacheControl = "public";
   }
   if (file.visibility === "PRIVATE") {
-    allowed = session?.user?.id === file.userId;
+    allowed = userId === file.userId;
   }
   if (file.visibility === "DEDICATED") {
     if (file.Package.length !== 0) {
       allowed = file.Package.some(
-        (pkg) => pkg.published || pkg.userId === session?.user?.id,
+        (pkg) => pkg.published || pkg.userId === userId,
       );
       cacheControl = file.Package.some((pkg) => pkg.published) ? "public" : "private";
     }
@@ -95,7 +97,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
       allowed = file.PackageScreenshot.some(
         (screenshot) =>
           screenshot.package.published ||
-          screenshot.package.userId === session?.user?.id,
+          screenshot.package.userId === userId,
       );
       cacheControl = file.PackageScreenshot.some((screenshot) => screenshot.package.published) ? "public" : "private";
     }
@@ -104,7 +106,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
       allowed = file.Release.some(
         (release) =>
           (release.published && release.package.published) ||
-          release.package.userId === session?.user?.id,
+          release.package.userId === userId,
       );
       if (allowed) {
         const pkg = file.Release.find((r) => r.package)?.package;
@@ -112,7 +114,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
         if (pkg?.packagePricing[0]?.id) {
           if (
             !(await existsUserPaymentHistory({
-              userId: session?.user?.id,
+              userId: userId || undefined,
               packageId: pkg.id,
             }))
           ) {

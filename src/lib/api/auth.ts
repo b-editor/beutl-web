@@ -13,6 +13,25 @@ export async function getUserId(c: Context) {
   ] as string;
 }
 
+export async function getUserIdFromHeaders(headers: Headers) {
+  const header = headers.get("Authorization");
+  if (!header) return null;
+  if (!header.startsWith("Bearer ")) return null;
+  const token = header.split(" ")[1];
+  const payload = await jwtVerify(token, process.env.JWT_SECRET as string, "HS256");
+  return payload[
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
+  ] as string;
+}
+
+export async function tryGetUserIdFromHeaders(headers: Headers) {
+  try {
+    return await getUserIdFromHeaders(headers);
+  } catch {
+    return null;
+  }
+}
+
 export function getUserIdFromToken(token: string) {
   const { payload } = decode(token);
   return payload[
