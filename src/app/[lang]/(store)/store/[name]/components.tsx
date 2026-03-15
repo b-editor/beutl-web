@@ -255,7 +255,7 @@ export function ClientPage({
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
               {pkg.PackageScreenshot.map((item) => (
                 <CarouselItem
-                  className="w-min max-w-min min-w-min"
+                  className="max-w-max min-w-max"
                   key={item.file.id}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}

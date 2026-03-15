@@ -119,7 +119,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
         <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
           {screenshots.map((item) => (
             <CarouselItem
-              className="w-min max-w-min min-w-min group relative"
+              className="max-w-max min-w-max group relative"
               key={item.file.id}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
