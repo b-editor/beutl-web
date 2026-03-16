@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   } = params;
 
   const session = await auth.api.getSession({ headers: request.headers });
-  let userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
+  const userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
 
   const prisma = await getDbAsync();
   const file = await prisma.file.findFirst({
