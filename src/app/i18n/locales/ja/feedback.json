@@ -1,0 +1,23 @@
+{
+  "traceId": "トレースID",
+  "title": "フィードバック",
+  "description": "ご意見をお聞かせください。バグの報告、機能のリクエスト、ご質問をお寄せください。",
+  "name": "お名前",
+  "namePlaceholder": "お名前",
+  "email": "メールアドレス",
+  "emailPlaceholder": "your@email.com",
+  "category": "カテゴリ",
+  "categoryPlaceholder": "カテゴリを選択",
+  "categories": {
+    "BUG_REPORT": "バグ報告",
+    "FEATURE_REQUEST": "機能リクエスト",
+    "QUESTION": "質問",
+    "OTHER": "その他"
+  },
+  "message": "メッセージ",
+  "messagePlaceholder": "フィードバックの詳細をご記入ください...",
+  "messageDescription": "最大2000文字",
+  "submit": "フィードバックを送信",
+  "successMessage": "フィードバックをありがとうございます！できるだけ早くレビューいたします。",
+  "errorMessage": "フィードバックの送信に失敗しました。もう一度お試しください。"
+}

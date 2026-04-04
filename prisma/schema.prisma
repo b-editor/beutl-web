@@ -27,6 +27,7 @@ model User {
   SocialProfile      SocialProfile[]
   UserPackage        UserPackage[]
   UserPaymentHistory UserPaymentHistory[]
+  Feedback           Feedback[]
 }
 
 model Account {
@@ -261,6 +262,24 @@ model AppReleaseAsset {
   type       String
   standalone Boolean
   url        String
+}
+
+model Feedback {
+  id        String           @id @default(uuid())
+  name      String
+  email     String
+  category  FeedbackCategory
+  message   String
+  userId    String?
+  user      User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime         @default(now())
+}
+
+enum FeedbackCategory {
+  BUG_REPORT
+  FEATURE_REQUEST
+  QUESTION
+  OTHER
 }
 
 enum ConfirmationTokenPurpose {

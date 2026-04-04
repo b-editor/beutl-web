@@ -1,0 +1,23 @@
+{
+  "traceId": "Trace ID",
+  "title": "Feedback",
+  "description": "We value your feedback. Please share your thoughts, report bugs, or suggest features.",
+  "name": "Name",
+  "namePlaceholder": "Your name",
+  "email": "Email",
+  "emailPlaceholder": "your@email.com",
+  "category": "Category",
+  "categoryPlaceholder": "Select a category",
+  "categories": {
+    "BUG_REPORT": "Bug Report",
+    "FEATURE_REQUEST": "Feature Request",
+    "QUESTION": "Question",
+    "OTHER": "Other"
+  },
+  "message": "Message",
+  "messagePlaceholder": "Please describe your feedback in detail...",
+  "messageDescription": "Maximum 2000 characters",
+  "submit": "Submit Feedback",
+  "successMessage": "Thank you for your feedback! We will review it as soon as possible.",
+  "errorMessage": "Failed to submit feedback. Please try again."
+}
