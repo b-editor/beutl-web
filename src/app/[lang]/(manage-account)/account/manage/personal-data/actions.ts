@@ -66,7 +66,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
           purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
         },
       });
-      revalidatePath("/account/manage/personal-data");
+      revalidatePath(`/${lang}/account/manage/personal-data`);
       return {
         message: t("account:data.cancelAccountDeletion"),
         success: true,
@@ -105,7 +105,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
       action: auditLogActions.account.sentDeleteAccountConfirmation,
       details: "",
     });
-    revalidatePath("/account/manage/personal-data");
+    revalidatePath(`/${lang}/account/manage/personal-data`);
     return {
       message: t("account:data.sentEmail"),
       success: true,

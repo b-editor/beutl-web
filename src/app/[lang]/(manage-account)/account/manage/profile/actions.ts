@@ -4,6 +4,7 @@ import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { getDbAsync } from "@/prisma";
+import { revalidatePath } from "next/cache";
 
 const emptyStringToUndefined = (z: Zod) =>
   z.literal("").transform(() => undefined);
@@ -41,7 +42,8 @@ export async function updateProfile(
   formData: FormData,
 ): Promise<State> {
   return await authenticated(async (session) => {
-    const { t, z } = await getTranslation(await getLanguage());
+    const lang = await getLanguage();
+    const { t, z } = await getTranslation(lang);
     const validated = profileSchema(z).safeParse(
       Object.fromEntries(formData.entries()),
     );
@@ -142,6 +144,7 @@ export async function updateProfile(
     }
 
     await Promise.all(promises);
+    revalidatePath(`/${lang}/account/manage/profile`);
     return {
       success: true,
       message: t("account:profile.profileUpdated"),

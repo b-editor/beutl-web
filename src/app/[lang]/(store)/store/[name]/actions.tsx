@@ -58,7 +58,7 @@ export async function addToLibrary(packageId: string) {
     });
   }
 
-  revalidatePath(`/store/${pkg.name}`);
+  revalidatePath(`/${lang}/store/${pkg.name}`);
   redirect(`/${lang}/store/${pkg.name}?message=PleaseOpenDesktopApp`);
 }
 
@@ -89,7 +89,7 @@ export async function removeFromLibrary(packageId: string) {
       action: auditLogActions.store.removeFromLibrary,
       details: `packageId: ${packageId}`,
     });
-    revalidatePath(`/store/${name}`);
+    revalidatePath(`/${lang}/store/${name}`);
     return {
       success: true,
       message: t("store:removedFromLibrary"),

@@ -3,6 +3,8 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { createDevPackage, existsPackageName } from "@/lib/db/package";
+import { getLanguage } from "@/lib/lang-utils";
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
@@ -60,6 +62,8 @@ export async function createNewProject(
       action: auditLogActions.developer.createPackage,
       details: `packageId: ${id}, name: ${packageId}`,
     });
-    redirect(`/developer/projects/${packageId}`);
+    const lang = await getLanguage();
+    revalidatePath(`/${lang}/developer`);
+    redirect(`/${lang}/developer/projects/${packageId}`);
   });
 }

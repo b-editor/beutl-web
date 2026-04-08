@@ -30,6 +30,7 @@ import {
   createStorageFile,
   deleteStorageFile,
 } from "@/lib/storage";
+import { getLanguage } from "@/lib/lang-utils";
 import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -148,7 +149,8 @@ export async function updateDisplayNameAndShortDescription(
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -178,7 +180,8 @@ export async function updateDescription({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -228,8 +231,9 @@ export async function deletePackage(id: string): Promise<Response> {
         action: auditLogActions.developer.deletePackage,
         details: `packageId: ${id}`,
       });
-      revalidatePath("/developer");
-      redirect("/developer");
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer`);
+      redirect(`/${lang}/developer`);
     });
   });
 }
@@ -264,7 +268,8 @@ export async function changePackageVisibility(
           details: `packageId: ${id}`,
         });
       }
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -314,7 +319,8 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -356,7 +362,8 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -418,7 +425,8 @@ export async function moveScreenshot({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -440,7 +448,8 @@ export async function deleteScreenshot({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -463,7 +472,8 @@ export async function updateTag({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -584,6 +594,10 @@ export async function updateRelease(formData: FormData) {
         });
       }
 
+      const lang = await getLanguage();
+      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      revalidatePath(`/${lang}/developer/projects/${name}`);
+
       return {
         success: true,
         data,
@@ -634,6 +648,9 @@ export async function createRelease({
         action: auditLogActions.developer.createRelease,
         details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
       });
+      const lang = await getLanguage();
+      const name = await getPackageNameFromPackageId({ packageId });
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
         data: release,
@@ -677,6 +694,9 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
         action: auditLogActions.developer.deleteRelease,
         details: `releaseId: ${releaseId}`,
       });
+      const lang = await getLanguage();
+      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
       };
@@ -726,7 +746,8 @@ export async function updatePricing({
         action: auditLogActions.admin.updatePackagePricing,
         details: `packageId: ${packageId}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return { success: true };
     });
   });
@@ -764,7 +785,8 @@ export async function updateInterval({
         action: auditLogActions.admin.updatePackageInterval,
         details: `packageId: ${packageId}, interval: ${interval}`,
       });
-      revalidatePath(`/developer/projects/${name}`);
+      const lang = await getLanguage();
+      revalidatePath(`/${lang}/developer/projects/${name}`);
       return { success: true };
     });
   });

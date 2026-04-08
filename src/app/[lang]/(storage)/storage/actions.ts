@@ -55,7 +55,7 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     });
     await Promise.all(promises);
 
-    revalidatePath("/storage");
+    revalidatePath(`/${lang}/storage`);
     return {
       success: true,
     };
@@ -116,7 +116,7 @@ export async function changeFileVisibility(
     });
     await Promise.all(promises);
 
-    revalidatePath("/storage");
+    revalidatePath(`/${lang}/storage`);
     return {
       success: true,
     };
@@ -183,7 +183,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
         visibility: "PRIVATE",
       },
     });
-    revalidatePath("/storage");
+    revalidatePath(`/${lang}/storage`);
     return {
       success: true,
     };
