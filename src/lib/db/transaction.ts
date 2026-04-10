@@ -1,11 +1,11 @@
-import { getDbAsync } from "@/prisma";
-import type { PrismaClient } from "@prisma/client";
+import { getDbAsync } from "@/db";
+import type { DbTransaction } from "@/db/types";
 
-export type PrismaTransaction = Parameters<
-  Parameters<typeof PrismaClient.prototype.$transaction>[0]
->[0];
+export type { DbTransaction };
 
-export const startTransaction = async <T>(callback: (tx: PrismaTransaction) => Promise<T>) => {
+export const startTransaction = async <T>(
+  callback: (tx: DbTransaction) => Promise<T>,
+) => {
   const db = await getDbAsync();
-  return db.$transaction(callback);
+  return db.transaction(callback);
 };

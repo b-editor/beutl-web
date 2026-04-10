@@ -1,64 +1,62 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import { userPaymentHistory } from "@/db/schema";
+import { and, desc, eq } from "drizzle-orm";
+import type { DbTransaction } from "./transaction";
 
 export async function getUserPaymentHistory({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.userPaymentHistory.findMany({
-    where: {
-      userId: userId,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
+  const db = tx || (await getDbAsync());
+  return await db.query.userPaymentHistory.findMany({
+    where: eq(userPaymentHistory.userId, userId),
+    orderBy: desc(userPaymentHistory.createdAt),
   });
 }
 
 export async function existsUserPaymentHistory({
   userId,
   packageId,
-  prisma,
+  tx,
 }: {
   userId?: string;
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
   if (!userId) return false;
-  const db = prisma || await getDbAsync();
-  return !!(await db.userPaymentHistory.findFirst({
-    where: {
-      userId: userId,
-      packageId: packageId,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ id: userPaymentHistory.id })
+    .from(userPaymentHistory)
+    .where(
+      and(
+        eq(userPaymentHistory.userId, userId),
+        eq(userPaymentHistory.packageId, packageId),
+      ),
+    )
+    .limit(1);
+  return result.length > 0;
 }
 
 export async function createUserPaymentHistory({
   userId,
   packageId,
   paymentIntentId,
-  prisma,
+  tx,
 }: {
   userId: string;
   packageId: string;
   paymentIntentId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.userPaymentHistory.create({
-    data: {
-      userId: userId,
-      packageId: packageId,
-      paymentId: paymentIntentId,
-    },
+  const db = tx || (await getDbAsync());
+  await db.insert(userPaymentHistory).values({
+    userId,
+    packageId,
+    paymentId: paymentIntentId,
   });
 }

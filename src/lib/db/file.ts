@@ -1,7 +1,9 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import { file } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
+import type { DbTransaction } from "./transaction";
 
 export async function getContentUrl(id?: string | null) {
   if (!id) return null;
@@ -12,16 +14,14 @@ export async function getContentUrl(id?: string | null) {
 
 export async function retrieveFilesByUserId({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.file.findMany({
-    where: {
-      userId: userId,
-    },
+  const db = tx || (await getDbAsync());
+  return await db.query.file.findMany({
+    where: eq(file.userId, userId),
   });
 }
 
@@ -32,7 +32,7 @@ export async function createFile({
   size,
   mimeType,
   visibility,
-  prisma,
+  tx,
   sha256,
 }: {
   userId: string;
@@ -41,12 +41,13 @@ export async function createFile({
   size: number;
   mimeType: string;
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
   sha256?: string;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.file.create({
-    data: {
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .insert(file)
+    .values({
       objectKey,
       name,
       size,
@@ -54,21 +55,19 @@ export async function createFile({
       userId,
       visibility,
       sha256,
-    },
-  });
+    })
+    .returning();
+  return result[0];
 }
 
 export async function deleteFile({
   fileId,
-  prisma,
+  tx,
 }: {
   fileId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.file.delete({
-    where: {
-      id: fileId,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db.delete(file).where(eq(file.id, fileId)).returning();
+  return result[0];
 }

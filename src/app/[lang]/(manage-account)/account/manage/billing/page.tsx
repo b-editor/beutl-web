@@ -1,4 +1,6 @@
-import { getDb } from "@/prisma";
+import { getDb } from "@/db";
+import { packageTable } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { getTranslation } from "@/app/i18n/server";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
@@ -19,21 +21,23 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const session = await authOrSignIn();
 
   const history = await getUserPaymentHistory({ userId: session.user.id });
-  const prisma = getDb();
+  const db = getDb();
   const items = await Promise.all(
     history.map(async (item) => {
-      const p1 = prisma.package.findFirst({
-        where: {
-          id: item.packageId,
-        },
-        select: {
+      const p1 = db.query.packageTable.findFirst({
+        where: eq(packageTable.id, item.packageId),
+        columns: {
           name: true,
           displayName: true,
+        },
+        with: {
           user: {
-            select: {
+            columns: {
               name: true,
-              Profile: {
-                select: {
+            },
+            with: {
+              profile: {
+                columns: {
                   displayName: true,
                 },
               },
@@ -47,7 +51,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
       return {
         product: pkg ? pkg.displayName || pkg.name : "不明なアイテム",
         seller:
-          pkg?.user.Profile?.displayName || pkg?.user.name || "不明なユーザー",
+          pkg?.user.profile?.displayName || pkg?.user.name || "不明なユーザー",
         amount: payment.amount,
         currency: payment.currency,
         paiedAt: item.createdAt,

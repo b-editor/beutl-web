@@ -1,8 +1,10 @@
 import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { passkey } from "@better-auth/passkey";
 import { magicLink } from "better-auth/plugins";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import { profile } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { addAuditLog, auditLogActions } from "./audit-log";
 import { sendEmail } from "@/resend";
 import type { Session, User } from "better-auth";
@@ -13,14 +15,14 @@ export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
 
 // Create auth instance lazily but cache it
-let authInstance: Awaited<ReturnType<typeof createAuthWithPrisma>> | null = null;
+let authInstance: Awaited<ReturnType<typeof createAuthWithDrizzle>> | null = null;
 
-// Create the auth instance with Prisma adapter
-async function createAuthWithPrisma() {
-  const prisma = await getDbAsync();
+// Create the auth instance with Drizzle adapter
+async function createAuthWithDrizzle() {
+  const db = await getDbAsync();
   return betterAuth({
-    database: prismaAdapter(prisma, {
-      provider: "postgresql",
+    database: drizzleAdapter(db, {
+      provider: "pg",
     }),
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
@@ -96,22 +98,20 @@ async function createAuthWithPrisma() {
             if (!userName) return;
 
             const original = userName;
-            let exists = await db.profile.findFirst({
-              where: { userName: original },
+            let exists = await db.query.profile.findFirst({
+              where: eq(profile.userName, original),
             });
             for (let i = 1; exists; i++) {
               userName = `${original}${i}`;
-              exists = await db.profile.findFirst({
-                where: { userName },
+              exists = await db.query.profile.findFirst({
+                where: eq(profile.userName, userName),
               });
             }
 
-            await db.profile.create({
-              data: {
-                userId: user.id,
-                displayName: user.name || userName,
-                userName,
-              },
+            await db.insert(profile).values({
+              userId: user.id,
+              displayName: user.name || userName,
+              userName,
             });
 
             await addAuditLog({
@@ -154,12 +154,6 @@ async function createAuthWithPrisma() {
         },
       },
     },
-    // pages: {
-    //   signIn: "/account/sign-in",
-    //   signOut: "/account/sign-out",
-    //   verifyRequest: "/account/verify-request",
-    //   error: "/account/error",
-    // },
   });
 }
 
@@ -167,14 +161,14 @@ async function createAuthWithPrisma() {
 export const auth = {
   handler: async (request: Request) => {
     if (!authInstance) {
-      authInstance = await createAuthWithPrisma();
+      authInstance = await createAuthWithDrizzle();
     }
     return authInstance.handler(request);
   },
   api: {
     getSession: async (options: { headers: Headers }) => {
       if (!authInstance) {
-        authInstance = await createAuthWithPrisma();
+        authInstance = await createAuthWithDrizzle();
       }
       return authInstance.api.getSession(options);
     },
@@ -184,7 +178,7 @@ export const auth = {
 // Export the auth instance getter for other uses
 export async function getAuth() {
   if (!authInstance) {
-    authInstance = await createAuthWithPrisma();
+    authInstance = await createAuthWithDrizzle();
   }
   return authInstance;
 }

@@ -1,103 +1,94 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import { passkey } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import type { DbTransaction } from "./transaction";
 
 export async function updatePasskeyUsedAt({
   credentialID,
   usedAt,
-  prisma,
+  tx,
 }: {
   credentialID: string;
   usedAt: Date;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.passkey.update({
-    where: {
-      credentialID,
-    },
-    data: {
-      usedAt: usedAt,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  await db
+    .update(passkey)
+    .set({ usedAt })
+    .where(eq(passkey.credentialID, credentialID));
 }
 
 export async function deletePasskey({
   credentialID,
   userId,
-  prisma,
+  tx,
 }: {
   credentialID: string;
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.passkey.delete({
-    where: {
-      credentialID,
-      userId,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  await db
+    .delete(passkey)
+    .where(
+      and(eq(passkey.credentialID, credentialID), eq(passkey.userId, userId)),
+    );
 }
 
 export async function updatePasskeyName({
   credentialID,
   userId,
   name,
-  prisma,
+  tx,
 }: {
   credentialID: string;
   userId: string;
   name: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.passkey.update({
-    where: {
-      credentialID,
-      userId,
-    },
-    data: {
-      name,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  await db
+    .update(passkey)
+    .set({ name })
+    .where(
+      and(eq(passkey.credentialID, credentialID), eq(passkey.userId, userId)),
+    );
 }
 
 export async function getPasskeysByUserId({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.passkey.findMany({
-    where: {
-      userId,
-    },
-    select: {
-      id: true,
-      credentialID: true,
-      name: true,
-      deviceType: true,
-      backedUp: true,
-      createdAt: true,
-      usedAt: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  return await db
+    .select({
+      id: passkey.id,
+      credentialID: passkey.credentialID,
+      name: passkey.name,
+      deviceType: passkey.deviceType,
+      backedUp: passkey.backedUp,
+      createdAt: passkey.createdAt,
+      usedAt: passkey.usedAt,
+    })
+    .from(passkey)
+    .where(eq(passkey.userId, userId));
 }
 
 export async function findPasskeyByCredentialId({
   credentialID,
-  prisma,
+  tx,
 }: {
   credentialID: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.passkey.findUnique({
-    where: {
-      credentialID,
-    },
+  const db = tx || (await getDbAsync());
+  const result = await db.query.passkey.findFirst({
+    where: eq(passkey.credentialID, credentialID),
   });
+  return result ?? null;
 }

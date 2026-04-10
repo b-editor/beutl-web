@@ -1,34 +1,36 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PaymentInterval } from "@prisma/client";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import {
+  packageTable,
+  packagePricing,
+  packageScreenshot,
+} from "@/db/schema";
+import type { PaymentInterval } from "@/db/types";
+import { and, asc, count, desc, eq, ilike } from "drizzle-orm";
+import type { DbTransaction } from "./transaction";
 
 export async function retrieveDevPackagesByUserId({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.findMany({
-    where: {
-      userId: userId,
-    },
-    select: {
+  const db = tx || (await getDbAsync());
+  return await db.query.packageTable.findMany({
+    where: eq(packageTable.userId, userId),
+    columns: {
       id: true,
       name: true,
       displayName: true,
       published: true,
+    },
+    with: {
       iconFile: {
-        select: {
-          id: true,
-        },
+        columns: { id: true },
       },
-      Release: {
-        select: {
-          version: true,
-        },
+      releases: {
+        columns: { version: true },
       },
     },
   });
@@ -37,22 +39,16 @@ export async function retrieveDevPackagesByUserId({
 export async function retrieveDevPackageByName({
   name,
   userId,
-  prisma,
+  tx,
 }: {
   name: string;
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.findFirst({
-    where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
-      userId: userId,
-    },
-    select: {
+  const db = tx || (await getDbAsync());
+  return await db.query.packageTable.findFirst({
+    where: and(ilike(packageTable.name, name), eq(packageTable.userId, userId)),
+    columns: {
       id: true,
       name: true,
       displayName: true,
@@ -62,8 +58,10 @@ export async function retrieveDevPackageByName({
       webSite: true,
       tags: true,
       interval: true,
-      packagePricing: {
-        select: {
+    },
+    with: {
+      packagePricings: {
+        columns: {
           id: true,
           price: true,
           currency: true,
@@ -71,46 +69,37 @@ export async function retrieveDevPackageByName({
         },
       },
       user: {
-        select: {
-          Profile: {
-            select: {
-              userName: true,
-            },
+        columns: {},
+        with: {
+          profile: {
+            columns: { userName: true },
           },
         },
       },
       iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-        },
+        columns: { id: true, objectKey: true },
       },
-      PackageScreenshot: {
-        select: {
-          order: true,
+      packageScreenshots: {
+        columns: { order: true },
+        with: {
           file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
+            columns: { id: true, objectKey: true },
           },
         },
-        orderBy: {
-          order: "asc",
-        },
+        orderBy: asc(packageScreenshot.order),
       },
-      Release: {
-        select: {
+      releases: {
+        columns: {
           version: true,
           title: true,
           description: true,
           targetVersion: true,
           id: true,
           published: true,
+        },
+        with: {
           file: {
-            select: {
-              name: true,
-            },
+            columns: { name: true },
           },
         },
       },
@@ -120,220 +109,187 @@ export async function retrieveDevPackageByName({
 
 export async function existsPackageName({
   name,
-  prisma,
+  tx,
 }: {
   name: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.count({
-    where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ count: count() })
+    .from(packageTable)
+    .where(ilike(packageTable.name, name));
+  return result[0].count;
 }
 
 export async function createDevPackage({
   name,
   userId,
-  prisma,
+  tx,
 }: {
   name: string;
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.create({
-    data: {
-      name: name,
-      userId: userId,
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .insert(packageTable)
+    .values({
+      name,
+      userId,
       description: "",
       shortDescription: "",
       webSite: "",
       published: false,
-    },
-  });
+    })
+    .returning();
+  return result[0];
 }
 
 export async function getUserIdFromPackageId({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return (await db.package.findFirst({
-      where: {
-        id: packageId,
-      },
-      select: {
-        userId: true,
-      },
-    }))?.userId;
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ userId: packageTable.userId })
+    .from(packageTable)
+    .where(eq(packageTable.id, packageId))
+    .limit(1);
+  return result[0]?.userId;
 }
 
 export async function getPackageNameFromPackageId({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return (await db.package.findFirst({
-      where: {
-        id: packageId,
-      },
-      select: {
-        name: true,
-      },
-    })
-  )?.name;
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ name: packageTable.name })
+    .from(packageTable)
+    .where(eq(packageTable.id, packageId))
+    .limit(1);
+  return result[0]?.name;
 }
 
 export async function updateDevPackageDisplay({
   packageId,
   displayName,
   shortDescription,
-  prisma,
+  tx,
 }: {
   packageId: string;
   displayName: string;
   shortDescription: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      displayName: displayName,
-      shortDescription: shortDescription,
-    },
-    select: {
-      name: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ displayName, shortDescription })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }
 
 export async function updateDevPackageDescription({
   packageId,
   description,
-  prisma,
+  tx,
 }: {
   packageId: string;
   description: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      description: description,
-    },
-    select: {
-      name: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ description })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }
 
 export async function updateDevPackagePublished({
   published,
   packageId,
-  prisma,
+  tx,
 }: {
   published: boolean;
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      published: published,
-    },
-    select: {
-      name: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ published })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }
 
 export async function updateDevPackageIconFile({
   packageId,
   fileId,
-  prisma,
+  tx,
 }: {
   packageId: string;
   fileId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      iconFileId: fileId,
-    },
-    select: {
-      name: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ iconFileId: fileId })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }
 
 export async function retrieveDevPackageDependsFile({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  const pkg = await db.package.findFirstOrThrow({
-    where: {
-      id: packageId,
-    },
-    select: {
-      PackageScreenshot: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
+  const db = tx || (await getDbAsync());
+  const pkg = await db.query.packageTable.findFirst({
+    where: eq(packageTable.id, packageId),
+    columns: {},
+    with: {
+      packageScreenshots: {
+        columns: {},
+        with: {
+          file: { columns: { id: true, objectKey: true } },
         },
       },
-      iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-        },
-      },
-      Release: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
+      iconFile: { columns: { id: true, objectKey: true } },
+      releases: {
+        columns: {},
+        with: {
+          file: { columns: { id: true, objectKey: true } },
         },
       },
     },
   });
-  const files = pkg.PackageScreenshot.map((item) => item.file).concat(
-    pkg.Release.map((item) => item.file as NonNullable<typeof item.file>),
-  );
+  if (!pkg) throw new Error(`Package not found: ${packageId}`);
+
+  const files = pkg.packageScreenshots
+    .map((item) => item.file)
+    .concat(
+      pkg.releases
+        .map((item) => item.file)
+        .filter(
+          (f): f is NonNullable<typeof f> => f !== null,
+        ),
+    );
   if (pkg.iconFile) {
     files.push(pkg.iconFile);
   }
@@ -342,197 +298,177 @@ export async function retrieveDevPackageDependsFile({
 
 export async function retrieveDevPackageIconFile({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return (await db.package.findFirst({
-      where: {
-        id: packageId,
-      },
-      select: {
-        iconFile: {
-          select: {
-            id: true,
-            objectKey: true,
-            size: true,
-          },
-        },
-      },
-    })
-  )?.iconFile;
+  const db = tx || (await getDbAsync());
+  const result = await db.query.packageTable.findFirst({
+    where: eq(packageTable.id, packageId),
+    columns: {},
+    with: {
+      iconFile: { columns: { id: true, objectKey: true, size: true } },
+    },
+  });
+  return result?.iconFile ?? null;
 }
 
 export async function retrieveDevPackageScreenshots({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.packageScreenshot.findMany({
-    where: {
-      packageId: packageId,
-    },
-    select: {
-      order: true,
-      fileId: true,
-    },
-    orderBy: {
-      order: "asc",
-    },
-  });
+  const db = tx || (await getDbAsync());
+  return await db
+    .select({
+      order: packageScreenshot.order,
+      fileId: packageScreenshot.fileId,
+    })
+    .from(packageScreenshot)
+    .where(eq(packageScreenshot.packageId, packageId))
+    .orderBy(asc(packageScreenshot.order));
 }
 
 export async function retrieveDevPackageLastScreenshotOrder({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.packageScreenshot.findFirst({
-    where: {
-      packageId: packageId,
-    },
-    select: {
-      order: true,
-    },
-    orderBy: {
-      order: "desc",
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ order: packageScreenshot.order })
+    .from(packageScreenshot)
+    .where(eq(packageScreenshot.packageId, packageId))
+    .orderBy(desc(packageScreenshot.order))
+    .limit(1);
+  return result[0] ?? null;
 }
 
 export async function createDevPackageScreenshot({
   packageId,
   fileId,
   order,
-  prisma,
+  tx,
 }: {
   packageId: string;
   fileId: string;
   order: number;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.packageScreenshot.create({
-    data: {
-      packageId: packageId,
-      fileId: fileId,
-      order: order,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .insert(packageScreenshot)
+    .values({ packageId, fileId, order })
+    .returning();
+  return result[0];
 }
 
 export async function updateDevPackageScreenshotOrder({
   packageId,
   fileId,
   order,
-  prisma,
+  tx,
 }: {
   packageId: string;
   fileId: string;
   order: number;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.packageScreenshot.update({
-    where: {
-      packageId_fileId: {
-        packageId: packageId,
-        fileId: fileId,
-      },
-    },
-    data: {
-      order: order,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageScreenshot)
+    .set({ order })
+    .where(
+      and(
+        eq(packageScreenshot.packageId, packageId),
+        eq(packageScreenshot.fileId, fileId),
+      ),
+    )
+    .returning();
+  return result[0];
 }
 
 export async function updateDevPackageTags({
   packageId,
   tags,
-  prisma,
+  tx,
 }: {
   packageId: string;
   tags: string[];
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      tags: tags,
-    },
-    select: {
-      name: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ tags })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }
 
 export async function deleteDevPackageScreenshot({
   packageId,
   fileId,
-  prisma,
+  tx,
 }: {
   packageId: string;
   fileId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.packageScreenshot.delete({
-    where: {
-      packageId_fileId: {
-        packageId: packageId,
-        fileId: fileId,
-      },
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .delete(packageScreenshot)
+    .where(
+      and(
+        eq(packageScreenshot.packageId, packageId),
+        eq(packageScreenshot.fileId, fileId),
+      ),
+    )
+    .returning();
+  return result[0];
 }
 
 export async function deleteDevPackage({
   packageId,
-  prisma,
+  tx,
 }: {
   packageId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.delete({
-    where: {
-      id: packageId,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .delete(packageTable)
+    .where(eq(packageTable.id, packageId))
+    .returning();
+  return result[0];
 }
 
 export async function upsertPackagePricings({
   packageId,
-  pricings
+  pricings,
 }: {
   packageId: string;
   pricings: { currency: string; price: number; fallback: boolean }[];
 }) {
   const db = await getDbAsync();
-  await db.$transaction(async (tx) => {
-    await tx.packagePricing.deleteMany({
-      where: { packageId },
-    });
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(packagePricing)
+      .where(eq(packagePricing.packageId, packageId));
     if (pricings.length > 0) {
-      await tx.packagePricing.createMany({
-        data: pricings.map((p) => ({
+      await tx.insert(packagePricing).values(
+        pricings.map((p) => ({
           packageId,
           currency: p.currency,
           price: p.price,
           fallback: p.fallback,
         })),
-      });
+      );
     }
   });
 }
@@ -540,16 +476,17 @@ export async function upsertPackagePricings({
 export async function updatePackageInterval({
   packageId,
   interval,
-  prisma,
+  tx,
 }: {
   packageId: string;
   interval: PaymentInterval | null;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.package.update({
-    where: { id: packageId },
-    data: { interval },
-    select: { name: true },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .update(packageTable)
+    .set({ interval })
+    .where(eq(packageTable.id, packageId))
+    .returning({ name: packageTable.name });
+  return result[0];
 }

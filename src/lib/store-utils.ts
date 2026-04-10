@@ -1,16 +1,34 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import {
+  packageTable,
+  packagePricing,
+  packageScreenshot,
+  userPackage,
+} from "@/db/schema";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  like,
+  or,
+  sql,
+} from "drizzle-orm";
 import { guessCurrency } from "./currency";
 import { existsUserPaymentHistory } from "./db/user-payment-history";
 
 export async function packageOwned(pkgId: string, userId: string) {
   const db = await getDbAsync();
-  return !!(await db.userPackage.findFirst({
-    where: {
-      userId: userId,
-      packageId: pkgId,
-    },
-  }));
+  const result = await db
+    .select({ userId: userPackage.userId })
+    .from(userPackage)
+    .where(
+      and(eq(userPackage.userId, userId), eq(userPackage.packageId, pkgId)),
+    )
+    .limit(1);
+  return result.length > 0;
 }
 
 export async function packagePaied(pkgId: string, userId: string) {
@@ -19,31 +37,23 @@ export async function packagePaied(pkgId: string, userId: string) {
 
 export async function retrievePrices(pkgId: string) {
   const db = await getDbAsync();
-  return await db.packagePricing.findMany({
-    where: {
-      packageId: pkgId,
-    },
-    select: {
-      currency: true,
-      price: true,
-      fallback: true,
-    },
-  });
+  return await db
+    .select({
+      currency: packagePricing.currency,
+      price: packagePricing.price,
+      fallback: packagePricing.fallback,
+    })
+    .from(packagePricing)
+    .where(eq(packagePricing.packageId, pkgId));
 }
 
 export type Package = NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
 
 export async function retrievePackage(name: string) {
   const db = await getDbAsync();
-  const pkg = await db.package.findFirst({
-    where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
-      published: true,
-    },
-    select: {
+  const pkg = await db.query.packageTable.findFirst({
+    where: and(ilike(packageTable.name, name), eq(packageTable.published, true)),
+    columns: {
       id: true,
       name: true,
       displayName: true,
@@ -52,46 +62,37 @@ export async function retrievePackage(name: string) {
       published: true,
       webSite: true,
       tags: true,
+    },
+    with: {
       user: {
-        select: {
-          Profile: {
-            select: {
-              userName: true,
-            },
+        columns: {},
+        with: {
+          profile: {
+            columns: { userName: true },
           },
         },
       },
       iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-        },
+        columns: { id: true, objectKey: true },
       },
-      PackageScreenshot: {
-        select: {
-          order: true,
+      packageScreenshots: {
+        columns: { order: true },
+        with: {
           file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
+            columns: { id: true, objectKey: true },
           },
         },
-        orderBy: {
-          order: "asc",
-        },
+        orderBy: asc(packageScreenshot.order),
       },
-      Release: {
-        select: {
+      releases: {
+        columns: {
           version: true,
           title: true,
           description: true,
           targetVersion: true,
           id: true,
         },
-        where: {
-          published: true,
-        },
+        where: (release, { eq }) => eq(release.published, true),
       },
     },
   });
@@ -99,19 +100,15 @@ export async function retrievePackage(name: string) {
     return null;
   }
 
-  const screenshots = await Promise.all(
-    pkg.PackageScreenshot.map(async (item) => {
-      return {
-        ...item,
-        url: `/api/contents/${item.file.id}`,
-      };
-    }),
-  );
+  const screenshots = pkg.packageScreenshots.map((item) => ({
+    ...item,
+    url: `/api/contents/${item.file.id}`,
+  }));
 
   return {
     ...pkg,
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
-    PackageScreenshot: screenshots,
+    packageScreenshots: screenshots,
   };
 }
 
@@ -137,114 +134,23 @@ export async function retrievePackages(
   const db = await getDbAsync();
   const currency = await guessCurrency();
 
-  if (query) {
-    const tmp = await db.package.findMany({
-      where: {
-        published: true,
-        OR: [
-          {
-            name: {
-              contains: query,
-            },
-          },
-          {
-            displayName: {
-              contains: query,
-            },
-          },
-          {
-            description: {
-              contains: query,
-            },
-          },
-          {
-            shortDescription: {
-              contains: query,
-            },
-          },
-          {
-            tags: {
-              hasSome: [query],
-            },
-          },
-        ],
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      select: {
-        id: true,
-        displayName: true,
-        name: true,
-        shortDescription: true,
-        tags: true,
-        iconFileId: true,
-        userId: true,
-        user: {
-          select: {
-            Profile: {
-              select: {
-                userName: true,
-              },
-            },
-          },
-        },
-        packagePricing: {
-          where: currency ? {
-            OR: [
-              {
-                currency: {
-                  equals: currency,
-                  mode: "insensitive",
-                },
-              },
-              {
-                fallback: true,
-              },
-            ],
-          } : {
-            fallback: true,
-          },
-          select: {
-            price: true,
-            currency: true,
-            fallback: true,
-          },
-        },
-      },
-    });
+  const baseWhere = query
+    ? and(
+        eq(packageTable.published, true),
+        or(
+          like(packageTable.name, `%${query}%`),
+          like(packageTable.displayName, `%${query}%`),
+          like(packageTable.description, `%${query}%`),
+          like(packageTable.shortDescription, `%${query}%`),
+          sql`${packageTable.tags} && ARRAY[${query}]::text[]`,
+        ),
+      )
+    : eq(packageTable.published, true);
 
-    return await Promise.all(
-      tmp.map(async (pkg) => {
-        const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
-
-        return {
-          id: pkg.id,
-          name: pkg.name,
-          displayName: pkg.displayName,
-          shortDescription: pkg.shortDescription,
-          userName: pkg.user.Profile?.userName || null,
-          userId: pkg.userId,
-          iconFileUrl: url,
-          iconFileId: pkg.iconFileId,
-          tags: pkg.tags,
-          price:
-            pkg.packagePricing.find((p) => p.currency === currency) ||
-            pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing?.[0] ||
-            null,
-        };
-      }),
-    );
-  }
-  const tmp = await db.package.findMany({
-    where: {
-      published: true,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-    select: {
+  const tmp = await db.query.packageTable.findMany({
+    where: baseWhere,
+    orderBy: desc(packageTable.createdAt),
+    columns: {
       id: true,
       displayName: true,
       name: true,
@@ -252,32 +158,21 @@ export async function retrievePackages(
       tags: true,
       iconFileId: true,
       userId: true,
+    },
+    with: {
       user: {
-        select: {
-          Profile: {
-            select: {
-              userName: true,
-            },
+        columns: {},
+        with: {
+          profile: {
+            columns: { userName: true },
           },
         },
       },
-      packagePricing: {
-        where: currency ? {
-          OR: [
-            {
-              currency: {
-                equals: currency,
-                mode: "insensitive",
-              },
-            },
-            {
-              fallback: true,
-            },
-          ],
-        } : {
-          fallback: true,
-        },
-        select: {
+      packagePricings: {
+        where: currency
+          ? or(ilike(packagePricing.currency, currency), eq(packagePricing.fallback, true))
+          : eq(packagePricing.fallback, true),
+        columns: {
           price: true,
           currency: true,
           fallback: true,
@@ -286,26 +181,25 @@ export async function retrievePackages(
     },
   });
 
-  return await Promise.all(
-    tmp.map(async (pkg) => {
-      const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
-
-      return {
-        id: pkg.id,
-        name: pkg.name,
-        displayName: pkg.displayName,
-        shortDescription: pkg.shortDescription,
-        userName: pkg.user.Profile?.userName || null,
-        userId: pkg.userId,
-        iconFileUrl: url,
-        iconFileId: pkg.iconFileId,
-        tags: pkg.tags,
-        price:
-          pkg.packagePricing.find((p) => p.currency === currency) ||
-          pkg.packagePricing.find((p) => p.fallback) ||
-          pkg.packagePricing[0] ||
-          null,
-      };
-    }),
-  );
+  return tmp.map((pkg) => {
+    const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
+    return {
+      id: pkg.id,
+      name: pkg.name,
+      displayName: pkg.displayName,
+      shortDescription: pkg.shortDescription,
+      userName: pkg.user.profile?.userName || null,
+      userId: pkg.userId,
+      iconFileUrl: url,
+      iconFileId: pkg.iconFileId,
+      tags: pkg.tags ?? [],
+      price:
+        pkg.packagePricings.find(
+          (p) => p.currency.toLowerCase() === currency?.toLowerCase(),
+        ) ||
+        pkg.packagePricings.find((p) => p.fallback) ||
+        pkg.packagePricings[0] ||
+        null,
+    };
+  });
 }

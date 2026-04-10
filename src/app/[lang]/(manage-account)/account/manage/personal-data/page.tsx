@@ -1,7 +1,9 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { getDb } from "@/prisma";
+import { getDb } from "@/db";
+import { confirmationToken } from "@/db/schema";
+import { ConfirmationTokenPurpose } from "@/db/types";
+import { eq, and } from "drizzle-orm";
 import { Form } from "./components";
-import { ConfirmationTokenPurpose } from "@prisma/client";
 import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
 import { findEmailByUserId } from "@/lib/db/user";
@@ -19,12 +21,12 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   if (!user) {
     throw new Error("User not found");
   }
-  const prisma = getDb();
-  const tokens = await prisma.confirmationToken.findMany({
-    where: {
-      userId: session.user.id,
-      purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-    },
+  const db = getDb();
+  const tokens = await db.query.confirmationToken.findMany({
+    where: and(
+      eq(confirmationToken.userId, session.user.id),
+      eq(confirmationToken.purpose, ConfirmationTokenPurpose.ACCOUNT_DELETE),
+    ),
   });
   const { t } = await getTranslation(lang);
 

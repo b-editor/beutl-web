@@ -1,63 +1,60 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import { account } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import type { DbTransaction } from "./transaction";
 
-// Better Auth uses accountId and providerId instead of providerAccountId and provider
 export async function retrieveAccounts({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.account.findMany({
-    where: {
-      userId: userId,
-    },
-    select: {
-      accountId: true,
-      providerId: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  return await db
+    .select({
+      accountId: account.accountId,
+      providerId: account.providerId,
+    })
+    .from(account)
+    .where(eq(account.userId, userId));
 }
 
 export async function retrieveAccountsWithIdToken({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return await db.account.findMany({
-    where: {
-      userId: userId,
-    },
-    select: {
-      accountId: true,
-      providerId: true,
-      idToken: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  return await db
+    .select({
+      accountId: account.accountId,
+      providerId: account.providerId,
+      idToken: account.idToken,
+    })
+    .from(account)
+    .where(eq(account.userId, userId));
 }
 
 export async function deleteAccount({
-  accountId,
+  accountId: accountIdValue,
   providerId,
-  prisma,
+  tx,
 }: {
   accountId: string;
   providerId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.account.delete({
-    where: {
-      providerId_accountId: {
-        accountId,
-        providerId,
-      },
-    }
-  });
+  const db = tx || (await getDbAsync());
+  await db
+    .delete(account)
+    .where(
+      and(
+        eq(account.accountId, accountIdValue),
+        eq(account.providerId, providerId),
+      ),
+    );
 }

@@ -23,7 +23,7 @@ import {
   updatePackageInterval,
   upsertPackagePricings,
 } from "@/lib/db/package";
-import type { PaymentInterval } from "@prisma/client";
+import type { PaymentInterval } from "@/db/types";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
 import {
   calcTotalFileSize,
@@ -31,7 +31,9 @@ import {
   deleteStorageFile,
 } from "@/lib/storage";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import { file as fileTable, packageTable, release } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import SemVer from "semver";
@@ -195,11 +197,11 @@ export async function retrievePackage(name: string) {
   if (!pkg) {
     return null;
   }
-  pkg.Release.sort((a, b) => {
+  pkg.releases.sort((a, b) => {
     return new SemVer.SemVer(b.version).compare(a.version);
   });
   const screenshots = await Promise.all(
-    pkg.PackageScreenshot.map(async (item) => {
+    pkg.packageScreenshots.map(async (item) => {
       return {
         ...item,
         url: `/api/contents/${item.file.id}`,
@@ -210,6 +212,7 @@ export async function retrievePackage(name: string) {
   return {
     ...pkg,
     iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
+    Release: pkg.releases,
     PackageScreenshot: screenshots,
   };
 }
@@ -245,16 +248,15 @@ export async function changePackageVisibility(
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
       const db = await getDbAsync();
-      const { published: oldPublished } = await db.package.findFirstOrThrow(
-        {
-          where: {
-            id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
+      const result = await db
+        .select({ published: packageTable.published })
+        .from(packageTable)
+        .where(eq(packageTable.id, id))
+        .limit(1);
+      if (!result[0]) {
+        throw new Error("Package not found");
+      }
+      const { published: oldPublished } = result[0];
       const { name } = await updateDevPackagePublished({
         packageId: id,
         published,
@@ -494,14 +496,14 @@ export async function updateRelease(formData: FormData) {
       };
     }
     const db = await getDbAsync();
-    const release = await db.release.findFirst({
-      where: {
-        id: validated.data.id,
-      },
-      select: {
+    const releaseData = await db.query.release.findFirst({
+      where: eq(release.id, validated.data.id),
+      columns: {
         packageId: true,
+      },
+      with: {
         file: {
-          select: {
+          columns: {
             id: true,
             objectKey: true,
             size: true,
@@ -509,18 +511,18 @@ export async function updateRelease(formData: FormData) {
         },
       },
     });
-    if (!release?.packageId) {
+    if (!releaseData?.packageId) {
       return {
         success: false,
         message: "IDが見つかりません",
       };
     }
 
-    return await sameUser(release.packageId, session.user.id, async () => {
-      let fileId = release.file?.id;
+    return await sameUser(releaseData.packageId, session.user.id, async () => {
+      let fileId = releaseData.file?.id;
       if (validated.data.file) {
-        const deletedSize = release.file
-          ? BigInt(release.file.size)
+        const deletedSize = releaseData.file
+          ? BigInt(releaseData.file.size)
           : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
@@ -534,9 +536,9 @@ export async function updateRelease(formData: FormData) {
           };
         }
 
-        if (release.file) {
+        if (releaseData.file) {
           await deleteStorageFile({
-            fileId: release.file.id,
+            fileId: releaseData.file.id,
           });
         }
         // biome-ignore lint/style/noNonNullAssertion: <explanation>
@@ -544,41 +546,52 @@ export async function updateRelease(formData: FormData) {
       }
 
       const db = await getDbAsync();
-      const { published: oldPublished } = await db.release.findFirstOrThrow(
-        {
-          where: {
-            id: validated.data.id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
-      const data = await db.release.update({
-        where: {
-          id: validated.data.id,
-        },
-        data: {
+      const oldReleaseResult = await db
+        .select({ published: release.published })
+        .from(release)
+        .where(eq(release.id, validated.data.id))
+        .limit(1);
+      if (!oldReleaseResult[0]) {
+        throw new Error("Release not found");
+      }
+      const { published: oldPublished } = oldReleaseResult[0];
+
+      const updatedRows = await db
+        .update(release)
+        .set({
           title: validated.data.title,
           description: validated.data.description,
           targetVersion: validated.data.targetVersion,
           published: validated.data.published === "on",
           fileId: fileId,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
-          file: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      });
+        })
+        .where(eq(release.id, validated.data.id))
+        .returning({
+          version: release.version,
+          title: release.title,
+          description: release.description,
+          targetVersion: release.targetVersion,
+          id: release.id,
+          published: release.published,
+          fileId: release.fileId,
+        });
+      const data = updatedRows[0];
+
+      // Fetch the file name separately if fileId exists
+      let fileName: string | null = null;
+      if (data.fileId) {
+        const fileResult = await db.query.file.findFirst({
+          where: eq(fileTable.id, data.fileId),
+          columns: { name: true },
+        });
+        fileName = fileResult?.name ?? null;
+      }
+
+      const returnData = {
+        ...data,
+        file: fileName ? { name: fileName } : null,
+      };
+
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updateRelease,
@@ -595,12 +608,12 @@ export async function updateRelease(formData: FormData) {
       }
 
       const lang = await getLanguage();
-      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      const name = await getPackageNameFromPackageId({ packageId: releaseData.packageId });
       revalidatePath(`/${lang}/developer/projects/${name}`);
 
       return {
         success: true,
-        data,
+        data: returnData,
       };
     });
   });
@@ -620,40 +633,39 @@ export async function createRelease({
       }
 
       const db = await getDbAsync();
-      const release = await db.release.create({
-        data: {
+      const rows = await db
+        .insert(release)
+        .values({
           packageId,
           version,
           title: "新しいリリース",
           description: "",
           targetVersion: "1.0.0-preview.10",
           published: false,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
-          file: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      });
+        })
+        .returning({
+          version: release.version,
+          title: release.title,
+          description: release.description,
+          targetVersion: release.targetVersion,
+          id: release.id,
+          published: release.published,
+        });
+      const createdRelease = {
+        ...rows[0],
+        file: null,
+      };
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.createRelease,
-        details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
+        details: `packageId: ${packageId}, releaseId: ${createdRelease.id}, version: ${version}`,
       });
       const lang = await getLanguage();
       const name = await getPackageNameFromPackageId({ packageId });
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
-        data: release,
+        data: createdRelease,
       };
     });
   });
@@ -662,40 +674,34 @@ export async function createRelease({
 export async function deleteRelease({ releaseId }: { releaseId: string }) {
   return await authenticated(async (session) => {
     const db = await getDbAsync();
-    const release = await db.release.findFirst({
-      where: {
-        id: releaseId,
-      },
-      select: {
+    const releaseData = await db.query.release.findFirst({
+      where: eq(release.id, releaseId),
+      columns: {
         packageId: true,
         fileId: true,
       },
     });
-    if (!release?.packageId) {
+    if (!releaseData?.packageId) {
       return {
         success: false,
         message: "IDが見つかりません",
       };
     }
-    return await sameUser(release.packageId, session.user.id, async () => {
-      if (release.fileId) {
+    return await sameUser(releaseData.packageId, session.user.id, async () => {
+      if (releaseData.fileId) {
         await deleteStorageFile({
-          fileId: release.fileId,
+          fileId: releaseData.fileId,
         });
       }
       const db = await getDbAsync();
-  await db.release.delete({
-        where: {
-          id: releaseId,
-        },
-      });
+      await db.delete(release).where(eq(release.id, releaseId));
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.deleteRelease,
         details: `releaseId: ${releaseId}`,
       });
       const lang = await getLanguage();
-      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      const name = await getPackageNameFromPackageId({ packageId: releaseData.packageId });
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,

@@ -3,7 +3,9 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { getUserId, getUserIdFromToken } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import { session, nativeAppAuth } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { sign } from "hono/jwt";
 
 const createAuthUriSchema = z.object({
@@ -131,12 +133,10 @@ async function createRefreshToken(userId: string) {
         Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
   );
   const db = await getDbAsync();
-  await db.session.create({
-    data: {
-      token: rawToken,
-      expiresAt: expires,
-      userId: userId,
-    },
+  await db.insert(session).values({
+    token: rawToken,
+    expiresAt: expires,
+    userId: userId,
   });
 
   return {
@@ -163,11 +163,9 @@ const app = new Hono()
         });
       }
       const db = await getDbAsync();
-      const auth = await db.nativeAppAuth.create({
-        data: {
-          continueUrl: continue_uri,
-        },
-      });
+      const [auth] = await db.insert(nativeAppAuth).values({
+        continueUrl: continue_uri,
+      }).returning();
       const currentUrl = new URL(c.req.url);
       return c.json({
         auth_uri: `${currentUrl.origin}/account/native-auth/handler?identifier=${auth.id}`,
@@ -189,8 +187,8 @@ const app = new Hono()
       });
     }
     const db = await getDbAsync();
-    const auth = await db.nativeAppAuth.findFirst({
-      where: { id: identifier },
+    const auth = await db.query.nativeAppAuth.findFirst({
+      where: eq(nativeAppAuth.id, identifier),
     });
     if (!auth) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
@@ -198,21 +196,20 @@ const app = new Hono()
       });
     }
 
-    const { code, continueUrl } = await db.nativeAppAuth.update({
-      where: { id: identifier },
-      data: {
+    const [updated] = await db.update(nativeAppAuth)
+      .set({
         userId,
         code: crypto.randomUUID(),
         codeExpires: new Date(Date.now() + 1000 * 60 * 30),
-      },
-      select: {
-        code: true,
-        continueUrl: true,
-      },
-    });
+      })
+      .where(eq(nativeAppAuth.id, identifier))
+      .returning({
+        code: nativeAppAuth.code,
+        continueUrl: nativeAppAuth.continueUrl,
+      });
 
-    const url = new URL(continueUrl);
-    url.searchParams.set("code", code ?? "");
+    const url = new URL(updated.continueUrl);
+    url.searchParams.set("code", updated.code ?? "");
     return c.redirect(url.toString());
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
@@ -232,12 +229,10 @@ const app = new Hono()
     }
 
     const db = await getDbAsync();
-    const oldRefreshTokens = await db.session.deleteMany({
-      where: {
-        token: oldDecryptedRefreshToken,
-      },
-    });
-    if (!oldRefreshTokens.count) {
+    const oldRefreshTokens = await db.delete(session)
+      .where(eq(session.token, oldDecryptedRefreshToken))
+      .returning();
+    if (!oldRefreshTokens.length) {
       return c.json(await apiErrorResponse("invalidRefreshToken"), {
         status: 401,
       });
@@ -257,10 +252,8 @@ const app = new Hono()
   .post("/code2jwt", zValidator("json", exchangeSchema), async (c) => {
     const { session_id, code } = c.req.valid("json");
     const db = await getDbAsync();
-    const auth = await db.nativeAppAuth.findFirst({
-      where: {
-        sessionId: session_id,
-      },
+    const auth = await db.query.nativeAppAuth.findFirst({
+      where: eq(nativeAppAuth.sessionId, session_id),
     });
 
     if (
@@ -274,11 +267,8 @@ const app = new Hono()
         status: 401,
       });
     }
-    await db.nativeAppAuth.deleteMany({
-      where: {
-        sessionId: session_id,
-      },
-    });
+    await db.delete(nativeAppAuth)
+      .where(eq(nativeAppAuth.sessionId, session_id));
 
     const { exp: accessTokenExp, token: accessToken } = await createJwtToken(
       auth.userId,

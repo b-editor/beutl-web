@@ -1,6 +1,8 @@
 import { auth } from "@/lib/better-auth";
 import { randomString } from "@/lib/create-hash";
-import { getDb } from "@/prisma";
+import { getDb } from "@/db";
+import { nativeAppAuth } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
@@ -38,17 +40,16 @@ export default async function Page(
     }
 
     const code = randomString(32);
-    const prisma = getDb();
-    const obj = await prisma.nativeAppAuth.update({
-      where: {
-        id: identifier,
-      },
-      data: {
+    const db = getDb();
+    const [obj] = await db
+      .update(nativeAppAuth)
+      .set({
         userId: session.user.id,
         codeExpires: new Date(Date.now() + 1000 * 60 * 30),
         code,
-      },
-    });
+      })
+      .where(eq(nativeAppAuth.id, identifier))
+      .returning();
 
     const continueUrl = new URL(obj.continueUrl, xurl);
     continueUrl.searchParams.set("code", code);

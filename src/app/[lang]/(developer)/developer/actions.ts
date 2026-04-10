@@ -25,7 +25,7 @@ export async function retrievePackages(): Promise<Package[]> {
 
   return await Promise.all(
     packages.map(async (pkg) => {
-      pkg.Release.sort((a, b) => {
+      pkg.releases.sort((a, b) => {
         return new SemVer(a.version).compare(b.version);
       });
       return {
@@ -34,7 +34,7 @@ export async function retrievePackages(): Promise<Package[]> {
         displayName: pkg.displayName || undefined,
         iconFileUrl:
           (pkg.iconFile && `/api/contents/${pkg.iconFile.id}`) || undefined,
-        latestVersion: pkg.Release[0]?.version,
+        latestVersion: pkg.releases[0]?.version,
         published: pkg.published,
       };
     }),

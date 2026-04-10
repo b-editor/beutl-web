@@ -1,9 +1,9 @@
-import type { FileVisibility } from "@prisma/client";
+import type { FileVisibility } from "@/db/types";
 
 export interface File {
   id: string;
   name: string;
-  size: bigint;
+  size: number;
   visibility: FileVisibility;
   mimeType: string;
   objectKey: string;

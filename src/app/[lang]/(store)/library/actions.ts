@@ -1,5 +1,7 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import { userPackage } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { guessCurrency } from "@/lib/currency";
 
 type ListedPackage = {
@@ -21,52 +23,36 @@ export async function retrievePackages(
 ): Promise<ListedPackage[]> {
   const db = await getDbAsync();
   const currency = await guessCurrency();
-  const tmp = await db.userPackage.findMany({
-    where: {
-      userId: userId,
+  const tmp = await db.query.userPackage.findMany({
+    where: eq(userPackage.userId, userId),
+    with: {
       package: {
-        published: true,
-      },
-    },
-    select: {
-      package: {
-        select: {
+        columns: {
           id: true,
           displayName: true,
           name: true,
           shortDescription: true,
           tags: true,
+          published: true,
+        },
+        with: {
           iconFile: {
-            select: {
+            columns: {
               id: true,
             },
           },
           user: {
-            select: {
-              Profile: {
-                select: {
+            columns: {},
+            with: {
+              profile: {
+                columns: {
                   userName: true,
                 },
               },
             },
           },
-          packagePricing: {
-            where: currency ? {
-              OR: [
-                {
-                  currency: {
-                    equals: currency,
-                    mode: "insensitive",
-                  },
-                },
-                {
-                  fallback: true,
-                },
-              ],
-            } : {
-              fallback: true,
-            },
-            select: {
+          packagePricings: {
+            columns: {
               price: true,
               currency: true,
               fallback: true,
@@ -79,22 +65,28 @@ export async function retrievePackages(
 
   return await Promise.all(
     tmp
+      .filter((up) => up.package.published)
       .map((up) => up.package)
       .map(async (pkg) => {
         const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
+        const pricings = pkg.packagePricings;
+        const matchedPrice = currency
+          ? pricings.find(
+              (p) => p.currency.toLowerCase() === currency.toLowerCase(),
+            ) ||
+            pricings.find((p) => p.fallback) ||
+            pricings[0]
+          : pricings.find((p) => p.fallback) || pricings[0];
 
         return {
           id: pkg.id,
           name: pkg.name,
           displayName: pkg.displayName || undefined,
           shortDescription: pkg.shortDescription,
-          userName: pkg.user.Profile?.userName || undefined,
+          userName: pkg.user.profile?.userName || undefined,
           iconFileUrl: url || undefined,
-          tags: pkg.tags,
-          price:
-            pkg.packagePricing.find((p) => p.currency === currency) ||
-            pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing[0],
+          tags: pkg.tags ?? [],
+          price: matchedPrice,
         };
       }),
   );

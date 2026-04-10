@@ -1,112 +1,93 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
-import type { PrismaTransaction } from "./transaction";
+import { getDbAsync } from "@/db";
+import { user } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import type { DbTransaction } from "./transaction";
 
 export async function existsUserByEmail({
   email,
-  prisma,
+  tx,
 }: {
   email: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return !!(await db.user.findFirst({
-    where: {
-      email: email,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(eq(user.email, email))
+    .limit(1);
+  return result.length > 0;
 }
 
 export async function existsUserById({
   id,
-  prisma,
+  tx,
 }: {
   id: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return !!(await db.user.findFirst({
-    where: {
-      id: id,
-    },
-    select: {
-      id: true,
-    },
-  }));
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(eq(user.id, id))
+    .limit(1);
+  return result.length > 0;
 }
 
 export async function updateUserEmail({
   userId,
   email,
-  prisma,
+  tx,
 }: {
   userId: string;
   email: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.user.update({
-    where: {
-      id: userId,
-    },
-    data: {
-      email: email,
-    }
-  });
+  const db = tx || (await getDbAsync());
+  await db.update(user).set({ email }).where(eq(user.id, userId));
 }
 
 export async function findEmailByUserId({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return db.user.findFirst({
-    where: {
-      id: userId,
-    },
-    select: {
-      email: true,
-    },
-  });
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ email: user.email })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  return result[0] ?? null;
 }
 
 export async function getEmailVerifiedByUserId({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  return (
-    await db.user.findFirst({
-      where: {
-        id: userId,
-      },
-      select: {
-        emailVerified: true,
-      },
-    })
-  )?.emailVerified;
+  const db = tx || (await getDbAsync());
+  const result = await db
+    .select({ emailVerified: user.emailVerified })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  return result[0]?.emailVerified;
 }
 
 export async function deleteUserById({
   userId,
-  prisma,
+  tx,
 }: {
   userId: string;
-  prisma?: PrismaTransaction;
+  tx?: DbTransaction;
 }) {
-  const db = prisma || await getDbAsync();
-  await db.user.delete({
-    where: {
-      id: userId,
-    }
-  });
+  const db = tx || (await getDbAsync());
+  await db.delete(user).where(eq(user.id, userId));
 }

@@ -1,16 +1,17 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/prisma";
+import { getDbAsync } from "@/db";
+import { profile } from "@/db/schema";
+import { eq, type SQL } from "drizzle-orm";
 import { apiErrorResponse } from "@/lib/api/error";
-import type { Prisma } from "@prisma/client";
 import { getUserId } from "@/lib/api/auth";
 import { getContentUrl } from "@/lib/db/file";
 
-export async function getUserProfile(query: Prisma.ProfileWhereInput) {
-  const prisma = await getDbAsync();
-  const profile = await prisma.profile.findFirst({
-    where: query,
-    select: {
+export async function getUserProfile(where: SQL) {
+  const db = await getDbAsync();
+  const profileResult = await db.query.profile.findFirst({
+    where,
+    columns: {
       userId: true,
       displayName: true,
       iconFileId: true,
@@ -18,16 +19,16 @@ export async function getUserProfile(query: Prisma.ProfileWhereInput) {
       bio: true,
     },
   });
-  if (!profile) {
+  if (!profileResult) {
     return null;
   }
   return {
-    id: profile.userId,
-    name: profile.userName,
-    displayName: profile.displayName || profile.userName,
-    bio: profile.bio,
-    iconId: profile.iconFileId,
-    iconUrl: await getContentUrl(profile.iconFileId),
+    id: profileResult.userId,
+    name: profileResult.userName,
+    displayName: profileResult.displayName || profileResult.userName,
+    bio: profileResult.bio,
+    iconId: profileResult.iconFileId,
+    iconUrl: await getContentUrl(profileResult.iconFileId),
   };
 }
 
@@ -38,13 +39,13 @@ const app = new Hono().get("/", async (c) => {
       status: 401,
     });
   }
-  const profile = await getUserProfile({
-    userId: currentUserId,
-  });
-  if (!profile) {
+  const userProfile = await getUserProfile(
+    eq(profile.userId, currentUserId),
+  );
+  if (!userProfile) {
     return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
   }
-  return c.json(profile);
+  return c.json(userProfile);
 });
 
 export default app;
