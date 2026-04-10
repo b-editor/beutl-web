@@ -18,7 +18,7 @@
   "dependencies": {
     "@better-auth/passkey": "^1.4.19",
     "@hono/zod-validator": "^0.7.6",
-    "@hookform/resolvers": "^5.0.1",
+    "@hookform/resolvers": "^5.2.2",
     "@opennextjs/cloudflare": "^1.17.1",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-avatar": "^1.1.11",
