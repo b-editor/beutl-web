@@ -15,7 +15,10 @@ const searchQuerySchema = z.object({
   // x64, arm64
   arch: z.string().refine((value) => ["x64", "arm64"].includes(value)),
   standalone: z.string().refine((value) => ["true", "false"].includes(value)).transform((value) => value === "true"),
-  prerelease: z.string().refine((value) => ["true", "false"].includes(value)).transform((value) => value === "true"),
+  prerelease: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "true")),
 });
 
 const app = new Hono()
@@ -31,8 +34,10 @@ const app = new Hono()
       os,
       arch,
       standalone,
-      prerelease,
+      prerelease: prereleaseQuery,
     } = c.req.valid("query");
+
+    const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
 
     const db = await getDbAsync();
     const assets = await db.query.appReleaseAsset.findMany({
@@ -43,7 +48,7 @@ const app = new Hono()
     const versions = assets.map((asset) => asset.version);
     const latest = [...new Set(versions)]
       .map((v) => new SemVer.SemVer(v))
-      .filter((v) => prerelease || v.prerelease.length === 0)
+      .filter((v) => includePrerelease || v.prerelease.length === 0)
       .sort((a, b) => SemVer.compare(b, a))[0];
 
     if (!latest) {
