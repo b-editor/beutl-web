@@ -16,7 +16,7 @@
   "dependencies": {
     "@better-auth/passkey": "^1.4.19",
     "@hono/zod-validator": "^0.7.6",
-    "@hookform/resolvers": "^5.0.1",
+    "@hookform/resolvers": "^5.2.2",
     "@opennextjs/cloudflare": "^1.17.1",
     "@prisma/adapter-pg": "^7.4.2",
     "@prisma/client": "^7.4.2",
