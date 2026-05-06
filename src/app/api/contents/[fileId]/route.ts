@@ -1,8 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
-import { getDbAsync } from "@/db";
-import { file } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 import { tryGetUserIdFromHeaders } from "@/lib/api/auth";
@@ -17,47 +15,43 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   const session = await auth.api.getSession({ headers: request.headers });
   const userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
 
-  const db = await getDbAsync();
-  const fileResult = await db.query.file.findFirst({
-    where: eq(file.id, fileId),
-    columns: {
+  const prisma = await getDbAsync();
+  const file = await prisma.file.findFirst({
+    where: {
+      id: fileId,
+    },
+    select: {
       objectKey: true,
       visibility: true,
       userId: true,
       mimeType: true,
-    },
-    with: {
-      packages: {
-        columns: {
+      Package: {
+        select: {
           userId: true,
           published: true,
         },
       },
-      profiles: true,
-      packageScreenshots: {
-        with: {
+      Profile: true,
+      PackageScreenshot: {
+        select: {
           package: {
-            columns: {
+            select: {
               userId: true,
               published: true,
             },
           },
         },
       },
-      releases: {
-        columns: {
+      Release: {
+        select: {
           published: true,
-        },
-        with: {
           package: {
-            columns: {
+            select: {
               id: true,
               userId: true,
               published: true,
-            },
-            with: {
-              packagePricings: {
-                columns: {
+              packagePricing: {
+                select: {
                   id: true,
                 },
               },
@@ -69,7 +63,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   });
   let cacheControl = "private";
 
-  if (!fileResult) {
+  if (!file) {
     return NextResponse.json(
       {
         message: "ファイルが見つかりません",
@@ -81,43 +75,43 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   }
 
   let allowed = false;
-  if (fileResult.visibility === "PUBLIC") {
+  if (file.visibility === "PUBLIC") {
     allowed = true;
     cacheControl = "public";
   }
-  if (fileResult.visibility === "PRIVATE") {
-    allowed = userId === fileResult.userId;
+  if (file.visibility === "PRIVATE") {
+    allowed = userId === file.userId;
   }
-  if (fileResult.visibility === "DEDICATED") {
-    if (fileResult.packages.length !== 0) {
-      allowed = fileResult.packages.some(
+  if (file.visibility === "DEDICATED") {
+    if (file.Package.length !== 0) {
+      allowed = file.Package.some(
         (pkg) => pkg.published || pkg.userId === userId,
       );
-      cacheControl = fileResult.packages.some((pkg) => pkg.published) ? "public" : "private";
+      cacheControl = file.Package.some((pkg) => pkg.published) ? "public" : "private";
     }
-    if (fileResult.profiles.length !== 0) {
+    if (file.Profile) {
       allowed = true;
       cacheControl = "public";
     }
-    if (fileResult.packageScreenshots.length !== 0) {
-      allowed = fileResult.packageScreenshots.some(
+    if (file.PackageScreenshot.length !== 0) {
+      allowed = file.PackageScreenshot.some(
         (screenshot) =>
           screenshot.package.published ||
           screenshot.package.userId === userId,
       );
-      cacheControl = fileResult.packageScreenshots.some((screenshot) => screenshot.package.published) ? "public" : "private";
+      cacheControl = file.PackageScreenshot.some((screenshot) => screenshot.package.published) ? "public" : "private";
     }
-    if (fileResult.releases.length !== 0) {
+    if (file.Release.length !== 0) {
       cacheControl = "no-store";
-      allowed = fileResult.releases.some(
-        (releaseItem) =>
-          (releaseItem.published && releaseItem.package.published) ||
-          releaseItem.package.userId === userId,
+      allowed = file.Release.some(
+        (release) =>
+          (release.published && release.package.published) ||
+          release.package.userId === userId,
       );
       if (allowed) {
-        const pkg = fileResult.releases.find((r) => r.package)?.package;
+        const pkg = file.Release.find((r) => r.package)?.package;
         // 価格が設定されている時、購入者のみアクセス可能
-        if (pkg?.packagePricings[0]?.id) {
+        if (pkg?.packagePricing[0]?.id) {
           if (
             !(await existsUserPaymentHistory({
               userId: userId || undefined,
@@ -140,7 +134,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
 
   if (allowed) {
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-    const res = await bucket.get(fileResult.objectKey);
+    const res = await bucket.get(file.objectKey);
     if (!res) {
       return NextResponse.json(
         {
@@ -154,7 +148,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
 
     return new NextResponse(res.body, {
       headers: {
-        "Content-Type": fileResult.mimeType || "application/octet-stream",
+        "Content-Type": file.mimeType || "application/octet-stream",
         "Content-Length": res.size.toString(),
         "Cache-Control": cacheControl !== "no-store" ? `${cacheControl}, max-age=31536000, immutable` : cacheControl,
       },

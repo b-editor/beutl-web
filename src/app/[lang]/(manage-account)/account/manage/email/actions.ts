@@ -1,14 +1,12 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { getDbAsync } from "@/db";
-import { confirmationToken } from "@/db/schema";
-import { ConfirmationTokenPurpose } from "@/db/types";
-import { and, eq, count } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
@@ -94,12 +92,14 @@ export async function sendConfirmationEmail(
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
     const db = await getDbAsync();
-    const createToken = db.insert(confirmationToken).values({
-      token: await createHash(`${token}${secret}`),
-      identifier: validated.data.newEmail,
-      userId: session.user.id,
-      expires,
-      purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
+    const createToken = db.confirmationToken.create({
+      data: {
+        token: await createHash(`${token}${secret}`),
+        identifier: validated.data.newEmail,
+        userId: session.user.id,
+        expires,
+        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
+      },
     });
 
     await Promise.all([sendRequest, createToken]);
@@ -120,17 +120,14 @@ export async function updateEmail(token: string, identifier: string) {
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
   const db = await getDbAsync();
-
-  const countResult = await db
-    .select({ count: count() })
-    .from(confirmationToken)
-    .where(
-      and(
-        eq(confirmationToken.identifier, identifier),
-        eq(confirmationToken.token, hash),
-      ),
-    );
-  if (!countResult[0].count) {
+  if (
+    !(await db.confirmationToken.count({
+      where: {
+        identifier: identifier,
+        token: hash,
+      },
+    }))
+  ) {
     console.error("Invalid token");
     redirect(
       `/${lang}/account/manage/email?status=emailUpdateFailed`,
@@ -138,21 +135,20 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const deletedRows = await db
-    .delete(confirmationToken)
-    .where(
-      and(
-        eq(confirmationToken.identifier, identifier),
-        eq(confirmationToken.token, hash),
-      ),
-    )
-    .returning({
-      identifier: confirmationToken.identifier,
-      expires: confirmationToken.expires,
-      userId: confirmationToken.userId,
-      purpose: confirmationToken.purpose,
-    });
-  const tokenData = deletedRows[0];
+  const tokenData = await db.confirmationToken.delete({
+    where: {
+      identifier_token: {
+        identifier: identifier,
+        token: hash,
+      },
+    },
+    select: {
+      identifier: true,
+      expires: true,
+      userId: true,
+      purpose: true,
+    },
+  });
   if (
     !tokenData ||
     tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE
@@ -172,17 +168,17 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const updated = await startTransaction(async (tx) => {
+  const updated = await startTransaction(async (p) => {
     await updateUserEmail({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      tx,
+      prisma: p,
     });
 
     await updateCustomerEmailIfExist({
       userId: tokenData.userId,
       email: tokenData.identifier,
-      tx,
+      prisma: p,
     });
     return true;
   }).catch((e) => {

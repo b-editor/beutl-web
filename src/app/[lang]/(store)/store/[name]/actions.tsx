@@ -5,9 +5,7 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, authOrSignIn } from "@/lib/auth-guard";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/db";
-import { packageTable, userPackage } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -16,25 +14,22 @@ export async function addToLibrary(packageId: string) {
   const lang = await getLanguage();
   const db = await getDbAsync();
 
-  const pkg = await db.query.packageTable.findFirst({
-    where: and(eq(packageTable.id, packageId), eq(packageTable.published, true)),
-    columns: {
+  const pkg = await db.package.findFirst({
+    where: {
+      id: packageId,
+      published: true,
+    },
+    select: {
       id: true,
       name: true,
-    },
-    with: {
-      packagePricings: {
-        columns: {
-          id: true,
-        },
-      },
+      packagePricing: true,
     },
   });
   if (!pkg) {
     return { success: false, message: "Package not found" };
   }
 
-  if (pkg.packagePricings.length > 0) {
+  if (pkg.packagePricing.length > 0) {
     // すでに支払いをしている場合のみ、支払わずにuserPackageを作成する
     const record = await existsUserPaymentHistory({
       userId: session.user.id,
@@ -45,20 +40,16 @@ export async function addToLibrary(packageId: string) {
     }
   }
 
-  const existing = await db
-    .select({ userId: userPackage.userId })
-    .from(userPackage)
-    .where(
-      and(
-        eq(userPackage.userId, session.user.id),
-        eq(userPackage.packageId, pkg.id),
-      ),
-    )
-    .limit(1);
-  if (!existing[0]) {
-    await db.insert(userPackage).values({
-      userId: session.user.id,
-      packageId: pkg.id,
+  if (
+    !(await db.userPackage.findFirst({
+      where: { userId: session.user.id, packageId: pkg.id },
+    }))
+  ) {
+    await db.userPackage.create({
+      data: {
+        userId: session.user.id,
+        packageId: pkg.id,
+      },
     });
     await addAuditLog({
       userId: session.user.id,
@@ -76,29 +67,29 @@ export async function removeFromLibrary(packageId: string) {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const db = await getDbAsync();
-
-    // First get the package name
-    const pkg = await db.query.packageTable.findFirst({
-      where: eq(packageTable.id, packageId),
-      columns: { name: true },
+    const {
+      package: { name },
+    } = await db.userPackage.delete({
+      where: {
+        userId_packageId: {
+          userId: session.user.id,
+          packageId,
+        },
+      },
+      select: {
+        package: {
+          select: {
+            name: true,
+          },
+        },
+      },
     });
-
-    // Delete the user package entry
-    await db
-      .delete(userPackage)
-      .where(
-        and(
-          eq(userPackage.userId, session.user.id),
-          eq(userPackage.packageId, packageId),
-        ),
-      );
-
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.store.removeFromLibrary,
       details: `packageId: ${packageId}`,
     });
-    revalidatePath(`/${lang}/store/${pkg?.name}`);
+    revalidatePath(`/${lang}/store/${name}`);
     return {
       success: true,
       message: t("store:removedFromLibrary"),

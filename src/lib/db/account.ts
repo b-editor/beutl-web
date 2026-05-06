@@ -1,60 +1,63 @@
 import "server-only";
-import { getDbAsync } from "@/db";
-import { account } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
-import type { DbTransaction } from "./transaction";
+import { getDbAsync } from "@/prisma";
+import type { PrismaTransaction } from "./transaction";
 
+// Better Auth uses accountId and providerId instead of providerAccountId and provider
 export async function retrieveAccounts({
   userId,
-  tx,
+  prisma,
 }: {
   userId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  return await db
-    .select({
-      accountId: account.accountId,
-      providerId: account.providerId,
-    })
-    .from(account)
-    .where(eq(account.userId, userId));
+  const db = prisma || await getDbAsync();
+  return await db.account.findMany({
+    where: {
+      userId: userId,
+    },
+    select: {
+      accountId: true,
+      providerId: true,
+    },
+  });
 }
 
 export async function retrieveAccountsWithIdToken({
   userId,
-  tx,
+  prisma,
 }: {
   userId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  return await db
-    .select({
-      accountId: account.accountId,
-      providerId: account.providerId,
-      idToken: account.idToken,
-    })
-    .from(account)
-    .where(eq(account.userId, userId));
+  const db = prisma || await getDbAsync();
+  return await db.account.findMany({
+    where: {
+      userId: userId,
+    },
+    select: {
+      accountId: true,
+      providerId: true,
+      idToken: true,
+    },
+  });
 }
 
 export async function deleteAccount({
-  accountId: accountIdValue,
+  accountId,
   providerId,
-  tx,
+  prisma,
 }: {
   accountId: string;
   providerId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  await db
-    .delete(account)
-    .where(
-      and(
-        eq(account.accountId, accountIdValue),
-        eq(account.providerId, providerId),
-      ),
-    );
+  const db = prisma || await getDbAsync();
+  await db.account.delete({
+    where: {
+      providerId_accountId: {
+        accountId,
+        providerId,
+      },
+    }
+  });
 }

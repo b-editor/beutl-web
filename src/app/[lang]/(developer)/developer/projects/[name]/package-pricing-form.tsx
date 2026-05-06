@@ -31,7 +31,7 @@ type Pricing = {
 
 export function PackagePricingForm({ pkg }: { pkg: Package }) {
   const [pricings, setPricings] = useState<Pricing[]>(
-    pkg.packagePricings.map((p) => ({
+    pkg.packagePricing.map((p) => ({
       currency: p.currency,
       price: p.price,
       fallback: p.fallback,

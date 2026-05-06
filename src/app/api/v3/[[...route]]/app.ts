@@ -1,7 +1,5 @@
 import { apiErrorResponse } from "@/lib/api/error";
-import { getDbAsync } from "@/db";
-import { appReleaseAsset } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import SemVer from "semver";
@@ -39,13 +37,12 @@ const app = new Hono()
 
     const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
 
-    const db = await getDbAsync();
-    const assets = await db.query.appReleaseAsset.findMany({
-      columns: {
+    const prisma = await getDbAsync();
+    const versions = (await prisma.appReleaseAsset.findMany({
+      select: {
         version: true,
-      },
-    });
-    const versions = assets.map((asset) => asset.version);
+      }
+    })).map((asset) => asset.version);
     const latest = [...new Set(versions)]
       .map((v) => new SemVer.SemVer(v))
       .filter((v) => includePrerelease || v.prerelease.length === 0)
@@ -66,14 +63,14 @@ const app = new Hono()
       });
     }
 
-    const asset = await db.query.appReleaseAsset.findFirst({
-      where: and(
-        eq(appReleaseAsset.version, latest.version),
-        eq(appReleaseAsset.type, type),
-        eq(appReleaseAsset.os, os),
-        eq(appReleaseAsset.arch, arch),
-        eq(appReleaseAsset.standalone, standalone),
-      ),
+    const asset = await prisma.appReleaseAsset.findFirst({
+      where: {
+        version: latest.version,
+        type,
+        os,
+        arch,
+        standalone,
+      },
     });
 
     if (!asset) {

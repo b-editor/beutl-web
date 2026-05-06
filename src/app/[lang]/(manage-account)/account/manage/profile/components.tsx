@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { Profile } from "@/db/types";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { AlertCircle, CheckCircle, Link2, Lock, LockOpen } from "lucide-react";
 import { type ComponentProps, useMemo, useState, useActionState } from "react";
 import { type State, updateProfile } from "./actions";
@@ -30,7 +30,7 @@ function ChangeUserName({
   state,
   lang,
 }: {
-  profile: Profile | undefined;
+  profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">;
   state: State;
   lang: string;
 }) {
@@ -103,19 +103,25 @@ function ChangeUserName({
   );
 }
 
-interface SocialWithProvider {
-  value: string;
-  provider: {
-    id: string;
-    name: string;
-    provider: string;
-    urlTemplate: string;
-  };
-}
-
 type FormProps = ComponentProps<"form"> & {
-  profile: Profile | undefined;
-  socials: SocialWithProvider[];
+  profile: Prisma.Result<PrismaClient["profile"], unknown, "findFirst">;
+  socials: Prisma.Result<
+    PrismaClient["socialProfile"],
+    {
+      select: {
+        value: true;
+        provider: {
+          select: {
+            id: true;
+            name: true;
+            provider: true;
+            urlTemplate: true;
+          };
+        };
+      };
+    },
+    "findMany"
+  >;
 };
 
 export function Form({

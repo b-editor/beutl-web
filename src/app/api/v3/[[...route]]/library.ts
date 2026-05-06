@@ -1,8 +1,6 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/db";
-import { user, packageTable, packagePricing, release, userPackage } from "@/db/schema";
-import { eq, and, gt, ilike } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { z } from "zod";
@@ -18,10 +16,12 @@ const acquireSchema = z.object({
 
 async function createResponse(pkgId: string, userId: string | null) {
   const currency = await guessCurrency();
-  const db = await getDbAsync();
-  const pkg = await db.query.packageTable.findFirst({
-    where: eq(packageTable.id, pkgId),
-    columns: {
+  const prisma = await getDbAsync();
+  const pkg = await prisma.package.findFirst({
+    where: {
+      id: pkgId,
+    },
+    select: {
       published: true,
       id: true,
       name: true,
@@ -30,12 +30,10 @@ async function createResponse(pkgId: string, userId: string | null) {
       tags: true,
       iconFileId: true,
       userId: true,
-    },
-    with: {
       user: {
-        with: {
-          profile: {
-            columns: {
+        select: {
+          Profile: {
+            select: {
               userName: true,
               displayName: true,
               bio: true,
@@ -44,26 +42,30 @@ async function createResponse(pkgId: string, userId: string | null) {
           },
         },
       },
-      packagePricings: currency ? {
-        where: (pp, { eq: e, or }) => or(
-          ilike(pp.currency, currency),
-          e(pp.fallback, true),
-        ),
-        columns: {
-          price: true,
-          currency: true,
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
           fallback: true,
         },
-      } : {
-        where: (pp, { eq: e }) => e(pp.fallback, true),
-        columns: {
+        select: {
           price: true,
           currency: true,
           fallback: true,
         },
       },
-      releases: {
-        columns: {
+      Release: {
+        select: {
           id: true,
           version: true,
         },
@@ -73,15 +75,17 @@ async function createResponse(pkgId: string, userId: string | null) {
   if (!pkg || !pkg.published) {
     return null;
   }
-  const profileData = pkg.user.profile;
-  pkg.releases.sort((a, b) => {
+  const profile = pkg.user.Profile;
+  pkg.Release.sort((a, b) => {
     return new SemVer(b.version).compare(a.version);
   });
-  const latestReleaseId = pkg.releases?.[0]?.id;
+  const latestReleaseId = pkg.Release?.[0]?.id;
   const latestRelease = latestReleaseId
-    ? await db.query.release.findFirst({
-      where: eq(release.id, latestReleaseId),
-      columns: {
+    ? await prisma.release.findFirst({
+      where: {
+        id: latestReleaseId,
+      },
+      select: {
         id: true,
         version: true,
         title: true,
@@ -100,9 +104,9 @@ async function createResponse(pkgId: string, userId: string | null) {
   }
 
   const price =
-    pkg.packagePricings.find((p) => p.currency === currency) ||
-    pkg.packagePricings.find((p) => p.fallback) ||
-    pkg.packagePricings[0];
+    pkg.packagePricing.find((p) => p.currency === currency) ||
+    pkg.packagePricing.find((p) => p.fallback) ||
+    pkg.packagePricing[0];
 
   return {
     package: {
@@ -119,11 +123,11 @@ async function createResponse(pkgId: string, userId: string | null) {
       owned: owned,
       owner: {
         id: pkg.userId,
-        name: profileData?.userName || "",
-        displayName: profileData?.displayName || "",
-        bio: profileData?.bio || null,
-        iconId: profileData?.iconFileId || null,
-        iconUrl: await getContentUrl(profileData?.iconFileId),
+        name: profile?.userName || "",
+        displayName: profile?.displayName || "",
+        bio: profile?.bio || null,
+        iconId: profile?.iconFileId || null,
+        iconUrl: await getContentUrl(profile?.iconFileId),
       },
     },
     latestRelease: latestRelease
@@ -150,14 +154,16 @@ const app = new Hono()
       });
     }
 
-    const db = await getDbAsync();
-    const userResult = await db.query.user.findFirst({
-      where: eq(user.id, userId),
-      columns: {
+    const prisma = await getDbAsync();
+    const user = await prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+      select: {
         id: true,
       },
     });
-    if (!userResult) {
+    if (!user) {
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
     }
 
@@ -166,17 +172,19 @@ const app = new Hono()
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
 
-    const paymentRequired = !!(await db.query.packagePricing.findFirst({
-      where: and(
-        eq(packagePricing.packageId, pkg.package.id),
-        gt(packagePricing.price, 0),
-      ),
-      columns: {
+    const paymentRequired = !!(await prisma.packagePricing.findFirst({
+      where: {
+        packageId: pkg.package.id,
+        price: {
+          gt: 0,
+        },
+      },
+      select: {
         id: true,
       },
     }));
     if (paymentRequired) {
-      const paied = await packagePaied(pkg.package.id, userResult.id);
+      const paied = await packagePaied(pkg.package.id, user.id);
       if (!paied) {
         return c.json(await apiErrorResponse("packageIsPrivate"), {
           status: 402,
@@ -184,16 +192,19 @@ const app = new Hono()
       }
     }
 
-    const existingUserPackage = await db.query.userPackage.findFirst({
-      where: and(
-        eq(userPackage.userId, userResult.id),
-        eq(userPackage.packageId, pkg.package.id),
-      ),
-    });
-    if (!existingUserPackage) {
-      await db.insert(userPackage).values({
-        userId: userResult.id,
-        packageId: pkg.package.id,
+    if (
+      !(await prisma.userPackage.findFirst({
+        where: {
+          userId: user.id,
+          packageId: pkg.package.id,
+        },
+      }))
+    ) {
+      await prisma.userPackage.create({
+        data: {
+          userId: user.id,
+          packageId: pkg.package.id,
+        },
       });
     }
 
@@ -207,10 +218,12 @@ const app = new Hono()
       });
     }
 
-    const db = await getDbAsync();
-    const packages = await db.query.userPackage.findMany({
-      where: eq(userPackage.userId, userId),
-      columns: {
+    const prisma = await getDbAsync();
+    const packages = await prisma.userPackage.findMany({
+      where: {
+        userId: userId,
+      },
+      select: {
         packageId: true,
       },
     });
@@ -232,21 +245,15 @@ const app = new Hono()
       });
     }
 
-    const db = await getDbAsync();
-    // First find the package by name
-    const pkg = await db.query.packageTable.findFirst({
-      where: eq(packageTable.name, name),
-      columns: {
-        id: true,
+    const prisma = await getDbAsync();
+    await prisma.userPackage.deleteMany({
+      where: {
+        userId: userId,
+        package: {
+          name: name,
+        },
       },
     });
-    if (pkg) {
-      await db.delete(userPackage)
-        .where(and(
-          eq(userPackage.userId, userId),
-          eq(userPackage.packageId, pkg.id),
-        ));
-    }
 
     return c.text("Deleted");
   });

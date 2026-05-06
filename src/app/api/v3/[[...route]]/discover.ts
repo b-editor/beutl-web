@@ -2,9 +2,7 @@ import "server-only";
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { getDbAsync } from "@/db";
-import { profile } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import {
   type ListedPackage,
   packageOwned,
@@ -21,10 +19,12 @@ const searchQuerySchema = z.object({
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
-  const db = await getDbAsync();
-  const profileResult = await db.query.profile.findFirst({
-    where: eq(profile.userId, pkg.userId),
-    columns: {
+  const prisma = await getDbAsync();
+  const profile = await prisma.profile.findFirst({
+    where: {
+      userId: pkg.userId,
+    },
+    select: {
       userName: true,
       displayName: true,
       bio: true,
@@ -52,11 +52,11 @@ async function mapPackage(pkg: ListedPackage, userId: string | null) {
     owned: owned,
     owner: {
       id: pkg.userId,
-      name: profileResult?.userName || "",
-      displayName: profileResult?.displayName || "",
-      bio: profileResult?.bio,
-      iconId: profileResult?.iconFileId,
-      iconUrl: await getContentUrl(profileResult?.iconFileId),
+      name: profile?.userName || "",
+      displayName: profile?.displayName || "",
+      bio: profile?.bio,
+      iconId: profile?.iconFileId,
+      iconUrl: await getContentUrl(profile?.iconFileId),
     },
   };
 }

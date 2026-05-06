@@ -1,9 +1,7 @@
 import "server-only";
-import { getDbAsync } from "@/db";
-import { file } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
+import type { PrismaTransaction } from "./transaction";
 import { headers } from "next/headers";
-import type { DbTransaction } from "./transaction";
 
 export async function getContentUrl(id?: string | null) {
   if (!id) return null;
@@ -14,14 +12,16 @@ export async function getContentUrl(id?: string | null) {
 
 export async function retrieveFilesByUserId({
   userId,
-  tx,
+  prisma,
 }: {
   userId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  return await db.query.file.findMany({
-    where: eq(file.userId, userId),
+  const db = prisma || await getDbAsync();
+  return await db.file.findMany({
+    where: {
+      userId: userId,
+    },
   });
 }
 
@@ -32,7 +32,7 @@ export async function createFile({
   size,
   mimeType,
   visibility,
-  tx,
+  prisma,
   sha256,
 }: {
   userId: string;
@@ -41,13 +41,12 @@ export async function createFile({
   size: number;
   mimeType: string;
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
   sha256?: string;
 }) {
-  const db = tx || (await getDbAsync());
-  const result = await db
-    .insert(file)
-    .values({
+  const db = prisma || await getDbAsync();
+  return await db.file.create({
+    data: {
       objectKey,
       name,
       size,
@@ -55,19 +54,21 @@ export async function createFile({
       userId,
       visibility,
       sha256,
-    })
-    .returning();
-  return result[0];
+    },
+  });
 }
 
 export async function deleteFile({
   fileId,
-  tx,
+  prisma,
 }: {
   fileId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  const result = await db.delete(file).where(eq(file.id, fileId)).returning();
-  return result[0];
+  const db = prisma || await getDbAsync();
+  return await db.file.delete({
+    where: {
+      id: fileId,
+    },
+  });
 }

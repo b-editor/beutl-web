@@ -1,20 +1,20 @@
 import "server-only";
-import type { DbTransaction } from "./db/transaction";
+import type { PrismaTransaction } from "./db/transaction";
 import { createFile, deleteFile, retrieveFilesByUserId } from "./db/file";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function deleteStorageFile({
   fileId,
-  tx,
+  prisma,
 }: {
   fileId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
   const record = await deleteFile({
     fileId: fileId,
-    tx,
+    prisma,
   });
-
+  
   const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
   bucket.delete(record.objectKey);
   return record;
@@ -22,12 +22,12 @@ export async function deleteStorageFile({
 
 export async function calcTotalFileSize({
   userId,
-  tx,
+  prisma,
 }: {
   userId: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const files = await retrieveFilesByUserId({ userId, tx });
+  const files = await retrieveFilesByUserId({ userId, prisma });
   let totalSize = BigInt(0);
   for (const file of files) {
     totalSize += BigInt(file.size);
@@ -37,16 +37,16 @@ export async function calcTotalFileSize({
 
 export async function createStorageFile({
   file,
-  tx,
+  prisma,
   visibility,
   userId,
 }: {
   file: File;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
   userId: string;
 }) {
-  const files = await retrieveFilesByUserId({ userId, tx });
+  const files = await retrieveFilesByUserId({ userId, prisma });
 
   let filename = file.name;
   const ext = file.name.split(".").pop();

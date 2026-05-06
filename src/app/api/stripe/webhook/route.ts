@@ -1,9 +1,7 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { createStripe } from "@/lib/stripe/config";
-import { getDbAsync } from "@/db";
-import { customer, packageTable, userPackage } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 
@@ -33,21 +31,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       const db = await getDbAsync();
-      const customerResult = await db.query.customer.findFirst({
-        where: eq(customer.stripeId, paymentIntent.customer),
-        columns: {
+      const customer = await db.customer.findFirst({
+        where: {
+          stripeId: paymentIntent.customer,
+        },
+        select: {
           userId: true,
         },
       });
-      if (!customerResult) {
+      if (!customer) {
         return NextResponse.json(
           { message: "User not found" },
           { status: 404 },
         );
       }
-      const pkg = await db.query.packageTable.findFirst({
-        where: eq(packageTable.id, paymentIntent.metadata.packageId),
-        columns: {
+      const pkg = await db.package.findFirst({
+        where: {
+          id: paymentIntent.metadata.packageId,
+        },
+        select: {
           id: true,
         },
       });
@@ -57,17 +59,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      await db.insert(userPackage).values({
-        userId: customerResult.userId,
-        packageId: pkg.id,
+      await db.userPackage.create({
+        data: {
+          userId: customer.userId,
+          packageId: pkg.id,
+        },
       });
       await createUserPaymentHistory({
-        userId: customerResult.userId,
+        userId: customer.userId,
         packageId: pkg.id,
         paymentIntentId: paymentIntent.id,
       });
       await addAuditLog({
-        userId: customerResult.userId,
+        userId: customer.userId,
         action: auditLogActions.store.paymentSucceeded,
         details: `packageId: ${pkg.id}`,
       });

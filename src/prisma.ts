@@ -1,17 +1,6 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import * as schema from "./schema";
-import * as relations from "./relations";
-
-const fullSchema = { ...schema, ...relations };
-
-export type Database = ReturnType<typeof createDrizzle>;
-
-function createDrizzle(connectionString: string) {
-  const pool = new Pool({ connectionString, max: 1 });
-  return drizzle(pool, { schema: fullSchema });
-}
 
 export const getDb = () => {
   const { env } = getCloudflareContext({ async: false });
@@ -25,9 +14,11 @@ export const getDb = () => {
     throw new Error("Hyperdrive connection string not available");
   }
 
-  return createDrizzle(connectionString);
+  const adapter = new PrismaPg({ connectionString, maxUses: 1 });
+  return new PrismaClient({ adapter });
 };
 
+// For Server Actions and other server-side contexts
 export const getDbAsync = async () => {
   const { env } = await getCloudflareContext({ async: true });
 
@@ -40,5 +31,6 @@ export const getDbAsync = async () => {
     throw new Error("Hyperdrive connection string not available");
   }
 
-  return createDrizzle(connectionString);
+  const adapter = new PrismaPg({ connectionString, maxUses: 1 });
+  return new PrismaClient({ adapter });
 };

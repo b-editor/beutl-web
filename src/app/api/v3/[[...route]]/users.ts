@@ -1,8 +1,6 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/db";
-import { profile, packageTable } from "@/db/schema";
-import { and, eq, ilike } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { apiErrorResponse } from "@/lib/api/error";
 import { getUserId } from "@/lib/api/auth";
 import { guessCurrency } from "@/lib/currency";
@@ -12,33 +10,45 @@ import { getUserProfile } from "./user";
 const app = new Hono()
   .get("/:name", async (c) => {
     const name = c.req.param("name");
-    const profileResult = await getUserProfile(
-      ilike(profile.userName, name),
-    );
+    const profile = await getUserProfile({
+      userName: {
+        equals: name,
+        mode: "insensitive",
+      },
+    });
 
-    if (!profileResult) {
+    if (!profile) {
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
     }
 
-    return c.json(profileResult);
+    return c.json(profile);
   })
   .get("/:name/packages", async (c) => {
     const name = c.req.param("name");
     const currentUserId = await getUserId(c);
     const currency = await guessCurrency();
     const db = await getDbAsync();
-    const profileResult = await db.query.profile.findFirst({
-      where: ilike(profile.userName, name),
-      columns: {
-        userId: true,
-      },
-    });
-    const userId = profileResult?.userId;
+    const userId = (
+      await db.profile.findFirst({
+        where: {
+          userName: {
+            equals: name,
+            mode: "insensitive",
+          },
+        },
+        select: {
+          userId: true,
+        },
+      })
+    )?.userId;
     if (!userId) {
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
     }
     const packages = await getPackages({
-      where: and(eq(packageTable.userId, userId), eq(packageTable.published, true))!,
+      query: {
+        userId: userId,
+        published: true,
+      },
       userId: currentUserId ?? undefined,
       currency: currency ?? undefined,
     });

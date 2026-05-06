@@ -1,43 +1,29 @@
 import "server-only";
-import { getDbAsync } from "@/db";
-import {
-  packagePricing,
-  userPackage,
-} from "@/db/schema";
-import { eq, ilike, or, type SQL } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
+import type { Prisma } from "@prisma/client";
 import { packagePaied } from "@/lib/store-utils";
 import { getContentUrl } from "@/lib/db/file";
 
 export async function getPackage({
   userId,
-  where,
+  query,
   currency,
 }: {
   userId?: string;
-  where: SQL;
+  query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
   const db = await getDbAsync();
-  const result = await db.query.packageTable.findFirst({
-    where,
-    columns: {
+  const result = await db.package.findFirst({
+    where: query,
+    select: {
       id: true,
       published: true,
       userId: true,
-      name: true,
-      displayName: true,
-      description: true,
-      shortDescription: true,
-      webSite: true,
-      tags: true,
-      iconFileId: true,
-    },
-    with: {
       user: {
-        columns: {},
-        with: {
-          profile: {
-            columns: {
+        select: {
+          Profile: {
+            select: {
               displayName: true,
               userName: true,
               bio: true,
@@ -46,65 +32,80 @@ export async function getPackage({
           },
         },
       },
-      packageScreenshots: {
-        columns: { fileId: true },
+      name: true,
+      displayName: true,
+      description: true,
+      shortDescription: true,
+      webSite: true,
+      tags: true,
+      iconFileId: true,
+      PackageScreenshot: {
+        select: {
+          fileId: true,
+        },
       },
-      packagePricings: {
-        where: currency
-          ? or(
-              ilike(packagePricing.currency, currency),
-              eq(packagePricing.fallback, true),
-            )
-          : undefined,
-        columns: {
+      packagePricing: {
+        where: {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        },
+        select: {
           price: true,
           currency: true,
           fallback: true,
         },
       },
-      userPackages: userId
+      UserPackage: userId
         ? {
-            where: eq(userPackage.userId, userId),
-            columns: { packageId: true },
-            limit: 1,
-          }
+          where: {
+            userId: userId,
+          },
+          select: {
+            packageId: true,
+          },
+          take: 1,
+        }
         : undefined,
     },
   });
 
-  return result ?? null;
+  return (
+    result && {
+      ...result,
+      UserPackage: result.UserPackage as typeof result.UserPackage | undefined,
+    }
+  );
 }
 
 export async function getPackages({
   userId,
-  where,
+  query,
   currency,
 }: {
   userId?: string;
-  where: SQL;
+  query: Prisma.PackageWhereInput;
   currency?: string;
 }) {
   const db = await getDbAsync();
-  return db.query.packageTable.findMany({
-    where,
-    columns: {
+  return db.package.findMany({
+    where: query,
+    select: {
       id: true,
       published: true,
       userId: true,
-      name: true,
-      displayName: true,
-      description: true,
-      shortDescription: true,
-      webSite: true,
-      tags: true,
-      iconFileId: true,
-    },
-    with: {
       user: {
-        columns: {},
-        with: {
-          profile: {
-            columns: {
+        select: {
+          Profile: {
+            select: {
               displayName: true,
               userName: true,
               bio: true,
@@ -113,28 +114,48 @@ export async function getPackages({
           },
         },
       },
-      packageScreenshots: {
-        columns: { fileId: true },
+      name: true,
+      displayName: true,
+      description: true,
+      shortDescription: true,
+      webSite: true,
+      tags: true,
+      iconFileId: true,
+      PackageScreenshot: {
+        select: {
+          fileId: true,
+        },
       },
-      packagePricings: {
-        where: currency
-          ? or(
-              ilike(packagePricing.currency, currency),
-              eq(packagePricing.fallback, true),
-            )
-          : undefined,
-        columns: {
+      packagePricing: {
+        where: {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        },
+        select: {
           price: true,
           currency: true,
           fallback: true,
         },
       },
-      userPackages: userId
+      UserPackage: userId
         ? {
-            where: eq(userPackage.userId, userId),
-            columns: { packageId: true },
-            limit: 1,
-          }
+          where: {
+            userId: userId,
+          },
+          select: {
+            packageId: true,
+          },
+          take: 1,
+        }
         : undefined,
     },
   });
@@ -149,19 +170,16 @@ export async function mapPackage({
   currency?: string;
   pkg: NonNullable<Awaited<ReturnType<typeof getPackage>>>;
 }) {
-  const owned =
-    "userPackages" in pkg &&
-    pkg.userPackages &&
-    pkg.userPackages.length > 0;
+  const owned = pkg.UserPackage && pkg.UserPackage.length > 0;
   let paied = false;
   if (userId) {
     paied = await packagePaied(pkg.id, userId);
   }
 
   const price =
-    pkg.packagePricings.find((p) => p.currency === currency) ||
-    pkg.packagePricings.find((p) => p.fallback) ||
-    pkg.packagePricings[0];
+    pkg.packagePricing.find((p) => p.currency === currency) ||
+    pkg.packagePricing.find((p) => p.fallback) ||
+    pkg.packagePricing[0];
 
   return {
     id: pkg.id,
@@ -171,9 +189,7 @@ export async function mapPackage({
     shortDescription: pkg.shortDescription,
     website: pkg.webSite,
     tags: pkg.tags,
-    screenshots: await Promise.all(
-      pkg.packageScreenshots.map(async (i) => await getContentUrl(i.fileId)),
-    ),
+    screenshots: await Promise.all(pkg.PackageScreenshot.map(async (i) => await getContentUrl(i.fileId))),
     logoId: pkg.iconFileId,
     logoUrl: await getContentUrl(pkg.iconFileId),
     currency: price?.currency || null,
@@ -182,11 +198,11 @@ export async function mapPackage({
     paid: paied,
     owner: {
       id: pkg.userId,
-      displayName: pkg.user.profile?.displayName || "",
-      name: pkg.user.profile?.userName || "",
-      bio: pkg.user.profile?.bio || null,
-      iconId: pkg.user.profile?.iconFileId || null,
-      iconUrl: await getContentUrl(pkg.user.profile?.iconFileId),
+      displayName: pkg.user.Profile?.displayName || "",
+      name: pkg.user.Profile?.userName || "",
+      bio: pkg.user.Profile?.bio || null,
+      iconId: pkg.user.Profile?.iconFileId || null,
+      iconUrl: await getContentUrl(pkg.user.Profile?.iconFileId),
     },
   };
 }

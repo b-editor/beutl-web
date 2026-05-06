@@ -1,28 +1,29 @@
 import "server-only";
-import { getDbAsync } from "@/db";
-import { customer } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { createStripe } from "../stripe/config";
-import type { DbTransaction } from "./transaction";
+import type { PrismaTransaction } from "./transaction";
 
 export async function updateCustomerEmailIfExist({
   userId,
   email,
-  tx,
+  prisma,
 }: {
   userId: string;
   email: string;
-  tx?: DbTransaction;
+  prisma?: PrismaTransaction;
 }) {
-  const db = tx || (await getDbAsync());
-  const result = await db
-    .select({ stripeId: customer.stripeId })
-    .from(customer)
-    .where(eq(customer.userId, userId))
-    .limit(1);
-  if (result[0]) {
+  const db = prisma || await getDbAsync();
+  const customer = await db.customer.findFirst({
+    where: {
+      userId: userId,
+    },
+    select: {
+      stripeId: true,
+    },
+  });
+  if (customer) {
     const stripe = createStripe();
-    await stripe.customers.update(result[0].stripeId, {
+    await stripe.customers.update(customer.stripeId, {
       email: email,
     });
   }

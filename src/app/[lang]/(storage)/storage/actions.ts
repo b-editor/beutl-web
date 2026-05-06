@@ -1,8 +1,6 @@
 "use server";
 
-import { getDbAsync } from "@/db";
-import { file } from "@/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
@@ -18,14 +16,19 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     const db = await getDbAsync();
-    const files = await db
-      .select({
-        objectKey: file.objectKey,
-        id: file.id,
-        visibility: file.visibility,
-      })
-      .from(file)
-      .where(and(inArray(file.id, ids), eq(file.userId, session.user.id)));
+    const files = await db.file.findMany({
+      where: {
+        id: {
+          in: ids,
+        },
+        userId: session.user.id,
+      },
+      select: {
+        objectKey: true,
+        id: true,
+        visibility: true,
+      },
+    });
     if (!files.length) {
       return {
         success: false,
@@ -39,12 +42,16 @@ export async function deleteFile(ids: string[]): Promise<Response> {
       };
     }
 
-    const promises = files.map(async (f) => {
+    const promises = files.map(async (file) => {
       const db = await getDbAsync();
-      await db.delete(file).where(eq(file.id, f.id));
+  await db.file.delete({
+        where: {
+          id: file.id,
+        },
+      });
 
       const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-      await bucket.delete(f.objectKey);
+      await bucket.delete(file.objectKey);
     });
     await Promise.all(promises);
 
@@ -70,14 +77,19 @@ export async function changeFileVisibility(
     }
 
     const db = await getDbAsync();
-    const files = await db
-      .select({
-        objectKey: file.objectKey,
-        id: file.id,
-        visibility: file.visibility,
-      })
-      .from(file)
-      .where(and(inArray(file.id, ids), eq(file.userId, session.user.id)));
+    const files = await db.file.findMany({
+      where: {
+        id: {
+          in: ids,
+        },
+        userId: session.user.id,
+      },
+      select: {
+        objectKey: true,
+        id: true,
+        visibility: true,
+      },
+    });
     if (!files.length) {
       return {
         success: false,
@@ -91,12 +103,16 @@ export async function changeFileVisibility(
       };
     }
 
-    const promises = files.map(async (f) => {
+    const promises = files.map(async (file) => {
       const db = await getDbAsync();
-      await db
-        .update(file)
-        .set({ visibility })
-        .where(eq(file.id, f.id));
+  await db.file.update({
+        where: {
+          id: file.id,
+        },
+        data: {
+          visibility: visibility,
+        },
+      });
     });
     await Promise.all(promises);
 
@@ -111,8 +127,8 @@ export async function uploadFile(formData: FormData): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const uploadedFile = formData.get("file") as File;
-    if (!uploadedFile) {
+    const file = formData.get("file") as File;
+    if (!file) {
       return {
         success: false,
         message: t("storage:fileNotFound"),
@@ -120,48 +136,52 @@ export async function uploadFile(formData: FormData): Promise<Response> {
     }
 
     const db = await getDbAsync();
-    const files = await db
-      .select({
-        size: file.size,
-        name: file.name,
-      })
-      .from(file)
-      .where(eq(file.userId, session.user.id));
+    const files = await db.file.findMany({
+      where: {
+        userId: session.user.id,
+      },
+      select: {
+        size: true,
+        name: true,
+      },
+    });
 
     const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
     let totalSize = BigInt(0);
-    for (const f of files) {
-      totalSize += BigInt(f.size);
+    for (const file of files) {
+      totalSize += BigInt(file.size);
     }
 
-    if (totalSize + BigInt(uploadedFile.size) > maxSize) {
+    if (totalSize + BigInt(file.size) > maxSize) {
       return {
         success: false,
         message: t("storage:insufficientStorageSpace"),
       };
     }
 
-    let filename = uploadedFile.name;
-    const ext = uploadedFile.name.split(".").pop();
+    let filename = file.name;
+    const ext = file.name.split(".").pop();
     for (let i = 1; files.some((f) => f.name === filename); i++) {
       filename = ext
-        ? uploadedFile.name.replace(`.${ext}`, ` (${i}).${ext}`)
-        : `${uploadedFile.name} (${i})`;
+        ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
+        : `${file.name} (${i})`;
     }
 
     const objectKey = crypto.randomUUID();
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
     bucket.put(
       objectKey,
-      await uploadedFile.arrayBuffer(),
+      await file.arrayBuffer(),
     );
-    await db.insert(file).values({
-      objectKey,
-      name: filename,
-      size: uploadedFile.size,
-      mimeType: uploadedFile.type,
-      userId: session.user.id,
-      visibility: "PRIVATE",
+    await db.file.create({
+      data: {
+        objectKey,
+        name: filename,
+        size: file.size,
+        mimeType: file.type,
+        userId: session.user.id,
+        visibility: "PRIVATE",
+      },
     });
     revalidatePath(`/${lang}/storage`);
     return {
@@ -173,15 +193,17 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 export async function retrieveFiles() {
   const session = await throwIfUnauth();
   const db = await getDbAsync();
-  return await db
-    .select({
-      id: file.id,
-      objectKey: file.objectKey,
-      name: file.name,
-      size: file.size,
-      mimeType: file.mimeType,
-      visibility: file.visibility,
-    })
-    .from(file)
-    .where(eq(file.userId, session?.user?.id));
+  return await db.file.findMany({
+    where: {
+      userId: session?.user?.id,
+    },
+    select: {
+      id: true,
+      objectKey: true,
+      name: true,
+      size: true,
+      mimeType: true,
+      visibility: true,
+    },
+  });
 }

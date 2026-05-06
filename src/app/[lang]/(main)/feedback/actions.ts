@@ -2,8 +2,7 @@
 
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/db";
-import { feedback } from "@/db/schema";
+import { getDbAsync } from "@/prisma";
 import { sendEmail } from "@/resend";
 import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
@@ -45,7 +44,7 @@ export async function submitFeedback(
     };
   }
 
-  const { name, email: feedbackEmail, category, message } = validated.data;
+  const { name, email, category, message } = validated.data;
 
   let userId: string | null = null;
   try {
@@ -67,12 +66,14 @@ export async function submitFeedback(
       OTHER: t("feedback:categories.OTHER"),
     };
 
-    const dbSave = db.insert(feedback).values({
-      name,
-      email: feedbackEmail,
-      category,
-      message,
-      userId,
+    const dbSave = db.feedback.create({
+      data: {
+        name,
+        email,
+        category,
+        message,
+        userId,
+      },
     });
 
     const emailNotification = sendEmail({
@@ -81,7 +82,7 @@ export async function submitFeedback(
       body: `
         <h2>New Feedback Received</h2>
         <p><strong>Name:</strong> ${escapeHtml(name)}</p>
-        <p><strong>Email:</strong> ${escapeHtml(feedbackEmail)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(email)}</p>
         <p><strong>Category:</strong> ${categoryLabels[category]}</p>
         <p><strong>Message:</strong></p>
         <p>${escapeHtml(message).replace(/\n/g, "<br/>")}</p>

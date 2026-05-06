@@ -1,7 +1,5 @@
 import { auth } from "@/lib/better-auth";
-import { getDb } from "@/db";
-import { profile as profileTable, socialProfile } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getDb } from "@/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
@@ -21,18 +19,20 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  const db = getDb();
-  const profile = await db.query.profile.findFirst({
-    where: eq(profileTable.userId, session.user.id),
-  });
-  const socials = await db.query.socialProfile.findMany({
-    where: eq(socialProfile.userId, session.user.id),
-    columns: {
-      value: true,
+  const prisma = getDb();
+  const profile = await prisma.profile.findFirst({
+    where: {
+      userId: session.user.id,
     },
-    with: {
+  });
+  const socials = await prisma.socialProfile.findMany({
+    where: {
+      userId: session.user.id,
+    },
+    select: {
+      value: true,
       provider: {
-        columns: {
+        select: {
           id: true,
           name: true,
           provider: true,
