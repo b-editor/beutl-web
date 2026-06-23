@@ -5,7 +5,7 @@ import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
 import { getPackage, mapPackage } from "@/lib/api/packages-db";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
 import { SemVer } from "semver";
 
 const app = new Hono()

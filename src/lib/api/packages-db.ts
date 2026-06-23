@@ -2,7 +2,7 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { Prisma } from "@prisma/client";
 import { packagePaied } from "@/lib/store-utils";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
 
 export async function getPackage({
   userId,

@@ -3,6 +3,7 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { isAdmin } from "@/lib/admin-guard";
+import { contentPath } from "@/lib/content-url";
 import {
   createDevPackageScreenshot,
   deleteDevPackage,
@@ -202,14 +203,14 @@ export async function retrievePackage(name: string) {
     pkg.PackageScreenshot.map(async (item) => {
       return {
         ...item,
-        url: `/api/contents/${item.file.id}`,
+        url: contentPath(item.file.id),
       };
     }),
   );
 
   return {
     ...pkg,
-    iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
+    iconFileUrl: pkg.iconFile && contentPath(pkg.iconFile.id),
     PackageScreenshot: screenshots,
   };
 }

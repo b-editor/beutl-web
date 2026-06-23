@@ -10,7 +10,7 @@ import {
   retrievePackages,
 } from "@/lib/store-utils";
 import { getUserId } from "@/lib/api/auth";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),

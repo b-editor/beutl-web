@@ -1,5 +1,6 @@
 import "server-only";
 import { getDbAsync } from "@/prisma";
+import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
 
 type ListedPackage = {
@@ -85,7 +86,7 @@ export async function retrievePublishedPackages(
   const items = Promise.all(
     tmp
       .map(async (pkg) => {
-        const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
+        const url = pkg.iconFile && contentPath(pkg.iconFile.id);
 
         return {
           id: pkg.id,

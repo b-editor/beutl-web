@@ -8,7 +8,7 @@ import { zValidator } from "@hono/zod-validator";
 import { packageOwned, packagePaied } from "@/lib/store-utils";
 import { guessCurrency } from "@/lib/currency";
 import { SemVer } from "semver";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
 
 const acquireSchema = z.object({
   packageId: z.string(),

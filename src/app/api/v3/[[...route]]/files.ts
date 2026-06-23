@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
 
 async function findFile(id: string) {
   const prisma = await getDbAsync();
