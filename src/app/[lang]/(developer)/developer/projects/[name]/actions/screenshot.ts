@@ -15,25 +15,29 @@ import {
   deleteStorageFile,
 } from "@/lib/storage";
 import { getLanguage } from "@/lib/lang-utils";
+import { getTranslation } from "@/app/i18n/server";
 import { revalidatePath } from "next/cache";
 import { createDedicatedFile, sameUser } from "./_shared";
 
 export async function addScreenshot(formData: FormData): Promise<ActionResult> {
   return await authenticated(async (session) => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
     const file = formData.get("file") as File;
     if (!file) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("developer:errors.fileNotFound"),
       };
     }
     const id = formData.get("id") as string;
-    return await sameUser(id, session.user.id, async () => {
+    return await sameUser(id, session.user.id, t, async () => {
       const name = await getPackageNameFromPackageId({ packageId: id });
       const result = await createDedicatedFile(
         session.user.id,
         file,
         BigInt(0),
+        t,
       );
       if (!result.success) {
         return result;
@@ -51,7 +55,6 @@ export async function addScreenshot(formData: FormData): Promise<ActionResult> {
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -66,7 +69,9 @@ export async function moveScreenshot({
   fileId,
 }: { delta: number; packageId: string; fileId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
-    return await sameUser(packageId, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(packageId, session.user.id, t, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
       const sign = Math.sign(delta);
       const all = await retrieveDevPackageScreenshots({ packageId });
@@ -75,7 +80,7 @@ export async function moveScreenshot({
       if (!target) {
         return {
           success: false,
-          message: "ファイルが見つかりません",
+          message: t("developer:errors.fileNotFound"),
         };
       }
 
@@ -83,13 +88,13 @@ export async function moveScreenshot({
       if (index === 0 && sign < 0) {
         return {
           success: false,
-          message: "既に先頭です",
+          message: t("developer:screenshots.alreadyFirst"),
         };
       }
       if (index === all.length - 1 && sign > 0) {
         return {
           success: false,
-          message: "既に末尾です",
+          message: t("developer:screenshots.alreadyLast"),
         };
       }
       all.splice(index, 1);
@@ -114,7 +119,6 @@ export async function moveScreenshot({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -128,7 +132,9 @@ export async function deleteScreenshot({
   fileId,
 }: { packageId: string; fileId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
-    return await sameUser(packageId, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(packageId, session.user.id, t, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
       await deleteDevPackageScreenshot({ packageId, fileId });
       await deleteStorageFile({ fileId });
@@ -137,7 +143,6 @@ export async function deleteScreenshot({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,

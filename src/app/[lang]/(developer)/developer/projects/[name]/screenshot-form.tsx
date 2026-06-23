@@ -28,8 +28,12 @@ import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
 import type { Package } from "./types";
 import { useMatchMedia } from "@/hooks/use-match-media";
+import { useTranslation } from "@/app/i18n/client";
 
-export function ScreenshotForm({ pkg }: { pkg: Package }) {
+export function ScreenshotForm({
+  pkg,
+  lang,
+}: { pkg: Package; lang: string }) {
   const [screenshots, moveOptimisticScreenshot] = useOptimistic<
     Package["PackageScreenshot"],
     { delta: number; item: Package["PackageScreenshot"][number] }
@@ -41,7 +45,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
 
     const newState = state.slice();
     newState.splice(index, 1);
-    // req.deltaが0の場合は削除
+    // A zero req.delta means delete.
     if (req.delta !== 0) {
       newState.splice(index + req.delta, 0, req.item);
     }
@@ -49,6 +53,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
   });
   const [adding, startAdd] = useTransition();
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
   const maxLg = useMatchMedia("(min-width: 1024px)", false);
 
   const handleAddClick = useCallback(async () => {
@@ -65,13 +70,13 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
       const res = await addScreenshot(formData);
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       }
     });
-  }, [toast, pkg.id]);
+  }, [toast, pkg.id, t]);
 
   const handleMove = useCallback(
     async (delta: number, item: Package["PackageScreenshot"][number]) => {
@@ -83,13 +88,13 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
       });
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       }
     },
-    [pkg.id, moveOptimisticScreenshot, toast],
+    [pkg.id, moveOptimisticScreenshot, t, toast],
   );
 
   const handleDelete = useCallback(
@@ -101,19 +106,19 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
       });
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       }
     },
-    [pkg.id, moveOptimisticScreenshot, toast],
+    [pkg.id, moveOptimisticScreenshot, t, toast],
   );
 
   return (
     <>
       <h3 className="font-bold text-xl mt-6 border-b pb-2">
-        スクリーンショット
+        {t("developer:screenshots.title")}
       </h3>
       <Carousel className="mt-4" opts={{ active: maxLg }}>
         <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
@@ -142,15 +147,15 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
                   <DropdownMenuContent>
                     <DropdownMenuItem onClick={() => handleMove(-1, item)}>
                       <ArrowLeft className="w-4 h-4 mr-2" />
-                      左に移動
+                      {t("developer:screenshots.moveLeft")}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleMove(1, item)}>
                       <ArrowRight className="w-4 h-4 mr-2" />
-                      右に移動
+                      {t("developer:screenshots.moveRight")}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleDelete(item)}>
                       <Trash className="w-4 h-4 mr-2" />
-                      削除
+                      {t("developer:common.delete")}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -169,7 +174,7 @@ export function ScreenshotForm({ pkg }: { pkg: Package }) {
                 ) : (
                   <Plus className="w-8 h-8" />
                 )}
-                追加
+                {t("developer:common.add")}
               </div>
             </Button>
           </CarouselItem>

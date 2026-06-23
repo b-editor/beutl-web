@@ -20,6 +20,7 @@ import {
   deleteStorageFile,
 } from "@/lib/storage";
 import { getLanguage } from "@/lib/lang-utils";
+import { getTranslation } from "@/app/i18n/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import SemVer from "semver";
@@ -35,19 +36,21 @@ export async function updateDisplayNameAndShortDescription(
   formData: FormData,
 ): Promise<State> {
   return await authenticated(async (session) => {
-    const validated = displayNameAndShortDescriptionSchema.safeParse(
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    const validated = displayNameAndShortDescriptionSchema(t).safeParse(
       Object.fromEntries(formData.entries()),
     );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
-        message: "入力内容に誤りがあります",
+        message: t("developer:errors.invalidInput"),
         success: false,
       };
     }
 
     const { displayName, shortDescription, id } = validated.data;
-    return await sameUser(id, session.user.id, async () => {
+    return await sameUser(id, session.user.id, t, async () => {
       const { name } = await updateDevPackageDisplay({
         packageId: id,
         displayName,
@@ -58,7 +61,6 @@ export async function updateDisplayNameAndShortDescription(
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -72,14 +74,16 @@ export async function updateDescription({
   description,
 }: { packageId: string; description: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
     if (description.length > 1000) {
       return {
-        message: "説明は1000文字以下である必要があります",
+        message: t("developer:validation.descriptionMax"),
         success: false,
       };
     }
 
-    return await sameUser(packageId, session.user.id, async () => {
+    return await sameUser(packageId, session.user.id, t, async () => {
       const { name } = await updateDevPackageDescription({
         packageId,
         description,
@@ -89,7 +93,6 @@ export async function updateDescription({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -125,7 +128,9 @@ export async function retrievePackage(name: string) {
 
 export async function deletePackage(id: string): Promise<ActionResult> {
   return await authenticated(async (session) => {
-    return await sameUser(id, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(id, session.user.id, t, async () => {
       const files = await retrieveDevPackageDependsFile({ packageId: id });
       await deleteDevPackage({ packageId: id });
       const promises = files.map(async (file) => {
@@ -140,7 +145,6 @@ export async function deletePackage(id: string): Promise<ActionResult> {
         action: auditLogActions.developer.deletePackage,
         details: `packageId: ${id}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer`);
       redirect(`/${lang}/developer`);
     });
@@ -152,7 +156,9 @@ export async function changePackageVisibility(
   published: boolean,
 ): Promise<ActionResult> {
   return await authenticated(async (session) => {
-    return await sameUser(id, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(id, session.user.id, t, async () => {
       const { published: oldPublished } = await getPackagePublishedByIdOrThrow({
         id,
       });
@@ -169,7 +175,6 @@ export async function changePackageVisibility(
           details: `packageId: ${id}`,
         });
       }
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -180,15 +185,17 @@ export async function changePackageVisibility(
 
 export async function uploadIcon(formData: FormData): Promise<ActionResult> {
   return await authenticated(async (session) => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
     const file = formData.get("file") as File;
     if (!file) {
       return {
         success: false,
-        message: "ファイルが見つかりません",
+        message: t("developer:errors.fileNotFound"),
       };
     }
     const id = formData.get("id") as string;
-    return await sameUser(id, session.user.id, async () => {
+    return await sameUser(id, session.user.id, t, async () => {
       const iconFile = await retrieveDevPackageIconFile({ packageId: id });
 
       const deletedSize = iconFile ? BigInt(iconFile.size) : BigInt(0);
@@ -196,6 +203,7 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
         session.user.id,
         file,
         deletedSize,
+        t,
       );
       if (!result.success) {
         return {
@@ -219,7 +227,6 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${id}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,
@@ -233,7 +240,9 @@ export async function updateTag({
   tags,
 }: { packageId: string; tags: string[] }): Promise<ActionResult> {
   return await authenticated(async (session) => {
-    return await sameUser(packageId, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(packageId, session.user.id, t, async () => {
       const { name } = await updateDevPackageTags({
         packageId,
         tags,
@@ -243,7 +252,6 @@ export async function updateTag({
         action: auditLogActions.developer.updatePackage,
         details: `packageId: ${packageId}`,
       });
-      const lang = await getLanguage();
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,

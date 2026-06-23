@@ -18,6 +18,7 @@ import {
   deleteStorageFile,
 } from "@/lib/storage";
 import { getLanguage } from "@/lib/lang-utils";
+import { getTranslation } from "@/app/i18n/server";
 import { revalidatePath } from "next/cache";
 import SemVer from "semver";
 import {
@@ -31,13 +32,15 @@ export async function updateRelease(
   formData: FormData,
 ): Promise<ActionResult<ReleaseRecord>> {
   return await authenticated(async (session) => {
-    const validated = releaseSchema.safeParse(
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    const validated = releaseSchema(t).safeParse(
       Object.fromEntries(formData.entries()),
     );
     if (!validated.success) {
       return {
         errors: validated.error.flatten().fieldErrors,
-        message: "入力内容に誤りがあります",
+        message: t("developer:errors.invalidInput"),
         success: false,
       };
     }
@@ -47,11 +50,11 @@ export async function updateRelease(
     if (!release?.packageId) {
       return {
         success: false,
-        message: "IDが見つかりません",
+        message: t("developer:errors.idNotFound"),
       };
     }
 
-    return await sameUser(release.packageId, session.user.id, async () => {
+    return await sameUser(release.packageId, session.user.id, t, async () => {
       let fileId = release.file?.id;
       if (validated.data.file) {
         const deletedSize = release.file
@@ -61,6 +64,7 @@ export async function updateRelease(
           session.user.id,
           validated.data.file as File,
           deletedSize,
+          t,
         );
         if (!result.success) {
           return {
@@ -103,7 +107,6 @@ export async function updateRelease(
         });
       }
 
-      const lang = await getLanguage();
       const name = await getPackageNameFromPackageId({ packageId: release.packageId });
       revalidatePath(`/${lang}/developer/projects/${name}`);
 
@@ -123,18 +126,20 @@ export async function createRelease({
   version: string;
 }): Promise<ActionResult<ReleaseRecord>> {
   return await authenticated(async (session) => {
-    return await sameUser(packageId, session.user.id, async () => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+    return await sameUser(packageId, session.user.id, t, async () => {
       if (SemVer.valid(version) === null) {
         return {
           success: false,
-          message: "バージョンが不正です",
+          message: t("developer:validation.versionInvalid"),
         };
       }
 
       const release = await createReleaseRecord({
         packageId,
         version,
-        title: "新しいリリース",
+        title: t("developer:release.defaultTitle"),
         description: "",
         targetVersion: "1.0.0-preview.10",
         published: false,
@@ -144,7 +149,6 @@ export async function createRelease({
         action: auditLogActions.developer.createRelease,
         details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
       });
-      const lang = await getLanguage();
       const name = await getPackageNameFromPackageId({ packageId });
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
@@ -159,16 +163,18 @@ export async function deleteRelease({
   releaseId,
 }: { releaseId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
     const release = await getReleasePackageAndFileId({
       id: releaseId,
     });
     if (!release?.packageId) {
       return {
         success: false,
-        message: "IDが見つかりません",
+        message: t("developer:errors.idNotFound"),
       };
     }
-    return await sameUser(release.packageId, session.user.id, async () => {
+    return await sameUser(release.packageId, session.user.id, t, async () => {
       if (release.fileId) {
         await deleteStorageFile({
           fileId: release.fileId,
@@ -182,7 +188,6 @@ export async function deleteRelease({
         action: auditLogActions.developer.deleteRelease,
         details: `releaseId: ${releaseId}`,
       });
-      const lang = await getLanguage();
       const name = await getPackageNameFromPackageId({
         packageId: release.packageId,
       });

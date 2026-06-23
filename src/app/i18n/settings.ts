@@ -11,6 +11,7 @@ export const namespaces = [
   "auth",
   "api-errors",
   "feedback",
+  "developer",
 ];
 
 export function getOptions(lng = defaultLanguage) {

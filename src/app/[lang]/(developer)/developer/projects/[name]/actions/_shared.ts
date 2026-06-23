@@ -7,6 +7,7 @@ import {
   calcTotalFileSize,
   createStorageFile,
 } from "@/lib/storage";
+import type { Translator } from "@/app/i18n/server";
 import SemVer from "semver";
 import { z } from "zod";
 
@@ -20,54 +21,65 @@ export type State = {
 };
 type ReleaseRecord = Awaited<ReturnType<typeof updateReleaseRecord>>;
 
-const displayNameAndShortDescriptionSchema = z.object({
-  displayName: z.string().max(50, "表示名は50文字以下である必要があります"),
-  shortDescription: z
-    .string()
-    .max(200, "短い説明は200文字以下である必要があります"),
-  id: z.string().uuid("IDが不正です"),
-});
+const displayNameAndShortDescriptionSchema = (t: Translator) =>
+  z.object({
+    displayName: z.string().max(50, t("developer:validation.displayNameMax")),
+    shortDescription: z
+      .string()
+      .max(200, t("developer:validation.shortDescriptionMax")),
+    id: z.string().uuid(t("developer:validation.idInvalid")),
+  });
 
-const releaseSchema = z.object({
-  title: z.string().max(50, "タイトルは50文字以下である必要があります"),
-  description: z.string().max(1000, "説明は1000文字以下である必要があります"),
-  id: z.string().uuid("IDが不正です"),
-  targetVersion: z
-    .string()
-    .refine(
-      (v) => SemVer.valid(v) || isValidNuGetVersionRange(v),
-      "バージョンが不正です",
-    ),
-  published: z
-    .string()
-    .refine((v) => v === "on" || v === "off", "公開設定が不正です"),
-  file: z.any()
-});
+const releaseSchema = (t: Translator) =>
+  z.object({
+    title: z.string().max(50, t("developer:validation.titleMax")),
+    description: z.string().max(1000, t("developer:validation.descriptionMax")),
+    id: z.string().uuid(t("developer:validation.idInvalid")),
+    targetVersion: z
+      .string()
+      .refine(
+        (v) => SemVer.valid(v) || isValidNuGetVersionRange(v),
+        t("developer:validation.versionInvalid"),
+      ),
+    published: z
+      .string()
+      .refine(
+        (v) => v === "on" || v === "off",
+        t("developer:validation.publishedInvalid"),
+      ),
+    file: z.any(),
+  });
 
 async function sameUser<TResult>(
   packageId: string,
   userId: string,
+  t: Translator,
   fnc: () => Promise<TResult>,
 ) {
   const pkgUserId = await getUserIdFromPackageId({ packageId });
   if (!pkgUserId) {
     return {
       success: false,
-      message: "IDが見つかりません",
+      message: t("developer:errors.idNotFound"),
     };
   }
 
   if (pkgUserId !== userId) {
     return {
       success: false,
-      message: "権限がありません",
+      message: t("developer:errors.noPermission"),
     };
   }
 
   return await fnc();
 }
 
-async function createDedicatedFile(userId: string, file: File, size: bigint) {
+async function createDedicatedFile(
+  userId: string,
+  file: File,
+  size: bigint,
+  t: Translator,
+) {
   const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
   let totalSize = await calcTotalFileSize({ userId });
   totalSize -= size;
@@ -75,7 +87,7 @@ async function createDedicatedFile(userId: string, file: File, size: bigint) {
   if (totalSize + BigInt(file.size) > maxSize) {
     return {
       success: false,
-      message: "ストレージ容量が足りません",
+      message: t("developer:errors.storageFull"),
     };
   }
 
@@ -91,19 +103,20 @@ async function createDedicatedFile(userId: string, file: File, size: bigint) {
   };
 }
 
-const pricingSchema = z.object({
-  packageId: z.string().uuid(),
-  pricings: z.array(
-    z.object({
-      currency: z.string().length(3, "通貨コードは3文字である必要があります"),
-      price: z.number().int().min(0, "価格は0以上である必要があります"),
-      fallback: z.boolean(),
-    }),
-  ).refine(
-    (pricings) => pricings.filter((p) => p.fallback).length <= 1,
-    "デフォルト通貨は1つまでです",
-  ),
-});
+const pricingSchema = (t: Translator) =>
+  z.object({
+    packageId: z.string().uuid(),
+    pricings: z.array(
+      z.object({
+        currency: z.string().length(3, t("developer:validation.currencyCodeLength")),
+        price: z.number().int().min(0, t("developer:validation.priceMin")),
+        fallback: z.boolean(),
+      }),
+    ).refine(
+      (pricings) => pricings.filter((p) => p.fallback).length <= 1,
+      t("developer:validation.defaultCurrencyMax"),
+    ),
+  });
 
 const intervalSchema = z.object({
   packageId: z.string().uuid(),

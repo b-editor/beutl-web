@@ -1,0 +1,113 @@
+{
+  "common": {
+    "actions": "Actions",
+    "add": "Add",
+    "cancel": "Cancel",
+    "confirmDeleteTitle": "Are you sure you want to delete this?",
+    "create": "Create",
+    "delete": "Delete",
+    "error": "Error",
+    "publish": "Publish",
+    "save": "Save",
+    "success": "Success"
+  },
+  "portal": {
+    "title": "Develop extensions",
+    "createNewExtension": "Create a new extension",
+    "documentation": "Documentation",
+    "projects": "Projects"
+  },
+  "newProject": {
+    "title": "Create a new project",
+    "packageId": "Package ID",
+    "packageIdDescription": "Only alphanumeric characters, periods, and underscores",
+    "createFromPackageFile": "Create from package file"
+  },
+  "forms": {
+    "displayNamePlaceholder": "Display name (the ID is shown when blank)"
+  },
+  "errors": {
+    "fileNotFound": "File not found",
+    "idNotFound": "ID not found",
+    "invalidInput": "There are errors in your input",
+    "noPermission": "You do not have permission",
+    "storageFull": "Not enough storage space"
+  },
+  "validation": {
+    "currencyCodeInput": "Enter a 3-character currency code",
+    "currencyCodeLength": "Currency code must be 3 characters",
+    "defaultCurrencyMax": "Only one default currency is allowed",
+    "descriptionMax": "Description must be 1000 characters or fewer",
+    "displayNameMax": "Display name must be 50 characters or fewer",
+    "idInvalid": "Invalid ID",
+    "packageIdCharacters": "Package ID can only contain alphanumeric characters, periods, and underscores",
+    "packageIdMax": "Package ID must be 50 characters or fewer",
+    "packageIdMin": "Package ID must be at least 3 characters",
+    "packageIdTaken": "This package ID is already in use",
+    "priceIntegerInput": "Enter a whole number of 0 or greater for the price",
+    "priceMin": "Price must be 0 or greater",
+    "publishedInvalid": "Invalid publish setting",
+    "shortDescriptionMax": "Short description must be 200 characters or fewer",
+    "titleMax": "Title must be 50 characters or fewer",
+    "versionIncorrect": "The version is not valid",
+    "versionInvalid": "Invalid version"
+  },
+  "packageInfo": {
+    "changed": "Changed",
+    "deleteDescription": "This action cannot be undone. All data associated with this package will be deleted.",
+    "unpublish": "Unpublish"
+  },
+  "description": {
+    "title": "Description"
+  },
+  "details": {
+    "title": "Details",
+    "tags": "Tags",
+    "tagName": "Tag name"
+  },
+  "screenshots": {
+    "alreadyFirst": "Already first",
+    "alreadyLast": "Already last",
+    "moveLeft": "Move left",
+    "moveRight": "Move right",
+    "title": "Screenshots"
+  },
+  "pricing": {
+    "addPrice": "Add price",
+    "currencyAlreadyAdded": "This currency has already been added",
+    "currencyCode": "Currency code",
+    "default": "Default",
+    "defaultCurrency": "Default currency",
+    "intervalUpdated": "Payment interval updated",
+    "intervals": {
+      "free": "Free",
+      "monthly": "Monthly",
+      "once": "One-time",
+      "yearly": "Yearly"
+    },
+    "noPrices": "No prices have been set",
+    "paymentInterval": "Payment interval",
+    "price": "Price",
+    "priceList": "Price list",
+    "pricingUpdated": "Pricing updated",
+    "savePrices": "Save prices",
+    "titleAdmin": "Pricing (Admin)"
+  },
+  "release": {
+    "createRelease": "Create release",
+    "createSuccess": "Release created",
+    "defaultTitle": "New release",
+    "deleteDescription": "This action cannot be undone. All data associated with this release will be deleted.",
+    "deleteError": "Failed to delete release",
+    "deleteSuccess": "Release deleted",
+    "description": "Description",
+    "noReleases": "No releases",
+    "packageFile": "Package file",
+    "saveError": "Failed to save release",
+    "saveSuccess": "Release saved",
+    "selectFile": "Select file",
+    "targetVersion": "Target version",
+    "title": "Title",
+    "version": "Version"
+  }
+}
