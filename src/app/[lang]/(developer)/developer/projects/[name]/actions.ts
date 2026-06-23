@@ -9,6 +9,7 @@ import {
   deleteDevPackage,
   deleteDevPackageScreenshot,
   getPackageNameFromPackageId,
+  getPackagePublishedByIdOrThrow,
   getUserIdFromPackageId,
   retrieveDevPackageByName,
   retrieveDevPackageDependsFile,
@@ -24,6 +25,14 @@ import {
   updatePackageInterval,
   upsertPackagePricings,
 } from "@/lib/db/package";
+import {
+  createRelease as createReleaseRecord,
+  deleteReleaseById,
+  getReleasePackageAndFileId,
+  getReleasePublishedByIdOrThrow,
+  getReleaseWithFileById,
+  updateRelease as updateReleaseRecord,
+} from "@/lib/db/release";
 import type { PaymentInterval } from "@prisma/client";
 import { isValidNuGetVersionRange } from "@/lib/nuget-version-range";
 import {
@@ -32,7 +41,6 @@ import {
   deleteStorageFile,
 } from "@/lib/storage";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import SemVer from "semver";
@@ -245,17 +253,9 @@ export async function changePackageVisibility(
 ): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
-      const db = await getDbAsync();
-      const { published: oldPublished } = await db.package.findFirstOrThrow(
-        {
-          where: {
-            id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
+      const { published: oldPublished } = await getPackagePublishedByIdOrThrow({
+        id,
+      });
       const { name } = await updateDevPackagePublished({
         packageId: id,
         published,
@@ -492,21 +492,8 @@ export async function updateRelease(formData: FormData) {
         success: false,
       };
     }
-    const db = await getDbAsync();
-    const release = await db.release.findFirst({
-      where: {
-        id: validated.data.id,
-      },
-      select: {
-        packageId: true,
-        file: {
-          select: {
-            id: true,
-            objectKey: true,
-            size: true,
-          },
-        },
-      },
+    const release = await getReleaseWithFileById({
+      id: validated.data.id,
     });
     if (!release?.packageId) {
       return {
@@ -541,41 +528,16 @@ export async function updateRelease(formData: FormData) {
         fileId = result.record!.id;
       }
 
-      const db = await getDbAsync();
-      const { published: oldPublished } = await db.release.findFirstOrThrow(
-        {
-          where: {
-            id: validated.data.id,
-          },
-          select: {
-            published: true,
-          },
-        },
-      );
-      const data = await db.release.update({
-        where: {
-          id: validated.data.id,
-        },
-        data: {
-          title: validated.data.title,
-          description: validated.data.description,
-          targetVersion: validated.data.targetVersion,
-          published: validated.data.published === "on",
-          fileId: fileId,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
-          file: {
-            select: {
-              name: true,
-            },
-          },
-        },
+      const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
+        id: validated.data.id,
+      });
+      const data = await updateReleaseRecord({
+        id: validated.data.id,
+        title: validated.data.title,
+        description: validated.data.description,
+        targetVersion: validated.data.targetVersion,
+        published: validated.data.published === "on",
+        fileId: fileId,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -617,29 +579,13 @@ export async function createRelease({
         };
       }
 
-      const db = await getDbAsync();
-      const release = await db.release.create({
-        data: {
-          packageId,
-          version,
-          title: "新しいリリース",
-          description: "",
-          targetVersion: "1.0.0-preview.10",
-          published: false,
-        },
-        select: {
-          version: true,
-          title: true,
-          description: true,
-          targetVersion: true,
-          id: true,
-          published: true,
-          file: {
-            select: {
-              name: true,
-            },
-          },
-        },
+      const release = await createReleaseRecord({
+        packageId,
+        version,
+        title: "新しいリリース",
+        description: "",
+        targetVersion: "1.0.0-preview.10",
+        published: false,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -659,15 +605,8 @@ export async function createRelease({
 
 export async function deleteRelease({ releaseId }: { releaseId: string }) {
   return await authenticated(async (session) => {
-    const db = await getDbAsync();
-    const release = await db.release.findFirst({
-      where: {
-        id: releaseId,
-      },
-      select: {
-        packageId: true,
-        fileId: true,
-      },
+    const release = await getReleasePackageAndFileId({
+      id: releaseId,
     });
     if (!release?.packageId) {
       return {
@@ -681,11 +620,8 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
           fileId: release.fileId,
         });
       }
-      const db = await getDbAsync();
-  await db.release.delete({
-        where: {
-          id: releaseId,
-        },
+      await deleteReleaseById({
+        id: releaseId,
       });
       await addAuditLog({
         userId: session.user.id,
@@ -693,7 +629,9 @@ export async function deleteRelease({ releaseId }: { releaseId: string }) {
         details: `releaseId: ${releaseId}`,
       });
       const lang = await getLanguage();
-      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      const name = await getPackageNameFromPackageId({
+        packageId: release.packageId,
+      });
       revalidatePath(`/${lang}/developer/projects/${name}`);
       return {
         success: true,

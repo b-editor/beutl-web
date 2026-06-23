@@ -41,6 +41,24 @@ export async function findPackageBasicByName({
   });
 }
 
+export async function getPackagePublishedByIdOrThrow({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return db.package.findFirstOrThrow({
+    where: {
+      id,
+    },
+    select: {
+      published: true,
+    },
+  });
+}
+
 export async function findPackageForLibraryResponse({
   id: pkgId,
   currency,
