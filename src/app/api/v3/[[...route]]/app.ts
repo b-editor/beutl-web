@@ -75,7 +75,7 @@ const app = new Hono()
 
     if (!asset) {
       console.error("asset not found");
-      return c.json(apiErrorResponse("assetNotFound"), { status: 404 });
+      return c.json(await apiErrorResponse("assetNotFound"), { status: 404 });
     }
 
     return c.json({

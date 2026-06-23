@@ -27,6 +27,6 @@
   "virtualAssetCannotBeDownloaded": "Virtual assets cannot be downloaded from this URL.",
   "cannotDeleteReleaseAssets": "Cannot delete release assets.",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "Cannot publish a release that does not have an asset.",
-  "disallowedContentType": "Disallowed Content Types",
-  "disposableEmailAddressesAreNotAccepted": "Disposable email addresses are not accepted."
+  "unknown": "An unknown error occurred.",
+  "invalidVersionFormat": "Invalid version format."
 }

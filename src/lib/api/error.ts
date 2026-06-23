@@ -1,63 +1,70 @@
 import "server-only";
 import { getTranslation } from "@/app/i18n/server";
+import type { ErrorHandler } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { JwtTokenExpired } from "hono/utils/jwt/types";
 
-export const errorCodes = {
-  unknown: 0,
+// The wire `error_code` is always the string key, never an index; array order
+// carries no protocol meaning.
+export const errorCodes = [
+  "unknown",
 
   // 認証
-  authenticationIsRequired: 1,
-  doNotHavePermissions: 2,
+  "authenticationIsRequired",
+  "doNotHavePermissions",
 
   // パッケージ
-  packageNotFound: 3,
-  packageNotFoundById: 4,
-  packageIsPrivate: 5,
+  "packageNotFound",
+  "packageNotFoundById",
+  "packageIsPrivate",
 
   // ユーザー
-  userNotFound: 6,
-  userNotFoundById: 7,
+  "userNotFound",
+  "userNotFoundById",
 
   // 検証
-  invalidPackageName: 8,
-  invalidAssetName: 9,
-  invalidLocaleId: 10,
-  invalidReleaseVersion: 11,
-  invalidRefreshToken: 12,
-  invalidRequestBody: 13,
-  assetMustHaveAtLeastOneHashValue: 14,
-  invalidVersionFormat: 15,
+  "invalidPackageName",
+  "invalidAssetName",
+  "invalidLocaleId",
+  "invalidReleaseVersion",
+  "invalidRefreshToken",
+  "invalidRequestBody",
+  "assetMustHaveAtLeastOneHashValue",
+  "invalidVersionFormat",
 
   // パッケージリソース
-  packageResourceNotFound: 16,
-  packageResourceHasAlreadyBeenAdded: 17,
+  "packageResourceNotFound",
+  "packageResourceHasAlreadyBeenAdded",
 
   // リリース
-  releaseNotFound: 18,
-  releaseNotFoundById: 19,
-  cannotPublishAReleaseThatDoesNotHaveAnAsset: 20,
+  "releaseNotFound",
+  "releaseNotFoundById",
+  "cannotPublishAReleaseThatDoesNotHaveAnAsset",
 
   // リリースリソース
-  releaseResourceNotFound: 21,
-  releaseResourceHasAlreadyBeenAdded: 22,
+  "releaseResourceNotFound",
+  "releaseResourceHasAlreadyBeenAdded",
 
   // アセット
-  assetNotFound: 23,
-  assetNotFoundById: 24,
-  rawAssetNotFound: 25,
-  noFilesDataInTheRequest: 26,
-  fileIsTooLarge: 27,
-  virtualAssetCannotBeDownloaded: 28,
-  cannotDeleteReleaseAssets: 29,
-} as const;
+  "assetNotFound",
+  "assetNotFoundById",
+  "rawAssetNotFound",
+  "noFilesDataInTheRequest",
+  "fileIsTooLarge",
+  "virtualAssetCannotBeDownloaded",
+  "cannotDeleteReleaseAssets",
+] as const;
+
+export type ApiErrorCode = (typeof errorCodes)[number];
 
 export type ApiErrorResponse = {
-  error_code: keyof typeof errorCodes;
+  error_code: ApiErrorCode;
   message: string;
   documentation_url: string | null;
 };
 
 export async function apiErrorResponse(
-  errorCode: keyof typeof errorCodes,
+  errorCode: ApiErrorCode,
 ): Promise<ApiErrorResponse> {
   const { t } = await getTranslation();
   return {
@@ -66,3 +73,18 @@ export async function apiErrorResponse(
     documentation_url: null,
   };
 }
+
+export const apiOnErrorHandler: ErrorHandler = async (err, c) => {
+  console.error(err);
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  if (err instanceof JwtTokenExpired) {
+    return c.json(await apiErrorResponse("authenticationIsRequired"), {
+      status: 401,
+    });
+  }
+  return c.json(await apiErrorResponse("unknown"), {
+    status: 500,
+  });
+};

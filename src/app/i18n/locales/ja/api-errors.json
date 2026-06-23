@@ -27,6 +27,6 @@
   "virtualAssetCannotBeDownloaded": "仮想アセットはこのURLからダウンロードできません。",
   "cannotDeleteReleaseAssets": "リリースアセットは削除できません。",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "アセットがないリリースは公開できません。",
-  "disallowedContentType": "許可されていないコンテンツタイプ",
-  "disposableEmailAddressesAreNotAccepted": "使い捨てのメールアドレスは登録できません。"
+  "unknown": "不明なエラーが発生しました。",
+  "invalidVersionFormat": "バージョンの形式が無効です。"
 }
