@@ -141,6 +141,8 @@ model File {
   PackageScreenshot PackageScreenshot[]
   Profile           Profile[]
   Release           Release[]
+
+  @@index([userId])
 }
 
 model Package {
@@ -163,6 +165,8 @@ model Package {
   PackageScreenshot PackageScreenshot[]
   Release           Release[]
   UserPackage       UserPackage[]
+
+  @@index([userId])
 }
 
 model PackagePricing {
@@ -184,6 +188,8 @@ model UserPaymentHistory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Customer {
@@ -214,6 +220,7 @@ model UserPackage {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, packageId])
+  @@index([packageId])
 }
 
 model Release {
@@ -229,6 +236,8 @@ model Release {
   updatedAt     DateTime       @updatedAt
   file          File?          @relation(fields: [fileId], references: [id])
   package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@index([packageId])
 }
 
 model NativeAppAuth {
@@ -251,6 +260,8 @@ model AuditLog {
   createdAt DateTime @default(now())
   port      String?
   user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }
 
 model AppReleaseAsset {
@@ -262,6 +273,8 @@ model AppReleaseAsset {
   type       String
   standalone Boolean
   url        String
+
+  @@index([version, type, os, arch, standalone])
 }
 
 model Feedback {
