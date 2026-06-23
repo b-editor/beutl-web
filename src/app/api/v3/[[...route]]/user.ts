@@ -1,23 +1,13 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/prisma";
 import { apiErrorResponse } from "@/lib/api/error";
 import type { Prisma } from "@prisma/client";
 import { getUserId } from "@/lib/api/auth";
 import { getContentUrl } from "@/lib/content-url";
+import { findProfileForApi } from "@/lib/db/profile";
 
 export async function getUserProfile(query: Prisma.ProfileWhereInput) {
-  const prisma = await getDbAsync();
-  const profile = await prisma.profile.findFirst({
-    where: query,
-    select: {
-      userId: true,
-      displayName: true,
-      iconFileId: true,
-      userName: true,
-      bio: true,
-    },
-  });
+  const profile = await findProfileForApi({ where: query });
   if (!profile) {
     return null;
   }

@@ -1,5 +1,8 @@
 import { apiErrorResponse } from "@/lib/api/error";
-import { getDbAsync } from "@/prisma";
+import {
+  findAppReleaseAsset,
+  findAppReleaseAssetVersions,
+} from "@/lib/db/app-release-asset";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import SemVer from "semver";
@@ -37,12 +40,7 @@ const app = new Hono()
 
     const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
 
-    const prisma = await getDbAsync();
-    const versions = (await prisma.appReleaseAsset.findMany({
-      select: {
-        version: true,
-      }
-    })).map((asset) => asset.version);
+    const versions = (await findAppReleaseAssetVersions({})).map((asset) => asset.version);
     const latest = [...new Set(versions)]
       .map((v) => new SemVer.SemVer(v))
       .filter((v) => includePrerelease || v.prerelease.length === 0)
@@ -63,14 +61,12 @@ const app = new Hono()
       });
     }
 
-    const asset = await prisma.appReleaseAsset.findFirst({
-      where: {
-        version: latest.version,
-        type,
-        os,
-        arch,
-        standalone,
-      },
+    const asset = await findAppReleaseAsset({
+      version: latest.version,
+      type,
+      os,
+      arch,
+      standalone,
     });
 
     if (!asset) {

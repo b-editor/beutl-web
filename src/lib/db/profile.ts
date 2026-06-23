@@ -1,6 +1,69 @@
 import "server-only";
 import { getDbAsync } from "@/prisma";
+import type { Prisma } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
+
+export async function findProfileForApi({
+  where,
+  prisma,
+}: {
+  where: Prisma.ProfileWhereInput;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.profile.findFirst({
+    where: where,
+    select: {
+      userId: true,
+      displayName: true,
+      iconFileId: true,
+      userName: true,
+      bio: true,
+    },
+  });
+}
+
+export async function findUserIdByUserName({
+  name,
+  prisma,
+}: {
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.profile.findFirst({
+    where: {
+      userName: {
+        equals: name,
+        mode: "insensitive",
+      },
+    },
+    select: {
+      userId: true,
+    },
+  });
+}
+
+export async function findProfileForDiscover({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.profile.findFirst({
+    where: {
+      userId: userId,
+    },
+    select: {
+      userName: true,
+      displayName: true,
+      bio: true,
+      iconFileId: true,
+    },
+  });
+}
 
 export async function getProfileByUserId(
   userId: string,

@@ -2,6 +2,29 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findFileForApi({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.findFirst({
+    where: {
+      id: id,
+    },
+    select: {
+      id: true,
+      name: true,
+      mimeType: true,
+      userId: true,
+      size: true,
+      sha256: true,
+    },
+  });
+}
+
 export async function retrieveFilesByUserId({
   userId,
   prisma,
