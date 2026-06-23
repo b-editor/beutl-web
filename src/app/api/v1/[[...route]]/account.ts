@@ -1,3 +1,9 @@
+// v1/account is the authentication backbone: the ONLY place that mints access
+// JWTs (createJwtToken) and refresh tokens (createRefreshToken), which every v3
+// endpoint validates via lib/api/auth.ts (getUserId). Do NOT retire this file;
+// only its genuinely-dead sub-routes are deprecated. The desktop app is coupled
+// to the exact claim names and refresh-token crypto, so any change must stay
+// byte-compatible. See docs/adr/0001-v1-account-is-the-auth-backbone.md.
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
