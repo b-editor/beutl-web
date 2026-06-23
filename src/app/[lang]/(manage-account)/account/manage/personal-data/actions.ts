@@ -65,7 +65,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
       });
       revalidatePath(`/${lang}/account/manage/personal-data`);
       return {
-        message: t("account:data.cancelAccountDeletion"),
+        message: t("account:data.canceledAccountDeletion"),
         success: true,
       };
     }
