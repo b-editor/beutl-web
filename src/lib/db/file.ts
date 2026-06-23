@@ -2,6 +2,61 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findFileForContentAccess({
+  id: fileId,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.findFirst({
+    where: {
+      id: fileId,
+    },
+    select: {
+      objectKey: true,
+      visibility: true,
+      userId: true,
+      mimeType: true,
+      Package: {
+        select: {
+          userId: true,
+          published: true,
+        },
+      },
+      Profile: true,
+      PackageScreenshot: {
+        select: {
+          package: {
+            select: {
+              userId: true,
+              published: true,
+            },
+          },
+        },
+      },
+      Release: {
+        select: {
+          published: true,
+          package: {
+            select: {
+              id: true,
+              userId: true,
+              published: true,
+              packagePricing: {
+                select: {
+                  id: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 export async function findFileForApi({
   id,
   prisma,

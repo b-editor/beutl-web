@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import { randomString } from "@/lib/create-hash";
-import { getDbAsync } from "@/prisma";
+import { updateNativeAppAuthCode } from "@/lib/db/native-app-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
@@ -38,16 +38,13 @@ export default async function Page(
     }
 
     const code = randomString(32);
-    const prisma = await getDbAsync();
-    const obj = await prisma.nativeAppAuth.update({
-      where: {
-        id: identifier,
-      },
-      data: {
-        userId: session.user.id,
-        codeExpires: new Date(Date.now() + 1000 * 60 * 30),
-        code,
-      },
+    const userId = session.user.id;
+    const codeExpires = new Date(Date.now() + 1000 * 60 * 30);
+    const obj = await updateNativeAppAuthCode({
+      id: identifier,
+      userId,
+      codeExpires,
+      code,
     });
 
     const continueUrl = new URL(obj.continueUrl, xurl);
