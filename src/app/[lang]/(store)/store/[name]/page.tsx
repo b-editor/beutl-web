@@ -1,4 +1,6 @@
 import { ClientPage } from "./components";
+import { cache } from "react";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SemVer } from "semver";
 import { auth } from "@/lib/better-auth";
@@ -12,6 +14,8 @@ import {
 } from "@/lib/store-utils";
 import { headers } from "next/headers";
 
+const getPackage = cache((name: string) => retrievePackage(name));
+
 type Props = {
   params: Promise<{
     lang: string;
@@ -21,6 +25,25 @@ type Props = {
     message?: "PleaseOpenDesktopApp";
   }>;
 };
+
+export async function generateMetadata(props: {
+  params: Promise<{ lang: string; name: string }>;
+}): Promise<Metadata> {
+  const { name } = await props.params;
+  const pkg = await getPackage(name);
+  if (!pkg) {
+    return {};
+  }
+  const title = pkg.displayName || name;
+  return {
+    title,
+    description: pkg.shortDescription,
+    openGraph: {
+      title,
+      description: pkg.shortDescription,
+    },
+  };
+}
 
 export default async function Page(props: Props) {
   const searchParams = await props.searchParams;
@@ -36,7 +59,7 @@ export default async function Page(props: Props) {
     name
   } = params;
 
-  const pkg = await retrievePackage(name);
+  const pkg = await getPackage(name);
   if (!pkg) {
     notFound();
   }
