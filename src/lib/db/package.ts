@@ -3,6 +3,94 @@ import { getDbAsync } from "@/prisma";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findPackageForLibraryResponse({
+  id: pkgId,
+  currency,
+  prisma,
+}: {
+  id: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id: pkgId,
+    },
+    select: {
+      published: true,
+      id: true,
+      name: true,
+      displayName: true,
+      shortDescription: true,
+      tags: true,
+      iconFileId: true,
+      userId: true,
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+              displayName: true,
+              bio: true,
+              iconFileId: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+      Release: {
+        select: {
+          id: true,
+          version: true,
+        },
+      },
+    },
+  });
+}
+
+export async function existsPaidPricingForPackage({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.packagePricing.findFirst({
+    where: {
+      packageId: packageId,
+      price: {
+        gt: 0,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
 export async function retrieveDevPackagesByUserId({
   userId,
   prisma,

@@ -2,6 +2,44 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findUserPackageIdsByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.userPackage.findMany({
+    where: {
+      userId: userId,
+    },
+    select: {
+      packageId: true,
+    },
+  });
+}
+
+export async function deleteUserPackagesByUserAndPackageName({
+  userId,
+  name,
+  prisma,
+}: {
+  userId: string;
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.userPackage.deleteMany({
+    where: {
+      userId: userId,
+      package: {
+        name: name,
+      },
+    },
+  });
+}
+
 export async function existsUserPackage(
   {
     userId,
