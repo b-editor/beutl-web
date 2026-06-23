@@ -154,12 +154,6 @@ async function createAuthWithPrisma() {
         },
       },
     },
-    // pages: {
-    //   signIn: "/account/sign-in",
-    //   signOut: "/account/sign-out",
-    //   verifyRequest: "/account/verify-request",
-    //   error: "/account/error",
-    // },
   });
 }
 
