@@ -377,7 +377,7 @@ export async function moveScreenshot({
 }: { delta: number; packageId: string; fileId: string }): Promise<Response> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
-      const name = getPackageNameFromPackageId({ packageId });
+      const name = await getPackageNameFromPackageId({ packageId });
       const sign = Math.sign(delta);
       const all = await retrieveDevPackageScreenshots({ packageId });
 
@@ -670,7 +670,7 @@ export async function updatePricing({
     if (!validated.success) {
       return {
         success: false,
-        message: validated.error.message ?? "入力内容に誤りがあります",
+        message: "入力内容に誤りがあります",
       };
     }
 
@@ -710,7 +710,7 @@ export async function updateInterval({
     if (!validated.success) {
       return {
         success: false,
-        message: validated.error.message ?? "入力内容に誤りがあります",
+        message: "入力内容に誤りがあります",
       };
     }
 
