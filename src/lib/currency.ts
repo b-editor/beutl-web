@@ -19,13 +19,10 @@ export async function guessCurrency(): Promise<string | null> {
   if (process.env.NODE_ENV === "development") return "JPY";
   const h = await headers();
   const ipAddress = h.get("x-real-ip") || h.get("X-Forwarded-For")?.split(",")[0];
-  console.log("IP Address:", ipAddress);
   if (!ipAddress) return null;
   const country = h.get("CF-IPCountry") || (await getCountry(ipAddress));
-  console.log("Country:", country);
   if (!country) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const currency = (countryToCurrency as any)[country];
-  console.log("Currency:", currency);
   return currency;
 }
