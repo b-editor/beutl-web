@@ -13,13 +13,13 @@ import {
 import { useCallback, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import type { State } from "./actions/_shared";
 import {
-  type State,
   updateDisplayNameAndShortDescription,
   deletePackage,
   changePackageVisibility,
   uploadIcon,
-} from "./actions";
+} from "./actions/package";
 import { ErrorDisplay } from "@/components/error-display";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";

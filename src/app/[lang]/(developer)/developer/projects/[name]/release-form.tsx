@@ -22,7 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import SemVer from "semver";
-import { createRelease, deleteRelease, updateRelease } from "./actions";
+import { createRelease, deleteRelease, updateRelease } from "./actions/release";
 import {
   Dialog,
   DialogContent,

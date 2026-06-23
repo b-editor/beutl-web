@@ -1,6 +1,6 @@
 import { ScreenshotForm } from "./screenshot-form";
 import { notFound } from "next/navigation";
-import { retrievePackage } from "./actions";
+import { retrievePackage } from "./actions/package";
 import { PackageInfoForm } from "./package-info-form";
 import { PackageDescriptionForm } from "./package-description-form";
 import { PackageDetailsForm } from "./package-details-form";

@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { type FormEvent, useCallback, useOptimistic } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { updateTag } from "./actions";
+import { updateTag } from "./actions/package";
 
 export function PackageDetailsForm({ pkg }: { pkg: Package }) {
   const [tags, manipulateTags] = useOptimistic<

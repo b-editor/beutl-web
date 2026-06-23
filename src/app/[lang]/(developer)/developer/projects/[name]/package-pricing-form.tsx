@@ -20,7 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useState, useTransition } from "react";
-import { updateInterval, updatePricing } from "./actions";
+import { updateInterval, updatePricing } from "./actions/pricing";
 import type { Package } from "./types";
 
 type Pricing = {

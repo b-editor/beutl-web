@@ -6,7 +6,7 @@ import { Edit, Loader2, Save } from "lucide-react";
 import { useCallback, useReducer, useState, useTransition } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { updateDescription } from "./actions";
+import { updateDescription } from "./actions/package";
 
 export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
   const [edit, toggleEdit] = useReducer((edit) => !edit, false);

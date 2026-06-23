@@ -16,7 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCallback, useOptimistic, useTransition } from "react";
-import { addScreenshot, moveScreenshot, deleteScreenshot } from "./actions";
+import { addScreenshot, moveScreenshot, deleteScreenshot } from "./actions/screenshot";
 import {
   Carousel,
   CarouselContent,
