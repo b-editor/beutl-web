@@ -3,7 +3,14 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { getUserId, getUserIdFromToken } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
-import { getDbAsync } from "@/prisma";
+import {
+  createNativeAppAuth,
+  deleteNativeAppAuthBySessionId,
+  findNativeAppAuthById,
+  findNativeAppAuthBySessionId,
+  updateNativeAppAuthForHandler,
+} from "@/lib/db/native-app-auth";
+import { createSession, deleteSessionsByToken } from "@/lib/db/session";
 import { sign } from "hono/jwt";
 
 const createAuthUriSchema = z.object({
@@ -130,13 +137,10 @@ async function createRefreshToken(userId: string) {
         24 *
         Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
   );
-  const db = await getDbAsync();
-  await db.session.create({
-    data: {
-      token: rawToken,
-      expiresAt: expires,
-      userId: userId,
-    },
+  await createSession({
+    token: rawToken,
+    expiresAt: expires,
+    userId: userId,
   });
 
   return {
@@ -162,11 +166,8 @@ const app = new Hono()
           status: 400,
         });
       }
-      const db = await getDbAsync();
-      const auth = await db.nativeAppAuth.create({
-        data: {
-          continueUrl: continue_uri,
-        },
+      const auth = await createNativeAppAuth({
+        continueUrl: continue_uri,
       });
       const currentUrl = new URL(c.req.url);
       return c.json({
@@ -188,9 +189,8 @@ const app = new Hono()
         status: 400,
       });
     }
-    const db = await getDbAsync();
-    const auth = await db.nativeAppAuth.findFirst({
-      where: { id: identifier },
+    const auth = await findNativeAppAuthById({
+      id: identifier,
     });
     if (!auth) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
@@ -198,21 +198,17 @@ const app = new Hono()
       });
     }
 
-    const { code, continueUrl } = await db.nativeAppAuth.update({
-      where: { id: identifier },
-      data: {
-        userId,
-        code: crypto.randomUUID(),
-        codeExpires: new Date(Date.now() + 1000 * 60 * 30),
-      },
-      select: {
-        code: true,
-        continueUrl: true,
-      },
+    const code = crypto.randomUUID();
+    const codeExpires = new Date(Date.now() + 1000 * 60 * 30);
+    const { code: authCode, continueUrl } = await updateNativeAppAuthForHandler({
+      id: identifier,
+      userId,
+      code,
+      codeExpires,
     });
 
     const url = new URL(continueUrl);
-    url.searchParams.set("code", code ?? "");
+    url.searchParams.set("code", authCode ?? "");
     return c.redirect(url.toString());
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
@@ -231,11 +227,8 @@ const app = new Hono()
       });
     }
 
-    const db = await getDbAsync();
-    const oldRefreshTokens = await db.session.deleteMany({
-      where: {
-        token: oldDecryptedRefreshToken,
-      },
+    const oldRefreshTokens = await deleteSessionsByToken({
+      token: oldDecryptedRefreshToken,
     });
     if (!oldRefreshTokens.count) {
       return c.json(await apiErrorResponse("invalidRefreshToken"), {
@@ -256,11 +249,8 @@ const app = new Hono()
   })
   .post("/code2jwt", zValidator("json", exchangeSchema), async (c) => {
     const { session_id, code } = c.req.valid("json");
-    const db = await getDbAsync();
-    const auth = await db.nativeAppAuth.findFirst({
-      where: {
-        sessionId: session_id,
-      },
+    const auth = await findNativeAppAuthBySessionId({
+      sessionId: session_id,
     });
 
     if (
@@ -274,10 +264,8 @@ const app = new Hono()
         status: 401,
       });
     }
-    await db.nativeAppAuth.deleteMany({
-      where: {
-        sessionId: session_id,
-      },
+    await deleteNativeAppAuthBySessionId({
+      sessionId: session_id,
     });
 
     const { exp: accessTokenExp, token: accessToken } = await createJwtToken(
