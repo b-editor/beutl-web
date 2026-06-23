@@ -1,27 +1,23 @@
 import "server-only";
-import { createHash } from "@/lib/create-hash";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { deleteConfirmationTokenByIdentifierToken } from "@/lib/db/confirmation-token";
 import { deleteUserById } from "@/lib/db/user";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { consumeConfirmationToken } from "@/lib/confirmation-token-flow";
 
 export async function deleteUser(token: string, identifier: string) {
-  const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`);
-  const tokenData = await deleteConfirmationTokenByIdentifierToken({
-    identifier: identifier,
-    token: hash,
+  const result = await consumeConfirmationToken({
+    token,
+    identifier,
+    purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
   });
-  if (
-    !tokenData ||
-    tokenData.purpose !== ConfirmationTokenPurpose.ACCOUNT_DELETE
-  ) {
+
+  if (!result.valid) {
+    if (result.reason === "expired") {
+      throw new Error("Token has expired");
+    }
     throw new Error("Invalid token");
   }
-
-  if (tokenData.expires.valueOf() < Date.now()) {
-    throw new Error("Token has expired");
-  }
+  const { tokenData } = result;
 
   await deleteUserById({ userId: tokenData.userId });
   await addAuditLog({

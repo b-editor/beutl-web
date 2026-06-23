@@ -5,16 +5,13 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { findEmailByUserId } from "@/lib/db/user";
-import {
-  createConfirmationToken,
-  deleteManyConfirmationTokens,
-} from "@/lib/db/confirmation-token";
+import { deleteManyConfirmationTokens } from "@/lib/db/confirmation-token";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { issueConfirmationToken } from "@/lib/confirmation-token-flow";
 
 type State = {
   message?: string;
@@ -80,23 +77,14 @@ export async function submit(state: State, formData: FormData): Promise<State> {
         success: false,
       };
     }
-    const maxAge = 24 * 60 * 60;
-    const ONE_DAY_IN_SECONDS = 86400;
-    const expires = new Date(
-      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000,
-    );
-    const secret = process.env.AUTH_SECRET;
-    const token = randomString(32);
-    const sendRequest = sendEmail(user.email, token, lang);
-    const createToken = createConfirmationToken({
-      token: await createHash(`${token}${secret}`),
+    const token = await issueConfirmationToken({
       identifier: user.email,
       userId: session.user.id,
-      expires,
       purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
     });
+    const sendRequest = sendEmail(user.email, token, lang);
 
-    await Promise.all([sendRequest, createToken]);
+    await Promise.all([sendRequest]);
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.account.sentDeleteAccountConfirmation,
