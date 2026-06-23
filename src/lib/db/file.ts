@@ -64,3 +64,90 @@ export async function deleteFile({
     },
   });
 }
+
+export async function retrieveFilesByIdsAndUserId({
+  ids,
+  userId,
+  prisma,
+}: {
+  ids: string[];
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.findMany({
+    where: {
+      id: {
+        in: ids,
+      },
+      userId,
+    },
+    select: {
+      objectKey: true,
+      id: true,
+      visibility: true,
+    },
+  });
+}
+
+export async function updateFileVisibility({
+  fileId,
+  visibility,
+  prisma,
+}: {
+  fileId: string;
+  visibility: "PRIVATE" | "PUBLIC";
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.update({
+    where: {
+      id: fileId,
+    },
+    data: {
+      visibility: visibility,
+    },
+  });
+}
+
+export async function retrieveFileNamesAndSizesByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.findMany({
+    where: {
+      userId,
+    },
+    select: {
+      size: true,
+      name: true,
+    },
+  });
+}
+
+export async function retrieveStorageFilesByUserId({
+  userId,
+  prisma,
+}: {
+  userId?: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.file.findMany({
+    where: {
+      userId,
+    },
+    select: {
+      id: true,
+      objectKey: true,
+      name: true,
+      size: true,
+      mimeType: true,
+      visibility: true,
+    },
+  });
+}

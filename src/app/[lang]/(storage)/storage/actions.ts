@@ -1,11 +1,18 @@
 "use server";
 
-import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import {
+  createFile,
+  deleteFile as deleteFileRecord,
+  retrieveFileNamesAndSizesByUserId,
+  retrieveFilesByIdsAndUserId,
+  retrieveStorageFilesByUserId,
+  updateFileVisibility,
+} from "@/lib/db/file";
 
 type Response = {
   success: boolean;
@@ -15,19 +22,9 @@ export async function deleteFile(ids: string[]): Promise<Response> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await getDbAsync();
-    const files = await db.file.findMany({
-      where: {
-        id: {
-          in: ids,
-        },
-        userId: session.user.id,
-      },
-      select: {
-        objectKey: true,
-        id: true,
-        visibility: true,
-      },
+    const files = await retrieveFilesByIdsAndUserId({
+      ids,
+      userId: session.user.id,
     });
     if (!files.length) {
       return {
@@ -43,11 +40,8 @@ export async function deleteFile(ids: string[]): Promise<Response> {
     }
 
     const promises = files.map(async (file) => {
-      const db = await getDbAsync();
-  await db.file.delete({
-        where: {
-          id: file.id,
-        },
+      await deleteFileRecord({
+        fileId: file.id,
       });
 
       const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
@@ -76,19 +70,9 @@ export async function changeFileVisibility(
       };
     }
 
-    const db = await getDbAsync();
-    const files = await db.file.findMany({
-      where: {
-        id: {
-          in: ids,
-        },
-        userId: session.user.id,
-      },
-      select: {
-        objectKey: true,
-        id: true,
-        visibility: true,
-      },
+    const files = await retrieveFilesByIdsAndUserId({
+      ids,
+      userId: session.user.id,
     });
     if (!files.length) {
       return {
@@ -104,14 +88,9 @@ export async function changeFileVisibility(
     }
 
     const promises = files.map(async (file) => {
-      const db = await getDbAsync();
-  await db.file.update({
-        where: {
-          id: file.id,
-        },
-        data: {
-          visibility: visibility,
-        },
+      await updateFileVisibility({
+        fileId: file.id,
+        visibility: visibility,
       });
     });
     await Promise.all(promises);
@@ -135,15 +114,8 @@ export async function uploadFile(formData: FormData): Promise<Response> {
       };
     }
 
-    const db = await getDbAsync();
-    const files = await db.file.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      select: {
-        size: true,
-        name: true,
-      },
+    const files = await retrieveFileNamesAndSizesByUserId({
+      userId: session.user.id,
     });
 
     const maxSize = BigInt(1024 * 1024 * 1024); // 1GB
@@ -173,15 +145,13 @@ export async function uploadFile(formData: FormData): Promise<Response> {
       objectKey,
       await file.arrayBuffer(),
     );
-    await db.file.create({
-      data: {
-        objectKey,
-        name: filename,
-        size: file.size,
-        mimeType: file.type,
-        userId: session.user.id,
-        visibility: "PRIVATE",
-      },
+    await createFile({
+      objectKey,
+      name: filename,
+      size: file.size,
+      mimeType: file.type,
+      userId: session.user.id,
+      visibility: "PRIVATE",
     });
     revalidatePath(`/${lang}/storage`);
     return {
@@ -192,18 +162,7 @@ export async function uploadFile(formData: FormData): Promise<Response> {
 
 export async function retrieveFiles() {
   const session = await throwIfUnauth();
-  const db = await getDbAsync();
-  return await db.file.findMany({
-    where: {
-      userId: session?.user?.id,
-    },
-    select: {
-      id: true,
-      objectKey: true,
-      name: true,
-      size: true,
-      mimeType: true,
-      visibility: true,
-    },
+  return await retrieveStorageFilesByUserId({
+    userId: session?.user?.id,
   });
 }
