@@ -354,13 +354,13 @@ function PasskeyListItem({
                 onClick={async () => {
                   setPending(true);
                   try {
-                    const { error } = await deletePasskey({
+                    const result = await deletePasskey({
                       id: authenticator.id,
                     });
-                    if (error) {
+                    if (!result.success) {
                       toast({
                         title: t("error"),
-                        description: error,
+                        description: result.message,
                         variant: "destructive",
                       });
                     }

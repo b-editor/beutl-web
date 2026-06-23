@@ -1,6 +1,7 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import type { ActionResult } from "@/lib/action-result";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { isAdmin } from "@/lib/admin-guard";
 import { contentPath } from "@/lib/content-url";
@@ -54,10 +55,7 @@ export type State = {
   success?: boolean;
   message?: string | null;
 };
-type Response = {
-  success: boolean;
-  message?: string;
-};
+type ReleaseRecord = Awaited<ReturnType<typeof updateReleaseRecord>>;
 
 const displayNameAndShortDescriptionSchema = z.object({
   displayName: z.string().max(50, "表示名は50文字以下である必要があります"),
@@ -170,7 +168,7 @@ export async function updateDisplayNameAndShortDescription(
 export async function updateDescription({
   packageId,
   description,
-}: { packageId: string; description: string }): Promise<Response> {
+}: { packageId: string; description: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
     if (description.length > 1000) {
       return {
@@ -223,7 +221,7 @@ export async function retrievePackage(name: string) {
   };
 }
 
-export async function deletePackage(id: string): Promise<Response> {
+export async function deletePackage(id: string): Promise<ActionResult> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
       const files = await retrieveDevPackageDependsFile({ packageId: id });
@@ -250,7 +248,7 @@ export async function deletePackage(id: string): Promise<Response> {
 export async function changePackageVisibility(
   id: string,
   published: boolean,
-): Promise<Response> {
+): Promise<ActionResult> {
   return await authenticated(async (session) => {
     return await sameUser(id, session.user.id, async () => {
       const { published: oldPublished } = await getPackagePublishedByIdOrThrow({
@@ -278,7 +276,7 @@ export async function changePackageVisibility(
   });
 }
 
-export async function uploadIcon(formData: FormData): Promise<Response> {
+export async function uploadIcon(formData: FormData): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const file = formData.get("file") as File;
     if (!file) {
@@ -328,7 +326,7 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
   });
 }
 
-export async function addScreenshot(formData: FormData): Promise<Response> {
+export async function addScreenshot(formData: FormData): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const file = formData.get("file") as File;
     if (!file) {
@@ -374,7 +372,7 @@ export async function moveScreenshot({
   delta,
   packageId,
   fileId,
-}: { delta: number; packageId: string; fileId: string }): Promise<Response> {
+}: { delta: number; packageId: string; fileId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
@@ -436,7 +434,7 @@ export async function moveScreenshot({
 export async function deleteScreenshot({
   packageId,
   fileId,
-}: { packageId: string; fileId: string }): Promise<Response> {
+}: { packageId: string; fileId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
@@ -459,7 +457,7 @@ export async function deleteScreenshot({
 export async function updateTag({
   packageId,
   tags,
-}: { packageId: string; tags: string[] }): Promise<Response> {
+}: { packageId: string; tags: string[] }): Promise<ActionResult> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       const { name } = await updateDevPackageTags({
@@ -480,7 +478,9 @@ export async function updateTag({
   });
 }
 
-export async function updateRelease(formData: FormData) {
+export async function updateRelease(
+  formData: FormData,
+): Promise<ActionResult<ReleaseRecord>> {
   return await authenticated(async (session) => {
     const validated = releaseSchema.safeParse(
       Object.fromEntries(formData.entries()),
@@ -569,7 +569,10 @@ export async function updateRelease(formData: FormData) {
 export async function createRelease({
   packageId,
   version,
-}: { packageId: string; version: string }) {
+}: {
+  packageId: string;
+  version: string;
+}): Promise<ActionResult<ReleaseRecord>> {
   return await authenticated(async (session) => {
     return await sameUser(packageId, session.user.id, async () => {
       if (SemVer.valid(version) === null) {
@@ -603,7 +606,9 @@ export async function createRelease({
   });
 }
 
-export async function deleteRelease({ releaseId }: { releaseId: string }) {
+export async function deleteRelease({
+  releaseId,
+}: { releaseId: string }): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const release = await getReleasePackageAndFileId({
       id: releaseId,
@@ -660,7 +665,7 @@ export async function updatePricing({
 }: {
   packageId: string;
   pricings: { currency: string; price: number; fallback: boolean }[];
-}): Promise<Response> {
+}): Promise<ActionResult> {
   return await authenticated(async (session) => {
     if (!isAdmin(session.user.id)) {
       return { success: false, message: "権限がありません" };
@@ -700,7 +705,7 @@ export async function updateInterval({
 }: {
   packageId: string;
   interval: PaymentInterval | null;
-}): Promise<Response> {
+}): Promise<ActionResult> {
   return await authenticated(async (session) => {
     if (!isAdmin(session.user.id)) {
       return { success: false, message: "権限がありません" };

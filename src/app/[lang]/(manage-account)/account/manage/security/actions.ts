@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import type { ActionResult } from "@/lib/action-result";
 import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
 import { getEmailVerifiedByUserId } from "@/lib/db/user";
@@ -88,7 +89,7 @@ export async function renamePasskey({
 
 export async function deletePasskey({
   id,
-}: { id: string }): Promise<{ error?: string }> {
+}: { id: string }): Promise<ActionResult> {
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
@@ -102,14 +103,14 @@ export async function deletePasskey({
 
   const passkeyToDelete = passkeys.find((p) => p.credentialID === id);
   if (!passkeyToDelete) {
-    return { error: "Passkey not found" };
+    return { success: false, message: "Passkey not found" };
   }
 
   if (totalAuthMethods <= 1) {
     console.log("Deleting the last auth method");
     if (!(await getEmailVerifiedByUserId({ userId: session.user.id }))) {
       console.log("The user is not verified");
-      return { error: t("account:security.cannotRemoveAccount") };
+      return { success: false, message: t("account:security.cannotRemoveAccount") };
     }
   }
 

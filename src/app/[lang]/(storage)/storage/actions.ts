@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
+import type { ActionResult } from "@/lib/action-result";
 import { getLanguage } from "@/lib/lang-utils";
 import { getTranslation } from "@/app/i18n/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
@@ -14,11 +15,7 @@ import {
   updateFileVisibility,
 } from "@/lib/db/file";
 
-type Response = {
-  success: boolean;
-  message?: string;
-};
-export async function deleteFile(ids: string[]): Promise<Response> {
+export async function deleteFile(ids: string[]): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
@@ -59,7 +56,7 @@ export async function deleteFile(ids: string[]): Promise<Response> {
 export async function changeFileVisibility(
   ids: string[],
   visibility: "PRIVATE" | "PUBLIC",
-): Promise<Response> {
+): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
@@ -102,7 +99,7 @@ export async function changeFileVisibility(
   });
 }
 
-export async function uploadFile(formData: FormData): Promise<Response> {
+export async function uploadFile(formData: FormData): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);

@@ -1,4 +1,5 @@
 import "server-only";
+import type { ActionResult } from "@/lib/action-result";
 import { auth } from "@/lib/better-auth";
 import type { BetterAuthSession, BetterAuthUser } from "@/lib/better-auth";
 import { headers } from "next/headers";
@@ -35,7 +36,11 @@ export async function authenticated<TResult>(
 ) {
   const result = await getSession();
   if (!result?.user?.id) {
-    return { message: "Unauthenticated", success: false };
+    const actionResult: ActionResult = {
+      message: "Unauthenticated",
+      success: false,
+    };
+    return actionResult;
   }
 
   return await fnc(result as SafeSession);

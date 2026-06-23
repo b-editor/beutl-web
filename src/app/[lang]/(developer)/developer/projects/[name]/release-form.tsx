@@ -87,8 +87,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
+        const data: Package["Release"][number] | undefined = result.data;
         if (data) {
           setRelease(data);
           setReleases(releases.map((r) => (r.id === release.id ? data : r)));
@@ -138,8 +137,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         version: version.value,
       });
       if (result.success) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
+        const data: Package["Release"][number] = result.data!;
         setReleases((releases) =>
           [...releases, data].toSorted((a, b) =>
             new SemVer.SemVer(b.version).compare(a.version),
@@ -185,8 +183,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         toast({
           variant: "destructive",
           title: "リリースの削除に失敗しました",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          description: (result as any).message,
+          description: result.message,
         });
       }
     });
