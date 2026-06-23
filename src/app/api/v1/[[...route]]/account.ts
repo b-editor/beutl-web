@@ -11,6 +11,7 @@ import {
   updateNativeAppAuthForHandler,
 } from "@/lib/db/native-app-auth";
 import { createSession, deleteSessionsByToken } from "@/lib/db/session";
+import { isAllowedContinueUrlHost } from "@/lib/native-auth";
 import { sign } from "hono/jwt";
 
 const createAuthUriSchema = z.object({
@@ -159,10 +160,7 @@ const app = new Hono()
       const { continue_uri } = c.req.valid("json");
 
       const url = new URL(continue_uri);
-      if (
-        url.hostname !== "localhost" &&
-        url.hostname !== "beutl.beditor.net"
-      ) {
+      if (!isAllowedContinueUrlHost(url.hostname)) {
         return c.json(await apiErrorResponse("invalidRequestBody"), {
           status: 400,
         });
