@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Noto_Sans_JP } from "next/font/google";
 import "../globals.css";
 import { Toaster } from "@/components/ui/toaster";
-import { LanguageProvider } from "../i18n/client";
 import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
 import { getTranslation } from "../i18n/server";
 
@@ -60,10 +59,8 @@ export default async function RootLayout(props: Props) {
     <html lang={lang} className="dark">
       <body className={`${notoSansJP.variable} antialiased`}>
         <ProgressBarProvider>
-          <LanguageProvider initialLanguage={lang}>
-            {children}
-            <Toaster />
-          </LanguageProvider>
+          {children}
+          <Toaster />
         </ProgressBarProvider>
       </body>
     </html>

@@ -2,26 +2,6 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
-export async function updatePasskeyUsedAt({
-  credentialID,
-  usedAt,
-  prisma,
-}: {
-  credentialID: string;
-  usedAt: Date;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDbAsync();
-  await db.passkey.update({
-    where: {
-      credentialID,
-    },
-    data: {
-      usedAt: usedAt,
-    },
-  });
-}
-
 export async function deletePasskey({
   credentialID,
   userId,
@@ -83,21 +63,6 @@ export async function getPasskeysByUserId({
       backedUp: true,
       createdAt: true,
       usedAt: true,
-    },
-  });
-}
-
-export async function findPasskeyByCredentialId({
-  credentialID,
-  prisma,
-}: {
-  credentialID: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDbAsync();
-  return await db.passkey.findUnique({
-    where: {
-      credentialID,
     },
   });
 }
