@@ -63,7 +63,7 @@ export async function changeFileVisibility(
     if (visibility !== "PRIVATE" && visibility !== "PUBLIC") {
       return {
         success: false,
-        message: t("zod:custom"),
+        message: t("invalidRequest"),
       };
     }
 

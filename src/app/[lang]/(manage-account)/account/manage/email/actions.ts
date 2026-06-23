@@ -65,9 +65,7 @@ export async function sendConfirmationEmail(
     );
     if (!validated.success) {
       return {
-        message: t("zod:errors.invalid_string.email", {
-          validation: t("zod:validations.email"),
-        }),
+        message: validated.error.issues[0]?.message ?? t("invalidRequest"),
         success: false,
       };
     }

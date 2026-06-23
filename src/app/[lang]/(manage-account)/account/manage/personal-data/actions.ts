@@ -53,7 +53,7 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     if (!validated.success) {
       console.error(validated.error);
       return {
-        message: t("zod:custom"),
+        message: validated.error.issues[0]?.message ?? t("invalidRequest"),
         success: false,
       };
     }
