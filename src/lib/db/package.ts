@@ -34,6 +34,27 @@ export async function retrieveDevPackagesByUserId({
   });
 }
 
+export async function findPublishedPackageForLibrary({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id,
+      published: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      packagePricing: true,
+    },
+  });
+}
+
 export async function retrieveDevPackageByName({
   name,
   userId,
