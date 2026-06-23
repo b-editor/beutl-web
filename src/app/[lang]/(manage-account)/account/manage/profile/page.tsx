@@ -1,5 +1,8 @@
 import { auth } from "@/lib/better-auth";
-import { getDbAsync } from "@/prisma";
+import {
+  getProfileByUserId,
+  getSocialProfilesByUserId,
+} from "@/lib/db/profile";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
@@ -19,28 +22,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  const prisma = await getDbAsync();
-  const profile = await prisma.profile.findFirst({
-    where: {
-      userId: session.user.id,
-    },
-  });
-  const socials = await prisma.socialProfile.findMany({
-    where: {
-      userId: session.user.id,
-    },
-    select: {
-      value: true,
-      provider: {
-        select: {
-          id: true,
-          name: true,
-          provider: true,
-          urlTemplate: true,
-        },
-      },
-    },
-  });
+  const profile = await getProfileByUserId(session.user.id);
+  const socials = await getSocialProfilesByUserId(session.user.id);
   const { t } = await getTranslation(lang);
 
   return (
