@@ -202,7 +202,6 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       >
         {releases.length > 0 ? (
           <>
-            {/* biome-ignore lint/style/noNonNullAssertion: <explanation> */}
             <Select
               value={release?.id}
               onValueChange={(e) =>

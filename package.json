@@ -2,6 +2,9 @@
   "name": "beutl-web",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "next build",
     "start": "next start",
@@ -11,7 +14,7 @@
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
-    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts"
   },
   "dependencies": {
     "@better-auth/passkey": "^1.4.19",
@@ -62,7 +65,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.4",
     "@next/bundle-analyzer": "15.5.12",
     "@tailwindcss/postcss": "^4.2.1",
     "@types/negotiator": "^0.6.4",

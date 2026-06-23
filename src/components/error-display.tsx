@@ -11,7 +11,6 @@ export function ErrorDisplay({
       className={cn(props.className, "text-sm font-medium text-destructive")}
     >
       <ul>
-        {/* biome-ignore lint/suspicious/noArrayIndexKey: <explanation> */}
         {errors.map((error, i) => (
           <li key={i}>{error}</li>
         ))}

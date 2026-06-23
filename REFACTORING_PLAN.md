@@ -13,7 +13,7 @@ beutl-web は Next.js 15 / Cloudflare Workers (@opennextjs/cloudflare) / Prisma 
 - 1 PR は 1 種類の変更に限定する: 死コード削除・重複統合・型変更・i18n 修正・設定変更を混在させない。各 work item は独立してシップ可能・レビュー可能・revert 可能であること。
 - 削除より先に統合の受け皿を作る: 死コードを消してから残りをリファクタする。データアクセスの統一関数を先に用意してから直接呼び出しを移行する。マッパー統合の前に出力 DTO のバイト等価性を現行の emit 形状を基準に固定する。
 - クライアントテレメトリで撤去を gate する: v1/checkForUpdates, v2/identity/signInWith, /account/signIn, dead v1 handler 等の外部到達可能な経路は、最古サポート対象デスクトップビルドが呼ばないことを確認するまで削除せず、deprecated コメントのみ付与する。
-- プロバイダ・エンジンの真実源を一本化する: DB エンジン(postgresql)、デプロイ先(Cloudflare)、lint ツール(1つ)をそれぞれ単一の宣言に揃え、矛盾する設定を除去する。
+- プロバイダ・エンジンの真実源を一本化する: DB エンジン(**CockroachDB**。オーナー確認済み、schema は cockroachdb のまま)、デプロイ先(Cloudflare)、lint ツール(1つ)をそれぞれ単一の宣言に揃え、矛盾する設定を除去する。
 - 外部 API の応答 DTO を変更する統合は、変更前に現行の emit 形状(paid/bio null vs undefined/logoId など)を基準にゴールデン値として固定し、リファクタ後にバイト等価を検証する。
 - TypeScript の型システムを活用する: 統合・型注釈の変更はコンパイル時に呼び出し側で破綻が検出される範囲で行い、ランタイム挙動を変えない。
 
@@ -101,9 +101,9 @@ beutl-web は Next.js 15 / Cloudflare Workers (@opennextjs/cloudflare) / Prisma 
 2. **[M/低]** lint ツールを 1 つに統一する。未起動かつ v1 スキーマで設定された Biome を除去(@biomejs/biome 依存削除、biome.json 削除、ソース中の biome-ignore コメント 10 箇所を整理)し、ESLint に一本化する。.eslintrc.json は唯一の ESLint 設定なので削除せず維持する。
    - 対象: `package.json, biome.json, src/app/[lang]/(developer)/developer/projects/[name]/actions.ts, src/hooks/use-toast.ts ほか`
    - 根拠ID: biome-unused-and-misconfigured,recon-correction-no-flat-eslint
-3. **[M/中]** DB プロバイダの三重不整合を是正する。BEUTL_DATABASE_HYPERDRIVE 背後の実エンジンが Postgres であることを確認の上、schema.prisma datasource と migration_lock.toml を postgresql に揃える(better-auth は既に postgresql)。既存テーブルを再 DDL せず no-op ベースラインで provider を切替える最小手順を採り、drift を避ける。
-   - 対象: `prisma/schema.prisma, prisma/migrations/migration_lock.toml`
-   - 根拠ID: provider-mismatch-cockroach-vs-postgres
+3. **[訂正済み・対応不要]** ~~DB プロバイダを postgresql に揃える~~ → **オーナー確認の結果、実エンジンは CockroachDB と判明（2026-06-23）。schema.prisma datasource と migration_lock.toml はすでに `cockroachdb` 宣言で正しく、変更不要。** `@prisma/adapter-pg` と better-auth の `provider: "postgresql"` 設定は、CockroachDB が pg ワイヤ互換のため動作しているだけで矛盾ではない。以降の全 Prisma マイグレーション（Phase 7 のインデックス追加含む）は **cockroachdb 前提**で生成すること。当初プランの postgresql 切替推奨は誤りとして取り下げ。
+   - 対象: `prisma/schema.prisma, prisma/migrations/migration_lock.toml`（変更なし）
+   - 根拠ID: provider-mismatch-cockroach-vs-postgres（解決: CockroachDB で確定）
 4. **[S/低]** .env.sample を実使用に同期する。コードが読む 11 個の未文書化キー(AUTH_RESEND_KEY, AUTH_SECRET, JWT_* 群, BEUTL_*_VERSION, METADATA_BASE_URL 等)を追加し、未使用の EMAIL_SERVER_* と DATABASE_HOST/NAME/USER/PASSWORD を削除する。DATABASE_URL は build-only として残し注記する。
    - 対象: `.env.sample`
    - 根拠ID: env-sample-drift
@@ -327,7 +327,7 @@ beutl-web は Next.js 15 / Cloudflare Workers (@opennextjs/cloudflare) / Prisma 
 - 外部 API 契約(v1/v2/v3)のバイト等価性: デスクトップアプリは v3 の packages/users/discover/library/files の JSON を直接消費する。マッパー統合(フェーズ3)・直接呼び出し移行(フェーズ4)・errorCodes/api-errors 整理(フェーズ2)はいずれも応答 shape を変えうるため、現行 emit 値(paid, bio の null vs undefined, logoId/iconId の null 有無, FileResponse.size の number)をゴールデン値として固定し、リファクタ後にバイト等価を検証する必要がある。スナップショット/契約テストが現状存在しないため、これらの導入自体が前提作業となる。
 - native-auth フローと JWT 発行(認証): v1/account は唯一の token 発行面で全 v3 認証が依存する。JWT クレーム名(xmlsoap nameidentifier)・HS256 署名・PBKDF2/AES-CBC refresh-token 暗号化形式・native-auth の continueUrl 契約はデスクトップアプリと厳密に結合しており、いかなる抽出・統合でもバイト互換を保つ必要がある。localhost 固定バグ修正と handler 統合は本番 continueUrl ホストの実確認を要する。
 - Stripe/決済: webhook は冪等性ガードが無く、payment_intent.succeeded 再送で UserPaymentHistory が重複しうる(UserPackage は複合 PK で保護済み)。冪等化には @unique 追加の DB migration が必要で、決済パスのため慎重なテストを要する。
-- DB migration とプロバイダ整合: schema が cockroachdb 宣言だが実行は adapter-pg。provider を postgresql へ揃える際、Prisma 7 の migration-engine provider 切替が live Hyperdrive に対して drift/shadow-DB 問題を起こしうるため、no-op ベースラインでの最小切替に留める。index 追加・@unique 追加もこの整合後に行う。
+- DB migration とプロバイダ整合: **実エンジンは CockroachDB と確定済み（2026-06-23）**。schema/migration_lock はすでに cockroachdb で正しく、プロバイダ切替は行わない。`@prisma/adapter-pg` で接続できるのは Cockroach の pg ワイヤ互換による。以降の index 追加・@unique 追加マイグレーションは **cockroachdb 前提**で生成し、live Hyperdrive に対する drift/shadow-DB に注意する。
 - テレメトリ依存の撤去 gate: legacy 外部経路(v1/checkForUpdates, v2/signInWith, /account/signIn, dead handler)の削除は最古サポート対象デスクトップビルドが呼ばないことの確認を絶対の前提とする。テレメトリが無ければ削除せず deprecated マーキングに留め、最終フェーズに後送りする。
 - Cloudflare Workers ランタイム制約: PrismaClient の memoization は module-scoped singleton が isolate 跨ぎでリークし Hyperdrive の per-request 接続モデル(maxUses:1)と衝突するため、request/isolate-scoped に厳密に閉じる必要がある。sync getDb 削除のみは安全だが memoization は別タスクとして慎重に扱う。
 
@@ -336,7 +336,7 @@ beutl-web は Next.js 15 / Cloudflare Workers (@opennextjs/cloudflare) / Prisma 
 - 削除した死ファイル/LOC: 確認済み死ファイル 4+(443 LOC)+ 死 UI プリミティブ 3 + 死 CSS/フォント/アセット。LOC 削減量を計測。
 - 除去した npm 依存数: vaul, react-hook-form, @hookform/resolvers, @radix-ui/react-tabs, @biomejs/biome の 5 つ(+lockfile スリム化)。
 - データアクセス経路の単一化: パッケージ読み出しマッパー 5〜6 → 1、@/prisma 直接 import が src/lib/db + better-auth.ts のみ(lint で強制)、sync getDb の消滅。
-- 設定の真実源一本化: デプロイ先 3 → 1(Cloudflare)、lint ツール 2 → 1、DB provider 宣言 3 → 1(postgresql)、Node バージョン宣言 4 → 1。
+- 設定の真実源一本化: デプロイ先 3 → 1(Cloudflare)、lint ツール 2 → 1、DB provider 宣言の整合(**cockroachdb で確定**、better-auth の postgresql 設定は pg ワイヤ互換で動作)、Node バージョン宣言 4 → 1。
 - i18n 健全性: 壊れた/欠落キー 0、ファントム名前空間 0、developer ポータルの en/ja カバレッジ、孤立キー 0。
 - .env.sample とコード使用の一致(未文書化キー 0、未使用キー 0)。
 - DB インデックス: 0 → FK/スキャン列への @@index 追加、AppReleaseAsset 複合インデックス。

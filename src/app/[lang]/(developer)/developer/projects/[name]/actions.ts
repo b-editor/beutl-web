@@ -311,7 +311,6 @@ export async function uploadIcon(formData: FormData): Promise<Response> {
 
       const { name } = await updateDevPackageIconFile({
         packageId: id,
-        // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId: result.record!.id,
       });
       await addAuditLog({
@@ -353,7 +352,6 @@ export async function addScreenshot(formData: FormData): Promise<Response> {
       });
       await createDevPackageScreenshot({
         packageId: id,
-        // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId: result.record!.id,
         order: (lastScreenshot?.order || 0) + 1,
       });
@@ -539,7 +537,6 @@ export async function updateRelease(formData: FormData) {
             fileId: release.file.id,
           });
         }
-        // biome-ignore lint/style/noNonNullAssertion: <explanation>
         fileId = result.record!.id;
       }
 
