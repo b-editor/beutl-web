@@ -1,12 +1,10 @@
 import { getTranslation } from "@/app/i18n/server";
 import { Navigation } from "./components";
-import { auth } from "@/lib/better-auth";
+import { authOrSignIn } from "@/lib/auth-guard";
 import NavBar from "@/components/nav-bar";
 import { Button } from "@/components/ui/button";
 import { UserCircle } from "lucide-react";
-import { headers } from "next/headers";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
 export default async function Layout(
   props: {
@@ -26,14 +24,7 @@ export default async function Layout(
     children
   } = props;
 
-  const headersList = await headers();
-  const session = await auth.api.getSession({ headers: headersList });
-  const url = headersList.get("x-url") || "/";
-  if (!session) {
-    const searchParams = new URLSearchParams();
-    searchParams.set("returnUrl", url);
-    redirect(`/account/sign-in?${searchParams.toString()}`);
-  }
+  const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
 
   return (
