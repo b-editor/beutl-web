@@ -34,7 +34,7 @@ export default async function Footer({ lang }: { lang: string }) {
             <Image
               width={24}
               height={24}
-              alt="X"
+              alt="Discord"
               className="w-5 h-5 invert"
               src="/img/discord.svg"
             />

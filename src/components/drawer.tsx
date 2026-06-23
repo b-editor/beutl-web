@@ -122,7 +122,7 @@ export async function StandardDrawer({ lang }: { lang: string }) {
                     <Image
                       width={24}
                       height={24}
-                      alt="GitHub"
+                      alt="X"
                       className="w-5 h-5 invert mr-2"
                       src="/img/x.svg"
                     />
@@ -140,7 +140,7 @@ export async function StandardDrawer({ lang }: { lang: string }) {
                     <Image
                       width={24}
                       height={24}
-                      alt="GitHub"
+                      alt="Discord"
                       className="w-5 h-5 invert mr-2"
                       src="/img/discord.svg"
                     />
