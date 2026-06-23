@@ -1,7 +1,8 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
 import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
+import { retrievePublishedPackagesByUserName } from "@/lib/db/package";
+import { getProfileDisplayNameByUserName } from "@/lib/db/profile";
 import { selectPricing } from "@/lib/pricing";
 
 type ListedPackage = {
@@ -22,67 +23,12 @@ export async function retrievePublishedPackages(
   userName: string,
 ): Promise<{ items: ListedPackage[]; displayName: string }> {
   const currency = await guessCurrency();
-  const db = await getDbAsync();
-  const profile = db.profile.findFirst({
-    where: {
-      userName: userName,
-    },
-    select: {
-      displayName: true,
-    },
+  const profile = getProfileDisplayNameByUserName({
+    userName,
   });
-  const tmp = await db.package.findMany({
-    where: {
-      user: {
-        Profile: {
-          userName: userName,
-        },
-      },
-      published: true,
-    },
-    select: {
-      id: true,
-      displayName: true,
-      name: true,
-      shortDescription: true,
-      tags: true,
-      iconFile: {
-        select: {
-          id: true,
-        },
-      },
-      user: {
-        select: {
-          Profile: {
-            select: {
-              userName: true,
-            },
-          },
-        },
-      },
-      packagePricing: {
-        where: currency ? {
-          OR: [
-            {
-              currency: {
-                equals: currency,
-                mode: "insensitive",
-              },
-            },
-            {
-              fallback: true,
-            },
-          ],
-        } : {
-          fallback: true,
-        },
-        select: {
-          price: true,
-          currency: true,
-          fallback: true,
-        },
-      },
-    },
+  const tmp = await retrievePublishedPackagesByUserName({
+    userName,
+    currency,
   });
   const items = Promise.all(
     tmp

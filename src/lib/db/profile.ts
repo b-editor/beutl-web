@@ -14,6 +14,24 @@ export async function getProfileByUserId(
   });
 }
 
+export async function getProfileDisplayNameByUserName({
+  userName,
+  prisma,
+}: {
+  userName: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.profile.findFirst({
+    where: {
+      userName: userName,
+    },
+    select: {
+      displayName: true,
+    },
+  });
+}
+
 export async function getSocialProfilesByUserId(
   userId: string,
   prisma?: PrismaTransaction,

@@ -1,7 +1,7 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
 import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
+import { retrieveLibraryPackagesByUserId } from "@/lib/db/user-package";
 import { selectPricing } from "@/lib/pricing";
 
 type ListedPackage = {
@@ -21,62 +21,10 @@ type ListedPackage = {
 export async function retrievePackages(
   userId: string,
 ): Promise<ListedPackage[]> {
-  const db = await getDbAsync();
   const currency = await guessCurrency();
-  const tmp = await db.userPackage.findMany({
-    where: {
-      userId: userId,
-      package: {
-        published: true,
-      },
-    },
-    select: {
-      package: {
-        select: {
-          id: true,
-          displayName: true,
-          name: true,
-          shortDescription: true,
-          tags: true,
-          iconFile: {
-            select: {
-              id: true,
-            },
-          },
-          user: {
-            select: {
-              Profile: {
-                select: {
-                  userName: true,
-                },
-              },
-            },
-          },
-          packagePricing: {
-            where: currency ? {
-              OR: [
-                {
-                  currency: {
-                    equals: currency,
-                    mode: "insensitive",
-                  },
-                },
-                {
-                  fallback: true,
-                },
-              ],
-            } : {
-              fallback: true,
-            },
-            select: {
-              price: true,
-              currency: true,
-              fallback: true,
-            },
-          },
-        },
-      },
-    },
+  const tmp = await retrieveLibraryPackagesByUserId({
+    userId,
+    currency,
   });
 
   return await Promise.all(

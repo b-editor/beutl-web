@@ -55,6 +55,100 @@ export async function findPublishedPackageForLibrary({
   });
 }
 
+export async function findPackageForBillingHistory({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id: packageId,
+    },
+    select: {
+      name: true,
+      displayName: true,
+      user: {
+        select: {
+          name: true,
+          Profile: {
+            select: {
+              displayName: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export async function retrievePublishedPackagesByUserName({
+  userName,
+  currency,
+  prisma,
+}: {
+  userName: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findMany({
+    where: {
+      user: {
+        Profile: {
+          userName: userName,
+        },
+      },
+      published: true,
+    },
+    select: {
+      id: true,
+      displayName: true,
+      name: true,
+      shortDescription: true,
+      tags: true,
+      iconFile: {
+        select: {
+          id: true,
+        },
+      },
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+    },
+  });
+}
+
 export async function retrieveDevPackageByName({
   name,
   userId,

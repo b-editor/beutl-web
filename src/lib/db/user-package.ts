@@ -61,3 +61,70 @@ export async function deleteUserPackage(
     },
   });
 }
+
+export async function retrieveLibraryPackagesByUserId({
+  userId,
+  currency,
+  prisma,
+}: {
+  userId: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.userPackage.findMany({
+    where: {
+      userId: userId,
+      package: {
+        published: true,
+      },
+    },
+    select: {
+      package: {
+        select: {
+          id: true,
+          displayName: true,
+          name: true,
+          shortDescription: true,
+          tags: true,
+          iconFile: {
+            select: {
+              id: true,
+            },
+          },
+          user: {
+            select: {
+              Profile: {
+                select: {
+                  userName: true,
+                },
+              },
+            },
+          },
+          packagePricing: {
+            where: currency ? {
+              OR: [
+                {
+                  currency: {
+                    equals: currency,
+                    mode: "insensitive",
+                  },
+                },
+                {
+                  fallback: true,
+                },
+              ],
+            } : {
+              fallback: true,
+            },
+            select: {
+              price: true,
+              currency: true,
+              fallback: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
