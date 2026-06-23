@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveCustomerId } from "@/lib/customer";
+import { createOrRetrieveCustomerId } from "@/lib/db/customer";
 import { createStripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
@@ -41,10 +41,10 @@ export default async function Page(
     throw new Error("No price found");
   }
 
-  const customerId = await createOrRetrieveCustomerId(
-    session.user.email as string,
-    session.user.id,
-  );
+  const customerId = await createOrRetrieveCustomerId({
+    email: session.user.email as string,
+    userId: session.user.id,
+  });
   const stripe = createStripe();
   const intents = await stripe.paymentIntents.search({
     query: `customer:"${customerId}" AND metadata["packageId"]:"${pkg.id}" AND amount:${price.price} AND currency:"${price.currency}" AND status:"requires_payment_method"`,

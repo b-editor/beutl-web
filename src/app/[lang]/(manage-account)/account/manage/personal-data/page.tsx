@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { getDb } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { Form } from "./components";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { Separator } from "@/components/ui/separator";
@@ -19,7 +19,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   if (!user) {
     throw new Error("User not found");
   }
-  const prisma = getDb();
+  const prisma = await getDbAsync();
   const tokens = await prisma.confirmationToken.findMany({
     where: {
       userId: session.user.id,

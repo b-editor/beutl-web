@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import { randomString } from "@/lib/create-hash";
-import { getDb } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
@@ -38,7 +38,7 @@ export default async function Page(
     }
 
     const code = randomString(32);
-    const prisma = getDb();
+    const prisma = await getDbAsync();
     const obj = await prisma.nativeAppAuth.update({
       where: {
         id: identifier,

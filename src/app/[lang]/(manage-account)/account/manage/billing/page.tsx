@@ -1,4 +1,4 @@
-import { getDb } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { getTranslation } from "@/app/i18n/server";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
@@ -19,7 +19,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const session = await authOrSignIn();
 
   const history = await getUserPaymentHistory({ userId: session.user.id });
-  const prisma = getDb();
+  const prisma = await getDbAsync();
   const items = await Promise.all(
     history.map(async (item) => {
       const p1 = prisma.package.findFirst({

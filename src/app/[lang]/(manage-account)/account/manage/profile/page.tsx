@@ -1,5 +1,5 @@
 import { auth } from "@/lib/better-auth";
-import { getDb } from "@/prisma";
+import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Form } from "./components";
@@ -19,7 +19,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  const prisma = getDb();
+  const prisma = await getDbAsync();
   const profile = await prisma.profile.findFirst({
     where: {
       userId: session.user.id,
