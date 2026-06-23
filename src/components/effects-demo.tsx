@@ -97,9 +97,20 @@ function getEffects(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {
 export default async function EffectsDemo({ lang }: { lang: string }) {
   const { t } = await getTranslation(lang);
   const effects = getEffects(t);
+  const items = effects.map((item) => (
+    <li
+      key={item.name}
+      className={cn(growStyles.listItem, "max-md:flex-auto")}
+    >
+      <Card className={growStyles.grow}>
+        <CardHeader>
+          <CardTitle className="max-md:text-center">{item.name}</CardTitle>
+        </CardHeader>
+      </Card>
+    </li>
+  ));
 
   return (
-    // styles.loopSlide,
     <div
       className={cn(
         styles.loopSlide,
@@ -112,44 +123,14 @@ export default async function EffectsDemo({ lang }: { lang: string }) {
           "pt-4 flex flex-wrap justify-between md:justify-center gap-4",
         )}
       >
-        {/* <ul className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8", styles.transparent)}> */}
-        {effects.map((item) => (
-          <li
-            key={item.name}
-            className={cn(growStyles.listItem, "max-md:flex-auto")}
-          >
-            <Card className={growStyles.grow}>
-              <CardHeader>
-                <CardTitle className="max-md:text-center">
-                  {item.name}
-                </CardTitle>
-                {/* <CardDescription>Deploy your new project in one-click.</CardDescription> */}
-              </CardHeader>
-            </Card>
-          </li>
-        ))}
+        {items}
       </ul>
       <ul
         className={cn(
           "pt-4 flex flex-wrap justify-between md:justify-center gap-4",
         )}
       >
-        {/* <ul className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8", styles.transparent)}> */}
-        {effects.map((item) => (
-          <li
-            key={item.name}
-            className={cn(growStyles.listItem, "max-md:flex-auto")}
-          >
-            <Card className={growStyles.grow}>
-              <CardHeader>
-                <CardTitle className="max-md:text-center">
-                  {item.name}
-                </CardTitle>
-                {/* <CardDescription>Deploy your new project in one-click.</CardDescription> */}
-              </CardHeader>
-            </Card>
-          </li>
-        ))}
+        {items}
       </ul>
     </div>
   );
