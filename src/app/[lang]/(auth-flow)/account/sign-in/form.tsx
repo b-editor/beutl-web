@@ -12,16 +12,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { KeyRound } from "lucide-react";
 import Link from "next/link";
-import Image from "next/image";
 import { signInWithEmailAction } from "./actions";
 import SubmitButton from "@/components/submit-button";
 import { useState, useActionState } from "react";
 import { ErrorDisplay } from "@/components/error-display";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { useToast } from "@/hooks/use-toast";
 import { authClient } from "@/lib/auth-client";
 import { useTranslation } from "@/app/i18n/client";
 import { useRouter } from "next/navigation";
+import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { AuthLogo } from "@/components/auth/auth-logo";
+import { useOAuthSignIn } from "@/components/auth/oauth";
 
 export default function Form({
   returnUrl,
@@ -29,27 +30,10 @@ export default function Form({
 }: { returnUrl?: string; lang: string }) {
   const [state, dispatch] = useActionState(signInWithEmailAction, {});
   const { t } = useTranslation(lang);
+  const { oauthLoading, handleOAuthSignIn } = useOAuthSignIn({ returnUrl, lang });
   const [passkeyVerifying, setPasskeyVerifying] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
-
-  const handleOAuthSignIn = async (provider: "google" | "github") => {
-    setOauthLoading(provider);
-    try {
-      await authClient.signIn.social({
-        provider,
-        callbackURL: returnUrl || "/",
-      });
-    } catch {
-      toast({
-        title: t("error"),
-        description: t("auth:errors.oauth"),
-        variant: "destructive",
-      });
-      setOauthLoading(null);
-    }
-  };
 
   const handlePasskeySignIn = async () => {
     setPasskeyVerifying(true);
@@ -75,16 +59,7 @@ export default function Form({
     <form action={dispatch}>
       <div className="h-screen flex items-center justify-center">
         <div className="w-[350px] flex flex-col gap-4 relative">
-          <div className="flex gap-2 absolute bottom-full left-1/2 -translate-x-1/2 -translate-y-4">
-            <Image
-              width={40}
-              height={40}
-              className="w-10 h-10 align-bottom"
-              src="/img/logo_dark.svg"
-              alt="Logo"
-            />
-            <h1 className="font-semibold text-3xl mt-1">Beutl</h1>
-          </div>
+          <AuthLogo />
           <Card>
             <CardHeader>
               <CardTitle>{t("auth:signIn")}</CardTitle>
