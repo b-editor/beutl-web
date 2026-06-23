@@ -175,6 +175,10 @@ const app = new Hono()
       });
     },
   )
+  // @deprecated Dead endpoint. The live native-auth handler is the page at
+  // (auth-flow)/account/native-auth/handler/page.tsx (createAuthUri points there,
+  // not at this API route). Kept until client telemetry confirms no desktop build
+  // calls GET /api/v1/account/handler.
   .get("/handler", async (c) => {
     const userId = await getUserId(c);
     if (!userId) {
