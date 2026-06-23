@@ -1,10 +1,10 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { getDbAsync } from "@/prisma";
 import { Form } from "./components";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { Separator } from "@/components/ui/separator";
 import { getTranslation } from "@/app/i18n/server";
 import { findEmailByUserId } from "@/lib/db/user";
+import { findManyConfirmationTokens } from "@/lib/db/confirmation-token";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
   const params = await props.params;
@@ -19,12 +19,9 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   if (!user) {
     throw new Error("User not found");
   }
-  const prisma = await getDbAsync();
-  const tokens = await prisma.confirmationToken.findMany({
-    where: {
-      userId: session.user.id,
-      purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-    },
+  const tokens = await findManyConfirmationTokens({
+    userId: session.user.id,
+    purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
   });
   const { t } = await getTranslation(lang);
 

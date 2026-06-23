@@ -1,7 +1,6 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
@@ -11,6 +10,10 @@ import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { findEmailByUserId } from "@/lib/db/user";
+import {
+  createConfirmationToken,
+  deleteManyConfirmationTokens,
+} from "@/lib/db/confirmation-token";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 
 type State = {
@@ -59,12 +62,9 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     }
 
     if (validated.data.cancel) {
-      const db = await getDbAsync();
-  await db.confirmationToken.deleteMany({
-        where: {
-          userId: session.user.id,
-          purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-        },
+      await deleteManyConfirmationTokens({
+        userId: session.user.id,
+        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
       });
       revalidatePath(`/${lang}/account/manage/personal-data`);
       return {
@@ -88,15 +88,12 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(user.email, token, lang);
-    const db = await getDbAsync();
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: user.email,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-      },
+    const createToken = createConfirmationToken({
+      token: await createHash(`${token}${secret}`),
+      identifier: user.email,
+      userId: session.user.id,
+      expires,
+      purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
     });
 
     await Promise.all([sendRequest, createToken]);

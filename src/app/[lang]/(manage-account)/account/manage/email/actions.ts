@@ -1,7 +1,6 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
@@ -15,6 +14,11 @@ import {
   existsUserById,
   updateUserEmail,
 } from "@/lib/db/user";
+import {
+  countConfirmationTokens,
+  createConfirmationToken,
+  deleteConfirmationTokenByIdentifierToken,
+} from "@/lib/db/confirmation-token";
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
 import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
@@ -91,15 +95,12 @@ export async function sendConfirmationEmail(
     const secret = process.env.AUTH_SECRET;
     const token = randomString(32);
     const sendRequest = sendEmail(validated.data.newEmail, token);
-    const db = await getDbAsync();
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: validated.data.newEmail,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
-      },
+    const createToken = createConfirmationToken({
+      token: await createHash(`${token}${secret}`),
+      identifier: validated.data.newEmail,
+      userId: session.user.id,
+      expires,
+      purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
     });
 
     await Promise.all([sendRequest, createToken]);
@@ -119,13 +120,10 @@ export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
   const secret = process.env.AUTH_SECRET;
   const hash = await createHash(`${token}${secret}`);
-  const db = await getDbAsync();
   if (
-    !(await db.confirmationToken.count({
-      where: {
-        identifier: identifier,
-        token: hash,
-      },
+    !(await countConfirmationTokens({
+      identifier: identifier,
+      token: hash,
     }))
   ) {
     console.error("Invalid token");
@@ -135,19 +133,9 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
-  const tokenData = await db.confirmationToken.delete({
-    where: {
-      identifier_token: {
-        identifier: identifier,
-        token: hash,
-      },
-    },
-    select: {
-      identifier: true,
-      expires: true,
-      userId: true,
-      purpose: true,
-    },
+  const tokenData = await deleteConfirmationTokenByIdentifierToken({
+    identifier: identifier,
+    token: hash,
   });
   if (
     !tokenData ||
