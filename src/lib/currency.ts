@@ -22,7 +22,6 @@ export async function guessCurrency(): Promise<string | null> {
   if (!ipAddress) return null;
   const country = h.get("CF-IPCountry") || (await getCountry(ipAddress));
   if (!country) return null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const currency = (countryToCurrency as any)[country];
-  return currency;
+  const currency = countryToCurrency[country as keyof typeof countryToCurrency];
+  return currency ?? null;
 }

@@ -80,7 +80,8 @@ async function decryptRefreshToken(token: string) {
     );
 
     return Buffer.from(decrypted).toString("utf8");
-  } catch {
+  } catch (err) {
+    console.error("Failed to decrypt refresh token", err);
     return null;
   }
 }
