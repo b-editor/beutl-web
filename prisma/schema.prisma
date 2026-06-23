@@ -179,7 +179,7 @@ model PackagePricing {
 model UserPaymentHistory {
   id        String   @id @default(uuid())
   userId    String
-  paymentId String
+  paymentId String   @unique
   packageId String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -67,8 +67,10 @@ export async function createUserPackage(
   prisma?: PrismaTransaction,
 ) {
   const db = prisma || await getDbAsync();
-  return await db.userPackage.create({
-    data: { userId, packageId },
+  return await db.userPackage.upsert({
+    where: { userId_packageId: { userId, packageId } },
+    create: { userId, packageId },
+    update: {},
   });
 }
 
