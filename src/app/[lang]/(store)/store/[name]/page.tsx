@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { SemVer } from "semver";
 import { auth } from "@/lib/better-auth";
 import { guessCurrency } from "@/lib/currency";
+import { selectPricing } from "@/lib/pricing";
 import {
   packageOwned,
   packagePaied,
@@ -45,10 +46,7 @@ export default async function Page(props: Props) {
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);
   const currency = await currencyP;
-  const price =
-    prices.find((p) => p.currency === currency) ||
-    prices.find((p) => p.fallback) ||
-    prices[0];
+  const price = selectPricing(prices, currency);
   const session = await auth.api.getSession({ headers: await headers() });
   let owned = false;
   let paied = false;

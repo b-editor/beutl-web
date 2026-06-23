@@ -9,6 +9,7 @@ import { packageOwned, packagePaied } from "@/lib/store-utils";
 import { guessCurrency } from "@/lib/currency";
 import { SemVer } from "semver";
 import { getContentUrl } from "@/lib/content-url";
+import { selectPricing } from "@/lib/pricing";
 
 const acquireSchema = z.object({
   packageId: z.string(),
@@ -103,10 +104,7 @@ async function createResponse(pkgId: string, userId: string | null) {
     owned = await packageOwned(pkg.id, userId);
   }
 
-  const price =
-    pkg.packagePricing.find((p) => p.currency === currency) ||
-    pkg.packagePricing.find((p) => p.fallback) ||
-    pkg.packagePricing[0];
+  const price = selectPricing(pkg.packagePricing, currency);
 
   return {
     package: {

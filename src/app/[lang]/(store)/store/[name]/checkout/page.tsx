@@ -4,6 +4,7 @@ import { createStripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
+import { selectPricing } from "@/lib/pricing";
 import {
   packageOwned,
   retrievePackage,
@@ -33,10 +34,7 @@ export default async function Page(
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);
   const currency = await currencyP;
-  const price =
-    prices.find((p) => p.currency === currency) ||
-    prices.find((p) => p.fallback) ||
-    prices[0];
+  const price = selectPricing(prices, currency);
   if (!price) {
     throw new Error("No price found");
   }

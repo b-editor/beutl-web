@@ -1,6 +1,7 @@
 import "server-only";
 import { getDbAsync } from "@/prisma";
 import { contentPath } from "@/lib/content-url";
+import { selectPricing } from "@/lib/pricing";
 import { guessCurrency } from "./currency";
 import { existsUserPaymentHistory } from "./db/user-payment-history";
 
@@ -229,11 +230,7 @@ export async function retrievePackages(
           iconFileUrl: url,
           iconFileId: pkg.iconFileId,
           tags: pkg.tags,
-          price:
-            pkg.packagePricing.find((p) => p.currency === currency) ||
-            pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing?.[0] ||
-            null,
+          price: selectPricing(pkg.packagePricing, currency) || null,
         };
       }),
     );
@@ -301,11 +298,7 @@ export async function retrievePackages(
         iconFileUrl: url,
         iconFileId: pkg.iconFileId,
         tags: pkg.tags,
-        price:
-          pkg.packagePricing.find((p) => p.currency === currency) ||
-          pkg.packagePricing.find((p) => p.fallback) ||
-          pkg.packagePricing[0] ||
-          null,
+        price: selectPricing(pkg.packagePricing, currency) || null,
       };
     }),
   );
