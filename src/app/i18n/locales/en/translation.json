@@ -22,5 +22,11 @@
   "edit": "Edit",
   "delete": "Delete",
   "remove": "Remove",
-  "userNotFound": "User not found"
+  "userNotFound": "User not found",
+  "pageNotFound": "Page not found",
+  "pageNotFoundDescription": "The page you are looking for doesn't exist or has been moved.",
+  "backToHome": "Back to home",
+  "somethingWentWrong": "Something went wrong",
+  "somethingWentWrongDescription": "An unexpected error occurred. Please try again.",
+  "tryAgain": "Try again"
 }
