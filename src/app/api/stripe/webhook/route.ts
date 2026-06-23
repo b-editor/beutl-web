@@ -1,7 +1,9 @@
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { findCustomerByStripeId } from "@/lib/db/customer";
+import { findPackageIdById } from "@/lib/db/package";
 import { createUserPaymentHistory } from "@/lib/db/user-payment-history";
+import { createUserPackage } from "@/lib/db/user-package";
 import { createStripe } from "@/lib/stripe/config";
-import { getDbAsync } from "@/prisma";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 
@@ -30,14 +32,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
-      const db = await getDbAsync();
-      const customer = await db.customer.findFirst({
-        where: {
-          stripeId: paymentIntent.customer,
-        },
-        select: {
-          userId: true,
-        },
+      const customer = await findCustomerByStripeId({
+        stripeId: paymentIntent.customer,
       });
       if (!customer) {
         return NextResponse.json(
@@ -45,13 +41,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      const pkg = await db.package.findFirst({
-        where: {
-          id: paymentIntent.metadata.packageId,
-        },
-        select: {
-          id: true,
-        },
+      const pkg = await findPackageIdById({
+        id: paymentIntent.metadata.packageId,
       });
       if (!pkg) {
         return NextResponse.json(
@@ -59,11 +50,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           { status: 404 },
         );
       }
-      await db.userPackage.create({
-        data: {
-          userId: customer.userId,
-          packageId: pkg.id,
-        },
+      await createUserPackage({
+        userId: customer.userId,
+        packageId: pkg.id,
       });
       await createUserPaymentHistory({
         userId: customer.userId,

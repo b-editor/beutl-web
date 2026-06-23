@@ -3,6 +3,24 @@ import { getDbAsync } from "@/prisma";
 import { createStripe } from "../stripe/config";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findCustomerByStripeId({
+  stripeId,
+  prisma,
+}: {
+  stripeId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.customer.findFirst({
+    where: {
+      stripeId,
+    },
+    select: {
+      userId: true,
+    },
+  });
+}
+
 export async function updateCustomerEmailIfExist({
   userId,
   email,

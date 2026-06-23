@@ -3,6 +3,24 @@ import { getDbAsync } from "@/prisma";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findPackageIdById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id,
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
 export async function findPackageBasicByName({
   name,
   prisma,
