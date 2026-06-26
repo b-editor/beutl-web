@@ -37,7 +37,7 @@ export default async function Layout(
             <span>{session.user?.name ?? session.user?.email}</span>
           </div>
           <Button variant="outline" asChild>
-            <Link href="/account/sign-out">
+            <Link href={`/${lang}/account/sign-out`}>
               {t("signOut")}
             </Link>
           </Button>

@@ -28,5 +28,6 @@
   "backToHome": "Back to home",
   "somethingWentWrong": "Something went wrong",
   "somethingWentWrongDescription": "An unexpected error occurred. Please try again.",
-  "tryAgain": "Try again"
+  "tryAgain": "Try again",
+  "openMenu": "Open menu"
 }

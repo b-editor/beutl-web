@@ -214,6 +214,7 @@ export async function retrieveStorageFilesByUserId({
   userId?: string;
   prisma?: PrismaTransaction;
 }) {
+  if (!userId) return [];
   const db = prisma ?? await getDbAsync();
   return await db.file.findMany({
     where: {

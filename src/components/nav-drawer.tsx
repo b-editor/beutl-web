@@ -24,7 +24,12 @@ export async function StandardDrawer({ lang }: { lang: string }) {
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button className="w-9 h-9 md:hidden" variant="ghost" size="icon">
+        <Button
+          className="w-9 h-9 md:hidden"
+          variant="ghost"
+          size="icon"
+          aria-label={t("openMenu")}
+        >
           <Menu className="h-4 w-4" />
         </Button>
       </SheetTrigger>

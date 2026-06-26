@@ -22,7 +22,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
           </h2>
           <div className="flex gap-2">
             <Button asChild>
-              <Link href="/developer/new/project">
+              <Link href={`/${lang}/developer/new/project`}>
                 {t("developer:portal.createNewExtension")}
               </Link>
             </Button>
@@ -40,7 +40,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
         <div className="flex flex-wrap -mx-2">
           {packages.map((item) => (
             <Link
-              href={`/developer/projects/${item.name}`}
+              href={`/${lang}/developer/projects/${item.name}`}
               className="text-start p-2 basis-full md:basis-1/2 lg:basis-1/3 min-w-0"
               key={item.name}
             >

@@ -28,5 +28,6 @@
   "backToHome": "ホームに戻る",
   "somethingWentWrong": "問題が発生しました",
   "somethingWentWrongDescription": "予期しないエラーが発生しました。もう一度お試しください。",
-  "tryAgain": "再試行"
+  "tryAgain": "再試行",
+  "openMenu": "メニューを開く"
 }
