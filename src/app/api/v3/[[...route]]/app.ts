@@ -35,7 +35,9 @@ const app = new Hono()
       prerelease: prereleaseQuery,
     } = c.req.valid("query");
 
-    const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
+    // NOTE: 一時的に prereleaseQuery を無視して、semver の prerelease があるかどうかで判定するようにする
+    const includePrerelease = semver.prerelease.length > 0;
+    // const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
 
     const prisma = await getDbAsync();
     const versions = (await prisma.appReleaseAsset.findMany({
