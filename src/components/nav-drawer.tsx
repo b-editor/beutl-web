@@ -10,6 +10,7 @@ import {
 } from "./ui/sheet";
 import {
   NavigationMenu,
+  NavigationMenuItem,
   NavigationMenuLink,
   NavigationMenuList,
   navigationMenuTriggerStyle,
@@ -44,7 +45,7 @@ export async function StandardDrawer({ lang }: { lang: string }) {
                   src="/img/logo_dark.svg"
                   alt="Logo"
                 />
-                <p className="font-semibold text-xl mt-1">Beutl</p>
+                <span className="font-semibold text-xl mt-1">Beutl</span>
               </SheetTitle>
             </SheetHeader>
 
@@ -52,21 +53,22 @@ export async function StandardDrawer({ lang }: { lang: string }) {
               <NavigationMenuList className="flex-col items-stretch space-x-0">
                 {(["docs", "store", "privacy", "telemetry"] as NavLinkKey[]).map(
                   (key) => (
-                    <NavigationMenuLink
-                      key={key}
-                      className={cn(
-                        navigationMenuTriggerStyle(),
-                        "w-full justify-start",
-                      )}
-                      asChild
-                    >
-                      <Link
-                        href={navHref(key, lang)}
-                        prefetch={key === "docs" ? false : undefined}
+                    <NavigationMenuItem key={key}>
+                      <NavigationMenuLink
+                        className={cn(
+                          navigationMenuTriggerStyle(),
+                          "w-full justify-start",
+                        )}
+                        asChild
                       >
-                        {t(key)}
-                      </Link>
-                    </NavigationMenuLink>
+                        <Link
+                          href={navHref(key, lang)}
+                          prefetch={key === "docs" ? false : undefined}
+                        >
+                          {t(key)}
+                        </Link>
+                      </NavigationMenuLink>
+                    </NavigationMenuItem>
                   ),
                 )}
               </NavigationMenuList>
@@ -78,25 +80,26 @@ export async function StandardDrawer({ lang }: { lang: string }) {
             <NavigationMenu className="flex-col items-stretch max-w-full">
               <NavigationMenuList className="flex-col items-stretch space-x-0">
                 {socialLinks.map((social) => (
-                  <NavigationMenuLink
-                    key={social.label}
-                    className={cn(
-                      navigationMenuTriggerStyle(),
-                      "w-full justify-start",
-                    )}
-                    asChild
-                  >
-                    <Link href={social.href}>
-                      <Image
-                        width={24}
-                        height={24}
-                        alt={social.label}
-                        className="w-5 h-5 invert mr-2"
-                        src={social.iconSrc}
-                      />
-                      {social.label}
-                    </Link>
-                  </NavigationMenuLink>
+                  <NavigationMenuItem key={social.label}>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        "w-full justify-start",
+                      )}
+                      asChild
+                    >
+                      <Link href={social.href}>
+                        <Image
+                          width={24}
+                          height={24}
+                          alt={social.label}
+                          className="w-5 h-5 invert mr-2"
+                          src={social.iconSrc}
+                        />
+                        {social.label}
+                      </Link>
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
                 ))}
               </NavigationMenuList>
             </NavigationMenu>
