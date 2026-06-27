@@ -35,12 +35,11 @@ const app = new Hono()
       os,
       arch,
       standalone,
-      prerelease: prereleaseQuery,
     } = c.req.valid("query");
 
-    // NOTE: 一時的に prereleaseQuery を無視して、semver の prerelease があるかどうかで判定するようにする
+    // NOTE: 一時的に prerelease クエリを無視して、semver の prerelease があるかどうかで判定するようにする
     const includePrerelease = semver.prerelease.length > 0;
-    // const includePrerelease = prereleaseQuery ?? semver.prerelease.length > 0;
+    // const includePrerelease = c.req.valid("query").prerelease ?? semver.prerelease.length > 0;
 
     const versions = (await findAppReleaseAssetVersions({})).map((asset) => asset.version);
     const latest = [...new Set(versions)]
