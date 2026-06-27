@@ -10,15 +10,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
-import Image from "next/image";
 import { signUpWithEmailAction } from "./actions";
-import { useState, useActionState } from "react";
+import { useActionState } from "react";
 import SubmitButton from "@/components/submit-button";
 import { ErrorDisplay } from "@/components/error-display";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { useTranslation } from "@/app/i18n/client";
-import { authClient } from "@/lib/auth-client";
-import { useToast } from "@/hooks/use-toast";
+import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { AuthLogo } from "@/components/auth/auth-logo";
+import { useOAuthSignIn } from "@/components/auth/oauth";
 
 export default function Form({
   returnUrl,
@@ -27,40 +26,13 @@ export default function Form({
 }: { returnUrl?: string; email?: string; lang: string }) {
   const [state, dispatch] = useActionState(signUpWithEmailAction, {});
   const { t } = useTranslation(lang);
-  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
-  const { toast } = useToast();
-
-  const handleOAuthSignIn = async (provider: "google" | "github") => {
-    setOauthLoading(provider);
-    try {
-      await authClient.signIn.social({
-        provider,
-        callbackURL: returnUrl || "/",
-      });
-    } catch {
-      toast({
-        title: t("error"),
-        description: t("auth:errors.oauth"),
-        variant: "destructive",
-      });
-      setOauthLoading(null);
-    }
-  };
+  const { oauthLoading, handleOAuthSignIn } = useOAuthSignIn({ returnUrl, lang });
 
   return (
     <form action={dispatch}>
       <div className="h-screen flex items-center justify-center">
         <div className="w-[350px] flex flex-col gap-4 relative">
-          <div className="flex gap-2 absolute bottom-full left-1/2 -translate-x-1/2 -translate-y-4">
-            <Image
-              width={40}
-              height={40}
-              className="w-10 h-10 align-bottom"
-              src="/img/logo_dark.svg"
-              alt="Logo"
-            />
-            <h1 className="font-semibold text-3xl mt-1">Beutl</h1>
-          </div>
+          <AuthLogo />
           <Card>
             <CardHeader>
               <CardTitle>{t("auth:createAccount")}</CardTitle>

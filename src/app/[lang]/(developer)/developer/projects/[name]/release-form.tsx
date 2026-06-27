@@ -22,7 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import SemVer from "semver";
-import { createRelease, deleteRelease, updateRelease } from "./actions";
+import { createRelease, deleteRelease, updateRelease } from "./actions/release";
 import {
   Dialog,
   DialogContent,
@@ -42,8 +42,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useTranslation } from "@/app/i18n/client";
 
-export function ReleaseForm({ pkg }: { pkg: Package }) {
+export function ReleaseForm({
+  pkg,
+  lang,
+}: { pkg: Package; lang: string }) {
   const [edit, setEdit] = useState(false);
   const [open, setOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
@@ -64,6 +68,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
   const [version, setVersion] = useState({ value: "", message: "" });
   const [published, setPublished] = useState(release?.published || false);
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   const handleReset = useCallback(() => {
     setTitle(release?.title || "");
@@ -87,21 +92,20 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
+        const data: Package["Release"][number] | undefined = result.data;
         if (data) {
           setRelease(data);
           setReleases(releases.map((r) => (r.id === release.id ? data : r)));
         }
         toast({
           variant: "default",
-          title: "リリースを保存しました",
+          title: t("developer:release.saveSuccess"),
         });
         setEdit(false);
       } else {
         toast({
           variant: "destructive",
-          title: "リリースの保存に失敗しました",
+          title: t("developer:release.saveError"),
           description: result.message,
         });
       }
@@ -112,6 +116,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
     published,
     release,
     releases,
+    t,
     targetVersion.value,
     title,
     toast,
@@ -138,8 +143,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         version: version.value,
       });
       if (result.success) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: Package["Release"][number] = (result as any).data;
+        const data: Package["Release"][number] = result.data!;
         setReleases((releases) =>
           [...releases, data].toSorted((a, b) =>
             new SemVer.SemVer(b.version).compare(a.version),
@@ -153,14 +157,14 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         setFile(undefined);
         toast({
           variant: "default",
-          title: "リリースを作成しました",
+          title: t("developer:release.createSuccess"),
         });
         handleClose();
       } else {
         setVersion({ ...version, message: result.message || "" });
       }
     });
-  }, [handleClose, pkg.id, version, toast]);
+  }, [handleClose, pkg.id, version, t, toast]);
 
   const handleDelete = useCallback(() => {
     if (!release) return;
@@ -179,18 +183,17 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         setEdit(false);
         toast({
           variant: "default",
-          title: "リリースを削除しました",
+          title: t("developer:release.deleteSuccess"),
         });
       } else {
         toast({
           variant: "destructive",
-          title: "リリースの削除に失敗しました",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          description: (result as any).message,
+          title: t("developer:release.deleteError"),
+          description: result.message,
         });
       }
     });
-  }, [release, releases, toast]);
+  }, [release, releases, t, toast]);
 
   return (
     <div>
@@ -202,7 +205,6 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       >
         {releases.length > 0 ? (
           <>
-            {/* biome-ignore lint/style/noNonNullAssertion: <explanation> */}
             <Select
               value={release?.id}
               onValueChange={(e) =>
@@ -245,7 +247,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
         ) : (
           <Button onClick={() => setOpen(true)}>
             <Plus className="w-4 h-4 mr-2" />
-            リリースを作成
+            {t("developer:release.createRelease")}
           </Button>
         )}
       </div>
@@ -260,39 +262,39 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
               {release.description}
             </>
           ) : (
-            <>リリースがありません</>
+            <>{t("developer:release.noReleases")}</>
           )}
         </p>
       )}
       {edit && release && (
         <div className="flex flex-col gap-2">
           <Label className="mt-2" htmlFor="release-title">
-            タイトル
+            {t("developer:release.title")}
           </Label>
           <Input
             id="release-title"
-            placeholder="タイトル"
+            placeholder={t("developer:release.title")}
             value={title}
             disabled={saving}
             onChange={(e) => setTitle(e.target.value)}
           />
           <Label className="mt-2" htmlFor="release-description">
-            説明
+            {t("developer:release.description")}
           </Label>
           <Textarea
             id="release-description"
-            placeholder="説明"
+            placeholder={t("developer:release.description")}
             maxLength={1000}
             value={description}
             disabled={saving}
             onChange={(e) => setDescription(e.target.value)}
           />
           <Label className="mt-2" htmlFor="release-target-version">
-            ターゲットバージョン
+            {t("developer:release.targetVersion")}
           </Label>
           <Input
             id="release-target-version"
-            placeholder="ターゲットバージョン"
+            placeholder={t("developer:release.targetVersion")}
             value={targetVersion.value}
             disabled={saving}
             onChange={(e) =>
@@ -302,14 +304,16 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
                   SemVer.valid(e.target.value) ||
                     isValidNuGetVersionRange(e.target.value)
                     ? ""
-                    : "バージョンが正しくありません",
+                    : t("developer:validation.versionIncorrect"),
               })
             }
           />
           {targetVersion.message && (
             <p className="text-sm text-red-300">{targetVersion.message}</p>
           )}
-          <Label className="mt-2">パッケージファイル</Label>
+          <Label className="mt-2">
+            {t("developer:release.packageFile")}
+          </Label>
           <Button
             variant="outline"
             className="flex w-full justify-start"
@@ -320,7 +324,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
               ? file.name
               : release?.file?.name
                 ? release.file.name
-                : "ファイルを選択"}
+                : t("developer:release.selectFile")}
           </Button>
           <div className="flex items-center space-x-2 mt-2">
             <Checkbox
@@ -329,7 +333,9 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
               onCheckedChange={(e) => setPublished(!!e)}
               disabled={saving}
             />
-            <Label htmlFor="release-public">公開する</Label>
+            <Label htmlFor="release-public">
+              {t("developer:common.publish")}
+            </Label>
           </div>
           <div className="flex gap-2 mt-4 flex-wrap justify-between">
             <div className="flex gap-2">
@@ -339,7 +345,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
                 ) : (
                   <Save className="w-4 h-4 mr-2" />
                 )}
-                保存
+                {t("developer:common.save")}
               </Button>
               <Button
                 variant="outline"
@@ -349,7 +355,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
                   handleReset();
                 }}
               >
-                キャンセル
+                {t("developer:common.cancel")}
               </Button>
             </div>
             <Button
@@ -357,7 +363,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
               disabled={saving || deleting}
               onClick={() => setDeleteDialog(true)}
             >
-              削除
+              {t("developer:common.delete")}
             </Button>
           </div>
         </div>
@@ -366,15 +372,17 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       <Dialog open={open} onOpenChange={() => handleClose()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>リリースを作成</DialogTitle>
+            <DialogTitle>
+              {t("developer:release.createRelease")}
+            </DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-2 py-4">
             <Label className="mt-2" htmlFor="release-version">
-              バージョン
+              {t("developer:release.version")}
             </Label>
             <Input
               id="release-version"
-              placeholder="バージョン"
+              placeholder={t("developer:release.version")}
               disabled={creating}
               value={version.value}
               onChange={(e) =>
@@ -382,7 +390,7 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
                   value: e.target.value,
                   message: SemVer.valid(e.target.value)
                     ? ""
-                    : "バージョンが正しくありません",
+                    : t("developer:validation.versionIncorrect"),
                 })
               }
             />
@@ -392,14 +400,14 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
           </div>
           <DialogFooter>
             <Button disabled={creating} variant="outline" onClick={handleClose}>
-              キャンセル
+              {t("developer:common.cancel")}
             </Button>
             <Button
               disabled={!!version.message || creating}
               onClick={handleCreate}
             >
               {creating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              作成
+              {t("developer:common.create")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -408,14 +416,20 @@ export function ReleaseForm({ pkg }: { pkg: Package }) {
       <AlertDialog open={deleteDialog} onOpenChange={setDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>本当に削除しますか？</AlertDialogTitle>
+            <AlertDialogTitle>
+              {t("developer:common.confirmDeleteTitle")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              この操作は取り消せません。このリリースに関連するすべてのデータが削除されます。
+              {t("developer:release.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>キャンセル</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>削除</AlertDialogAction>
+            <AlertDialogCancel>
+              {t("developer:common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>
+              {t("developer:common.delete")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

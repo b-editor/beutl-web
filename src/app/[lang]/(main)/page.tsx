@@ -1,4 +1,3 @@
-import NavBar from "@/components/nav-bar";
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,7 +17,6 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel";
 import { Card, CardContent } from "@/components/ui/card";
-import Footer from "@/components/footer";
 import { getTranslation } from "@/app/i18n/server";
 import { Code } from "lucide-react";
 
@@ -58,8 +56,6 @@ export default async function Home(props: {
   const extensions = getExtensions(t);
 
   return (
-    <div>
-      <NavBar lang={lang} />
       <div>
         {/* Hero Section */}
         <HeroSection
@@ -289,7 +285,5 @@ export default async function Home(props: {
           </div>
         </AnimatedSection>
       </div>
-      <Footer lang={lang} />
-    </div>
   );
 }

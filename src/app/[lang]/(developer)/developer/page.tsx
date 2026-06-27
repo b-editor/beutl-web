@@ -2,36 +2,45 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { authOrSignIn } from "@/lib/auth-guard";
+import { getTranslation } from "@/app/i18n/server";
 import { Eye, EyeOff } from "lucide-react";
 import { retrievePackages } from "./actions";
 import Link from "next/link";
 
-export default async function Page() {
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const { lang } = await props.params;
   await authOrSignIn();
+  const { t } = await getTranslation(lang);
   const packages = await retrievePackages();
 
   return (
     <div>
       <div className="border-b bg-card">
         <div className="container max-w-6xl mx-auto py-12 px-4 flex flex-col gap-12">
-          <h2 className="text-3xl font-semibold">拡張機能を開発する</h2>
+          <h2 className="text-3xl font-semibold">
+            {t("developer:portal.title")}
+          </h2>
           <div className="flex gap-2">
             <Button asChild>
-              <Link href="/developer/new/project">新しい拡張機能を作成</Link>
+              <Link href={`/${lang}/developer/new/project`}>
+                {t("developer:portal.createNewExtension")}
+              </Link>
             </Button>
             <Button variant="outline" disabled>
-              ドキュメント
+              {t("developer:portal.documentation")}
             </Button>
           </div>
         </div>
       </div>
 
       <div className="container max-w-6xl mx-auto py-12 px-4 flex flex-col">
-        <h2 className="text-xl font-semibold">プロジェクト</h2>
+        <h2 className="text-xl font-semibold">
+          {t("developer:portal.projects")}
+        </h2>
         <div className="flex flex-wrap -mx-2">
           {packages.map((item) => (
             <Link
-              href={`/developer/projects/${item.name}`}
+              href={`/${lang}/developer/projects/${item.name}`}
               className="text-start p-2 basis-full md:basis-1/2 lg:basis-1/3 min-w-0"
               key={item.name}
             >

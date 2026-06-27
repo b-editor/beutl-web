@@ -1,30 +1,13 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
-import { getContentUrl } from "@/lib/db/file";
-
-async function findFile(id: string) {
-  const prisma = await getDbAsync();
-  return await prisma.file.findFirst({
-    where: {
-      id: id,
-    },
-    select: {
-      id: true,
-      name: true,
-      mimeType: true,
-      userId: true,
-      size: true,
-      sha256: true,
-    },
-  });
-}
+import { getContentUrl } from "@/lib/content-url";
+import { findFileForApi } from "@/lib/db/file";
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
 async function isAllowed(
-  file: NonNullable<Awaited<ReturnType<typeof findFile>>>,
+  file: NonNullable<Awaited<ReturnType<typeof findFileForApi>>>,
   userId: string | null,
 ) {
   // return userId === file.userId;
@@ -34,7 +17,7 @@ async function isAllowed(
 
 const app = new Hono().get("/:id", async (c) => {
   const id = c.req.param("id");
-  const file = await findFile(id);
+  const file = await findFileForApi({ id });
 
   if (!file) {
     return c.json(await apiErrorResponse("assetNotFound"), { status: 404 });

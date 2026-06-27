@@ -22,5 +22,12 @@
   "edit": "編集",
   "delete": "削除",
   "remove": "削除",
-  "userNotFound": "ユーザーが見つかりません"
+  "userNotFound": "ユーザーが見つかりません",
+  "pageNotFound": "ページが見つかりません",
+  "pageNotFoundDescription": "お探しのページは存在しないか、移動された可能性があります。",
+  "backToHome": "ホームに戻る",
+  "somethingWentWrong": "問題が発生しました",
+  "somethingWentWrongDescription": "予期しないエラーが発生しました。もう一度お試しください。",
+  "tryAgain": "再試行",
+  "openMenu": "メニューを開く"
 }

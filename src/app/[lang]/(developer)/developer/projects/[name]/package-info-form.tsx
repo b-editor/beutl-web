@@ -13,17 +13,18 @@ import {
 import { useCallback, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import type { State } from "./actions/_shared";
 import {
-  type State,
   updateDisplayNameAndShortDescription,
   deletePackage,
   changePackageVisibility,
   uploadIcon,
-} from "./actions";
+} from "./actions/package";
 import { ErrorDisplay } from "@/components/error-display";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import { useToast } from "@/hooks/use-toast";
 import type { Package } from "./types";
+import { useTranslation } from "@/app/i18n/client";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,7 +36,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-export function PackageInfoForm({ pkg }: { pkg: Package }) {
+export function PackageInfoForm({
+  pkg,
+  lang,
+}: { pkg: Package; lang: string }) {
   const [edit, setEdit] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [pending, setPending] = useState(false);
@@ -47,6 +51,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
   const [pendingActions, startDropdownActions] = useTransition();
   const [pendingIcon, startUploadIcon] = useTransition();
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   const handleSubmit = useCallback(async () => {
     try {
@@ -76,31 +81,31 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
       const res = await deletePackage(pkg.id);
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       }
     });
-  }, [pkg.id, toast]);
+  }, [pkg.id, t, toast]);
 
   const handleChangeVisibility = useCallback(async () => {
     startDropdownActions(async () => {
       const res = await changePackageVisibility(pkg.id, !pkg.published);
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       } else {
         toast({
-          title: "成功",
-          description: "変更しました",
+          title: t("developer:common.success"),
+          description: t("developer:packageInfo.changed"),
         });
       }
     });
-  }, [pkg.id, pkg.published, toast]);
+  }, [pkg.id, pkg.published, t, toast]);
 
   const handleUploadIconClick = useCallback(async () => {
     const files = await showOpenFileDialog({ accept: "image/*" });
@@ -116,13 +121,13 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
       const res = await uploadIcon(formData);
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
       }
     });
-  }, [toast, pkg.id]);
+  }, [toast, pkg.id, t]);
 
   return (
     <>
@@ -135,7 +140,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
               onClick={handleUploadIconClick}
             >
               {pkg.iconFileUrl && (
-                /* eslint-disable-next-line @next/next/no-img-element */ 
+                /* eslint-disable-next-line @next/next/no-img-element */
                 <img
                   className="w-16 h-16 max-w-fit rounded-md group-hover:opacity-80"
                   alt="Package icon"
@@ -157,7 +162,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
                 className={cn(!edit && "hidden")}
                 value={displayName}
                 type="text"
-                placeholder="表示名 (空白の場合IDが表示されます)"
+                placeholder={t("developer:forms.displayNamePlaceholder")}
                 onChange={(e) => setDisplayName(e.target.value)}
               />
               {state?.errors?.displayName && (
@@ -185,13 +190,17 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
-                  <DropdownMenuLabel>操作</DropdownMenuLabel>
+                  <DropdownMenuLabel>
+                    {t("developer:common.actions")}
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => setDeleteDialog(true)}>
-                    削除
+                    {t("developer:common.delete")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleChangeVisibility}>
-                    {pkg.published ? "非公開にする" : "公開する"}
+                    {pkg.published
+                      ? t("developer:packageInfo.unpublish")
+                      : t("developer:common.publish")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -224,7 +233,7 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
           ) : (
             <Save className="w-4 h-4 mr-2" />
           )}
-          保存
+          {t("developer:common.save")}
         </Button>
         <Button
           variant="outline"
@@ -233,21 +242,27 @@ export function PackageInfoForm({ pkg }: { pkg: Package }) {
           disabled={pending}
           onClick={handleCancel}
         >
-          キャンセル
+          {t("developer:common.cancel")}
         </Button>
       </div>
 
       <AlertDialog open={deleteDialog} onOpenChange={setDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>本当に削除しますか？</AlertDialogTitle>
+            <AlertDialogTitle>
+              {t("developer:common.confirmDeleteTitle")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              この操作は取り消せません。このパッケージに関連するすべてのデータが削除されます。
+              {t("developer:packageInfo.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>キャンセル</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>削除</AlertDialogAction>
+            <AlertDialogCancel>
+              {t("developer:common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>
+              {t("developer:common.delete")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

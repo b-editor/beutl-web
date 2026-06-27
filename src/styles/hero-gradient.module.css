@@ -125,8 +125,7 @@
   .blob3,
   .floatSlow,
   .floatMedium,
-  .floatFast,
-  .shimmer {
+  .floatFast {
     animation: none;
   }
 }

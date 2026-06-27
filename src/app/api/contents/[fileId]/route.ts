@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
+import { findFileForContentAccess } from "@/lib/db/file";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
-import { getDbAsync } from "@/prisma";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 import { tryGetUserIdFromHeaders } from "@/lib/api/auth";
@@ -15,52 +15,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
   const session = await auth.api.getSession({ headers: request.headers });
   const userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
 
-  const prisma = await getDbAsync();
-  const file = await prisma.file.findFirst({
-    where: {
-      id: fileId,
-    },
-    select: {
-      objectKey: true,
-      visibility: true,
-      userId: true,
-      mimeType: true,
-      Package: {
-        select: {
-          userId: true,
-          published: true,
-        },
-      },
-      Profile: true,
-      PackageScreenshot: {
-        select: {
-          package: {
-            select: {
-              userId: true,
-              published: true,
-            },
-          },
-        },
-      },
-      Release: {
-        select: {
-          published: true,
-          package: {
-            select: {
-              id: true,
-              userId: true,
-              published: true,
-              packagePricing: {
-                select: {
-                  id: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  });
+  const file = await findFileForContentAccess({ id: fileId });
   let cacheControl = "private";
 
   if (!file) {

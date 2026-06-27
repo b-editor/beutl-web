@@ -1,0 +1,113 @@
+{
+  "common": {
+    "actions": "操作",
+    "add": "追加",
+    "cancel": "キャンセル",
+    "confirmDeleteTitle": "本当に削除しますか？",
+    "create": "作成",
+    "delete": "削除",
+    "error": "エラー",
+    "publish": "公開する",
+    "save": "保存",
+    "success": "成功"
+  },
+  "portal": {
+    "title": "拡張機能を開発する",
+    "createNewExtension": "新しい拡張機能を作成",
+    "documentation": "ドキュメント",
+    "projects": "プロジェクト"
+  },
+  "newProject": {
+    "title": "新しいプロジェクトを作成",
+    "packageId": "パッケージID",
+    "packageIdDescription": "半角英数字とピリオド、アンダースコアのみ",
+    "createFromPackageFile": "パッケージファイルから作成"
+  },
+  "forms": {
+    "displayNamePlaceholder": "表示名 (空白の場合IDが表示されます)"
+  },
+  "errors": {
+    "fileNotFound": "ファイルが見つかりません",
+    "idNotFound": "IDが見つかりません",
+    "invalidInput": "入力内容に誤りがあります",
+    "noPermission": "権限がありません",
+    "storageFull": "ストレージ容量が足りません"
+  },
+  "validation": {
+    "currencyCodeInput": "通貨コードは3文字で入力してください",
+    "currencyCodeLength": "通貨コードは3文字である必要があります",
+    "defaultCurrencyMax": "デフォルト通貨は1つまでです",
+    "descriptionMax": "説明は1000文字以下である必要があります",
+    "displayNameMax": "表示名は50文字以下である必要があります",
+    "idInvalid": "IDが不正です",
+    "packageIdCharacters": "パッケージIDは半角英数字とピリオド、アンダースコアのみ使用できます",
+    "packageIdMax": "パッケージIDは50文字以下である必要があります",
+    "packageIdMin": "パッケージIDは3文字以上である必要があります",
+    "packageIdTaken": "このパッケージIDは既に使用されています",
+    "priceIntegerInput": "価格は0以上の整数で入力してください",
+    "priceMin": "価格は0以上である必要があります",
+    "publishedInvalid": "公開設定が不正です",
+    "shortDescriptionMax": "短い説明は200文字以下である必要があります",
+    "titleMax": "タイトルは50文字以下である必要があります",
+    "versionIncorrect": "バージョンが正しくありません",
+    "versionInvalid": "バージョンが不正です"
+  },
+  "packageInfo": {
+    "changed": "変更しました",
+    "deleteDescription": "この操作は取り消せません。このパッケージに関連するすべてのデータが削除されます。",
+    "unpublish": "非公開にする"
+  },
+  "description": {
+    "title": "説明"
+  },
+  "details": {
+    "title": "詳細",
+    "tags": "タグ",
+    "tagName": "タグ名"
+  },
+  "screenshots": {
+    "alreadyFirst": "既に先頭です",
+    "alreadyLast": "既に末尾です",
+    "moveLeft": "左に移動",
+    "moveRight": "右に移動",
+    "title": "スクリーンショット"
+  },
+  "pricing": {
+    "addPrice": "価格を追加",
+    "currencyAlreadyAdded": "この通貨は既に追加されています",
+    "currencyCode": "通貨コード",
+    "default": "デフォルト",
+    "defaultCurrency": "デフォルト通貨",
+    "intervalUpdated": "支払い間隔を更新しました",
+    "intervals": {
+      "free": "無料",
+      "monthly": "月額",
+      "once": "一度のみ",
+      "yearly": "年額"
+    },
+    "noPrices": "価格が設定されていません",
+    "paymentInterval": "支払い間隔",
+    "price": "価格",
+    "priceList": "価格一覧",
+    "pricingUpdated": "価格設定を更新しました",
+    "savePrices": "価格を保存",
+    "titleAdmin": "価格設定 (管理者)"
+  },
+  "release": {
+    "createRelease": "リリースを作成",
+    "createSuccess": "リリースを作成しました",
+    "defaultTitle": "新しいリリース",
+    "deleteDescription": "この操作は取り消せません。このリリースに関連するすべてのデータが削除されます。",
+    "deleteError": "リリースの削除に失敗しました",
+    "deleteSuccess": "リリースを削除しました",
+    "description": "説明",
+    "noReleases": "リリースがありません",
+    "packageFile": "パッケージファイル",
+    "saveError": "リリースの保存に失敗しました",
+    "saveSuccess": "リリースを保存しました",
+    "selectFile": "ファイルを選択",
+    "targetVersion": "ターゲットバージョン",
+    "title": "タイトル",
+    "version": "バージョン"
+  }
+}

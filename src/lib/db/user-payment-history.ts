@@ -42,6 +42,24 @@ export async function existsUserPaymentHistory({
   }));
 }
 
+export async function existsUserPaymentHistoryByPaymentId({
+  paymentId,
+  prisma,
+}: {
+  paymentId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return !!(await db.userPaymentHistory.findUnique({
+    where: {
+      paymentId: paymentId,
+    },
+    select: {
+      id: true,
+    },
+  }));
+}
+
 export async function createUserPaymentHistory({
   userId,
   packageId,
@@ -54,11 +72,13 @@ export async function createUserPaymentHistory({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDbAsync();
-  await db.userPaymentHistory.create({
-    data: {
+  await db.userPaymentHistory.upsert({
+    where: { paymentId: paymentIntentId },
+    create: {
       userId: userId,
       packageId: packageId,
       paymentId: paymentIntentId,
     },
+    update: {},
   });
 }

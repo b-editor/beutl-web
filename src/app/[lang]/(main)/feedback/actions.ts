@@ -2,7 +2,7 @@
 
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/prisma";
+import { createFeedback } from "@/lib/db/feedback";
 import { sendEmail } from "@/resend";
 import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
@@ -57,8 +57,6 @@ export async function submitFeedback(
   }
 
   try {
-    const db = await getDbAsync();
-
     const categoryLabels: Record<string, string> = {
       BUG_REPORT: t("feedback:categories.BUG_REPORT"),
       FEATURE_REQUEST: t("feedback:categories.FEATURE_REQUEST"),
@@ -66,14 +64,12 @@ export async function submitFeedback(
       OTHER: t("feedback:categories.OTHER"),
     };
 
-    const dbSave = db.feedback.create({
-      data: {
-        name,
-        email,
-        category,
-        message,
-        userId,
-      },
+    const dbSave = createFeedback({
+      name,
+      email,
+      category,
+      message,
+      userId,
     });
 
     const emailNotification = sendEmail({

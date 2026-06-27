@@ -1,3 +1,29 @@
 {
-  "extends": ["next/core-web-vitals", "next/typescript"]
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@/prisma",
+            "message": "Access the database through @/lib/db functions instead of importing @/prisma directly."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/lib/db/**",
+        "src/lib/better-auth.ts",
+        "src/lib/store-utils.ts",
+        "src/lib/api/packages-db.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
 }

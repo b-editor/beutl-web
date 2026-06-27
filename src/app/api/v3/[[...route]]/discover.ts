@@ -2,7 +2,6 @@ import "server-only";
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { getDbAsync } from "@/prisma";
 import {
   type ListedPackage,
   packageOwned,
@@ -10,7 +9,8 @@ import {
   retrievePackages,
 } from "@/lib/store-utils";
 import { getUserId } from "@/lib/api/auth";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
+import { findProfileForDiscover } from "@/lib/db/profile";
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),
@@ -19,17 +19,8 @@ const searchQuerySchema = z.object({
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null) {
-  const prisma = await getDbAsync();
-  const profile = await prisma.profile.findFirst({
-    where: {
-      userId: pkg.userId,
-    },
-    select: {
-      userName: true,
-      displayName: true,
-      bio: true,
-      iconFileId: true,
-    },
+  const profile = await findProfileForDiscover({
+    userId: pkg.userId,
   });
   let paid = false;
   let owned = false;

@@ -43,7 +43,9 @@ export default async function Page(
           );
 
           emailOrUserName = (await res.json()).login;
-        } catch {}
+        } catch (err) {
+          console.error("Failed to fetch GitHub username", err);
+        }
       }
       return {
         providerId: account.providerId,

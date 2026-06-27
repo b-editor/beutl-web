@@ -1,6 +1,5 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { z } from "zod";
@@ -8,7 +7,20 @@ import { zValidator } from "@hono/zod-validator";
 import { packageOwned, packagePaied } from "@/lib/store-utils";
 import { guessCurrency } from "@/lib/currency";
 import { SemVer } from "semver";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
+import { selectPricing } from "@/lib/pricing";
+import {
+  existsPaidPricingForPackage,
+  findPackageForLibraryResponse,
+} from "@/lib/db/package";
+import { findReleaseForLibrary } from "@/lib/db/release";
+import { findUserForLibrary } from "@/lib/db/user";
+import {
+  createUserPackage,
+  deleteUserPackagesByUserAndPackageName,
+  existsUserPackage,
+  findUserPackageIdsByUserId,
+} from "@/lib/db/user-package";
 
 const acquireSchema = z.object({
   packageId: z.string(),
@@ -16,61 +28,9 @@ const acquireSchema = z.object({
 
 async function createResponse(pkgId: string, userId: string | null) {
   const currency = await guessCurrency();
-  const prisma = await getDbAsync();
-  const pkg = await prisma.package.findFirst({
-    where: {
-      id: pkgId,
-    },
-    select: {
-      published: true,
-      id: true,
-      name: true,
-      displayName: true,
-      shortDescription: true,
-      tags: true,
-      iconFileId: true,
-      userId: true,
-      user: {
-        select: {
-          Profile: {
-            select: {
-              userName: true,
-              displayName: true,
-              bio: true,
-              iconFileId: true,
-            },
-          },
-        },
-      },
-      packagePricing: {
-        where: currency ? {
-          OR: [
-            {
-              currency: {
-                equals: currency,
-                mode: "insensitive",
-              },
-            },
-            {
-              fallback: true,
-            },
-          ],
-        } : {
-          fallback: true,
-        },
-        select: {
-          price: true,
-          currency: true,
-          fallback: true,
-        },
-      },
-      Release: {
-        select: {
-          id: true,
-          version: true,
-        },
-      },
-    },
+  const pkg = await findPackageForLibraryResponse({
+    id: pkgId,
+    currency,
   });
   if (!pkg || !pkg.published) {
     return null;
@@ -81,18 +41,8 @@ async function createResponse(pkgId: string, userId: string | null) {
   });
   const latestReleaseId = pkg.Release?.[0]?.id;
   const latestRelease = latestReleaseId
-    ? await prisma.release.findFirst({
-      where: {
-        id: latestReleaseId,
-      },
-      select: {
-        id: true,
-        version: true,
-        title: true,
-        description: true,
-        targetVersion: true,
-        fileId: true,
-      },
+    ? await findReleaseForLibrary({
+      id: latestReleaseId,
     })
     : null;
 
@@ -103,10 +53,7 @@ async function createResponse(pkgId: string, userId: string | null) {
     owned = await packageOwned(pkg.id, userId);
   }
 
-  const price =
-    pkg.packagePricing.find((p) => p.currency === currency) ||
-    pkg.packagePricing.find((p) => p.fallback) ||
-    pkg.packagePricing[0];
+  const price = selectPricing(pkg.packagePricing, currency);
 
   return {
     package: {
@@ -154,14 +101,8 @@ const app = new Hono()
       });
     }
 
-    const prisma = await getDbAsync();
-    const user = await prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-      select: {
-        id: true,
-      },
+    const user = await findUserForLibrary({
+      id: userId,
     });
     if (!user) {
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
@@ -172,16 +113,8 @@ const app = new Hono()
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
 
-    const paymentRequired = !!(await prisma.packagePricing.findFirst({
-      where: {
-        packageId: pkg.package.id,
-        price: {
-          gt: 0,
-        },
-      },
-      select: {
-        id: true,
-      },
+    const paymentRequired = !!(await existsPaidPricingForPackage({
+      packageId: pkg.package.id,
     }));
     if (paymentRequired) {
       const paied = await packagePaied(pkg.package.id, user.id);
@@ -193,18 +126,14 @@ const app = new Hono()
     }
 
     if (
-      !(await prisma.userPackage.findFirst({
-        where: {
-          userId: user.id,
-          packageId: pkg.package.id,
-        },
+      !(await existsUserPackage({
+        userId: user.id,
+        packageId: pkg.package.id,
       }))
     ) {
-      await prisma.userPackage.create({
-        data: {
-          userId: user.id,
-          packageId: pkg.package.id,
-        },
+      await createUserPackage({
+        userId: user.id,
+        packageId: pkg.package.id,
       });
     }
 
@@ -218,14 +147,8 @@ const app = new Hono()
       });
     }
 
-    const prisma = await getDbAsync();
-    const packages = await prisma.userPackage.findMany({
-      where: {
-        userId: userId,
-      },
-      select: {
-        packageId: true,
-      },
+    const packages = await findUserPackageIdsByUserId({
+      userId: userId,
     });
 
     return c.json(
@@ -245,14 +168,9 @@ const app = new Hono()
       });
     }
 
-    const prisma = await getDbAsync();
-    await prisma.userPackage.deleteMany({
-      where: {
-        userId: userId,
-        package: {
-          name: name,
-        },
-      },
+    await deleteUserPackagesByUserAndPackageName({
+      userId: userId,
+      name: name,
     });
 
     return c.text("Deleted");

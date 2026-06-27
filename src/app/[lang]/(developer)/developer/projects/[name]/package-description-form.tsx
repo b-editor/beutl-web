@@ -6,20 +6,25 @@ import { Edit, Loader2, Save } from "lucide-react";
 import { useCallback, useReducer, useState, useTransition } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { updateDescription } from "./actions";
+import { updateDescription } from "./actions/package";
+import { useTranslation } from "@/app/i18n/client";
 
-export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
+export function PackageDescriptionForm({
+  pkg,
+  lang,
+}: { pkg: Package; lang: string }) {
   const [edit, toggleEdit] = useReducer((edit) => !edit, false);
   const [pending, startTransition] = useTransition();
   const [description, setDescription] = useState(pkg.description);
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   const handleSave = useCallback(async () => {
     startTransition(async () => {
       const res = await updateDescription({ packageId: pkg.id, description });
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
@@ -27,12 +32,14 @@ export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
         toggleEdit();
       }
     });
-  }, [description, pkg.id, toast]);
+  }, [description, pkg.id, t, toast]);
 
   return (
     <div>
       <div className="flex justify-between items-center mt-6 border-b pb-2">
-        <h3 className="font-bold text-xl">説明</h3>
+        <h3 className="font-bold text-xl">
+          {t("developer:description.title")}
+        </h3>
         {!edit && (
           <Button
             size="icon"
@@ -67,7 +74,7 @@ export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
               ) : (
                 <Save className="w-4 h-4 mr-2" />
               )}
-              保存
+              {t("developer:common.save")}
             </Button>
             <Button
               variant="outline"
@@ -76,7 +83,7 @@ export function PackageDescriptionForm({ pkg }: { pkg: Package }) {
                 setDescription(pkg.description);
               }}
             >
-              キャンセル
+              {t("developer:common.cancel")}
             </Button>
           </div>
         </>

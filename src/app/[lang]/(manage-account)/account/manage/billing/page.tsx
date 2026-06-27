@@ -1,10 +1,10 @@
-import { getDb } from "@/prisma";
 import { getTranslation } from "@/app/i18n/server";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getUserPaymentHistory } from "@/lib/db/user-payment-history";
+import { findPackageForBillingHistory } from "@/lib/db/package";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
@@ -19,27 +19,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const session = await authOrSignIn();
 
   const history = await getUserPaymentHistory({ userId: session.user.id });
-  const prisma = getDb();
   const items = await Promise.all(
     history.map(async (item) => {
-      const p1 = prisma.package.findFirst({
-        where: {
-          id: item.packageId,
-        },
-        select: {
-          name: true,
-          displayName: true,
-          user: {
-            select: {
-              name: true,
-              Profile: {
-                select: {
-                  displayName: true,
-                },
-              },
-            },
-          },
-        },
+      const p1 = findPackageForBillingHistory({
+        packageId: item.packageId,
       });
       const stripe = createStripe();
       const p2 = stripe.paymentIntents.retrieve(item.paymentId);

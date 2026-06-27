@@ -3,6 +3,150 @@ import { getDbAsync } from "@/prisma";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findPackageIdById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id,
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
+export async function findPackageBasicByName({
+  name,
+  prisma,
+}: {
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return db.package.findFirst({
+    where: {
+      name: name,
+    },
+    select: {
+      id: true,
+      userId: true,
+      published: true,
+    },
+  });
+}
+
+export async function getPackagePublishedByIdOrThrow({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return db.package.findFirstOrThrow({
+    where: {
+      id,
+    },
+    select: {
+      published: true,
+    },
+  });
+}
+
+export async function findPackageForLibraryResponse({
+  id: pkgId,
+  currency,
+  prisma,
+}: {
+  id: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id: pkgId,
+    },
+    select: {
+      published: true,
+      id: true,
+      name: true,
+      displayName: true,
+      shortDescription: true,
+      tags: true,
+      iconFileId: true,
+      userId: true,
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+              displayName: true,
+              bio: true,
+              iconFileId: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+      Release: {
+        select: {
+          id: true,
+          version: true,
+        },
+      },
+    },
+  });
+}
+
+export async function existsPaidPricingForPackage({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.packagePricing.findFirst({
+    where: {
+      packageId: packageId,
+      price: {
+        gt: 0,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
 export async function retrieveDevPackagesByUserId({
   userId,
   prisma,
@@ -28,6 +172,121 @@ export async function retrieveDevPackagesByUserId({
       Release: {
         select: {
           version: true,
+        },
+      },
+    },
+  });
+}
+
+export async function findPublishedPackageForLibrary({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id,
+      published: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      packagePricing: true,
+    },
+  });
+}
+
+export async function findPackageForBillingHistory({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findFirst({
+    where: {
+      id: packageId,
+    },
+    select: {
+      name: true,
+      displayName: true,
+      user: {
+        select: {
+          name: true,
+          Profile: {
+            select: {
+              displayName: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export async function retrievePublishedPackagesByUserName({
+  userName,
+  currency,
+  prisma,
+}: {
+  userName: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDbAsync();
+  return await db.package.findMany({
+    where: {
+      user: {
+        Profile: {
+          userName: userName,
+        },
+      },
+      published: true,
+    },
+    select: {
+      id: true,
+      displayName: true,
+      name: true,
+      shortDescription: true,
+      tags: true,
+      iconFile: {
+        select: {
+          id: true,
+        },
+      },
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
         },
       },
     },

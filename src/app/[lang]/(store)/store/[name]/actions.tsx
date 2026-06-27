@@ -3,27 +3,23 @@
 import { getTranslation } from "@/app/i18n/server";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import { authenticated, authOrSignIn } from "@/lib/auth-guard";
+import { findPublishedPackageForLibrary } from "@/lib/db/package";
+import {
+  createUserPackage,
+  deleteUserPackage,
+  existsUserPackage,
+} from "@/lib/db/user-package";
 import { existsUserPaymentHistory } from "@/lib/db/user-payment-history";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function addToLibrary(packageId: string) {
   const session = await authOrSignIn();
   const lang = await getLanguage();
-  const db = await getDbAsync();
 
-  const pkg = await db.package.findFirst({
-    where: {
-      id: packageId,
-      published: true,
-    },
-    select: {
-      id: true,
-      name: true,
-      packagePricing: true,
-    },
+  const pkg = await findPublishedPackageForLibrary({
+    id: packageId,
   });
   if (!pkg) {
     return { success: false, message: "Package not found" };
@@ -41,15 +37,14 @@ export async function addToLibrary(packageId: string) {
   }
 
   if (
-    !(await db.userPackage.findFirst({
-      where: { userId: session.user.id, packageId: pkg.id },
+    !(await existsUserPackage({
+      userId: session.user.id,
+      packageId: pkg.id,
     }))
   ) {
-    await db.userPackage.create({
-      data: {
-        userId: session.user.id,
-        packageId: pkg.id,
-      },
+    await createUserPackage({
+      userId: session.user.id,
+      packageId: pkg.id,
     });
     await addAuditLog({
       userId: session.user.id,
@@ -66,23 +61,11 @@ export async function removeFromLibrary(packageId: string) {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const db = await getDbAsync();
     const {
       package: { name },
-    } = await db.userPackage.delete({
-      where: {
-        userId_packageId: {
-          userId: session.user.id,
-          packageId,
-        },
-      },
-      select: {
-        package: {
-          select: {
-            name: true,
-          },
-        },
-      },
+    } = await deleteUserPackage({
+      userId: session.user.id,
+      packageId,
     });
     await addAuditLog({
       userId: session.user.id,

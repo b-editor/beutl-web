@@ -2,6 +2,9 @@ import { apiErrorResponse } from "@/lib/api/error";
 import { Hono } from "hono";
 import SemVer from "semver";
 
+// @deprecated Superseded by v3 GET /app/updates. Kept for old desktop builds
+// that still poll this endpoint; once client telemetry confirms it is unused,
+// remove it along with the BEUTL_LATEST_VERSION / BEUTL_REQUIRED_VERSION env vars.
 const app = new Hono().get("/checkForUpdates/:version", async (c) => {
   const version = c.req.param("version");
   const latest = new SemVer.SemVer(process.env.BEUTL_LATEST_VERSION as string);

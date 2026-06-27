@@ -1,13 +1,11 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { createHash, randomString } from "@/lib/create-hash";
 import { getTranslation, type Zod } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import {
@@ -18,6 +16,10 @@ import {
 import { updateCustomerEmailIfExist } from "@/lib/db/customer";
 import { startTransaction } from "@/lib/db/transaction";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import {
+  consumeConfirmationToken,
+  issueConfirmationToken,
+} from "@/lib/confirmation-token-flow";
 
 type State = {
   message?: string;
@@ -63,9 +65,7 @@ export async function sendConfirmationEmail(
     );
     if (!validated.success) {
       return {
-        message: t("zod:errors.invalid_string.email", {
-          validation: t("zod:validations.email"),
-        }),
+        message: validated.error.issues[0]?.message ?? t("invalidRequest"),
         success: false,
       };
     }
@@ -83,26 +83,14 @@ export async function sendConfirmationEmail(
         success: false,
       };
     }
-    const maxAge = 24 * 60 * 60;
-    const ONE_DAY_IN_SECONDS = 86400;
-    const expires = new Date(
-      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000,
-    );
-    const secret = process.env.AUTH_SECRET;
-    const token = randomString(32);
-    const sendRequest = sendEmail(validated.data.newEmail, token);
-    const db = await getDbAsync();
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: validated.data.newEmail,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
-      },
+    const token = await issueConfirmationToken({
+      identifier: validated.data.newEmail,
+      userId: session.user.id,
+      purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
     });
+    const sendRequest = sendEmail(validated.data.newEmail, token);
 
-    await Promise.all([sendRequest, createToken]);
+    await Promise.all([sendRequest]);
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.account.sentEmailChangeConfirmation,
@@ -117,56 +105,21 @@ export async function sendConfirmationEmail(
 
 export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
-  const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`);
-  const db = await getDbAsync();
-  if (
-    !(await db.confirmationToken.count({
-      where: {
-        identifier: identifier,
-        token: hash,
-      },
-    }))
-  ) {
-    console.error("Invalid token");
-    redirect(
-      `/${lang}/account/manage/email?status=emailUpdateFailed`,
-      RedirectType.replace,
-    );
-  }
-
-  const tokenData = await db.confirmationToken.delete({
-    where: {
-      identifier_token: {
-        identifier: identifier,
-        token: hash,
-      },
-    },
-    select: {
-      identifier: true,
-      expires: true,
-      userId: true,
-      purpose: true,
-    },
+  const result = await consumeConfirmationToken({
+    token,
+    identifier,
+    purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
   });
-  if (
-    !tokenData ||
-    tokenData.purpose !== ConfirmationTokenPurpose.EMAIL_UPDATE
-  ) {
-    console.error("Invalid token");
+  if (!result.valid) {
+    console.error(
+      result.reason === "expired" ? "Token has expired" : "Invalid token",
+    );
     redirect(
       `/${lang}/account/manage/email?status=emailUpdateFailed`,
       RedirectType.replace,
     );
   }
-
-  if (tokenData.expires.valueOf() < Date.now()) {
-    console.error("Token has expired");
-    redirect(
-      `/${lang}/account/manage/email?status=emailUpdateFailed`,
-      RedirectType.replace,
-    );
-  }
+  const { tokenData } = result;
 
   const updated = await startTransaction(async (p) => {
     await updateUserEmail({

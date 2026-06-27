@@ -5,20 +5,19 @@ export const namespaces = [
   "translation",
   "main",
   "effects",
-  "docs",
   "store",
   "storage",
   "account",
   "auth",
-  "developer",
   "api-errors",
   "feedback",
+  "developer",
 ];
 
 export function getOptions(lng = defaultLanguage) {
   return {
     lng,
-    defaultNS: defaultLanguage,
+    defaultNS: "translation",
     fallbackLng: defaultLanguage,
     fallbackNS: namespaces[0],
     ns: namespaces,

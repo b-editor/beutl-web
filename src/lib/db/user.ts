@@ -2,6 +2,24 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { PrismaTransaction } from "./transaction";
 
+export async function findUserForLibrary({
+  id: userId,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDbAsync();
+  return await db.user.findUnique({
+    where: {
+      id: userId,
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
 export async function existsUserByEmail({
   email,
   prisma,

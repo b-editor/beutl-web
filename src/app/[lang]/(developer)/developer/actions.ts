@@ -1,6 +1,7 @@
 "use server";
 
 import { auth } from "@/lib/better-auth";
+import { contentPath } from "@/lib/content-url";
 import { retrieveDevPackagesByUserId } from "@/lib/db/package";
 import { SemVer } from "semver";
 import { headers } from "next/headers";
@@ -33,7 +34,7 @@ export async function retrievePackages(): Promise<Package[]> {
         name: pkg.name,
         displayName: pkg.displayName || undefined,
         iconFileUrl:
-          (pkg.iconFile && `/api/contents/${pkg.iconFile.id}`) || undefined,
+          (pkg.iconFile && contentPath(pkg.iconFile.id)) || undefined,
         latestVersion: pkg.Release[0]?.version,
         published: pkg.published,
       };

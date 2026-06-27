@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { StandardDrawer } from "./drawer";
+import { StandardDrawer } from "./nav-drawer";
 import {
   NavigationMenuContent,
   NavigationMenuItem,
@@ -13,13 +13,14 @@ import { auth } from "@/lib/better-auth";
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { getTranslation } from "@/app/i18n/server";
 import { headers } from "next/headers";
+import { navHref, type NavLinkKey } from "@/components/site-links";
 
 export default async function NavBar({ lang }: { lang: string }) {
   const { t } = await getTranslation(lang);
   const session = await auth.api.getSession({ headers: await headers() });
 
   return (
-    <nav className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-20">
+    <header className="py-2 px-2 md:px-[52px] gap-2 flex sticky top-0 w-full items-center justify-between border-b bg-background z-20">
       <div className="gap-2 flex">
         <StandardDrawer lang={lang} />
 
@@ -40,22 +41,21 @@ export default async function NavBar({ lang }: { lang: string }) {
         >
           <NavigationMenuList>
 
-            <NavigationMenuLink
-              asChild
-              className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
-            >
-              <Link href={`https://docs.beutl.beditor.net/${lang}`} prefetch={false}>
-                {t("docs")}
-              </Link>
-            </NavigationMenuLink>
-            <NavigationMenuLink
-              asChild
-              className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
-            >
-              <Link href={`/${lang}/store`}>
-                {t("store")}
-              </Link>
-            </NavigationMenuLink>
+            {(["docs", "store"] as NavLinkKey[]).map((key) => (
+              <NavigationMenuItem key={key}>
+                <NavigationMenuLink
+                  asChild
+                  className={cn(navigationMenuTriggerStyle(), "max-md:hidden")}
+                >
+                  <Link
+                    href={navHref(key, lang)}
+                    prefetch={key === "docs" ? false : undefined}
+                  >
+                    {t(key)}
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuItem>
+            ))}
             {session?.user ? (
               <NavigationMenuItem>
                 <NavigationMenuPrimitive.Trigger
@@ -104,14 +104,16 @@ export default async function NavBar({ lang }: { lang: string }) {
               </NavigationMenuItem>
             ) : (
 
-              <NavigationMenuLink
-                className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}
-                asChild
-              >
-                <Link href={`/${lang}/account`}>
-                  <CircleUser className="w-5 h-5" />
-                </Link>
-              </NavigationMenuLink>
+              <NavigationMenuItem>
+                <NavigationMenuLink
+                  className={cn(navigationMenuTriggerStyle(), "px-2 w-10")}
+                  asChild
+                >
+                  <Link href={`/${lang}/account`}>
+                    <CircleUser className="w-5 h-5" />
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuItem>
             )}
           </NavigationMenuList>
 
@@ -124,6 +126,6 @@ export default async function NavBar({ lang }: { lang: string }) {
           </div>
         </NavigationMenuPrimitive.Root>
       </div>
-    </nav>
+    </header>
   );
 }

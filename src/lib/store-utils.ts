@@ -1,5 +1,7 @@
 import "server-only";
 import { getDbAsync } from "@/prisma";
+import { contentPath } from "@/lib/content-url";
+import { selectPricing } from "@/lib/pricing";
 import { guessCurrency } from "./currency";
 import { existsUserPaymentHistory } from "./db/user-payment-history";
 
@@ -103,14 +105,14 @@ export async function retrievePackage(name: string) {
     pkg.PackageScreenshot.map(async (item) => {
       return {
         ...item,
-        url: `/api/contents/${item.file.id}`,
+        url: contentPath(item.file.id),
       };
     }),
   );
 
   return {
     ...pkg,
-    iconFileUrl: pkg.iconFile && `/api/contents/${pkg.iconFile.id}`,
+    iconFileUrl: pkg.iconFile && contentPath(pkg.iconFile.id),
     PackageScreenshot: screenshots,
   };
 }
@@ -216,7 +218,7 @@ export async function retrievePackages(
 
     return await Promise.all(
       tmp.map(async (pkg) => {
-        const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
+        const url = pkg.iconFileId && contentPath(pkg.iconFileId);
 
         return {
           id: pkg.id,
@@ -228,11 +230,7 @@ export async function retrievePackages(
           iconFileUrl: url,
           iconFileId: pkg.iconFileId,
           tags: pkg.tags,
-          price:
-            pkg.packagePricing.find((p) => p.currency === currency) ||
-            pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing?.[0] ||
-            null,
+          price: selectPricing(pkg.packagePricing, currency) || null,
         };
       }),
     );
@@ -288,7 +286,7 @@ export async function retrievePackages(
 
   return await Promise.all(
     tmp.map(async (pkg) => {
-      const url = pkg.iconFileId && `/api/contents/${pkg.iconFileId}`;
+      const url = pkg.iconFileId && contentPath(pkg.iconFileId);
 
       return {
         id: pkg.id,
@@ -300,11 +298,7 @@ export async function retrievePackages(
         iconFileUrl: url,
         iconFileId: pkg.iconFileId,
         tags: pkg.tags,
-        price:
-          pkg.packagePricing.find((p) => p.currency === currency) ||
-          pkg.packagePricing.find((p) => p.fallback) ||
-          pkg.packagePricing[0] ||
-          null,
+        price: selectPricing(pkg.packagePricing, currency) || null,
       };
     }),
   );

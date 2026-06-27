@@ -1,5 +1,7 @@
-// デスクトップアプリからのログインページ
-// 互換用に残しているが、今後は使わない
+// @deprecated camelCase /account/signIn, kept only for old desktop builds. The
+// live route is /account/native-auth/sign-in (this page just redirects there).
+// Remove once client telemetry confirms no shipped client requests this URL.
+// デスクトップアプリからのログインページ（互換用に残しているが、今後は使わない）
 
 import { redirect } from "next/navigation";
 

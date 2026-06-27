@@ -52,7 +52,7 @@
     "deleteAccount": "Delete Account",
     "confirmationAccountDeletion": {
       "title": "Confirmation of account deletion",
-      "body": "<p>以下のリンクをクリックしてアカウントを削除できます</p><br/><a href=\"{{url}}\">アカウントを削除</a>"
+      "body": "<p>Click the link below to delete your account.</p><br/><a href=\"{{url}}\">Delete account</a>"
     },
     "canceledAccountDeletion": "Account deletion canceled",
     "sentEmail": "We have sent an email to confirm account deletion"

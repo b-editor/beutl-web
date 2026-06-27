@@ -1,17 +1,17 @@
 "use server";
 
 import { authenticated } from "@/lib/auth-guard";
-import { getDbAsync } from "@/prisma";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { sendEmail as sendEmailUsingResend } from "@/resend";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { createHash, randomString } from "@/lib/create-hash";
 import { revalidatePath } from "next/cache";
 import { getTranslation } from "@/app/i18n/server";
 import { getLanguage } from "@/lib/lang-utils";
 import { findEmailByUserId } from "@/lib/db/user";
+import { deleteManyConfirmationTokens } from "@/lib/db/confirmation-token";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { issueConfirmationToken } from "@/lib/confirmation-token-flow";
 
 type State = {
   message?: string;
@@ -53,22 +53,19 @@ export async function submit(state: State, formData: FormData): Promise<State> {
     if (!validated.success) {
       console.error(validated.error);
       return {
-        message: t("zod:custom"),
+        message: validated.error.issues[0]?.message ?? t("invalidRequest"),
         success: false,
       };
     }
 
     if (validated.data.cancel) {
-      const db = await getDbAsync();
-  await db.confirmationToken.deleteMany({
-        where: {
-          userId: session.user.id,
-          purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-        },
+      await deleteManyConfirmationTokens({
+        userId: session.user.id,
+        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
       });
       revalidatePath(`/${lang}/account/manage/personal-data`);
       return {
-        message: t("account:data.cancelAccountDeletion"),
+        message: t("account:data.canceledAccountDeletion"),
         success: true,
       };
     }
@@ -80,26 +77,14 @@ export async function submit(state: State, formData: FormData): Promise<State> {
         success: false,
       };
     }
-    const maxAge = 24 * 60 * 60;
-    const ONE_DAY_IN_SECONDS = 86400;
-    const expires = new Date(
-      Date.now() + (maxAge ?? ONE_DAY_IN_SECONDS) * 1000,
-    );
-    const secret = process.env.AUTH_SECRET;
-    const token = randomString(32);
-    const sendRequest = sendEmail(user.email, token, lang);
-    const db = await getDbAsync();
-    const createToken = db.confirmationToken.create({
-      data: {
-        token: await createHash(`${token}${secret}`),
-        identifier: user.email,
-        userId: session.user.id,
-        expires,
-        purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-      },
+    const token = await issueConfirmationToken({
+      identifier: user.email,
+      userId: session.user.id,
+      purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
     });
+    const sendRequest = sendEmail(user.email, token, lang);
 
-    await Promise.all([sendRequest, createToken]);
+    await Promise.all([sendRequest]);
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.account.sentDeleteAccountConfirmation,

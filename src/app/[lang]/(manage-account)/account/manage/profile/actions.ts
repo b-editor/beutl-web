@@ -2,8 +2,13 @@
 
 import { getTranslation, Zod } from "@/app/i18n/server";
 import { authenticated } from "@/lib/auth-guard";
+import {
+  deleteSocialProfiles,
+  getSocialProviders,
+  upsertProfile,
+  upsertSocialProfile,
+} from "@/lib/db/profile";
 import { getLanguage } from "@/lib/lang-utils";
-import { getDbAsync } from "@/prisma";
 import { revalidatePath } from "next/cache";
 
 const emptyStringToUndefined = (z: Zod) =>
@@ -59,37 +64,21 @@ export async function updateProfile(
       validated.data;
 
     const promises: Promise<unknown>[] = [];
-    const db = await getDbAsync();
     // プロフィール更新
     promises.push(
-      db.profile.upsert({
-        where: {
-          userId: session.user.id,
-        },
-        update: {
-          displayName,
-          userName,
-          bio,
-        },
-        create: {
-          userId: session.user.id,
-          displayName,
-          userName,
-          bio,
-        },
+      upsertProfile({
+        userId: session.user.id,
+        displayName,
+        userName,
+        bio,
       }),
     );
-    const providers = await db.socialProfileProvider.findMany({
-      where: {
-        provider: {
-          in: ["x", "github", "youtube", "custom"],
-        },
-      },
-      select: {
-        id: true,
-        provider: true,
-      },
-    });
+    const providers = await getSocialProviders([
+      "x",
+      "github",
+      "youtube",
+      "custom",
+    ]);
     const socials = [
       {
         providerId: providers.find((p) => p.provider === "x")?.id,
@@ -114,30 +103,17 @@ export async function updateProfile(
       }
       if (social.value) {
         promises.push(
-          db.socialProfile.upsert({
-            where: {
-              userId_providerId: {
-                userId: session.user.id,
-                providerId: social.providerId,
-              },
-            },
-            update: {
-              value: social.value,
-            },
-            create: {
-              userId: session.user.id,
-              providerId: social.providerId,
-              value: social.value,
-            },
+          upsertSocialProfile({
+            userId: session.user.id,
+            providerId: social.providerId,
+            value: social.value,
           }),
         );
       } else {
         promises.push(
-          db.socialProfile.deleteMany({
-            where: {
-              userId: session.user.id,
-              providerId: social.providerId,
-            },
+          deleteSocialProfiles({
+            userId: session.user.id,
+            providerId: social.providerId,
           }),
         );
       }

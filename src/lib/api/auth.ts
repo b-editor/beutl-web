@@ -2,26 +2,23 @@ import "server-only";
 import { decode, verify as jwtVerify } from "hono/jwt";
 import type { Context } from "hono";
 
-export async function getUserId(c: Context) {
-  const header = c.req.header("Authorization");
-  if (!header) return null;
-  if (!header.startsWith("Bearer ")) return null;
-  const token = header.split(" ")[1];
+const nameIdentifierClaim =
+  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
+
+async function verifyBearer(authHeader: string | null) {
+  if (!authHeader) return null;
+  if (!authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.split(" ")[1];
   const payload = await jwtVerify(token, process.env.JWT_SECRET as string, "HS256");
-  return payload[
-    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
-  ] as string;
+  return payload[nameIdentifierClaim] as string;
+}
+
+export async function getUserId(c: Context) {
+  return verifyBearer(c.req.header("Authorization") ?? null);
 }
 
 export async function getUserIdFromHeaders(headers: Headers) {
-  const header = headers.get("Authorization");
-  if (!header) return null;
-  if (!header.startsWith("Bearer ")) return null;
-  const token = header.split(" ")[1];
-  const payload = await jwtVerify(token, process.env.JWT_SECRET as string, "HS256");
-  return payload[
-    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
-  ] as string;
+  return verifyBearer(headers.get("Authorization"));
 }
 
 export async function tryGetUserIdFromHeaders(headers: Headers) {
@@ -33,8 +30,7 @@ export async function tryGetUserIdFromHeaders(headers: Headers) {
 }
 
 export function getUserIdFromToken(token: string) {
+  // Decode-only helper. Do not use for authorization because it does not verify the JWT signature.
   const { payload } = decode(token);
-  return payload[
-    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
-  ] as string;
+  return payload[nameIdentifierClaim] as string;
 }

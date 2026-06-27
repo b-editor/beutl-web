@@ -1,11 +1,12 @@
 import "server-only";
 import { Hono } from "hono";
-import { getDbAsync } from "@/prisma";
 import { getUserId } from "@/lib/api/auth";
 import { apiErrorResponse } from "@/lib/api/error";
 import { guessCurrency } from "@/lib/currency";
 import { getPackage, mapPackage } from "@/lib/api/packages-db";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
+import { findPackageBasicByName } from "@/lib/db/package";
+import { findReleaseByPackageAndVersion, findReleasesForPackage } from "@/lib/db/release";
 import { SemVer } from "semver";
 
 const app = new Hono()
@@ -40,17 +41,7 @@ const app = new Hono()
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
-    const db = await getDbAsync();
-    const pkg = await db.package.findFirst({
-      where: {
-        name: name,
-      },
-      select: {
-        id: true,
-        userId: true,
-        published: true,
-      },
-    });
+    const pkg = await findPackageBasicByName({ name });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -60,19 +51,10 @@ const app = new Hono()
       });
     }
 
-    const releases = await db.release.findMany({
-      where: {
-        packageId: pkg.id,
-        published: pkg.userId === userId ? undefined : true,
-      },
-      select: {
-        id: true,
-        version: true,
-        title: true,
-        description: true,
-        targetVersion: true,
-        fileId: true,
-      },
+    const published = pkg.userId === userId ? undefined : true;
+    const releases = await findReleasesForPackage({
+      packageId: pkg.id,
+      published,
     });
     releases.sort((a, b) => {
       return new SemVer(b.version).compare(a.version);
@@ -95,17 +77,7 @@ const app = new Hono()
     const version = c.req.param("version");
     const userId = await getUserId(c);
 
-    const db = await getDbAsync();
-    const pkg = await db.package.findFirst({
-      where: {
-        name: name,
-      },
-      select: {
-        id: true,
-        userId: true,
-        published: true,
-      },
-    });
+    const pkg = await findPackageBasicByName({ name });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -115,20 +87,9 @@ const app = new Hono()
       });
     }
 
-    const release = await db.release.findFirst({
-      where: {
-        packageId: pkg.id,
-        version: version,
-      },
-      select: {
-        id: true,
-        version: true,
-        title: true,
-        description: true,
-        targetVersion: true,
-        fileId: true,
-        published: true,
-      },
+    const release = await findReleaseByPackageAndVersion({
+      packageId: pkg.id,
+      version,
     });
     if (!release) {
       return c.json(await apiErrorResponse("releaseNotFound"), { status: 404 });

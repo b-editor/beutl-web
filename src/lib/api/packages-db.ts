@@ -2,7 +2,8 @@ import "server-only";
 import { getDbAsync } from "@/prisma";
 import type { Prisma } from "@prisma/client";
 import { packagePaied } from "@/lib/store-utils";
-import { getContentUrl } from "@/lib/db/file";
+import { getContentUrl } from "@/lib/content-url";
+import { selectPricing } from "@/lib/pricing";
 
 export async function getPackage({
   userId,
@@ -176,10 +177,7 @@ export async function mapPackage({
     paied = await packagePaied(pkg.id, userId);
   }
 
-  const price =
-    pkg.packagePricing.find((p) => p.currency === currency) ||
-    pkg.packagePricing.find((p) => p.fallback) ||
-    pkg.packagePricing[0];
+  const price = selectPricing(pkg.packagePricing, currency);
 
   return {
     id: pkg.id,

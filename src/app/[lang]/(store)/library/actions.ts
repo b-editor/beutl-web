@@ -1,6 +1,8 @@
 import "server-only";
-import { getDbAsync } from "@/prisma";
+import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
+import { retrieveLibraryPackagesByUserId } from "@/lib/db/user-package";
+import { selectPricing } from "@/lib/pricing";
 
 type ListedPackage = {
   id: string;
@@ -19,69 +21,17 @@ type ListedPackage = {
 export async function retrievePackages(
   userId: string,
 ): Promise<ListedPackage[]> {
-  const db = await getDbAsync();
   const currency = await guessCurrency();
-  const tmp = await db.userPackage.findMany({
-    where: {
-      userId: userId,
-      package: {
-        published: true,
-      },
-    },
-    select: {
-      package: {
-        select: {
-          id: true,
-          displayName: true,
-          name: true,
-          shortDescription: true,
-          tags: true,
-          iconFile: {
-            select: {
-              id: true,
-            },
-          },
-          user: {
-            select: {
-              Profile: {
-                select: {
-                  userName: true,
-                },
-              },
-            },
-          },
-          packagePricing: {
-            where: currency ? {
-              OR: [
-                {
-                  currency: {
-                    equals: currency,
-                    mode: "insensitive",
-                  },
-                },
-                {
-                  fallback: true,
-                },
-              ],
-            } : {
-              fallback: true,
-            },
-            select: {
-              price: true,
-              currency: true,
-              fallback: true,
-            },
-          },
-        },
-      },
-    },
+  const tmp = await retrieveLibraryPackagesByUserId({
+    userId,
+    currency,
   });
 
   return await Promise.all(
     tmp
       .map((up) => up.package)
       .map(async (pkg) => {
-        const url = pkg.iconFile && `/api/contents/${pkg.iconFile.id}`;
+        const url = pkg.iconFile && contentPath(pkg.iconFile.id);
 
         return {
           id: pkg.id,
@@ -91,10 +41,7 @@ export async function retrievePackages(
           userName: pkg.user.Profile?.userName || undefined,
           iconFileUrl: url || undefined,
           tags: pkg.tags,
-          price:
-            pkg.packagePricing.find((p) => p.currency === currency) ||
-            pkg.packagePricing.find((p) => p.fallback) ||
-            pkg.packagePricing[0],
+          price: selectPricing(pkg.packagePricing, currency),
         };
       }),
   );

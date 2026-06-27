@@ -15,7 +15,6 @@ export function Toaster() {
 
   return (
     <ToastProvider>
-      {/* biome-ignore lint/complexity/useArrowFunction: <explanation> */}
       {toasts.map(function ({ id, title, description, action, ...props }) {
         return (
           <Toast key={id} {...props}>

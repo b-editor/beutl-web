@@ -1,5 +1,3 @@
-import NavBar from "@/components/nav-bar";
-import Footer from "@/components/footer";
 import { getTranslation } from "@/app/i18n/server";
 import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
@@ -26,8 +24,6 @@ export default async function Page(props: {
   }
 
   return (
-    <div>
-      <NavBar lang={lang} />
       <div className="container mx-auto px-6 py-12 md:px-12 max-w-2xl">
         <h2 className="font-bold text-2xl">{t("feedback:title")}</h2>
         <p className="text-muted-foreground mt-2">
@@ -41,7 +37,5 @@ export default async function Page(props: {
           className="mt-6"
         />
       </div>
-      <Footer lang={lang} />
-    </div>
   );
 }

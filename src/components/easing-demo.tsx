@@ -8,7 +8,6 @@ export default function EasingDemo({
 }: { path: string; easing: string; type: "in" | "out" | "inOut" }) {
   return (
     <div className={cn(styles.easingDemo, "relative")}>
-      {/* biome-ignore lint/a11y/noSvgWithoutTitle: <explanation> */}
       <svg
         className="overflow-visible"
         viewBox="0 0 125 85"

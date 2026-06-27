@@ -1,9 +1,10 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveCustomerId } from "@/lib/customer";
+import { createOrRetrieveCustomerId } from "@/lib/db/customer";
 import { createStripe } from "@/lib/stripe/config";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
+import { selectPricing } from "@/lib/pricing";
 import {
   packageOwned,
   retrievePackage,
@@ -33,18 +34,15 @@ export default async function Page(
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);
   const currency = await currencyP;
-  const price =
-    prices.find((p) => p.currency === currency) ||
-    prices.find((p) => p.fallback) ||
-    prices[0];
+  const price = selectPricing(prices, currency);
   if (!price) {
     throw new Error("No price found");
   }
 
-  const customerId = await createOrRetrieveCustomerId(
-    session.user.email as string,
-    session.user.id,
-  );
+  const customerId = await createOrRetrieveCustomerId({
+    email: session.user.email as string,
+    userId: session.user.id,
+  });
   const stripe = createStripe();
   const intents = await stripe.paymentIntents.search({
     query: `customer:"${customerId}" AND metadata["packageId"]:"${pkg.id}" AND amount:${price.price} AND currency:"${price.currency}" AND status:"requires_payment_method"`,

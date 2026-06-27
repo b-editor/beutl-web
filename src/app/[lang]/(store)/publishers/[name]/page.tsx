@@ -1,9 +1,28 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { retrievePublishedPackages } from "./actions";
+import { cache } from "react";
+import type { Metadata } from "next";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatAmount } from "@/lib/currency-formatter";
 import { getTranslation } from "@/app/i18n/server";
+
+const getPublishedPackages = cache((name: string) => retrievePublishedPackages(name));
+
+export async function generateMetadata(props: {
+  params: Promise<{ lang: string; name: string }>;
+}): Promise<Metadata> {
+  const { lang, name } = await props.params;
+  const { displayName } = await getPublishedPackages(name);
+  const { t } = await getTranslation(lang);
+  const title = t("store:packagesCreatedByName", { name: displayName });
+  return {
+    title,
+    openGraph: {
+      title,
+    },
+  };
+}
 
 export default async function Page(props: { params: Promise<{ lang: string; name: string }> }) {
   const params = await props.params;
@@ -14,7 +33,7 @@ export default async function Page(props: { params: Promise<{ lang: string; name
   } = params;
 
   const { items: packages, displayName } =
-    await retrievePublishedPackages(name);
+    await getPublishedPackages(name);
   const { t } = await getTranslation(lang);
 
   return (

@@ -14,9 +14,13 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { type FormEvent, useCallback, useOptimistic } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { updateTag } from "./actions";
+import { updateTag } from "./actions/package";
+import { useTranslation } from "@/app/i18n/client";
 
-export function PackageDetailsForm({ pkg }: { pkg: Package }) {
+export function PackageDetailsForm({
+  pkg,
+  lang,
+}: { pkg: Package; lang: string }) {
   const [tags, manipulateTags] = useOptimistic<
     string[],
     { type: "add" | "delete"; tag: string } | { type: "reset"; tags: string[] }
@@ -36,6 +40,7 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
     return state;
   });
   const { toast } = useToast();
+  const { t } = useTranslation(lang);
 
   const handleAddTag = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
@@ -53,19 +58,19 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
       });
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
         manipulateTags({ type: "delete", tag: newTag });
       }
     },
-    [manipulateTags, tags, pkg.id, toast],
+    [manipulateTags, tags, pkg.id, t, toast],
   );
 
   const handleDeleteTag = useCallback(
     async (tag: string) => {
-      // 多分不要？
+      // Probably unnecessary?
       const tmptags = tags;
       manipulateTags({ type: "delete", tag });
       const res = await updateTag({
@@ -74,21 +79,23 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
       });
       if (!res.success) {
         toast({
-          title: "エラー",
+          title: t("developer:common.error"),
           description: res.message,
           variant: "destructive",
         });
         manipulateTags({ type: "reset", tags: tmptags });
       }
     },
-    [manipulateTags, tags, pkg.id, toast],
+    [manipulateTags, tags, pkg.id, t, toast],
   );
 
   return (
     <div>
-      <h4 className="font-bold text-lg mt-6 border-b pb-2">詳細</h4>
+      <h4 className="font-bold text-lg mt-6 border-b pb-2">
+        {t("developer:details.title")}
+      </h4>
       <div className="flex gap-2 flex-col my-4">
-        <h4>タグ</h4>
+        <h4>{t("developer:details.tags")}</h4>
         <div className="flex gap-1 flex-wrap">
           {pkg.tags.map((tag) => (
             <Badge key={tag} onClick={() => handleDeleteTag(tag)}>
@@ -105,11 +112,13 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
             <PopoverContent className="w-80">
               <form className="flex flex-col gap-4" onSubmit={handleAddTag}>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="newtag">タグ名</Label>
+                  <Label htmlFor="newtag">
+                    {t("developer:details.tagName")}
+                  </Label>
                   <Input name="newtag" id="newtag" className="col-span-2 h-8" />
                 </div>
                 <Button type="submit" size="sm">
-                  追加
+                  {t("developer:common.add")}
                 </Button>
               </form>
             </PopoverContent>
@@ -118,12 +127,12 @@ export function PackageDetailsForm({ pkg }: { pkg: Package }) {
       </div>
       <Separator />
       {/* <div className="flex gap-2 my-4 justify-between">
-        <h4>{selectedVersion === defaultVersion ? "最新のバージョン" : "選択されているバージョン"}</h4>
+        <h4>{selectedVersion === defaultVersion ? "Latest version" : "Selected version"}</h4>
         <p>{selectedVersion}</p>
       </div>
       <Separator />
       <div className="flex gap-2 my-4 justify-between">
-        <h4>ターゲットバージョン</h4>
+        <h4>Target version</h4>
         <p>{selectedRelease?.target_version}</p>
       </div> */}
     </div>
