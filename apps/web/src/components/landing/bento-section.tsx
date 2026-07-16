@@ -27,8 +27,18 @@ function ParticlesIcon() {
 
 function ShapesIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M3 12h4l3-8 4 16 3-8h4" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 18 C 8 6, 16 6, 20 18" />
+      <rect x="2.5" y="16.5" width="3" height="3" />
+      <rect x="18.5" y="16.5" width="3" height="3" />
+      <circle cx="12" cy="9" r="1.4" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -44,34 +54,66 @@ function ColorGradingIcon() {
 
 function BrushIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <rect x="3" y="3" width="18" height="18" rx="3" />
-      <path d="M3 9h18" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" />
+      <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" />
     </svg>
   );
 }
 
 function EasingIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M4 20V4M4 12c6 0 8-8 16-8" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 19 C 5 9, 19 15, 19 5" />
+      <circle cx="5" cy="19" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="5" r="1.7" fill="currentColor" stroke="none" />
     </svg>
   );
 }
 
 function ExpressionIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M4 7V4h16v3M9 20h6M12 4v16" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 21s-4-3-4-9 4-9 4-9" />
+      <path d="M16 3s4 3 4 9-4 9-4 9" />
+      <path d="M15 9l-6 6M9 9l6 6" />
     </svg>
   );
 }
 
 function UndoIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M3 7v6a9 9 0 0018 0V7" />
-      <path d="M3 7l9-4 9 4-9 4z" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H10" />
     </svg>
   );
 }
