@@ -75,12 +75,20 @@
   @media (min-width: 900px){ .feat .grid { grid-template-columns: 1fr 1fr; gap: 56px; } .feat.reverse .copy { order: 2; } }
   .mockwrap { border: 1px solid var(--border); border-radius: var(--r); background: linear-gradient(180deg,var(--surface),var(--bg-2)); padding: 20px; overflow: hidden; }
 
-  /* timeline mock */
-  .tl { display: flex; flex-direction: column; gap: 8px; font-size: 11px; }
-  .tl .ruler { display: flex; gap: 0; height: 16px; color: var(--faint); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
-  .tl .ruler span { flex: 1; border-left: 1px solid var(--border); padding-left: 4px; }
-  .tl .track { height: 30px; border-radius: 7px; background: rgba(255,255,255,0.03); position: relative; }
-  .tl .clip { position: absolute; top: 4px; bottom: 4px; border-radius: 5px; display: flex; align-items: center; padding: 0 8px; font-weight: 700; color: #0c0a18; font-size: 10.5px; overflow: hidden; white-space: nowrap; }
+  /* timeline mock — lanes are separated by rules, clips are flat, and each clip
+     sits on an odd lane so the lane below it is free for its keyframe editor. */
+  .tl .ruler { display: flex; height: 20px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tl .ruler span { flex: 1; border-left: 1px solid var(--border); padding-left: 6px; }
+  .tl .lanes { position: relative; height: 210px; border-top: 1px solid var(--border); }
+  .tl .lane { position: absolute; left: 0; right: 0; height: 30px; border-bottom: 1px solid rgba(255,255,255,0.07); }
+  .tl .clip { position: absolute; height: 26px; display: flex; align-items: center; padding: 0 8px; font-weight: 700; color: #0c0a18; font-size: 14px; overflow: hidden; white-space: nowrap; }
+  .tl .kf { position: absolute; }
+  .tl .kf svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .tl .kf i { position: absolute; width: 9px; height: 9px; margin-left: -4.5px; margin-top: -4.5px; transform: rotate(45deg); background: #F5D14E; }
+  .tl .audio { padding: 0; }
+  .tl .audio > b { flex: none; padding: 0 8px; font-weight: 700; }
+  .tl .wave { flex: 1; height: 100%; padding: 3px 6px 3px 0; }
+  .tl .wave svg { display: block; width: 100%; height: 100%; }
 
   /* node graph mock */
   .nodes { position: relative; }
@@ -202,11 +210,33 @@
     </div>
     <div class="mockwrap">
       <div class="tl">
-        <div class="ruler"><span>0s</span><span>1s</span><span>2s</span><span>3s</span><span>4s</span></div>
-        <div class="track"><div class="clip" style="left:2%;width:46%;background:linear-gradient(90deg,#9A8CFF,#6D5CF7)">背景シーン</div></div>
-        <div class="track"><div class="clip" style="left:18%;width:40%;background:linear-gradient(90deg,#FF7A6B,#ff9d7a)">テキスト</div></div>
-        <div class="track"><div class="clip" style="left:30%;width:55%;background:linear-gradient(90deg,#57D6E6,#3aa9d6)">図形 + エフェクト</div></div>
-        <div class="track"><div class="clip" style="left:8%;width:80%;background:linear-gradient(90deg,#C8F45C,#8fd23a)">オーディオ</div></div>
+        <div class="ruler"><span>00:00:00</span><span>00:00:01</span><span>00:00:02</span><span>00:00:03</span><span>00:00:04</span></div>
+        <div class="lanes">
+          <div class="lane" style="top:0"></div>
+          <div class="lane" style="top:30px"></div>
+          <div class="lane" style="top:60px"></div>
+          <div class="lane" style="top:90px"></div>
+          <div class="lane" style="top:120px"></div>
+          <div class="lane" style="top:150px"></div>
+          <div class="lane" style="top:180px"></div>
+
+          <div class="clip" style="top:2px;left:2%;width:46%;background:linear-gradient(90deg,#9A8CFF,#6D5CF7)">背景シーン</div>
+          <div class="clip" style="top:62px;left:18%;width:40%;background:linear-gradient(90deg,#FF7A6B,#ff9d7a)">テキスト</div>
+          <div class="clip" style="top:122px;left:30%;width:55%;background:linear-gradient(90deg,#57D6E6,#3aa9d6)">図形 + エフェクト</div>
+
+          <div class="kf" style="left:30%;width:55%;top:150px;height:30px">
+            <svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M3 24 C 20 24, 32 11, 45 11 C 62 11, 80 7, 97 7" fill="none" stroke="#E8E6F5" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+            </svg>
+            <i style="left:3%;top:15px"></i>
+            <i style="left:45%;top:15px"></i>
+            <i style="left:97%;top:15px"></i>
+          </div>
+
+          <div class="clip audio" style="top:182px;left:8%;width:80%;background:linear-gradient(90deg,#C8F45C,#8fd23a)">
+            <b>オーディオ</b><div class="wave"><svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><path id="tlwave" fill="rgba(0,0,0,0.55)"/></svg></div>
+          </div>
+        </div>
       </div>
     </div>
   </div></div>
@@ -481,6 +511,19 @@ document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
   for (var i=0;i<64;i++){ var b=document.createElement('i'); var h=Math.abs(Math.sin(i*0.5))*0.6+Math.abs(Math.sin(i*0.17))*0.4; b.style.height=(12+h*56)+'%'; wave.appendChild(b); }
   var viz = document.getElementById('viz');
   for (var j=0;j<40;j++){ var v=document.createElement('i'); v.style.height=(20+Math.abs(Math.sin(j*0.6))*80)+'%'; viz.appendChild(v); }
+  // waveform inside the timeline's audio clip: one filled path mirrored about
+  // the centre line, the way an audio editor draws it
+  function fract(i){ var n = Math.sin(i*12.9898)*43758.5453; return n - Math.floor(n); }
+  var N = 240, MID = 15, top = [], bottom = [];
+  for (var k=0;k<N;k++){
+    var t = k/(N-1);
+    var env = 0.32 + 0.4*Math.abs(Math.sin(t*Math.PI*2.6)) + 0.22*Math.abs(Math.sin(t*Math.PI*9.3+0.8));
+    var amp = Math.min(1, Math.max(0.06, env*(0.45+0.55*fract(k)))) * MID;
+    var x = (t*100).toFixed(2);
+    top.push(x+','+(MID-amp).toFixed(2));
+    bottom.push(x+','+(MID+amp).toFixed(2));
+  }
+  document.getElementById('tlwave').setAttribute('d', 'M'+top.join('L')+'L'+bottom.reverse().join('L')+'Z');
 })();
 
 // ---- hero shader (6 patterns, auto crossfade) ----

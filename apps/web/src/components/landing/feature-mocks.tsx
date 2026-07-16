@@ -1,62 +1,191 @@
 import type { Translator } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 
-const TIMELINE_RULER = ["0s", "1s", "2s", "3s", "4s"];
+const TIMELINE_RULER = [
+  "00:00:00",
+  "00:00:01",
+  "00:00:02",
+  "00:00:03",
+  "00:00:04",
+];
 
-const TIMELINE_TRACKS = [
+/** Track lane height. Clips sit on odd lanes so the lane below each one is free
+ * for its keyframe editor, mirroring how the editor lays a timeline out. */
+const LANE_H = 30;
+const LANE_COUNT = 7;
+
+const TIMELINE_CLIPS = [
   {
     key: "timelineClipScene",
+    lane: 0,
     left: "2%",
     width: "46%",
     background: "linear-gradient(90deg,#9A8CFF,#6D5CF7)",
   },
   {
     key: "timelineClipText",
+    lane: 2,
     left: "18%",
     width: "40%",
     background: "linear-gradient(90deg,#FF7A6B,#ff9d7a)",
   },
   {
     key: "timelineClipShape",
+    lane: 4,
     left: "30%",
     width: "55%",
     background: "linear-gradient(90deg,#57D6E6,#3aa9d6)",
   },
-  {
-    key: "timelineClipAudio",
-    left: "8%",
-    width: "80%",
-    background: "linear-gradient(90deg,#C8F45C,#8fd23a)",
-  },
 ] as const;
+
+const AUDIO_CLIP = {
+  key: "timelineClipAudio",
+  lane: 6,
+  left: "8%",
+  width: "80%",
+  background: "linear-gradient(90deg,#C8F45C,#8fd23a)",
+} as const;
+
+/** Keyframe editor for the shape clip, drawn on the lane below it and aligned to
+ * the clip's own time range. */
+const KEYFRAME_LANE = 5;
+const KEYFRAME_CURVE = "M3 24 C 20 24, 32 11, 45 11 C 62 11, 80 7, 97 7";
+/** Markers sit centred on the lane rather than riding the curve. */
+const KEYFRAME_XS = [3, 45, 97];
+
+/** Deterministic, so the markup the server renders matches the client's. */
+function fract(i: number) {
+  const n = Math.sin(i * 12.9898) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+/** The waveform is one filled path mirrored about the centre line, the way an
+ * audio editor draws it. Discrete bars read as a chart no matter how thin. */
+const WAVE_SAMPLES = 240;
+const WAVE_MID = 15;
+
+const AUDIO_WAVE_PATH = (() => {
+  const top: string[] = [];
+  const bottom: string[] = [];
+
+  for (let i = 0; i < WAVE_SAMPLES; i++) {
+    const t = i / (WAVE_SAMPLES - 1);
+    const envelope =
+      0.32 +
+      0.4 * Math.abs(Math.sin(t * Math.PI * 2.6)) +
+      0.22 * Math.abs(Math.sin(t * Math.PI * 9.3 + 0.8));
+    const amplitude =
+      Math.min(1, Math.max(0.06, envelope * (0.45 + 0.55 * fract(i)))) *
+      WAVE_MID;
+    const x = (t * 100).toFixed(2);
+    top.push(`${x},${(WAVE_MID - amplitude).toFixed(2)}`);
+    bottom.push(`${x},${(WAVE_MID + amplitude).toFixed(2)}`);
+  }
+
+  return `M${top.join("L")}L${bottom.reverse().join("L")}Z`;
+})();
 
 export function TimelineMock({ t }: { t: Translator }) {
   return (
-    <div className="flex flex-col gap-2 text-[11px]">
-      <div className="mb-1 flex h-4 border-b border-lp-border text-lp-faint">
+    <div>
+      <div className="flex h-5 text-[12px] tabular-nums text-lp-faint">
         {TIMELINE_RULER.map((label) => (
-          <span key={label} className="flex-1 border-l border-lp-border pl-1">
+          <span key={label} className="flex-1 border-l border-lp-border pl-1.5">
             {label}
           </span>
         ))}
       </div>
-      {TIMELINE_TRACKS.map((track) => (
-        <div
-          key={track.key}
-          className="relative h-[30px] rounded-[7px] bg-white/[0.03]"
-        >
+
+      <div
+        className="relative border-t border-lp-border"
+        style={{ height: LANE_COUNT * LANE_H }}
+      >
+        {Array.from({ length: LANE_COUNT }, (_, lane) => (
           <div
-            className="absolute top-1 bottom-1 flex items-center overflow-hidden rounded-[5px] px-2 text-[10.5px] font-bold whitespace-nowrap text-[#0c0a18]"
+            key={lane}
+            className="absolute right-0 left-0 border-b border-white/[0.07]"
+            style={{ top: lane * LANE_H, height: LANE_H }}
+          />
+        ))}
+
+        {TIMELINE_CLIPS.map((clip) => (
+          <div
+            key={clip.key}
+            className="absolute flex items-center overflow-hidden px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18]"
             style={{
-              left: track.left,
-              width: track.width,
-              background: track.background,
+              left: clip.left,
+              width: clip.width,
+              top: clip.lane * LANE_H + 2,
+              height: LANE_H - 4,
+              background: clip.background,
             }}
           >
-            {t(`main:${track.key}`)}
+            {t(`main:${clip.key}`)}
+          </div>
+        ))}
+
+        <div
+          className="absolute"
+          style={{
+            left: "30%",
+            width: "55%",
+            top: KEYFRAME_LANE * LANE_H,
+            height: LANE_H,
+          }}
+        >
+          <svg
+            viewBox="0 0 100 30"
+            preserveAspectRatio="none"
+            className="absolute inset-0 h-full w-full"
+            aria-hidden="true"
+          >
+            <path
+              d={KEYFRAME_CURVE}
+              fill="none"
+              stroke="#E8E6F5"
+              strokeWidth="1.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+          {KEYFRAME_XS.map((x) => (
+            <span
+              key={x}
+              className="absolute h-[9px] w-[9px] rotate-45 bg-[#F5D14E]"
+              style={{
+                left: `${x}%`,
+                top: LANE_H / 2,
+                marginLeft: -4.5,
+                marginTop: -4.5,
+              }}
+            />
+          ))}
+        </div>
+
+        <div
+          className="absolute flex items-center overflow-hidden"
+          style={{
+            left: AUDIO_CLIP.left,
+            width: AUDIO_CLIP.width,
+            top: AUDIO_CLIP.lane * LANE_H + 2,
+            height: LANE_H - 4,
+            background: AUDIO_CLIP.background,
+          }}
+        >
+          <span className="shrink-0 px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18]">
+            {t(`main:${AUDIO_CLIP.key}`)}
+          </span>
+          <div className="h-full flex-1 py-[3px] pr-1.5">
+            <svg
+              viewBox="0 0 100 30"
+              preserveAspectRatio="none"
+              className="block h-full w-full"
+              aria-hidden="true"
+            >
+              <path d={AUDIO_WAVE_PATH} fill="rgba(0,0,0,0.55)" />
+            </svg>
           </div>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
