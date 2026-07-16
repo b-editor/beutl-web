@@ -21,7 +21,7 @@ const CHIPS: { key: string; hot?: boolean }[] = [
 
 export default function EffectsDemo({ t }: { t: Translator }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap justify-center gap-2">
       {CHIPS.map((chip) => (
         <Chip key={chip.key} hot={chip.hot}>
           {t(`main:${chip.key}`)}

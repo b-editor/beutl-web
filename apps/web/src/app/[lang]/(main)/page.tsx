@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getTranslation } from "@beutl/i18n";
 import { cn } from "@beutl/core";
-import EasingDemo from "@/components/easing-demo";
+import EasingDemo, { EASING_CURVES } from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import FeaturesToc from "@/components/features-toc";
 import AnimatedSection from "@/components/landing/animated-section";
@@ -35,32 +35,32 @@ const GITHUB_HREF = "https://github.com/b-editor/beutl";
 const EASINGS = [
   {
     labelKey: "easeIn",
-    path: "M4 88 C 50 88, 95 80, 121 8",
+    path: EASING_CURVES.easeIn,
     color: "#9A8CFF",
   },
   {
-    labelKey: "easeOut",
-    path: "M4 88 C 30 16, 75 8, 121 8",
-    color: "#FF7A6B",
-  },
-  {
     labelKey: "easeInOut",
-    path: "M4 88 C 55 88, 70 8, 121 8",
+    path: EASING_CURVES.easeInOut,
     color: "#57D6E6",
   },
   {
+    labelKey: "easeOut",
+    path: EASING_CURVES.easeOut,
+    color: "#FF7A6B",
+  },
+  {
     labelKey: "easeElastic",
-    path: "M4 88 C 45 106, 80 -14, 121 8",
+    path: EASING_CURVES.easeElastic,
     color: "#C8F45C",
   },
   {
     labelKey: "easeBack",
-    path: "M4 88 C 40 104, 75 -4, 121 8",
+    path: EASING_CURVES.easeBack,
     color: "#9A8CFF",
   },
   {
     labelKey: "easeBounce",
-    path: "M4 88 L 30 40 L 50 70 L 70 20 L 90 44 L 105 12 L 121 8",
+    path: EASING_CURVES.easeBounce,
     color: "#FF7A6B",
   },
 ];
