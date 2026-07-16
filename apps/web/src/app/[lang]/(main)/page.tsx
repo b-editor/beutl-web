@@ -12,6 +12,7 @@ import {
   ExportMock,
   GpuMock,
   NodeGraphMock,
+  OsLogos,
   PackagesMock,
   PlatformMock,
   ShaderCodeMock,
@@ -70,12 +71,6 @@ const AUDIO_CHIPS = [
   "audioChipCompressor",
   "audioChipLimiter",
   "audioChipDelay",
-];
-
-const PLATFORMS = [
-  { emoji: "🪟", key: "platformWindows" },
-  { emoji: "🍎", key: "platformMacos" },
-  { emoji: "🐧", key: "platformLinux" },
 ];
 
 export default async function Home(props: {
@@ -207,19 +202,7 @@ export default async function Home(props: {
         headline={t("main:crossPlatformHeadline")}
         body={t("main:crossPlatformText")}
         mockClassName="flex min-h-[220px] items-center justify-center"
-        extra={
-          <div className="mt-6 flex flex-wrap gap-3">
-            {PLATFORMS.map((platform) => (
-              <span
-                key={platform.key}
-                className="inline-flex items-center gap-2 rounded-[10px] border border-lp-border2 px-4 py-2.5 text-sm font-bold"
-              >
-                <span aria-hidden="true">{platform.emoji}</span>
-                {t(`main:${platform.key}`)}
-              </span>
-            ))}
-          </div>
-        }
+        extra={<OsLogos t={t} />}
       >
         <PlatformMock t={t} />
       </FeatureSection>

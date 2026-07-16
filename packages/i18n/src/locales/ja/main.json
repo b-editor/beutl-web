@@ -89,8 +89,8 @@
 
   "exportEyebrow": "書き出し",
   "exportHeadline": "主要フォーマットに|書き出し。",
-  "exportText": "mp4 / mov / mkv / webm などに対応。macOSは AVFoundation、Windowsは MediaFoundation を使ったハードウェアエンコードも利用できます。",
-  "exportStatus": "書き出し中 72% · ハードウェアエンコード有効",
+  "exportText": "mp4 / mov / mkv / webm など、主要なフォーマットに書き出せます。",
+  "exportStatus": "書き出し中 72%",
 
   "bentoEyebrow": "そのほかの機能",
   "bentoHeadline": "そのほかの機能も、ひととおり揃っています。",

@@ -89,8 +89,8 @@
 
   "exportEyebrow": "Export",
   "exportHeadline": "Export to the major formats.",
-  "exportText": "mp4, mov, mkv, and webm are supported. Hardware encoding is available through AVFoundation on macOS and MediaFoundation on Windows.",
-  "exportStatus": "Exporting 72% · Hardware encoding on",
+  "exportText": "Export to the major formats: mp4, mov, mkv, and webm.",
+  "exportStatus": "Exporting 72%",
 
   "bentoEyebrow": "More Features",
   "bentoHeadline": "The rest of the toolkit is here too.",
