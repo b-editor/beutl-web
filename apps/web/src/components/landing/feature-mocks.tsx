@@ -190,6 +190,83 @@ export function TimelineMock({ t }: { t: Translator }) {
   );
 }
 
+const NODE_HEADER_H = 22;
+const NODE_BODY_FILL = "#14121F";
+const NODE_STROKE = "rgba(255,255,255,0.16)";
+/** Wires and the ports they land on share one colour, as in the editor. */
+const NODE_WIRE = "#3FB950";
+
+function GraphNode({
+  x,
+  y,
+  width,
+  height,
+  accent,
+  title,
+  param,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  accent: string;
+  title: string;
+  param: string;
+}) {
+  const headerMid = y + NODE_HEADER_H / 2;
+  const paramY = y + NODE_HEADER_H + (height - NODE_HEADER_H) / 2 + 3.5;
+
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        rx="4"
+        fill={NODE_BODY_FILL}
+      />
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={NODE_HEADER_H}
+        rx="4"
+        fill={accent}
+      />
+      <path
+        d={`M${x + 8} ${headerMid + 1.25} L${x + 10.5} ${headerMid - 1.25} L${x + 13} ${headerMid + 1.25}`}
+        fill="none"
+        stroke="#fff"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <text
+        x={x + 22}
+        y={headerMid + 3.4}
+        fill="#fff"
+        fontSize="9.5"
+        fontWeight="700"
+      >
+        {title}
+      </text>
+      <text x={x + 10} y={paramY} fill="#A8A3C6" fontSize="9">
+        {param}
+      </text>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        rx="4"
+        fill="none"
+        stroke={NODE_STROKE}
+      />
+    </g>
+  );
+}
+
 export function NodeGraphMock({ t }: { t: Translator }) {
   return (
     <svg
@@ -198,83 +275,70 @@ export function NodeGraphMock({ t }: { t: Translator }) {
       className="block max-w-full [font-family:inherit]"
       aria-hidden="true"
     >
+      <defs>
+        <pattern
+          id="node-graph-grid"
+          width="19"
+          height="19"
+          patternUnits="userSpaceOnUse"
+        >
+          <path
+            d="M19 0H0V19"
+            fill="none"
+            stroke="rgba(255,255,255,0.055)"
+            strokeWidth="1"
+          />
+        </pattern>
+      </defs>
+      <rect width="380" height="210" fill="url(#node-graph-grid)" />
+
       <path
-        d="M118 47 C 165 47, 170 105, 214 105"
+        d="M126 58 C 168 58, 174 103, 214 103"
         fill="none"
-        stroke="#57D6E6"
+        stroke={NODE_WIRE}
         strokeWidth="2"
-        opacity="0.8"
       />
       <path
-        d="M118 163 C 165 163, 170 123, 214 123"
+        d="M126 170 C 168 170, 174 121, 214 121"
         fill="none"
-        stroke="#FF7A6B"
+        stroke={NODE_WIRE}
         strokeWidth="2"
-        opacity="0.8"
       />
-      <path
-        d="M338 113 L 372 113"
-        fill="none"
-        stroke="#9A8CFF"
-        strokeWidth="2"
-        opacity="0.8"
+      <path d="M338 112 L 372 112" fill="none" stroke={NODE_WIRE} strokeWidth="2" />
+
+      <GraphNode
+        x={14}
+        y={22}
+        width={112}
+        height={50}
+        accent="#2EA043"
+        title={t("main:nodeShape")}
+        param={t("main:nodeShapeParams")}
       />
-      <g>
-        <rect
-          x="14"
-          y="24"
-          width="104"
-          height="46"
-          rx="9"
-          fill="#1B1734"
-          stroke="rgba(255,255,255,0.16)"
-        />
-        <text x="28" y="46" fill="#57D6E6" fontSize="12" fontWeight="700">
-          {t("main:nodeShape")}
-        </text>
-        <text x="28" y="62" fill="#A8A3C6" fontSize="10">
-          {t("main:nodeShapeParams")}
-        </text>
-        <circle cx="118" cy="47" r="4" fill="#57D6E6" />
-      </g>
-      <g>
-        <rect
-          x="14"
-          y="140"
-          width="104"
-          height="46"
-          rx="9"
-          fill="#1B1734"
-          stroke="rgba(255,255,255,0.16)"
-        />
-        <text x="28" y="162" fill="#FF7A6B" fontSize="12" fontWeight="700">
-          {t("main:nodeRandom")}
-        </text>
-        <text x="28" y="178" fill="#A8A3C6" fontSize="10">
-          {t("main:nodeRandomParams")}
-        </text>
-        <circle cx="118" cy="163" r="4" fill="#FF7A6B" />
-      </g>
-      <g>
-        <rect
-          x="214"
-          y="83"
-          width="124"
-          height="60"
-          rx="9"
-          fill="#1B1734"
-          stroke="rgba(255,255,255,0.16)"
-        />
-        <text x="228" y="107" fill="#9A8CFF" fontSize="12" fontWeight="700">
-          {t("main:nodeEffect")}
-        </text>
-        <text x="228" y="125" fill="#A8A3C6" fontSize="10">
-          {t("main:nodeEffectParams")}
-        </text>
-        <circle cx="214" cy="105" r="4" fill="#57D6E6" />
-        <circle cx="214" cy="123" r="4" fill="#FF7A6B" />
-        <circle cx="338" cy="113" r="4" fill="#9A8CFF" />
-      </g>
+      <GraphNode
+        x={14}
+        y={134}
+        width={112}
+        height={50}
+        accent="#0D9488"
+        title={t("main:nodeRandom")}
+        param={t("main:nodeRandomParams")}
+      />
+      <GraphNode
+        x={214}
+        y={70}
+        width={124}
+        height={63}
+        accent="#0284C7"
+        title={t("main:nodeEffect")}
+        param={t("main:nodeEffectParams")}
+      />
+
+      <circle cx="126" cy="58" r="3.5" fill={NODE_WIRE} />
+      <circle cx="126" cy="170" r="3.5" fill={NODE_WIRE} />
+      <circle cx="214" cy="103" r="3.5" fill={NODE_WIRE} />
+      <circle cx="214" cy="121" r="3.5" fill={NODE_WIRE} />
+      <circle cx="338" cy="112" r="3.5" fill={NODE_WIRE} />
     </svg>
   );
 }
