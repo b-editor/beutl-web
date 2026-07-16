@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Translator } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 
@@ -521,23 +522,112 @@ export function TextMock({ t }: { t: Translator }) {
   );
 }
 
+/**
+ * Both frames show the same frame: a blob lit over a dark ground, sampled from
+ * one scene function. The preview draws it as coarse blocks (the reduced-scale
+ * preview) while the export renders the same composition smoothly.
+ */
+const GPU_W = 160;
+const GPU_H = 100;
+const GPU_DARK = [12, 10, 24];
+const GPU_INDIGO = [109, 92, 247];
+const GPU_CORAL = [255, 122, 107];
+
+function gpuLerp(a: number[], b: number[], t: number) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
+function gpuScene(u: number, v: number) {
+  const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+  const dBg = Math.hypot(u - 0.32, v - 0.28);
+  let c = gpuLerp(GPU_DARK, GPU_INDIGO, clamp01(1 - dBg * 1.45));
+  const dBlob = Math.hypot(u - 0.66, v - 0.72);
+  c = gpuLerp(c, GPU_CORAL, clamp01(1 - dBlob * 2.3) * 0.85);
+  return `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
+}
+
+const GPU_PREVIEW_COLS = 11;
+const GPU_PREVIEW_ROWS = 7;
+const GPU_CELL_W = GPU_W / GPU_PREVIEW_COLS;
+const GPU_CELL_H = GPU_H / GPU_PREVIEW_ROWS;
+const GPU_PREVIEW_CELLS = Array.from(
+  { length: GPU_PREVIEW_COLS * GPU_PREVIEW_ROWS },
+  (_, i) => {
+    const col = i % GPU_PREVIEW_COLS;
+    const row = Math.floor(i / GPU_PREVIEW_COLS);
+    return {
+      x: col * GPU_CELL_W,
+      y: row * GPU_CELL_H,
+      fill: gpuScene(
+        (col + 0.5) / GPU_PREVIEW_COLS,
+        (row + 0.5) / GPU_PREVIEW_ROWS,
+      ),
+    };
+  },
+);
+
+function GpuFrame({
+  label,
+  scale,
+  children,
+}: {
+  label: string;
+  scale: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-lp-border">
+      <div className="flex justify-between border-b border-lp-border px-2.5 py-[7px] text-[11px] font-bold text-lp-muted">
+        <span>{label}</span>
+        <span>{scale}</span>
+      </div>
+      <div className="aspect-16/10">
+        <svg
+          viewBox={`0 0 ${GPU_W} ${GPU_H}`}
+          preserveAspectRatio="none"
+          className="block h-full w-full"
+          aria-hidden="true"
+        >
+          {children}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export function GpuMock({ t }: { t: Translator }) {
   return (
     <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
-      <div className="overflow-hidden rounded-[10px] border border-lp-border">
-        <div className="flex justify-between border-b border-lp-border px-2.5 py-[7px] text-[11px] font-bold text-lp-muted">
-          <span>{t("main:gpuPreview")}</span>
-          <span>0.5×</span>
-        </div>
-        <div className="aspect-16/10 bg-[radial-gradient(120%_120%_at_30%_20%,#6D5CF7,#0c0a18_70%)]" />
-      </div>
-      <div className="overflow-hidden rounded-[10px] border border-lp-border">
-        <div className="flex justify-between border-b border-lp-border px-2.5 py-[7px] text-[11px] font-bold text-lp-muted">
-          <span>{t("main:gpuExport")}</span>
-          <span>2.0×</span>
-        </div>
-        <div className="aspect-16/10 bg-[radial-gradient(120%_120%_at_30%_20%,#FF7A6B,#6D5CF7_45%,#0c0a18_78%)]" />
-      </div>
+      <GpuFrame label={t("main:gpuPreview")} scale="0.5×">
+        {GPU_PREVIEW_CELLS.map((cell, i) => (
+          <rect
+            key={i}
+            x={cell.x}
+            y={cell.y}
+            width={GPU_CELL_W + 0.5}
+            height={GPU_CELL_H + 0.5}
+            fill={cell.fill}
+          />
+        ))}
+      </GpuFrame>
+      <GpuFrame label={t("main:gpuExport")} scale="2.0×">
+        <defs>
+          <radialGradient id="lp-gpu-bg" cx="0.32" cy="0.28" r="0.95">
+            <stop offset="0" stopColor="#6D5CF7" />
+            <stop offset="1" stopColor="#0c0a18" />
+          </radialGradient>
+          <radialGradient id="lp-gpu-blob" cx="0.66" cy="0.72" r="0.5">
+            <stop offset="0" stopColor="#FF7A6B" />
+            <stop offset="1" stopColor="#FF7A6B" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <rect width={GPU_W} height={GPU_H} fill="url(#lp-gpu-bg)" />
+        <rect width={GPU_W} height={GPU_H} fill="url(#lp-gpu-blob)" />
+      </GpuFrame>
     </div>
   );
 }

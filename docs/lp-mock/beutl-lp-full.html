@@ -127,8 +127,12 @@
   .gpu { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .gpu .f { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .gpu .f .cap { font-size: 11px; font-weight: 700; padding: 7px 10px; display: flex; justify-content: space-between; color: var(--muted); border-bottom: 1px solid var(--border); }
-  .gpu .f .img { aspect-ratio: 16/10; background: radial-gradient(120% 120% at 30% 20%, var(--indigo), #0c0a18 70%); }
-  .gpu .f.hi .img { background: radial-gradient(120% 120% at 30% 20%, var(--coral), var(--indigo) 45%, #0c0a18 78%); }
+  /* both frames show the same scene; preview is a coarse block grid (svg, built
+     by the script below), export renders it smoothly */
+  .gpu .f .img { aspect-ratio: 16/10; display: block; width: 100%; }
+  .gpu .f.hi .img { background:
+    radial-gradient(50% 60% at 66% 72%, rgba(255,122,107,0.85), transparent 70%),
+    radial-gradient(95% 95% at 32% 28%, #6D5CF7, #0c0a18 78%); }
 
   /* export */
   .fmts { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -408,7 +412,7 @@
     </div>
     <div class="mockwrap">
       <div class="gpu">
-        <div class="f"><div class="cap"><span>プレビュー</span><span>0.5×</span></div><div class="img"></div></div>
+        <div class="f"><div class="cap"><span>プレビュー</span><span>0.5×</span></div><svg class="img" id="gpuprev" viewBox="0 0 160 100" preserveAspectRatio="none" aria-hidden="true"></svg></div>
         <div class="f hi"><div class="cap"><span>書き出し</span><span>2.0×</span></div><div class="img"></div></div>
       </div>
     </div>
@@ -539,6 +543,33 @@
   document.querySelectorAll('path[data-ease]').forEach(function (p) {
     p.setAttribute('d', curves[p.getAttribute('data-ease')]);
   });
+})();
+
+// ---- GPU preview mosaic ----
+// Same scene as the smooth export frame, sampled into coarse blocks.
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  var DARK = [12, 10, 24], IND = [109, 92, 247], COR = [255, 122, 107];
+  function lerp(a, b, t) { return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+  function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+  function scene(u, v) {
+    var dBg = Math.hypot(u - 0.32, v - 0.28);
+    var c = lerp(DARK, IND, clamp01(1 - dBg * 1.45));
+    var dBlob = Math.hypot(u - 0.66, v - 0.72);
+    c = lerp(c, COR, clamp01(1 - dBlob * 2.3) * 0.85);
+    return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')';
+  }
+  var svg = document.getElementById('gpuprev');
+  if (svg) {
+    var COLS = 11, ROWS = 7, cw = 160 / COLS, ch = 100 / ROWS;
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      var rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', c * cw); rect.setAttribute('y', r * ch);
+      rect.setAttribute('width', cw + 0.5); rect.setAttribute('height', ch + 0.5);
+      rect.setAttribute('fill', scene((c + 0.5) / COLS, (r + 0.5) / ROWS));
+      svg.appendChild(rect);
+    }
+  }
 })();
 
 // ---- headline line-break control ----
