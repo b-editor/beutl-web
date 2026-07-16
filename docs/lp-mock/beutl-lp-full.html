@@ -348,7 +348,8 @@
       <p class="support">SKSL・GLSLのシェーダや、C#スクリプトをその場で記述できます。既製のエフェクトでは足りない表現も、コードで作れます。</p>
     </div>
     <div class="mockwrap">
-      <div class="code"><span class="c">// GLSL filter effect</span><br><span class="k">half4</span> <span class="f">main</span>(<span class="k">float2</span> uv){<br>&nbsp;&nbsp;<span class="k">float</span> w = <span class="f">wave</span>(uv.y * <span class="n">12.0</span> + iTime);<br>&nbsp;&nbsp;uv.x += w * <span class="n">0.03</span>;<br>&nbsp;&nbsp;<span class="k">return</span> <span class="f">image</span>.<span class="f">eval</span>(uv);<br>}</div>
+      <!-- real SKSL, verified against SKSLScriptEffect's compiler -->
+      <div class="code"><span class="c">// SKSL filter effect</span><br><span class="k">uniform</span> <span class="k">shader</span> src;<br><span class="k">uniform</span> <span class="k">float</span> iTime;<br><br><span class="k">half4</span> <span class="f">main</span>(<span class="k">float2</span> fragCoord) {<br>&nbsp;&nbsp;<span class="k">float</span> w = <span class="f">sin</span>(fragCoord.y * <span class="n">0.05</span> + iTime * <span class="n">2.0</span>);<br>&nbsp;&nbsp;<span class="k">float2</span> uv = <span class="k">float2</span>(fragCoord.x + w * <span class="n">6.0</span>, fragCoord.y);<br>&nbsp;&nbsp;<span class="k">return</span> src.<span class="f">eval</span>(uv);<br>}</div>
       <div class="shaderprev"></div>
     </div>
   </div></div>

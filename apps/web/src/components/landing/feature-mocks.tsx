@@ -347,23 +347,32 @@ export function ShaderCodeMock() {
   return (
     <>
       <div className="overflow-x-auto rounded-[10px] border border-lp-border bg-[#0b0916] px-4 py-[14px] font-mono text-xs leading-[1.75]">
-        <span className="text-lp-faint">{"// GLSL filter effect"}</span>
+        <span className="text-lp-faint">{"// SKSL filter effect"}</span>
+        <br />
+        <span className="text-lp-indigo-bright">uniform</span>{" "}
+        <span className="text-lp-indigo-bright">shader</span> src;
+        <br />
+        <span className="text-lp-indigo-bright">uniform</span>{" "}
+        <span className="text-lp-indigo-bright">float</span> iTime;
+        <br />
         <br />
         <span className="text-lp-indigo-bright">half4</span>{" "}
         <span className="text-lp-cyan">main</span>(
-        <span className="text-lp-indigo-bright">float2</span> uv){"{"}
+        <span className="text-lp-indigo-bright">float2</span> fragCoord) {"{"}
         <br />
         {"  "}
         <span className="text-lp-indigo-bright">float</span> w ={" "}
-        <span className="text-lp-cyan">wave</span>(uv.y *{" "}
-        <span className="text-lp-coral">12.0</span> + iTime);
+        <span className="text-lp-cyan">sin</span>(fragCoord.y *{" "}
+        <span className="text-lp-coral">0.05</span> + iTime *{" "}
+        <span className="text-lp-coral">2.0</span>);
         <br />
-        {"  "}uv.x += w * <span className="text-lp-coral">0.03</span>;
+        {"  "}<span className="text-lp-indigo-bright">float2</span> uv ={" "}
+        <span className="text-lp-indigo-bright">float2</span>(fragCoord.x + w *{" "}
+        <span className="text-lp-coral">6.0</span>, fragCoord.y);
         <br />
         {"  "}
         <span className="text-lp-indigo-bright">return</span>{" "}
-        <span className="text-lp-cyan">image</span>.
-        <span className="text-lp-cyan">eval</span>(uv);
+        src.<span className="text-lp-cyan">eval</span>(uv);
         <br />
         {"}"}
       </div>
