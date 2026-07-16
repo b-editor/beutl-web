@@ -686,22 +686,6 @@ const OS = [
   { key: "platformLinux", brand: "#F5C93B", Logo: LinuxLogo },
 ] as const;
 
-export function OsLogos({ t }: { t: Translator }) {
-  return (
-    <div className="mt-6 flex flex-wrap gap-3">
-      {OS.map(({ key, Logo }) => (
-        <span
-          key={key}
-          className="inline-flex items-center gap-2 rounded-[10px] border border-lp-border2 px-4 py-2.5 text-sm font-bold"
-        >
-          <Logo className="h-[18px] w-[18px]" />
-          {t(`main:${key}`)}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 export function PlatformMock({ t }: { t: Translator }) {
   return (
     <div className="flex flex-col items-center gap-6">

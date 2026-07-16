@@ -12,7 +12,6 @@ import {
   ExportMock,
   GpuMock,
   NodeGraphMock,
-  OsLogos,
   PackagesMock,
   PlatformMock,
   ShaderCodeMock,
@@ -202,7 +201,6 @@ export default async function Home(props: {
         headline={t("main:crossPlatformHeadline")}
         body={t("main:crossPlatformText")}
         mockClassName="flex min-h-[220px] items-center justify-center"
-        extra={<OsLogos t={t} />}
       >
         <PlatformMock t={t} />
       </FeatureSection>
