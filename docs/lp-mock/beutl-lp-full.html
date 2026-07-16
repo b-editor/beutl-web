@@ -111,11 +111,10 @@
   .shaderprev { height: 60px; border-radius: 10px; margin-top: 12px; background: linear-gradient(100deg,#0b0916, var(--indigo), var(--coral), var(--cyan)); background-size: 300% 100%; animation: slide 8s linear infinite; }
   @keyframes slide { to { background-position: 300% 0; } }
 
-  /* audio */
-  .wave { display: flex; align-items: center; gap: 3px; height: 70px; }
-  .wave i { flex: 1; background: linear-gradient(180deg,var(--cyan),var(--indigo)); border-radius: 2px; opacity: 0.85; }
-  .viz { display: flex; align-items: flex-end; gap: 4px; height: 56px; margin-top: 14px; }
-  .viz i { flex: 1; background: linear-gradient(180deg,var(--coral),var(--indigo)); border-radius: 3px 3px 0 0; }
+  /* audio — the gradient belongs to the whole group (see the svg defs), not to
+     each bar, so a short bar samples only the middle of the ramp */
+  .wave, .viz { display: block; width: 100%; height: auto; }
+  .viz { margin-top: 14px; }
 
   /* text mock */
   .textmock { display: flex; align-items: center; justify-content: center; height: 220px; position: relative; }
@@ -365,8 +364,22 @@
       <div class="chips" style="margin-top:18px"><span class="chip">EQ</span><span class="chip">コンプレッサー</span><span class="chip">リミッター</span><span class="chip">ディレイ</span></div>
     </div>
     <div class="mockwrap">
-      <div class="wave" id="wave"></div>
-      <div class="viz" id="viz"></div>
+      <svg class="wave" viewBox="0 0 480 70" aria-hidden="true">
+        <defs>
+          <linearGradient id="lp-audio-wave" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="70">
+            <stop offset="0" stop-color="#57D6E6"/><stop offset="1" stop-color="#6D5CF7"/>
+          </linearGradient>
+        </defs>
+        <g id="wavebars"></g>
+      </svg>
+      <svg class="viz" viewBox="0 0 480 56" aria-hidden="true">
+        <defs>
+          <linearGradient id="lp-audio-spectrum" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="56">
+            <stop offset="0" stop-color="#FF7A6B"/><stop offset="1" stop-color="#6D5CF7"/>
+          </linearGradient>
+        </defs>
+        <g id="specbars"></g>
+      </svg>
     </div>
   </div></div>
 </section>
@@ -564,10 +577,31 @@ document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
 
 // ---- audio mock bars ----
 (function(){
-  var wave = document.getElementById('wave');
-  for (var i=0;i<64;i++){ var b=document.createElement('i'); var h=Math.abs(Math.sin(i*0.5))*0.6+Math.abs(Math.sin(i*0.17))*0.4; b.style.height=(12+h*56)+'%'; wave.appendChild(b); }
-  var viz = document.getElementById('viz');
-  for (var j=0;j<40;j++){ var v=document.createElement('i'); v.style.height=(20+Math.abs(Math.sin(j*0.6))*80)+'%'; viz.appendChild(v); }
+  var NS = 'http://www.w3.org/2000/svg';
+  function bar(g, x, y, w, h, fill){
+    var r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', w); r.setAttribute('height', h);
+    r.setAttribute('rx', w / 2); r.setAttribute('fill', fill);
+    g.appendChild(r);
+  }
+  // waveform: bars centred on the middle
+  var WN = 48, WGAP = 3, WW = (480 - WGAP * (WN - 1)) / WN, wg = document.getElementById('wavebars');
+  for (var i = 0; i < WN; i++){
+    var lv = Math.abs(Math.sin(i*0.5))*0.6 + Math.abs(Math.sin(i*0.17))*0.4;
+    var h = 10 + lv * 56;
+    bar(wg, i * (WW + WGAP), (70 - h) / 2, WW, h, 'url(#lp-audio-wave)');
+  }
+  // spectrum: loud at the low frequencies on the left, trailing off to the right
+  var SN = 40, SGAP = 4, SW = (480 - SGAP * (SN - 1)) / SN, sg = document.getElementById('specbars');
+  for (var j = 0; j < SN; j++){
+    var t = j / (SN - 1);
+    var decay = Math.pow(1 - t, 1.5);
+    var rise = Math.min(1, 0.35 + t * 3);
+    var lvl = Math.min(1, decay * rise * (0.65 + 0.35 * fract(j * 3.7)) * 1.5);
+    var sh = Math.max(2, lvl * 56);
+    bar(sg, j * (SW + SGAP), 56 - sh, SW, sh, 'url(#lp-audio-spectrum)');
+  }
   // waveform inside the timeline's audio clip: one filled path mirrored about
   // the centre line, the way an audio editor draws it
   function fract(i){ var n = Math.sin(i*12.9898)*43758.5453; return n - Math.floor(n); }

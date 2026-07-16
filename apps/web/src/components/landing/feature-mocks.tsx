@@ -385,38 +385,110 @@ export function ShaderCodeMock() {
  * The mock builds these bars in the browser, but the expressions are
  * deterministic, so they are evaluated once on the server instead.
  */
-const WAVE_BARS = Array.from({ length: 64 }, (_, i) => {
+const WAVE_W = 480;
+const WAVE_H = 70;
+const WAVE_N = 48;
+const WAVE_GAP = 3;
+const WAVE_BAR_W = (WAVE_W - WAVE_GAP * (WAVE_N - 1)) / WAVE_N;
+
+const WAVE_BARS = Array.from({ length: WAVE_N }, (_, i) => {
   const level =
     Math.abs(Math.sin(i * 0.5)) * 0.6 + Math.abs(Math.sin(i * 0.17)) * 0.4;
-  return `${12 + level * 56}%`;
+  const height = 10 + level * 56;
+  return {
+    x: i * (WAVE_BAR_W + WAVE_GAP),
+    y: (WAVE_H - height) / 2,
+    height,
+  };
 });
 
-const SPECTRUM_BARS = Array.from(
-  { length: 40 },
-  (_, i) => `${20 + Math.abs(Math.sin(i * 0.6)) * 80}%`,
-);
+const SPEC_W = 480;
+const SPEC_H = 56;
+const SPEC_N = 40;
+const SPEC_GAP = 4;
+const SPEC_BAR_W = (SPEC_W - SPEC_GAP * (SPEC_N - 1)) / SPEC_N;
+
+/** A spectrum leans left: loud down at the low frequencies and trailing away
+ * to almost nothing at the high end. */
+const SPECTRUM_BARS = Array.from({ length: SPEC_N }, (_, i) => {
+  const t = i / (SPEC_N - 1);
+  const decay = Math.pow(1 - t, 1.5);
+  const rise = Math.min(1, 0.35 + t * 3);
+  const level = Math.min(1, decay * rise * (0.65 + 0.35 * fract(i * 3.7)) * 1.5);
+  const height = Math.max(2, level * SPEC_H);
+  return {
+    x: i * (SPEC_BAR_W + SPEC_GAP),
+    y: SPEC_H - height,
+    height,
+  };
+});
 
 export function AudioMock() {
   return (
     <>
-      <div className="flex h-[70px] items-center gap-[3px]">
-        {WAVE_BARS.map((height, index) => (
-          <i
+      {/* One gradient per visualiser, in user space, so the ramp belongs to the
+          whole group: a short bar samples only the middle of it while a tall one
+          reaches the top. Filling each bar on its own restarts the ramp. */}
+      <svg
+        viewBox={`0 0 ${WAVE_W} ${WAVE_H}`}
+        className="block h-auto w-full max-w-full"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="lp-audio-wave"
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1="0"
+            x2="0"
+            y2={WAVE_H}
+          >
+            <stop offset="0" stopColor="#57D6E6" />
+            <stop offset="1" stopColor="#6D5CF7" />
+          </linearGradient>
+        </defs>
+        {WAVE_BARS.map((bar, index) => (
+          <rect
             key={`wave-${index}`}
-            className="flex-1 rounded-[2px] bg-[linear-gradient(180deg,#57D6E6,#6D5CF7)] opacity-85"
-            style={{ height }}
+            x={bar.x}
+            y={bar.y}
+            width={WAVE_BAR_W}
+            height={bar.height}
+            rx={WAVE_BAR_W / 2}
+            fill="url(#lp-audio-wave)"
           />
         ))}
-      </div>
-      <div className="mt-[14px] flex h-14 items-end gap-1">
-        {SPECTRUM_BARS.map((height, index) => (
-          <i
+      </svg>
+      <svg
+        viewBox={`0 0 ${SPEC_W} ${SPEC_H}`}
+        className="mt-[14px] block h-auto w-full max-w-full"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="lp-audio-spectrum"
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1="0"
+            x2="0"
+            y2={SPEC_H}
+          >
+            <stop offset="0" stopColor="#FF7A6B" />
+            <stop offset="1" stopColor="#6D5CF7" />
+          </linearGradient>
+        </defs>
+        {SPECTRUM_BARS.map((bar, index) => (
+          <rect
             key={`spectrum-${index}`}
-            className="flex-1 rounded-t-[3px] bg-[linear-gradient(180deg,#FF7A6B,#6D5CF7)]"
-            style={{ height }}
+            x={bar.x}
+            y={bar.y}
+            width={SPEC_BAR_W}
+            height={bar.height}
+            rx={SPEC_BAR_W / 2}
+            fill="url(#lp-audio-spectrum)"
           />
         ))}
-      </div>
+      </svg>
     </>
   );
 }
