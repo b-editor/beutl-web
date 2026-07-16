@@ -1,110 +1,71 @@
-"use client";
-
-import { motion, useReducedMotion } from "framer-motion";
-import Image from "next/image";
 import Link from "next/link";
-import { Download } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import FloatingElements from "./floating-elements";
-import styles from "@/styles/hero-gradient.module.css";
+import { cn } from "@beutl/core";
+import ShaderCanvas from "./shader-canvas";
+import {
+  DownloadIcon,
+  Eyebrow,
+  GitHubIcon,
+  LP_BUTTON_GHOST,
+  LP_BUTTON_PRIMARY,
+  LP_CTA_ROW,
+  LP_WRAP,
+} from "./lp-parts";
 
-function HeroGradientMesh() {
-  return (
-    <div className={styles.meshContainer}>
-      <div className={styles.blob1} />
-      <div className={styles.blob2} />
-      <div className={styles.blob3} />
-    </div>
-  );
-}
+const SCRIM_BACKGROUND =
+  "linear-gradient(90deg, rgba(9,8,15,0.86) 0%, rgba(9,8,15,0.5) 36%, rgba(9,8,15,0) 64%), linear-gradient(0deg, rgba(9,8,15,0.9) 2%, rgba(9,8,15,0) 40%)";
 
-interface HeroTexts {
-  unleashCreativity: string;
-  freeAndOpenSource: string;
+export interface HeroTexts {
+  eyebrow: string;
+  titleLine1: string;
+  titleLine2: string;
+  lede: string;
   download: string;
+  github: string;
 }
 
 export default function HeroSection({
   texts,
+  downloadHref,
+  githubHref,
 }: {
   texts: HeroTexts;
+  downloadHref: string;
+  githubHref: string;
 }) {
-  const prefersReducedMotion = useReducedMotion();
-
-  const fadeInUp = (delay: number) =>
-    prefersReducedMotion
-      ? {}
-      : {
-          initial: { opacity: 0, y: 30 },
-          animate: { opacity: 1, y: 0 },
-          transition: { duration: 0.6, ease: "easeOut" as const, delay },
-        };
-
   return (
-    <section className="relative overflow-hidden min-h-[85vh] flex flex-col justify-center">
-      <HeroGradientMesh />
+    <header className="relative flex min-h-[90svh] items-center overflow-hidden bg-lp-bg">
+      <ShaderCanvas />
+      <div
+        className="pointer-events-none absolute inset-0 z-[1]"
+        style={{ background: SCRIM_BACKGROUND }}
+      />
 
-      <div className="container mx-auto px-6 pt-12 md:px-12 relative z-10">
-        <motion.h1
-          {...fadeInUp(0)}
-          className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl lg:mt-8"
-        >
-          {texts.unleashCreativity}
-        </motion.h1>
-        <motion.h2
-          {...fadeInUp(0.1)}
-          className="scroll-m-20 mt-8 pb-2 text-xl md:text-3xl font-medium tracking-tight"
-        >
-          {texts.freeAndOpenSource}
-        </motion.h2>
-        <motion.div {...fadeInUp(0.2)} className="mt-6 flex gap-4">
-          <Button
-            className={`border bg-gradient-to-r from-primary via-primary/80 to-primary hover:shadow-[0_0_20px_hsl(244_86%_57%/0.4)] transition-shadow`}
-            asChild
-          >
-            <Link href="https://github.com/b-editor/beutl/releases/latest">
-              <Download className="w-5 h-5 mr-2" />
-              {texts.download}
-            </Link>
-          </Button>
-          <Button
-            variant="link"
-            className="text-foreground border backdrop-brightness-75 hover:shadow-[0_0_15px_hsl(0_0%_100%/0.15)] transition-shadow"
-            asChild
-          >
-            <Link href="https://github.com/b-editor/beutl">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/img/github-color.svg"
-                alt="GitHub"
-                className="w-5 h-5 mr-2 invert"
-              />
-              GitHub
-            </Link>
-          </Button>
-        </motion.div>
-
-        <motion.div
-          {...(prefersReducedMotion
-            ? {}
-            : {
-                initial: { opacity: 0, scale: 0.95, y: 20 },
-                animate: { opacity: 1, scale: 1, y: 0 },
-                transition: { duration: 0.8, ease: "easeOut" as const, delay: 0.3 },
-              })}
-          className="relative mt-16 md:mt-8 mx-auto select-none pointer-events-none"
-        >
-          <FloatingElements />
-          <Image
-            className="scale-[107.5%]"
-            src="/img/brand-image2.png"
-            alt="brand image"
-            width={1920}
-            height={1080}
-            priority
-          />
-        </motion.div>
+      <div className={cn(LP_WRAP, "relative z-[2] pt-10 pb-15")}>
+        <Eyebrow>{texts.eyebrow}</Eyebrow>
+        {/* The 32px floor is relaxed below ~372px viewports: at that size the
+            first line no longer fits on one line and the heading breaks to
+            three lines. Above it the size matches the design as-is. */}
+        <h1 className="mt-[22px] text-[clamp(min(32px,8.6vw),8vw,74px)] font-extrabold tracking-[-0.02em] [overflow-wrap:anywhere] [word-break:keep-all] leading-[1.1]">
+          {texts.titleLine1}
+          <br />
+          <span className="bg-[linear-gradient(100deg,#9A8CFF_10%,#FF7A6B_90%)] bg-clip-text text-transparent">
+            {texts.titleLine2}
+          </span>
+        </h1>
+        <p className="mt-6 max-w-[42ch] text-[clamp(16px,2vw,20px)] text-lp-muted [overflow-wrap:anywhere]">
+          {texts.lede}
+        </p>
+        <div className={LP_CTA_ROW}>
+          <Link href={downloadHref} className={LP_BUTTON_PRIMARY}>
+            <DownloadIcon />
+            {texts.download}
+          </Link>
+          <Link href={githubHref} className={LP_BUTTON_GHOST}>
+            <GitHubIcon />
+            {texts.github}
+          </Link>
+        </div>
       </div>
-    </section>
+    </header>
   );
 }

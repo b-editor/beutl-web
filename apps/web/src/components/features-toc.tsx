@@ -13,23 +13,35 @@ import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
 import { useTranslation } from "@/app/i18n/client";
 
+/**
+ * Only the primary feature sections are listed. The order must match the
+ * document order of the `.features-header` headings the scroll tracking reads.
+ */
 function getFeatures(t: ReturnType<typeof useTranslation>["t"]) {
   return [
     {
-      name: "features-cross-platform",
-      text: t("main:crossPlatform"),
+      name: "features-timeline",
+      text: t("main:tocTimeline"),
+    },
+    {
+      name: "features-nodes",
+      text: t("main:tocNodes"),
     },
     {
       name: "features-animation",
-      text: t("main:animation"),
+      text: t("main:tocAnimation"),
     },
     {
       name: "features-effects",
-      text: t("main:richEffects"),
+      text: t("main:tocEffects"),
+    },
+    {
+      name: "features-audio",
+      text: t("main:tocAudio"),
     },
     {
       name: "features-extensions",
-      text: t("main:extensible"),
+      text: t("main:tocExtensions"),
     },
   ];
 }
@@ -107,13 +119,13 @@ export default function FeaturesToc({ lang }: { lang: string }) {
   );
 
   return (
-    <div className="flex items-center justify-center md:sticky mx-auto p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-background/60 backdrop-blur-xl border-b border-white/5 gap-2">
+    <div className="flex items-center justify-center md:sticky mx-auto p-2 md:p-3 flex-wrap top-[calc(3.5rem+1px)] z-10 bg-lp-bg/60 backdrop-blur-xl border-b border-lp-border gap-1 md:gap-2">
       {features.map((feature) => (
         <div key={feature.name} className="relative">
           {selected === feature.name && (
             <motion.div
               layoutId="features-indicator"
-              className="absolute inset-0 bg-secondary rounded-md"
+              className="absolute inset-0 bg-lp-surface2 rounded-md"
               transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
             />
           )}
@@ -121,7 +133,7 @@ export default function FeaturesToc({ lang }: { lang: string }) {
             onClick={handleClick}
             value={feature.name}
             variant="ghost"
-            className="relative z-10"
+            className="relative z-10 h-8 px-2.5 text-xs text-lp-muted hover:bg-transparent hover:text-lp-text md:h-9 md:px-4 md:text-sm"
           >
             {feature.text}
           </Button>

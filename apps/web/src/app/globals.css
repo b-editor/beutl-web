@@ -35,6 +35,31 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* Landing page palette. The landing page renders on its own dark canvas
+     rather than the themed app surfaces, so it carries a dedicated scale. */
+  --color-lp-bg: #09080f;
+  --color-lp-bg2: #0e0c18;
+  --color-lp-surface: #15122a;
+  --color-lp-surface2: #1b1734;
+  --color-lp-border: rgba(255, 255, 255, 0.09);
+  --color-lp-border2: rgba(255, 255, 255, 0.16);
+  --color-lp-text: #eceaf8;
+  --color-lp-muted: #a8a3c6;
+  --color-lp-faint: #6e6990;
+  --color-lp-indigo: #6d5cf7;
+  --color-lp-indigo-bright: #9a8cff;
+  --color-lp-coral: #ff7a6b;
+  --color-lp-cyan: #57d6e6;
+  --color-lp-lime: #c8f45c;
+
+  --animate-lp-slide: lp-slide 8s linear infinite;
+
+  @keyframes lp-slide {
+    to {
+      background-position: 300% 0;
+    }
+  }
 }
 
 /*

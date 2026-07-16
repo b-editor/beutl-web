@@ -1,69 +1,31 @@
-import styles from "@/styles/easing-demo.module.css";
-import { cn } from "@beutl/core";
-
 export default function EasingDemo({
   path,
-  easing,
-  type,
-}: { path: string; easing: string; type: "in" | "out" | "inOut" }) {
+  color,
+  label,
+}: {
+  path: string;
+  color: string;
+  label: string;
+}) {
   return (
-    <div className={cn(styles.easingDemo, "relative")}>
+    <div className="rounded-[10px] border border-lp-border bg-white/[0.02] p-3">
       <svg
-        className="overflow-visible"
-        viewBox="0 0 125 85"
+        viewBox="0 -22 125 134"
+        className="block h-auto w-full max-w-full"
         xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true"
       >
-        <defs>
-          {type === "in" && (
-            <linearGradient id="in" x1="0%" y1="100%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="hsl(var(--foreground))" />
-              <stop offset="50%" stopColor="hsl(var(--foreground))" />
-              <stop offset="70%" stopColor="hsl(var(--primary))" />
-              <stop offset="100%" stopColor="hsl(var(--primary))" />
-            </linearGradient>
-          )}
-          {type === "out" && (
-            <linearGradient id="out" x1="0%" y1="100%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="hsl(var(--primary))" />
-              <stop offset="30%" stopColor="hsl(var(--primary))" />
-              <stop offset="50%" stopColor="hsl(var(--foreground))" />
-              <stop offset="100%" stopColor="hsl(var(--foreground))" />
-            </linearGradient>
-          )}
-          {type === "inOut" && (
-            <linearGradient id="inOut" x1="0%" y1="100%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="hsl(var(--foreground))" />
-              <stop offset="20%" stopColor="hsl(var(--primary))" />
-              <stop offset="80%" stopColor="hsl(var(--primary))" />
-              <stop offset="100%" stopColor="hsl(var(--foreground))" />
-            </linearGradient>
-          )}
-        </defs>
-        <g>
-          <path
-            d="M1 0v84h124"
-            strokeLinecap="round"
-            strokeWidth="2"
-            fill="none"
-            stroke="#ffffff"
-          />
-        </g>
         <path
-          className="translate-x-[1px] translate-y-[-1px]"
-          strokeLinecap="round"
           d={path}
-          strokeWidth="2"
           fill="none"
-          stroke={`url(#${type})`}
+          stroke={color}
+          strokeWidth="3"
+          strokeLinecap="round"
         />
       </svg>
-      <div
-        className={cn(
-          styles.easingDemoMeter,
-          "bg-primary w-2 h-2 rounded absolute top-full -right-3 -translate-y-[5.5px] will-change-[top]",
-        )}
-        style={{ animationTimingFunction: easing }}
-      />
+      <span className="text-[10.5px] font-bold tracking-[0.04em] text-lp-faint">
+        {label}
+      </span>
     </div>
   );
 }
