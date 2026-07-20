@@ -101,7 +101,7 @@ export function Headline({
     <h2
       id={tocId}
       className={cn(
-        "mt-4 text-[clamp(24px,3.6vw,38px)] font-extrabold tracking-[-0.01em] text-balance text-lp-text [overflow-wrap:anywhere] leading-[1.2]",
+        "mt-4 text-[clamp(24px,3.6vw,38px)] font-extrabold tracking-[-0.01em] text-balance text-lp-text [word-break:keep-all] [overflow-wrap:anywhere] leading-[1.2]",
         tocId && "features-header scroll-mt-20 md:scroll-mt-36",
         className,
       )}

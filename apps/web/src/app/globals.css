@@ -155,7 +155,13 @@
     --secondary: 249 8% 16%;
     --secondary-foreground: 249 50% 95%;
 
-    --muted: 249 8% 16%;
+    /*
+      --muted is a surface, and it has to stay a step above --secondary and well
+      clear of --card: dropdown-menu and select draw their 1px separator with
+      bg-muted, and table rows use it for hover and selection. Pulling it down to
+      --secondary would leave those a few points from the panel they sit on.
+    */
+    --muted: 249 8% 24%;
     --muted-foreground: 249 23% 71%;
 
     --accent: 247 30% 20%;

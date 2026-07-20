@@ -6,11 +6,34 @@ import { cn } from "@beutl/core";
 const VERTEX_SOURCE =
   "attribute vec2 a_pos;void main(){gl_Position=vec4(a_pos,0.0,1.0);}";
 
+/*
+  The shader palette is derived from the same hex values the rest of the landing
+  page uses, rather than hand-converted vec3 literals that drift from them
+  silently — a wrong digit here is invisible until someone compares screenshots.
+*/
+const PALETTE = {
+  BG: "#09080F",
+  INDIGO: "#6D5CF7",
+  CORAL: "#FF7A6B",
+  CYAN: "#57D6E6",
+} as const;
+
+function toVec3(hex: string) {
+  const value = Number.parseInt(hex.slice(1), 16);
+  const channel = (shift: number) =>
+    (((value >> shift) & 0xff) / 255).toFixed(3);
+  return `vec3(${channel(16)},${channel(8)},${channel(0)})`;
+}
+
+const PALETTE_SOURCE = Object.entries(PALETTE)
+  .map(([name, hex]) => `const vec3 ${name}=${toVec3(hex)};`)
+  .join("");
+
 const FRAGMENT_SOURCE = [
   "precision highp float;",
   "precision highp int;",
   "uniform vec2 u_res;uniform float u_time;uniform int u_from;uniform int u_to;uniform float u_blend;uniform vec2 u_mouse;",
-  "const vec3 BG=vec3(0.035,0.031,0.059);const vec3 INDIGO=vec3(0.427,0.361,0.969);const vec3 CORAL=vec3(1.0,0.478,0.420);const vec3 CYAN=vec3(0.341,0.839,0.902);const float TAU=6.28318;",
+  `${PALETTE_SOURCE}const float TAU=6.28318;`,
   "float hash(vec2 p){p=fract(p*vec2(123.34,345.45));p+=dot(p,p+34.345);return fract(p.x*p.y);}",
   "vec2 hash2(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return fract(sin(p)*43758.5453);}",
   "float noise(vec2 p){vec2 i=floor(p);vec2 f=fract(p);vec2 u=f*f*(3.0-2.0*f);float a=hash(i);float b=hash(i+vec2(1.0,0.0));float c=hash(i+vec2(0.0,1.0));float d=hash(i+vec2(1.0,1.0));return mix(mix(a,b,u.x),mix(c,d,u.x),u.y);}",
@@ -128,7 +151,15 @@ export default function ShaderCanvas() {
 
     const smoothstep = (x: number) => x * x * (3 - 2 * x);
 
+    /*
+      Reading clientWidth forces a synchronous layout, so it happens only when a
+      ResizeObserver says the box actually changed rather than on every frame —
+      this page scrolls through fourteen sections that animate as they enter.
+    */
+    let needsResize = true;
     const resize = () => {
+      if (!needsResize) return;
+      needsResize = false;
       const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
       const width = Math.floor(canvas.clientWidth * ratio);
       const height = Math.floor(canvas.clientHeight * ratio);
@@ -176,26 +207,71 @@ export default function ShaderCanvas() {
       frame = requestAnimationFrame(loop);
     };
 
-    const handleResize = () => draw();
+    const animates = !window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches;
+
+    const start = () => {
+      if (frame || !animates) return;
+      last = null; // otherwise the first delta spans the whole pause
+      frame = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      if (!frame) return;
+      cancelAnimationFrame(frame);
+      frame = 0;
+    };
+
     const handlePointerMove = (event: PointerEvent) => {
       mouse[0] = event.clientX / window.innerWidth;
       mouse[1] = 1 - event.clientY / window.innerHeight;
     };
 
-    window.addEventListener("resize", handleResize);
-    window.addEventListener("pointermove", handlePointerMove, {
-      passive: true,
+    /*
+      The hero only occupies the top of the page, so there is no reason to keep
+      evaluating a full-screen fragment shader while the reader is further down.
+    */
+    const visibility = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) start();
+      else stop();
     });
+    visibility.observe(canvas);
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      draw();
-    } else {
-      frame = requestAnimationFrame(loop);
+    const sizing = new ResizeObserver(() => {
+      needsResize = true;
+      if (!frame) draw(); // keep the static frame in step while paused
+    });
+    sizing.observe(canvas);
+
+    /*
+      A lost context leaves the canvas transparent while status is already
+      "ready", so the fallback is gone and the hero reads as a blank panel.
+      Drop back to the gradient instead of animating something that draws
+      nothing. Losing the context is normal after sleep or a driver reset.
+    */
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      stop();
+      console.warn(
+        "[ShaderCanvas] WebGL context lost; falling back to the gradient.",
+      );
+      setStatus("unsupported");
+    };
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+
+    if (animates) {
+      window.addEventListener("pointermove", handlePointerMove, {
+        passive: true,
+      });
     }
+    // Paint immediately: the observer's first callback is asynchronous, and
+    // status is already "ready", so the fallback has gone.
+    draw();
 
     return () => {
-      if (frame) cancelAnimationFrame(frame);
-      window.removeEventListener("resize", handleResize);
+      stop();
+      visibility.disconnect();
+      sizing.disconnect();
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
       window.removeEventListener("pointermove", handlePointerMove);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
