@@ -24,14 +24,25 @@ export const LP_BUTTON_GHOST = cn(
 
 export const LP_CTA_ROW = "mt-[34px] flex flex-wrap gap-[14px]";
 
-/**
- * A headline may only wrap at Japanese punctuation or at an explicit "|"
- * marker, so each phrase is emitted as its own inline-block span. The marker
- * itself is never rendered. Body copy is left to the browser's default
- * per-character CJK breaking.
- */
-const PHRASE_BOUNDARY = /[、。！？・]/;
+/** Both patterns below are built from this, so a new boundary is added once. */
+const PHRASE_BOUNDARY_CHARS = "、。！？・";
+const PHRASE_BOUNDARY = new RegExp(`[${PHRASE_BOUNDARY_CHARS}]`);
+const PHRASE_SPLIT = new RegExp(`([${PHRASE_BOUNDARY_CHARS}|])`);
 
+/**
+ * Splits a headline at Japanese punctuation and at an explicit "|" marker, which
+ * is itself never rendered. Each phrase is emitted as its own inline-block span,
+ * so a headline normally wraps only between phrases.
+ *
+ * It is not a guarantee. A phrase wider than the line still breaks inside
+ * itself, because the headline carries overflow-wrap: anywhere — without it a
+ * long phrase would push the page sideways instead, which matters more here.
+ * word-break: keep-all does not help: overflow-wrap wins as the last resort, so
+ * adding it changes nothing (measured).
+ *
+ * Body copy gets none of this and is left to the browser's per-character CJK
+ * breaking.
+ */
 export function splitPhrases(text: string): string[] {
   const phrases: string[] = [];
   let current = "";
@@ -42,15 +53,20 @@ export function splitPhrases(text: string): string[] {
     }
   };
 
-  for (const token of text.split(/([、。！？・|])/)) {
-    if (!token) continue;
+  const tokens = text.split(PHRASE_SPLIT).filter(Boolean);
+  tokens.forEach((token, index) => {
     if (token === "|") {
       flush();
-      continue;
+      return;
     }
     current += token;
-    if (PHRASE_BOUNDARY.test(token)) flush();
-  }
+    // Keep a run of punctuation on the phrase it closes, so that a line never
+    // opens with a lone ？ or 、.
+    const nextToken = tokens[index + 1] ?? "";
+    if (PHRASE_BOUNDARY.test(token) && !PHRASE_BOUNDARY.test(nextToken)) {
+      flush();
+    }
+  });
   flush();
 
   return phrases;
@@ -101,7 +117,7 @@ export function Headline({
     <h2
       id={tocId}
       className={cn(
-        "mt-4 text-[clamp(24px,3.6vw,38px)] font-extrabold tracking-[-0.01em] text-balance text-lp-text [word-break:keep-all] [overflow-wrap:anywhere] leading-[1.2]",
+        "mt-4 text-[clamp(24px,3.6vw,38px)] font-extrabold tracking-[-0.01em] text-balance text-lp-text [overflow-wrap:anywhere] leading-[1.2]",
         tocId && "features-header scroll-mt-20 md:scroll-mt-36",
         className,
       )}
