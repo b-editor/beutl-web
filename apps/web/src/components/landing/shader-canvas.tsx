@@ -83,12 +83,20 @@ export default function ShaderCanvas() {
     const gl = context;
 
     const compile = (type: number, source: string) => {
+      // The reported line numbers refer to the generated source, so log it:
+      // the fragment shader's palette is assembled at module load.
+      const kind = type === gl.VERTEX_SHADER ? "vertex" : "fragment";
       const shader = gl.createShader(type);
-      if (!shader) return null;
+      if (!shader) {
+        console.error(`[ShaderCanvas] could not create the ${kind} shader.`);
+        return null;
+      }
       gl.shaderSource(shader, source);
       gl.compileShader(shader);
       if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(shader));
+        console.error(
+          `[ShaderCanvas] the ${kind} shader failed to compile:\n${gl.getShaderInfoLog(shader)}\n--- source ---\n${source}`,
+        );
         gl.deleteShader(shader);
         return null;
       }
@@ -109,7 +117,9 @@ export default function ShaderCanvas() {
     gl.attachShader(program, fragmentShader);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error(gl.getProgramInfoLog(program));
+      console.error(
+        `[ShaderCanvas] the program failed to link:\n${gl.getProgramInfoLog(program)}`,
+      );
       gl.deleteProgram(program);
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);
@@ -210,9 +220,11 @@ export default function ShaderCanvas() {
     const animates = !window.matchMedia("(prefers-reduced-motion: reduce)")
       .matches;
 
+    let lost = false;
+
     const start = () => {
-      if (frame || !animates) return;
-      last = null; // otherwise the first delta spans the whole pause
+      if (frame || !animates || lost) return;
+      last = null; // resume from the new timestamp, not the clamped 0.1s jump
       frame = requestAnimationFrame(loop);
     };
     const stop = () => {
@@ -237,6 +249,7 @@ export default function ShaderCanvas() {
     visibility.observe(canvas);
 
     const sizing = new ResizeObserver(() => {
+      if (lost) return; // the fallback hides the canvas, reporting a 0x0 box
       needsResize = true;
       if (!frame) draw(); // keep the static frame in step while paused
     });
@@ -248,8 +261,12 @@ export default function ShaderCanvas() {
       Drop back to the gradient instead of animating something that draws
       nothing. Losing the context is normal after sleep or a driver reset.
     */
-    const handleContextLost = (event: Event) => {
-      event.preventDefault();
+    const handleContextLost = () => {
+      // Deliberately not calling preventDefault(). That asks the browser to
+      // restore the context, and this component never rebuilds one — it would
+      // hold a GPU context nobody draws into, against a per-browser limit that
+      // other tabs share.
+      lost = true;
       stop();
       console.warn(
         "[ShaderCanvas] WebGL context lost; falling back to the gradient.",
@@ -263,8 +280,11 @@ export default function ShaderCanvas() {
         passive: true,
       });
     }
-    // Paint immediately: the observer's first callback is asynchronous, and
-    // status is already "ready", so the fallback has gone.
+    // Draw before React commits the "ready" state. The fallback is still
+    // mounted at this point — setStatus only queues a render — so the canvas
+    // already holds a frame the moment the gradient unmounts. Leaving the first
+    // paint to the IntersectionObserver would be too late: its callback is
+    // asynchronous, so the gradient would go and expose an empty canvas.
     draw();
 
     return () => {
