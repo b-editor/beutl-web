@@ -126,12 +126,12 @@ export function ClientPage({
             appearance: {
               theme: "night",
               variables: {
-                colorPrimary: "hsl(300 9% 98%)",
-                colorBackground: "hsl(240 7% 8%)",
+                colorPrimary: "hsl(249 50% 95%)",
+                colorBackground: "hsl(249 30% 5%)",
               },
               rules: {
                 ".AccordionItem": {
-                  // backgroundColor: "hsl(240 7% 8%)",
+                  // backgroundColor: "hsl(249 30% 5%)",
                   backgroundColor: "transparent",
                   boxShadow: "none",
                   borderWidth: "0px",
@@ -144,9 +144,9 @@ export function ClientPage({
                   borderWidth: "0px",
                 },
                 ".Input": {
-                  backgroundColor: "hsl(240 7% 8%)",
+                  backgroundColor: "hsl(249 30% 5%)",
                   color: "hsl(0 0% 100%)",
-                  borderColor: "hsl(248 9% 18%)",
+                  borderColor: "hsl(250 6% 20%)",
                   borderWidth: "1px",
                   borderRadius: "calc(0.5rem - 2px)",
                   borderStyle: "solid",
@@ -158,8 +158,8 @@ export function ClientPage({
                   outline: "2px solid transparent",
                   outlineOffset: "2px",
                   boxShadow:
-                    "0 0 0 2px hsl(240 7% 8%), 0 0 0 4px hsl(243 86% 40%), #00000000 0 0 0 0",
-                  borderColor: "hsl(248 9% 18%)",
+                    "0 0 0 2px hsl(249 30% 5%), 0 0 0 4px hsl(247 91% 66%), #00000000 0 0 0 0",
+                  borderColor: "hsl(250 6% 20%)",
                 },
                 ".PickerItem--selected": {
                   marginLeft: "0.75rem",
