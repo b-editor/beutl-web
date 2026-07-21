@@ -131,22 +131,22 @@
   /*
     The app renders dark-only, and these mirror the landing page palette above so
     the rest of the site sits on the same ground: --background is lp-bg,
-    --foreground is lp-text, --muted-foreground is lp-muted and --primary is
-    lp-indigo. --border and --input carry the translucent lp-border values
-    composited over lp-bg, since these are consumed as opaque hsl().
-
-    Surfaces keep the hue but drop most of the saturation: the landing page can
-    carry a violet card because it sits among violet artwork, while a page of
-    forms and tables reads better on a near-neutral panel.
+    --foreground is lp-text, --muted-foreground is lp-muted, --primary is
+    lp-indigo, and --border is lp-border — the same translucent white hairline
+    the landing page cards use, kept as an alpha hsl() so it reads correctly over
+    both the background and a card.
+    --card/--popover share the landing page hue but at a fraction of its
+    saturation: a violet card belongs among violet artwork, while a page of
+    forms and tables reads calmer with only a hint of it.
   */
   .dark {
     --background: 249 30% 5%;
     --foreground: 249 50% 95%;
 
-    --card: 249 10% 11%;
+    --card: 249 14% 7%;
     --card-foreground: 249 50% 95%;
 
-    --popover: 249 10% 11%;
+    --popover: 249 14% 7%;
     --popover-foreground: 249 50% 95%;
 
     --primary: 247 91% 66%;
@@ -170,7 +170,7 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 249 10% 13%;
+    --border: 0 0% 100% / 0.09;
     --input: 250 6% 20%;
     --ring: 247 91% 66%;
   }
