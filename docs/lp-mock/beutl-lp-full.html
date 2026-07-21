@@ -61,11 +61,11 @@
   .hero h1 .em { background: linear-gradient(100deg,var(--indigo-bright) 10%,var(--coral) 90%); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .hero .lede { margin: 24px 0 0; color: var(--muted); font-size: clamp(16px,2vw,20px); max-width: 42ch; }
   .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
-  .btn { display: inline-flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; padding: 13px 24px; border-radius: 12px; text-decoration: none; cursor: pointer; border: 1px solid transparent; transition: transform .18s, box-shadow .25s; }
-  .btn.primary { color: #fff; background: linear-gradient(100deg,var(--indigo),var(--indigo-bright)); box-shadow: 0 12px 34px -12px rgba(109,92,247,0.8); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 600; padding: 12px 24px; border-radius: 8px; text-decoration: none; cursor: pointer; border: 1px solid transparent; transition: transform .18s, box-shadow .25s, background .2s; }
+  .btn.primary { color: #fff; background: linear-gradient(100deg,var(--indigo),var(--indigo-bright)); box-shadow: 0 8px 22px -12px rgba(109,92,247,0.7); }
   .btn.primary:hover { transform: translateY(-2px); }
   .btn.ghost { color: var(--text); border-color: var(--border-2); background: rgba(255,255,255,0.04); }
-  .btn.ghost:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.3); }
+  .btn.ghost:hover { transform: translateY(-2px); background: rgba(255,255,255,0.08); }
   .btn svg { width: 18px; height: 18px; }
 
   /* ---------- FEATURE SECTIONS ---------- */

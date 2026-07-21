@@ -9,17 +9,22 @@ export const LP_SECTION = "border-t border-lp-border py-[clamp(48px,7vw,88px)]";
 export const LP_MOCK_PANEL =
   "overflow-hidden rounded-2xl border border-lp-border bg-gradient-to-b from-lp-surface to-lp-bg2 p-5";
 
+/*
+  The CTA keeps the app button's conventions — the rounded-lg token, a medium
+  weight, the focus-visible ring — so it reads as the same family, and keeps its
+  own gradient, larger size and hover lift so it still carries the hero.
+*/
 const LP_BUTTON =
-  "inline-flex items-center gap-2.5 rounded-xl border border-transparent px-6 py-[13px] text-[15px] font-bold transition-[transform,box-shadow] duration-200 [&>svg]:size-[18px] [&>svg]:shrink-0";
+  "inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-6 py-3 text-[15px] font-semibold transition-all outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] [&>svg]:size-[18px] [&>svg]:shrink-0";
 
 export const LP_BUTTON_PRIMARY = cn(
   LP_BUTTON,
-  "bg-[linear-gradient(100deg,#6D5CF7,#9A8CFF)] text-white shadow-[0_12px_34px_-12px_rgba(109,92,247,0.8)] hover:-translate-y-0.5",
+  "bg-[linear-gradient(100deg,#6D5CF7,#9A8CFF)] text-white shadow-[0_8px_22px_-12px_rgba(109,92,247,0.7)] hover:-translate-y-0.5",
 );
 
 export const LP_BUTTON_GHOST = cn(
   LP_BUTTON,
-  "border-lp-border2 bg-white/[0.04] text-lp-text hover:-translate-y-0.5 hover:border-white/30",
+  "border-lp-border2 bg-white/[0.04] text-lp-text hover:-translate-y-0.5 hover:bg-white/[0.08]",
 );
 
 export const LP_CTA_ROW = "mt-[34px] flex flex-wrap gap-[14px]";
