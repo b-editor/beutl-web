@@ -38,7 +38,9 @@ export default async function Footer({ lang }: { lang: string }) {
             <span>|</span>
             <Link href={`/en${langUrl}`}>English</Link>
           </div>
-          <p className="text-end">© 2020-2025 b-editor</p>
+          <p className="text-end">
+            © 2020-{new Date().getFullYear()} b-editor
+          </p>
         </div>
       </div>
     </footer>
