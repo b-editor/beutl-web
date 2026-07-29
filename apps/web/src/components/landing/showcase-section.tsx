@@ -8,17 +8,24 @@ import ShowcaseMedia, { type ShowcaseSource } from "./showcase-media";
   its space from the numbers below, so a mismatch would make the picture jump
   the moment the video takes over.
 */
-const POSTER = "/img/brand-image.png";
-const WIDTH = 3164;
-const HEIGHT = 1936;
+const POSTER = "/img/showcase-poster.png";
+const WIDTH = 2048;
+const HEIGHT = 1152;
 
 /*
+  The poster is the video's own first frame, so the picture does not change when
+  playback starts. It is a plain PNG because the poster attribute is a raw URL
+  that never reaches next/image, and a screenshot of UI text survives lossless
+  compression better than it survives a lossy one.
+
   Availability is declared, not detected — the site runs on Cloudflare Workers,
-  where there is no filesystem to ask. While this is empty the section shows the
-  poster alone and requests nothing that is not there; adding the capture here
-  is what turns the video on.
+  where there is no filesystem to ask. Emptying this list falls back to the
+  poster alone and requests nothing else.
 */
-const SOURCES: ReadonlyArray<ShowcaseSource> = [];
+const SOURCES: ReadonlyArray<ShowcaseSource> = [
+  { src: "/img/showcase.webm", type: "video/webm" },
+  { src: "/img/showcase.mp4", type: "video/mp4" },
+];
 
 const GLOW =
   "radial-gradient(75% 100% at 50% 0%, rgba(109,92,247,0.20), transparent 70%)";

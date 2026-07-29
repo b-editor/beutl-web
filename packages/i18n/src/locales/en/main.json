@@ -9,8 +9,8 @@
   "heroTitleLine2": "Make it yours.",
   "heroLede": "Keyframes, node graphs, shaders, audio. Free and open source software with the tools a video project needs.",
 
-  "showcaseLabel": "The Beutl editor: the library on the left, the preview in the middle, properties on the right, and the timeline along the bottom.",
-  "showcaseCaption": "The library, the preview, properties and the timeline all sit in one window.",
+  "showcaseLabel": "The Beutl editor: keyframes on a text element's character spacing, an easing curve being shaped in the graph editor below, and the letters moving in the preview.",
+  "showcaseCaption": "Shaping the easing in the graph editor, with the preview playing the result.",
 
   "tocTimeline": "Timeline",
   "tocNodes": "Node Graph",

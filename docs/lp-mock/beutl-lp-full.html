@@ -226,22 +226,23 @@
 </header>
 
 <!-- ============ SHOWCASE ============ -->
-<!-- The video is what ships; the poster is a still of the same framing, and it
-     is what stays on screen while the file loads, if playback is refused, or if
-     the reader asked for less motion. There is deliberately no autoplay
-     attribute: the implementation starts playback from script once the section
-     is in view and motion is welcome, so nothing plays here either. -->
+<!-- The video is what ships; the poster is its own first frame, so the picture
+     does not change when playback starts, and it is what stays on screen while
+     the file loads, if playback is refused, or if the reader asked for less
+     motion. There is deliberately no autoplay attribute: the implementation
+     starts playback from script once the section is in view and motion is
+     welcome, so nothing plays here either. -->
 <section class="showcase">
   <div class="glow"></div>
   <figure class="wrap">
     <div class="shot">
-      <video poster="../../public/img/brand-image.png" muted loop playsinline preload="metadata"
-             aria-label="Beutlの編集画面。左にライブラリ、中央にプレビュー、右にプロパティ、下にタイムラインが並んでいる。">
+      <video poster="../../public/img/showcase-poster.png" muted loop playsinline preload="metadata"
+             aria-label="Beutlの編集画面。テキストの文字間隔にキーフレームが打たれ、下のグラフエディタでイージング曲線を調整すると、中央のプレビューで文字が動く。">
         <source src="../../public/img/showcase.webm" type="video/webm">
         <source src="../../public/img/showcase.mp4" type="video/mp4">
       </video>
     </div>
-    <figcaption>ライブラリ、プレビュー、プロパティ、タイムラインが一つのウィンドウに収まっています。</figcaption>
+    <figcaption>グラフエディタでイージングを調整しながら、プレビューで結果を確かめているところ。</figcaption>
   </figure>
 </section>
 
