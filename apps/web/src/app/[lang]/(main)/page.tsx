@@ -7,6 +7,7 @@ import FeaturesToc from "@/components/features-toc";
 import AnimatedSection from "@/components/landing/animated-section";
 import BentoSection from "@/components/landing/bento-section";
 import HeroSection from "@/components/landing/hero-section";
+import ShowcaseSection from "@/components/landing/showcase-section";
 import {
   AudioMock,
   ExportMock,
@@ -91,6 +92,11 @@ export default async function Home(props: {
           download: t("main:download"),
           github: t("main:github"),
         }}
+      />
+
+      <ShowcaseSection
+        label={t("main:showcaseLabel")}
+        caption={t("main:showcaseCaption")}
       />
 
       <FeaturesToc lang={lang} />

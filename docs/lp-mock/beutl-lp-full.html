@@ -68,6 +68,18 @@
   .btn.ghost:hover { transform: translateY(-2px); background: rgba(255,255,255,0.08); }
   .btn svg { width: 18px; height: 18px; }
 
+  /* ---------- SHOWCASE ---------- */
+  /* The one place the real application is shown, straight under the hero and
+     before any of the drawn mocks below explain a part of it. */
+  section.showcase { position: relative; overflow: hidden; padding: clamp(40px,6vw,72px) 0 clamp(48px,7vw,88px); }
+  .showcase .glow { position: absolute; inset: 0 0 auto; height: min(60vw,520px); pointer-events: none;
+    background: radial-gradient(75% 100% at 50% 0%, rgba(109,92,247,0.20), transparent 70%); }
+  .showcase figure { position: relative; margin: 0 auto; }
+  .showcase .shot { border: 1px solid var(--border); border-radius: var(--r); background: var(--bg-2);
+    overflow: hidden; box-shadow: 0 50px 120px -50px rgba(109,92,247,0.55); }
+  .showcase .shot > img, .showcase .shot > video { display: block; width: 100%; height: auto; }
+  .showcase figcaption { margin-top: 16px; text-align: center; font-size: 14px; color: var(--muted); }
+
   /* ---------- FEATURE SECTIONS ---------- */
   section.feat { padding: clamp(48px,7vw,88px) 0; border-top: 1px solid var(--border); }
   .feat .grid { display: grid; grid-template-columns: 1fr; gap: 40px; align-items: center; }
@@ -212,6 +224,26 @@
     </div>
   </div>
 </header>
+
+<!-- ============ SHOWCASE ============ -->
+<!-- The video is what ships; the poster is a still of the same framing, and it
+     is what stays on screen while the file loads, if playback is refused, or if
+     the reader asked for less motion. There is deliberately no autoplay
+     attribute: the implementation starts playback from script once the section
+     is in view and motion is welcome, so nothing plays here either. -->
+<section class="showcase">
+  <div class="glow"></div>
+  <figure class="wrap">
+    <div class="shot">
+      <video poster="../../public/img/brand-image.png" muted loop playsinline preload="metadata"
+             aria-label="Beutlの編集画面。左にライブラリ、中央にプレビュー、右にプロパティ、下にタイムラインが並んでいる。">
+        <source src="../../public/img/showcase.webm" type="video/webm">
+        <source src="../../public/img/showcase.mp4" type="video/mp4">
+      </video>
+    </div>
+    <figcaption>ライブラリ、プレビュー、プロパティ、タイムラインが一つのウィンドウに収まっています。</figcaption>
+  </figure>
+</section>
 
 <!-- ============ TIMELINE ============ -->
 <section class="feat reveal">
