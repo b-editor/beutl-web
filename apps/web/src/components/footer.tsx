@@ -10,7 +10,7 @@ export default async function Footer({ lang }: { lang: string }) {
   const { t } = await getTranslation(lang);
 
   return (
-    <footer className="border-t border-border bg-card">
+    <footer className="border-t border-border bg-background">
       <div className="container mx-auto px-6 py-6 md:px-12">
         <div className="flex gap-8">
           {socialLinks.map((social) => (
