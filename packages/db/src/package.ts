@@ -1,0 +1,820 @@
+import { getDb } from "./provider";
+import type { PaymentInterval } from "@prisma/client";
+import type { PrismaTransaction } from "./transaction";
+
+export async function findPackageIdById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.package.findFirst({
+    where: {
+      id,
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
+export async function findPackageBasicByName({
+  name,
+  prisma,
+}: {
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return db.package.findFirst({
+    where: {
+      name: name,
+    },
+    select: {
+      id: true,
+      userId: true,
+      published: true,
+    },
+  });
+}
+
+export async function getPackagePublishedByIdOrThrow({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return db.package.findFirstOrThrow({
+    where: {
+      id,
+    },
+    select: {
+      published: true,
+    },
+  });
+}
+
+export async function findPackageForLibraryResponse({
+  id: pkgId,
+  currency,
+  prisma,
+}: {
+  id: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.package.findFirst({
+    where: {
+      id: pkgId,
+    },
+    select: {
+      published: true,
+      id: true,
+      name: true,
+      displayName: true,
+      shortDescription: true,
+      tags: true,
+      iconFileId: true,
+      userId: true,
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+              displayName: true,
+              bio: true,
+              iconFileId: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+      Release: {
+        select: {
+          id: true,
+          version: true,
+        },
+      },
+    },
+  });
+}
+
+export async function existsPaidPricingForPackage({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.packagePricing.findFirst({
+    where: {
+      packageId: packageId,
+      price: {
+        gt: 0,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+}
+
+export async function retrieveDevPackagesByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.findMany({
+    where: {
+      userId: userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      displayName: true,
+      published: true,
+      iconFile: {
+        select: {
+          id: true,
+        },
+      },
+      Release: {
+        select: {
+          version: true,
+        },
+      },
+    },
+  });
+}
+
+export async function findPublishedPackageForLibrary({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.findFirst({
+    where: {
+      id,
+      published: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      packagePricing: true,
+    },
+  });
+}
+
+export async function findPackageForBillingHistory({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.findFirst({
+    where: {
+      id: packageId,
+    },
+    select: {
+      name: true,
+      displayName: true,
+      user: {
+        select: {
+          name: true,
+          Profile: {
+            select: {
+              displayName: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export async function retrievePublishedPackagesByUserName({
+  userName,
+  currency,
+  prisma,
+}: {
+  userName: string;
+  currency: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.findMany({
+    where: {
+      user: {
+        Profile: {
+          userName: userName,
+        },
+      },
+      published: true,
+    },
+    select: {
+      id: true,
+      displayName: true,
+      name: true,
+      shortDescription: true,
+      tags: true,
+      iconFile: {
+        select: {
+          id: true,
+        },
+      },
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+            },
+          },
+        },
+      },
+      packagePricing: {
+        where: currency ? {
+          OR: [
+            {
+              currency: {
+                equals: currency,
+                mode: "insensitive",
+              },
+            },
+            {
+              fallback: true,
+            },
+          ],
+        } : {
+          fallback: true,
+        },
+        select: {
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+    },
+  });
+}
+
+export async function retrieveDevPackageByName({
+  name,
+  userId,
+  prisma,
+}: {
+  name: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.findFirst({
+    where: {
+      name: {
+        equals: name,
+        mode: "insensitive",
+      },
+      userId: userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      displayName: true,
+      description: true,
+      shortDescription: true,
+      published: true,
+      webSite: true,
+      tags: true,
+      interval: true,
+      packagePricing: {
+        select: {
+          id: true,
+          price: true,
+          currency: true,
+          fallback: true,
+        },
+      },
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+            },
+          },
+        },
+      },
+      iconFile: {
+        select: {
+          id: true,
+          objectKey: true,
+        },
+      },
+      PackageScreenshot: {
+        select: {
+          order: true,
+          file: {
+            select: {
+              id: true,
+              objectKey: true,
+            },
+          },
+        },
+        orderBy: {
+          order: "asc",
+        },
+      },
+      Release: {
+        select: {
+          version: true,
+          title: true,
+          description: true,
+          targetVersion: true,
+          id: true,
+          published: true,
+          file: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export async function existsPackageName({
+  name,
+  prisma,
+}: {
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.count({
+    where: {
+      name: {
+        equals: name,
+        mode: "insensitive",
+      },
+    },
+  });
+}
+
+export async function createDevPackage({
+  name,
+  userId,
+  prisma,
+}: {
+  name: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.create({
+    data: {
+      name: name,
+      userId: userId,
+      description: "",
+      shortDescription: "",
+      webSite: "",
+      published: false,
+    },
+  });
+}
+
+export async function getUserIdFromPackageId({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return (await db.package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        userId: true,
+      },
+    }))?.userId;
+}
+
+export async function getPackageNameFromPackageId({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return (await db.package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        name: true,
+      },
+    })
+  )?.name;
+}
+
+export async function updateDevPackageDisplay({
+  packageId,
+  displayName,
+  shortDescription,
+  prisma,
+}: {
+  packageId: string;
+  displayName: string;
+  shortDescription: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      displayName: displayName,
+      shortDescription: shortDescription,
+    },
+    select: {
+      name: true,
+    },
+  });
+}
+
+export async function updateDevPackageDescription({
+  packageId,
+  description,
+  prisma,
+}: {
+  packageId: string;
+  description: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      description: description,
+    },
+    select: {
+      name: true,
+    },
+  });
+}
+
+export async function updateDevPackagePublished({
+  published,
+  packageId,
+  prisma,
+}: {
+  published: boolean;
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      published: published,
+    },
+    select: {
+      name: true,
+    },
+  });
+}
+
+export async function updateDevPackageIconFile({
+  packageId,
+  fileId,
+  prisma,
+}: {
+  packageId: string;
+  fileId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      iconFileId: fileId,
+    },
+    select: {
+      name: true,
+    },
+  });
+}
+
+export async function retrieveDevPackageDependsFile({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  const pkg = await db.package.findFirstOrThrow({
+    where: {
+      id: packageId,
+    },
+    select: {
+      PackageScreenshot: {
+        select: {
+          file: {
+            select: {
+              id: true,
+              objectKey: true,
+            },
+          },
+        },
+      },
+      iconFile: {
+        select: {
+          id: true,
+          objectKey: true,
+        },
+      },
+      Release: {
+        select: {
+          file: {
+            select: {
+              id: true,
+              objectKey: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  const files = pkg.PackageScreenshot.map((item) => item.file).concat(
+    pkg.Release.map((item) => item.file as NonNullable<typeof item.file>),
+  );
+  if (pkg.iconFile) {
+    files.push(pkg.iconFile);
+  }
+  return files;
+}
+
+export async function retrieveDevPackageIconFile({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return (await db.package.findFirst({
+      where: {
+        id: packageId,
+      },
+      select: {
+        iconFile: {
+          select: {
+            id: true,
+            objectKey: true,
+            size: true,
+          },
+        },
+      },
+    })
+  )?.iconFile;
+}
+
+export async function retrieveDevPackageScreenshots({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.packageScreenshot.findMany({
+    where: {
+      packageId: packageId,
+    },
+    select: {
+      order: true,
+      fileId: true,
+    },
+    orderBy: {
+      order: "asc",
+    },
+  });
+}
+
+export async function retrieveDevPackageLastScreenshotOrder({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.packageScreenshot.findFirst({
+    where: {
+      packageId: packageId,
+    },
+    select: {
+      order: true,
+    },
+    orderBy: {
+      order: "desc",
+    },
+  });
+}
+
+export async function createDevPackageScreenshot({
+  packageId,
+  fileId,
+  order,
+  prisma,
+}: {
+  packageId: string;
+  fileId: string;
+  order: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.packageScreenshot.create({
+    data: {
+      packageId: packageId,
+      fileId: fileId,
+      order: order,
+    },
+  });
+}
+
+export async function updateDevPackageScreenshotOrder({
+  packageId,
+  fileId,
+  order,
+  prisma,
+}: {
+  packageId: string;
+  fileId: string;
+  order: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.packageScreenshot.update({
+    where: {
+      packageId_fileId: {
+        packageId: packageId,
+        fileId: fileId,
+      },
+    },
+    data: {
+      order: order,
+    },
+  });
+}
+
+export async function updateDevPackageTags({
+  packageId,
+  tags,
+  prisma,
+}: {
+  packageId: string;
+  tags: string[];
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: {
+      id: packageId,
+    },
+    data: {
+      tags: tags,
+    },
+    select: {
+      name: true,
+    },
+  });
+}
+
+export async function deleteDevPackageScreenshot({
+  packageId,
+  fileId,
+  prisma,
+}: {
+  packageId: string;
+  fileId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.packageScreenshot.delete({
+    where: {
+      packageId_fileId: {
+        packageId: packageId,
+        fileId: fileId,
+      },
+    },
+  });
+}
+
+export async function deleteDevPackage({
+  packageId,
+  prisma,
+}: {
+  packageId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.delete({
+    where: {
+      id: packageId,
+    },
+  });
+}
+
+export async function upsertPackagePricings({
+  packageId,
+  pricings,
+  prisma,
+}: {
+  packageId: string;
+  pricings: { currency: string; price: number; fallback: boolean }[];
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    await tx.packagePricing.deleteMany({
+      where: { packageId },
+    });
+    if (pricings.length > 0) {
+      await tx.packagePricing.createMany({
+        data: pricings.map((p) => ({
+          packageId,
+          currency: p.currency,
+          price: p.price,
+          fallback: p.fallback,
+        })),
+      });
+    }
+  };
+  if (prisma) {
+    await run(prisma);
+  } else {
+    const db = await getDb();
+    await db.$transaction(run);
+  }
+}
+
+export async function updatePackageInterval({
+  packageId,
+  interval,
+  prisma,
+}: {
+  packageId: string;
+  interval: PaymentInterval | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.package.update({
+    where: { id: packageId },
+    data: { interval },
+    select: { name: true },
+  });
+}

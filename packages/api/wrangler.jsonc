@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": "src/worker.ts",
+  "name": "beutl-web-api",
+  "compatibility_date": "2025-04-04",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  // 同一ドメイン・パス分割: デスクトップアプリ向け API のみ受ける。
+  // /api/auth・/api/contents・/api/stripe は beutl-web が処理するためパターンに含めない。
+  "routes": [
+    {
+      "pattern": "beutl.beditor.net/api/v1/*",
+      "zone_name": "beditor.net"
+    },
+    {
+      "pattern": "beutl.beditor.net/api/v2/*",
+      "zone_name": "beditor.net"
+    },
+    {
+      "pattern": "beutl.beditor.net/api/v3/*",
+      "zone_name": "beditor.net"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "BEUTL_DATABASE_HYPERDRIVE",
+      "id": "34ad44345f2f45ea97c3608b0567a878"
+    }
+  ],
+  "vars": {
+    // MUST MATCH beutl-web (apps/web/wrangler.jsonc)
+    "JWT_EXPIRATION_MINUTES": "5",
+    "JWT_REFRESH_TOKEN_EXPIRATION_DAYS": "30",
+    "PUBLIC_ORIGIN": "https://beutl.beditor.net"
+  }
+}

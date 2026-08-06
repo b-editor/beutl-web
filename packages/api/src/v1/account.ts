@@ -1,0 +1,293 @@
+// v1/account is the authentication backbone: the ONLY place that mints access
+// JWTs (createJwtToken) and refresh tokens (createRefreshToken), which every v3
+// endpoint validates via lib/api/auth.ts (getUserId). Do NOT retire this file;
+// only its genuinely-dead sub-routes are deprecated. The desktop app is coupled
+// to the exact claim names and refresh-token crypto, so any change must stay
+// byte-compatible. See docs/adr/0001-v1-account-is-the-auth-backbone.md.
+import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
+import { z } from "zod";
+import { getUserId, getUserIdFromToken } from "../api/auth";
+import { apiErrorResponse } from "../api/error";
+import {
+  createNativeAppAuth,
+  deleteNativeAppAuthBySessionId,
+  findNativeAppAuthById,
+  findNativeAppAuthBySessionId,
+  updateNativeAppAuthForHandler,
+} from "@beutl/db";
+import { createSession, deleteSessionsByToken } from "@beutl/db";
+import { isAllowedContinueUrlHost } from "@beutl/core";
+import { sign } from "hono/jwt";
+
+const createAuthUriSchema = z.object({
+  continue_uri: z.string().url(),
+});
+
+const refreshTokenSchema = z.object({
+  refresh_token: z.string(),
+  token: z.string(),
+});
+
+const exchangeSchema = z.object({
+  code: z.string(),
+  session_id: z.string(),
+});
+
+async function getKeyMaterial(secret: string) {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return keyMaterial;
+}
+
+async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array) {
+  return await crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: salt as BufferSource,
+      iterations: 100000,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    {
+      name: "AES-CBC",
+      length: 256,
+    },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function getKey(salt: Uint8Array) {
+  const keyMaterial = await getKeyMaterial(process.env.JWT_SECRET as string);
+  return await deriveKey(keyMaterial, salt);
+}
+
+async function decryptRefreshToken(token: string) {
+  try {
+    const data = Buffer.from(token, "base64");
+    const iv = data.subarray(0, 16);
+    const salt = data.subarray(16, 32);
+    const encryptedData = data.subarray(32);
+    const key = await getKey(salt);
+
+    const decrypted = await crypto.subtle.decrypt(
+      {
+        name: "AES-CBC",
+        iv: iv,
+      },
+      key,
+      encryptedData,
+    );
+
+    return Buffer.from(decrypted).toString("utf8");
+  } catch (err) {
+    console.error("Failed to decrypt refresh token", err);
+    return null;
+  }
+}
+
+async function encryptRefreshToken(token: string) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await getKey(salt);
+  const iv = new Uint8Array(16);
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: "AES-CBC",
+      iv: iv,
+    },
+    key,
+    Buffer.from(token, "utf8"),
+  );
+
+  return Buffer.concat([iv, salt, new Uint8Array(encrypted)]).toString(
+    "base64",
+  );
+}
+
+async function createJwtToken(userId: string) {
+  const exp =
+    Math.floor(Date.now() / 1000) +
+    60 * Number.parseInt(process.env.JWT_EXPIRATION_MINUTES ?? "5");
+  const token = await sign(
+    {
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":
+        userId,
+      jti: crypto.randomUUID(),
+      iss: process.env.JWT_ISSUER,
+      aud: process.env.JWT_AUDIENCE,
+      exp: exp,
+      nbf: Math.floor(Date.now() / 1000),
+    },
+    process.env.JWT_SECRET as string,
+  );
+
+  return {
+    token,
+    exp: new Date(exp * 1000),
+  };
+}
+
+async function createRefreshToken(userId: string) {
+  const rawToken = crypto.randomUUID();
+  const encToken = await encryptRefreshToken(rawToken);
+  const expires = new Date(
+    Date.now() +
+      1000 *
+        60 *
+        60 *
+        24 *
+        Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
+  );
+  await createSession({
+    token: rawToken,
+    expiresAt: expires,
+    userId: userId,
+  });
+
+  return {
+    encToken,
+    rawToken,
+    expires,
+  };
+}
+
+const app = new Hono()
+  .post(
+    "/createAuthUri",
+    zValidator("json", createAuthUriSchema),
+    async (c) => {
+      const { continue_uri } = c.req.valid("json");
+
+      const url = new URL(continue_uri);
+      if (!isAllowedContinueUrlHost(url.hostname)) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      const auth = await createNativeAppAuth({
+        continueUrl: continue_uri,
+      });
+      const currentUrl = new URL(c.req.url);
+      return c.json({
+        auth_uri: `${currentUrl.origin}/account/native-auth/handler?identifier=${auth.id}`,
+        session_id: auth.sessionId,
+      });
+    },
+  )
+  // @deprecated Dead endpoint. The live native-auth handler is the page at
+  // (auth-flow)/account/native-auth/handler/page.tsx (createAuthUri points there,
+  // not at this API route). Kept until client telemetry confirms no desktop build
+  // calls GET /api/v1/account/handler.
+  .get("/handler", async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+    const identifier = c.req.query("identifier");
+    if (!identifier) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const auth = await findNativeAppAuthById({
+      id: identifier,
+    });
+    if (!auth) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
+    const code = crypto.randomUUID();
+    const codeExpires = new Date(Date.now() + 1000 * 60 * 30);
+    const { code: authCode, continueUrl } = await updateNativeAppAuthForHandler({
+      id: identifier,
+      userId,
+      code,
+      codeExpires,
+    });
+
+    const url = new URL(continueUrl);
+    url.searchParams.set("code", authCode ?? "");
+    return c.redirect(url.toString());
+  })
+  .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
+    const { refresh_token, token } = c.req.valid("json");
+    const userId = getUserIdFromToken(token);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+
+    const oldDecryptedRefreshToken = await decryptRefreshToken(refresh_token);
+    if (!oldDecryptedRefreshToken) {
+      return c.json(await apiErrorResponse("invalidRefreshToken"), {
+        status: 401,
+      });
+    }
+
+    const oldRefreshTokens = await deleteSessionsByToken({
+      token: oldDecryptedRefreshToken,
+    });
+    if (!oldRefreshTokens.count) {
+      return c.json(await apiErrorResponse("invalidRefreshToken"), {
+        status: 401,
+      });
+    }
+
+    const { exp: accessTokenExp, token: accessToken } =
+      await createJwtToken(userId);
+
+    const { encToken } = await createRefreshToken(userId);
+
+    return c.json({
+      token: accessToken,
+      refresh_token: encToken,
+      expiration: accessTokenExp,
+    });
+  })
+  .post("/code2jwt", zValidator("json", exchangeSchema), async (c) => {
+    const { session_id, code } = c.req.valid("json");
+    const auth = await findNativeAppAuthBySessionId({
+      sessionId: session_id,
+    });
+
+    if (
+      !auth ||
+      !auth.codeExpires ||
+      !auth.userId ||
+      auth.codeExpires.valueOf() <= Date.now() ||
+      auth.code !== code
+    ) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 401,
+      });
+    }
+    await deleteNativeAppAuthBySessionId({
+      sessionId: session_id,
+    });
+
+    const { exp: accessTokenExp, token: accessToken } = await createJwtToken(
+      auth.userId,
+    );
+
+    const { encToken } = await createRefreshToken(auth.userId);
+
+    return c.json({
+      token: accessToken,
+      refresh_token: encToken,
+      expiration: accessTokenExp,
+    });
+  });
+
+export default app;

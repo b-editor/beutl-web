@@ -1,0 +1,46 @@
+import { authOrSignIn } from "@/lib/auth-guard";
+import { Form } from "./components";
+import { ConfirmationTokenPurpose } from "@prisma/client";
+import { Separator } from "@/components/ui/separator";
+import { getTranslation } from "@beutl/i18n";
+import { findEmailByUserId } from "@beutl/db";
+import { findManyConfirmationTokens } from "@beutl/db";
+
+export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  const params = await props.params;
+
+  const {
+    lang
+  } = params;
+
+  const session = await authOrSignIn();
+
+  const user = await findEmailByUserId({ userId: session.user.id });
+  if (!user) {
+    throw new Error("User not found");
+  }
+  const tokens = await findManyConfirmationTokens({
+    userId: session.user.id,
+    purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
+  });
+  const { t } = await getTranslation(lang);
+
+  return (
+    <div>
+      <h2 className="font-bold text-2xl">{t("account:data.title")}</h2>
+
+      <div className="mt-4 rounded-lg border text-card-foreground">
+        <h2 className="font-bold text-md m-6 mb-4">
+          {t("account:data.deleteAccount")}
+        </h2>
+        <Separator />
+        <Form
+          lang={lang}
+          email={user.email}
+          className="mx-6 mt-4"
+          cancelable={tokens.some((i) => i.expires.valueOf() >= Date.now())}
+        />
+      </div>
+    </div>
+  );
+}
