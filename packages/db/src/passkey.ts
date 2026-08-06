@@ -1,0 +1,67 @@
+import { getDb } from "./provider";
+import type { PrismaTransaction } from "./transaction";
+
+export async function deletePasskey({
+  credentialID,
+  userId,
+  prisma,
+}: {
+  credentialID: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  await db.passkey.delete({
+    where: {
+      credentialID,
+      userId,
+    },
+  });
+}
+
+export async function updatePasskeyName({
+  credentialID,
+  userId,
+  name,
+  prisma,
+}: {
+  credentialID: string;
+  userId: string;
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  await db.passkey.update({
+    where: {
+      credentialID,
+      userId,
+    },
+    data: {
+      name,
+    },
+  });
+}
+
+export async function getPasskeysByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  return await db.passkey.findMany({
+    where: {
+      userId,
+    },
+    select: {
+      id: true,
+      credentialID: true,
+      name: true,
+      deviceType: true,
+      backedUp: true,
+      createdAt: true,
+      usedAt: true,
+    },
+  });
+}

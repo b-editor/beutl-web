@@ -1,0 +1,20 @@
+import { cn } from "@beutl/core";
+import type { ComponentProps } from "react";
+
+export function ErrorDisplay({
+  errors,
+  ...props
+}: { errors: string[] } & ComponentProps<"div">) {
+  return (
+    <div
+      {...props}
+      className={cn(props.className, "text-sm font-medium text-destructive")}
+    >
+      <ul>
+        {errors.map((error, i) => (
+          <li key={i}>{error}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
