@@ -2,6 +2,7 @@
 // i18next-resources-to-backend の動的 import (import(`./locales/${lang}/${ns}.json`)) は
 // Cloudflare Workers バンドラで解決不能なため、静的 import に置換する。
 import en_account from "./locales/en/account.json";
+import en_admin from "./locales/en/admin.json";
 import en_apiErrors from "./locales/en/api-errors.json";
 import en_auth from "./locales/en/auth.json";
 import en_developer from "./locales/en/developer.json";
@@ -12,6 +13,7 @@ import en_storage from "./locales/en/storage.json";
 import en_store from "./locales/en/store.json";
 import en_translation from "./locales/en/translation.json";
 import ja_account from "./locales/ja/account.json";
+import ja_admin from "./locales/ja/admin.json";
 import ja_apiErrors from "./locales/ja/api-errors.json";
 import ja_auth from "./locales/ja/auth.json";
 import ja_developer from "./locales/ja/developer.json";
@@ -25,6 +27,7 @@ import ja_translation from "./locales/ja/translation.json";
 export const resources = {
   en: {
     account: en_account,
+    admin: en_admin,
     "api-errors": en_apiErrors,
     auth: en_auth,
     developer: en_developer,
@@ -37,6 +40,7 @@ export const resources = {
   },
   ja: {
     account: ja_account,
+    admin: ja_admin,
     "api-errors": ja_apiErrors,
     auth: ja_auth,
     developer: ja_developer,

@@ -1,13 +1,13 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import type { Package } from "./types";
 import { Edit, Loader2, Save } from "lucide-react";
 import { useCallback, useReducer, useState, useTransition } from "react";
-import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/use-toast";
+import { Textarea } from "@beutl/ui/ui/textarea";
+import { useToast } from "@beutl/ui/use-toast";
 import { updateDescription } from "./actions/package";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function PackageDescriptionForm({
   pkg,

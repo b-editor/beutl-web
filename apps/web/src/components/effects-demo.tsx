@@ -2,7 +2,7 @@ import styles from "@/styles/loop-slide.module.css";
 import transparentStyles from "@/styles/transparent.module.css";
 import growStyles from "@/styles/grow.module.css";
 import { cn } from "@beutl/core";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@beutl/ui/ui/card";
 import { getTranslation } from "@beutl/i18n";
 
 function getEffects(t: Awaited<ReturnType<typeof getTranslation>>["t"]) {

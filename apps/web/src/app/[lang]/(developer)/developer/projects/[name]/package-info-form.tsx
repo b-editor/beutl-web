@@ -1,7 +1,7 @@
 "use client";
 
 import { Edit, Loader2, MoreVertical, Save, Upload } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,10 +9,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@beutl/ui/ui/dropdown-menu";
 import { useCallback, useState, useTransition } from "react";
 import { cn } from "@beutl/core";
-import { Input } from "@/components/ui/input";
+import { Input } from "@beutl/ui/ui/input";
 import type { State } from "./actions/_shared";
 import {
   updateDisplayNameAndShortDescription,
@@ -20,11 +20,11 @@ import {
   changePackageVisibility,
   uploadIcon,
 } from "./actions/package";
-import { ErrorDisplay } from "@/components/error-display";
+import { ErrorDisplay } from "@beutl/ui/error-display";
 import { showOpenFileDialog } from "@/lib/fileDialog";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import type { Package } from "./types";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,7 +34,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from "@beutl/ui/ui/alert-dialog";
 
 export function PackageInfoForm({
   pkg,

@@ -6,7 +6,7 @@ import {
   NavigationMenuLink,
   NavigationMenuList,
   navigationMenuTriggerStyle,
-} from "./ui/navigation-menu";
+} from "@beutl/ui/ui/navigation-menu";
 import { CircleUser } from "lucide-react";
 import { cn } from "@beutl/core";
 import { auth } from "@/lib/better-auth";

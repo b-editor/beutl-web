@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
 import { Download } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import FloatingElements from "./floating-elements";
 import styles from "@/styles/hero-gradient.module.css";
 

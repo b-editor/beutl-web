@@ -30,3 +30,51 @@ export async function createAuditLog({
     },
   });
 }
+
+export async function listAuditLogs({
+  action,
+  userId,
+  page,
+  pageSize,
+}: {
+  action?: string;
+  userId?: string;
+  page: number;
+  pageSize: number;
+}) {
+  const db = await getDb();
+  const where = {
+    action: action ? { equals: action } : undefined,
+    userId: userId ? userId : undefined,
+  };
+  const [items, total] = await Promise.all([
+    db.auditLog.findMany({
+      where,
+      orderBy: {
+        createdAt: "desc",
+      },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.auditLog.count({
+      where,
+    }),
+  ]);
+  return {
+    items: items.map((item) => ({
+      id: item.id,
+      userId: item.userId,
+      action: item.action,
+      details: item.details,
+      ipAddress: item.ipAddress,
+      userAgent: item.userAgent,
+      createdAt: item.createdAt,
+    })),
+    total,
+  };
+}
+
+export async function countAuditLogs() {
+  const db = await getDb();
+  return db.auditLog.count();
+}

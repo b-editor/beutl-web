@@ -1,12 +1,12 @@
 import Image from "next/image";
 import { cn } from "@beutl/core";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import FeaturesToc from "@/components/features-toc";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
+} from "@beutl/ui/ui/popover";
 import EasingDemo from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import {
@@ -16,7 +16,7 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from "@/components/ui/carousel";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@beutl/ui/ui/card";
 import { getTranslation } from "@beutl/i18n";
 import { Code } from "lucide-react";
 

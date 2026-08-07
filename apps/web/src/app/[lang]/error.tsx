@@ -2,9 +2,9 @@
 
 import { useEffect } from "react";
 import { useParams } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { useTranslation } from "@/app/i18n/client";
+import { Card, CardContent, CardHeader, CardTitle } from "@beutl/ui/ui/card";
+import { Button } from "@beutl/ui/ui/button";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export default function Error({
   error,

@@ -1,28 +1,28 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@beutl/ui/ui/button";
+import { Checkbox } from "@beutl/ui/ui/checkbox";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
+} from "@beutl/ui/ui/popover";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { useToast } from "@/hooks/use-toast";
+} from "@beutl/ui/ui/select";
+import { Separator } from "@beutl/ui/ui/separator";
+import { useToast } from "@beutl/ui/use-toast";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useState, useTransition } from "react";
 import { updateInterval, updatePricing } from "./actions/pricing";
 import type { Package } from "./types";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 type Pricing = {
   currency: string;

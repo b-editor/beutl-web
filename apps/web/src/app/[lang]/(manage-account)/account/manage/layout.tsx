@@ -2,7 +2,7 @@ import { getTranslation } from "@beutl/i18n";
 import { Navigation } from "./components";
 import { authOrSignIn } from "@/lib/auth-guard";
 import NavBar from "@/components/nav-bar";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import { UserCircle } from "lucide-react";
 import Link from "next/link";
 

@@ -1,0 +1,81 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "users": "Users",
+    "feedback": "Feedback",
+    "auditLog": "Audit log",
+    "signOut": "Sign out"
+  },
+  "dashboard": {
+    "title": "Admin dashboard",
+    "userCount": "Users",
+    "openFeedbackCount": "Open feedback",
+    "recentAuditLogs": "Recent audit log",
+    "viewAll": "View all"
+  },
+  "users": {
+    "title": "Users",
+    "searchPlaceholder": "Search by email or name",
+    "search": "Search",
+    "noResults": "No users found",
+    "id": "ID",
+    "name": "Name",
+    "email": "Email",
+    "createdAt": "Created",
+    "actions": "Actions",
+    "detail": "Detail",
+    "back": "Back",
+    "profile": "Profile",
+    "packages": "Packages",
+    "paymentHistory": "Payment history",
+    "feedback": "Feedback",
+    "delete": "Delete user",
+    "deleteConfirmTitle": "Delete this user?",
+    "deleteConfirmDescription": "This permanently deletes the account, packages, and all related data. This action cannot be undone.",
+    "deleteSuccess": "User deleted",
+    "deleteFailed": "Failed to delete user"
+  },
+  "feedback": {
+    "title": "Feedback",
+    "allStatuses": "All statuses",
+    "allCategories": "All categories",
+    "status": "Status",
+    "category": "Category",
+    "name": "Name",
+    "email": "Email",
+    "message": "Message",
+    "createdAt": "Received",
+    "noResults": "No feedback found",
+    "updateSuccess": "Status updated",
+    "updateFailed": "Failed to update status"
+  },
+  "auditLog": {
+    "title": "Audit log",
+    "allActions": "All actions",
+    "userIdPlaceholder": "Filter by user ID",
+    "userId": "User ID",
+    "action": "Action",
+    "details": "Details",
+    "ipAddress": "IP address",
+    "createdAt": "Time",
+    "noResults": "No log entries found",
+    "apply": "Apply"
+  },
+  "status": {
+    "OPEN": "Open",
+    "IN_PROGRESS": "In progress",
+    "RESOLVED": "Resolved"
+  },
+  "category": {
+    "BUG_REPORT": "Bug report",
+    "FEATURE_REQUEST": "Feature request",
+    "QUESTION": "Question",
+    "OTHER": "Other"
+  },
+  "common": {
+    "loading": "Loading",
+    "error": "Error",
+    "empty": "No data",
+    "cancel": "Cancel"
+  }
+}

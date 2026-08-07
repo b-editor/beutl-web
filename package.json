@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @beutl/web dev",
+    "dev:admin": "pnpm --filter @beutl/admin dev",
     "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api build",
     "start": "pnpm --filter @beutl/web start",
     "lint": "pnpm --filter @beutl/web lint",
@@ -15,9 +16,11 @@
     "deploy": "pnpm deploy:web",
     "deploy:web": "pnpm --filter @beutl/web deploy",
     "deploy:api": "pnpm --filter @beutl/api deploy",
+    "deploy:admin": "pnpm --filter @beutl/admin deploy",
     "upload": "pnpm upload:web",
     "upload:web": "pnpm --filter @beutl/web upload",
     "upload:api": "pnpm --filter @beutl/api upload",
+    "upload:admin": "pnpm --filter @beutl/admin upload",
     "preview": "pnpm --filter @beutl/web preview"
   },
   "devDependencies": {

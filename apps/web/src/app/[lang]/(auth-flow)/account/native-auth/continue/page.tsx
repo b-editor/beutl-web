@@ -1,7 +1,7 @@
 import { getTranslation } from "@beutl/i18n";
 import { auth } from "@/lib/better-auth";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@beutl/ui/ui/avatar";
+import { Button } from "@beutl/ui/ui/button";
 import {
   Card,
   CardContent,
@@ -9,7 +9,7 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
+} from "@beutl/ui/ui/card";
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";

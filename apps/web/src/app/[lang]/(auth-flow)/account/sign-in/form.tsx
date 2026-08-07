@@ -7,18 +7,18 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@beutl/ui/ui/card";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
 import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import { signInWithEmailAction } from "./actions";
-import SubmitButton from "@/components/submit-button";
+import SubmitButton from "@beutl/ui/submit-button";
 import { useState, useActionState } from "react";
-import { ErrorDisplay } from "@/components/error-display";
-import { useToast } from "@/hooks/use-toast";
+import { ErrorDisplay } from "@beutl/ui/error-display";
+import { useToast } from "@beutl/ui/use-toast";
 import { authClient } from "@/lib/auth-client";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 import { useRouter } from "next/navigation";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { AuthLogo } from "@/components/auth/auth-logo";

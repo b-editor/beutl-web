@@ -6,20 +6,20 @@ import {
   useTransition,
 } from "react";
 import type { Package } from "./types";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import { Edit, Loader2, Plus, Save } from "lucide-react";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@beutl/ui/ui/textarea";
+import { Input } from "@beutl/ui/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { useToast } from "@/hooks/use-toast";
+} from "@beutl/ui/ui/select";
+import { Label } from "@beutl/ui/ui/label";
+import { Checkbox } from "@beutl/ui/ui/checkbox";
+import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import SemVer from "semver";
 import { createRelease, deleteRelease, updateRelease } from "./actions/release";
@@ -29,7 +29,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@beutl/ui/ui/dialog";
 import { cn } from "@beutl/core";
 import { isValidNuGetVersionRange } from "@beutl/core";
 import {
@@ -41,8 +41,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { useTranslation } from "@/app/i18n/client";
+} from "@beutl/ui/ui/alert-dialog";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function ReleaseForm({
   pkg,

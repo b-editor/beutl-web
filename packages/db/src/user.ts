@@ -127,3 +127,82 @@ export async function deleteUserById({
     }
   });
 }
+
+export async function listUsers({
+  query,
+  page,
+  pageSize,
+}: {
+  query?: string;
+  page: number;
+  pageSize: number;
+}) {
+  const db = await getDb();
+  const queryMode = "insensitive" as const;
+  const where =
+    query && query.length > 0
+      ? {
+          OR: [
+            {
+              email: {
+                contains: query,
+                mode: queryMode,
+              },
+            },
+            {
+              name: {
+                contains: query,
+                mode: queryMode,
+              },
+            },
+          ],
+        }
+      : {};
+  const [items, total] = await Promise.all([
+    db.user.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        createdAt: true,
+        emailVerified: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.user.count({
+      where,
+    }),
+  ]);
+  return { items, total };
+}
+
+export async function getUserDetail({ userId }: { userId: string }) {
+  const db = await getDb();
+  return db.user.findUnique({
+    where: {
+      id: userId,
+    },
+    include: {
+      // スキーマ上、User のリレーションフィールド名は Profile (大文字)
+      Profile: true,
+      Package: {
+        include: {
+          packagePricing: true,
+        },
+      },
+      UserPaymentHistory: true,
+      Feedback: true,
+    },
+  });
+}
+
+export async function countUsers() {
+  const db = await getDb();
+  return db.user.count();
+}

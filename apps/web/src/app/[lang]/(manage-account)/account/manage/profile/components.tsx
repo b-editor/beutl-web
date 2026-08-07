@@ -10,20 +10,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+} from "@beutl/ui/ui/alert-dialog";
+import { Button } from "@beutl/ui/ui/button";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
+import { Textarea } from "@beutl/ui/ui/textarea";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { AlertCircle, CheckCircle, Link2, Lock, LockOpen } from "lucide-react";
 import { type ComponentProps, useMemo, useState, useActionState } from "react";
 import { type State, updateProfile } from "./actions";
-import SubmitButton from "@/components/submit-button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ErrorDisplay } from "@/components/error-display";
-import { Separator } from "@/components/ui/separator";
-import { useTranslation } from "@/app/i18n/client";
+import SubmitButton from "@beutl/ui/submit-button";
+import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
+import { ErrorDisplay } from "@beutl/ui/error-display";
+import { Separator } from "@beutl/ui/ui/separator";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 function ChangeUserName({
   profile,

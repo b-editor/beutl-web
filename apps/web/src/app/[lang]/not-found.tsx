@@ -1,5 +1,5 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@beutl/ui/ui/card";
+import { Button } from "@beutl/ui/ui/button";
 import Link from "next/link";
 import { getTranslation } from "@beutl/i18n";
 import { getLanguage } from "@/lib/lang-utils";

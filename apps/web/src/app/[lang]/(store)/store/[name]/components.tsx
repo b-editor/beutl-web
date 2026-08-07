@@ -1,7 +1,7 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@beutl/ui/ui/badge";
+import { Button } from "@beutl/ui/ui/button";
 import {
   Carousel,
   CarouselContent,
@@ -18,8 +18,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
+} from "@beutl/ui/ui/dropdown-menu";
+import { Separator } from "@beutl/ui/ui/separator";
 import { Loader2, MoreVertical } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -36,8 +36,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { useTranslation } from "@/app/i18n/client";
+} from "@beutl/ui/ui/alert-dialog";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 type Price = {
   price: number;

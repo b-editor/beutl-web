@@ -1,20 +1,20 @@
 import { Menu } from "lucide-react";
 import Image from "next/image";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from "./ui/sheet";
+} from "@beutl/ui/ui/sheet";
 import {
   NavigationMenu,
   NavigationMenuItem,
   NavigationMenuLink,
   NavigationMenuList,
   navigationMenuTriggerStyle,
-} from "./ui/navigation-menu";
+} from "@beutl/ui/ui/navigation-menu";
 import Link from "next/link";
 import { cn } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";

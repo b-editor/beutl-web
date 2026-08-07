@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Noto_Sans_JP } from "next/font/google";
 import "../globals.css";
-import { Toaster } from "@/components/ui/toaster";
-import ProgressBarProvider from "@/components/providers/ProgressBarProvider";
+import { Toaster } from "@beutl/ui/ui/toaster";
+import ProgressBarProvider from "@beutl/ui/progress-bar-provider";
 import { getTranslation, defaultLanguage } from "@beutl/i18n";
 
 const notoSansJP = Noto_Sans_JP({

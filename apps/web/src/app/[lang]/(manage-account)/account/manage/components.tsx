@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@/app/i18n/client";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useTranslation } from "@beutl/ui/i18n-client";
+import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { CircleUser, CreditCard, Mail, Shield, Trash } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";

@@ -8,13 +8,13 @@ import {
   Plus,
   Trash,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@beutl/ui/ui/dropdown-menu";
 import { useCallback, useOptimistic, useTransition } from "react";
 import { addScreenshot, moveScreenshot, deleteScreenshot } from "./actions/screenshot";
 import {
@@ -25,10 +25,10 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel";
 import { showOpenFileDialog } from "@/lib/fileDialog";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import type { Package } from "./types";
 import { useMatchMedia } from "@/hooks/use-match-media";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function ScreenshotForm({
   pkg,

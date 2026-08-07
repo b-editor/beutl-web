@@ -1,5 +1,5 @@
 import { getTranslation } from "@beutl/i18n";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import { CheckCircle, CircleSlash, Info } from "lucide-react";
 import Link from "next/link";
 import Stripe from "stripe";

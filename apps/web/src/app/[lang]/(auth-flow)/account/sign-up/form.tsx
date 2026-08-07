@@ -6,15 +6,15 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@beutl/ui/ui/card";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
 import Link from "next/link";
 import { signUpWithEmailAction } from "./actions";
 import { useActionState } from "react";
-import SubmitButton from "@/components/submit-button";
-import { ErrorDisplay } from "@/components/error-display";
-import { useTranslation } from "@/app/i18n/client";
+import SubmitButton from "@beutl/ui/submit-button";
+import { ErrorDisplay } from "@beutl/ui/error-display";
+import { useTranslation } from "@beutl/ui/i18n-client";
 import { GitHubLogo, GoogleLogo } from "@/components/logo";
 import { AuthLogo } from "@/components/auth/auth-logo";
 import { useOAuthSignIn } from "@/components/auth/oauth";

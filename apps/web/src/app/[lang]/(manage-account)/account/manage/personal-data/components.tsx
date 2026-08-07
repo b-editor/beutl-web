@@ -1,12 +1,12 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
 import { useState, type ComponentProps, useActionState } from "react";
 import { submit } from "./actions";
-import SubmitButton from "@/components/submit-button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useTranslation } from "@/app/i18n/client";
+import SubmitButton from "@beutl/ui/submit-button";
+import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function Form({
   email,

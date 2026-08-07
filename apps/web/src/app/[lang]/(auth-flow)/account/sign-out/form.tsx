@@ -6,12 +6,12 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
+} from "@beutl/ui/ui/card";
 import Image from "next/image";
 import { useActionState } from "react";
 import { signOutAction } from "./actions";
-import SubmitButton from "@/components/submit-button";
-import { useTranslation } from "@/app/i18n/client";
+import SubmitButton from "@beutl/ui/submit-button";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export default function Form({ lang }: { lang: string }) {
   const [, dispatch] = useActionState(signOutAction, undefined);

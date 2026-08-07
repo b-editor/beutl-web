@@ -14,8 +14,8 @@ import {
 } from "@tanstack/react-table";
 import { Loader2, Trash, Upload } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@beutl/ui/ui/button";
+import { Input } from "@beutl/ui/ui/input";
 import {
   Table,
   TableBody,
@@ -23,14 +23,14 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@beutl/ui/ui/table";
 import { cn } from "@beutl/core";
 import { useCallback, useMemo, useState, useTransition } from "react";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
 import type { File } from "./types";
 import { getColumns } from "./columns";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function List({ data, lang }: { data: File[]; lang: string }) {
   const { t } = useTranslation(lang);

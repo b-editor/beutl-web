@@ -284,6 +284,7 @@ model Feedback {
   email     String
   category  FeedbackCategory
   message   String
+  status    FeedbackStatus   @default(OPEN)
   userId    String?
   user      User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt DateTime         @default(now())
@@ -294,6 +295,12 @@ enum FeedbackCategory {
   FEATURE_REQUEST
   QUESTION
   OTHER
+}
+
+enum FeedbackStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
 }
 
 enum ConfirmationTokenPurpose {

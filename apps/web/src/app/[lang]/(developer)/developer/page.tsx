@@ -1,6 +1,6 @@
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@beutl/ui/ui/badge";
+import { Button } from "@beutl/ui/ui/button";
+import { Card, CardContent } from "@beutl/ui/ui/card";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { getTranslation } from "@beutl/i18n";
 import { Eye, EyeOff } from "lucide-react";

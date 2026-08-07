@@ -1,7 +1,7 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { Form } from "./components";
 import { ConfirmationTokenPurpose } from "@prisma/client";
-import { Separator } from "@/components/ui/separator";
+import { Separator } from "@beutl/ui/ui/separator";
 import { getTranslation } from "@beutl/i18n";
 import { findEmailByUserId } from "@beutl/db";
 import { findManyConfirmationTokens } from "@beutl/db";

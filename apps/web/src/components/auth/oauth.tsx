@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { useToast } from "@/hooks/use-toast";
-import { useTranslation } from "@/app/i18n/client";
+import { useToast } from "@beutl/ui/use-toast";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 type OAuthProvider = "google" | "github";
 

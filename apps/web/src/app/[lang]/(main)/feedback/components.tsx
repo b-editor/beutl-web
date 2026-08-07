@@ -2,22 +2,22 @@
 
 import { type ComponentProps, useActionState, useState } from "react";
 import { submitFeedback } from "./actions";
-import { useTranslation } from "@/app/i18n/client";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { useTranslation } from "@beutl/ui/i18n-client";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
+import { Textarea } from "@beutl/ui/ui/textarea";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+} from "@beutl/ui/ui/select";
+import { Separator } from "@beutl/ui/ui/separator";
+import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { AlertCircle, CheckCircle } from "lucide-react";
-import SubmitButton from "@/components/submit-button";
-import { ErrorDisplay } from "@/components/error-display";
+import SubmitButton from "@beutl/ui/submit-button";
+import { ErrorDisplay } from "@beutl/ui/error-display";
 
 type FeedbackFormProps = ComponentProps<"form"> & {
   lang: string;
