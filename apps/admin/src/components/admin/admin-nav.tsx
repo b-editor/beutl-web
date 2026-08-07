@@ -10,7 +10,12 @@ import { cn } from "@beutl/core";
 export function AdminNav({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
   const pathname = usePathname();
-  const slug = useMemo(() => pathname?.split("/")[2], [pathname]);
+  // pathname は /{lang}/admin/... の形。最初のセグメントが lang、
+  // 2 番目が "admin"、3 番目以降が実際のセクション (users / feedback / audit-log)。
+  // ダッシュボードは /{lang}/admin ちょうど (セグメント数 3) のときのみ active。
+  const segments = useMemo(() => pathname?.split("/").filter(Boolean) ?? [], [pathname]);
+  const slug = segments[2] ?? "admin";
+  const isDashboard = segments.length === 2;
 
   const items = [
     { slug: "admin", href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },
@@ -22,7 +27,8 @@ export function AdminNav({ lang }: { lang: string }) {
   return (
     <nav className="flex items-center gap-1">
       {items.map((item) => {
-        const active = slug === item.slug;
+        const active =
+          item.slug === "admin" ? isDashboard : slug === item.slug;
         return (
           <Link
             key={item.slug}

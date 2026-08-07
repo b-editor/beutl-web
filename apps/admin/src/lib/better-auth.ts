@@ -42,7 +42,7 @@ async function createAuthWithPrisma() {
       passkey({
         rpID: process.env.BETTER_AUTH_RP_ID || "localhost",
         rpName: "Beutl Admin",
-        origin: process.env.BETTER_AUTH_URL || "http://localhost:3000",
+        origin: adminURL,
       }),
       magicLink({
         sendMagicLink: async ({ email, url }) => {

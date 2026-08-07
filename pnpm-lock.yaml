@@ -397,10 +397,10 @@ importers:
         specifier: ^2.4.7
         version: 2.4.7
       react:
-        specifier: 19.1.0
+        specifier: ^19.1.0
         version: 19.1.0
       react-dom:
-        specifier: 19.1.0
+        specifier: ^19.1.0
         version: 19.1.0(react@19.1.0)
       react-i18next:
         specifier: ^16.5.6
