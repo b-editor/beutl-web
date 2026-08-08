@@ -112,7 +112,7 @@ export function TimelineMock({ t }: { t: Translator }) {
         {TIMELINE_CLIPS.map((clip) => (
           <div
             key={clip.key}
-            className="absolute flex items-center overflow-hidden px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18]"
+            className="absolute flex items-center overflow-hidden px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18] rounded-sm"
             style={{
               left: clip.left,
               width: clip.width,
@@ -163,7 +163,7 @@ export function TimelineMock({ t }: { t: Translator }) {
         </div>
 
         <div
-          className="absolute flex items-center overflow-hidden"
+          className="absolute flex items-center overflow-hidden rounded-sm"
           style={{
             left: AUDIO_CLIP.left,
             width: AUDIO_CLIP.width,
@@ -224,7 +224,7 @@ function GraphNode({
         y={y}
         width={width}
         height={height}
-        rx="4"
+        rx="6"
         fill={NODE_BODY_FILL}
       />
       <rect
@@ -232,7 +232,7 @@ function GraphNode({
         y={y}
         width={width}
         height={NODE_HEADER_H}
-        rx="4"
+        rx="6"
         fill={accent}
       />
       <path
@@ -260,7 +260,7 @@ function GraphNode({
         y={y}
         width={width}
         height={height}
-        rx="4"
+        rx="6"
         fill="none"
         stroke={NODE_STROKE}
       />
