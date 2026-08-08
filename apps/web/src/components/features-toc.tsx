@@ -132,6 +132,7 @@ export default function FeaturesToc({ lang }: { lang: string }) {
           <Button
             onClick={handleClick}
             value={feature.name}
+            aria-current={selected === feature.name ? "true" : undefined}
             variant="ghost"
             className="relative z-10 h-8 px-2.5 text-xs text-lp-muted hover:bg-transparent hover:text-lp-text md:h-9 md:px-4 md:text-sm"
           >

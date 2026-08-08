@@ -30,8 +30,18 @@ const PALETTE_SOURCE = Object.entries(PALETTE)
   .join("");
 
 const FRAGMENT_SOURCE = [
+  /*
+    Fragment highp is optional in GLSL ES 1.00, so declaring it unconditionally
+    fails to compile on devices that only offer mediump and drops the whole
+    backdrop to the fallback.
+  */
+  "#ifdef GL_FRAGMENT_PRECISION_HIGH",
   "precision highp float;",
   "precision highp int;",
+  "#else",
+  "precision mediump float;",
+  "precision mediump int;",
+  "#endif",
   "uniform vec2 u_res;uniform float u_time;uniform int u_from;uniform int u_to;uniform float u_blend;uniform vec2 u_mouse;",
   /*
     Every pattern reads its own clock off T, so TIME_SCALE is the one place that

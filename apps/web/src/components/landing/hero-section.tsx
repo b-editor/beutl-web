@@ -33,7 +33,7 @@ export default function HeroSection({
   githubHref: string;
 }) {
   return (
-    <header className="relative flex min-h-[90svh] items-center overflow-hidden bg-lp-bg">
+    <section className="relative flex min-h-[90svh] items-center overflow-hidden bg-lp-bg">
       <ShaderCanvas />
       <div
         className="pointer-events-none absolute inset-0 z-[1]"
@@ -66,6 +66,6 @@ export default function HeroSection({
           </Link>
         </div>
       </div>
-    </header>
+    </section>
   );
 }

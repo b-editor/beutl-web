@@ -12,8 +12,8 @@ const TIMELINE_RULER = [
   "00:00:04",
 ];
 
-/** Track lane height. Clips sit on odd lanes so the lane below each one is free
- * for its keyframe editor, mirroring how the editor lays a timeline out. */
+/** Track lane height. Clips sit on even lanes so the odd lane below each one is
+ * free for its keyframe editor, mirroring how the editor lays a timeline out. */
 const LANE_H = 30;
 const LANE_COUNT = 7;
 
@@ -51,7 +51,8 @@ const AUDIO_CLIP = {
 
 /** Keyframe editor for the shape clip, drawn on the lane below it and aligned to
  * the clip's own time range. */
-const KEYFRAME_LANE = 5;
+const KEYFRAME_CLIP = TIMELINE_CLIPS[2];
+const KEYFRAME_LANE = KEYFRAME_CLIP.lane + 1;
 const KEYFRAME_CURVE = "M3 24 C 20 24, 32 11, 45 11 C 62 11, 80 7, 97 7";
 /** Markers sit centred on the lane rather than riding the curve. */
 const KEYFRAME_XS = [3, 45, 97];
@@ -130,8 +131,8 @@ export function TimelineMock({ t }: { t: Translator }) {
         <div
           className="absolute"
           style={{
-            left: "30%",
-            width: "55%",
+            left: KEYFRAME_CLIP.left,
+            width: KEYFRAME_CLIP.width,
             top: KEYFRAME_LANE * LANE_H,
             height: LANE_H,
           }}
@@ -349,7 +350,8 @@ export function NodeGraphMock({ t }: { t: Translator }) {
 export function ShaderCodeMock() {
   return (
     <>
-      <div className="overflow-x-auto rounded-[10px] border border-lp-border bg-[#0b0916] px-4 py-[14px] font-mono text-xs leading-[1.75]">
+      <pre className="overflow-x-auto whitespace-pre rounded-[10px] border border-lp-border bg-[#0b0916] px-4 py-[14px] font-mono text-xs leading-[1.75]">
+        <code>
         <span className="text-lp-faint">{"// SKSL filter effect"}</span>
         <br />
         <span className="text-lp-indigo-bright">uniform</span>{" "}
@@ -378,7 +380,8 @@ export function ShaderCodeMock() {
         src.<span className="text-lp-cyan">eval</span>(uv);
         <br />
         {"}"}
-      </div>
+        </code>
+      </pre>
       <div className="mt-3 h-[60px] animate-lp-slide rounded-[10px] bg-[linear-gradient(100deg,#0b0916,#6D5CF7,#FF7A6B,#57D6E6)] bg-[length:300%_100%] motion-reduce:animate-none" />
     </>
   );
@@ -739,6 +742,7 @@ export function PackagesMock({
             <img
               className="size-[46px] flex-none rounded-[10px] object-cover"
               alt=""
+              loading="lazy"
               src={pkg.iconFileUrl}
             />
           ) : (

@@ -82,7 +82,7 @@ export default function EasingDemo({
           strokeLinejoin="round"
         />
       </svg>
-      <span className="text-[10.5px] font-bold tracking-[0.04em] text-lp-faint">
+      <span className="text-[10.5px] font-bold tracking-[0.04em] text-lp-muted">
         {label}
       </span>
     </div>

@@ -127,7 +127,7 @@
   "extensibleEyebrow": "Extensibility",
   "extensibleHeadline": "Add features with extensions.",
   "extensibleText": "Get extensions from the store to add features to Beutl. Extensions can add effects, objects, codecs, and UI, and you can publish the ones you build yourself.",
-  "buildExtensions": "＋ Build an extension",
+  "buildExtensions": "+ Build an extension",
   "buildExtensionsDescription": "Publish the extensions you build to the store.",
 
   "finalHeadline": "Free, and ready when you are.",
