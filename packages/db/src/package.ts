@@ -292,6 +292,46 @@ export async function retrievePublishedPackagesByUserName({
   });
 }
 
+/*
+  Newest first, matching the store listing: there is no download count or
+  rating on Package, so recency is the only ranking the schema supports.
+*/
+export async function retrieveLatestPublishedPackages({
+  take,
+  prisma,
+}: {
+  take: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.package.findMany({
+    where: {
+      published: true,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+    take,
+    select: {
+      id: true,
+      name: true,
+      displayName: true,
+      shortDescription: true,
+      iconFileId: true,
+      user: {
+        select: {
+          Profile: {
+            select: {
+              userName: true,
+              displayName: true,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 export async function retrieveDevPackageByName({
   name,
   userId,

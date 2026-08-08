@@ -3,7 +3,10 @@ import { getDb } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
 import { selectPricing } from "@beutl/core";
 import { guessCurrency } from "./currency";
-import { existsUserPaymentHistory } from "@beutl/db";
+import {
+  existsUserPaymentHistory,
+  retrieveLatestPublishedPackages,
+} from "@beutl/db";
 
 export async function packageOwned(pkgId: string, userId: string) {
   const db = await getDb();
@@ -115,6 +118,45 @@ export async function retrievePackage(name: string) {
     iconFileUrl: pkg.iconFile && contentPath(pkg.iconFile.id),
     PackageScreenshot: screenshots,
   };
+}
+
+export type LandingPackage = {
+  id: string;
+  name: string;
+  displayName: string;
+  shortDescription: string;
+  publisherName: string | null;
+  iconFileUrl: string | null;
+};
+
+/*
+  Unlike the store listing this deliberately swallows its own failure: the
+  landing page is the front door and has to render even when the store database
+  is unreachable, so a lost connection costs two cards rather than the page.
+  Pricing is left out for the same reason — it would pull in guessCurrency and
+  its ipinfo lookup.
+*/
+export async function retrieveLatestPackagesForLanding(
+  take: number,
+): Promise<LandingPackage[]> {
+  try {
+    const packages = await retrieveLatestPublishedPackages({ take });
+    return packages.map((pkg) => ({
+      id: pkg.id,
+      name: pkg.name,
+      displayName: pkg.displayName || pkg.name,
+      shortDescription: pkg.shortDescription,
+      publisherName:
+        pkg.user.Profile?.displayName || pkg.user.Profile?.userName || null,
+      iconFileUrl: pkg.iconFileId ? contentPath(pkg.iconFileId) : null,
+    }));
+  } catch (error) {
+    console.error(
+      "[landing] could not load the store packages; rendering without them:",
+      error,
+    );
+    return [];
+  }
 }
 
 export type ListedPackage = {

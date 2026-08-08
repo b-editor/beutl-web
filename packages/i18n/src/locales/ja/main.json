@@ -127,11 +127,6 @@
   "extensibleEyebrow": "拡張性",
   "extensibleHeadline": "拡張機能で|機能を追加。",
   "extensibleText": "ストアから拡張機能を入手して、Beutlに機能を追加できます。エフェクト、オブジェクト、コーデック、UIなどを追加でき、自分で開発した拡張機能を公開することもできます。",
-  "officialPackage": "公式",
-  "ffmpegLocator": "FFmpeg配置ツール",
-  "ffmpegLocatorDescription": "FFmpegのライブラリ・実行ファイルを自動配置。",
-  "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "キーフレームなしでフェード等のアニメを付与。",
   "buildExtensions": "＋ 拡張機能を開発する",
   "buildExtensionsDescription": "自作の拡張機能をストアに公開できます。",
 

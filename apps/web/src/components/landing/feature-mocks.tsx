@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { Translator } from "@beutl/i18n";
 import { cn } from "@beutl/core";
+import type { LandingPackage } from "@/lib/store-utils";
 
 const TIMELINE_RULER = [
   "00:00:00",
@@ -689,7 +691,9 @@ const OS = [
 export function PlatformMock({ t }: { t: Translator }) {
   return (
     <div className="flex flex-col items-center gap-6">
-      <div className="flex gap-3 md:gap-4">
+      {/* A grid rather than a flex row: the three labels are different lengths
+          in every locale, and equal tracks keep the three borders matching. */}
+      <div className="grid grid-cols-3 gap-3 md:gap-4">
         {OS.map(({ key, brand, Logo }) => (
           <div
             key={key}
@@ -713,38 +717,50 @@ export function PlatformMock({ t }: { t: Translator }) {
   );
 }
 
-export function PackagesMock({ t }: { t: Translator }) {
+export function PackagesMock({
+  t,
+  lang,
+  packages,
+}: {
+  t: Translator;
+  lang: string;
+  packages: LandingPackage[];
+}) {
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-[14px] rounded-xl border border-lp-border bg-lp-surface p-4">
-        <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,#6D5CF7,#FF7A6B)]" />
-        <div className="min-w-0">
-          <h4 className="text-[15px] font-extrabold">
-            {t("main:ffmpegLocator")}{" "}
-            <small className="text-[11.5px] text-lp-faint">
-              {t("main:officialPackage")}
-            </small>
-          </h4>
-          <p className="mt-[3px] text-[12.5px] text-lp-muted">
-            {t("main:ffmpegLocatorDescription")}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-[14px] rounded-xl border border-lp-border bg-lp-surface p-4">
-        <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,#fff,#090C1D)]" />
-        <div className="min-w-0">
-          <h4 className="text-[15px] font-extrabold">
-            {t("main:sugarShaker")}{" "}
-            <small className="text-[11.5px] text-lp-faint">
-              {t("main:officialPackage")}
-            </small>
-          </h4>
-          <p className="mt-[3px] text-[12.5px] text-lp-muted">
-            {t("main:sugarShakerDescription")}
-          </p>
-        </div>
-      </div>
+      {packages.map((pkg) => (
+        <Link
+          key={pkg.id}
+          href={`/${lang}/store/${pkg.name}`}
+          className="flex items-center gap-[14px] rounded-xl border border-lp-border bg-lp-surface p-4 transition-colors hover:border-lp-border2"
+        >
+          {pkg.iconFileUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              className="size-[46px] flex-none rounded-[10px] object-cover"
+              alt=""
+              src={pkg.iconFileUrl}
+            />
+          ) : (
+            <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,#6D5CF7,#FF7A6B)]" />
+          )}
+          <div className="min-w-0">
+            <h4 className="text-[15px] font-extrabold">
+              {pkg.displayName}
+              {pkg.publisherName && (
+                <small className="ml-2 text-[11.5px] font-normal text-lp-faint">
+                  {pkg.publisherName}
+                </small>
+              )}
+            </h4>
+            {pkg.shortDescription && (
+              <p className="mt-[3px] text-[12.5px] text-lp-muted">
+                {pkg.shortDescription}
+              </p>
+            )}
+          </div>
+        </Link>
+      ))}
 
       <div className="flex items-center justify-center gap-[14px] rounded-xl border border-dashed border-lp-border bg-lp-surface p-4 text-center">
         <div className="min-w-0">

@@ -8,6 +8,7 @@ import AnimatedSection from "@/components/landing/animated-section";
 import BentoSection from "@/components/landing/bento-section";
 import HeroSection from "@/components/landing/hero-section";
 import ShowcaseSection from "@/components/landing/showcase-section";
+import { retrieveLatestPackagesForLanding } from "@/lib/store-utils";
 import {
   AudioMock,
   ExportMock,
@@ -30,6 +31,7 @@ import {
   LP_WRAP,
 } from "@/components/landing/lp-parts";
 
+const LANDING_PACKAGE_COUNT = 2;
 const DOWNLOAD_HREF = "https://github.com/b-editor/beutl/releases/latest";
 const GITHUB_HREF = "https://github.com/b-editor/beutl";
 
@@ -78,6 +80,7 @@ export default async function Home(props: {
 }) {
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
+  const packages = await retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT);
 
   return (
     <div className="bg-lp-bg text-lp-text">
@@ -217,7 +220,7 @@ export default async function Home(props: {
         headline={t("main:extensibleHeadline")}
         body={t("main:extensibleText")}
       >
-        <PackagesMock t={t} />
+        <PackagesMock t={t} lang={lang} packages={packages} />
       </FeatureSection>
 
       <section

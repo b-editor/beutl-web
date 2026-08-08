@@ -127,11 +127,6 @@
   "extensibleEyebrow": "Extensibility",
   "extensibleHeadline": "Add features with extensions.",
   "extensibleText": "Get extensions from the store to add features to Beutl. Extensions can add effects, objects, codecs, and UI, and you can publish the ones you build yourself.",
-  "officialPackage": "Official",
-  "ffmpegLocator": "FFmpeg Locator",
-  "ffmpegLocatorDescription": "Places FFmpeg libraries and executables automatically.",
-  "sugarShaker": "Sugar Shaker",
-  "sugarShakerDescription": "Adds fades and similar animation without keyframes.",
   "buildExtensions": "＋ Build an extension",
   "buildExtensionsDescription": "Publish the extensions you build to the store.",
 
