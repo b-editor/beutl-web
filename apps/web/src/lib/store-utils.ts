@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { getDb } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
 import { selectPricing } from "@beutl/core";
@@ -130,6 +131,18 @@ export type LandingPackage = {
 };
 
 /*
+  The landing page route is dynamic, so without this every visit to the front
+  door would open a database connection for a list that changes on the order of
+  weeks. The cache wraps the query alone: an error must not be cached, or one
+  blip would blank the section for the whole revalidation window.
+*/
+const cachedLatestPublishedPackages = unstable_cache(
+  (take: number) => retrieveLatestPublishedPackages({ take }),
+  ["landing-latest-packages"],
+  { revalidate: 3600 },
+);
+
+/*
   Unlike the store listing this deliberately swallows its own failure: the
   landing page is the front door and has to render even when the store database
   is unreachable, so a lost connection costs two cards rather than the page.
@@ -140,7 +153,7 @@ export async function retrieveLatestPackagesForLanding(
   take: number,
 ): Promise<LandingPackage[]> {
   try {
-    const packages = await retrieveLatestPublishedPackages({ take });
+    const packages = await cachedLatestPublishedPackages(take);
     return packages.map((pkg) => ({
       id: pkg.id,
       name: pkg.name,

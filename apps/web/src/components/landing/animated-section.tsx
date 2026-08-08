@@ -16,11 +16,9 @@ const sectionVariants: Variants = {
 export default function AnimatedSection({
   children,
   className,
-  delay = 0,
 }: {
   children: ReactNode;
   className?: string;
-  delay?: number;
 }) {
   const prefersReducedMotion = useReducedMotion();
   // useReducedMotion reads matchMedia during the first client render, which the
@@ -39,7 +37,7 @@ export default function AnimatedSection({
       transition={
         mounted && prefersReducedMotion
           ? { duration: 0 }
-          : { duration: 0.6, ease: "easeOut", delay }
+          : { duration: 0.6, ease: "easeOut" }
       }
       className={className}
     >

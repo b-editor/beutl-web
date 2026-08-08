@@ -12,6 +12,9 @@ const TIMELINE_RULER = [
   "00:00:04",
 ];
 
+/** How much of the ruler survives below 440px. See TimelineMock. */
+const MOBILE_RULER_TICKS = 3;
+
 /** Track lane height. Clips sit on even lanes so the odd lane below each one is
  * free for its keyframe editor, mirroring how the editor lays a timeline out. */
 const LANE_H = 30;
@@ -23,21 +26,22 @@ const TIMELINE_CLIPS = [
     lane: 0,
     left: "2%",
     width: "46%",
-    background: "linear-gradient(90deg,#9A8CFF,#6D5CF7)",
+    background:
+      "linear-gradient(90deg,var(--color-lp-indigo-bright),var(--color-lp-indigo))",
   },
   {
     key: "timelineClipText",
     lane: 2,
     left: "18%",
     width: "40%",
-    background: "linear-gradient(90deg,#FF7A6B,#ff9d7a)",
+    background: "linear-gradient(90deg,var(--color-lp-coral),#ff9d7a)",
   },
   {
     key: "timelineClipShape",
     lane: 4,
     left: "30%",
     width: "55%",
-    background: "linear-gradient(90deg,#57D6E6,#3aa9d6)",
+    background: "linear-gradient(90deg,var(--color-lp-cyan),#3aa9d6)",
   },
 ] as const;
 
@@ -46,7 +50,7 @@ const AUDIO_CLIP = {
   lane: 6,
   left: "8%",
   width: "80%",
-  background: "linear-gradient(90deg,#C8F45C,#8fd23a)",
+  background: "linear-gradient(90deg,var(--color-lp-lime),#8fd23a)",
 } as const;
 
 /** Keyframe editor for the shape clip, drawn on the lane below it and aligned to
@@ -57,7 +61,8 @@ const KEYFRAME_CURVE = "M3 24 C 20 24, 32 11, 45 11 C 62 11, 80 7, 97 7";
 /** Markers sit centred on the lane rather than riding the curve. */
 const KEYFRAME_XS = [3, 45, 97];
 
-/** Deterministic, so the markup the server renders matches the client's. */
+/** A hash rather than Math.random, so the paths below can be built once at
+ * module load instead of per render. */
 function fract(i: number) {
   const n = Math.sin(i * 12.9898) * 43758.5453;
   return n - Math.floor(n);
@@ -92,9 +97,20 @@ const AUDIO_WAVE_PATH = (() => {
 export function TimelineMock({ t }: { t: Translator }) {
   return (
     <div>
+      {/* A timestamp has no break opportunity, so five seconds of ruler do not
+          fit a phone-width panel at a legible size. Below 440px the ruler shows
+          three seconds instead, which gives each one half again as much width.
+          min-w-0 keeps any remaining overflow inside its own cell rather than
+          pushing the row wide enough for the panel to clip the last label. */}
       <div className="flex h-5 text-[12px] tabular-nums text-lp-faint">
-        {TIMELINE_RULER.map((label) => (
-          <span key={label} className="flex-1 border-l border-lp-border pl-1.5">
+        {TIMELINE_RULER.map((label, index) => (
+          <span
+            key={label}
+            className={cn(
+              "min-w-0 flex-1 overflow-hidden border-l border-lp-border pl-1.5",
+              index >= MOBILE_RULER_TICKS && "hidden min-[440px]:block",
+            )}
+          >
             {label}
           </span>
         ))}
@@ -382,7 +398,7 @@ export function ShaderCodeMock() {
         {"}"}
         </code>
       </pre>
-      <div className="mt-3 h-[60px] animate-lp-slide rounded-[10px] bg-[linear-gradient(100deg,#0b0916,#6D5CF7,#FF7A6B,#57D6E6)] bg-[length:300%_100%] motion-reduce:animate-none" />
+      <div className="mt-3 h-[60px] animate-lp-slide rounded-[10px] bg-[linear-gradient(100deg,#0b0916,var(--color-lp-indigo),var(--color-lp-coral),var(--color-lp-cyan))] bg-[length:300%_100%] motion-reduce:animate-none" />
     </>
   );
 }
@@ -449,8 +465,8 @@ export function AudioMock() {
             x2="0"
             y2={WAVE_H}
           >
-            <stop offset="0" stopColor="#57D6E6" />
-            <stop offset="1" stopColor="#6D5CF7" />
+            <stop offset="0" style={{ stopColor: "var(--color-lp-cyan)" }} />
+            <stop offset="1" style={{ stopColor: "var(--color-lp-indigo)" }} />
           </linearGradient>
         </defs>
         {WAVE_BARS.map((bar, index) => (
@@ -479,8 +495,8 @@ export function AudioMock() {
             x2="0"
             y2={SPEC_H}
           >
-            <stop offset="0" stopColor="#FF7A6B" />
-            <stop offset="1" stopColor="#6D5CF7" />
+            <stop offset="0" style={{ stopColor: "var(--color-lp-coral)" }} />
+            <stop offset="1" style={{ stopColor: "var(--color-lp-indigo)" }} />
           </linearGradient>
         </defs>
         {SPECTRUM_BARS.map((bar, index) => (
@@ -510,7 +526,7 @@ export function TextMock({ t }: { t: Translator }) {
         aria-hidden="true"
         className={cn(
           TEXT_MOCK_TYPE,
-          "absolute translate-x-[10px] translate-y-[10px] text-transparent [-webkit-text-stroke:1.5px_rgba(154,140,255,0.35)]",
+          "absolute translate-x-[10px] translate-y-[10px] text-transparent [-webkit-text-stroke:1.5px_color-mix(in_srgb,var(--color-lp-indigo-bright)_35%,transparent)]",
         )}
       >
         {sample}
@@ -518,7 +534,7 @@ export function TextMock({ t }: { t: Translator }) {
       <span
         className={cn(
           TEXT_MOCK_TYPE,
-          "bg-[linear-gradient(100deg,#9A8CFF,#FF7A6B)] bg-clip-text text-transparent",
+          "bg-[linear-gradient(100deg,var(--color-lp-indigo-bright),var(--color-lp-coral))] bg-clip-text text-transparent",
         )}
       >
         {sample}
@@ -528,15 +544,23 @@ export function TextMock({ t }: { t: Translator }) {
 }
 
 /**
- * Both frames show the same frame: a blob lit over a dark ground, sampled from
- * one scene function. The preview draws it as coarse blocks (the reduced-scale
- * preview) while the export renders the same composition smoothly.
+ * Both frames show the same frame: a blob lit over a dark ground. The preview
+ * samples it per cell as coarse blocks (the reduced-scale preview); the export
+ * reproduces the same falloffs as gradients, which is what makes it smooth.
+ *
+ * Two radial gradients in objectBoundingBox units are exactly the two clamped
+ * linear falloffs below: cx/cy is the centre, r is where the ramp reaches zero
+ * (1 / falloff), and sRGB stop interpolation is the same lerp. Changing a
+ * falloff here without changing the matching r would make the two frames show
+ * different pictures, which is the one thing this pair must not do.
  */
 const GPU_W = 160;
 const GPU_H = 100;
 const GPU_DARK = [12, 10, 24];
 const GPU_INDIGO = [109, 92, 247];
 const GPU_CORAL = [255, 122, 107];
+const GPU_BG = { x: 0.32, y: 0.28, falloff: 1.45 };
+const GPU_BLOB = { x: 0.66, y: 0.72, falloff: 2.3, peak: 0.85 };
 
 function gpuLerp(a: number[], b: number[], t: number) {
   return [
@@ -546,13 +570,21 @@ function gpuLerp(a: number[], b: number[], t: number) {
   ];
 }
 
+function gpuRgb(c: number[]) {
+  return `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
+}
+
 function gpuScene(u: number, v: number) {
   const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-  const dBg = Math.hypot(u - 0.32, v - 0.28);
-  let c = gpuLerp(GPU_DARK, GPU_INDIGO, clamp01(1 - dBg * 1.45));
-  const dBlob = Math.hypot(u - 0.66, v - 0.72);
-  c = gpuLerp(c, GPU_CORAL, clamp01(1 - dBlob * 2.3) * 0.85);
-  return `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
+  const dBg = Math.hypot(u - GPU_BG.x, v - GPU_BG.y);
+  let c = gpuLerp(GPU_DARK, GPU_INDIGO, clamp01(1 - dBg * GPU_BG.falloff));
+  const dBlob = Math.hypot(u - GPU_BLOB.x, v - GPU_BLOB.y);
+  c = gpuLerp(
+    c,
+    GPU_CORAL,
+    clamp01(1 - dBlob * GPU_BLOB.falloff) * GPU_BLOB.peak,
+  );
+  return gpuRgb(c);
 }
 
 const GPU_PREVIEW_COLS = 11;
@@ -621,13 +653,27 @@ export function GpuMock({ t }: { t: Translator }) {
       </GpuFrame>
       <GpuFrame label={t("main:gpuExport")} scale="2.0×">
         <defs>
-          <radialGradient id="lp-gpu-bg" cx="0.32" cy="0.28" r="0.95">
-            <stop offset="0" stopColor="#6D5CF7" />
-            <stop offset="1" stopColor="#0c0a18" />
+          <radialGradient
+            id="lp-gpu-bg"
+            cx={GPU_BG.x}
+            cy={GPU_BG.y}
+            r={1 / GPU_BG.falloff}
+          >
+            <stop offset="0" stopColor={gpuRgb(GPU_INDIGO)} />
+            <stop offset="1" stopColor={gpuRgb(GPU_DARK)} />
           </radialGradient>
-          <radialGradient id="lp-gpu-blob" cx="0.66" cy="0.72" r="0.5">
-            <stop offset="0" stopColor="#FF7A6B" />
-            <stop offset="1" stopColor="#FF7A6B" stopOpacity="0" />
+          <radialGradient
+            id="lp-gpu-blob"
+            cx={GPU_BLOB.x}
+            cy={GPU_BLOB.y}
+            r={1 / GPU_BLOB.falloff}
+          >
+            <stop
+              offset="0"
+              stopColor={gpuRgb(GPU_CORAL)}
+              stopOpacity={GPU_BLOB.peak}
+            />
+            <stop offset="1" stopColor={gpuRgb(GPU_CORAL)} stopOpacity="0" />
           </radialGradient>
         </defs>
         <rect width={GPU_W} height={GPU_H} fill="url(#lp-gpu-bg)" />
@@ -653,7 +699,7 @@ export function ExportMock({ t }: { t: Translator }) {
         ))}
       </div>
       <div className="mt-[18px] h-2 overflow-hidden rounded-full bg-white/[0.08]">
-        <i className="block h-full w-[72%] rounded-full bg-[linear-gradient(90deg,#6D5CF7,#FF7A6B)]" />
+        <i className="block h-full w-[72%] rounded-full bg-[linear-gradient(90deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
       </div>
       <p className="mt-2.5 text-xs text-lp-faint">{t("main:exportStatus")}</p>
     </>
@@ -746,17 +792,17 @@ export function PackagesMock({
               src={pkg.iconFileUrl}
             />
           ) : (
-            <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,#6D5CF7,#FF7A6B)]" />
+            <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
           )}
           <div className="min-w-0">
-            <h4 className="text-[15px] font-extrabold">
+            <h3 className="text-[15px] font-extrabold">
               {pkg.displayName}
               {pkg.publisherName && (
                 <small className="ml-2 text-[11.5px] font-normal text-lp-faint">
                   {pkg.publisherName}
                 </small>
               )}
-            </h4>
+            </h3>
             {pkg.shortDescription && (
               <p className="mt-[3px] text-[12.5px] text-lp-muted">
                 {pkg.shortDescription}
@@ -768,9 +814,9 @@ export function PackagesMock({
 
       <div className="flex items-center justify-center gap-[14px] rounded-xl border border-dashed border-lp-border bg-lp-surface p-4 text-center">
         <div className="min-w-0">
-          <h4 className="text-[15px] font-extrabold text-lp-indigo-bright">
+          <h3 className="text-[15px] font-extrabold text-lp-indigo-bright">
             {t("main:buildExtensions")}
-          </h4>
+          </h3>
           <p className="mt-[3px] text-[12.5px] text-lp-muted">
             {t("main:buildExtensionsDescription")}
           </p>

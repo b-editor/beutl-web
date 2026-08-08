@@ -1,10 +1,9 @@
 import Link from "next/link";
+import { Download, Github } from "lucide-react";
 import { cn } from "@beutl/core";
 import ShaderCanvas from "./shader-canvas";
 import {
-  DownloadIcon,
   Eyebrow,
-  GitHubIcon,
   LP_BUTTON_GHOST,
   LP_BUTTON_PRIMARY,
   LP_CTA_ROW,
@@ -48,7 +47,7 @@ export default function HeroSection({
         <h1 className="mt-[22px] text-[clamp(min(32px,8.6vw),8vw,74px)] font-extrabold tracking-[-0.02em] [overflow-wrap:anywhere] [word-break:keep-all] leading-[1.1]">
           {texts.titleLine1}
           <br />
-          <span className="bg-[linear-gradient(100deg,#9A8CFF_10%,#FF7A6B_90%)] bg-clip-text text-transparent">
+          <span className="bg-[linear-gradient(100deg,var(--color-lp-indigo-bright)_10%,var(--color-lp-coral)_90%)] bg-clip-text text-transparent">
             {texts.titleLine2}
           </span>
         </h1>
@@ -57,11 +56,11 @@ export default function HeroSection({
         </p>
         <div className={LP_CTA_ROW}>
           <Link href={downloadHref} className={LP_BUTTON_PRIMARY}>
-            <DownloadIcon />
+            <Download />
             {texts.download}
           </Link>
           <Link href={githubHref} className={LP_BUTTON_GHOST}>
-            <GitHubIcon />
+            <Github />
             {texts.github}
           </Link>
         </div>

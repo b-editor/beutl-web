@@ -9,17 +9,12 @@ export const LP_SECTION = "border-t border-lp-border py-[clamp(48px,7vw,88px)]";
 export const LP_MOCK_PANEL =
   "overflow-hidden rounded-2xl border border-lp-border bg-gradient-to-b from-lp-surface to-lp-bg2 p-5";
 
-/*
-  The CTA keeps the app button's conventions — the rounded-lg token, a medium
-  weight, the focus-visible ring — so it reads as the same family, and keeps its
-  own gradient, larger size and hover lift so it still carries the hero.
-*/
 const LP_BUTTON =
   "inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-6 py-3 text-[15px] font-semibold transition-all outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] [&>svg]:size-[18px] [&>svg]:shrink-0";
 
 export const LP_BUTTON_PRIMARY = cn(
   LP_BUTTON,
-  "bg-[linear-gradient(100deg,#6D5CF7,#9A8CFF)] text-white shadow-[0_8px_22px_-12px_rgba(109,92,247,0.7)] hover:-translate-y-0.5",
+  "bg-[linear-gradient(100deg,var(--color-lp-indigo),var(--color-lp-indigo-bright))] text-white shadow-[0_8px_22px_-12px_color-mix(in_srgb,var(--color-lp-indigo)_70%,transparent)] hover:-translate-y-0.5",
 );
 
 export const LP_BUTTON_GHOST = cn(
@@ -42,8 +37,6 @@ const PHRASE_SPLIT = new RegExp(`([${PHRASE_BOUNDARY_CHARS}|])`);
  * It is not a guarantee. A phrase wider than the line still breaks inside
  * itself, because the headline carries overflow-wrap: anywhere — without it a
  * long phrase would push the page sideways instead, which matters more here.
- * word-break: keep-all does not help: overflow-wrap wins as the last resort, so
- * adding it changes nothing (measured).
  *
  * Body copy gets none of this and is left to the browser's per-character CJK
  * breaking.
@@ -206,29 +199,5 @@ export function FeatureSection({
         </div>
       </AnimatedSection>
     </section>
-  );
-}
-
-export function DownloadIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" />
-    </svg>
-  );
-}
-
-export function GitHubIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 015 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.79-4.58 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z" />
-    </svg>
   );
 }

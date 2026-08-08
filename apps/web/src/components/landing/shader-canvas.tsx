@@ -7,9 +7,9 @@ const VERTEX_SOURCE =
   "attribute vec2 a_pos;void main(){gl_Position=vec4(a_pos,0.0,1.0);}";
 
 /*
-  The shader palette is derived from the same hex values the rest of the landing
-  page uses, rather than hand-converted vec3 literals that drift from them
-  silently — a wrong digit here is invisible until someone compares screenshots.
+  GLSL cannot read the --color-lp-* tokens, so these must be kept in step with
+  globals.css by hand. They are converted rather than written as vec3 literals
+  so only the hex has to match.
 */
 const PALETTE = {
   BG: "#09080F",
@@ -53,13 +53,6 @@ const FRAGMENT_SOURCE = [
   "vec2 hash2(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return fract(sin(p)*43758.5453);}",
   "float noise(vec2 p){vec2 i=floor(p);vec2 f=fract(p);vec2 u=f*f*(3.0-2.0*f);float a=hash(i);float b=hash(i+vec2(1.0,0.0));float c=hash(i+vec2(0.0,1.0));float d=hash(i+vec2(1.0,1.0));return mix(mix(a,b,u.x),mix(c,d,u.x),u.y);}",
   "float fbm(vec2 p){float v=0.0;float a=0.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=0.5;}return v;}",
-  /*
-    The patterns are backdrops for the headline, not the subject. Each one keeps
-    its motif but gives up whatever made it read as a demo: accents cover less
-    area and stop short of the full palette colour, edges are wide enough to
-    have no visible line, and the additive highlights are gone so nothing can
-    exceed the copy in contrast.
-  */
   "vec3 pAurora(vec2 p,float T){float t=T*0.045;vec2 q=vec2(fbm(p+vec2(0.0,t)),fbm(p+vec2(5.2,1.3)-t*0.8));vec2 r=vec2(fbm(p+1.8*q+vec2(1.7,9.2)),fbm(p+1.8*q+vec2(8.3,2.8)));float f=fbm(p+2.2*r);vec3 col=BG;col=mix(col,mix(BG,INDIGO,0.62),clamp(f*f*1.35,0.0,1.0));col=mix(col,mix(BG,CORAL,0.5),clamp(pow(r.x,2.8)*0.55,0.0,1.0));col=mix(col,mix(BG,CYAN,0.45),clamp(pow(q.y,3.6)*0.3,0.0,1.0));return col;}",
   // A star's halo is now wider than the margin its centre can have inside one
   // cell, so the eight neighbours are sampled too: without them the cell border
@@ -69,9 +62,6 @@ const FRAGMENT_SOURCE = [
   "vec3 pGrid(vec2 p,float T){float t=T*0.28;vec3 col=BG;if(p.y>0.0){col=mix(BG,mix(BG,INDIGO,0.34),smoothstep(0.0,1.4,p.y));float glow=smoothstep(1.0,0.0,length(vec2(p.x*0.34,p.y-0.02)));col=mix(col,mix(BG,CORAL,0.4),glow*0.45);}else{float persp=0.18/(-p.y+0.02);float gx=p.x*persp*5.5;float gy=persp*5.5+t*3.0;float dx=0.5-abs(fract(gx)-0.5);float dy=0.5-abs(fract(gy)-0.5);float line=smoothstep(0.1,0.0,min(dx,dy));col=mix(BG,mix(BG,INDIGO,0.45),0.16);col=mix(col,mix(BG,mix(CYAN,INDIGO,0.55),0.7),line*0.34);col*=smoothstep(0.03,-0.6,p.y);}return col;}",
   "vec3 pMeta(vec2 p,float T){float t=T*0.22;float f=0.0;for(int i=0;i<4;i++){float fi=float(i);vec2 c=vec2(sin(t*0.7+fi*1.3)*0.95,cos(t*0.6+fi*2.1)*0.55);float rad=0.26+0.05*sin(t+fi);f+=rad*rad/(dot(p-c,p-c)+0.05);}vec3 col=mix(BG,mix(BG,INDIGO,0.55),smoothstep(0.15,1.45,f));col=mix(col,mix(BG,CORAL,0.42),smoothstep(1.3,2.8,f));return col;}",
   "vec3 pInfinite(vec2 p,float T){float t=T*0.26;float r=length(p)+0.0015;float a=atan(p.y,p.x)+t*0.12;float depth=0.45/r+t;float ang=a/3.14159;float rings=0.5-abs(fract(depth*1.4)-0.5);float spokes=0.5-abs(fract(ang*4.0)-0.5);float line=smoothstep(0.11,0.0,min(rings,spokes));vec3 tint=mix(INDIGO,CYAN,0.5+0.5*sin(depth*1.1));vec3 col=mix(BG,mix(BG,tint,0.2),smoothstep(0.0,1.25,r));col=mix(col,mix(BG,tint,0.62),line*0.45);col=mix(col,mix(BG,INDIGO,0.5),smoothstep(0.4,0.0,r)*0.3);col*=0.6+0.4*smoothstep(1.8,0.1,r);return col;}",
-  // The escape radius and the iteration count both widen the lit band, which is
-  // what turns the filaments into the busiest frame of the set. They stay at 4
-  // and 64, and m*m keeps the tint on the boundary and nothing else.
   "vec3 pJulia(vec2 p,float T){float t=T*0.09;vec2 c=vec2(-0.76,0.15)+0.11*vec2(cos(t),sin(t*1.2));vec2 z=p*1.15;float it=0.0;for(int i=0;i<64;i++){z=vec2(z.x*z.x-z.y*z.y,2.0*z.x*z.y)+c;if(dot(z,z)>4.0)break;it+=1.0;}float m=it/64.0;vec3 col=mix(BG,mix(BG,INDIGO,0.5),m*m);col=mix(col,mix(BG,CYAN,0.3),smoothstep(0.8,1.0,m)*0.25);if(it>=63.5)col=mix(BG,INDIGO,0.16);return col;}",
   "vec3 patternFor(int id,vec2 p,float T){if(id==0)return pAurora(p,T);else if(id==1)return pStars(p,T);else if(id==2)return pGrid(p,T);else if(id==3)return pMeta(p,T);else if(id==4)return pInfinite(p,T);return pJulia(p,T);}",
   "void main(){vec2 p=(gl_FragCoord.xy-0.5*u_res.xy)/u_res.y;p*=1.6;p+=(u_mouse-0.5)*0.05;float T=u_time*TIME_SCALE;vec3 a=patternFor(u_from,p,T);vec3 b=(u_blend>0.001)?patternFor(u_to,p,T):a;vec3 col=mix(a,b,u_blend);col*=0.5+0.5*smoothstep(1.5,0.12,length(p));col+=hash(gl_FragCoord.xy+T)*0.03-0.015;gl_FragColor=vec4(col,1.0);}",
@@ -82,8 +72,11 @@ const HOLD_SECONDS = 9.5;
 const FADE_SECONDS = 3.6;
 const MAX_PIXEL_RATIO = 2;
 
-const FALLBACK_BACKGROUND =
-  "radial-gradient(60% 80% at 75% 20%, rgba(109,92,247,0.26), transparent 60%), radial-gradient(50% 60% at 15% 85%, rgba(255,122,107,0.15), transparent 60%), #09080F";
+const FALLBACK_BACKGROUND = [
+  "radial-gradient(60% 80% at 75% 20%, color-mix(in srgb, var(--color-lp-indigo) 26%, transparent), transparent 60%)",
+  "radial-gradient(50% 60% at 15% 85%, color-mix(in srgb, var(--color-lp-coral) 15%, transparent), transparent 60%)",
+  "var(--color-lp-bg)",
+].join(", ");
 
 type Status = "pending" | "ready" | "unsupported";
 
@@ -246,25 +239,36 @@ export default function ShaderCanvas() {
       frame = requestAnimationFrame(loop);
     };
 
-    const animates = !window.matchMedia("(prefers-reduced-motion: reduce)")
-      .matches;
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+    let visible = false;
     let lost = false;
 
+    const handlePointerMove = (event: PointerEvent) => {
+      mouse[0] = event.clientX / window.innerWidth;
+      mouse[1] = 1 - event.clientY / window.innerHeight;
+    };
+
     const start = () => {
-      if (frame || !animates || lost) return;
+      if (frame) return;
       last = null; // resume from the new timestamp, not the clamped 0.1s jump
+      window.addEventListener("pointermove", handlePointerMove, {
+        passive: true,
+      });
       frame = requestAnimationFrame(loop);
     };
     const stop = () => {
+      // Unbound outside the loop as well: the listener would otherwise keep
+      // firing over the whole page for a uniform nothing uploads.
+      window.removeEventListener("pointermove", handlePointerMove);
       if (!frame) return;
       cancelAnimationFrame(frame);
       frame = 0;
     };
 
-    const handlePointerMove = (event: PointerEvent) => {
-      mouse[0] = event.clientX / window.innerWidth;
-      mouse[1] = 1 - event.clientY / window.innerHeight;
+    const sync = () => {
+      if (visible && !motion.matches && !lost) start();
+      else stop();
     };
 
     /*
@@ -272,10 +276,11 @@ export default function ShaderCanvas() {
       evaluating a full-screen fragment shader while the reader is further down.
     */
     const visibility = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) start();
-      else stop();
+      visible = entry.isIntersecting;
+      sync();
     });
     visibility.observe(canvas);
+    motion.addEventListener("change", sync);
 
     const sizing = new ResizeObserver(() => {
       if (lost) return; // the fallback hides the canvas, reporting a 0x0 box
@@ -304,11 +309,6 @@ export default function ShaderCanvas() {
     };
     canvas.addEventListener("webglcontextlost", handleContextLost);
 
-    if (animates) {
-      window.addEventListener("pointermove", handlePointerMove, {
-        passive: true,
-      });
-    }
     // Draw before React commits the "ready" state. The fallback is still
     // mounted at this point — setStatus only queues a render — so the canvas
     // already holds a frame the moment the gradient unmounts. Leaving the first
@@ -320,8 +320,8 @@ export default function ShaderCanvas() {
       stop();
       visibility.disconnect();
       sizing.disconnect();
+      motion.removeEventListener("change", sync);
       canvas.removeEventListener("webglcontextlost", handleContextLost);
-      window.removeEventListener("pointermove", handlePointerMove);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
       gl.deleteShader(vertexShader);

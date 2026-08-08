@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Download } from "lucide-react";
 import { getTranslation } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 import EasingDemo, { EASING_CURVES } from "@/components/easing-demo";
@@ -22,7 +23,6 @@ import {
 } from "@/components/landing/feature-mocks";
 import {
   Chip,
-  DownloadIcon,
   FeatureSection,
   LP_BUTTON_GHOST,
   LP_BUTTON_PRIMARY,
@@ -39,32 +39,32 @@ const EASINGS = [
   {
     labelKey: "easeIn",
     path: EASING_CURVES.easeIn,
-    color: "#9A8CFF",
+    color: "var(--color-lp-indigo-bright)",
   },
   {
     labelKey: "easeInOut",
     path: EASING_CURVES.easeInOut,
-    color: "#57D6E6",
+    color: "var(--color-lp-cyan)",
   },
   {
     labelKey: "easeOut",
     path: EASING_CURVES.easeOut,
-    color: "#FF7A6B",
+    color: "var(--color-lp-coral)",
   },
   {
     labelKey: "easeElastic",
     path: EASING_CURVES.easeElastic,
-    color: "#C8F45C",
+    color: "var(--color-lp-lime)",
   },
   {
     labelKey: "easeBack",
     path: EASING_CURVES.easeBack,
-    color: "#9A8CFF",
+    color: "var(--color-lp-indigo-bright)",
   },
   {
     labelKey: "easeBounce",
     path: EASING_CURVES.easeBounce,
-    color: "#FF7A6B",
+    color: "var(--color-lp-coral)",
   },
 ];
 
@@ -79,8 +79,10 @@ export default async function Home(props: {
   params: Promise<{ lang: string }>;
 }) {
   const { lang } = await props.params;
-  const { t } = await getTranslation(lang);
-  const packages = await retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT);
+  const [{ t }, packages] = await Promise.all([
+    getTranslation(lang),
+    retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT),
+  ]);
 
   return (
     <div className="bg-lp-bg text-lp-text">
@@ -227,7 +229,7 @@ export default async function Home(props: {
         className={cn(LP_SECTION, "py-[clamp(64px,9vw,120px)] text-center")}
         style={{
           background:
-            "radial-gradient(80% 120% at 50% 0%, rgba(109,92,247,0.18), transparent 60%)",
+            "radial-gradient(80% 120% at 50% 0%, color-mix(in srgb, var(--color-lp-indigo) 18%, transparent), transparent 60%)",
         }}
       >
         <AnimatedSection className={LP_WRAP}>
@@ -239,7 +241,7 @@ export default async function Home(props: {
           </p>
           <div className={cn(LP_CTA_ROW, "justify-center")}>
             <Link href={DOWNLOAD_HREF} className={LP_BUTTON_PRIMARY}>
-              <DownloadIcon />
+              <Download />
               {t("main:download")}
             </Link>
             <Link href={GITHUB_HREF} className={LP_BUTTON_GHOST}>

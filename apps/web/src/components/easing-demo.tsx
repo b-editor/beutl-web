@@ -76,7 +76,7 @@ export default function EasingDemo({
         <path
           d={path}
           fill="none"
-          stroke={color}
+          style={{ stroke: color }}
           strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"

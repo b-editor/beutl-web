@@ -28,7 +28,9 @@
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
 
-  --color-border: hsl(var(--border));
+  /* --border carries its own alpha, so it is a complete color rather than the
+     H S L triple the other tokens are consumed as. */
+  --color-border: var(--border);
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
@@ -121,24 +123,15 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 250 9% 87%;
+    --border: hsl(250 9% 87%);
     --input: 247 9% 80%;
     --ring: 243 36% 72%;
 
     --radius: 0.5rem;
   }
 
-  /*
-    The app renders dark-only, and these mirror the landing page palette above so
-    the rest of the site sits on the same ground: --background is lp-bg,
-    --foreground is lp-text, --muted-foreground is lp-muted, --primary is
-    lp-indigo, and --border is lp-border — the same translucent white hairline
-    the landing page cards use, kept as an alpha hsl() so it reads correctly over
-    both the background and a card.
-    --card/--popover share the landing page hue but at a fraction of its
-    saturation: a violet card belongs among violet artwork, while a page of
-    forms and tables reads calmer with only a hint of it.
-  */
+  /* The app renders dark-only, and these mirror the landing page palette above
+     so the rest of the site sits on the same ground. */
   .dark {
     --background: 249 30% 5%;
     --foreground: 249 50% 95%;
@@ -170,7 +163,7 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 100% / 0.09;
+    --border: hsl(0 0% 100% / 0.09);
     --input: 250 6% 20%;
     --ring: 247 91% 66%;
   }

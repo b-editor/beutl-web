@@ -131,7 +131,6 @@ export function ClientPage({
               },
               rules: {
                 ".AccordionItem": {
-                  // backgroundColor: "hsl(249 30% 5%)",
                   backgroundColor: "transparent",
                   boxShadow: "none",
                   borderWidth: "0px",

@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { cn } from "@beutl/core";
 import { LP_WRAP } from "./lp-parts";
 import ShowcaseMedia, { type ShowcaseSource } from "./showcase-media";
@@ -17,10 +16,6 @@ const HEIGHT = 1152;
   playback starts. It is a plain PNG because the poster attribute is a raw URL
   that never reaches next/image, and a screenshot of UI text survives lossless
   compression better than it survives a lossy one.
-
-  Availability is declared, not detected — the site runs on Cloudflare Workers,
-  where there is no filesystem to ask. Emptying this list falls back to the
-  poster alone and requests nothing else.
 */
 const SOURCES: ReadonlyArray<ShowcaseSource> = [
   { src: "/img/showcase.webm", type: "video/webm" },
@@ -28,7 +23,7 @@ const SOURCES: ReadonlyArray<ShowcaseSource> = [
 ];
 
 const GLOW =
-  "radial-gradient(75% 100% at 50% 0%, rgba(109,92,247,0.20), transparent 70%)";
+  "radial-gradient(75% 100% at 50% 0%, color-mix(in srgb, var(--color-lp-indigo) 20%, transparent), transparent 70%)";
 
 /*
   Deliberately not wrapped in AnimatedSection. This sits directly under the hero
@@ -52,25 +47,13 @@ export default function ShowcaseSection({
 
       <figure className={cn(LP_WRAP, "relative")}>
         <div className="overflow-hidden rounded-2xl border border-lp-border bg-lp-bg2 shadow-[0_50px_120px_-50px_rgba(109,92,247,0.55)]">
-          {SOURCES.length > 0 ? (
-            <ShowcaseMedia
-              sources={SOURCES}
-              poster={POSTER}
-              width={WIDTH}
-              height={HEIGHT}
-              label={label}
-            />
-          ) : (
-            <Image
-              src={POSTER}
-              width={WIDTH}
-              height={HEIGHT}
-              alt={label}
-              priority
-              sizes="(min-width: 1180px) 1068px, 100vw"
-              className="h-auto w-full"
-            />
-          )}
+          <ShowcaseMedia
+            sources={SOURCES}
+            poster={POSTER}
+            width={WIDTH}
+            height={HEIGHT}
+            label={label}
+          />
         </div>
         <figcaption className="mt-4 text-center text-sm text-lp-muted [overflow-wrap:anywhere]">
           {caption}
