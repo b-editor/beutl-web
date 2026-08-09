@@ -1,5 +1,5 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import { startTransaction, type PrismaTransaction } from "./transaction";
 
 export async function findUserPackageIdsByUserId({
   userId,
@@ -59,18 +59,36 @@ export async function createUserPackage(
   {
     userId,
     packageId,
+    requireActivePayment = false,
   }: {
     userId: string;
     packageId: string;
+    requireActivePayment?: boolean;
   },
   prisma?: PrismaTransaction,
 ) {
-  const db = prisma || await getDb();
-  return await db.userPackage.upsert({
-    where: { userId_packageId: { userId, packageId } },
-    create: { userId, packageId },
-    update: {},
-  });
+  const create = async (tx: PrismaTransaction) => {
+    const paymentManaged = Boolean(
+      await tx.userPaymentHistory.findFirst({
+        where: {
+          userId,
+          packageId,
+          fulfillmentValidated: true,
+          revokedAt: null,
+        },
+        select: { paymentId: true },
+      }),
+    );
+    if (requireActivePayment && !paymentManaged) {
+      return null;
+    }
+    return await tx.userPackage.upsert({
+      where: { userId_packageId: { userId, packageId } },
+      create: { userId, packageId, paymentManaged },
+      update: paymentManaged ? { paymentManaged: true } : {},
+    });
+  };
+  return prisma ? await create(prisma) : await startTransaction(create);
 }
 
 export async function deleteUserPackage(
