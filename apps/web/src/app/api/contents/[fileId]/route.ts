@@ -60,7 +60,7 @@ export async function GET(
       headers: {
         "Content-Type": file.mimeType || "application/octet-stream",
         "Content-Length": object.size.toString(),
-        ...contentCacheHeaders(access.isPublic),
+        ...contentCacheHeaders(access.canUsePublicCache),
       },
       status: 200,
     });

@@ -34,7 +34,7 @@ type FileRecord = {
       id: string;
       userId: string;
       published: boolean;
-      packagePricing: Array<{ id: string }>;
+      packagePricing: Array<{ id: string; price: number }>;
     };
   }>;
 };
@@ -161,6 +161,28 @@ describe("v3 file metadata access", () => {
     expect((await requestFile()).status).toBe(200);
   });
 
+  it("keeps an all-zero-priced release available anonymously", async () => {
+    dbMocks.findFileForApi.mockResolvedValue(
+      fileRecord({
+        visibility: "DEDICATED",
+        Release: [
+          {
+            published: true,
+            package: {
+              id: "zero-priced-package",
+              userId: OWNER_ID,
+              published: true,
+              packagePricing: [{ id: "zero-price", price: 0 }],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect((await requestFile()).status).toBe(200);
+    expect(dbMocks.existsUserPaymentHistory).not.toHaveBeenCalled();
+  });
+
   it("requires payment for a paid release but allows its owner", async () => {
     dbMocks.findFileForApi.mockResolvedValue(
       fileRecord({
@@ -172,7 +194,7 @@ describe("v3 file metadata access", () => {
               id: "paid-package",
               userId: OWNER_ID,
               published: true,
-              packagePricing: [{ id: "price-1" }],
+              packagePricing: [{ id: "price-1", price: 100 }],
             },
           },
         ],

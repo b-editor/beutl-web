@@ -26,6 +26,16 @@ describe("authenticated content caching", () => {
     ).resolves.toEqual({ outcome: "denied" });
   });
 
+  it("allows an orphaned dedicated file owner without public caching", async () => {
+    await expect(
+      resolveContentAccess({
+        file: dedicatedFile(),
+        userId: "owner",
+        hasPurchasedPackage: async () => false,
+      }),
+    ).resolves.toEqual({ outcome: "allowed", canUsePublicCache: false });
+  });
+
   it("keeps actual profile content public", async () => {
     await expect(
       resolveContentAccess({
@@ -33,7 +43,56 @@ describe("authenticated content caching", () => {
         userId: null,
         hasPurchasedPackage: async () => false,
       }),
-    ).resolves.toEqual({ outcome: "allowed", isPublic: true });
+    ).resolves.toEqual({ outcome: "allowed", canUsePublicCache: true });
+  });
+
+  it("allows a free release anonymously without public caching", async () => {
+    const access = await resolveContentAccess({
+      file: freeReleaseFile(),
+      userId: null,
+      hasPurchasedPackage: async () => false,
+    });
+
+    expect(access).toEqual({
+      outcome: "allowed",
+      canUsePublicCache: false,
+    });
+    expect(
+      contentCacheHeaders(
+        access.outcome === "allowed" && access.canUsePublicCache,
+      ),
+    ).toEqual({
+      "Cache-Control": "no-store",
+      Vary: "Cookie, Authorization",
+    });
+  });
+
+  it("allows an all-zero-priced release without a payment record", async () => {
+    let paymentChecks = 0;
+    await expect(
+      resolveContentAccess({
+        file: releaseFile([{ id: "zero-price", price: 0 }]),
+        userId: null,
+        hasPurchasedPackage: async () => {
+          paymentChecks++;
+          return false;
+        },
+      }),
+    ).resolves.toEqual({ outcome: "allowed", canUsePublicCache: false });
+    expect(paymentChecks).toBe(0);
+  });
+
+  it("does not publicly cache an explicitly public release payload", async () => {
+    await expect(
+      resolveContentAccess({
+        file: freeReleaseFile({ visibility: "PUBLIC" }),
+        userId: null,
+        hasPurchasedPackage: async () => false,
+      }),
+    ).resolves.toEqual({
+      outcome: "allowed",
+      canUsePublicCache: false,
+    });
   });
 
   it("allows a paid release owner without a purchase record", async () => {
@@ -47,7 +106,7 @@ describe("authenticated content caching", () => {
           return false;
         },
       }),
-    ).resolves.toEqual({ outcome: "allowed", isPublic: false });
+    ).resolves.toEqual({ outcome: "allowed", canUsePublicCache: false });
     expect(paymentChecks).toBe(0);
   });
 
@@ -58,7 +117,7 @@ describe("authenticated content caching", () => {
         userId: "purchaser",
         hasPurchasedPackage: async (packageId) => packageId === "package-1",
       }),
-    ).resolves.toEqual({ outcome: "allowed", isPublic: false });
+    ).resolves.toEqual({ outcome: "allowed", canUsePublicCache: false });
   });
 
   it("requires payment for an unpaid published release", async () => {
@@ -85,6 +144,17 @@ function dedicatedFile(overrides: Record<string, unknown> = {}) {
 }
 
 function paidReleaseFile() {
+  return releaseFile([{ id: "price-1", price: 100 }]);
+}
+
+function freeReleaseFile(overrides: Record<string, unknown> = {}) {
+  return releaseFile([], overrides);
+}
+
+function releaseFile(
+  packagePricing: Array<{ id: string; price: number }>,
+  overrides: Record<string, unknown> = {},
+) {
   return dedicatedFile({
     Release: [
       {
@@ -93,9 +163,10 @@ function paidReleaseFile() {
           id: "package-1",
           userId: "owner",
           published: true,
-          packagePricing: [{ id: "price-1" }],
+          packagePricing,
         },
       },
     ],
+    ...overrides,
   });
 }

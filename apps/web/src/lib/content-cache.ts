@@ -1,5 +1,5 @@
-export function contentCacheHeaders(isPublic: boolean): Record<string, string> {
-  return isPublic
+export function contentCacheHeaders(canUsePublicCache: boolean): Record<string, string> {
+  return canUsePublicCache
     ? { "Cache-Control": "public, max-age=31536000, immutable" }
     : {
         "Cache-Control": "no-store",

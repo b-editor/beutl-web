@@ -46,6 +46,7 @@ export async function findFileForContentAccess({
               packagePricing: {
                 select: {
                   id: true,
+                  price: true,
                 },
               },
             },
@@ -108,6 +109,7 @@ export async function findFileForApi({
               packagePricing: {
                 select: {
                   id: true,
+                  price: true,
                 },
               },
             },

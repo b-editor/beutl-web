@@ -15,13 +15,13 @@ export type ContentAccessFile = {
     published: boolean;
     package: OwnedPublication & {
       id: string;
-      packagePricing: readonly { id: string }[];
+      packagePricing: readonly { id: string; price: number }[];
     };
   }[];
 };
 
 export type ContentAccessResult =
-  | { outcome: "allowed"; isPublic: boolean }
+  | { outcome: "allowed"; canUsePublicCache: boolean }
   | { outcome: "denied" }
   | { outcome: "payment-required" };
 
@@ -34,12 +34,14 @@ export async function resolveContentAccess({
   userId: string | null;
   hasPurchasedPackage: (packageId: string) => Promise<boolean>;
 }): Promise<ContentAccessResult> {
+  const isReleasePayload = file.Release.length > 0;
+
   if (file.visibility === "PUBLIC") {
-    return { outcome: "allowed", isPublic: true };
+    return { outcome: "allowed", canUsePublicCache: !isReleasePayload };
   }
   if (file.visibility === "PRIVATE") {
     return file.userId === userId
-      ? { outcome: "allowed", isPublic: false }
+      ? { outcome: "allowed", canUsePublicCache: false }
       : { outcome: "denied" };
   }
 
@@ -61,29 +63,39 @@ export async function resolveContentAccess({
   const releaseIsOwned = visibleReleases.some(
     (release) => release.package.userId === userId,
   );
-  const freeReleaseIsPublic = visibleReleases.some(
+  const freeReleaseAllowsAnonymousAccess = visibleReleases.some(
     (release) =>
       release.published &&
       release.package.published &&
-      release.package.packagePricing.length === 0,
+      !release.package.packagePricing.some((pricing) => pricing.price > 0),
   );
 
-  const isPublic =
+  const allowsAnonymousAccess =
     packageIsPublic ||
     screenshotIsPublic ||
     profileIsPublic ||
-    freeReleaseIsPublic;
-  if (isPublic) {
-    return { outcome: "allowed", isPublic: true };
+    freeReleaseAllowsAnonymousAccess;
+  if (allowsAnonymousAccess) {
+    return {
+      outcome: "allowed",
+      canUsePublicCache: !isReleasePayload,
+    };
   }
-  if (packageIsOwned || screenshotIsOwned || releaseIsOwned) {
-    return { outcome: "allowed", isPublic: false };
+  if (
+    file.userId === userId ||
+    packageIsOwned ||
+    screenshotIsOwned ||
+    releaseIsOwned
+  ) {
+    return { outcome: "allowed", canUsePublicCache: false };
   }
 
   const paidPackageIds = [
     ...new Set(
       visibleReleases
-        .filter((release) => release.package.packagePricing.length > 0)
+        .filter((release) =>
+          release.package.packagePricing.some((pricing) => pricing.price > 0),
+        )
         .map((release) => release.package.id),
     ),
   ];
@@ -98,6 +110,6 @@ export async function resolveContentAccess({
     paidPackageIds.map((packageId) => hasPurchasedPackage(packageId)),
   );
   return paymentRecords.some(Boolean)
-    ? { outcome: "allowed", isPublic: false }
+    ? { outcome: "allowed", canUsePublicCache: false }
     : { outcome: "payment-required" };
 }
