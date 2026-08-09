@@ -95,6 +95,28 @@ describe("authenticated content caching", () => {
     });
   });
 
+  it("requires payment for an explicitly public paid release", async () => {
+    await expect(
+      resolveContentAccess({
+        file: paidReleaseFile({ visibility: "PUBLIC" }),
+        userId: null,
+        hasPurchasedPackage: async () => false,
+      }),
+    ).resolves.toEqual({ outcome: "payment-required" });
+  });
+
+  it("requires payment when a paid release has a public package relation", async () => {
+    await expect(
+      resolveContentAccess({
+        file: paidReleaseFile({
+          Package: [{ userId: "owner", published: true }],
+        }),
+        userId: null,
+        hasPurchasedPackage: async () => false,
+      }),
+    ).resolves.toEqual({ outcome: "payment-required" });
+  });
+
   it("allows a paid release owner without a purchase record", async () => {
     let paymentChecks = 0;
     await expect(
@@ -143,8 +165,8 @@ function dedicatedFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function paidReleaseFile() {
-  return releaseFile([{ id: "price-1", price: 100 }]);
+function paidReleaseFile(overrides: Record<string, unknown> = {}) {
+  return releaseFile([{ id: "price-1", price: 100 }], overrides);
 }
 
 function freeReleaseFile(overrides: Record<string, unknown> = {}) {

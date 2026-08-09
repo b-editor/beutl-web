@@ -6,6 +6,9 @@ import { resolveContentAccess } from "@beutl/core";
 import { existsUserPaymentHistory, findFileForApi } from "@beutl/db";
 
 const app = new Hono().get("/:id", async (c) => {
+  c.header("Cache-Control", "no-store");
+  c.header("Vary", "Authorization");
+
   const id = c.req.param("id");
   const file = await findFileForApi({ id });
 

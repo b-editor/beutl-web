@@ -96,6 +96,8 @@ describe("v3 file metadata access", () => {
     const response = await requestFile(OWNER_ID);
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Vary")).toBe("Authorization");
     expect(await response.json()).toEqual({
       id: "file-1",
       name: "asset.beutl",

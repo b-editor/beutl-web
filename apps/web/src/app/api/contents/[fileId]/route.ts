@@ -80,10 +80,10 @@ export async function GET(
 
   return NextResponse.json(
     {
-      message: "アクセスが拒否されました",
+      message: "ファイルが見つかりません",
     },
     {
-      status: 403,
+      status: 404,
       headers: contentCacheHeaders(false),
     },
   );

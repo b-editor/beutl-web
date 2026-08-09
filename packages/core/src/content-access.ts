@@ -35,8 +35,21 @@ export async function resolveContentAccess({
   hasPurchasedPackage: (packageId: string) => Promise<boolean>;
 }): Promise<ContentAccessResult> {
   const isReleasePayload = file.Release.length > 0;
+  const publishedPaidPackageIds = [
+    ...new Set(
+      file.Release.filter(
+        (release) =>
+          release.published &&
+          release.package.published &&
+          release.package.packagePricing.some((pricing) => pricing.price > 0),
+      ).map((release) => release.package.id),
+    ),
+  ];
 
-  if (file.visibility === "PUBLIC") {
+  if (
+    file.visibility === "PUBLIC" &&
+    publishedPaidPackageIds.length === 0
+  ) {
     return { outcome: "allowed", canUsePublicCache: !isReleasePayload };
   }
   if (file.visibility === "PRIVATE") {
@@ -75,7 +88,7 @@ export async function resolveContentAccess({
     screenshotIsPublic ||
     profileIsPublic ||
     freeReleaseAllowsAnonymousAccess;
-  if (allowsAnonymousAccess) {
+  if (allowsAnonymousAccess && publishedPaidPackageIds.length === 0) {
     return {
       outcome: "allowed",
       canUsePublicCache: !isReleasePayload,
@@ -90,16 +103,7 @@ export async function resolveContentAccess({
     return { outcome: "allowed", canUsePublicCache: false };
   }
 
-  const paidPackageIds = [
-    ...new Set(
-      visibleReleases
-        .filter((release) =>
-          release.package.packagePricing.some((pricing) => pricing.price > 0),
-        )
-        .map((release) => release.package.id),
-    ),
-  ];
-  if (paidPackageIds.length === 0) {
+  if (publishedPaidPackageIds.length === 0) {
     return { outcome: "denied" };
   }
   if (!userId) {
@@ -107,7 +111,9 @@ export async function resolveContentAccess({
   }
 
   const paymentRecords = await Promise.all(
-    paidPackageIds.map((packageId) => hasPurchasedPackage(packageId)),
+    publishedPaidPackageIds.map((packageId) =>
+      hasPurchasedPackage(packageId),
+    ),
   );
   return paymentRecords.some(Boolean)
     ? { outcome: "allowed", canUsePublicCache: false }
