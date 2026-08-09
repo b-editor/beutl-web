@@ -51,15 +51,21 @@ model Account {
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  token     String   @unique(map: "Session_sessionToken_key")
-  userId    String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ipAddress String?
-  userAgent String?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                          String    @id @default(uuid())
+  token                       String    @unique(map: "Session_sessionToken_key")
+  userId                      String
+  expiresAt                   DateTime
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+  ipAddress                   String?
+  userAgent                   String?
+  refreshTokenFamilyId        String?
+  refreshTokenConsumedAt      DateTime?
+  refreshTokenReplacedByToken String?
+  refreshTokenRevokedAt       DateTime?
+  user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([refreshTokenFamilyId])
 }
 
 model Verification {

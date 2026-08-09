@@ -7,7 +7,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { getUserId, getUserIdFromToken } from "../api/auth";
+import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import {
   createNativeAppAuth,
@@ -16,7 +16,7 @@ import {
   findNativeAppAuthBySessionId,
   updateNativeAppAuthForHandler,
 } from "@beutl/db";
-import { createSession, deleteSessionsByToken } from "@beutl/db";
+import { createSession, rotateSessionByToken } from "@beutl/db";
 import { isAllowedContinueUrlHost } from "@beutl/core";
 import { sign } from "hono/jwt";
 
@@ -135,6 +135,18 @@ async function createJwtToken(userId: string) {
 }
 
 async function createRefreshToken(userId: string) {
+  const prepared = await prepareRefreshToken();
+  await createSession({
+    token: prepared.rawToken,
+    expiresAt: prepared.expires,
+    userId,
+    refreshTokenFamilyId: crypto.randomUUID(),
+  });
+
+  return prepared;
+}
+
+async function prepareRefreshToken() {
   const rawToken = crypto.randomUUID();
   const encToken = await encryptRefreshToken(rawToken);
   const expires = new Date(
@@ -145,11 +157,9 @@ async function createRefreshToken(userId: string) {
         24 *
         Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
   );
-  await createSession({
-    token: rawToken,
-    expiresAt: expires,
-    userId: userId,
-  });
+  if (Number.isNaN(expires.getTime())) {
+    throw new Error("JWT_REFRESH_TOKEN_EXPIRATION_DAYS is invalid");
+  }
 
   return {
     encToken,
@@ -221,13 +231,7 @@ const app = new Hono()
     return c.redirect(url.toString());
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
-    const { refresh_token, token } = c.req.valid("json");
-    const userId = getUserIdFromToken(token);
-    if (!userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), {
-        status: 401,
-      });
-    }
+    const { refresh_token } = c.req.valid("json");
 
     const oldDecryptedRefreshToken = await decryptRefreshToken(refresh_token);
     if (!oldDecryptedRefreshToken) {
@@ -236,23 +240,33 @@ const app = new Hono()
       });
     }
 
-    const oldRefreshTokens = await deleteSessionsByToken({
+    const replacement = await prepareRefreshToken();
+    const rotation = await rotateSessionByToken({
       token: oldDecryptedRefreshToken,
+      replacementToken: replacement.rawToken,
+      replacementExpiresAt: replacement.expires,
+      // Successful decryption is the provenance signal that allows a
+      // pre-family native session to be adopted. Other DB callers omit it.
+      legacyNativeSessionAdoption: {
+        familyId: crypto.randomUUID(),
+      },
     });
-    if (!oldRefreshTokens.count) {
+    if (!rotation) {
       return c.json(await apiErrorResponse("invalidRefreshToken"), {
         status: 401,
       });
     }
 
     const { exp: accessTokenExp, token: accessToken } =
-      await createJwtToken(userId);
-
-    const { encToken } = await createRefreshToken(userId);
+      await createJwtToken(rotation.userId);
+    const encryptedRefreshToken =
+      rotation.refreshToken === replacement.rawToken
+        ? replacement.encToken
+        : await encryptRefreshToken(rotation.refreshToken);
 
     return c.json({
       token: accessToken,
-      refresh_token: encToken,
+      refresh_token: encryptedRefreshToken,
       expiration: accessTokenExp,
     });
   })
