@@ -4,8 +4,8 @@ import { PrismaClient } from "@prisma/client";
 import Stripe from "stripe";
 
 const EVENT_RANK = {
-  disputeRestored: 20,
-  disputeRevoked: 30,
+  disputeRevoked: 20,
+  disputeRestored: 30,
   refundSucceeded: 40,
 };
 const REVOKED_DISPUTE_STATUSES = new Set([
@@ -27,6 +27,7 @@ export function classifyHistoricalPackagePayment({
       rank: EVENT_RANK.refundSucceeded,
       reason: `historical refund succeeded: ${refund.id}`,
       sourceId: refund.id,
+      sourceCreated: refund.created,
       sourceKind: "refund",
     };
   }
@@ -43,6 +44,7 @@ export function classifyHistoricalPackagePayment({
       rank: EVENT_RANK.disputeRevoked,
       reason: `historical dispute ${dispute.status}: ${dispute.id}`,
       sourceId: dispute.id,
+      sourceCreated: dispute.created,
       sourceKind: "dispute",
     };
   }
@@ -52,10 +54,51 @@ export function classifyHistoricalPackagePayment({
       rank: EVENT_RANK.refundSucceeded,
       reason: `historical PaymentIntent status: ${paymentIntent.status}`,
       sourceId: paymentIntent.id,
+      sourceCreated: paymentIntent.created,
       sourceKind: "payment-intent",
     };
   }
   return null;
+}
+
+export function historicalStateEvent(candidate, observedAt = new Date()) {
+  const createdAt =
+    candidate.sourceKind === "refund"
+      ? observedAt
+      : new Date(candidate.sourceCreated * 1_000);
+  if (
+    (candidate.sourceKind !== "refund" &&
+      !Number.isSafeInteger(candidate.sourceCreated)) ||
+    Number.isNaN(createdAt.getTime())
+  ) {
+    throw new TypeError("Historical Stripe state timestamp is invalid");
+  }
+  return {
+    id: `reconcile:${candidate.sourceId}`,
+    createdAt,
+    rank: candidate.rank,
+  };
+}
+
+export function isHistoricalStateEventNewer(current, incoming) {
+  if (
+    current.stripeStateEventRank === EVENT_RANK.refundSucceeded &&
+    incoming.rank < EVENT_RANK.refundSucceeded
+  ) {
+    return false;
+  }
+  if (!current.stripeStateEventCreatedAt) {
+    return true;
+  }
+  const currentTime = current.stripeStateEventCreatedAt.getTime();
+  const incomingTime = incoming.createdAt.getTime();
+  if (incomingTime !== currentTime) {
+    return incomingTime > currentTime;
+  }
+  if (incoming.rank !== current.stripeStateEventRank) {
+    return incoming.rank > current.stripeStateEventRank;
+  }
+  return incoming.id > (current.stripeStateEventId ?? "");
 }
 
 async function main() {
@@ -80,6 +123,7 @@ async function main() {
     for (;;) {
       const histories = await prisma.userPaymentHistory.findMany({
         where: {
+          fulfillmentValidated: true,
           revokedAt: null,
           ...(cursor ? { paymentId: { gt: cursor } } : {}),
         },
@@ -139,29 +183,39 @@ async function main() {
           }
         }
 
-        const observedAt = new Date();
+        const stateEvent = historicalStateEvent(candidate);
         const changed = await prisma.$transaction(async (tx) => {
           const current = await tx.userPaymentHistory.findUnique({
             where: { paymentId: history.paymentId },
-            select: { revokedAt: true },
+            select: {
+              revokedAt: true,
+              stripeStateEventId: true,
+              stripeStateEventCreatedAt: true,
+              stripeStateEventRank: true,
+            },
           });
-          if (!current || current.revokedAt) {
+          if (
+            !current ||
+            current.revokedAt ||
+            !isHistoricalStateEventNewer(current, stateEvent)
+          ) {
             return false;
           }
           await tx.userPaymentHistory.update({
             where: { paymentId: history.paymentId },
             data: {
-              revokedAt: observedAt,
+              revokedAt: stateEvent.createdAt,
               revocationReason: candidate.reason,
-              stripeStateEventId: `reconcile:${candidate.sourceId}`,
-              stripeStateEventCreatedAt: observedAt,
-              stripeStateEventRank: candidate.rank,
+              stripeStateEventId: stateEvent.id,
+              stripeStateEventCreatedAt: stateEvent.createdAt,
+              stripeStateEventRank: stateEvent.rank,
             },
           });
           const activePayments = await tx.userPaymentHistory.count({
             where: {
               userId: history.userId,
               packageId: history.packageId,
+              fulfillmentValidated: true,
               revokedAt: null,
             },
           });

@@ -34,6 +34,8 @@ export const auditLogActions = {
     paymentSucceeded: "store.paymentSucceeded",
     paymentRevoked: "store.paymentRevoked",
     paymentRestored: "store.paymentRestored",
+    paymentRefundFailed: "store.paymentRefundFailed",
+    paymentRefundRequiresAction: "store.paymentRefundRequiresAction",
   },
   admin: {
     updatePackagePricing: "admin.updatePackagePricing",

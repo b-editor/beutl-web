@@ -5,7 +5,11 @@ import { ClientPage } from "./components";
 import { notFound } from "next/navigation";
 import { PackageDetails } from "../components";
 import { retrievePackage } from "@/lib/store-utils";
-import { findCustomerByUserId } from "@beutl/db";
+import {
+  findCustomerByUserId,
+  findPackagePaymentReference,
+} from "@beutl/db";
+import { resolvePackageCheckoutCompletionStatus } from "./status";
 
 export default async function Page(
   props: {
@@ -45,6 +49,13 @@ export default async function Page(
   ) {
     notFound();
   }
+  const payment = await findPackagePaymentReference({
+    paymentId: intent.id,
+  });
+  const status = resolvePackageCheckoutCompletionStatus(
+    intent.status,
+    payment,
+  );
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-2 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
@@ -59,7 +70,7 @@ export default async function Page(
         </div>
         <div className="border max-md:h-[1px] md:w-[1px]" />
         <div className="md:flex-1 mx-2 max-md:mt-4">
-          <ClientPage status={intent.status} name={name} lang={lang} />
+          <ClientPage status={status} name={name} lang={lang} />
         </div>
       </div>
     </div>

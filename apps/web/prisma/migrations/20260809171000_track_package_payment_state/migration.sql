@@ -2,6 +2,8 @@
 ALTER TABLE "UserPaymentHistory"
 ADD COLUMN "revokedAt" TIMESTAMP(3);
 ALTER TABLE "UserPaymentHistory"
+ADD COLUMN "fulfillmentValidated" BOOL NOT NULL DEFAULT true;
+ALTER TABLE "UserPaymentHistory"
 ADD COLUMN "revocationReason" STRING;
 ALTER TABLE "UserPaymentHistory"
 ADD COLUMN "stripeStateEventId" STRING;
@@ -11,9 +13,11 @@ ALTER TABLE "UserPaymentHistory"
 ADD COLUMN "stripeStateEventRank" INT4 NOT NULL DEFAULT 0;
 
 ALTER TABLE "UserPackage"
-ADD COLUMN "paymentManaged" BOOL NOT NULL DEFAULT false;
+ADD COLUMN "paymentManaged" BOOL NOT NULL DEFAULT true;
 
--- Existing paid entitlements were created by the Stripe webhook.
+-- Existing paid entitlements and writes from the old Worker during cutover
+-- inherit the backward-compatible true default. The new Worker writes every
+-- fulfillment and reversal value explicitly.
 UPDATE "UserPackage" AS up
 SET "paymentManaged" = true
 WHERE EXISTS (

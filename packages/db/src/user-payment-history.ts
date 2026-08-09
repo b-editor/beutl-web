@@ -34,6 +34,7 @@ export async function existsUserPaymentHistory({
     where: {
       userId: userId,
       packageId: packageId,
+      fulfillmentValidated: true,
       revokedAt: null,
     },
     select: {
@@ -78,6 +79,7 @@ export async function createUserPaymentHistory({
       userId: userId,
       packageId: packageId,
       paymentId: paymentIntentId,
+      fulfillmentValidated: false,
     },
     update: {},
   });

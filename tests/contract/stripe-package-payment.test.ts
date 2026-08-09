@@ -116,6 +116,24 @@ describe("package PaymentIntent validation", () => {
     expect(retrieveCustomer).not.toHaveBeenCalled();
   });
 
+  it("refunds a package-marked intent without a package id", async () => {
+    await expect(
+      resolvePackagePayment({
+        paymentIntent: paymentIntent({
+          metadata: {
+            ...packagePaymentIntentMetadata("user-1", "package-1"),
+            packageId: " ",
+          },
+        }),
+        stripe,
+      }),
+    ).resolves.toEqual({
+      status: "refund",
+      reason: "missing package id",
+    });
+    expect(retrieveCustomer).not.toHaveBeenCalled();
+  });
+
   it("refunds duplicate or mismatched customer ownership", async () => {
     mocks.findCustomerOwnersByStripeId.mockResolvedValue([
       { userId: "user-1" },

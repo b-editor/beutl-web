@@ -9,9 +9,11 @@ const mocks = vi.hoisted(() => ({
   resolvePackagePayment: vi.fn(),
   resolvePackagePaymentOwner: vi.fn(),
   restorePackagePayment: vi.fn(),
+  listRefunds: vi.fn(),
   retrieveCharge: vi.fn(),
   retrieveDispute: vi.fn(),
   retrievePaymentIntent: vi.fn(),
+  retrieveRefund: vi.fn(),
   revokePackagePayment: vi.fn(),
 }));
 
@@ -21,6 +23,8 @@ vi.mock("@/lib/audit-log", () => ({
     store: {
       paymentRestored: "store.paymentRestored",
       paymentRevoked: "store.paymentRevoked",
+      paymentRefundFailed: "store.paymentRefundFailed",
+      paymentRefundRequiresAction: "store.paymentRefundRequiresAction",
       paymentSucceeded: "store.paymentSucceeded",
     },
   },
@@ -30,6 +34,10 @@ vi.mock("@/lib/stripe/config", () => ({
     charges: { retrieve: mocks.retrieveCharge },
     disputes: { retrieve: mocks.retrieveDispute },
     paymentIntents: { retrieve: mocks.retrievePaymentIntent },
+    refunds: {
+      list: mocks.listRefunds,
+      retrieve: mocks.retrieveRefund,
+    },
     webhooks: { constructEvent: mocks.constructEvent },
   }),
 }));
@@ -41,8 +49,8 @@ vi.mock("@/lib/stripe/package-payment", () => ({
 vi.mock("@beutl/db", () => ({
   PACKAGE_PAYMENT_EVENT_RANK: {
     paymentSucceeded: 10,
-    disputeRestored: 20,
-    disputeRevoked: 30,
+    disputeRevoked: 20,
+    disputeRestored: 30,
     refundSucceeded: 40,
   },
   findPackagePaymentReference: mocks.findPackagePaymentReference,
@@ -57,6 +65,14 @@ const reference = {
   paymentId: "pi_package",
   userId: "user-1",
   packageId: "package-1",
+};
+const validatedReference = {
+  ...reference,
+  fulfillmentValidated: true,
+};
+const tombstoneReference = {
+  ...reference,
+  fulfillmentValidated: false,
 };
 
 function request(): Request {
@@ -100,6 +116,7 @@ describe("package payment webhook state", () => {
       id: "pi_package",
       metadata: {},
     });
+    mocks.listRefunds.mockResolvedValue({ data: [], has_more: false });
   });
 
   it("records only a validated successful package payment", async () => {
@@ -153,11 +170,33 @@ describe("package payment webhook state", () => {
     mocks.constructEvent.mockReturnValue(
       event("payment_intent.succeeded", { id: "pi_package" }),
     );
-    mocks.findPackagePaymentReference.mockResolvedValue(reference);
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
 
     expect((await POST(request() as never)).status).toBe(200);
     expect(mocks.resolvePackagePayment).not.toHaveBeenCalled();
     expect(mocks.refundPackagePayment).not.toHaveBeenCalled();
+  });
+
+  it("validates a reversal tombstone when success arrives late", async () => {
+    const paymentIntent = {
+      id: "pi_package",
+      amount: 1_000,
+      currency: "usd",
+    };
+    mocks.constructEvent.mockReturnValue(
+      event("payment_intent.succeeded", paymentIntent),
+    );
+    mocks.findPackagePaymentReference.mockResolvedValue(tombstoneReference);
+    mocks.resolvePackagePayment.mockResolvedValue({
+      status: "fulfill",
+      reference,
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.resolvePackagePayment).toHaveBeenCalled();
+    expect(mocks.recordPackagePaymentSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({ reference }),
+    );
   });
 
   it("refunds when the package price changes during fulfillment", async () => {
@@ -185,7 +224,7 @@ describe("package payment webhook state", () => {
   });
 
   it("revokes package access after a refund", async () => {
-    mocks.findPackagePaymentReference.mockResolvedValue(reference);
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
     mocks.constructEvent.mockReturnValue(
       event("charge.refunded", { id: "ch_1" }),
     );
@@ -194,19 +233,170 @@ describe("package payment webhook state", () => {
       amount_refunded: 1_000,
       payment_intent: "pi_package",
     });
+    mocks.listRefunds.mockResolvedValue({
+      data: [
+        {
+          id: "re_1",
+          payment_intent: "pi_package",
+          status: "succeeded",
+        },
+      ],
+      has_more: false,
+    });
 
     expect((await POST(request() as never)).status).toBe(200);
     expect(mocks.revokePackagePayment).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentId: "pi_package",
-        reason: "charge refunded: ch_1",
+        reason: "refund succeeded: re_1",
         event: expect.objectContaining({ rank: 40 }),
       }),
     );
   });
 
+  it("keeps access while an asynchronous refund is pending", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
+    mocks.constructEvent.mockReturnValue(
+      event("charge.refunded", { id: "ch_pending" }),
+    );
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_pending",
+      amount_refunded: 1_000,
+      payment_intent: "pi_package",
+    });
+    mocks.listRefunds.mockResolvedValue({
+      data: [{ id: "re_pending", status: "pending" }],
+      has_more: false,
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.revokePackagePayment).not.toHaveBeenCalled();
+  });
+
+  it("revokes access when an asynchronous refund later succeeds", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
+    mocks.constructEvent.mockReturnValue(
+      event("refund.updated", { id: "re_async" }),
+    );
+    mocks.retrieveRefund.mockResolvedValue({
+      id: "re_async",
+      charge: "ch_1",
+      payment_intent: "pi_package",
+      status: "succeeded",
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.revokePackagePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentId: "pi_package",
+        reason: "refund succeeded: re_async",
+        event: expect.objectContaining({ rank: 40 }),
+      }),
+    );
+  });
+
+  it.each([
+    { eventType: "refund.failed", status: "failed" },
+    { eventType: "refund.updated", status: "canceled" },
+    { eventType: "refund.updated", status: "requires_action" },
+  ])(
+    "keeps access when an asynchronous refund reaches $status",
+    async ({ eventType, status }) => {
+      mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
+      mocks.constructEvent.mockReturnValue(
+        event(eventType, { id: "re_unsuccessful" }),
+      );
+      mocks.retrieveRefund.mockResolvedValue({
+        id: "re_unsuccessful",
+        charge: "ch_1",
+        payment_intent: "pi_package",
+        status,
+      });
+
+      expect((await POST(request() as never)).status).toBe(200);
+      expect(mocks.revokePackagePayment).not.toHaveBeenCalled();
+      expect(mocks.restorePackagePayment).not.toHaveBeenCalled();
+      expect(mocks.addAuditLog).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retries when an automatic-refund incident cannot be persisted", async () => {
+    mocks.constructEvent.mockReturnValue(
+      event("refund.failed", { id: "re_automatic" }),
+    );
+    mocks.retrieveRefund.mockResolvedValue({
+      id: "re_automatic",
+      charge: "ch_automatic",
+      payment_intent: "pi_package",
+      status: "failed",
+      failure_reason: "insufficient_funds",
+      metadata: {
+        beutlDisposition: "package-payment-validation-failed",
+        beutlDispositionReason: "amount mismatch",
+      },
+    });
+    mocks.addAuditLog.mockRejectedValueOnce(new Error("audit unavailable"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    expect((await POST(request() as never)).status).toBe(500);
+    expect(consoleError).toHaveBeenCalledWith(
+      "Stripe webhook handler failed",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  it.each([
+    {
+      action: "store.paymentRefundFailed",
+      eventType: "refund.failed",
+      status: "failed",
+    },
+    {
+      action: "store.paymentRefundFailed",
+      eventType: "refund.updated",
+      status: "canceled",
+    },
+    {
+      action: "store.paymentRefundRequiresAction",
+      eventType: "refund.updated",
+      status: "requires_action",
+    },
+  ])(
+    "persists an intervention when an automatic refund reaches $status",
+    async ({ action, eventType, status }) => {
+      mocks.constructEvent.mockReturnValue(
+        event(eventType, { id: "re_automatic" }),
+      );
+      mocks.retrieveRefund.mockResolvedValue({
+        id: "re_automatic",
+        charge: "ch_automatic",
+        payment_intent: "pi_package",
+        status,
+        failure_reason: "insufficient_funds",
+        metadata: {
+          beutlDisposition: "package-payment-validation-failed",
+          beutlDispositionReason: "amount mismatch",
+        },
+      });
+
+      expect((await POST(request() as never)).status).toBe(200);
+      expect(mocks.addAuditLog).toHaveBeenCalledWith({
+        userId: null,
+        action,
+        details: expect.stringContaining(
+          `refundId: re_automatic, refundStatus: ${status}`,
+        ),
+      });
+      expect(mocks.revokePackagePayment).not.toHaveBeenCalled();
+      expect(mocks.restorePackagePayment).not.toHaveBeenCalled();
+    },
+  );
+
   it("revokes access while a dispute is open", async () => {
-    mocks.findPackagePaymentReference.mockResolvedValue(reference);
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
     mocks.constructEvent.mockReturnValue(
       event("charge.dispute.created", { id: "dp_1" }),
     );
@@ -221,13 +411,13 @@ describe("package payment webhook state", () => {
     expect(mocks.revokePackagePayment).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentId: "pi_package",
-        event: expect.objectContaining({ rank: 30 }),
+        event: expect.objectContaining({ rank: 20 }),
       }),
     );
   });
 
   it("restores access after a won dispute when no refund remains", async () => {
-    mocks.findPackagePaymentReference.mockResolvedValue(reference);
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
     mocks.constructEvent.mockReturnValue(
       event("charge.dispute.closed", { id: "dp_1" }),
     );
@@ -246,13 +436,13 @@ describe("package payment webhook state", () => {
     expect(mocks.restorePackagePayment).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentId: "pi_package",
-        event: expect.objectContaining({ rank: 20 }),
+        event: expect.objectContaining({ rank: 30 }),
       }),
     );
   });
 
-  it("does not restore a won dispute after any refund", async () => {
-    mocks.findPackagePaymentReference.mockResolvedValue(reference);
+  it("does not restore a won dispute after a succeeded refund", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
     mocks.constructEvent.mockReturnValue(
       event("charge.dispute.closed", { id: "dp_1" }),
     );
@@ -266,9 +456,110 @@ describe("package payment webhook state", () => {
       id: "ch_1",
       amount_refunded: 1,
     });
+    mocks.listRefunds.mockResolvedValue({
+      data: [{ id: "re_1", status: "succeeded" }],
+      has_more: false,
+    });
 
     expect((await POST(request() as never)).status).toBe(200);
     expect(mocks.restorePackagePayment).not.toHaveBeenCalled();
+  });
+
+  it("restores a won dispute after an unsuccessful refund", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
+    mocks.constructEvent.mockReturnValue(
+      event("charge.dispute.closed", { id: "dp_1" }),
+    );
+    mocks.retrieveDispute.mockResolvedValue({
+      id: "dp_1",
+      charge: "ch_1",
+      payment_intent: "pi_package",
+      status: "won",
+    });
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_1",
+      amount_refunded: 1,
+    });
+    mocks.listRefunds.mockResolvedValue({
+      data: [{ id: "re_failed", status: "failed" }],
+      has_more: false,
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.restorePackagePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentId: "pi_package",
+        event: expect.objectContaining({ rank: 30 }),
+      }),
+    );
+  });
+
+  it("does not restore an invalid reversal tombstone", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(tombstoneReference);
+    mocks.constructEvent.mockReturnValue(
+      event("charge.dispute.closed", { id: "dp_tombstone" }),
+    );
+    mocks.retrieveDispute.mockResolvedValue({
+      id: "dp_tombstone",
+      charge: "ch_1",
+      payment_intent: "pi_package",
+      status: "won",
+    });
+    mocks.retrievePaymentIntent.mockResolvedValue({
+      id: "pi_package",
+      amount: 1_000,
+      currency: "usd",
+      metadata: {},
+    });
+    mocks.resolvePackagePayment.mockResolvedValue({
+      status: "refund",
+      reason: "package, amount, or currency mismatch",
+    });
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_1",
+      amount_refunded: 0,
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.recordPackagePaymentSucceeded).not.toHaveBeenCalled();
+    expect(mocks.restorePackagePayment).not.toHaveBeenCalled();
+  });
+
+  it("revalidates a reversal tombstone before restoring it", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(tombstoneReference);
+    mocks.constructEvent.mockReturnValue(
+      event("charge.dispute.closed", { id: "dp_tombstone" }),
+    );
+    mocks.retrieveDispute.mockResolvedValue({
+      id: "dp_tombstone",
+      charge: "ch_1",
+      payment_intent: "pi_package",
+      status: "won",
+    });
+    mocks.retrievePaymentIntent.mockResolvedValue({
+      id: "pi_package",
+      amount: 1_000,
+      currency: "usd",
+      metadata: {},
+    });
+    mocks.resolvePackagePayment.mockResolvedValue({
+      status: "fulfill",
+      reference,
+    });
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_1",
+      amount_refunded: 0,
+    });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.recordPackagePaymentSucceeded).toHaveBeenCalledWith({
+      reference,
+      billing: { amount: 1_000, currency: "usd" },
+      event: expect.objectContaining({ rank: 10 }),
+    });
+    expect(mocks.restorePackagePayment).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentId: "pi_package" }),
+    );
   });
 
   it("does not change access for a warning inquiry", async () => {

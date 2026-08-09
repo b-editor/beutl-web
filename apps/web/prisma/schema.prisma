@@ -186,6 +186,7 @@ model UserPaymentHistory {
   userId                    String
   paymentId                 String    @unique
   packageId                 String
+  fulfillmentValidated      Boolean   @default(true)
   revokedAt                 DateTime?
   revocationReason          String?
   stripeStateEventId        String?
@@ -222,7 +223,7 @@ model PackageScreenshot {
 model UserPackage {
   userId         String
   packageId      String
-  paymentManaged Boolean  @default(false)
+  paymentManaged Boolean  @default(true)
   createdAt      DateTime @default(now())
   package        Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)

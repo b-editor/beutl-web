@@ -6,6 +6,8 @@
   "orderThankYou": "ご注文ありがとうございます。決済が正常に完了しました。インストールするにはデスクトップアプリを開いてください。",
   "processing": "処理中",
   "orderProcessing": "ご注文ありがとうございます。支払い処理中です。",
+  "paymentRefunded": "返金済み",
+  "orderRefunded": "この決済は返金されたため、パッケージはライブラリに追加されていません。",
   "paymentFailed": "支払いが成功しませんでした。もう一度お試しください。",
   "somethingWentWrong": "何かがうまくいきませんでした。もう一度お試しください。",
   "returnToProductPage": "商品ページに戻る",

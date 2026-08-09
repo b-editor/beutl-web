@@ -53,15 +53,17 @@ export async function resolvePackagePaymentOwner({
   stripe: PackagePaymentStripeClient;
 }): Promise<PackagePaymentOwnerResolution> {
   const packageId = paymentIntent.metadata.packageId?.trim();
-  if (!packageId) {
-    return { status: "unrecognized" };
-  }
   const purchaseKind = paymentIntent.metadata.beutlPurchaseKind;
   if (
     purchaseKind !== undefined &&
     purchaseKind !== PACKAGE_PURCHASE_METADATA_VALUE
   ) {
     return { status: "unrecognized" };
+  }
+  if (!packageId) {
+    return purchaseKind === PACKAGE_PURCHASE_METADATA_VALUE
+      ? { status: "invalid", reason: "missing package id" }
+      : { status: "unrecognized" };
   }
   if (purchaseKind !== PACKAGE_PURCHASE_METADATA_VALUE) {
     return { status: "invalid", reason: "missing package ownership binding" };

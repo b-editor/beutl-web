@@ -32,6 +32,14 @@ const RESTORED_DISPUTE_STATUSES = new Set<Stripe.Dispute.Status>([
   "won",
 ]);
 
+const REFUND_INTERVENTION_STATUSES = new Set([
+  "failed",
+  "canceled",
+  "requires_action",
+]);
+const PACKAGE_PAYMENT_VALIDATION_REFUND =
+  "package-payment-validation-failed";
+
 function stripeStateEvent(
   event: Stripe.Event,
   rank: number,
@@ -66,21 +74,37 @@ async function resolveReversalReference({
   paymentIntent,
   stripe,
   requireValidPayment,
+  event,
 }: {
   paymentIntent: Stripe.PaymentIntent;
   stripe: StripeClient;
   requireValidPayment: boolean;
+  event: Stripe.Event;
 }): Promise<PackagePaymentReference | null> {
   const existing = await findPackagePaymentReference({
     paymentId: paymentIntent.id,
   });
-  if (existing) {
+  if (existing && (!requireValidPayment || existing.fulfillmentValidated)) {
     return existing;
   }
 
   if (requireValidPayment) {
     const payment = await resolvePackagePayment({ paymentIntent, stripe });
-    return payment.status === "fulfill" ? payment.reference : null;
+    if (payment.status !== "fulfill") {
+      return null;
+    }
+    const result = await recordPackagePaymentSucceeded({
+      reference: payment.reference,
+      billing: {
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency,
+      },
+      event: stripeStateEvent(
+        event,
+        PACKAGE_PAYMENT_EVENT_RANK.paymentSucceeded,
+      ),
+    });
+    return result ? payment.reference : null;
   }
   const owner = await resolvePackagePaymentOwner({ paymentIntent, stripe });
   return owner.status === "owned" ? owner.reference : null;
@@ -91,7 +115,10 @@ async function handlePaymentSucceeded(
   paymentIntent: Stripe.PaymentIntent,
   event: Stripe.Event,
 ): Promise<void> {
-  if (await findPackagePaymentReference({ paymentId: paymentIntent.id })) {
+  const existing = await findPackagePaymentReference({
+    paymentId: paymentIntent.id,
+  });
+  if (existing?.fulfillmentValidated) {
     return;
   }
   const payment = await resolvePackagePayment({ paymentIntent, stripe });
@@ -142,15 +169,125 @@ async function handleRefundedCharge(
   if (charge.amount_refunded <= 0) {
     return;
   }
+  const refund = await findSucceededRefund(stripe, charge.id);
+  if (!refund) {
+    return;
+  }
   const paymentIntentId = getExpandableId(charge.payment_intent);
   if (!paymentIntentId) {
     return;
   }
+  await revokeRefundedPayment({
+    stripe,
+    event,
+    paymentIntentId,
+    chargeId: charge.id,
+    refundId: refund.id,
+  });
+}
+
+async function findSucceededRefund(
+  stripe: StripeClient,
+  chargeId: string,
+): Promise<Stripe.Refund | null> {
+  let startingAfter: string | undefined;
+  while (true) {
+    const refunds = await stripe.refunds.list({
+      charge: chargeId,
+      limit: 100,
+      ...(startingAfter ? { starting_after: startingAfter } : {}),
+    });
+    const succeeded = refunds.data.find(
+      (refund) => refund.status === "succeeded",
+    );
+    if (succeeded) {
+      return succeeded;
+    }
+    if (!refunds.has_more) {
+      return null;
+    }
+    const lastRefund = refunds.data.at(-1);
+    if (!lastRefund) {
+      throw new Error("Stripe returned an empty refund page with has_more");
+    }
+    startingAfter = lastRefund.id;
+  }
+}
+
+async function handleRefund(
+  stripe: StripeClient,
+  eventRefund: Stripe.Refund,
+  event: Stripe.Event,
+): Promise<void> {
+  const refund = await stripe.refunds.retrieve(eventRefund.id);
+  if (refund.status !== "succeeded") {
+    await recordAutomaticRefundFailure(refund);
+    return;
+  }
+  let paymentIntentId = getExpandableId(refund.payment_intent);
+  const chargeId = getExpandableId(refund.charge);
+  if (!paymentIntentId && chargeId) {
+    const charge = await stripe.charges.retrieve(chargeId);
+    paymentIntentId = getExpandableId(charge.payment_intent);
+  }
+  if (!paymentIntentId) {
+    return;
+  }
+  await revokeRefundedPayment({
+    stripe,
+    event,
+    paymentIntentId,
+    chargeId,
+    refundId: refund.id,
+  });
+}
+
+async function recordAutomaticRefundFailure(
+  refund: Stripe.Refund,
+): Promise<void> {
+  if (
+    !refund.status ||
+    !REFUND_INTERVENTION_STATUSES.has(refund.status) ||
+    refund.metadata?.beutlDisposition !== PACKAGE_PAYMENT_VALIDATION_REFUND
+  ) {
+    return;
+  }
+  await addAuditLog({
+    userId: null,
+    action:
+      refund.status === "requires_action"
+        ? auditLogActions.store.paymentRefundRequiresAction
+        : auditLogActions.store.paymentRefundFailed,
+    details: [
+      `refundId: ${refund.id}`,
+      `refundStatus: ${refund.status}`,
+      `paymentIntentId: ${getExpandableId(refund.payment_intent) ?? "unknown"}`,
+      `chargeId: ${getExpandableId(refund.charge) ?? "unknown"}`,
+      `failureReason: ${refund.failure_reason ?? "unknown"}`,
+      `dispositionReason: ${refund.metadata.beutlDispositionReason ?? "unknown"}`,
+    ].join(", "),
+  });
+}
+
+async function revokeRefundedPayment({
+  stripe,
+  event,
+  paymentIntentId,
+  chargeId,
+  refundId,
+}: {
+  stripe: StripeClient;
+  event: Stripe.Event;
+  paymentIntentId: string;
+  chargeId: string | null;
+  refundId: string;
+}): Promise<void> {
   const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
   const reference = await resolveReversalReference({
     paymentIntent,
     stripe,
     requireValidPayment: false,
+    event,
   });
   const result = await revokePackagePayment({
     paymentId: paymentIntent.id,
@@ -161,12 +298,12 @@ async function handleRefundedCharge(
       event,
       PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded,
     ),
-    reason: `charge refunded: ${charge.id}`,
+    reason: `refund succeeded: ${refundId}`,
   });
   await addPaymentAuditLog(
     result,
     auditLogActions.store.paymentRevoked,
-    `state: revoked, chargeId: ${charge.id}`,
+    `state: revoked, chargeId: ${chargeId ?? "unknown"}, refundId: ${refundId}`,
   );
 }
 
@@ -186,10 +323,23 @@ async function handleDispute(
   if (!shouldRevoke && !shouldRestore) {
     return;
   }
+  if (shouldRestore) {
+    const chargeId = getExpandableId(dispute.charge);
+    if (chargeId) {
+      const charge = await stripe.charges.retrieve(chargeId);
+      if (
+        charge.amount_refunded > 0 &&
+        (await findSucceededRefund(stripe, charge.id))
+      ) {
+        return;
+      }
+    }
+  }
   const reference = await resolveReversalReference({
     paymentIntent,
     stripe,
     requireValidPayment: !shouldRevoke,
+    event,
   });
 
   if (shouldRevoke) {
@@ -212,18 +362,12 @@ async function handleDispute(
     return;
   }
 
-  const chargeId = getExpandableId(dispute.charge);
-  if (chargeId) {
-    const charge = await stripe.charges.retrieve(chargeId);
-    if (charge.amount_refunded > 0) {
-      return;
-    }
+  if (!reference) {
+    return;
   }
   const result = await restorePackagePayment({
     paymentId: paymentIntent.id,
-    reference: reference
-      ? { userId: reference.userId, packageId: reference.packageId }
-      : undefined,
+    reference: { userId: reference.userId, packageId: reference.packageId },
     event: stripeStateEvent(
       event,
       PACKAGE_PAYMENT_EVENT_RANK.disputeRestored,
@@ -269,6 +413,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         await handleRefundedCharge(
           stripe,
           event.data.object as Stripe.Charge,
+          event,
+        );
+        break;
+      case "refund.created":
+      case "refund.updated":
+      case "refund.failed":
+        await handleRefund(
+          stripe,
+          event.data.object as Stripe.Refund,
           event,
         );
         break;

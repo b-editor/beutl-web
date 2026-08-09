@@ -3,8 +3,8 @@ import { startTransaction, type PrismaTransaction } from "./transaction";
 
 export const PACKAGE_PAYMENT_EVENT_RANK = {
   paymentSucceeded: 10,
-  disputeRestored: 20,
-  disputeRevoked: 30,
+  disputeRevoked: 20,
+  disputeRestored: 30,
   refundSucceeded: 40,
 } as const;
 
@@ -30,7 +30,14 @@ export type PackagePaymentStateResult = PackagePaymentReference & {
   changed: boolean;
 };
 
+export type PackagePaymentRecord = PackagePaymentReference & {
+  fulfillmentValidated: boolean;
+  revokedAt: Date | null;
+  stripeStateEventRank: number;
+};
+
 type PaymentHistoryState = PackagePaymentReference & {
+  fulfillmentValidated: boolean;
   revokedAt: Date | null;
   stripeStateEventId: string | null;
   stripeStateEventCreatedAt: Date | null;
@@ -41,6 +48,7 @@ const paymentStateSelect = {
   paymentId: true,
   userId: true,
   packageId: true,
+  fulfillmentValidated: true,
   revokedAt: true,
   stripeStateEventId: true,
   stripeStateEventCreatedAt: true,
@@ -60,6 +68,13 @@ function isNewerEvent(
   current: PaymentHistoryState,
   incoming: PackagePaymentStateEvent,
 ): boolean {
+  if (
+    current.stripeStateEventRank ===
+      PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded &&
+    incoming.rank < PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded
+  ) {
+    return false;
+  }
   if (!current.stripeStateEventCreatedAt) {
     return true;
   }
@@ -75,7 +90,7 @@ function isNewerEvent(
 }
 
 function assertSameReference(
-  current: PaymentHistoryState,
+  current: PackagePaymentReference,
   reference: PackagePaymentReference,
 ): void {
   if (
@@ -91,7 +106,7 @@ async function reconcileLibraryEntitlement(
   tx: PrismaTransaction,
   state: PaymentHistoryState,
 ): Promise<void> {
-  if (!state.revokedAt) {
+  if (state.fulfillmentValidated && !state.revokedAt) {
     const pkg = await tx.package.findFirst({
       where: { id: state.packageId },
       select: { id: true },
@@ -120,6 +135,7 @@ async function reconcileLibraryEntitlement(
     where: {
       userId: state.userId,
       packageId: state.packageId,
+      fulfillmentValidated: true,
       revokedAt: null,
     },
   });
@@ -140,6 +156,7 @@ async function applyPackagePaymentState({
   event,
   reason,
   reference,
+  validateFulfillment,
   tx,
 }: {
   active: boolean;
@@ -147,6 +164,7 @@ async function applyPackagePaymentState({
   event: PackagePaymentStateEvent;
   reason?: string;
   reference?: PackagePaymentReference;
+  validateFulfillment: boolean;
   tx: PrismaTransaction;
 }): Promise<PackagePaymentStateResult | null> {
   validateEvent(event);
@@ -168,6 +186,7 @@ async function applyPackagePaymentState({
         paymentId: reference.paymentId,
         userId: reference.userId,
         packageId: reference.packageId,
+        fulfillmentValidated: validateFulfillment,
         revokedAt: active ? null : event.createdAt,
         revocationReason: active ? null : reason ?? "payment reversed",
         stripeStateEventId: event.id,
@@ -180,17 +199,29 @@ async function applyPackagePaymentState({
   } else {
     assertSameReference(existing, reference);
     state = existing;
+    const shouldValidateFulfillment =
+      validateFulfillment && !existing.fulfillmentValidated;
     const mayReactivate = !active || !existing.revokedAt || allowReactivation;
-    if (mayReactivate && isNewerEvent(existing, event)) {
-      changed = Boolean(existing.revokedAt) === active;
+    const shouldApplyEvent = mayReactivate && isNewerEvent(existing, event);
+    if (shouldValidateFulfillment || shouldApplyEvent) {
+      changed = shouldApplyEvent && Boolean(existing.revokedAt) === active;
       state = await tx.userPaymentHistory.update({
         where: { paymentId },
         data: {
-          revokedAt: active ? null : event.createdAt,
-          revocationReason: active ? null : reason ?? "payment reversed",
-          stripeStateEventId: event.id,
-          stripeStateEventCreatedAt: event.createdAt,
-          stripeStateEventRank: event.rank,
+          ...(shouldValidateFulfillment
+            ? { fulfillmentValidated: true }
+            : {}),
+          ...(shouldApplyEvent
+            ? {
+                revokedAt: active ? null : event.createdAt,
+                revocationReason: active
+                  ? null
+                  : reason ?? "payment reversed",
+                stripeStateEventId: event.id,
+                stripeStateEventCreatedAt: event.createdAt,
+                stripeStateEventRank: event.rank,
+              }
+            : {}),
         },
         select: paymentStateSelect,
       });
@@ -213,7 +244,7 @@ export async function findPackagePaymentReference({
 }: {
   paymentId: string;
   prisma?: PrismaTransaction;
-}): Promise<PackagePaymentReference | null> {
+}): Promise<PackagePaymentRecord | null> {
   const db = prisma ?? await getDb();
   return await db.userPaymentHistory.findUnique({
     where: { paymentId },
@@ -221,6 +252,9 @@ export async function findPackagePaymentReference({
       paymentId: true,
       userId: true,
       packageId: true,
+      fulfillmentValidated: true,
+      revokedAt: true,
+      stripeStateEventRank: true,
     },
   });
 }
@@ -249,7 +283,10 @@ export async function recordPackagePaymentSucceeded({
       paymentId: reference.paymentId,
       prisma: tx,
     });
-    if (!existing) {
+    if (existing) {
+      assertSameReference(existing, reference);
+    }
+    if (!existing?.fulfillmentValidated) {
       const pkg = await tx.package.findFirst({
         where: {
           id: reference.packageId,
@@ -275,6 +312,7 @@ export async function recordPackagePaymentSucceeded({
       allowReactivation: false,
       event,
       reference,
+      validateFulfillment: true,
       tx,
     });
   };
@@ -307,6 +345,7 @@ export async function revokePackagePayment({
       event,
       reason,
       reference: resolvedReference,
+      validateFulfillment: false,
       tx,
     });
   };
@@ -329,13 +368,18 @@ export async function restorePackagePayment({
       paymentId,
       prisma: tx,
     });
-    const resolvedReference =
-      existing ?? (reference ? { paymentId, ...reference } : undefined);
+    if (!existing?.fulfillmentValidated) {
+      return null;
+    }
+    if (reference) {
+      assertSameReference(existing, { paymentId, ...reference });
+    }
     return await applyPackagePaymentState({
       active: true,
       allowReactivation: true,
       event,
-      reference: resolvedReference,
+      reference: existing,
+      validateFulfillment: false,
       tx,
     });
   };
