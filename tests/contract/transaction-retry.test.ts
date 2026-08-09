@@ -34,6 +34,30 @@ describe("database transactions", () => {
     expect(transaction).toHaveBeenCalledTimes(1);
   });
 
+  it("passes interactive transaction options to every attempt", async () => {
+    const transaction = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("write conflict"), { code: "P2034" }),
+      )
+      .mockImplementation(async (callback) => callback({}));
+    setDbProvider(async () => ({ $transaction: transaction }) as never);
+    const options = { isolationLevel: "Serializable" as const };
+
+    await startRetryableTransaction(async () => "completed", options);
+
+    expect(transaction).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Function),
+      options,
+    );
+    expect(transaction).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Function),
+      options,
+    );
+  });
+
   it("retries adapter write conflicts raised while committing", async () => {
     const adapterConflict = Object.assign(
       new Error("TransactionWriteConflict"),

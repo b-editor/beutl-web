@@ -160,13 +160,14 @@ async function prepareRefreshToken() {
 
 function createRefreshTokenCandidate() {
   const rawToken = crypto.randomUUID();
+  const expirationDays = Number.parseInt(
+    process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30",
+  );
+  if (!Number.isFinite(expirationDays) || expirationDays <= 0) {
+    throw new Error("JWT_REFRESH_TOKEN_EXPIRATION_DAYS is invalid");
+  }
   const expires = new Date(
-    Date.now() +
-      1000 *
-        60 *
-        60 *
-        24 *
-        Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
+    Date.now() + 1000 * 60 * 60 * 24 * expirationDays,
   );
   if (Number.isNaN(expires.getTime())) {
     throw new Error("JWT_REFRESH_TOKEN_EXPIRATION_DAYS is invalid");

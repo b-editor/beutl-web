@@ -3,6 +3,11 @@ import {
   startRetryableTransaction,
   type PrismaTransaction,
 } from "./transaction";
+import { Prisma } from "@prisma/client";
+
+export const REFRESH_TOKEN_RESPONSE_LOSS_GRACE_MS = 10_000;
+export const REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS =
+  90 * 24 * 60 * 60 * 1000;
 
 export async function createSession({
   token,
@@ -54,18 +59,25 @@ export async function createNativeRefreshToken({
   prisma?: PrismaTransaction;
 }) {
   const create = async (db: PrismaTransaction) => {
-    await purgeOneExpiredRefreshTokenFamily(db, new Date());
+    const now = new Date();
+    const effectiveExpiresAt = new Date(
+      Math.min(
+        expiresAt.getTime(),
+        now.getTime() + REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS,
+      ),
+    );
+    await purgeOneExpiredRefreshTokenFamily(db, now);
     await db.refreshTokenFamily.create({
       data: {
         id: refreshTokenFamilyId,
         userId,
-        expiresAt,
+        expiresAt: effectiveExpiresAt,
       },
     });
     return await db.nativeRefreshToken.create({
       data: {
         token,
-        expiresAt,
+        expiresAt: effectiveExpiresAt,
         userId,
         refreshTokenFamilyId,
       },
@@ -76,8 +88,6 @@ export async function createNativeRefreshToken({
     ? await create(prisma)
     : await startRetryableTransaction(create);
 }
-
-export const REFRESH_TOKEN_RESPONSE_LOSS_GRACE_MS = 10_000;
 
 type NativeRefreshToken = {
   token: string;
@@ -99,6 +109,7 @@ type RefreshTokenFamily = {
   userId: string;
   expiresAt: Date;
   revokedAt: Date | null;
+  createdAt: Date;
 };
 
 export type RotateNativeRefreshTokenResult = {
@@ -156,6 +167,7 @@ async function findRefreshTokenFamily(
       userId: true,
       expiresAt: true,
       revokedAt: true,
+      createdAt: true,
     },
   });
 }
@@ -343,17 +355,21 @@ export async function rotateNativeRefreshTokenByToken({
       family = adopted.family;
     }
 
-    if (family && family.expiresAt <= now) {
+    if (!family) {
+      return null;
+    }
+    const familyMaxExpiresAt = new Date(
+      family.createdAt.getTime() + REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS,
+    );
+    if (family.expiresAt <= now || familyMaxExpiresAt <= now) {
       await db.refreshTokenFamily.deleteMany({
         where: {
           id: family.id,
-          expiresAt: { lte: now },
         },
       });
       return null;
     }
     if (
-      !family ||
       family.userId !== refreshToken.userId ||
       family.revokedAt
     ) {
@@ -372,6 +388,11 @@ export async function rotateNativeRefreshTokenByToken({
     if (refreshToken.expiresAt <= now) {
       return null;
     }
+
+    const effectiveReplacementExpiresAt =
+      replacementExpiresAt < familyMaxExpiresAt
+        ? replacementExpiresAt
+        : familyMaxExpiresAt;
 
     const consumed = await db.nativeRefreshToken.updateMany({
       where: {
@@ -416,16 +437,15 @@ export async function rotateNativeRefreshTokenByToken({
       where: {
         id: family.id,
         revokedAt: null,
-        expiresAt: { lt: replacementExpiresAt },
       },
       data: {
-        expiresAt: replacementExpiresAt,
+        expiresAt: effectiveReplacementExpiresAt,
       },
     });
     await db.nativeRefreshToken.create({
       data: {
         token: replacementToken,
-        expiresAt: replacementExpiresAt,
+        expiresAt: effectiveReplacementExpiresAt,
         userId: refreshToken.userId,
         refreshTokenFamilyId: family.id,
       },
@@ -434,9 +454,13 @@ export async function rotateNativeRefreshTokenByToken({
     return {
       userId: refreshToken.userId,
       refreshToken: replacementToken,
-      refreshTokenExpiresAt: replacementExpiresAt,
+      refreshTokenExpiresAt: effectiveReplacementExpiresAt,
     };
   };
 
-  return prisma ? await rotate(prisma) : await startRetryableTransaction(rotate);
+  return prisma
+    ? await rotate(prisma)
+    : await startRetryableTransaction(rotate, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
 }

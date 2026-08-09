@@ -27,6 +27,7 @@ vi.mock("@beutl/db", async (importOriginal) => {
 });
 
 import {
+  REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS,
   REFRESH_TOKEN_RESPONSE_LOSS_GRACE_MS,
   setDbProvider,
 } from "@beutl/db";
@@ -104,6 +105,18 @@ describe("v1 refresh-token rotation", () => {
     });
   });
 
+  it("caps the initial refresh-token lifetime at 90 days", async () => {
+    process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS = "120";
+
+    await issueCredentials("session-owner");
+
+    const absoluteExpiry = new Date(
+      NOW.getTime() + REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS,
+    );
+    expect(store.allFamilies()[0].expiresAt).toEqual(absoluteExpiry);
+    expect(store.all()[0].expiresAt).toEqual(absoluteExpiry);
+  });
+
   it("adopts a pre-deployment native session on its first refresh", async () => {
     const credentials = await issueCredentials("legacy-session-owner");
     const legacySession = store.all()[0];
@@ -134,7 +147,38 @@ describe("v1 refresh-token rotation", () => {
       refreshTokenFamilyId: adoptedParent!.refreshTokenFamilyId,
       refreshTokenConsumedAt: null,
     });
+    expect(store.allTransactionOptions().at(-1)).toEqual({
+      isolationLevel: "Serializable",
+    });
   });
+
+  it.each(["0", "-1", "invalid"])(
+    "rejects an invalid refresh-token expiration of %s days",
+    async (expirationDays) => {
+      process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS = expirationDays;
+      mocks.findNativeAppAuthBySessionId.mockResolvedValueOnce({
+        code: "authorization-code",
+        codeExpires: new Date(Date.now() + 60_000),
+        continueUrl: "https://app.example/continue",
+        sessionId: "native-session",
+        userId: "session-owner",
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        const response = await post("/code2jwt", {
+          code: "authorization-code",
+          session_id: "native-session",
+        });
+
+        expect(response.status).toBe(500);
+        expect(store.allFamilies()).toHaveLength(0);
+        expect(store.all()).toHaveLength(0);
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 
   it("ignores a forged victim claim and mints for the session owner", async () => {
     const credentials = await issueCredentials("session-owner");
@@ -276,6 +320,42 @@ describe("v1 refresh-token rotation", () => {
     expect(
       store.getFamily(original.refreshTokenFamilyId!)?.expiresAt,
     ).toEqual(new Date(NOW.getTime() + 31 * 24 * 60 * 60 * 1000));
+  });
+
+  it("caps a refresh-token family at 90 days from creation", async () => {
+    const credentials = await issueCredentials("session-owner");
+    const original = store.all()[0];
+    const familyId = original.refreshTokenFamilyId;
+    store.updateFamily(familyId, {
+      createdAt: new Date(
+        NOW.getTime() -
+          REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS +
+          24 * 60 * 60 * 1000,
+      ),
+    });
+
+    const response = await post("/refresh", {
+      refresh_token: credentials.refresh_token,
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(200);
+    const refreshed = (await response.json()) as Credentials;
+    const absoluteExpiry = new Date(NOW.getTime() + 24 * 60 * 60 * 1000);
+    expect(store.getFamily(familyId)?.expiresAt).toEqual(absoluteExpiry);
+    expect(
+      store.all().find((token) => !token.refreshTokenConsumedAt)?.expiresAt,
+    ).toEqual(absoluteExpiry);
+
+    vi.setSystemTime(absoluteExpiry);
+    const expiredResponse = await post("/refresh", {
+      refresh_token: refreshed.refresh_token,
+      token: refreshed.token,
+    });
+
+    expect(expiredResponse.status).toBe(401);
+    expect(store.getFamily(familyId)).toBeNull();
+    expect(store.all()).toHaveLength(0);
   });
 
   it("retains tombstones until token expiry and then purges them", async () => {

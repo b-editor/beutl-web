@@ -1,9 +1,15 @@
 import { getDb } from "./provider";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 export type PrismaTransaction = Parameters<
   Parameters<typeof PrismaClient.prototype.$transaction>[0]
 >[0];
+
+export type PrismaTransactionOptions = {
+  maxWait?: number;
+  timeout?: number;
+  isolationLevel?: Prisma.TransactionIsolationLevel;
+};
 
 const MAX_TRANSACTION_ATTEMPTS = 5;
 
@@ -45,11 +51,12 @@ export const startTransaction = async <T>(
 // become safe to repeat when the failed transaction is rolled back.
 export const startRetryableTransaction = async <T>(
   callback: (tx: PrismaTransaction) => Promise<T>,
+  options?: PrismaTransactionOptions,
 ) => {
   const db = await getDb();
   for (let attempt = 1; ; attempt++) {
     try {
-      return await db.$transaction(callback);
+      return await db.$transaction(callback, options);
     } catch (error) {
       if (
         attempt >= MAX_TRANSACTION_ATTEMPTS ||

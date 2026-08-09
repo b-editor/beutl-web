@@ -139,6 +139,9 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
   const sessions = new Map<string, SessionRecord>();
   const refreshTokens = new Map<string, NativeRefreshTokenRecord>();
   const families = new Map<string, RefreshTokenFamilyRecord>();
+  const transactionOptions: Array<
+    { isolationLevel?: string } | undefined
+  > = [];
 
   const toSessionRecord = (seed: SessionSeed): SessionRecord => {
     const timestamp = new Date();
@@ -349,7 +352,9 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
         nativeRefreshToken: typeof nativeRefreshToken;
         refreshTokenFamily: typeof refreshTokenFamily;
       }) => Promise<T>,
+      options?: { isolationLevel?: string },
     ) => {
+      transactionOptions.push(options ? { ...options } : undefined);
       const previous = transactionQueue;
       let release!: () => void;
       transactionQueue = new Promise<void>((resolve) => {
@@ -454,6 +459,11 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
         throw new Error(`Unknown refresh token family: ${id}`);
       }
       families.set(id, cloneFamily({ ...family, ...data }));
+    },
+    allTransactionOptions() {
+      return transactionOptions.map((options) =>
+        options ? { ...options } : undefined,
+      );
     },
   };
 }
