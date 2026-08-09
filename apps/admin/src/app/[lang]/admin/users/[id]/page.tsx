@@ -6,10 +6,12 @@ import Link from "next/link";
 import { Button } from "@beutl/ui/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
+import { requireAdmin } from "@/lib/auth-guard";
 
 export default async function Page(props: {
   params: Promise<{ lang: string; id: string }>;
 }) {
+  await requireAdmin();
   const params = await props.params;
   const { lang, id } = params;
   const { t } = await getTranslation(lang);

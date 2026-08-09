@@ -4,6 +4,7 @@ import { FeedbackStatusSelect } from "./components";
 import { FeedbackFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { Badge } from "@beutl/ui/ui/badge";
+import { requireAdmin } from "@/lib/auth-guard";
 
 const PAGE_SIZE = 20;
 const statuses = ["OPEN", "IN_PROGRESS", "RESOLVED"] as const;
@@ -21,6 +22,7 @@ export default async function Page(props: {
   params: Promise<{ lang: string }>;
   searchParams: Promise<{ status?: string; category?: string; page?: string }>;
 }) {
+  await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;
@@ -57,6 +59,7 @@ export default async function Page(props: {
                 <TableHead>{t("admin:feedback.status")}</TableHead>
                 <TableHead>{t("admin:feedback.category")}</TableHead>
                 <TableHead>{t("admin:feedback.name")}</TableHead>
+                <TableHead>{t("admin:feedback.email")}</TableHead>
                 <TableHead>{t("admin:feedback.message")}</TableHead>
                 <TableHead>{t("admin:feedback.createdAt")}</TableHead>
               </TableRow>
@@ -75,6 +78,14 @@ export default async function Page(props: {
                     <Badge variant="secondary">{t(`admin:category.${item.category}`)}</Badge>
                   </TableCell>
                   <TableCell>{item.name}</TableCell>
+                  <TableCell>
+                    <a
+                      href={`mailto:${item.email}`}
+                      className="text-sm underline-offset-4 hover:underline"
+                    >
+                      {item.email}
+                    </a>
+                  </TableCell>
                   <TableCell className="max-w-md truncate" title={item.message}>
                     {item.message}
                   </TableCell>

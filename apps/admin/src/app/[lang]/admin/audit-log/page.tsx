@@ -2,6 +2,7 @@ import { listAuditLogs } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
+import { requireAdmin } from "@/lib/auth-guard";
 
 const PAGE_SIZE = 30;
 
@@ -9,6 +10,7 @@ export default async function Page(props: {
   params: Promise<{ lang: string }>;
   searchParams: Promise<{ action?: string; userId?: string; page?: string }>;
 }) {
+  await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;

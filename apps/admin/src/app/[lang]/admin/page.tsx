@@ -2,8 +2,10 @@ import { countUsers, countFeedback, listAuditLogs } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import { Users, MessageSquare, ScrollText } from "lucide-react";
+import { requireAdmin } from "@/lib/auth-guard";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
+  await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const { t } = await getTranslation(lang);

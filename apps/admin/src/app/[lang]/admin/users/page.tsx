@@ -4,6 +4,7 @@ import { UserSearchForm } from "./components";
 import Link from "next/link";
 import { Button } from "@beutl/ui/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
+import { requireAdmin } from "@/lib/auth-guard";
 
 const PAGE_SIZE = 20;
 
@@ -11,6 +12,7 @@ export default async function Page(props: {
   params: Promise<{ lang: string }>;
   searchParams: Promise<{ q?: string; page?: string }>;
 }) {
+  await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;

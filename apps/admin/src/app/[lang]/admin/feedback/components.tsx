@@ -46,15 +46,22 @@ export function FeedbackStatusSelect({
     // 楽観的更新: サーバー応答前に選択値を反映
     setSelectedStatus(nextStatus);
     startTransition(async () => {
-      const res = await updateStatus({
-        id: feedbackId,
-        status: nextStatus,
-      });
-      if (!res.success) {
-        // 失敗時は元の値に戻す
+      try {
+        const res = await updateStatus({
+          id: feedbackId,
+          status: nextStatus,
+        });
+        if (!res.success) {
+          setSelectedStatus(initialStatus);
+        }
+        setLastResult(res);
+      } catch (e) {
         setSelectedStatus(initialStatus);
+        setLastResult({
+          success: false,
+          message: e instanceof Error ? e.message : String(e),
+        });
       }
-      setLastResult(res);
     });
   }, [feedbackId, initialStatus, startTransition]);
 
