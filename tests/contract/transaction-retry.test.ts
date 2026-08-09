@@ -28,9 +28,9 @@ describe("database transactions", () => {
     const transaction = vi.fn().mockRejectedValue(new Error("invalid data"));
     setDbProvider(async () => ({ $transaction: transaction }) as never);
 
-    await expect(startTransaction(async () => "unused")).rejects.toThrow(
-      "invalid data",
-    );
+    await expect(
+      startRetryableTransaction(async () => "unused"),
+    ).rejects.toThrow("invalid data");
     expect(transaction).toHaveBeenCalledTimes(1);
   });
 

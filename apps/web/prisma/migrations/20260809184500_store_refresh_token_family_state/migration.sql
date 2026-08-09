@@ -24,51 +24,6 @@ CREATE TABLE "NativeRefreshToken" (
     CONSTRAINT "NativeRefreshToken_pkey" PRIMARY KEY ("token")
 );
 
--- Backfill
-INSERT INTO "RefreshTokenFamily" (
-    "id",
-    "userId",
-    "expiresAt",
-    "revokedAt",
-    "createdAt",
-    "updatedAt"
-)
-SELECT
-    "refreshTokenFamilyId",
-    "userId",
-    MAX("expiresAt"),
-    MAX("refreshTokenRevokedAt"),
-    MIN("createdAt"),
-    MAX("updatedAt")
-FROM "Session"
-WHERE "refreshTokenFamilyId" IS NOT NULL
-GROUP BY "refreshTokenFamilyId", "userId";
-
-INSERT INTO "NativeRefreshToken" (
-    "token",
-    "userId",
-    "refreshTokenFamilyId",
-    "expiresAt",
-    "refreshTokenConsumedAt",
-    "refreshTokenReplacedByToken",
-    "createdAt",
-    "updatedAt"
-)
-SELECT
-    "token",
-    "userId",
-    "refreshTokenFamilyId",
-    "expiresAt",
-    "refreshTokenConsumedAt",
-    "refreshTokenReplacedByToken",
-    "createdAt",
-    "updatedAt"
-FROM "Session"
-WHERE "refreshTokenFamilyId" IS NOT NULL;
-
-DELETE FROM "Session"
-WHERE "refreshTokenFamilyId" IS NOT NULL;
-
 -- CreateIndex
 CREATE INDEX "RefreshTokenFamily_userId_idx"
 ON "RefreshTokenFamily"("userId");

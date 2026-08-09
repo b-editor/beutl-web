@@ -241,7 +241,7 @@ const app = new Hono()
     return c.redirect(url.toString());
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
-    const { refresh_token } = c.req.valid("json");
+    const { refresh_token, token: _unusedAccessToken } = c.req.valid("json");
 
     const oldDecryptedRefreshToken = await decryptRefreshToken(refresh_token);
     if (!oldDecryptedRefreshToken) {
