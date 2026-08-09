@@ -8,6 +8,8 @@
   "orderProcessing": "Thank you for your order. Payment is being processed.",
   "paymentRefunded": "Payment refunded",
   "orderRefunded": "This payment was refunded, so the package was not added to your library.",
+  "paymentRevoked": "Package access unavailable",
+  "orderRevoked": "Access to this package is unavailable while the payment is under review.",
   "paymentFailed": "Payment was unsuccessful. Please try again.",
   "somethingWentWrong": "Something went wrong. Please try again.",
   "returnToProductPage": "Return to product page",

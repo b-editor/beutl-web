@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "@beutl/core";
 
 const mocks = vi.hoisted(() => ({
   createCustomer: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("@/lib/stripe/config", () => ({
 import { createOrRetrieveCustomerId } from "../../apps/web/src/lib/customer";
 
 describe("Stripe customer ownership", () => {
+  async function idempotencyKey(email: string, prefix: string) {
+    return `${prefix}:${(await createHash(email)).slice(0, 16)}`;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findCustomerByUserId.mockResolvedValue(null);
@@ -54,7 +59,12 @@ describe("Stripe customer ownership", () => {
           beutlUserId: "user-1",
         },
       },
-      { idempotencyKey: "beutl:customer:user-1" },
+      {
+        idempotencyKey: await idempotencyKey(
+          "user@example.com",
+          "beutl:customer:user-1",
+        ),
+      },
     );
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
@@ -126,7 +136,10 @@ describe("Stripe customer ownership", () => {
         },
       }),
       {
-        idempotencyKey: "beutl:customer:user-1:replace:cus_shared",
+        idempotencyKey: await idempotencyKey(
+          "user@example.com",
+          "beutl:customer:user-1:replace:cus_shared",
+        ),
       },
     );
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
@@ -161,5 +174,85 @@ describe("Stripe customer ownership", () => {
       }),
     ).resolves.toBe("cus_new");
     expect(mocks.updateCustomer).not.toHaveBeenCalled();
+    expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
+      userId: "user-1",
+      stripeId: "cus_new",
+      prisma: undefined,
+    });
+  });
+
+  it("replaces a mapping whose Stripe customer is deleted", async () => {
+    mocks.findCustomerByUserId.mockResolvedValue({
+      userId: "user-1",
+      stripeId: "cus_deleted",
+    });
+    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
+      { userId: "user-1" },
+    ]);
+    mocks.retrieveCustomer.mockResolvedValue({
+      id: "cus_deleted",
+      deleted: true,
+    });
+
+    await expect(
+      createOrRetrieveCustomerId({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    ).resolves.toBe("cus_new");
+    expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
+      userId: "user-1",
+      stripeId: "cus_new",
+      prisma: undefined,
+    });
+  });
+
+  it("replaces a mapping whose Stripe customer is missing", async () => {
+    mocks.findCustomerByUserId.mockResolvedValue({
+      userId: "user-1",
+      stripeId: "cus_missing",
+    });
+    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
+      { userId: "user-1" },
+    ]);
+    mocks.retrieveCustomer.mockRejectedValue(
+      Object.assign(new Error("No such customer"), {
+        statusCode: 404,
+        code: "resource_missing",
+      }),
+    );
+
+    await expect(
+      createOrRetrieveCustomerId({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    ).resolves.toBe("cus_new");
+    expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
+      userId: "user-1",
+      stripeId: "cus_new",
+      prisma: undefined,
+    });
+  });
+
+  it("binds customer idempotency to the email request body", async () => {
+    await createOrRetrieveCustomerId({
+      email: "user@example.com",
+      userId: "user-1",
+    });
+    await createOrRetrieveCustomerId({
+      email: "user@example.com",
+      userId: "user-1",
+    });
+    await createOrRetrieveCustomerId({
+      email: "changed@example.com",
+      userId: "user-1",
+    });
+
+    const keys = mocks.createCustomer.mock.calls.map(
+      ([, options]) => options.idempotencyKey,
+    );
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
   });
 });

@@ -26,6 +26,11 @@ async function getStatusContent(
       text: t("store:orderRefunded"),
       icon: () => <Info className="min-w-9 min-h-9 text-gray-500" />,
     },
+    revoked: {
+      title: t("store:paymentRevoked"),
+      text: t("store:orderRevoked"),
+      icon: () => <Info className="min-w-9 min-h-9 text-gray-500" />,
+    },
     requires_payment_method: {
       title: t("error"),
       text: t("store:paymentFailed"),

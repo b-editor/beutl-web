@@ -42,10 +42,14 @@ export async function addToLibrary(packageId: string) {
       packageId: pkg.id,
     }))
   ) {
-    await createUserPackage({
+    const userPackage = await createUserPackage({
       userId: session.user.id,
       packageId: pkg.id,
+      requireActivePayment: pkg.packagePricing.length > 0,
     });
+    if (!userPackage) {
+      redirect(`/${lang}/store/${pkg.name}/checkout`);
+    }
     await addAuditLog({
       userId: session.user.id,
       action: auditLogActions.store.addToLibrary,

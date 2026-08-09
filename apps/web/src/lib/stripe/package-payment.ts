@@ -101,10 +101,14 @@ export async function resolvePackagePaymentOwner({
   };
 }
 
-async function matchesCurrentPackagePrice(
+type PackagePriceValidation =
+  | { valid: true }
+  | { valid: false; reason: string };
+
+async function validateCurrentPackagePrice(
   paymentIntent: Stripe.PaymentIntent,
   packageId: string,
-): Promise<boolean> {
+): Promise<PackagePriceValidation> {
   if (
     paymentIntent.status !== "succeeded" ||
     !Number.isSafeInteger(paymentIntent.amount) ||
@@ -112,11 +116,14 @@ async function matchesCurrentPackagePrice(
     paymentIntent.amount_received !== paymentIntent.amount ||
     paymentIntent.currency.trim().length === 0
   ) {
-    return false;
+    return {
+      valid: false,
+      reason: "payment status, amount, or currency is invalid",
+    };
   }
 
   const db = await getDb();
-  return !!(await db.package.findFirst({
+  const pkg = await db.package.findFirst({
     where: {
       id: packageId,
       published: true,
@@ -131,7 +138,10 @@ async function matchesCurrentPackagePrice(
       },
     },
     select: { id: true },
-  }));
+  });
+  return pkg
+    ? { valid: true }
+    : { valid: false, reason: "package is unpublished or price changed" };
 }
 
 export async function resolvePackagePayment({
@@ -148,15 +158,14 @@ export async function resolvePackagePayment({
   if (owner.status === "invalid") {
     return { status: "refund", reason: owner.reason };
   }
-  if (
-    !(await matchesCurrentPackagePrice(
-      paymentIntent,
-      owner.reference.packageId,
-    ))
-  ) {
+  const price = await validateCurrentPackagePrice(
+    paymentIntent,
+    owner.reference.packageId,
+  );
+  if (!price.valid) {
     return {
       status: "refund",
-      reason: "package, amount, or currency mismatch",
+      reason: price.reason,
     };
   }
   return { status: "fulfill", reference: owner.reference };

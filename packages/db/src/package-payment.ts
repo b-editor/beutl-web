@@ -9,6 +9,7 @@ export const PACKAGE_PAYMENT_EVENT_RANK = {
 } as const;
 
 const PACKAGE_PAYMENT_TRANSACTION_MAX_ATTEMPTS = 3;
+const PACKAGE_PAYMENT_TRANSACTION_RETRY_BASE_DELAY_MS = 10;
 const PACKAGE_PAYMENT_TRANSACTION_RETRY_CODES = new Set(["P2002", "P2034"]);
 
 export type PackagePaymentReference = {
@@ -81,6 +82,12 @@ async function startPackagePaymentTransaction<T>(
       ) {
         throw error;
       }
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          PACKAGE_PAYMENT_TRANSACTION_RETRY_BASE_DELAY_MS * attempt,
+        ),
+      );
     }
   }
 }
@@ -209,6 +216,7 @@ async function applyPackagePaymentState({
   });
   let state: PaymentHistoryState;
   let changed = false;
+  let shouldReconcileEntitlement = false;
 
   if (!existing) {
     state = await tx.userPaymentHistory.create({
@@ -226,6 +234,7 @@ async function applyPackagePaymentState({
       select: paymentStateSelect,
     });
     changed = true;
+    shouldReconcileEntitlement = true;
   } else {
     assertSameReference(existing, reference);
     state = existing;
@@ -255,10 +264,15 @@ async function applyPackagePaymentState({
         },
         select: paymentStateSelect,
       });
+      shouldReconcileEntitlement = active
+        ? changed || (shouldValidateFulfillment && !state.revokedAt)
+        : shouldApplyEvent || shouldValidateFulfillment;
     }
   }
 
-  await reconcileLibraryEntitlement(tx, state);
+  if (shouldReconcileEntitlement) {
+    await reconcileLibraryEntitlement(tx, state);
+  }
   return {
     paymentId: state.paymentId,
     userId: state.userId,

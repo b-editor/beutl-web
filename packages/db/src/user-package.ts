@@ -59,9 +59,11 @@ export async function createUserPackage(
   {
     userId,
     packageId,
+    requireActivePayment = false,
   }: {
     userId: string;
     packageId: string;
+    requireActivePayment?: boolean;
   },
   prisma?: PrismaTransaction,
 ) {
@@ -77,6 +79,9 @@ export async function createUserPackage(
         select: { paymentId: true },
       }),
     );
+    if (requireActivePayment && !paymentManaged) {
+      return null;
+    }
     return await tx.userPackage.upsert({
       where: { userId_packageId: { userId, packageId } },
       create: { userId, packageId, paymentManaged },

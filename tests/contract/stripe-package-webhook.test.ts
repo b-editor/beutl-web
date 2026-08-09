@@ -254,6 +254,59 @@ describe("package payment webhook state", () => {
     );
   });
 
+  it("finds a succeeded refund on a later page", async () => {
+    mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
+    mocks.constructEvent.mockReturnValue(
+      event("charge.refunded", { id: "ch_paged" }),
+    );
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_paged",
+      amount_refunded: 1_000,
+      payment_intent: "pi_package",
+    });
+    mocks.listRefunds
+      .mockResolvedValueOnce({
+        data: [{ id: "re_pending", status: "pending" }],
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: "re_succeeded", status: "succeeded" }],
+        has_more: false,
+      });
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.listRefunds).toHaveBeenNthCalledWith(2, {
+      charge: "ch_paged",
+      limit: 100,
+      starting_after: "re_pending",
+    });
+    expect(mocks.revokePackagePayment).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "refund succeeded: re_succeeded" }),
+    );
+  });
+
+  it("rejects an empty refund page that claims more results", async () => {
+    mocks.constructEvent.mockReturnValue(
+      event("charge.refunded", { id: "ch_empty_page" }),
+    );
+    mocks.retrieveCharge.mockResolvedValue({
+      id: "ch_empty_page",
+      amount_refunded: 1_000,
+      payment_intent: "pi_package",
+    });
+    mocks.listRefunds.mockResolvedValue({ data: [], has_more: true });
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    expect((await POST(request() as never)).status).toBe(500);
+    expect(consoleError).toHaveBeenCalledWith(
+      "Stripe webhook handler failed",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
   it("keeps access while an asynchronous refund is pending", async () => {
     mocks.findPackagePaymentReference.mockResolvedValue(validatedReference);
     mocks.constructEvent.mockReturnValue(
@@ -343,6 +396,33 @@ describe("package payment webhook state", () => {
     expect((await POST(request() as never)).status).toBe(500);
     expect(consoleError).toHaveBeenCalledWith(
       "Stripe webhook handler failed",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  it("keeps a committed payment when the audit log write fails", async () => {
+    mocks.constructEvent.mockReturnValue(
+      event("payment_intent.succeeded", {
+        id: "pi_package",
+        amount: 1_000,
+        currency: "usd",
+      }),
+    );
+    mocks.resolvePackagePayment.mockResolvedValue({
+      status: "fulfill",
+      reference,
+    });
+    mocks.addAuditLog.mockRejectedValueOnce(new Error("audit unavailable"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    expect((await POST(request() as never)).status).toBe(200);
+    expect(mocks.recordPackagePaymentSucceeded).toHaveBeenCalled();
+    expect(mocks.refundPackagePayment).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Failed to record package-payment audit log",
       expect.any(Error),
     );
     consoleError.mockRestore();

@@ -13,7 +13,7 @@ import {
   existsUserById,
   updateUserEmail,
 } from "@beutl/db";
-import { updateCustomerEmailIfExist } from "@/lib/customer";
+import { synchronizeMappedStripeCustomer } from "@/lib/customer";
 import { startTransaction } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import {
@@ -128,7 +128,7 @@ export async function updateEmail(token: string, identifier: string) {
       prisma: p,
     });
 
-    await updateCustomerEmailIfExist({
+    await synchronizeMappedStripeCustomer({
       userId: tokenData.userId,
       email: tokenData.identifier,
       prisma: p,

@@ -6,7 +6,8 @@ import type Stripe from "stripe";
 
 export type PackageCheckoutCompletionStatus =
   | Stripe.PaymentIntent.Status
-  | "refunded";
+  | "refunded"
+  | "revoked";
 
 export function resolvePackageCheckoutCompletionStatus(
   paymentIntentStatus: Stripe.PaymentIntent.Status,
@@ -18,11 +19,11 @@ export function resolvePackageCheckoutCompletionStatus(
   if (payment?.fulfillmentValidated && !payment.revokedAt) {
     return "succeeded";
   }
-  if (
-    payment?.revokedAt &&
-    payment.stripeStateEventRank === PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded
-  ) {
-    return "refunded";
+  if (payment?.revokedAt) {
+    return payment.stripeStateEventRank ===
+      PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded
+      ? "refunded"
+      : "revoked";
   }
   return "processing";
 }

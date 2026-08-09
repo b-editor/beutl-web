@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { PACKAGE_PAYMENT_EVENT_RANK } from "@beutl/db";
 import {
   resolvePackageCheckoutCompletionStatus,
 } from "../../apps/web/src/app/[lang]/(store)/store/[name]/checkout/complete/status";
-import { shouldPollPackageCheckoutCompletionStatus } from "../../apps/web/src/app/[lang]/(store)/store/[name]/checkout/complete/polling";
+import {
+  nextPackageCheckoutPollInterval,
+  shouldPollPackageCheckoutCompletionStatus,
+} from "../../apps/web/src/app/[lang]/(store)/store/[name]/checkout/complete/polling";
 
 const activePayment = {
   paymentId: "pi_1",
@@ -10,7 +14,7 @@ const activePayment = {
   packageId: "package-1",
   fulfillmentValidated: true,
   revokedAt: null,
-  stripeStateEventRank: 10,
+  stripeStateEventRank: PACKAGE_PAYMENT_EVENT_RANK.paymentSucceeded,
 };
 
 describe("package checkout completion status", () => {
@@ -29,9 +33,20 @@ describe("package checkout completion status", () => {
         ...activePayment,
         fulfillmentValidated: false,
         revokedAt: new Date("2026-08-09T00:01:00.000Z"),
-        stripeStateEventRank: 40,
+        stripeStateEventRank: PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded,
       }),
     ).toBe("refunded");
+  });
+
+  it("shows a dispute revocation as a terminal unavailable state", () => {
+    expect(
+      resolvePackageCheckoutCompletionStatus("succeeded", {
+        ...activePayment,
+        revokedAt: new Date("2026-08-09T00:01:00.000Z"),
+        stripeStateEventRank: PACKAGE_PAYMENT_EVENT_RANK.disputeRevoked,
+      }),
+    ).toBe("revoked");
+    expect(shouldPollPackageCheckoutCompletionStatus("revoked")).toBe(false);
   });
 
   it("polls only while webhook fulfillment is still processing", () => {
@@ -44,5 +59,11 @@ describe("package checkout completion status", () => {
     expect(
       resolvePackageCheckoutCompletionStatus("requires_payment_method", null),
     ).toBe("requires_payment_method");
+  });
+
+  it("backs polling off to the configured maximum", () => {
+    expect(nextPackageCheckoutPollInterval(1_000)).toBe(2_000);
+    expect(nextPackageCheckoutPollInterval(4_000)).toBe(8_000);
+    expect(nextPackageCheckoutPollInterval(8_000)).toBe(8_000);
   });
 });

@@ -24,6 +24,7 @@ type History = {
 function createPaymentStatePrisma() {
   const histories = new Map<string, History>();
   const packages = new Map<string, { paymentManaged: boolean }>();
+  let concurrentHistoryAfterRollback: History | null = null;
   let raceNextHistoryCreate = false;
   let transactionAttempts = 0;
   const packageKey = (userId: string, packageId: string) =>
@@ -63,13 +64,14 @@ function createPaymentStatePrisma() {
         throw new Error("duplicate payment");
       }
       const history = clone(data);
-      histories.set(history.paymentId, history);
       if (raceNextHistoryCreate) {
         raceNextHistoryCreate = false;
+        concurrentHistoryAfterRollback = history;
         throw Object.assign(new Error("concurrent payment insert"), {
           code: "P2002",
         });
       }
+      histories.set(history.paymentId, history);
       return clone(history);
     },
     update: async ({
@@ -160,11 +162,39 @@ function createPaymentStatePrisma() {
       }) => Promise<T>,
     ) => {
       transactionAttempts++;
-      return await callback({
-        package: packageDelegate,
-        userPaymentHistory,
-        userPackage,
-      });
+      const historiesSnapshot = new Map(
+        [...histories].map(([key, value]) => [key, clone(value)]),
+      );
+      const packagesSnapshot = new Map(
+        [...packages].map(([key, value]) => [key, { ...value }]),
+      );
+      try {
+        return await callback({
+          package: packageDelegate,
+          userPaymentHistory,
+          userPackage,
+        });
+      } catch (error) {
+        histories.clear();
+        for (const [key, value] of historiesSnapshot) {
+          histories.set(key, value);
+        }
+        packages.clear();
+        for (const [key, value] of packagesSnapshot) {
+          packages.set(key, value);
+        }
+        if (concurrentHistoryAfterRollback) {
+          const history = concurrentHistoryAfterRollback;
+          concurrentHistoryAfterRollback = null;
+          histories.set(history.paymentId, clone(history));
+          if (history.fulfillmentValidated && !history.revokedAt) {
+            packages.set(packageKey(history.userId, history.packageId), {
+              paymentManaged: true,
+            });
+          }
+        }
+        throw error;
+      }
     },
   };
 
@@ -212,6 +242,7 @@ describe("package payment migration cutover", () => {
     expect(migration).toContain(
       'ADD COLUMN "paymentManaged" BOOL NOT NULL DEFAULT true;',
     );
+    expect(migration).not.toContain('UPDATE "UserPackage"');
   });
 });
 
@@ -260,6 +291,28 @@ describe("package payment entitlement state", () => {
     expect(store.package("user-1", "package-1")).toEqual({
       paymentManaged: true,
     });
+  });
+
+  it("does not recreate a paid entry after its active payment disappears", async () => {
+    await recordSuccess("pi_reacquire_race");
+    await revokePackagePayment({
+      paymentId: "pi_reacquire_race",
+      event: {
+        id: "evt_refunded_before_readd",
+        createdAt: REFUNDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded,
+      },
+      reason: "refunded",
+    });
+
+    await expect(
+      createUserPackage({
+        userId: "user-1",
+        packageId: "package-1",
+        requireActivePayment: true,
+      }),
+    ).resolves.toBeNull();
+    expect(store.package("user-1", "package-1")).toBeNull();
   });
 
   it("does not fulfill after the package price changes", async () => {
@@ -404,6 +457,39 @@ describe("package payment entitlement state", () => {
     expect(store.package("user-1", "package-1")).toEqual({
       paymentManaged: true,
     });
+  });
+
+  it("does not re-add a user-removed package on restoration replays", async () => {
+    await recordSuccess("pi_restored_once");
+    await revokePackagePayment({
+      paymentId: "pi_restored_once",
+      event: {
+        id: "evt_dispute_opened",
+        createdAt: REFUNDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.disputeRevoked,
+      },
+      reason: "disputed",
+    });
+    await restorePackagePayment({
+      paymentId: "pi_restored_once",
+      event: {
+        id: "evt_dispute_won",
+        createdAt: RESTORED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.disputeRestored,
+      },
+    });
+    store.removePackage("user-1", "package-1");
+
+    await restorePackagePayment({
+      paymentId: "pi_restored_once",
+      event: {
+        id: "evt_funds_reinstated",
+        createdAt: new Date("2026-08-09T00:03:00.000Z"),
+        rank: PACKAGE_PAYMENT_EVENT_RANK.disputeRestored,
+      },
+    });
+
+    expect(store.package("user-1", "package-1")).toBeNull();
   });
 
   it("lets a terminal dispute resolution win a same-second tie", async () => {

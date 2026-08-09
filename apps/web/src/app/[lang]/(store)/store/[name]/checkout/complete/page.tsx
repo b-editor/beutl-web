@@ -14,7 +14,9 @@ import { resolvePackageCheckoutCompletionStatus } from "./status";
 export default async function Page(
   props: {
     params: Promise<{ name: string; lang: string }>;
-    searchParams: Promise<{ payment_intent: string }>;
+    searchParams: Promise<{
+      payment_intent?: string | string[];
+    }>;
   }
 ) {
   const searchParams = await props.searchParams;
@@ -32,7 +34,7 @@ export default async function Page(
 
   const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
-  if (!pkg) {
+  if (!pkg || typeof payment_intent !== "string" || !payment_intent) {
     notFound();
   }
 

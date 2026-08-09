@@ -3,7 +3,8 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  PACKAGE_CHECKOUT_POLL_INTERVAL_MS,
+  nextPackageCheckoutPollInterval,
+  PACKAGE_CHECKOUT_POLL_INITIAL_INTERVAL_MS,
   PACKAGE_CHECKOUT_POLL_TIMEOUT_MS,
   shouldPollPackageCheckoutCompletionStatus,
 } from "./polling";
@@ -25,16 +26,18 @@ export function CompletionStatusPoller({
 
     const startedAt = startedAtRef.current ?? Date.now();
     startedAtRef.current = startedAt;
+    let interval = PACKAGE_CHECKOUT_POLL_INITIAL_INTERVAL_MS;
     let timeoutId: number;
     const poll = () => {
       if (Date.now() - startedAt >= PACKAGE_CHECKOUT_POLL_TIMEOUT_MS) {
         return;
       }
       router.refresh();
-      timeoutId = window.setTimeout(poll, PACKAGE_CHECKOUT_POLL_INTERVAL_MS);
+      interval = nextPackageCheckoutPollInterval(interval);
+      timeoutId = window.setTimeout(poll, interval);
     };
 
-    timeoutId = window.setTimeout(poll, PACKAGE_CHECKOUT_POLL_INTERVAL_MS);
+    timeoutId = window.setTimeout(poll, interval);
     return () => window.clearTimeout(timeoutId);
   }, [router, status]);
 

@@ -18,14 +18,6 @@ ADD COLUMN "paymentManaged" BOOL NOT NULL DEFAULT true;
 -- Existing paid entitlements and writes from the old Worker during cutover
 -- inherit the backward-compatible true default. The new Worker writes every
 -- fulfillment and reversal value explicitly.
-UPDATE "UserPackage" AS up
-SET "paymentManaged" = true
-WHERE EXISTS (
-  SELECT 1
-  FROM "UserPaymentHistory" AS history
-  WHERE history."userId" = up."userId"
-    AND history."packageId" = up."packageId"
-);
 
 -- Keep one deterministic owner for any legacy Stripe customer that was mapped
 -- to multiple users. Removed users receive a new owned customer on checkout.

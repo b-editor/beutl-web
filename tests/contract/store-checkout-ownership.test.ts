@@ -13,15 +13,25 @@ describe("store checkout ownership", () => {
       beutlUserId: "user-1",
       packageId: "package-1",
     });
-    expect(
-      packagePaymentIntentSearchQuery({
-        customerId: "cus_1",
-        userId: "user-1",
-        packageId: "package-1",
-        amount: 1_000,
-        currency: "USD",
-      }),
-    ).toContain('metadata["beutlUserId"]:"user-1"');
+    const query = packagePaymentIntentSearchQuery({
+      customerId: "cus_1",
+      userId: "user-1",
+      packageId: "package-1",
+      amount: 1_000,
+      currency: "USD",
+    });
+    for (const filter of [
+      'customer:"cus_1"',
+      'metadata["beutlApplication"]:"beutl-web"',
+      'metadata["beutlPurchaseKind"]:"package"',
+      'metadata["beutlUserId"]:"user-1"',
+      'metadata["packageId"]:"package-1"',
+      "amount:1000",
+      'currency:"usd"',
+      'status:"requires_payment_method"',
+    ]) {
+      expect(query).toContain(filter);
+    }
   });
 
   it("accepts only an exact customer, owner, package, and price match", () => {

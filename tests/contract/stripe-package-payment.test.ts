@@ -81,8 +81,14 @@ describe("package PaymentIntent validation", () => {
   });
 
   it.each([
-    [{ amount_received: 999 }, "package, amount, or currency mismatch"],
-    [{ status: "processing" }, "package, amount, or currency mismatch"],
+    [
+      { amount_received: 999 },
+      "payment status, amount, or currency is invalid",
+    ],
+    [
+      { status: "processing" },
+      "payment status, amount, or currency is invalid",
+    ],
   ])("refunds incomplete or invalid billing data", async (overrides, reason) => {
     await expect(
       resolvePackagePayment({
@@ -99,7 +105,7 @@ describe("package PaymentIntent validation", () => {
       resolvePackagePayment({ paymentIntent: paymentIntent(), stripe }),
     ).resolves.toEqual({
       status: "refund",
-      reason: "package, amount, or currency mismatch",
+      reason: "package is unpublished or price changed",
     });
   });
 
@@ -163,6 +169,33 @@ describe("package PaymentIntent validation", () => {
     ).resolves.toEqual({
       status: "refund",
       reason: "Stripe customer owner mismatch",
+    });
+  });
+
+  it("refunds a payment for a deleted Stripe customer", async () => {
+    retrieveCustomer.mockResolvedValue({ id: "cus_1", deleted: true });
+
+    await expect(
+      resolvePackagePayment({ paymentIntent: paymentIntent(), stripe }),
+    ).resolves.toEqual({
+      status: "refund",
+      reason: "Stripe customer is closed",
+    });
+  });
+
+  it("refunds a payment for a missing Stripe customer", async () => {
+    retrieveCustomer.mockRejectedValueOnce(
+      Object.assign(new Error("No such customer"), {
+        statusCode: 404,
+        code: "resource_missing",
+      }),
+    );
+
+    await expect(
+      resolvePackagePayment({ paymentIntent: paymentIntent(), stripe }),
+    ).resolves.toEqual({
+      status: "refund",
+      reason: "Stripe customer is closed",
     });
   });
 

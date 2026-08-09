@@ -12,6 +12,7 @@ import {
   isDeletedCustomer,
   stripeOwnerMetadata,
 } from "@/lib/stripe/ownership";
+import { createHash } from "@beutl/core";
 import type Stripe from "stripe";
 
 type StripeClient = ReturnType<typeof createStripe>;
@@ -42,6 +43,7 @@ async function createOwnedCustomer({
   userId: string;
   replacesCustomerId?: string;
 }): Promise<Stripe.Customer> {
+  const emailDigest = (await createHash(email)).slice(0, 16);
   return await stripe.customers.create(
     {
       email,
@@ -49,8 +51,8 @@ async function createOwnedCustomer({
     },
     {
       idempotencyKey: replacesCustomerId
-        ? `beutl:customer:${userId}:replace:${replacesCustomerId}`
-        : `beutl:customer:${userId}`,
+        ? `beutl:customer:${userId}:replace:${replacesCustomerId}:${emailDigest}`
+        : `beutl:customer:${userId}:${emailDigest}`,
     },
   );
 }
@@ -68,11 +70,13 @@ export async function createOrRetrieveCustomerId({
   const stripe = createStripe();
 
   if (mapping) {
-    const customer = await retrieveCustomerIfPresent(stripe, mapping.stripeId);
-    const owners = await findCustomerOwnersByStripeId({
-      stripeId: mapping.stripeId,
-      prisma,
-    });
+    const [customer, owners] = await Promise.all([
+      retrieveCustomerIfPresent(stripe, mapping.stripeId),
+      findCustomerOwnersByStripeId({
+        stripeId: mapping.stripeId,
+        prisma,
+      }),
+    ]);
     const mappingIsUnique =
       owners.length === 1 && owners[0]?.userId === userId;
     if (
@@ -106,7 +110,7 @@ export async function createOrRetrieveCustomerId({
   return customer.id;
 }
 
-export async function updateCustomerEmailIfExist({
+export async function synchronizeMappedStripeCustomer({
   userId,
   email,
   prisma,
