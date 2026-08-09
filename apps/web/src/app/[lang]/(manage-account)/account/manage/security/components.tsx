@@ -173,7 +173,7 @@ function ListItem({
           </h4>
         </div>
         {account.emailOrUserName && (
-          <p className="text-sm text-muted">{account.emailOrUserName}</p>
+          <p className="text-sm text-muted-foreground">{account.emailOrUserName}</p>
         )}
       </div>
 
@@ -305,7 +305,7 @@ function PasskeyListItem({
                 </Badge>
               )}
             </div>
-            <p className="text-sm text-muted">
+            <p className="text-sm text-muted-foreground">
               {t("account:security.createdAt")}:{" "}
               {getRelativeTimeDifference(authenticator.createdAt)}{" "}
               {authenticator.usedAt && (

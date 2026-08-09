@@ -56,7 +56,7 @@ export default async function Page(props: { params: Promise<{ lang: string; name
                       <h4 className="text-xl font-semibold">
                         {item.displayName || item.name}
                       </h4>
-                      <span className="text-muted">{item.userName}</span>
+                      <span className="text-muted-foreground">{item.userName}</span>
                     </div>
                     {item.iconFileUrl && (
                       /* eslint-disable-next-line @next/next/no-img-element */
