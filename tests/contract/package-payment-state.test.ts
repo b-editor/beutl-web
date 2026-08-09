@@ -24,6 +24,8 @@ type History = {
 function createPaymentStatePrisma() {
   const histories = new Map<string, History>();
   const packages = new Map<string, { paymentManaged: boolean }>();
+  let raceNextHistoryCreate = false;
+  let transactionAttempts = 0;
   const packageKey = (userId: string, packageId: string) =>
     `${userId}:${packageId}`;
   const clone = (history: History): History => ({
@@ -62,6 +64,12 @@ function createPaymentStatePrisma() {
       }
       const history = clone(data);
       histories.set(history.paymentId, history);
+      if (raceNextHistoryCreate) {
+        raceNextHistoryCreate = false;
+        throw Object.assign(new Error("concurrent payment insert"), {
+          code: "P2002",
+        });
+      }
       return clone(history);
     },
     update: async ({
@@ -150,12 +158,14 @@ function createPaymentStatePrisma() {
         userPackage: typeof userPackage;
         package: typeof packageDelegate;
       }) => Promise<T>,
-    ) =>
-      await callback({
+    ) => {
+      transactionAttempts++;
+      return await callback({
         package: packageDelegate,
         userPaymentHistory,
         userPackage,
-      }),
+      });
+    },
   };
 
   return {
@@ -172,6 +182,12 @@ function createPaymentStatePrisma() {
     },
     removePackage(userId: string, packageId: string) {
       packages.delete(packageKey(userId, packageId));
+    },
+    raceNextPaymentHistoryCreate() {
+      raceNextHistoryCreate = true;
+    },
+    transactionAttempts() {
+      return transactionAttempts;
     },
     setPackageAvailable(value: boolean) {
       packageAvailable = value;
@@ -223,6 +239,21 @@ describe("package payment entitlement state", () => {
     });
 
     expect(store.history("pi_1")).toMatchObject({
+      fulfillmentValidated: true,
+      revokedAt: null,
+    });
+    expect(store.package("user-1", "package-1")).toEqual({
+      paymentManaged: true,
+    });
+  });
+
+  it("retries a concurrent payment-history insert", async () => {
+    store.raceNextPaymentHistoryCreate();
+
+    await recordSuccess("pi_concurrent");
+
+    expect(store.transactionAttempts()).toBe(2);
+    expect(store.history("pi_concurrent")).toMatchObject({
       fulfillmentValidated: true,
       revokedAt: null,
     });

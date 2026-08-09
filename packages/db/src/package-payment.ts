@@ -8,6 +8,9 @@ export const PACKAGE_PAYMENT_EVENT_RANK = {
   refundSucceeded: 40,
 } as const;
 
+const PACKAGE_PAYMENT_TRANSACTION_MAX_ATTEMPTS = 3;
+const PACKAGE_PAYMENT_TRANSACTION_RETRY_CODES = new Set(["P2002", "P2034"]);
+
 export type PackagePaymentReference = {
   paymentId: string;
   userId: string;
@@ -54,6 +57,33 @@ const paymentStateSelect = {
   stripeStateEventCreatedAt: true,
   stripeStateEventRank: true,
 } as const;
+
+function isRetryablePackagePaymentTransactionError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      PACKAGE_PAYMENT_TRANSACTION_RETRY_CODES.has(error.code),
+  );
+}
+
+async function startPackagePaymentTransaction<T>(
+  callback: (tx: PrismaTransaction) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await startTransaction(callback);
+    } catch (error) {
+      if (
+        attempt >= PACKAGE_PAYMENT_TRANSACTION_MAX_ATTEMPTS ||
+        !isRetryablePackagePaymentTransactionError(error)
+      ) {
+        throw error;
+      }
+    }
+  }
+}
 
 function validateEvent(event: PackagePaymentStateEvent): void {
   if (!event.id || Number.isNaN(event.createdAt.getTime())) {
@@ -316,7 +346,9 @@ export async function recordPackagePaymentSucceeded({
       tx,
     });
   };
-  return prisma ? await record(prisma) : await startTransaction(record);
+  return prisma
+    ? await record(prisma)
+    : await startPackagePaymentTransaction(record);
 }
 
 export async function revokePackagePayment({
@@ -349,7 +381,9 @@ export async function revokePackagePayment({
       tx,
     });
   };
-  return prisma ? await revoke(prisma) : await startTransaction(revoke);
+  return prisma
+    ? await revoke(prisma)
+    : await startPackagePaymentTransaction(revoke);
 }
 
 export async function restorePackagePayment({
@@ -383,5 +417,7 @@ export async function restorePackagePayment({
       tx,
     });
   };
-  return prisma ? await restore(prisma) : await startTransaction(restore);
+  return prisma
+    ? await restore(prisma)
+    : await startPackagePaymentTransaction(restore);
 }
