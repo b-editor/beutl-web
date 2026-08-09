@@ -34,6 +34,7 @@ export async function existsUserPaymentHistory({
     where: {
       userId: userId,
       packageId: packageId,
+      revokedAt: null,
     },
     select: {
       id: true,

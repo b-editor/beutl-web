@@ -9,6 +9,7 @@ export * from "./feedback";
 export * from "./file";
 export * from "./native-app-auth";
 export * from "./package";
+export * from "./package-payment";
 export * from "./passkey";
 export * from "./profile";
 export * from "./release";

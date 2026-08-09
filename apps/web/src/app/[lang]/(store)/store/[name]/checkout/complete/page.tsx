@@ -1,8 +1,11 @@
+import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
+import { isOwnedPackagePaymentIntent } from "@/lib/stripe/store-checkout";
 import { ClientPage } from "./components";
 import { notFound } from "next/navigation";
 import { PackageDetails } from "../components";
 import { retrievePackage } from "@/lib/store-utils";
+import { findCustomerByUserId } from "@beutl/db";
 
 export default async function Page(
   props: {
@@ -23,6 +26,7 @@ export default async function Page(
     lang
   } = params;
 
+  const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
   if (!pkg) {
     notFound();
@@ -30,6 +34,17 @@ export default async function Page(
 
   const stripe = createStripe();
   const intent = await stripe.paymentIntents.retrieve(payment_intent);
+  const customer = await findCustomerByUserId({ userId: session.user.id });
+  if (
+    !customer ||
+    !isOwnedPackagePaymentIntent(intent, {
+      customerId: customer.stripeId,
+      userId: session.user.id,
+      packageId: pkg.id,
+    })
+  ) {
+    notFound();
+  }
 
   return (
     <div className="max-w-5xl mx-auto py-10 lg:py-6 px-2 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
