@@ -8,27 +8,29 @@ datasource db {
 }
 
 model User {
-  id                 String               @id @default(uuid())
-  name               String?
-  email              String               @unique
-  image              String?
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  emailVerified      Boolean?             @default(false)
-  accounts           Account[]
-  AuditLog           AuditLog[]
-  ConfirmationToken  ConfirmationToken[]
-  Customer           Customer?
-  File               File[]
-  NativeAppAuth      NativeAppAuth[]
-  Package            Package[]
-  passkeys           Passkey[]
-  Profile            Profile?
-  sessions           Session[]
-  SocialProfile      SocialProfile[]
-  UserPackage        UserPackage[]
-  UserPaymentHistory UserPaymentHistory[]
-  Feedback           Feedback[]
+  id                   String               @id @default(uuid())
+  name                 String?
+  email                String               @unique
+  image                String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  emailVerified        Boolean?             @default(false)
+  accounts             Account[]
+  AuditLog             AuditLog[]
+  ConfirmationToken    ConfirmationToken[]
+  Customer             Customer?
+  File                 File[]
+  NativeAppAuth        NativeAppAuth[]
+  nativeRefreshTokens  NativeRefreshToken[]
+  Package              Package[]
+  passkeys             Passkey[]
+  Profile              Profile?
+  refreshTokenFamilies RefreshTokenFamily[]
+  sessions             Session[]
+  SocialProfile        SocialProfile[]
+  UserPackage          UserPackage[]
+  UserPaymentHistory   UserPaymentHistory[]
+  Feedback             Feedback[]
 }
 
 model Account {
@@ -60,6 +62,36 @@ model Session {
   ipAddress String?
   userAgent String?
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RefreshTokenFamily {
+  id        String               @id
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  tokens    NativeRefreshToken[]
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+model NativeRefreshToken {
+  token                       String             @id
+  userId                      String
+  refreshTokenFamilyId        String
+  expiresAt                   DateTime
+  refreshTokenConsumedAt      DateTime?
+  refreshTokenReplacedByToken String?
+  createdAt                   DateTime           @default(now())
+  updatedAt                   DateTime           @updatedAt
+  family                      RefreshTokenFamily @relation(fields: [refreshTokenFamilyId], references: [id], onDelete: Cascade)
+  user                        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([refreshTokenFamilyId, expiresAt])
+  @@index([userId])
 }
 
 model Verification {
