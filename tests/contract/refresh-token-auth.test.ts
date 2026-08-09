@@ -86,25 +86,32 @@ describe("v1 refresh-token rotation", () => {
     delete process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS;
   });
 
-  it("assigns a family only to the initial native refresh session", async () => {
+  it("stores the initial native refresh token outside Better Auth sessions", async () => {
     await issueCredentials("session-owner");
 
     expect(store.all()).toHaveLength(1);
+    expect(store.allSessions()).toHaveLength(0);
     expect(store.all()[0]).toMatchObject({
       userId: "session-owner",
       refreshTokenFamilyId: expect.any(String),
       refreshTokenConsumedAt: null,
       refreshTokenReplacedByToken: null,
-      refreshTokenRevokedAt: null,
+    });
+    expect(store.allFamilies()).toHaveLength(1);
+    expect(store.allFamilies()[0]).toMatchObject({
+      userId: "session-owner",
+      revokedAt: null,
     });
   });
 
   it("adopts a pre-deployment native session on its first refresh", async () => {
     const credentials = await issueCredentials("legacy-session-owner");
     const legacySession = store.all()[0];
-    store.update(legacySession.token, {
-      refreshTokenFamilyId: null,
-    });
+    const oldFamilyId = legacySession.refreshTokenFamilyId!;
+    store.moveNativeTokenToLegacySession(legacySession.token);
+    store.deleteFamily(oldFamilyId);
+    expect(store.all()).toHaveLength(0);
+    expect(store.allSessions()).toHaveLength(1);
 
     const response = await post("/refresh", {
       refresh_token: credentials.refresh_token,
@@ -113,12 +120,12 @@ describe("v1 refresh-token rotation", () => {
 
     expect(response.status).toBe(200);
     expect(store.all()).toHaveLength(2);
+    expect(store.allSessions()).toHaveLength(0);
     const adoptedParent = store.get(legacySession.token);
     expect(adoptedParent).toMatchObject({
       userId: "legacy-session-owner",
       refreshTokenFamilyId: expect.any(String),
       refreshTokenConsumedAt: NOW,
-      refreshTokenRevokedAt: null,
     });
     expect(
       store.get(adoptedParent!.refreshTokenReplacedByToken!),
@@ -126,7 +133,6 @@ describe("v1 refresh-token rotation", () => {
       userId: "legacy-session-owner",
       refreshTokenFamilyId: adoptedParent!.refreshTokenFamilyId,
       refreshTokenConsumedAt: null,
-      refreshTokenRevokedAt: null,
     });
   });
 
@@ -155,22 +161,28 @@ describe("v1 refresh-token rotation", () => {
     store.update(session.token, {
       expiresAt: new Date(Date.now() - 1),
     });
+    const encrypt = vi.spyOn(crypto.subtle, "encrypt");
 
-    const response = await post("/refresh", {
-      refresh_token: credentials.refresh_token,
-      token: credentials.token,
-    });
+    try {
+      const response = await post("/refresh", {
+        refresh_token: credentials.refresh_token,
+        token: credentials.token,
+      });
 
-    expect(response.status).toBe(401);
-    expect(store.all()).toHaveLength(1);
+      expect(response.status).toBe(401);
+      expect(store.all()).toHaveLength(1);
+      expect(encrypt).not.toHaveBeenCalled();
+    } finally {
+      encrypt.mockRestore();
+    }
   });
 
   it("returns one child to concurrent legacy refresh callers", async () => {
     const credentials = await issueCredentials("session-owner");
     const legacySession = store.all()[0];
-    store.update(legacySession.token, {
-      refreshTokenFamilyId: null,
-    });
+    const oldFamilyId = legacySession.refreshTokenFamilyId!;
+    store.moveNativeTokenToLegacySession(legacySession.token);
+    store.deleteFamily(oldFamilyId);
     const body = {
       refresh_token: credentials.refresh_token,
       token: credentials.token,
@@ -182,6 +194,7 @@ describe("v1 refresh-token rotation", () => {
     ]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
     expect(store.all()).toHaveLength(2);
+    expect(store.allSessions()).toHaveLength(0);
     expect(
       store.all().filter((session) => !session.refreshTokenConsumedAt),
     ).toHaveLength(1);
@@ -196,7 +209,7 @@ describe("v1 refresh-token rotation", () => {
       },
     ]);
     setDbProvider(async () => store.prisma as never);
-    const before = store.get("better-auth-browser-token");
+    const before = store.getSession("better-auth-browser-token");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -206,8 +219,9 @@ describe("v1 refresh-token rotation", () => {
       });
 
       expect(response.status).toBe(401);
-      expect(store.get("better-auth-browser-token")).toEqual(before);
-      expect(store.all()).toHaveLength(1);
+      expect(store.getSession("better-auth-browser-token")).toEqual(before);
+      expect(store.allSessions()).toHaveLength(1);
+      expect(store.all()).toHaveLength(0);
     } finally {
       log.mockRestore();
     }
@@ -234,6 +248,82 @@ describe("v1 refresh-token rotation", () => {
     ).toHaveLength(1);
   });
 
+  it("extends only the family record when rotating repeatedly", async () => {
+    const credentials = await issueCredentials("session-owner");
+    const original = store.all()[0];
+
+    const firstResponse = await post("/refresh", {
+      refresh_token: credentials.refresh_token,
+      token: credentials.token,
+    });
+    expect(firstResponse.status).toBe(200);
+    const firstCredentials = (await firstResponse.json()) as Credentials;
+    const firstChild = store
+      .all()
+      .find((session) => !session.refreshTokenConsumedAt)!;
+    const firstChildExpiresAt = firstChild.expiresAt;
+
+    vi.setSystemTime(new Date(NOW.getTime() + 24 * 60 * 60 * 1000));
+    const secondResponse = await post("/refresh", {
+      refresh_token: firstCredentials.refresh_token,
+      token: firstCredentials.token,
+    });
+
+    expect(secondResponse.status).toBe(200);
+    expect(store.allSessions()).toHaveLength(0);
+    expect(store.get(original.token)?.expiresAt).toEqual(original.expiresAt);
+    expect(store.get(firstChild.token)?.expiresAt).toEqual(firstChildExpiresAt);
+    expect(
+      store.getFamily(original.refreshTokenFamilyId!)?.expiresAt,
+    ).toEqual(new Date(NOW.getTime() + 31 * 24 * 60 * 60 * 1000));
+  });
+
+  it("retains tombstones until token expiry and then purges them", async () => {
+    const initialCredentials = await issueCredentials("session-owner");
+    const original = store.all()[0];
+
+    const firstResponse = await post("/refresh", {
+      refresh_token: initialCredentials.refresh_token,
+      token: initialCredentials.token,
+    });
+    const firstCredentials = (await firstResponse.json()) as Credentials;
+
+    vi.setSystemTime(new Date(NOW.getTime() + 29 * 24 * 60 * 60 * 1000));
+    const secondResponse = await post("/refresh", {
+      refresh_token: firstCredentials.refresh_token,
+      token: firstCredentials.token,
+    });
+    expect(secondResponse.status).toBe(200);
+    const secondCredentials = (await secondResponse.json()) as Credentials;
+    expect(store.get(original.token)).not.toBeNull();
+
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 24 * 60 * 60 * 1000));
+    const thirdResponse = await post("/refresh", {
+      refresh_token: secondCredentials.refresh_token,
+      token: secondCredentials.token,
+    });
+
+    expect(thirdResponse.status).toBe(200);
+    expect(store.get(original.token)).toBeNull();
+    expect(store.all()).toHaveLength(2);
+  });
+
+  it("purges one expired family when issuing new credentials", async () => {
+    await issueCredentials("expired-family-owner");
+    const expiredFamily = store.allFamilies()[0];
+    store.updateFamily(expiredFamily.id, {
+      expiresAt: new Date(NOW.getTime() - 1),
+    });
+
+    await issueCredentials("new-family-owner");
+
+    expect(store.getFamily(expiredFamily.id)).toBeNull();
+    expect(store.allFamilies()).toHaveLength(1);
+    expect(store.allFamilies()[0].userId).toBe("new-family-owner");
+    expect(store.all()).toHaveLength(1);
+    expect(store.all()[0].userId).toBe("new-family-owner");
+  });
+
   it("revokes the family when the parent is replayed after grace", async () => {
     const credentials = await issueCredentials("session-owner");
     const body = {
@@ -249,8 +339,10 @@ describe("v1 refresh-token rotation", () => {
 
     expect((await post("/refresh", body)).status).toBe(401);
     expect(
-      store.all().every((session) => session.refreshTokenRevokedAt !== null),
-    ).toBe(true);
+      store.getFamily(store.all()[0].refreshTokenFamilyId!)?.revokedAt,
+    ).toEqual(
+      new Date(NOW.getTime() + REFRESH_TOKEN_RESPONSE_LOSS_GRACE_MS + 1),
+    );
     expect(
       (
         await post("/refresh", {

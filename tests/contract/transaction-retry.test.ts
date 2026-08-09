@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { setDbProvider, startTransaction } from "@beutl/db";
+import {
+  setDbProvider,
+  startRetryableTransaction,
+  startTransaction,
+} from "@beutl/db";
 
 describe("database transactions", () => {
   it("retries CockroachDB write conflicts", async () => {
@@ -14,7 +18,7 @@ describe("database transactions", () => {
       .mockImplementation(async (callback) => callback({}));
     setDbProvider(async () => ({ $transaction: transaction }) as never);
 
-    const result = await startTransaction(async () => "completed");
+    const result = await startRetryableTransaction(async () => "completed");
 
     expect(result).toBe("completed");
     expect(transaction).toHaveBeenCalledTimes(3);
@@ -44,9 +48,25 @@ describe("database transactions", () => {
       .mockImplementation(async (callback) => callback({}));
     setDbProvider(async () => ({ $transaction: transaction }) as never);
 
-    const result = await startTransaction(async () => "completed");
+    const result = await startRetryableTransaction(async () => "completed");
 
     expect(result).toBe("completed");
     expect(transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not replay ordinary transaction callbacks", async () => {
+    const conflict = Object.assign(new Error("write conflict"), {
+      code: "P2034",
+    });
+    const callback = vi.fn(async () => "unused");
+    const transaction = vi.fn(async (run) => {
+      await run({});
+      throw conflict;
+    });
+    setDbProvider(async () => ({ $transaction: transaction }) as never);
+
+    await expect(startTransaction(callback)).rejects.toBe(conflict);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 });

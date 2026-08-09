@@ -16,7 +16,10 @@ import {
   findNativeAppAuthBySessionId,
   updateNativeAppAuthForHandler,
 } from "@beutl/db";
-import { createSession, rotateSessionByToken } from "@beutl/db";
+import {
+  createNativeRefreshToken,
+  rotateNativeRefreshTokenByToken,
+} from "@beutl/db";
 import { isAllowedContinueUrlHost } from "@beutl/core";
 import { sign } from "hono/jwt";
 
@@ -136,7 +139,7 @@ async function createJwtToken(userId: string) {
 
 async function createRefreshToken(userId: string) {
   const prepared = await prepareRefreshToken();
-  await createSession({
+  await createNativeRefreshToken({
     token: prepared.rawToken,
     expiresAt: prepared.expires,
     userId,
@@ -147,8 +150,16 @@ async function createRefreshToken(userId: string) {
 }
 
 async function prepareRefreshToken() {
+  const candidate = createRefreshTokenCandidate();
+  const encToken = await encryptRefreshToken(candidate.rawToken);
+  return {
+    ...candidate,
+    encToken,
+  };
+}
+
+function createRefreshTokenCandidate() {
   const rawToken = crypto.randomUUID();
-  const encToken = await encryptRefreshToken(rawToken);
   const expires = new Date(
     Date.now() +
       1000 *
@@ -162,7 +173,6 @@ async function prepareRefreshToken() {
   }
 
   return {
-    encToken,
     rawToken,
     expires,
   };
@@ -240,8 +250,8 @@ const app = new Hono()
       });
     }
 
-    const replacement = await prepareRefreshToken();
-    const rotation = await rotateSessionByToken({
+    const replacement = createRefreshTokenCandidate();
+    const rotation = await rotateNativeRefreshTokenByToken({
       token: oldDecryptedRefreshToken,
       replacementToken: replacement.rawToken,
       replacementExpiresAt: replacement.expires,
@@ -259,10 +269,9 @@ const app = new Hono()
 
     const { exp: accessTokenExp, token: accessToken } =
       await createJwtToken(rotation.userId);
-    const encryptedRefreshToken =
-      rotation.refreshToken === replacement.rawToken
-        ? replacement.encToken
-        : await encryptRefreshToken(rotation.refreshToken);
+    const encryptedRefreshToken = await encryptRefreshToken(
+      rotation.refreshToken,
+    );
 
     return c.json({
       token: accessToken,

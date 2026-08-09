@@ -7,10 +7,26 @@ export type SessionRecord = {
   updatedAt: Date;
   ipAddress: string | null;
   userAgent: string | null;
-  refreshTokenFamilyId: string | null;
+};
+
+export type NativeRefreshTokenRecord = {
+  token: string;
+  userId: string;
+  expiresAt: Date;
+  refreshTokenFamilyId: string;
   refreshTokenConsumedAt: Date | null;
   refreshTokenReplacedByToken: string | null;
-  refreshTokenRevokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type RefreshTokenFamilyRecord = {
+  id: string;
+  userId: string;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type SessionSeed = Pick<
@@ -19,23 +35,62 @@ export type SessionSeed = Pick<
 > &
   Partial<Omit<SessionRecord, "token" | "userId" | "expiresAt">>;
 
+type NativeRefreshTokenSeed = Pick<
+  NativeRefreshTokenRecord,
+  "token" | "userId" | "expiresAt" | "refreshTokenFamilyId"
+> &
+  Partial<
+    Omit<
+      NativeRefreshTokenRecord,
+      "token" | "userId" | "expiresAt" | "refreshTokenFamilyId"
+    >
+  >;
+
+type RefreshTokenFamilySeed = Pick<
+  RefreshTokenFamilyRecord,
+  "id" | "userId" | "expiresAt"
+> &
+  Partial<
+    Omit<RefreshTokenFamilyRecord, "id" | "userId" | "expiresAt">
+  >;
+
 function cloneSession(session: SessionRecord): SessionRecord {
   return {
     ...session,
     expiresAt: new Date(session.expiresAt),
     createdAt: new Date(session.createdAt),
     updatedAt: new Date(session.updatedAt),
-    refreshTokenConsumedAt: session.refreshTokenConsumedAt
-      ? new Date(session.refreshTokenConsumedAt)
-      : null,
-    refreshTokenRevokedAt: session.refreshTokenRevokedAt
-      ? new Date(session.refreshTokenRevokedAt)
+  };
+}
+
+function cloneNativeRefreshToken(
+  refreshToken: NativeRefreshTokenRecord,
+): NativeRefreshTokenRecord {
+  return {
+    ...refreshToken,
+    expiresAt: new Date(refreshToken.expiresAt),
+    createdAt: new Date(refreshToken.createdAt),
+    updatedAt: new Date(refreshToken.updatedAt),
+    refreshTokenConsumedAt: refreshToken.refreshTokenConsumedAt
+      ? new Date(refreshToken.refreshTokenConsumedAt)
       : null,
   };
 }
 
-function matchesWhere(
-  session: SessionRecord,
+function cloneFamily(
+  family: RefreshTokenFamilyRecord,
+): RefreshTokenFamilyRecord {
+  return {
+    ...family,
+    expiresAt: new Date(family.expiresAt),
+    revokedAt: family.revokedAt ? new Date(family.revokedAt) : null,
+    createdAt: new Date(family.createdAt),
+    updatedAt: new Date(family.updatedAt),
+  };
+}
+
+function matchesWhere<T extends Record<string, unknown>>(
+  record: T,
   where: Record<string, unknown>,
 ): boolean {
   return Object.entries(where).every(([key, expected]) => {
@@ -43,7 +98,16 @@ function matchesWhere(
       return true;
     }
 
-    const actual = session[key as keyof SessionRecord];
+    const actual = record[key as keyof T];
+    if (
+      typeof expected === "object" &&
+      expected !== null &&
+      !(expected instanceof Date) &&
+      "not" in expected &&
+      actual === expected.not
+    ) {
+      return false;
+    }
     if (
       actual instanceof Date &&
       typeof expected === "object" &&
@@ -70,14 +134,16 @@ function matchesWhere(
   });
 }
 
-export function createSessionPrisma(initial: SessionSeed[] = []) {
-  let nextId = 1;
-  const records = new Map<string, SessionRecord>();
+export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
+  let nextSessionId = 1;
+  const sessions = new Map<string, SessionRecord>();
+  const refreshTokens = new Map<string, NativeRefreshTokenRecord>();
+  const families = new Map<string, RefreshTokenFamilyRecord>();
 
-  const toRecord = (seed: SessionSeed): SessionRecord => {
+  const toSessionRecord = (seed: SessionSeed): SessionRecord => {
     const timestamp = new Date();
     return {
-      id: seed.id ?? `session-${nextId++}`,
+      id: seed.id ?? `session-${nextSessionId++}`,
       token: seed.token,
       userId: seed.userId,
       expiresAt: new Date(seed.expiresAt),
@@ -85,50 +151,99 @@ export function createSessionPrisma(initial: SessionSeed[] = []) {
       updatedAt: seed.updatedAt ? new Date(seed.updatedAt) : timestamp,
       ipAddress: seed.ipAddress ?? null,
       userAgent: seed.userAgent ?? null,
-      refreshTokenFamilyId: seed.refreshTokenFamilyId ?? null,
+    };
+  };
+
+  const toNativeRefreshTokenRecord = (
+    seed: NativeRefreshTokenSeed,
+  ): NativeRefreshTokenRecord => {
+    const timestamp = new Date();
+    return {
+      token: seed.token,
+      userId: seed.userId,
+      expiresAt: new Date(seed.expiresAt),
+      refreshTokenFamilyId: seed.refreshTokenFamilyId,
       refreshTokenConsumedAt: seed.refreshTokenConsumedAt
         ? new Date(seed.refreshTokenConsumedAt)
         : null,
       refreshTokenReplacedByToken:
         seed.refreshTokenReplacedByToken ?? null,
-      refreshTokenRevokedAt: seed.refreshTokenRevokedAt
-        ? new Date(seed.refreshTokenRevokedAt)
-        : null,
+      createdAt: seed.createdAt ? new Date(seed.createdAt) : timestamp,
+      updatedAt: seed.updatedAt ? new Date(seed.updatedAt) : timestamp,
     };
   };
 
-  for (const seed of initial) {
-    records.set(seed.token, toRecord(seed));
+  const toFamilyRecord = (
+    seed: RefreshTokenFamilySeed,
+  ): RefreshTokenFamilyRecord => {
+    const timestamp = new Date();
+    return {
+      id: seed.id,
+      userId: seed.userId,
+      expiresAt: new Date(seed.expiresAt),
+      revokedAt: seed.revokedAt ? new Date(seed.revokedAt) : null,
+      createdAt: seed.createdAt ? new Date(seed.createdAt) : timestamp,
+      updatedAt: seed.updatedAt ? new Date(seed.updatedAt) : timestamp,
+    };
+  };
+
+  for (const seed of initialSessions) {
+    sessions.set(seed.token, toSessionRecord(seed));
   }
 
   const session = {
     findUnique: async ({ where }: { where: { token: string } }) => {
-      const record = records.get(where.token);
+      const record = sessions.get(where.token);
       return record ? cloneSession(record) : null;
     },
     create: async ({ data }: { data: SessionSeed }) => {
-      if (records.has(data.token)) {
+      if (sessions.has(data.token)) {
         throw new Error(`Duplicate session token: ${data.token}`);
       }
-      const record = toRecord(data);
-      records.set(record.token, record);
+      const record = toSessionRecord(data);
+      sessions.set(record.token, record);
       return cloneSession(record);
+    },
+    deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+      let count = 0;
+      for (const [token, record] of sessions) {
+        if (matchesWhere(record, where)) {
+          sessions.delete(token);
+          count++;
+        }
+      }
+      return { count };
+    },
+  };
+
+  const nativeRefreshToken = {
+    findUnique: async ({ where }: { where: { token: string } }) => {
+      const record = refreshTokens.get(where.token);
+      return record ? cloneNativeRefreshToken(record) : null;
+    },
+    create: async ({ data }: { data: NativeRefreshTokenSeed }) => {
+      if (refreshTokens.has(data.token)) {
+        throw new Error(`Duplicate native refresh token: ${data.token}`);
+      }
+      const record = toNativeRefreshTokenRecord(data);
+      refreshTokens.set(record.token, record);
+      return cloneNativeRefreshToken(record);
     },
     updateMany: async ({
       where,
       data,
     }: {
       where: Record<string, unknown>;
-      data: Partial<SessionRecord>;
+      data: Partial<NativeRefreshTokenRecord>;
     }) => {
       let count = 0;
-      for (const [token, record] of records) {
+      for (const [token, record] of refreshTokens) {
         if (!matchesWhere(record, where)) {
           continue;
         }
-        records.set(
+        refreshTokens.set(
           token,
-          cloneSession({
+          cloneNativeRefreshToken({
             ...record,
             ...data,
             updatedAt: new Date(),
@@ -140,11 +255,84 @@ export function createSessionPrisma(initial: SessionSeed[] = []) {
     },
     deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
       let count = 0;
-      for (const [token, record] of records) {
+      for (const [token, record] of refreshTokens) {
         if (matchesWhere(record, where)) {
-          records.delete(token);
+          refreshTokens.delete(token);
           count++;
         }
+      }
+      return { count };
+    },
+  };
+
+  const refreshTokenFamily = {
+    findUnique: async ({ where }: { where: { id: string } }) => {
+      const family = families.get(where.id);
+      return family ? cloneFamily(family) : null;
+    },
+    findFirst: async ({
+      where,
+      orderBy,
+    }: {
+      where: Record<string, unknown>;
+      orderBy: { expiresAt: "asc" | "desc" };
+    }) => {
+      const matches = [...families.values()]
+        .filter((family) => matchesWhere(family, where))
+        .sort((left, right) => {
+          const direction = orderBy.expiresAt === "asc" ? 1 : -1;
+          return (
+            direction *
+            (left.expiresAt.getTime() - right.expiresAt.getTime())
+          );
+        });
+      return matches[0] ? cloneFamily(matches[0]) : null;
+    },
+    create: async ({ data }: { data: RefreshTokenFamilySeed }) => {
+      if (families.has(data.id)) {
+        throw new Error(`Duplicate refresh token family: ${data.id}`);
+      }
+      const family = toFamilyRecord(data);
+      families.set(family.id, family);
+      return cloneFamily(family);
+    },
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: Record<string, unknown>;
+      data: Partial<RefreshTokenFamilyRecord>;
+    }) => {
+      let count = 0;
+      for (const [id, family] of families) {
+        if (!matchesWhere(family, where)) {
+          continue;
+        }
+        families.set(
+          id,
+          cloneFamily({
+            ...family,
+            ...data,
+            updatedAt: new Date(),
+          }),
+        );
+        count++;
+      }
+      return { count };
+    },
+    deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+      let count = 0;
+      for (const [id, family] of families) {
+        if (!matchesWhere(family, where)) {
+          continue;
+        }
+        families.delete(id);
+        for (const [token, refreshToken] of refreshTokens) {
+          if (refreshToken.refreshTokenFamilyId === id) {
+            refreshTokens.delete(token);
+          }
+        }
+        count++;
       }
       return { count };
     },
@@ -153,8 +341,14 @@ export function createSessionPrisma(initial: SessionSeed[] = []) {
   let transactionQueue = Promise.resolve();
   const prisma = {
     session,
+    nativeRefreshToken,
+    refreshTokenFamily,
     $transaction: async <T>(
-      callback: (transaction: { session: typeof session }) => Promise<T>,
+      callback: (transaction: {
+        session: typeof session;
+        nativeRefreshToken: typeof nativeRefreshToken;
+        refreshTokenFamily: typeof refreshTokenFamily;
+      }) => Promise<T>,
     ) => {
       const previous = transactionQueue;
       let release!: () => void;
@@ -163,15 +357,36 @@ export function createSessionPrisma(initial: SessionSeed[] = []) {
       });
       await previous;
 
-      const snapshot = new Map(
-        [...records].map(([token, record]) => [token, cloneSession(record)]),
+      const sessionSnapshot = new Map(
+        [...sessions].map(([token, record]) => [token, cloneSession(record)]),
+      );
+      const refreshTokenSnapshot = new Map(
+        [...refreshTokens].map(([token, record]) => [
+          token,
+          cloneNativeRefreshToken(record),
+        ]),
+      );
+      const familySnapshot = new Map(
+        [...families].map(([id, family]) => [id, cloneFamily(family)]),
       );
       try {
-        return await callback({ session });
+        return await callback({
+          session,
+          nativeRefreshToken,
+          refreshTokenFamily,
+        });
       } catch (error) {
-        records.clear();
-        for (const [token, record] of snapshot) {
-          records.set(token, record);
+        sessions.clear();
+        for (const [token, record] of sessionSnapshot) {
+          sessions.set(token, record);
+        }
+        refreshTokens.clear();
+        for (const [token, record] of refreshTokenSnapshot) {
+          refreshTokens.set(token, record);
+        }
+        families.clear();
+        for (const [id, family] of familySnapshot) {
+          families.set(id, family);
         }
         throw error;
       } finally {
@@ -183,18 +398,62 @@ export function createSessionPrisma(initial: SessionSeed[] = []) {
   return {
     prisma,
     get(token: string) {
-      const record = records.get(token);
-      return record ? cloneSession(record) : null;
+      const record = refreshTokens.get(token);
+      return record ? cloneNativeRefreshToken(record) : null;
     },
     all() {
-      return [...records.values()].map(cloneSession);
+      return [...refreshTokens.values()].map(cloneNativeRefreshToken);
     },
-    update(token: string, data: Partial<SessionRecord>) {
-      const record = records.get(token);
+    update(token: string, data: Partial<NativeRefreshTokenRecord>) {
+      const record = refreshTokens.get(token);
       if (!record) {
-        throw new Error(`Unknown session token: ${token}`);
+        throw new Error(`Unknown native refresh token: ${token}`);
       }
-      records.set(token, cloneSession({ ...record, ...data }));
+      refreshTokens.set(
+        token,
+        cloneNativeRefreshToken({ ...record, ...data }),
+      );
+    },
+    getSession(token: string) {
+      const record = sessions.get(token);
+      return record ? cloneSession(record) : null;
+    },
+    allSessions() {
+      return [...sessions.values()].map(cloneSession);
+    },
+    moveNativeTokenToLegacySession(token: string) {
+      const refreshToken = refreshTokens.get(token);
+      if (!refreshToken) {
+        throw new Error(`Unknown native refresh token: ${token}`);
+      }
+      refreshTokens.delete(token);
+      sessions.set(
+        token,
+        toSessionRecord({
+          token,
+          userId: refreshToken.userId,
+          expiresAt: refreshToken.expiresAt,
+          createdAt: refreshToken.createdAt,
+          updatedAt: refreshToken.updatedAt,
+        }),
+      );
+    },
+    getFamily(id: string) {
+      const family = families.get(id);
+      return family ? cloneFamily(family) : null;
+    },
+    allFamilies() {
+      return [...families.values()].map(cloneFamily);
+    },
+    deleteFamily(id: string) {
+      families.delete(id);
+    },
+    updateFamily(id: string, data: Partial<RefreshTokenFamilyRecord>) {
+      const family = families.get(id);
+      if (!family) {
+        throw new Error(`Unknown refresh token family: ${id}`);
+      }
+      families.set(id, cloneFamily({ ...family, ...data }));
     },
   };
 }

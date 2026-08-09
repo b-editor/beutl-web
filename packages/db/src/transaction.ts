@@ -38,6 +38,15 @@ export const startTransaction = async <T>(
   callback: (tx: PrismaTransaction) => Promise<T>,
 ) => {
   const db = await getDb();
+  return await db.$transaction(callback);
+};
+
+// The callback may be replayed and must contain only database operations that
+// become safe to repeat when the failed transaction is rolled back.
+export const startRetryableTransaction = async <T>(
+  callback: (tx: PrismaTransaction) => Promise<T>,
+) => {
+  const db = await getDb();
   for (let attempt = 1; ; attempt++) {
     try {
       return await db.$transaction(callback);
