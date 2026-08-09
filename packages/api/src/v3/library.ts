@@ -130,10 +130,16 @@ const app = new Hono()
         packageId: pkg.package.id,
       }))
     ) {
-      await createUserPackage({
+      const userPackage = await createUserPackage({
         userId: user.id,
         packageId: pkg.package.id,
+        requireActivePayment: paymentRequired,
       });
+      if (!userPackage) {
+        return c.json(await apiErrorResponse("packageIsPrivate"), {
+          status: 402,
+        });
+      }
     }
 
     return c.json(pkg);

@@ -46,6 +46,7 @@ export async function findFileForContentAccess({
               packagePricing: {
                 select: {
                   id: true,
+                  price: true,
                 },
               },
             },
@@ -73,8 +74,48 @@ export async function findFileForApi({
       name: true,
       mimeType: true,
       userId: true,
+      visibility: true,
       size: true,
       sha256: true,
+      Package: {
+        select: {
+          userId: true,
+          published: true,
+        },
+      },
+      Profile: {
+        select: {
+          userId: true,
+        },
+      },
+      PackageScreenshot: {
+        select: {
+          package: {
+            select: {
+              userId: true,
+              published: true,
+            },
+          },
+        },
+      },
+      Release: {
+        select: {
+          published: true,
+          package: {
+            select: {
+              id: true,
+              userId: true,
+              published: true,
+              packagePricing: {
+                select: {
+                  id: true,
+                  price: true,
+                },
+              },
+            },
+          },
+        },
+      },
     },
   });
 }

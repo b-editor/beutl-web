@@ -2,10 +2,11 @@ import { getTranslation } from "@beutl/i18n";
 import { Button } from "@beutl/ui/ui/button";
 import { CheckCircle, CircleSlash, Info } from "lucide-react";
 import Link from "next/link";
-import Stripe from "stripe";
+import type { PackageCheckoutCompletionStatus } from "./status";
+import { CompletionStatusPoller } from "./status-poller";
 
 async function getStatusContent(
-  status: Stripe.PaymentIntent["status"],
+  status: PackageCheckoutCompletionStatus,
   t: Awaited<ReturnType<typeof getTranslation>>["t"],
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,6 +21,16 @@ async function getStatusContent(
       text: t("store:orderProcessing"),
       icon: () => <Info className="min-w-9 min-h-9 text-gray-500" />,
     },
+    refunded: {
+      title: t("store:paymentRefunded"),
+      text: t("store:orderRefunded"),
+      icon: () => <Info className="min-w-9 min-h-9 text-gray-500" />,
+    },
+    revoked: {
+      title: t("store:paymentRevoked"),
+      text: t("store:orderRevoked"),
+      icon: () => <Info className="min-w-9 min-h-9 text-gray-500" />,
+    },
     requires_payment_method: {
       title: t("error"),
       text: t("store:paymentFailed"),
@@ -32,7 +43,7 @@ async function getStatusContent(
     },
   };
 
-  return STATUS_CONTENT_MAP[status];
+  return STATUS_CONTENT_MAP[status] ?? STATUS_CONTENT_MAP.default;
 }
 
 export async function ClientPage({
@@ -42,12 +53,13 @@ export async function ClientPage({
 }: {
   lang: string;
   name: string;
-  status: Stripe.PaymentIntent["status"];
+  status: PackageCheckoutCompletionStatus;
 }) {
   const { t } = await getTranslation(lang);
   const statusContent = await getStatusContent(status, t);
   return (
     <div className="h-full flex flex-col justify-between gap-6">
+      <CompletionStatusPoller status={status} />
       <div>
         <div className="flex gap-2 items-center">
           {statusContent.icon()}

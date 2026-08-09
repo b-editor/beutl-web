@@ -9,3 +9,8 @@ export { cn, formatBytes } from "./utils";
 export type { ActionResult } from "./action-result";
 export { isAllowedContinueUrlHost } from "./native-auth";
 export { isAdmin } from "./admin-guard";
+export { resolveContentAccess } from "./content-access";
+export type {
+  ContentAccessFile,
+  ContentAccessResult,
+} from "./content-access";

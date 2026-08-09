@@ -2,19 +2,13 @@ import { Hono } from "hono";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import { getContentUrl } from "../content-url";
-import { findFileForApi } from "@beutl/db";
-
-/* eslint-disable @typescript-eslint/no-unused-vars */
-async function isAllowed(
-  file: NonNullable<Awaited<ReturnType<typeof findFileForApi>>>,
-  userId: string | null,
-) {
-  // return userId === file.userId;
-  // todo
-  return true;
-}
+import { resolveContentAccess } from "@beutl/core";
+import { existsUserPaymentHistory, findFileForApi } from "@beutl/db";
 
 const app = new Hono().get("/:id", async (c) => {
+  c.header("Cache-Control", "no-store");
+  c.header("Vary", "Authorization");
+
   const id = c.req.param("id");
   const file = await findFileForApi({ id });
 
@@ -23,7 +17,19 @@ const app = new Hono().get("/:id", async (c) => {
   }
 
   const userId = await getUserId(c);
-  if (!(await isAllowed(file, userId))) {
+  const access = await resolveContentAccess({
+    file,
+    userId,
+    hasPurchasedPackage: async (packageId) =>
+      await existsUserPaymentHistory({
+        userId: userId ?? undefined,
+        packageId,
+      }),
+  });
+  if (access.outcome === "denied") {
+    return c.json(await apiErrorResponse("assetNotFound"), { status: 404 });
+  }
+  if (access.outcome === "payment-required") {
     return c.json(await apiErrorResponse("doNotHavePermissions"), {
       status: 403,
     });

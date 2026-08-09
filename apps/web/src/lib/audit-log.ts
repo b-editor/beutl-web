@@ -32,6 +32,10 @@ export const auditLogActions = {
     addToLibrary: "store.addToLibrary",
     removeFromLibrary: "store.removeFromLibrary",
     paymentSucceeded: "store.paymentSucceeded",
+    paymentRevoked: "store.paymentRevoked",
+    paymentRestored: "store.paymentRestored",
+    paymentRefundFailed: "store.paymentRefundFailed",
+    paymentRefundRequiresAction: "store.paymentRefundRequiresAction",
   },
   admin: {
     updatePackagePricing: "admin.updatePackagePricing",

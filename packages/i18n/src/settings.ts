@@ -4,7 +4,6 @@ export type AvailableLanguage = typeof availableLanguages[number];
 export const namespaces = [
   "translation",
   "main",
-  "effects",
   "store",
   "storage",
   "account",

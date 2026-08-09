@@ -7,7 +7,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { getUserId, getUserIdFromToken } from "../api/auth";
+import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import {
   createNativeAppAuth,
@@ -16,7 +16,10 @@ import {
   findNativeAppAuthBySessionId,
   updateNativeAppAuthForHandler,
 } from "@beutl/db";
-import { createSession, deleteSessionsByToken } from "@beutl/db";
+import {
+  createNativeRefreshToken,
+  rotateNativeRefreshTokenByToken,
+} from "@beutl/db";
 import { isAllowedContinueUrlHost } from "@beutl/core";
 import { sign } from "hono/jwt";
 
@@ -135,24 +138,42 @@ async function createJwtToken(userId: string) {
 }
 
 async function createRefreshToken(userId: string) {
-  const rawToken = crypto.randomUUID();
-  const encToken = await encryptRefreshToken(rawToken);
-  const expires = new Date(
-    Date.now() +
-      1000 *
-        60 *
-        60 *
-        24 *
-        Number.parseInt(process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30"),
-  );
-  await createSession({
-    token: rawToken,
-    expiresAt: expires,
-    userId: userId,
+  const prepared = await prepareRefreshToken();
+  await createNativeRefreshToken({
+    token: prepared.rawToken,
+    expiresAt: prepared.expires,
+    userId,
+    refreshTokenFamilyId: crypto.randomUUID(),
   });
 
+  return prepared;
+}
+
+async function prepareRefreshToken() {
+  const candidate = createRefreshTokenCandidate();
+  const encToken = await encryptRefreshToken(candidate.rawToken);
   return {
+    ...candidate,
     encToken,
+  };
+}
+
+function createRefreshTokenCandidate() {
+  const rawToken = crypto.randomUUID();
+  const expirationDays = Number.parseInt(
+    process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS ?? "30",
+  );
+  if (!Number.isFinite(expirationDays) || expirationDays <= 0) {
+    throw new Error("JWT_REFRESH_TOKEN_EXPIRATION_DAYS is invalid");
+  }
+  const expires = new Date(
+    Date.now() + 1000 * 60 * 60 * 24 * expirationDays,
+  );
+  if (Number.isNaN(expires.getTime())) {
+    throw new Error("JWT_REFRESH_TOKEN_EXPIRATION_DAYS is invalid");
+  }
+
+  return {
     rawToken,
     expires,
   };
@@ -221,13 +242,7 @@ const app = new Hono()
     return c.redirect(url.toString());
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
-    const { refresh_token, token } = c.req.valid("json");
-    const userId = getUserIdFromToken(token);
-    if (!userId) {
-      return c.json(await apiErrorResponse("authenticationIsRequired"), {
-        status: 401,
-      });
-    }
+    const { refresh_token, token: _unusedAccessToken } = c.req.valid("json");
 
     const oldDecryptedRefreshToken = await decryptRefreshToken(refresh_token);
     if (!oldDecryptedRefreshToken) {
@@ -236,23 +251,32 @@ const app = new Hono()
       });
     }
 
-    const oldRefreshTokens = await deleteSessionsByToken({
+    const replacement = createRefreshTokenCandidate();
+    const rotation = await rotateNativeRefreshTokenByToken({
       token: oldDecryptedRefreshToken,
+      replacementToken: replacement.rawToken,
+      replacementExpiresAt: replacement.expires,
+      // Successful decryption is the provenance signal that allows a
+      // pre-family native session to be adopted. Other DB callers omit it.
+      legacyNativeSessionAdoption: {
+        familyId: crypto.randomUUID(),
+      },
     });
-    if (!oldRefreshTokens.count) {
+    if (!rotation) {
       return c.json(await apiErrorResponse("invalidRefreshToken"), {
         status: 401,
       });
     }
 
     const { exp: accessTokenExp, token: accessToken } =
-      await createJwtToken(userId);
-
-    const { encToken } = await createRefreshToken(userId);
+      await createJwtToken(rotation.userId);
+    const encryptedRefreshToken = await encryptRefreshToken(
+      rotation.refreshToken,
+    );
 
     return c.json({
       token: accessToken,
-      refresh_token: encToken,
+      refresh_token: encryptedRefreshToken,
       expiration: accessTokenExp,
     });
   })

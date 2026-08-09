@@ -1,6 +1,11 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createOrRetrieveCustomerId } from "@/lib/customer";
 import { createStripe } from "@/lib/stripe/config";
+import {
+  isOwnedPackagePaymentIntent,
+  packagePaymentIntentMetadata,
+  packagePaymentIntentSearchQuery,
+} from "@/lib/stripe/store-checkout";
 import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
@@ -45,20 +50,32 @@ export default async function Page(
   });
   const stripe = createStripe();
   const intents = await stripe.paymentIntents.search({
-    query: `customer:"${customerId}" AND metadata["packageId"]:"${pkg.id}" AND amount:${price.price} AND currency:"${price.currency}" AND status:"requires_payment_method"`,
+    query: packagePaymentIntentSearchQuery({
+      customerId,
+      userId: session.user.id,
+      packageId: pkg.id,
+      amount: price.price,
+      currency: price.currency,
+    }),
     limit: 1,
   });
 
   const paymentIntent =
-    intents.data[0] ||
+    intents.data.find((intent) =>
+      isOwnedPackagePaymentIntent(intent, {
+        customerId,
+        userId: session.user.id,
+        packageId: pkg.id,
+        amount: price.price,
+        currency: price.currency,
+      }),
+    ) ||
     (await stripe.paymentIntents.create({
       customer: customerId,
       setup_future_usage: "off_session",
       amount: price.price,
       currency: price.currency,
-      metadata: {
-        packageId: pkg.id,
-      },
+      metadata: packagePaymentIntentMetadata(session.user.id, pkg.id),
       // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
       automatic_payment_methods: {
         enabled: true,

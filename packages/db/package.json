@@ -7,6 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@prisma/client": "^7.4.2"
+    "@prisma/client": "^7.9.1"
   }
 }

@@ -14,9 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "pnpm deploy:web",
-    "deploy:web": "pnpm --filter @beutl/web deploy",
-    "deploy:api": "pnpm --filter @beutl/api deploy",
-    "deploy:admin": "pnpm --filter @beutl/admin deploy",
+    "deploy:web": "pnpm --filter @beutl/web run deploy",
+    "deploy:api": "pnpm --filter @beutl/api run deploy",
+    "deploy:admin": "pnpm --filter @beutl/admin run deploy",
     "upload": "pnpm upload:web",
     "upload:web": "pnpm --filter @beutl/web upload",
     "upload:api": "pnpm --filter @beutl/api upload",
@@ -24,13 +24,36 @@
     "preview": "pnpm --filter @beutl/web preview"
   },
   "devDependencies": {
-    "hono": "^4.12.4",
+    "hono": "^4.13.0",
     "vitest": "^4.1.10"
   },
   "pnpm": {
     "overrides": {
       "@types/react": "19.1.0",
-      "@types/react-dom": "19.1.1"
+      "@types/react-dom": "19.1.1",
+      "minimatch@3": "3.1.5",
+      "minimatch@9": "9.0.9",
+      "brace-expansion@1": "1.1.18",
+      "brace-expansion@2": "2.1.4",
+      "brace-expansion@5": "5.0.9",
+      "undici": "7.29.0",
+      "postcss": "8.5.26",
+      "lodash": "4.18.1",
+      "fast-xml-parser": "5.7.0",
+      "fast-xml-builder": "1.1.7",
+      "flatted": "3.4.4",
+      "yaml": "2.9.0",
+      "body-parser": "2.3.0",
+      "qs": "6.15.3",
+      "path-to-regexp@8": "8.4.2",
+      "ws@7": "7.5.13",
+      "sharp": "0.35.3",
+      "form-data": "4.0.6",
+      "defu": "6.1.7",
+      "@typescript-eslint/eslint-plugin": "8.66.0",
+      "@typescript-eslint/parser": "8.66.0",
+      "@typescript-eslint/typescript-estree": "8.66.0",
+      "@typescript-eslint/utils": "8.66.0"
     }
   },
   "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a"

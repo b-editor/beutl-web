@@ -1,27 +1,60 @@
 import {
-  createCustomer,
-  deleteCustomerByUserId,
   findCustomerByUserId,
+  findCustomerOwnersByStripeId,
+  type PrismaTransaction,
+  upsertCustomerMapping,
 } from "@beutl/db";
 import { createStripe } from "@/lib/stripe/config";
-import type { PrismaTransaction } from "@beutl/db";
+import { isStripeResourceMissingError } from "@/lib/stripe/errors";
+import {
+  hasConflictingStripeOwnerMetadata,
+  hasStripeOwnerMetadata,
+  isDeletedCustomer,
+  stripeOwnerMetadata,
+} from "@/lib/stripe/ownership";
+import { createHash } from "@beutl/core";
+import type Stripe from "stripe";
 
-export async function updateCustomerEmailIfExist({
-  userId,
-  email,
-  prisma,
-}: {
-  userId: string;
-  email: string;
-  prisma?: PrismaTransaction;
-}) {
-  const customer = await findCustomerByUserId({ userId, prisma });
-  if (customer) {
-    const stripe = createStripe();
-    await stripe.customers.update(customer.stripeId, {
-      email: email,
-    });
+type StripeClient = ReturnType<typeof createStripe>;
+
+async function retrieveCustomerIfPresent(
+  stripe: StripeClient,
+  customerId: string,
+): Promise<Stripe.Customer | null> {
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+    return isDeletedCustomer(customer) ? null : customer;
+  } catch (error) {
+    if (isStripeResourceMissingError(error)) {
+      return null;
+    }
+    throw error;
   }
+}
+
+async function createOwnedCustomer({
+  stripe,
+  email,
+  userId,
+  replacesCustomerId,
+}: {
+  stripe: StripeClient;
+  email: string;
+  userId: string;
+  replacesCustomerId?: string;
+}): Promise<Stripe.Customer> {
+  const emailDigest = (await createHash(email)).slice(0, 16);
+  return await stripe.customers.create(
+    {
+      email,
+      metadata: stripeOwnerMetadata(userId),
+    },
+    {
+      idempotencyKey: replacesCustomerId
+        ? `beutl:customer:${userId}:replace:${replacesCustomerId}:${emailDigest}`
+        : `beutl:customer:${userId}:${emailDigest}`,
+    },
+  );
 }
 
 export async function createOrRetrieveCustomerId({
@@ -33,28 +66,61 @@ export async function createOrRetrieveCustomerId({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const customer = await findCustomerByUserId({ userId, prisma });
+  const mapping = await findCustomerByUserId({ userId, prisma });
   const stripe = createStripe();
-  let customerId = customer?.stripeId;
-  if (customerId) {
-    const c = await stripe.customers.retrieve(customerId);
-    if (c?.deleted) {
-      await deleteCustomerByUserId({ userId, prisma });
-      customerId = undefined;
+
+  if (mapping) {
+    const [customer, owners] = await Promise.all([
+      retrieveCustomerIfPresent(stripe, mapping.stripeId),
+      findCustomerOwnersByStripeId({
+        stripeId: mapping.stripeId,
+        prisma,
+      }),
+    ]);
+    const mappingIsUnique =
+      owners.length === 1 && owners[0]?.userId === userId;
+    if (
+      customer &&
+      mappingIsUnique &&
+      !hasConflictingStripeOwnerMetadata(customer.metadata, userId)
+    ) {
+      if (!hasStripeOwnerMetadata(customer.metadata, userId)) {
+        await stripe.customers.update(customer.id, {
+          email,
+          metadata: stripeOwnerMetadata(userId),
+        });
+      } else if (customer.email !== email) {
+        await stripe.customers.update(customer.id, { email });
+      }
+      return customer.id;
     }
   }
 
-  if (!customerId) {
-    customerId = (await stripe.customers.list({ email: email })).data[0]?.id;
-    if (!customerId) {
-      const customer = await stripe.customers.create({ email: email });
-      customerId = customer.id;
-      await createCustomer({
-        userId: userId,
-        stripeId: customerId,
-        prisma,
-      });
-    }
+  const customer = await createOwnedCustomer({
+    stripe,
+    email,
+    userId,
+    replacesCustomerId: mapping?.stripeId,
+  });
+  await upsertCustomerMapping({
+    userId,
+    stripeId: customer.id,
+    prisma,
+  });
+  return customer.id;
+}
+
+export async function synchronizeMappedStripeCustomer({
+  userId,
+  email,
+  prisma,
+}: {
+  userId: string;
+  email: string;
+  prisma?: PrismaTransaction;
+}) {
+  const mapping = await findCustomerByUserId({ userId, prisma });
+  if (mapping) {
+    await createOrRetrieveCustomerId({ userId, email, prisma });
   }
-  return customerId;
 }
