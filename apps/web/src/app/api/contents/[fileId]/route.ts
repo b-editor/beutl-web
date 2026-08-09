@@ -1,23 +1,24 @@
-import { auth } from "@/lib/better-auth";
-import { findFileForContentAccess } from "@beutl/db";
-import { existsUserPaymentHistory } from "@beutl/db";
+import { resolveContentAccess } from "@beutl/core";
+import {
+  existsUserPaymentHistory,
+  findFileForContentAccess,
+} from "@beutl/db";
+import { tryGetUserIdFromHeaders } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
-import { tryGetUserIdFromHeaders } from "@beutl/api";
+import { auth } from "@/lib/better-auth";
+import { contentCacheHeaders } from "@/lib/content-cache";
 
-export async function GET(request: NextRequest, props: { params: Promise<{ fileId: string }> }) {
-  const params = await props.params;
-
-  const {
-    fileId
-  } = params;
-
+export async function GET(
+  request: NextRequest,
+  props: { params: Promise<{ fileId: string }> },
+) {
+  const { fileId } = await props.params;
   const session = await auth.api.getSession({ headers: request.headers });
-  const userId = session?.user?.id || await tryGetUserIdFromHeaders(request.headers);
+  const userId =
+    session?.user?.id ?? (await tryGetUserIdFromHeaders(request.headers));
 
   const file = await findFileForContentAccess({ id: fileId });
-  let cacheControl = "private";
-
   if (!file) {
     return NextResponse.json(
       {
@@ -25,97 +26,65 @@ export async function GET(request: NextRequest, props: { params: Promise<{ fileI
       },
       {
         status: 404,
+        headers: contentCacheHeaders(false),
       },
     );
   }
 
-  let allowed = false;
-  if (file.visibility === "PUBLIC") {
-    allowed = true;
-    cacheControl = "public";
-  }
-  if (file.visibility === "PRIVATE") {
-    allowed = userId === file.userId;
-  }
-  if (file.visibility === "DEDICATED") {
-    if (file.Package.length !== 0) {
-      allowed = file.Package.some(
-        (pkg) => pkg.published || pkg.userId === userId,
-      );
-      cacheControl = file.Package.some((pkg) => pkg.published) ? "public" : "private";
-    }
-    if (file.Profile) {
-      allowed = true;
-      cacheControl = "public";
-    }
-    if (file.PackageScreenshot.length !== 0) {
-      allowed = file.PackageScreenshot.some(
-        (screenshot) =>
-          screenshot.package.published ||
-          screenshot.package.userId === userId,
-      );
-      cacheControl = file.PackageScreenshot.some((screenshot) => screenshot.package.published) ? "public" : "private";
-    }
-    if (file.Release.length !== 0) {
-      cacheControl = "no-store";
-      allowed = file.Release.some(
-        (release) =>
-          (release.published && release.package.published) ||
-          release.package.userId === userId,
-      );
-      if (allowed) {
-        const pkg = file.Release.find((r) => r.package)?.package;
-        // 価格が設定されている時、購入者のみアクセス可能
-        if (pkg?.packagePricing[0]?.id) {
-          if (
-            !(await existsUserPaymentHistory({
-              userId: userId || undefined,
-              packageId: pkg.id,
-            }))
-          ) {
-            return NextResponse.json(
-              {
-                message: "支払いが必要です",
-              },
-              {
-                status: 403,
-              },
-            );
-          }
-        }
-      }
-    }
-  }
+  const access = await resolveContentAccess({
+    file,
+    userId,
+    hasPurchasedPackage: async (packageId) =>
+      await existsUserPaymentHistory({
+        userId: userId ?? undefined,
+        packageId,
+      }),
+  });
 
-  if (allowed) {
+  if (access.outcome === "allowed") {
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-    const res = await bucket.get(file.objectKey);
-    if (!res) {
+    const object = await bucket.get(file.objectKey);
+    if (!object) {
       return NextResponse.json(
         {
           message: "ファイルが見つかりません",
         },
         {
           status: 404,
+          headers: contentCacheHeaders(false),
         },
       );
     }
 
-    return new NextResponse(res.body, {
+    return new NextResponse(object.body, {
       headers: {
         "Content-Type": file.mimeType || "application/octet-stream",
-        "Content-Length": res.size.toString(),
-        "Cache-Control": cacheControl !== "no-store" ? `${cacheControl}, max-age=31536000, immutable` : cacheControl,
+        "Content-Length": object.size.toString(),
+        ...contentCacheHeaders(access.isPublic),
       },
       status: 200,
     });
   }
+
+  if (access.outcome === "payment-required") {
+    return NextResponse.json(
+      {
+        message: "支払いが必要です",
+      },
+      {
+        status: 403,
+        headers: contentCacheHeaders(false),
+      },
+    );
+  }
+
   return NextResponse.json(
     {
       message: "アクセスが拒否されました",
     },
     {
       status: 403,
+      headers: contentCacheHeaders(false),
     },
   );
 }
