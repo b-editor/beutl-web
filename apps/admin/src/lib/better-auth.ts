@@ -32,10 +32,12 @@ async function createAuthWithPrisma() {
       google: {
         clientId: process.env.AUTH_GOOGLE_ID as string,
         clientSecret: process.env.AUTH_GOOGLE_SECRET as string,
+        disableImplicitSignUp: true,
       },
       github: {
         clientId: process.env.AUTH_GITHUB_ID as string,
         clientSecret: process.env.AUTH_GITHUB_SECRET as string,
+        disableImplicitSignUp: true,
       },
     },
     plugins: [
@@ -85,14 +87,16 @@ async function createAuthWithPrisma() {
         trustedProviders: ["google", "github"],
       },
     },
-    // 既存 Web (beutl.beditor.net) とセッションを共有する。
-    // domain 未指定時は baseURL からルートドメインを自動導出するため、
-    // ローカル開発 (localhost) ではクッキードメインを壊さない。
-    crossSubDomainCookies: {
-      enabled: true,
-      ...(process.env.BETTER_AUTH_COOKIE_DOMAIN
-        ? { domain: process.env.BETTER_AUTH_COOKIE_DOMAIN }
-        : {}),
+    advanced: {
+      // 既存 Web (beutl.beditor.net) とセッションを共有する。
+      // domain 未指定時は baseURL からルートドメインを自動導出するため、
+      // ローカル開発 (localhost) ではクッキードメインを壊さない。
+      crossSubDomainCookies: {
+        enabled: true,
+        ...(process.env.BETTER_AUTH_COOKIE_DOMAIN
+          ? { domain: process.env.BETTER_AUTH_COOKIE_DOMAIN }
+          : {}),
+      },
     },
     databaseHooks: {
       session: {

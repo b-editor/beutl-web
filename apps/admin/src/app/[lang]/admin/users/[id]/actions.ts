@@ -17,6 +17,9 @@ export async function deleteUser({
     if (!isAdmin(session.user.id)) {
       return { success: false, message: "Forbidden" };
     }
+    if (userId === session.user.id) {
+      return { success: false, message: "You cannot delete your own account" };
+    }
 
     await deleteUserById({ userId });
     await addAuditLog({

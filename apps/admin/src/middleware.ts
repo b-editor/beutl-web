@@ -23,7 +23,8 @@ export function middleware(request: NextRequest) {
   };
   const preferredLanguage = getNegotiatedLanguage(headers) || defaultLanguage;
 
-  const pathname = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  const pathname = request.nextUrl.pathname;
+  const search = request.nextUrl.search;
 
   if (
     ["/img", "/favicon.ico", "/robots.txt", "/_next", "/api"].find((i) =>
@@ -44,12 +45,12 @@ export function middleware(request: NextRequest) {
   if (pathnameIsMissingLocale) {
     if (preferredLanguage !== defaultLanguage) {
       return NextResponse.redirect(
-        new URL(`/${preferredLanguage}${pathname}`, url),
+        new URL(`/${preferredLanguage}${pathname}${search}`, url),
       );
     }
 
     const newPathname = `/${defaultLanguage}${pathname}`;
-    return NextResponse.rewrite(new URL(newPathname, request.url), {
+    return NextResponse.rewrite(new URL(`${newPathname}${search}`, request.url), {
       request: {
         headers: newRequest.headers,
       },

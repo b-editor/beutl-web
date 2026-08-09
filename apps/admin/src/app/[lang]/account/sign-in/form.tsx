@@ -23,6 +23,23 @@ import { AuthLogo } from "@/components/auth/auth-logo";
 import { useOAuthSignIn } from "@/components/auth/oauth";
 import { useTranslation } from "@beutl/ui/i18n-client";
 
+function getSafeReturnUrl(returnUrl: string | undefined, fallback: string) {
+  if (!returnUrl) return fallback;
+
+  try {
+    const url = new URL(returnUrl, window.location.origin);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.origin !== window.location.origin
+    ) {
+      return fallback;
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function Form({
   returnUrl,
   lang,
@@ -41,7 +58,7 @@ export default function Form({
       if (result?.error) {
         throw new Error(result.error.message);
       }
-      router.push(returnUrl || `/${lang}/admin`);
+      router.push(getSafeReturnUrl(returnUrl, `/${lang}/admin`));
     } catch {
       toast({
         title: t("error"),

@@ -6,6 +6,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@beutl/ui/ui/badge";
 
 const PAGE_SIZE = 20;
+const statuses = ["OPEN", "IN_PROGRESS", "RESOLVED"] as const;
+const categories = ["BUG_REPORT", "FEATURE_REQUEST", "QUESTION", "OTHER"] as const;
+
+function isFeedbackStatus(value: string | undefined): value is (typeof statuses)[number] {
+  return statuses.includes(value as (typeof statuses)[number]);
+}
+
+function isFeedbackCategory(value: string | undefined): value is (typeof categories)[number] {
+  return categories.includes(value as (typeof categories)[number]);
+}
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
@@ -16,11 +26,13 @@ export default async function Page(props: {
   const searchParams = await props.searchParams;
   const { status, category, page } = searchParams;
   const { t } = await getTranslation(lang);
+  const statusFilter = isFeedbackStatus(status) ? status : undefined;
+  const categoryFilter = isFeedbackCategory(category) ? category : undefined;
 
   const currentPage = Math.max(1, Number(page) || 1);
   const result = await listFeedback({
-    status: status as "OPEN" | "IN_PROGRESS" | "RESOLVED" | undefined,
-    category: category as "BUG_REPORT" | "FEATURE_REQUEST" | "QUESTION" | "OTHER" | undefined,
+    status: statusFilter,
+    category: categoryFilter,
     page: currentPage,
     pageSize: PAGE_SIZE,
   });
@@ -33,7 +45,7 @@ export default async function Page(props: {
         <h1 className="text-2xl font-bold">{t("admin:feedback.title")}</h1>
       </div>
 
-      <FeedbackFilterForm lang={lang} status={status} category={category} />
+      <FeedbackFilterForm lang={lang} status={statusFilter} category={categoryFilter} />
 
       {result.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("admin:feedback.noResults")}</p>
@@ -78,8 +90,8 @@ export default async function Page(props: {
             <div className="flex items-center justify-center gap-2">
               <a
                 href={`/${lang}/admin/feedback?${new URLSearchParams({
-                  status: status || "",
-                  category: category || "",
+                  ...(statusFilter ? { status: statusFilter } : {}),
+                  ...(categoryFilter ? { category: categoryFilter } : {}),
                   page: String(Math.max(1, currentPage - 1)),
                 })}`}
                 className="text-sm text-muted-foreground hover:text-foreground"
@@ -91,8 +103,8 @@ export default async function Page(props: {
               </span>
               <a
                 href={`/${lang}/admin/feedback?${new URLSearchParams({
-                  status: status || "",
-                  category: category || "",
+                  ...(statusFilter ? { status: statusFilter } : {}),
+                  ...(categoryFilter ? { category: categoryFilter } : {}),
                   page: String(Math.min(totalPages, currentPage + 1)),
                 })}`}
                 className="text-sm text-muted-foreground hover:text-foreground"
