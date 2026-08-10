@@ -6,19 +6,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@beutl/ui/ui/badge";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { firstSearchParam } from "@/lib/search-params";
 import { Pagination } from "@/components/admin/pagination";
 
 const PAGE_SIZE = 20;
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
-  searchParams: Promise<{ status?: string; category?: string; page?: string }>;
+  searchParams: Promise<{
+    status?: string | string[];
+    category?: string | string[];
+    page?: string | string[];
+  }>;
 }) {
   await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;
-  const { status, category, page } = searchParams;
+  const status = firstSearchParam(searchParams.status);
+  const category = firstSearchParam(searchParams.category);
+  const { page } = searchParams;
   const { t } = await getTranslation(lang);
   const statusFilter = isFeedbackStatus(status) ? status : undefined;
   const categoryFilter = isFeedbackCategory(category) ? category : undefined;

@@ -65,7 +65,7 @@ export default function Form({
           <Card>
             <CardHeader>
               <CardTitle>{t("auth:signIn")}</CardTitle>
-              <CardDescription>{t("admin:nav.dashboard")}</CardDescription>
+              <CardDescription>{t("auth:useYourAccount")}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid w-full items-center gap-4">

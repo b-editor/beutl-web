@@ -4,6 +4,7 @@ import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { firstSearchParam } from "@/lib/search-params";
 import { Pagination } from "@/components/admin/pagination";
 import Link from "next/link";
 
@@ -11,13 +12,19 @@ const PAGE_SIZE = 30;
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
-  searchParams: Promise<{ action?: string; userId?: string; page?: string }>;
+  searchParams: Promise<{
+    action?: string | string[];
+    userId?: string | string[];
+    page?: string | string[];
+  }>;
 }) {
   await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;
-  const { action, userId, page } = searchParams;
+  const action = firstSearchParam(searchParams.action);
+  const userId = firstSearchParam(searchParams.userId);
+  const { page } = searchParams;
   const { t } = await getTranslation(lang);
 
   const { result, currentPage, totalPages } = await fetchPaginated(

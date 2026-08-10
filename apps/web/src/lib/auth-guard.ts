@@ -4,6 +4,7 @@ import { auth } from "@/lib/better-auth";
 import type { BetterAuthSession, BetterAuthUser } from "@/lib/better-auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 export interface SafeUser extends BetterAuthUser {
   id: string;
@@ -14,10 +15,12 @@ export interface SafeSession {
   user: SafeUser;
 }
 
-async function getSession() {
+// 1 リクエスト中に layout / page / server action が別々にガードを呼ぶため、
+// React の cache でセッション取得をリクエスト単位に 1 回へまとめる。
+const getSession = cache(async () => {
   const headersList = await headers();
   return auth.api.getSession({ headers: headersList });
-}
+});
 
 export async function authOrSignIn(): Promise<SafeSession> {
   const result = await getSession();

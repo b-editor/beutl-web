@@ -14,9 +14,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
 
 export default async function Page(
-  props: { searchParams: Promise<{ returnUrl: string }>; params: Promise<{ lang: string }> }
+  props: { searchParams: Promise<{ returnUrl?: string }>; params: Promise<{ lang: string }> }
 ) {
   const params = await props.params;
 
@@ -26,9 +27,7 @@ export default async function Page(
 
   const searchParams = await props.searchParams;
 
-  const {
-    returnUrl
-  } = searchParams;
+  const returnUrl = (await resolveSafeReturnUrl(searchParams.returnUrl)) ?? `/${lang}`;
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) {

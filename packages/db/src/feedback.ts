@@ -54,24 +54,17 @@ export async function listFeedback({
   pageSize: number;
 }) {
   const db = await getDb();
+  const where = { status, category };
   const [items, total] = await Promise.all([
     db.feedback.findMany({
-      where: {
-        status,
-        category,
-      },
+      where,
       orderBy: {
         createdAt: "desc",
       },
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
-    db.feedback.count({
-      where: {
-        status,
-        category,
-      },
-    }),
+    db.feedback.count({ where }),
   ]);
   return {
     items: items.map((item) => ({
@@ -88,8 +81,14 @@ export async function listFeedback({
   };
 }
 
-export async function countFeedback({ status }: { status?: FeedbackStatus }) {
-  const db = await getDb();
+export async function countFeedback({
+  status,
+  prisma,
+}: {
+  status?: FeedbackStatus;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
   return db.feedback.count({
     where: {
       status,

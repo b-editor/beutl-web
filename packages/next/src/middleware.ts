@@ -9,14 +9,15 @@ import {
 // x-url / x-pathname 付与を行う。既定ロケールは redirect ではなく rewrite する
 // ため、ブラウザ上のパスには接頭辞が付かないことがある (getLanguage 側で考慮)。
 export function localeMiddleware(request: NextRequest) {
-  const newRequest = request.clone();
+  // request.clone() は本文ストリームまで tee するので、ヘッダーの複製だけを行う。
+  const headers = new Headers(request.headers);
   let url = request.url;
   if (process.env.NODE_ENV === "development") {
     url = `${request.headers.get("x-forwarded-proto")}://${request.headers.get("x-forwarded-host")}${request.nextUrl.pathname}${request.nextUrl.search}`;
   }
 
-  newRequest.headers.set("x-url", url);
-  newRequest.headers.set("x-pathname", request.nextUrl.pathname);
+  headers.set("x-url", url);
+  headers.set("x-pathname", request.nextUrl.pathname);
 
   const pathname = request.nextUrl.pathname;
   const search = request.nextUrl.search;
@@ -28,7 +29,7 @@ export function localeMiddleware(request: NextRequest) {
   ) {
     return NextResponse.next({
       request: {
-        headers: newRequest.headers,
+        headers,
       },
     });
   }
@@ -48,7 +49,7 @@ export function localeMiddleware(request: NextRequest) {
       new URL(`/${defaultLanguage}${pathname}${search}`, request.url),
       {
         request: {
-          headers: newRequest.headers,
+          headers,
         },
       },
     );
@@ -56,7 +57,7 @@ export function localeMiddleware(request: NextRequest) {
 
   return NextResponse.next({
     request: {
-      headers: newRequest.headers,
+      headers,
     },
   });
 }

@@ -8,7 +8,6 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
 
-// Export types for use elsewhere
 export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
 
@@ -147,7 +146,6 @@ async function createAuthWithPrisma() {
   });
 }
 
-// Export an async auth handler for route.ts
 export const auth = {
   handler: async (request: Request) => {
     if (!authInstance) {
@@ -165,7 +163,6 @@ export const auth = {
   },
 };
 
-// Export the auth instance getter for other uses
 export async function getAuth() {
   if (!authInstance) {
     authInstance = await createAuthWithPrisma();

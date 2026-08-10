@@ -9,21 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@beutl/ui/ui/select";
-import type { FeedbackCategory, FeedbackStatus } from "@beutl/db";
-
-// クライアントコンポーネントなので @beutl/db の値 (Prisma Client) は import しない。
-// satisfies により、enum からメンバーが削除・改名された場合はここで型エラーになる。
-const statuses = [
-  "OPEN",
-  "IN_PROGRESS",
-  "RESOLVED",
-] as const satisfies readonly FeedbackStatus[];
-const categories = [
-  "BUG_REPORT",
-  "FEATURE_REQUEST",
-  "QUESTION",
-  "OTHER",
-] as const satisfies readonly FeedbackCategory[];
+import { categories, statuses } from "./enums";
 
 export function FeedbackFilterForm({
   lang,

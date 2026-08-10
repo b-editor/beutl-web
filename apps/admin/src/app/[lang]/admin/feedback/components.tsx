@@ -6,16 +6,8 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
 import { useEffect } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
+import { statuses } from "./enums";
 import type { FeedbackStatus } from "@beutl/db";
-import type { ActionResult } from "@beutl/core";
-
-// クライアントコンポーネントなので @beutl/db の値 (Prisma Client) は import しない。
-// satisfies により、enum からメンバーが削除・改名された場合はここで型エラーになる。
-const statuses = [
-  "OPEN",
-  "IN_PROGRESS",
-  "RESOLVED",
-] as const satisfies readonly FeedbackStatus[];
 
 export function FeedbackStatusSelect({
   lang,
@@ -29,7 +21,6 @@ export function FeedbackStatusSelect({
   const { t } = useTranslation(lang);
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
-  const [lastResult, setLastResult] = useState<ActionResult | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<FeedbackStatus>(initialStatus);
   // 更新が失敗したときの戻り先。initialStatus は再描画されるまで古いままなので、
   // 直近で永続化に成功した値を保持する。
@@ -40,24 +31,20 @@ export function FeedbackStatusSelect({
     setSelectedStatus(initialStatus);
   }, [initialStatus]);
 
-  useEffect(() => {
-    const state = lastResult;
-    if (!state) return;
-    if (state.success) {
-      toast({ title: t("admin:feedback.updateSuccess") });
-    } else {
+  const notifyFailure = useCallback(
+    (message?: string) => {
+      setSelectedStatus(committedStatus.current);
       toast({
         title: t("admin:feedback.updateFailed"),
-        description: state.message,
+        description: message,
         variant: "destructive",
       });
-    }
-    setLastResult(null);
-  }, [lastResult, toast, t]);
+    },
+    [toast, t],
+  );
 
   const handleChange = useCallback((value: string) => {
     const nextStatus = value as FeedbackStatus;
-    // 楽観的更新: サーバー応答前に選択値を反映
     setSelectedStatus(nextStatus);
     startTransition(async () => {
       try {
@@ -67,19 +54,15 @@ export function FeedbackStatusSelect({
         });
         if (res.success) {
           committedStatus.current = nextStatus;
+          toast({ title: t("admin:feedback.updateSuccess") });
         } else {
-          setSelectedStatus(committedStatus.current);
+          notifyFailure(res.message);
         }
-        setLastResult(res);
       } catch (e) {
-        setSelectedStatus(committedStatus.current);
-        setLastResult({
-          success: false,
-          message: e instanceof Error ? e.message : String(e),
-        });
+        notifyFailure(e instanceof Error ? e.message : String(e));
       }
     });
-  }, [feedbackId, startTransition]);
+  }, [feedbackId, startTransition, notifyFailure, toast, t]);
 
   return (
     <Select

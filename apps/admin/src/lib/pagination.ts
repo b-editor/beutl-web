@@ -1,11 +1,13 @@
+import { firstSearchParam } from "./search-params";
+
 // skip は 64bit 整数に収める必要があり、pageSize を掛けた値が溢れない上限に切る。
 const MAX_PAGE = 1_000_000;
 
 // URL の page パラメータは任意の文字列を取りうる。整数に丸めずに Prisma の skip へ
 // 渡すと "2.01" (小数) や "1e999" (Infinity)、"1e19" (整数だが巨大) でクエリ検証
 // エラーになるため、ここで MAX_PAGE 以下の正整数へ正規化する。
-export function parsePageParam(page: string | undefined): number {
-  const parsed = Number(page);
+export function parsePageParam(page: string | string[] | undefined): number {
+  const parsed = Number(firstSearchParam(page));
   if (!Number.isFinite(parsed)) return 1;
 
   return Math.min(MAX_PAGE, Math.max(1, Math.floor(parsed)));

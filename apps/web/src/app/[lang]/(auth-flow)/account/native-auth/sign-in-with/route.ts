@@ -24,7 +24,9 @@ export async function GET(request: NextRequest) {
     if (response.url) {
       return NextResponse.redirect(response.url);
     } else {
-      return NextResponse.redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl.toString())}`);
+      const signInUrl = new URL(`/${lang}/account/sign-in`, request.nextUrl.origin);
+      signInUrl.searchParams.set("returnUrl", continueUrl.toString());
+      return NextResponse.redirect(signInUrl);
     }
   } else {
     // アカウントが存在する

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useTransition } from "react";
 import { deleteUser } from "./actions";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { useRouter } from "next/navigation";
@@ -18,41 +18,29 @@ import {
 } from "@beutl/ui/ui/alert-dialog";
 import { Trash2 } from "lucide-react";
 import { useToast } from "@beutl/ui/use-toast";
-import { useEffect } from "react";
-import type { ActionResult } from "@beutl/core";
 
 export function DeleteUserButton({ lang, userId }: { lang: string; userId: string }) {
   const { t } = useTranslation(lang);
   const router = useRouter();
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
-  const [lastResult, setLastResult] = useState<ActionResult | null>(null);
-
-  useEffect(() => {
-    const state = lastResult;
-    if (!state) return;
-    if (state.success) {
-      toast({
-        title: t("admin:users.deleteSuccess"),
-      });
-      router.push(`/${lang}/admin/users`);
-      router.refresh();
-    } else if (state.message) {
-      toast({
-        title: t("admin:users.deleteFailed"),
-        description: state.message,
-        variant: "destructive",
-      });
-    }
-    setLastResult(null);
-  }, [lastResult, router, toast, t, lang]);
 
   const handleDelete = useCallback(() => {
     startTransition(async () => {
       const res = await deleteUser({ userId });
-      setLastResult(res);
+      if (res.success) {
+        toast({ title: t("admin:users.deleteSuccess") });
+        router.push(`/${lang}/admin/users`);
+        router.refresh();
+      } else {
+        toast({
+          title: t("admin:users.deleteFailed"),
+          description: res.message,
+          variant: "destructive",
+        });
+      }
     });
-  }, [userId, startTransition]);
+  }, [userId, startTransition, router, toast, t, lang]);
 
   return (
     <AlertDialog>

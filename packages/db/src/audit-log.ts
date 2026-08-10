@@ -80,13 +80,15 @@ export async function listAuditLogs({
   userId,
   page,
   pageSize,
+  prisma,
 }: {
   action?: string;
   userId?: string;
   page: number;
   pageSize: number;
+  prisma?: PrismaTransaction;
 }) {
-  const db = await getDb();
+  const db = prisma ?? await getDb();
   const where = {
     action: action || undefined,
     userId: userId || undefined,

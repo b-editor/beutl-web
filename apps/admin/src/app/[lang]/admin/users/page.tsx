@@ -6,19 +6,21 @@ import { Button } from "@beutl/ui/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { firstSearchParam } from "@/lib/search-params";
 import { Pagination } from "@/components/admin/pagination";
 
 const PAGE_SIZE = 20;
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
-  searchParams: Promise<{ q?: string; page?: string }>;
+  searchParams: Promise<{ q?: string | string[]; page?: string | string[] }>;
 }) {
   await requireAdmin();
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;
-  const { q, page } = searchParams;
+  const q = firstSearchParam(searchParams.q);
+  const { page } = searchParams;
   const { t } = await getTranslation(lang);
 
   const { result, currentPage, totalPages } = await fetchPaginated(

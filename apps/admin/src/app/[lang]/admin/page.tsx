@@ -1,4 +1,4 @@
-import { countFeedback, countUsers, listAuditLogs } from "@beutl/db";
+import { countFeedback, countUsers, getDb, listAuditLogs } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import { Users, MessageSquare, ScrollText } from "lucide-react";
@@ -10,11 +10,14 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const { lang } = params;
   const { t } = await getTranslation(lang);
 
+  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
+  // 3 つのクエリで 1 つのクライアントを共有する。
+  const prisma = await getDb();
   // listAuditLogs は絞り込みなしの total を返すため、総数は別クエリを発行せず流用する。
   const [userCount, openFeedbackCount, recentLogs] = await Promise.all([
-    countUsers(),
-    countFeedback({ status: "OPEN" }),
-    listAuditLogs({ page: 1, pageSize: 10 }),
+    countUsers({ prisma }),
+    countFeedback({ status: "OPEN", prisma }),
+    listAuditLogs({ page: 1, pageSize: 10, prisma }),
   ]);
   const auditLogCount = recentLogs.total;
 

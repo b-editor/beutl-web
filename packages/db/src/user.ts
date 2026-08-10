@@ -182,6 +182,7 @@ export async function listUsers({
   return { items, total };
 }
 
+// 呼び出し側が「打ち切られたか」を判定できるよう、リレーションはこの上限より 1 件多く取得する。
 export const USER_DETAIL_RELATION_LIMIT = 50;
 
 export async function getUserDetail({ userId }: { userId: string }) {
@@ -206,7 +207,6 @@ export async function getUserDetail({ userId }: { userId: string }) {
         orderBy: {
           createdAt: "desc",
         },
-        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
         take: USER_DETAIL_RELATION_LIMIT + 1,
       },
       UserPaymentHistory: {
@@ -219,7 +219,6 @@ export async function getUserDetail({ userId }: { userId: string }) {
         orderBy: {
           createdAt: "desc",
         },
-        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
         take: USER_DETAIL_RELATION_LIMIT + 1,
       },
       Feedback: {
@@ -232,14 +231,17 @@ export async function getUserDetail({ userId }: { userId: string }) {
         orderBy: {
           createdAt: "desc",
         },
-        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
         take: USER_DETAIL_RELATION_LIMIT + 1,
       },
     },
   });
 }
 
-export async function countUsers() {
-  const db = await getDb();
+export async function countUsers({
+  prisma,
+}: {
+  prisma?: PrismaTransaction;
+} = {}) {
+  const db = prisma ?? await getDb();
   return db.user.count();
 }

@@ -10,9 +10,9 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4">
       <h1 className="text-2xl font-bold">403</h1>
-      <p className="text-muted-foreground">{t("admin:common.error")}</p>
+      <p className="text-muted-foreground">{t("admin:common.forbidden")}</p>
       <Button variant="outline" asChild>
-        <Link href={`/${lang}/admin`}>{t("admin:nav.dashboard")}</Link>
+        <Link href={`/${lang}/account/sign-out`}>{t("admin:nav.signOut")}</Link>
       </Button>
     </div>
   );
