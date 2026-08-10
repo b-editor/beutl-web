@@ -10,6 +10,7 @@
     "title": "管理ダッシュボード",
     "userCount": "ユーザー数",
     "openFeedbackCount": "未対応フィードバック",
+    "auditLogCount": "監査ログ総数",
     "recentAuditLogs": "最近の監査ログ",
     "viewAll": "すべて見る"
   },

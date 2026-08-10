@@ -8,6 +8,7 @@ export { randomString, createHash } from "./create-hash";
 export { cn, formatBytes } from "./utils";
 export type { ActionResult } from "./action-result";
 export { isAllowedContinueUrlHost } from "./native-auth";
+export { resolveSafeRedirectPath } from "./safe-redirect";
 export { isAdmin } from "./admin-guard";
 export { resolveContentAccess } from "./content-access";
 export type {

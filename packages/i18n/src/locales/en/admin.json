@@ -10,6 +10,7 @@
     "title": "Admin dashboard",
     "userCount": "Users",
     "openFeedbackCount": "Open feedback",
+    "auditLogCount": "Audit log entries",
     "recentAuditLogs": "Recent audit log",
     "viewAll": "View all"
   },
