@@ -47,6 +47,7 @@ async function createAuthWithPrisma() {
         origin: adminURL,
       }),
       magicLink({
+        disableSignUp: true,
         sendMagicLink: async ({ email, url }) => {
           const { host } = new URL(url);
           await sendEmail({
@@ -89,8 +90,11 @@ async function createAuthWithPrisma() {
     },
     advanced: {
       // 既存 Web (beutl.beditor.net) とセッションを共有する。
-      // domain 未指定時は baseURL からルートドメインを自動導出するため、
-      // ローカル開発 (localhost) ではクッキードメインを壊さない。
+      // better-auth は Domain 属性をルートドメインにして両サブドメインで
+      // 同一セッションクッキーを扱う。domain 未指定時は baseURL のホスト名
+      // 全体 (admin.beutl.beditor.net 等) が使われるため、本番でサブドメイン
+      // 間の共有には BETTER_AUTH_COOKIE_DOMAIN (例: beditor.net) が必須。
+      // ローカル開発 (localhost) では設定しないこと。
       crossSubDomainCookies: {
         enabled: true,
         ...(process.env.BETTER_AUTH_COOKIE_DOMAIN

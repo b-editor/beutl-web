@@ -16,15 +16,15 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts"
   },
   "dependencies": {
-    "@better-auth/passkey": "^1.4.19",
+    "@better-auth/passkey": "^1.6.26",
     "@beutl/ui": "workspace:*",
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/i18n": "workspace:*",
-    "@opennextjs/cloudflare": "^1.17.1",
-    "@prisma/adapter-pg": "^7.4.2",
-    "@prisma/client": "^7.4.2",
-    "better-auth": "^1.4.19",
+    "@opennextjs/cloudflare": "^1.20.2",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "better-auth": "^1.6.26",
     "lucide-react": "^0.575.0",
     "negotiator": "^1.0.0",
     "next": "15.5.22",
@@ -40,13 +40,13 @@
     "@types/react": "19.1.0",
     "@types/react-dom": "19.1.1",
     "@types/semver": "^7.7.0",
-    "eslint": "^9.30.1",
-    "eslint-config-next": "15.2.4",
-    "postcss": "^8.5.8",
-    "prisma": "^7.4.2",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.22",
+    "postcss": "^8.5.26",
+    "prisma": "^7.9.1",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.7.3",
-    "wrangler": "^4.67.0"
+    "wrangler": "^4.119.0"
   },
   "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a"
 }
