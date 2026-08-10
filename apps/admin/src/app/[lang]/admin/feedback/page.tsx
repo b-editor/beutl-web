@@ -104,6 +104,8 @@ export default async function Page(props: {
             params={{ status: statusFilter, category: categoryFilter }}
             currentPage={currentPage}
             totalPages={totalPages}
+            previousLabel={t("admin:common.previousPage")}
+            nextLabel={t("admin:common.nextPage")}
           />
         </>
       )}

@@ -10,11 +10,12 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack -p 3001",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
-    "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts"
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts",
+    "postinstall": "node ../../scripts/prisma-generate.mjs"
   },
   "dependencies": {
     "@better-auth/passkey": "^1.6.26",

@@ -24,7 +24,10 @@ const getSession = cache(async () => {
   return auth.api.getSession({ headers: headersList });
 });
 
-export async function authenticated<TResult>(
+// エクスポートしない。BETTER_AUTH_COOKIE_DOMAIN によりセッションは公開サイトと
+// 共有されるため、認証だけを見るこの関数は管理画面では登録済みユーザー全員を
+// 通してしまう。外へ出すのは管理者判定込みの adminAction / requireAdmin だけ。
+async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
 ) {
   const result = await getSession();
@@ -39,9 +42,7 @@ export async function authenticated<TResult>(
   return await fnc(result as SafeSession);
 }
 
-// 管理画面の Server Action はこちらを使うこと。BETTER_AUTH_COOKIE_DOMAIN により
-// セッションは公開サイトと共有されるため、authenticated だけでは登録済みユーザー
-// 全員から到達できてしまう。管理者判定を呼び出し側の任意にしない。
+// 管理画面の Server Action はこちらを使うこと。管理者判定を呼び出し側の任意にしない。
 export async function adminAction(
   fnc: (session: SafeSession) => Promise<ActionResult>,
 ): Promise<ActionResult> {

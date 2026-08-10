@@ -77,6 +77,8 @@ export default async function Page(props: {
             params={{ q }}
             currentPage={currentPage}
             totalPages={totalPages}
+            previousLabel={t("admin:common.previousPage")}
+            nextLabel={t("admin:common.nextPage")}
           />
         </>
       )}

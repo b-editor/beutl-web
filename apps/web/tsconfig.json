@@ -46,6 +46,9 @@
       "@beutl/next/audit-log": [
         "../../packages/next/src/audit-log.ts"
       ],
+      "@beutl/next/auth-hooks": [
+        "../../packages/next/src/auth-hooks.ts"
+      ],
       "@beutl/next/language": [
         "../../packages/next/src/language.ts"
       ],

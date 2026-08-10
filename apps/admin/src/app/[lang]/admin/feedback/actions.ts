@@ -3,7 +3,11 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
-import { isFeedbackStatus, startTransaction, updateFeedbackStatus } from "@beutl/db";
+import {
+  isFeedbackStatus,
+  startRetryableTransaction,
+  updateFeedbackStatus,
+} from "@beutl/db";
 import type { FeedbackStatus } from "@beutl/db";
 import { revalidatePath } from "next/cache";
 
@@ -25,7 +29,7 @@ export async function updateStatus({
 
     // 監査ログと対象の書き込みは同一トランザクションで確定させる
     // (片方だけ成功すると、呼び出し元へ返す結果と実際の状態が食い違う)。
-    await startTransaction(async (tx) => {
+    await startRetryableTransaction(async (tx) => {
       await updateFeedbackStatus({ id, status, prisma: tx });
       await addAuditLog({
         userId: session.user.id,

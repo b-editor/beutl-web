@@ -67,19 +67,7 @@ export async function listFeedback({
     }),
     db.feedback.count({ where }),
   ]);
-  return {
-    items: items.map((item) => ({
-      id: item.id,
-      name: item.name,
-      email: item.email,
-      category: item.category,
-      message: item.message,
-      status: item.status,
-      userId: item.userId,
-      createdAt: item.createdAt,
-    })),
-    total,
-  };
+  return { items, total };
 }
 
 export async function countFeedback({

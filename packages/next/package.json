@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./audit-log": "./src/audit-log.ts",
+    "./auth-hooks": "./src/auth-hooks.ts",
     "./language": "./src/language.ts",
     "./local-redirect": "./src/local-redirect.ts",
     "./middleware": "./src/middleware.ts"

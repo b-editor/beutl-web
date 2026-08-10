@@ -303,6 +303,9 @@ model AuditLog {
   user      User?    @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  // 管理画面の監査ログ一覧は createdAt 降順で、action での絞り込みを伴う。
+  @@index([createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
 }
 
 model AppReleaseAsset {
@@ -328,6 +331,13 @@ model Feedback {
   userId    String?
   user      User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt DateTime         @default(now())
+
+  // 管理画面のフィードバック一覧は createdAt 降順で、status / category で絞り込む。
+  // userId はユーザー詳細画面のリレーション取得に使う。
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([category, createdAt(sort: Desc)])
 }
 
 enum FeedbackCategory {

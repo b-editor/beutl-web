@@ -27,6 +27,21 @@ describe("resolveSafeRedirectPath", () => {
     expect(resolveSafeRedirectPath(url, ORIGIN)).toBeNull();
   });
 
+  // ドットセグメントは URL 解決時に畳まれるため、入力が "/" 始まりでも
+  // 正規化後のパスが "//evil.com" になりうる。オリジン比較だけでは通過する。
+  it.each([
+    "/..//evil.com",
+    "/../\\evil.com",
+    "/a/../..//evil.com",
+    "/ja/../..//evil.com/path",
+  ])(
+    "正規化でプロトコル相対パスになる入力を拒否する: %s",
+    (url) => {
+      expect(resolveSafeRedirectPath(url, ORIGIN)).toBeNull();
+      expect(resolveSafeRedirectPath(url)).toBeNull();
+    },
+  );
+
   it("別オリジンの絶対 URL を拒否する", () => {
     expect(resolveSafeRedirectPath("https://evil.com", ORIGIN)).toBeNull();
     expect(

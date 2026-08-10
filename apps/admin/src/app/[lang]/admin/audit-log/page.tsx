@@ -1,4 +1,4 @@
-import { listAuditLogs } from "@beutl/db";
+import { auditLogActions, listAuditLogs } from "@beutl/db";
 import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import { AuditLogFilterForm } from "./filter";
@@ -10,6 +10,12 @@ import { Pagination } from "@/components/admin/pagination";
 import Link from "next/link";
 
 const PAGE_SIZE = 30;
+
+// auditLogActions は @beutl/db 経由で @prisma/client を引き込むため、
+// クライアントコンポーネントからは読めない。ここで平坦化して props で渡す。
+const ACTION_NAMES = Object.values(auditLogActions)
+  .flatMap((group) => Object.values(group))
+  .sort();
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
@@ -46,7 +52,12 @@ export default async function Page(props: {
         <h1 className="text-2xl font-bold">{t("admin:auditLog.title")}</h1>
       </div>
 
-      <AuditLogFilterForm lang={lang} action={action} userId={userId} />
+      <AuditLogFilterForm
+        lang={lang}
+        action={action}
+        userId={userId}
+        actions={ACTION_NAMES}
+      />
 
       {result.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("admin:auditLog.noResults")}</p>
@@ -95,6 +106,8 @@ export default async function Page(props: {
             params={{ action, userId }}
             currentPage={currentPage}
             totalPages={totalPages}
+            previousLabel={t("admin:common.previousPage")}
+            nextLabel={t("admin:common.nextPage")}
           />
         </>
       )}

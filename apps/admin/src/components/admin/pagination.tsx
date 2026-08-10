@@ -19,11 +19,16 @@ export function Pagination({
   params = {},
   currentPage,
   totalPages,
+  previousLabel,
+  nextLabel,
 }: {
   basePath: string;
   params?: Record<string, string | undefined>;
   currentPage: number;
   totalPages: number;
+  // 表示は « / » の記号だけなので、支援技術向けの名前を別に渡す。
+  previousLabel: string;
+  nextLabel: string;
 }) {
   if (totalPages <= 1) return null;
 
@@ -31,14 +36,19 @@ export function Pagination({
   const hasNext = currentPage < totalPages;
 
   return (
-    <div className="flex items-center justify-center gap-2">
+    <nav className="flex items-center justify-center gap-2">
       {hasPrevious ? (
         <Button variant="outline" size="sm" asChild>
-          <Link href={buildHref(basePath, params, currentPage - 1)}>&laquo;</Link>
+          <Link
+            href={buildHref(basePath, params, currentPage - 1)}
+            aria-label={previousLabel}
+          >
+            <span aria-hidden="true">&laquo;</span>
+          </Link>
         </Button>
       ) : (
-        <Button variant="outline" size="sm" disabled>
-          &laquo;
+        <Button variant="outline" size="sm" disabled aria-label={previousLabel}>
+          <span aria-hidden="true">&laquo;</span>
         </Button>
       )}
       <span className="text-sm text-muted-foreground">
@@ -46,13 +56,18 @@ export function Pagination({
       </span>
       {hasNext ? (
         <Button variant="outline" size="sm" asChild>
-          <Link href={buildHref(basePath, params, currentPage + 1)}>&raquo;</Link>
+          <Link
+            href={buildHref(basePath, params, currentPage + 1)}
+            aria-label={nextLabel}
+          >
+            <span aria-hidden="true">&raquo;</span>
+          </Link>
         </Button>
       ) : (
-        <Button variant="outline" size="sm" disabled>
-          &raquo;
+        <Button variant="outline" size="sm" disabled aria-label={nextLabel}>
+          <span aria-hidden="true">&raquo;</span>
         </Button>
       )}
-    </div>
+    </nav>
   );
 }

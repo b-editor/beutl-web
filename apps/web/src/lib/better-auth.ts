@@ -4,6 +4,7 @@ import { passkey } from "@better-auth/passkey";
 import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
+import { onUserCreated } from "@beutl/next/auth-hooks";
 import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
@@ -112,36 +113,7 @@ async function createAuthWithPrisma() {
     databaseHooks: {
       user: {
         create: {
-          after: async (user) => {
-            const db = await getDb();
-            let userName = user.email?.split("@")[0];
-            if (!userName) return;
-
-            const original = userName;
-            let exists = await db.profile.findFirst({
-              where: { userName: original },
-            });
-            for (let i = 1; exists; i++) {
-              userName = `${original}${i}`;
-              exists = await db.profile.findFirst({
-                where: { userName },
-              });
-            }
-
-            await db.profile.create({
-              data: {
-                userId: user.id,
-                displayName: user.name || userName,
-                userName,
-              },
-            });
-
-            await addAuditLog({
-              userId: user.id,
-              action: auditLogActions.authjs.createUser,
-              details: `userName: ${userName}, email: ${user.email}`,
-            });
-          },
+          after: onUserCreated,
         },
       },
       session: {

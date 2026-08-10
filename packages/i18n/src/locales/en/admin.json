@@ -81,6 +81,8 @@
     "error": "Error",
     "forbidden": "This account does not have administrator access.",
     "empty": "No data",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "previousPage": "Previous page",
+    "nextPage": "Next page"
   }
 }

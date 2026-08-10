@@ -115,6 +115,11 @@ const NavigationMenuIndicator = React.forwardRef<
 NavigationMenuIndicator.displayName =
   NavigationMenuPrimitive.Indicator.displayName;
 
+// Radix のプリミティブを直接使う画面 (apps/web の NavBar) もここから取る。
+// 各アプリが @radix-ui/react-navigation-menu を個別に依存すると、Root と List が
+// 別モジュールインスタンスになって React context が繋がらなくなりうる。
+export { NavigationMenuPrimitive };
+
 export {
   navigationMenuTriggerStyle,
   NavigationMenu,

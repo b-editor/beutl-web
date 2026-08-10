@@ -38,5 +38,13 @@ export function resolveSafeRedirectPath(
     return null;
   }
 
+  // "/..//evil.com" は URL 解決で "//evil.com" というパスへ正規化される。
+  // オリジンは基準と一致するのでここまで通るが、返した文字列をそのまま
+  // redirect() や router.push() へ渡すとブラウザはプロトコル相対 URL と解釈し、
+  // https://evil.com へ遷移してしまう。先頭が "//" のパスは拒否する。
+  if (resolved.pathname.startsWith("//")) {
+    return null;
+  }
+
   return `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }

@@ -38,6 +38,7 @@ export function UserSearchForm({ lang, query }: { lang: string; query?: string }
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder={t("admin:users.searchPlaceholder")}
+        aria-label={t("admin:users.searchPlaceholder")}
         className="max-w-sm"
       />
       <Button type="submit" variant="outline">

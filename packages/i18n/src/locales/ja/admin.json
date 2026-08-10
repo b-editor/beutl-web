@@ -81,6 +81,8 @@
     "error": "エラー",
     "forbidden": "このアカウントには管理者権限がありません。",
     "empty": "データがありません",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ"
   }
 }

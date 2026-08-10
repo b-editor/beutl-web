@@ -5,6 +5,7 @@ import { passkey } from "@better-auth/passkey";
 import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
+import { onUserCreated } from "@beutl/next/auth-hooks";
 import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
 
@@ -16,16 +17,16 @@ let authInstance: Awaited<ReturnType<typeof createAuthWithPrisma>> | null = null
 async function createAuthWithPrisma() {
   const prisma = await getDb();
   const adminURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
-  // 未設定のまま既定値へ倒すと、本番の管理 Worker が http://localhost:3000 を
-  // 信頼済みオリジンとして受け入れてしまう。設定されている場合だけ追加する。
-  const webURL = process.env.BETTER_AUTH_WEB_URL;
   return betterAuth({
     database: prismaAdapter(prisma, {
       provider: "postgresql",
     }),
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: adminURL,
-    trustedOrigins: webURL ? [adminURL, webURL] : [adminURL],
+    // 公開サイトのオリジンは含めない。セッション共有は crossSubDomainCookies が
+    // 行うため trustedOrigins には不要で、加えるとクッキーが同一サイト送信される
+    // 分だけ管理 Worker のオリジン検査が公開サイト側へ開いてしまう。
+    trustedOrigins: [adminURL],
     emailAndPassword: {
       enabled: false,
     },
@@ -33,12 +34,18 @@ async function createAuthWithPrisma() {
       google: {
         clientId: process.env.AUTH_GOOGLE_ID as string,
         clientSecret: process.env.AUTH_GOOGLE_SECRET as string,
+        // disableImplicitSignUp だけだと requestSignUp: true を送るリクエストで
+        // 新規ユーザーを作れてしまう (better-auth の callback は
+        // `disableImplicitSignUp && !requestSignUp || options.disableSignUp`)。
+        // 管理画面はサインアップの導線ではないので両方立てる。
         disableImplicitSignUp: true,
+        disableSignUp: true,
       },
       github: {
         clientId: process.env.AUTH_GITHUB_ID as string,
         clientSecret: process.env.AUTH_GITHUB_SECRET as string,
         disableImplicitSignUp: true,
+        disableSignUp: true,
       },
     },
     plugins: [
@@ -90,6 +97,17 @@ async function createAuthWithPrisma() {
       },
     },
     advanced: {
+      // クッキー名の既定は "better-auth.<name>" で web と同一。Domain 共有を有効に
+      // すると両 Worker のクッキーが同名・同ドメイン・同パスで衝突するため、
+      // 管理 Worker 側は接頭辞を分ける。共有したいのはセッションだけなので
+      // session_token だけ web と同じ名前に固定する。
+      // これを分けないと、OAuth の state クッキー (__Secure-better-auth.state) を
+      // 両サイトが上書きし合い、先に始めたサインインが
+      // state_security_mismatch で失敗する。
+      cookiePrefix: "beutl-admin",
+      cookies: {
+        session_token: { name: "better-auth.session_token" },
+      },
       // BETTER_AUTH_COOKIE_DOMAIN を設定したときだけ Domain 付きのセッションクッキーを
       // 発行し、既存 Web (beutl.beditor.net) と共有する。
       // 値には共有に必要な最小のドメインを指定する (本番では beutl.beditor.net)。
@@ -113,6 +131,14 @@ async function createAuthWithPrisma() {
         : {}),
     },
     databaseHooks: {
+      // サインアップ導線は塞いでいるが、better-auth には requestSignUp や
+      // idToken 経由でユーザーが作られうる経路が残る。web と同じフックを共有し、
+      // 管理 Worker 経由で作られても Profile と監査ログが必ず付くようにする。
+      user: {
+        create: {
+          after: onUserCreated,
+        },
+      },
       session: {
         create: {
           after: async (session) => {

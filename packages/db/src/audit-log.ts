@@ -96,6 +96,16 @@ export async function listAuditLogs({
   const [items, total] = await Promise.all([
     db.auditLog.findMany({
       where,
+      // port は管理画面で使わないので取得しない。
+      select: {
+        id: true,
+        userId: true,
+        action: true,
+        details: true,
+        ipAddress: true,
+        userAgent: true,
+        createdAt: true,
+      },
       // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * pageSize,
@@ -105,16 +115,5 @@ export async function listAuditLogs({
       where,
     }),
   ]);
-  return {
-    items: items.map((item) => ({
-      id: item.id,
-      userId: item.userId,
-      action: item.action,
-      details: item.details,
-      ipAddress: item.ipAddress,
-      userAgent: item.userAgent,
-      createdAt: item.createdAt,
-    })),
-    total,
-  };
+  return { items, total };
 }

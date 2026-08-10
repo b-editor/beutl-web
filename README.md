@@ -59,9 +59,11 @@ pnpm run deploy:api   # API Worker (wrangler deploy)
 pnpm run deploy:admin # Admin Worker (OpenNext build + deploy)
 ```
 
-Cloudflare bindings are declared in `apps/web/wrangler.jsonc` and `packages/api/wrangler.jsonc`;
-local environment placeholders are documented in `apps/web/.env.sample`.
-`JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` must match between both Workers (CI deploys from GitHub Secrets).
+Cloudflare bindings are declared in `apps/web/wrangler.jsonc`, `packages/api/wrangler.jsonc`
+and `apps/admin/wrangler.jsonc`; local environment placeholders are documented in
+`apps/web/.env.sample` and `apps/admin/.env.sample`.
+`JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` must match between the Web and API Workers
+(CI deploys from GitHub Secrets).
 
 The admin console can share the better-auth session with the Web app via
 `crossSubDomainCookies`, which is enabled only when `BETTER_AUTH_COOKIE_DOMAIN` is set.
