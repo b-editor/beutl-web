@@ -6,6 +6,7 @@ import { Button } from "@beutl/ui/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { Pagination } from "@/components/admin/pagination";
 
 const PAGE_SIZE = 20;
 
@@ -68,35 +69,12 @@ export default async function Page(props: {
             </TableBody>
           </Table>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2">
-              {currentPage > 1 ? (
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/${lang}/admin/users?${new URLSearchParams({ q: q || "", page: String(currentPage - 1) })}`}>
-                    &laquo;
-                  </Link>
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" disabled>
-                  &laquo;
-                </Button>
-              )}
-              <span className="text-sm text-muted-foreground">
-                {currentPage} / {totalPages}
-              </span>
-              {currentPage < totalPages ? (
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/${lang}/admin/users?${new URLSearchParams({ q: q || "", page: String(currentPage + 1) })}`}>
-                    &raquo;
-                  </Link>
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" disabled>
-                  &raquo;
-                </Button>
-              )}
-            </div>
-          )}
+          <Pagination
+            basePath={`/${lang}/admin/users`}
+            params={{ q }}
+            currentPage={currentPage}
+            totalPages={totalPages}
+          />
         </>
       )}
     </div>

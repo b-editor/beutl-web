@@ -19,6 +19,8 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
     title: "Beutl Admin",
     description: t("admin:nav.dashboard"),
     applicationName: "Beutl Admin",
+    // 管理画面は検索エンジンに載せない。
+    robots: { index: false, follow: false },
   };
 }
 

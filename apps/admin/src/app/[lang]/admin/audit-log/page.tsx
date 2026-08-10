@@ -4,6 +4,7 @@ import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { Pagination } from "@/components/admin/pagination";
 import Link from "next/link";
 
 const PAGE_SIZE = 30;
@@ -81,33 +82,12 @@ export default async function Page(props: {
             </TableBody>
           </Table>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2">
-              <Link
-                href={`/${lang}/admin/audit-log?${new URLSearchParams({
-                  action: action || "",
-                  userId: userId || "",
-                  page: String(Math.max(1, currentPage - 1)),
-                })}`}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                &laquo;
-              </Link>
-              <span className="text-sm text-muted-foreground">
-                {currentPage} / {totalPages}
-              </span>
-              <Link
-                href={`/${lang}/admin/audit-log?${new URLSearchParams({
-                  action: action || "",
-                  userId: userId || "",
-                  page: String(Math.min(totalPages, currentPage + 1)),
-                })}`}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                &raquo;
-              </Link>
-            </div>
-          )}
+          <Pagination
+            basePath={`/${lang}/admin/audit-log`}
+            params={{ action, userId }}
+            currentPage={currentPage}
+            totalPages={totalPages}
+          />
         </>
       )}
     </div>

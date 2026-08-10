@@ -22,9 +22,6 @@
       }
     ],
     "paths": {
-      "@beutl/ui": [
-        "../../packages/ui/src/index.ts"
-      ],
       "@/*": [
         "./src/*"
       ],

@@ -88,8 +88,8 @@ export async function listAuditLogs({
 }) {
   const db = await getDb();
   const where = {
-    action: action ? { equals: action } : undefined,
-    userId: userId ? userId : undefined,
+    action: action || undefined,
+    userId: userId || undefined,
   };
   const [items, total] = await Promise.all([
     db.auditLog.findMany({
@@ -116,9 +116,4 @@ export async function listAuditLogs({
     })),
     total,
   };
-}
-
-export async function countAuditLogs() {
-  const db = await getDb();
-  return db.auditLog.count();
 }

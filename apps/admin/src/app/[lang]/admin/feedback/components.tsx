@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useRef, useState, useTransition } from "react";
 import { updateStatus } from "./actions";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
@@ -31,6 +31,14 @@ export function FeedbackStatusSelect({
   const [isPending, startTransition] = useTransition();
   const [lastResult, setLastResult] = useState<ActionResult | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<FeedbackStatus>(initialStatus);
+  // 更新が失敗したときの戻り先。initialStatus は再描画されるまで古いままなので、
+  // 直近で永続化に成功した値を保持する。
+  const committedStatus = useRef<FeedbackStatus>(initialStatus);
+
+  useEffect(() => {
+    committedStatus.current = initialStatus;
+    setSelectedStatus(initialStatus);
+  }, [initialStatus]);
 
   useEffect(() => {
     const state = lastResult;
@@ -57,19 +65,21 @@ export function FeedbackStatusSelect({
           id: feedbackId,
           status: nextStatus,
         });
-        if (!res.success) {
-          setSelectedStatus(initialStatus);
+        if (res.success) {
+          committedStatus.current = nextStatus;
+        } else {
+          setSelectedStatus(committedStatus.current);
         }
         setLastResult(res);
       } catch (e) {
-        setSelectedStatus(initialStatus);
+        setSelectedStatus(committedStatus.current);
         setLastResult({
           success: false,
           message: e instanceof Error ? e.message : String(e),
         });
       }
     });
-  }, [feedbackId, initialStatus, startTransition]);
+  }, [feedbackId, startTransition]);
 
   return (
     <Select

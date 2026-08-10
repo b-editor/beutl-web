@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@beutl/ui/ui/badge";
 import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
-import Link from "next/link";
+import { Pagination } from "@/components/admin/pagination";
 
 const PAGE_SIZE = 20;
 
@@ -91,33 +91,12 @@ export default async function Page(props: {
             </TableBody>
           </Table>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2">
-              <Link
-                href={`/${lang}/admin/feedback?${new URLSearchParams({
-                  ...(statusFilter ? { status: statusFilter } : {}),
-                  ...(categoryFilter ? { category: categoryFilter } : {}),
-                  page: String(Math.max(1, currentPage - 1)),
-                })}`}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                &laquo;
-              </Link>
-              <span className="text-sm text-muted-foreground">
-                {currentPage} / {totalPages}
-              </span>
-              <Link
-                href={`/${lang}/admin/feedback?${new URLSearchParams({
-                  ...(statusFilter ? { status: statusFilter } : {}),
-                  ...(categoryFilter ? { category: categoryFilter } : {}),
-                  page: String(Math.min(totalPages, currentPage + 1)),
-                })}`}
-                className="text-sm text-muted-foreground hover:text-foreground"
-              >
-                &raquo;
-              </Link>
-            </div>
-          )}
+          <Pagination
+            basePath={`/${lang}/admin/feedback`}
+            params={{ status: statusFilter, category: categoryFilter }}
+            currentPage={currentPage}
+            totalPages={totalPages}
+          />
         </>
       )}
     </div>

@@ -32,7 +32,13 @@ export async function localRedirect(
   url: string,
   type?: RedirectType,
 ): Promise<never> {
+  const safePath = await resolveSafeReturnUrl(url);
   // 検証を通らない入力はサイト内トップへ送る。両アプリともルートは
   // /{lang}/... へリダイレクトされるため、安全な既定の遷移先になる。
-  redirect((await resolveSafeReturnUrl(url)) ?? "/", type);
+  // ただし黙って倒すと呼び出し側の不具合がユーザー操作ミスに見えるため記録する。
+  if (!safePath) {
+    console.error("localRedirect: rejected unsafe redirect target", url);
+  }
+
+  redirect(safePath ?? "/", type);
 }

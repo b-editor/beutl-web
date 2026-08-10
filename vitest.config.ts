@@ -38,12 +38,15 @@ export default defineConfig({
       ...workspacePackage("db"),
       ...workspacePackage("email"),
       ...workspacePackage("i18n"),
-      // @beutl/next はバレルを持たずサブパスのみを公開する。
+      // @beutl/next / @beutl/ui はバレルを持たずサブパスのみを公開する。
       {
         find: /^@beutl\/next\//,
         replacement: `${path.resolve(__dirname, "packages/next/src")}/`,
       },
-      ...workspacePackage("ui"),
+      {
+        find: /^@beutl\/ui\//,
+        replacement: `${path.resolve(__dirname, "packages/ui/src")}/`,
+      },
       // server-only は Next.js 専用パッケージ。契約テストは node 環境で実行するため
       // 空モジュールに解決する。
       {

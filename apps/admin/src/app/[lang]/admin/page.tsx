@@ -1,9 +1,4 @@
-import {
-  countAuditLogs,
-  countFeedback,
-  countUsers,
-  listAuditLogs,
-} from "@beutl/db";
+import { countFeedback, countUsers, listAuditLogs } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import { Users, MessageSquare, ScrollText } from "lucide-react";
@@ -15,12 +10,13 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const { lang } = params;
   const { t } = await getTranslation(lang);
 
-  const [userCount, openFeedbackCount, auditLogCount, recentLogs] = await Promise.all([
+  // listAuditLogs は絞り込みなしの total を返すため、総数は別クエリを発行せず流用する。
+  const [userCount, openFeedbackCount, recentLogs] = await Promise.all([
     countUsers(),
     countFeedback({ status: "OPEN" }),
-    countAuditLogs(),
     listAuditLogs({ page: 1, pageSize: 10 }),
   ]);
+  const auditLogCount = recentLogs.total;
 
   const stats = [
     {
