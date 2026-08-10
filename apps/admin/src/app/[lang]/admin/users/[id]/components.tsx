@@ -25,22 +25,33 @@ export function DeleteUserButton({ lang, userId }: { lang: string; userId: strin
   const { toast } = useToast();
   const [isPending, startTransition] = useTransition();
 
+  const notifyFailure = useCallback(
+    (message?: string) => {
+      toast({
+        title: t("admin:users.deleteFailed"),
+        description: message,
+        variant: "destructive",
+      });
+    },
+    [toast, t],
+  );
+
   const handleDelete = useCallback(() => {
     startTransition(async () => {
-      const res = await deleteUser({ userId });
-      if (res.success) {
-        toast({ title: t("admin:users.deleteSuccess") });
-        router.push(`/${lang}/admin/users`);
-        router.refresh();
-      } else {
-        toast({
-          title: t("admin:users.deleteFailed"),
-          description: res.message,
-          variant: "destructive",
-        });
+      try {
+        const res = await deleteUser({ userId });
+        if (res.success) {
+          toast({ title: t("admin:users.deleteSuccess") });
+          router.push(`/${lang}/admin/users`);
+          router.refresh();
+        } else {
+          notifyFailure(res.message);
+        }
+      } catch (e) {
+        notifyFailure(e instanceof Error ? e.message : String(e));
       }
     });
-  }, [userId, startTransition, router, toast, t, lang]);
+  }, [userId, startTransition, router, toast, t, lang, notifyFailure]);
 
   return (
     <AlertDialog>

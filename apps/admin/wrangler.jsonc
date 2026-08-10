@@ -13,6 +13,14 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "services": [
+    {
+      // @opennextjs/cloudflare のインクリメンタルキャッシュ再検証 (revalidatePath)
+      // は自分自身への service binding を必要とする。"service" は "name" と一致させる。
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "beutl-admin"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

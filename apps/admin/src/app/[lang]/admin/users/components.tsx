@@ -5,13 +5,19 @@ import { Input } from "@beutl/ui/ui/input";
 import { Button } from "@beutl/ui/ui/button";
 import { Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export function UserSearchForm({ lang, query }: { lang: string; query?: string }) {
   const { t } = useTranslation(lang);
   const router = useRouter();
   const searchParams = useSearchParams();
   const [value, setValue] = useState(query || "");
+
+  // このコンポーネントは検索のたびに再マウントされないため、初期値だけでは
+  // 戻る/進むや外部リンクで URL が変わったときに入力欄が古いまま残る。
+  useEffect(() => {
+    setValue(query || "");
+  }, [query]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

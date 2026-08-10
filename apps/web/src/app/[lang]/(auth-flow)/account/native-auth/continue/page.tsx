@@ -14,7 +14,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
+import { resolveNativeAuthReturnUrl } from "@beutl/next/local-redirect";
 
 export default async function Page(
   props: { searchParams: Promise<{ returnUrl?: string }>; params: Promise<{ lang: string }> }
@@ -27,12 +27,17 @@ export default async function Page(
 
   const searchParams = await props.searchParams;
 
-  const returnUrl = (await resolveSafeReturnUrl(searchParams.returnUrl)) ?? `/${lang}`;
+  const returnUrl =
+    (await resolveNativeAuthReturnUrl(searchParams.returnUrl)) ?? `/${lang}`;
+
+  // 遷移先の検証はこのページが一手に引き受けるため、サインイン/サインアップへは
+  // 遷移先そのものではなくこのページの URL を渡す (handler ページと同じ形)。
+  const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(returnUrl)}`;
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) {
     redirect(
-      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
+      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`,
     );
   }
   const user = session.user;
@@ -77,7 +82,7 @@ export default async function Page(
               <Link href={returnUrl}>{t("continue")}</Link>
             </Button>
             <Link
-              href={`/${lang}/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`}
+              href={`/${lang}/account/native-auth/sign-up?returnUrl=${encodeURIComponent(continueUrl)}`}
               prefetch={false}
               className="text-sm font-medium inline-block mt-6"
             >

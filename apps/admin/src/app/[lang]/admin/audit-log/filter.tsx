@@ -4,7 +4,7 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { Input } from "@beutl/ui/ui/input";
 import { Button } from "@beutl/ui/ui/button";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Filter } from "lucide-react";
 
 export function AuditLogFilterForm({
@@ -20,6 +20,16 @@ export function AuditLogFilterForm({
   const router = useRouter();
   const [actionValue, setActionValue] = useState(action || "");
   const [userIdValue, setUserIdValue] = useState(userId || "");
+
+  // このコンポーネントは絞り込みのたびに再マウントされないため、初期値だけでは
+  // 戻る/進むや外部リンクで URL が変わったときに入力欄が古いまま残る。
+  useEffect(() => {
+    setActionValue(action || "");
+  }, [action]);
+
+  useEffect(() => {
+    setUserIdValue(userId || "");
+  }, [userId]);
 
   const apply = (e: React.FormEvent) => {
     e.preventDefault();

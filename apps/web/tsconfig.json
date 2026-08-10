@@ -55,6 +55,9 @@
       "@beutl/next/middleware": [
         "../../packages/next/src/middleware.ts"
       ],
+      "@beutl/ui/use-toast": [
+        "../../packages/ui/src/hooks/use-toast.ts"
+      ],
       "@beutl/ui/*": [
         "../../packages/ui/src/*"
       ]

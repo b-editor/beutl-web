@@ -1,7 +1,10 @@
 import "server-only";
 import { headers } from "next/headers";
 import { redirect, type RedirectType } from "next/navigation";
-import { resolveSafeRedirectPath } from "@beutl/core";
+import {
+  resolveNativeAuthContinueTarget,
+  resolveSafeRedirectPath,
+} from "@beutl/core";
 
 // x-url は middleware が付与するが、開発環境では x-forwarded-proto/host が
 // 欠けて "null://..." のような解析不能な値になりうる。その場合は origin を
@@ -26,6 +29,16 @@ export async function resolveSafeReturnUrl(
   url: string | null | undefined,
 ): Promise<string | undefined> {
   return resolveSafeRedirectPath(url, await getRequestOrigin()) ?? undefined;
+}
+
+// native-auth の同意画面専用。デスクトップアプリのコールバックは別オリジンに
+// なりうるため、同一オリジンに加えてホスト許可リストも受け入れる。
+export async function resolveNativeAuthReturnUrl(
+  url: string | null | undefined,
+): Promise<string | undefined> {
+  return (
+    resolveNativeAuthContinueTarget(url, await getRequestOrigin()) ?? undefined
+  );
 }
 
 export async function localRedirect(
