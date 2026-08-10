@@ -56,15 +56,14 @@ export async function adminAction(
 
 export async function requireAdmin(): Promise<SafeSession> {
   const result = await getSession();
-  if (!result?.user?.id) {
+  if (!result?.user?.id || !isAdmin(result.user.id)) {
     const [headersList, lang] = await Promise.all([headers(), getLanguage()]);
-    redirect(
-      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`,
-    );
-  }
-
-  if (!isAdmin(result.user.id)) {
-    redirect(`/${await getLanguage()}/forbidden`);
+    if (!result?.user?.id) {
+      redirect(
+        `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`,
+      );
+    }
+    redirect(`/${lang}/forbidden`);
   }
 
   return result as SafeSession;

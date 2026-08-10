@@ -169,9 +169,8 @@ export async function listUsers({
         createdAt: true,
         emailVerified: true,
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),

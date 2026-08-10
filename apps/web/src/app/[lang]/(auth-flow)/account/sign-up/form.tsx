@@ -57,7 +57,7 @@ export default function Form({
                   </p>
                 )}
               </div>
-              <input type="hidden" name="returnUrl" value={returnUrl} />
+              <input type="hidden" name="returnUrl" value={returnUrl ?? ""} />
             </CardContent>
             <CardFooter className="block">
               <SubmitButton

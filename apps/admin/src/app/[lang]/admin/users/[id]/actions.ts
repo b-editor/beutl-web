@@ -27,8 +27,8 @@ export async function deleteUser({
       };
     }
 
-    // 監査ログを別トランザクションで書くと、削除が成功した後に監査ログが失敗した
-    // 場合に「削除失敗」と報告しつつアカウントは消えた状態になる。1 つにまとめる。
+    // 監査ログと対象の書き込みは同一トランザクションで確定させる
+    // (片方だけ成功すると、呼び出し元へ返す結果と実際の状態が食い違う)。
     await startTransaction(async (tx) => {
       await deleteUserById({ userId, prisma: tx });
       await addAuditLog({

@@ -22,11 +22,15 @@ export function useOAuthSignIn({
   const handleOAuthSignIn = async (provider: OAuthProvider) => {
     setOauthLoading(provider);
     try {
-      await authClient.signIn.social({
+      const result = await authClient.signIn.social({
         provider,
         callbackURL:
           resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
       });
+      // signIn.social は失敗しても throw せず error を返すため、明示的に確認する。
+      if (result?.error) {
+        throw new Error(result.error.message);
+      }
     } catch {
       toast({
         title: t("error"),

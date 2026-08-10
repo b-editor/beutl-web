@@ -23,8 +23,8 @@ export async function updateStatus({
       return { success: false, message: "Invalid feedback id" };
     }
 
-    // 監査ログを別トランザクションで書くと、更新が成功した後に監査ログが失敗した
-    // 場合に「更新失敗」と報告しつつ値は変わった状態になる。1 つにまとめる。
+    // 監査ログと対象の書き込みは同一トランザクションで確定させる
+    // (片方だけ成功すると、呼び出し元へ返す結果と実際の状態が食い違う)。
     await startTransaction(async (tx) => {
       await updateFeedbackStatus({ id, status, prisma: tx });
       await addAuditLog({

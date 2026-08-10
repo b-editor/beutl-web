@@ -96,9 +96,8 @@ export async function listAuditLogs({
   const [items, total] = await Promise.all([
     db.auditLog.findMany({
       where,
-      orderBy: {
-        createdAt: "desc",
-      },
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
