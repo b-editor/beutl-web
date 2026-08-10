@@ -1,4 +1,5 @@
 import { isFeedbackCategory, isFeedbackStatus, listFeedback } from "@beutl/db";
+import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import { FeedbackStatusSelect } from "./components";
 import { FeedbackFilterForm } from "./filter";
@@ -91,7 +92,7 @@ export default async function Page(props: {
                     {item.message}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {item.createdAt.toLocaleString(lang)}
+                    {formatTimestamp(item.createdAt, lang)}
                   </TableCell>
                 </TableRow>
               ))}

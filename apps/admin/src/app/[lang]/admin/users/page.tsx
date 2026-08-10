@@ -1,4 +1,5 @@
 import { listUsers } from "@beutl/db";
+import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import { UserSearchForm } from "./components";
 import Link from "next/link";
@@ -57,7 +58,7 @@ export default async function Page(props: {
                   <TableCell className="font-medium">{user.name || "-"}</TableCell>
                   <TableCell>{user.email}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {user.createdAt.toLocaleString(lang)}
+                    {formatTimestamp(user.createdAt, lang)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="outline" size="sm" asChild>

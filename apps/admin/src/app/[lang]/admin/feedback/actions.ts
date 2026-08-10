@@ -2,8 +2,7 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
-import { authenticated } from "@/lib/auth-guard";
-import { isAdmin } from "@beutl/core";
+import { adminAction } from "@/lib/auth-guard";
 import { isFeedbackStatus, updateFeedbackStatus } from "@beutl/db";
 import type { FeedbackStatus } from "@beutl/db";
 import { revalidatePath } from "next/cache";
@@ -15,11 +14,7 @@ export async function updateStatus({
   id: string;
   status: FeedbackStatus;
 }): Promise<ActionResult> {
-  return await authenticated(async (session) => {
-    if (!isAdmin(session.user.id)) {
-      return { success: false, message: "Forbidden" };
-    }
-
+  return await adminAction(async (session) => {
     // Server Action の引数は型注釈が実行時に消えるため、値を検証してから永続化する。
     if (!isFeedbackStatus(status)) {
       return { success: false, message: "Invalid status" };

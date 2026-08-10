@@ -32,23 +32,27 @@ export function Pagination({
 
   return (
     <div className="flex items-center justify-center gap-2">
-      <Button variant="outline" size="sm" asChild={hasPrevious} disabled={!hasPrevious}>
-        {hasPrevious ? (
+      {hasPrevious ? (
+        <Button variant="outline" size="sm" asChild>
           <Link href={buildHref(basePath, params, currentPage - 1)}>&laquo;</Link>
-        ) : (
-          <span>&laquo;</span>
-        )}
-      </Button>
+        </Button>
+      ) : (
+        <Button variant="outline" size="sm" disabled>
+          &laquo;
+        </Button>
+      )}
       <span className="text-sm text-muted-foreground">
         {currentPage} / {totalPages}
       </span>
-      <Button variant="outline" size="sm" asChild={hasNext} disabled={!hasNext}>
-        {hasNext ? (
+      {hasNext ? (
+        <Button variant="outline" size="sm" asChild>
           <Link href={buildHref(basePath, params, currentPage + 1)}>&raquo;</Link>
-        ) : (
-          <span>&raquo;</span>
-        )}
-      </Button>
+        </Button>
+      ) : (
+        <Button variant="outline" size="sm" disabled>
+          &raquo;
+        </Button>
+      )}
     </div>
   );
 }

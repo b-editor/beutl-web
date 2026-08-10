@@ -25,11 +25,8 @@ export function AuditLogFilterForm({
   // 戻る/進むや外部リンクで URL が変わったときに入力欄が古いまま残る。
   useEffect(() => {
     setActionValue(action || "");
-  }, [action]);
-
-  useEffect(() => {
     setUserIdValue(userId || "");
-  }, [userId]);
+  }, [action, userId]);
 
   const apply = (e: React.FormEvent) => {
     e.preventDefault();

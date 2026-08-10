@@ -1,4 +1,5 @@
 import { countFeedback, countUsers, getDb, listAuditLogs } from "@beutl/db";
+import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import { Users, MessageSquare, ScrollText } from "lucide-react";
@@ -87,7 +88,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {log.createdAt.toLocaleString(lang)}
+                  {formatTimestamp(log.createdAt, lang)}
                 </div>
               </li>
             ))}

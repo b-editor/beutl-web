@@ -1,4 +1,5 @@
 import { listAuditLogs } from "@beutl/db";
+import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
@@ -82,7 +83,7 @@ export default async function Page(props: {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{log.ipAddress || "-"}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {log.createdAt.toLocaleString(lang)}
+                    {formatTimestamp(log.createdAt, lang)}
                   </TableCell>
                 </TableRow>
               ))}

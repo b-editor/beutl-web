@@ -1,4 +1,5 @@
 import { getUserDetail, USER_DETAIL_RELATION_LIMIT } from "@beutl/db";
+import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import { notFound } from "next/navigation";
 import { DeleteUserButton } from "./components";
@@ -60,7 +61,7 @@ export default async function Page(props: {
           </div>
           <div>
             <dt className="text-muted-foreground">{t("admin:users.createdAt")}</dt>
-            <dd>{user.createdAt.toLocaleString(lang)}</dd>
+            <dd>{formatTimestamp(user.createdAt, lang)}</dd>
           </div>
         </dl>
       </section>
@@ -117,7 +118,7 @@ export default async function Page(props: {
                   <TableRow key={payment.id}>
                     <TableCell className="font-mono text-xs">{payment.paymentId}</TableCell>
                     <TableCell>{payment.packageId}</TableCell>
-                    <TableCell>{payment.createdAt.toLocaleString(lang)}</TableCell>
+                    <TableCell>{formatTimestamp(payment.createdAt, lang)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -143,7 +144,7 @@ export default async function Page(props: {
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-sm font-medium">{item.message}</div>
                     <div className="text-xs text-muted-foreground">
-                      {item.createdAt.toLocaleString(lang)}
+                      {formatTimestamp(item.createdAt, lang)}
                     </div>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">{item.category}</div>
