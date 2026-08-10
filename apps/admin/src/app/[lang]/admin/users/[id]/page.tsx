@@ -75,9 +75,9 @@ export default async function Page(props: {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>ID</TableHead>
+                  <TableHead>{t("admin:users.packageName")}</TableHead>
                   <TableHead>{t("admin:users.name")}</TableHead>
-                  <TableHead>{t("admin:feedback.status")}</TableHead>
+                  <TableHead>{t("admin:users.published")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -1,5 +1,5 @@
 import "server-only";
-import { createAuditLog } from "@beutl/db";
+import { createAuditLog, type PrismaTransaction } from "@beutl/db";
 import { headers } from "next/headers";
 
 export { auditLogActions } from "@beutl/db";
@@ -8,10 +8,13 @@ export async function addAuditLog({
   userId,
   action,
   details,
+  prisma,
 }: {
   userId: string | null;
   action: string;
   details?: string;
+  // 監査対象の書き込みと同じトランザクションに載せるために渡す。
+  prisma?: PrismaTransaction;
 }) {
   const h = await headers();
 
@@ -25,5 +28,6 @@ export async function addAuditLog({
     ipAddress,
     userAgent,
     port,
+    prisma,
   });
 }

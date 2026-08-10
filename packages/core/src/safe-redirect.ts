@@ -11,16 +11,19 @@
 const RELATIVE_ONLY_BASE = "http://localhost";
 
 export function resolveSafeRedirectPath(
-  url: string | null | undefined,
+  url: string | string[] | null | undefined,
   origin?: string,
 ): string | null {
-  if (!url) return null;
+  // Next.js は同じクエリキーが繰り返されると配列を渡す。そのまま URL へ渡すと
+  // "/a,/b" という同一オリジンの文字列として通ってしまうため、先頭だけを採る。
+  const value = Array.isArray(url) ? url[0] : url;
+  if (!value) return null;
 
   const base = origin ?? RELATIVE_ONLY_BASE;
 
   let resolved: URL;
   try {
-    resolved = new URL(url, base);
+    resolved = new URL(value, base);
   } catch {
     return null;
   }

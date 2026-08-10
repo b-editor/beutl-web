@@ -26,7 +26,7 @@ async function getRequestOrigin(): Promise<string | undefined> {
 // input や searchParams はクライアントが自由に変えられるため、リダイレクト先や
 // callbackURL に渡す前にサーバー側で必ず通すこと。
 export async function resolveSafeReturnUrl(
-  url: string | null | undefined,
+  url: string | string[] | null | undefined,
 ): Promise<string | undefined> {
   return resolveSafeRedirectPath(url, await getRequestOrigin()) ?? undefined;
 }
@@ -34,7 +34,7 @@ export async function resolveSafeReturnUrl(
 // native-auth の同意画面専用。デスクトップアプリのコールバックは別オリジンに
 // なりうるため、同一オリジンに加えてホスト許可リストも受け入れる。
 export async function resolveNativeAuthReturnUrl(
-  url: string | null | undefined,
+  url: string | string[] | null | undefined,
 ): Promise<string | undefined> {
   return (
     resolveNativeAuthContinueTarget(url, await getRequestOrigin()) ?? undefined

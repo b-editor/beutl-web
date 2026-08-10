@@ -4,7 +4,7 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
 import { isAdmin } from "@beutl/core";
-import { deleteUserById } from "@beutl/db";
+import { deleteUserById, startTransaction } from "@beutl/db";
 import { revalidatePath } from "next/cache";
 
 export async function deleteUser({
@@ -27,11 +27,16 @@ export async function deleteUser({
       };
     }
 
-    await deleteUserById({ userId });
-    await addAuditLog({
-      userId: session.user.id,
-      action: auditLogActions.admin.userDeleted,
-      details: `userId: ${userId}`,
+    // 監査ログを別トランザクションで書くと、削除が成功した後に監査ログが失敗した
+    // 場合に「削除失敗」と報告しつつアカウントは消えた状態になる。1 つにまとめる。
+    await startTransaction(async (tx) => {
+      await deleteUserById({ userId, prisma: tx });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.userDeleted,
+        details: `userId: ${userId}`,
+        prisma: tx,
+      });
     });
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。

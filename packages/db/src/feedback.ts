@@ -4,8 +4,10 @@ import { FeedbackCategory, FeedbackStatus } from "@prisma/client";
 
 export { FeedbackCategory, FeedbackStatus };
 
-export const feedbackStatuses = Object.values(FeedbackStatus);
-export const feedbackCategories = Object.values(FeedbackCategory);
+// クライアントコンポーネントは @prisma/client を読み込めないため、列挙の一覧を
+// 公開しても使えない (UI 側は独自に列挙を持つ)。ここでは判定関数の実装にのみ使う。
+const feedbackStatuses = Object.values(FeedbackStatus);
+const feedbackCategories = Object.values(FeedbackCategory);
 
 export function isFeedbackStatus(value: unknown): value is FeedbackStatus {
   return feedbackStatuses.includes(value as FeedbackStatus);

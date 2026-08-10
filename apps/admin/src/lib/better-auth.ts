@@ -16,14 +16,16 @@ let authInstance: Awaited<ReturnType<typeof createAuthWithPrisma>> | null = null
 async function createAuthWithPrisma() {
   const prisma = await getDb();
   const adminURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
-  const webURL = process.env.BETTER_AUTH_WEB_URL || "http://localhost:3000";
+  // 未設定のまま既定値へ倒すと、本番の管理 Worker が http://localhost:3000 を
+  // 信頼済みオリジンとして受け入れてしまう。設定されている場合だけ追加する。
+  const webURL = process.env.BETTER_AUTH_WEB_URL;
   return betterAuth({
     database: prismaAdapter(prisma, {
       provider: "postgresql",
     }),
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: adminURL,
-    trustedOrigins: [adminURL, webURL],
+    trustedOrigins: webURL ? [adminURL, webURL] : [adminURL],
     emailAndPassword: {
       enabled: false,
     },

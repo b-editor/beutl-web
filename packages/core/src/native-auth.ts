@@ -15,16 +15,18 @@ export function isAllowedContinueUrlHost(hostname: string): boolean {
 // 同一オリジン判定だけでは後者を弾いてしまうので、弾かれた場合は createAuthUri と
 // 同じホスト許可リストで再判定する。許可リスト外は null。
 export function resolveNativeAuthContinueTarget(
-  url: string | null | undefined,
+  url: string | string[] | null | undefined,
   origin?: string,
 ): string | null {
   const samePath = resolveSafeRedirectPath(url, origin);
   if (samePath) return samePath;
-  if (!url) return null;
+
+  const value = Array.isArray(url) ? url[0] : url;
+  if (!value) return null;
 
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = new URL(value);
   } catch {
     return null;
   }

@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { updateStatus } from "./actions";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
-import { useEffect } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { statuses } from "./enums";
 import type { FeedbackStatus } from "@beutl/db";
@@ -20,6 +20,7 @@ export function FeedbackStatusSelect({
 }) {
   const { t } = useTranslation(lang);
   const { toast } = useToast();
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [selectedStatus, setSelectedStatus] = useState<FeedbackStatus>(initialStatus);
   // 更新が失敗したときの戻り先。initialStatus は再描画されるまで古いままなので、
@@ -39,8 +40,11 @@ export function FeedbackStatusSelect({
         description: message,
         variant: "destructive",
       });
+      // 失敗はステータス永続化の後 (監査ログ書き込みなど) でも起こりうる。
+      // 直前の値へ戻すだけでは DB と食い違うため、サーバーの値を取り直す。
+      router.refresh();
     },
-    [toast, t],
+    [toast, t, router],
   );
 
   const handleChange = useCallback((value: string) => {

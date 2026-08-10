@@ -28,6 +28,8 @@
     "back": "戻る",
     "profile": "プロフィール",
     "packages": "パッケージ",
+    "packageName": "パッケージ名",
+    "published": "公開状態",
     "paymentHistory": "支払履歴",
     "feedback": "フィードバック",
     "delete": "ユーザーを削除",

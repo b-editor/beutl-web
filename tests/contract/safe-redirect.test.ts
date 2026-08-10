@@ -51,3 +51,23 @@ describe("resolveSafeRedirectPath", () => {
     expect(resolveSafeRedirectPath(`${ORIGIN}/ja/admin`)).toBeNull();
   });
 });
+
+// Next.js は ?returnUrl=/a&returnUrl=/b のような繰り返しクエリを配列で渡す。
+// 配列のまま URL へ渡すと "/a,/b" が同一オリジンとして通ってしまう。
+describe("resolveSafeRedirectPath (繰り返しクエリ)", () => {
+  it("配列は先頭要素だけを採用する", () => {
+    expect(resolveSafeRedirectPath(["/ja/admin", "/ja/other"], ORIGIN)).toBe(
+      "/ja/admin",
+    );
+  });
+
+  it("先頭要素が外部オリジンなら拒否する", () => {
+    expect(
+      resolveSafeRedirectPath(["https://evil.example/", "/ja/admin"], ORIGIN),
+    ).toBeNull();
+  });
+
+  it("空配列は null", () => {
+    expect(resolveSafeRedirectPath([], ORIGIN)).toBeNull();
+  });
+});

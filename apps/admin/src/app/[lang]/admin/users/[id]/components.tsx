@@ -32,8 +32,11 @@ export function DeleteUserButton({ lang, userId }: { lang: string; userId: strin
         description: message,
         variant: "destructive",
       });
+      // 失敗は削除の後 (監査ログ書き込みなど) でも起こりうる。表示中のユーザーが
+      // すでに存在しない可能性があるため、サーバーの状態を取り直す。
+      router.refresh();
     },
-    [toast, t],
+    [toast, t, router],
   );
 
   const handleDelete = useCallback(() => {

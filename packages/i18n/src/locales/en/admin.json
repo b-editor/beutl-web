@@ -28,6 +28,8 @@
     "back": "Back",
     "profile": "Profile",
     "packages": "Packages",
+    "packageName": "Package",
+    "published": "Visibility",
     "paymentHistory": "Payment history",
     "feedback": "Feedback",
     "delete": "Delete user",
