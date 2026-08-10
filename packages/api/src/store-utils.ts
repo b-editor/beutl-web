@@ -2,7 +2,8 @@
 // Web 版は next/headers ベースの contentPath/guessCurrency に依存するため、
 // packages/api の Worker 版 context を使う。
 import { getDb } from "@beutl/db";
-import { selectPricing } from "@beutl/core";
+import { selectPricing, packageTypeWhere } from "@beutl/core";
+import type { PackageTypeFilter } from "@beutl/core";
 import { existsUserPaymentHistory } from "@beutl/db";
 import { contentPath } from "./content-url";
 import { guessCurrency } from "./currency";
@@ -40,11 +41,13 @@ export type ListedPackage = {
 export async function retrievePackages(
   query?: string,
   request?: Request,
+  type?: PackageTypeFilter,
 ): Promise<ListedPackage[]> {
   const db = await getDb();
   const currency = await guessCurrency(request);
   const where = {
     published: true,
+    ...packageTypeWhere(type),
     ...(query
       ? {
           OR: [

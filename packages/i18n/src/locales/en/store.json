@@ -34,6 +34,13 @@
   "author": "Author",
   "tags": "Tags",
   "targetVersion": "Target version",
-  "searchForExtensions": "Search for extensions",
-  "search": "Search"
+  "searchForPackages": "Search for packages",
+  "search": "Search",
+  "typeAll": "All",
+  "typeExtensions": "Extensions",
+  "typeMaterials": "Materials",
+  "typeTemplates": "Templates",
+  "typeExtension": "Extension",
+  "typeMaterial": "Material",
+  "typeTemplate": "Template"
 }

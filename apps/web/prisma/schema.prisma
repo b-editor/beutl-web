@@ -186,7 +186,7 @@ model Package {
   shortDescription  String
   published         Boolean
   webSite           String
-  tags              String[]
+  tags              String[]            @default([])
   iconFileId        String?
   userId            String
   createdAt         DateTime            @default(now())

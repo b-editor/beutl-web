@@ -63,7 +63,13 @@
   "details": {
     "title": "Details",
     "tags": "Tags",
-    "tagName": "Tag name"
+    "tagName": "Tag name",
+    "packageType": "Package type",
+    "packageTypeExtension": "Extension",
+    "packageTypeMaterial": "Material",
+    "packageTypeTemplate": "Template",
+    "packageTypeDescription": "Extensions ship code. Materials ship media files under materials/, and templates ship object templates under templates/ — neither is loaded as an assembly.",
+    "reservedTag": "\"material\" and \"template\" are reserved for the package type. Use the package type selector instead."
   },
   "screenshots": {
     "alreadyFirst": "Already first",

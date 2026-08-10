@@ -12,81 +12,110 @@ import {
 } from "@beutl/ui/ui/popover";
 import { Label } from "@beutl/ui/ui/label";
 import { Input } from "@beutl/ui/ui/input";
-import { type FormEvent, useCallback, useOptimistic } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
+import {
+  type FormEvent,
+  useCallback,
+  useOptimistic,
+  useTransition,
+} from "react";
 import { useToast } from "@beutl/ui/use-toast";
 import { updateTag } from "./actions/package";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import {
+  applyPackageType,
+  getPackageType,
+  isPackageType,
+  isReservedPackageTag,
+  PACKAGE_TYPES,
+  visiblePackageTags,
+} from "@beutl/core";
+import type { PackageType } from "@beutl/core";
+
+const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
+  extension: "developer:details.packageTypeExtension",
+  material: "developer:details.packageTypeMaterial",
+  template: "developer:details.packageTypeTemplate",
+};
 
 export function PackageDetailsForm({
   pkg,
   lang,
 }: { pkg: Package; lang: string }) {
-  const [tags, manipulateTags] = useOptimistic<
-    string[],
-    { type: "add" | "delete"; tag: string } | { type: "reset"; tags: string[] }
-  >(pkg.tags, (state, req) => {
-    if (req.type === "add") {
-      return [...state, req.tag];
-    }
-
-    if (req.type === "delete") {
-      return state.filter((tag) => tag !== req.tag);
-    }
-
-    if (req.type === "reset") {
-      return req.tags;
-    }
-
-    return state;
-  });
+  const [tags, setTags] = useOptimistic<string[], string[]>(
+    pkg.tags,
+    (_state, next) => next,
+  );
+  const [, startTransition] = useTransition();
   const { toast } = useToast();
   const { t } = useTranslation(lang);
 
+  /*
+    The optimistic value only survives for the life of the transition, which is
+    exactly what we want: a successful save revalidates `pkg.tags` underneath us,
+    and a failed one falls back to the unchanged server value on its own.
+  */
+  const commitTags = useCallback(
+    (nextTags: string[]) => {
+      startTransition(async () => {
+        setTags(nextTags);
+        const res = await updateTag({ packageId: pkg.id, tags: nextTags });
+        if (!res.success) {
+          toast({
+            title: t("developer:common.error"),
+            description: res.message,
+            variant: "destructive",
+          });
+        }
+      });
+    },
+    [setTags, pkg.id, t, toast],
+  );
+
   const handleAddTag = useCallback(
-    async (e: FormEvent<HTMLFormElement>) => {
+    (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const form = e.target as HTMLFormElement;
       const formData = new FormData(form);
-      const newTag = formData.get("newtag") as string;
-      if (tags.includes(newTag)) return;
-      manipulateTags({ type: "add", tag: newTag });
-      form.reset();
-
-      const res = await updateTag({
-        packageId: pkg.id,
-        tags: [...tags, newTag],
-      });
-      if (!res.success) {
+      const newTag = (formData.get("newtag") as string).trim();
+      if (!newTag) return;
+      // The store reads the package kind out of these two tags, so letting an
+      // author type one by hand would silently reclassify the package.
+      if (isReservedPackageTag(newTag)) {
         toast({
           title: t("developer:common.error"),
-          description: res.message,
+          description: t("developer:details.reservedTag"),
           variant: "destructive",
         });
-        manipulateTags({ type: "delete", tag: newTag });
+        return;
       }
+      if (tags.includes(newTag)) return;
+      form.reset();
+
+      commitTags([...tags, newTag]);
     },
-    [manipulateTags, tags, pkg.id, t, toast],
+    [commitTags, tags, t, toast],
   );
 
   const handleDeleteTag = useCallback(
-    async (tag: string) => {
-      // Probably unnecessary?
-      const tmptags = tags;
-      manipulateTags({ type: "delete", tag });
-      const res = await updateTag({
-        packageId: pkg.id,
-        tags: tags.filter((t) => t !== tag),
-      });
-      if (!res.success) {
-        toast({
-          title: t("developer:common.error"),
-          description: res.message,
-          variant: "destructive",
-        });
-        manipulateTags({ type: "reset", tags: tmptags });
-      }
+    (tag: string) => {
+      commitTags(tags.filter((t) => t !== tag));
     },
-    [manipulateTags, tags, pkg.id, t, toast],
+    [commitTags, tags],
+  );
+
+  const handleChangeType = useCallback(
+    (value: string) => {
+      if (!isPackageType(value)) return;
+      commitTags(applyPackageType(tags, value));
+    },
+    [commitTags, tags],
   );
 
   return (
@@ -95,9 +124,28 @@ export function PackageDetailsForm({
         {t("developer:details.title")}
       </h4>
       <div className="flex gap-2 flex-col my-4">
+        <h4>{t("developer:details.packageType")}</h4>
+        <Select value={getPackageType(tags)} onValueChange={handleChangeType}>
+          <SelectTrigger className="md:max-w-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PACKAGE_TYPES.map((type) => (
+              <SelectItem key={type} value={type}>
+                {t(PACKAGE_TYPE_LABEL_KEYS[type])}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-sm text-muted-foreground">
+          {t("developer:details.packageTypeDescription")}
+        </p>
+      </div>
+      <Separator />
+      <div className="flex gap-2 flex-col my-4">
         <h4>{t("developer:details.tags")}</h4>
         <div className="flex gap-1 flex-wrap">
-          {pkg.tags.map((tag) => (
+          {visiblePackageTags(tags).map((tag) => (
             <Badge key={tag} onClick={() => handleDeleteTag(tag)}>
               {tag}
               <X className="ml-1 w-4 h-4" />
@@ -126,15 +174,6 @@ export function PackageDetailsForm({
         </div>
       </div>
       <Separator />
-      {/* <div className="flex gap-2 my-4 justify-between">
-        <h4>{selectedVersion === defaultVersion ? "Latest version" : "Selected version"}</h4>
-        <p>{selectedVersion}</p>
-      </div>
-      <Separator />
-      <div className="flex gap-2 my-4 justify-between">
-        <h4>Target version</h4>
-        <p>{selectedRelease?.target_version}</p>
-      </div> */}
     </div>
   );
 }

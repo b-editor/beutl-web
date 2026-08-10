@@ -18,3 +18,20 @@ export type {
   ContentAccessFile,
   ContentAccessResult,
 } from "./content-access";
+export {
+  RESERVED_PACKAGE_TAGS,
+  PACKAGE_TYPES,
+  PACKAGE_TYPE_FILTERS,
+  isReservedPackageTag,
+  isPackageType,
+  isPackageTypeFilter,
+  getPackageType,
+  visiblePackageTags,
+  applyPackageType,
+  packageTypeWhere,
+} from "./package-type";
+export type {
+  ReservedPackageTag,
+  PackageType,
+  PackageTypeFilter,
+} from "./package-type";

@@ -3,13 +3,27 @@ import { Badge } from "@beutl/ui/ui/badge";
 import { Card, CardContent } from "@beutl/ui/ui/card";
 import { Input } from "@beutl/ui/ui/input";
 import { Separator } from "@beutl/ui/ui/separator";
-import { formatAmount } from "@beutl/core";
+import {
+  cn,
+  formatAmount,
+  isPackageTypeFilter,
+  PACKAGE_TYPE_FILTERS,
+  visiblePackageTags,
+} from "@beutl/core";
+import type { PackageTypeFilter } from "@beutl/core";
 import { retrievePackages } from "@/lib/store-utils";
 import Link from "next/link";
 
+const TYPE_FILTER_LABEL_KEYS: Record<PackageTypeFilter, string> = {
+  all: "store:typeAll",
+  extension: "store:typeExtensions",
+  material: "store:typeMaterials",
+  template: "store:typeTemplates",
+};
+
 export default async function Page(
   props: {
-    searchParams: Promise<{ query?: string }>;
+    searchParams: Promise<{ query?: string; type?: string }>;
     params: Promise<{ lang: string }>;
   }
 ) {
@@ -25,17 +39,22 @@ export default async function Page(
     query
   } = searchParams;
 
+  const type = isPackageTypeFilter(searchParams.type) ? searchParams.type : "all";
+
   const { t } = await getTranslation(lang);
-  const packages = await retrievePackages(query);
+  const packages = await retrievePackages(query, type);
 
   return (
     <>
       <div className="border-b bg-card">
         <div className="container max-w-6xl mx-auto py-6 flex flex-col">
           <h2 className="text-3xl font-semibold mx-4">
-            {t("store:searchForExtensions")}
+            {t("store:searchForPackages")}
           </h2>
           <form method="GET">
+            {/* The tabs below are links, so the current filter has to ride along
+                with a new search or submitting the box would reset it to "all". */}
+            <input type="hidden" name="type" value={type} />
             <Input
               name="query"
               className="my-4 mx-4 max-md:w-auto md:max-w-md"
@@ -44,11 +63,38 @@ export default async function Page(
               defaultValue={query}
             />
           </form>
+          <div className="flex gap-1 mx-4 flex-wrap">
+            {PACKAGE_TYPE_FILTERS.map((filter) => {
+              const next = new URLSearchParams();
+              if (query) next.set("query", query);
+              if (filter !== "all") next.set("type", filter);
+              const search = next.toString();
+
+              return (
+                <Link
+                  key={filter}
+                  href={`/${lang}/store${search ? `?${search}` : ""}`}
+                  aria-current={filter === type ? "page" : undefined}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-sm transition-colors",
+                    filter === type
+                      ? "border-input bg-secondary font-semibold"
+                      : "border-transparent text-muted-foreground hover:bg-secondary/50",
+                  )}
+                >
+                  {t(TYPE_FILTER_LABEL_KEYS[filter])}
+                </Link>
+              );
+            })}
+          </div>
         </div>
       </div>
       <div className="container max-w-6xl mx-auto py-6 px-2">
         <div className="flex flex-wrap">
-          {packages.map((item) => (
+          {packages.map((item) => {
+            const tags = visiblePackageTags(item.tags);
+
+            return (
             <Link
               href={`/${lang}/store/${item.name}`}
               className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
@@ -89,11 +135,13 @@ export default async function Page(
                           )
                           : t("store:free")}
                       </Badge>
-                      <Separator
-                        orientation="vertical"
-                        className="h-auto my-1"
-                      />
-                      {item.tags.map((tag) => (
+                      {tags.length > 0 && (
+                        <Separator
+                          orientation="vertical"
+                          className="h-auto my-1"
+                        />
+                      )}
+                      {tags.map((tag) => (
                         <Badge
                           variant="outline"
                           className="border-input text-nowrap"
@@ -107,7 +155,8 @@ export default async function Page(
                 </CardContent>
               </Card>
             </Link>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>

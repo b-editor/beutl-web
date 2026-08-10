@@ -4,7 +4,7 @@ import { cache } from "react";
 import type { Metadata } from "next";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Separator } from "@beutl/ui/ui/separator";
-import { formatAmount } from "@beutl/core";
+import { formatAmount, visiblePackageTags } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 
 const getPublishedPackages = cache((name: string) => retrievePublishedPackages(name));
@@ -42,7 +42,10 @@ export default async function Page(props: { params: Promise<{ lang: string; name
         {t("store:packagesCreatedByName", { name: displayName })}
       </h2>
       <div className="flex flex-wrap">
-        {packages.map((item) => (
+        {packages.map((item) => {
+          const tags = visiblePackageTags(item.tags);
+
+          return (
           <a
             href={`/store/${item.name}`}
             className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
@@ -83,8 +86,10 @@ export default async function Page(props: { params: Promise<{ lang: string; name
                         )
                         : t("store:free")}
                     </Badge>
-                    <Separator orientation="vertical" className="h-auto my-1" />
-                    {item.tags.map((tag) => (
+                    {tags.length > 0 && (
+                      <Separator orientation="vertical" className="h-auto my-1" />
+                    )}
+                    {tags.map((tag) => (
                       <Badge
                         variant="outline"
                         className="border-input text-nowrap"
@@ -98,7 +103,8 @@ export default async function Page(props: { params: Promise<{ lang: string; name
               </CardContent>
             </Card>
           </a>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
