@@ -1,0 +1,54 @@
+{
+  "name": "@beutl/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ui/*": "./src/ui/*.tsx",
+    "./use-toast": "./src/hooks/use-toast.ts",
+    "./hooks/*": "./src/hooks/*.ts",
+    "./submit-button": "./src/submit-button.tsx",
+    "./error-display": "./src/error-display.tsx",
+    "./progress-bar-provider": "./src/progress-bar-provider.tsx",
+    "./i18n-client": "./src/i18n-client.tsx",
+    "./logo": "./src/logo.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@beutl/core": "workspace:*",
+    "@beutl/i18n": "workspace:*",
+    "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-avatar": "^1.1.11",
+    "@radix-ui/react-checkbox": "^1.1.4",
+    "@radix-ui/react-dialog": "^1.1.6",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-navigation-menu": "^1.2.14",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-progress": "^1.1.8",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-toast": "^1.2.6",
+    "@radix-ui/react-toggle": "^1.1.2",
+    "@radix-ui/react-toggle-group": "^1.1.11",
+    "class-variance-authority": "^0.7.1",
+    "i18next": "^25.8.13",
+    "lucide-react": "^0.575.0",
+    "next-nprogress-bar": "^2.4.7",
+    "react-i18next": "^16.5.6"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.0",
+    "@types/react-dom": "19.1.1",
+    "next": "15.5.22",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}

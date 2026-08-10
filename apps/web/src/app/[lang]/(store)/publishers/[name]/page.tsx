@@ -1,9 +1,9 @@
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@beutl/ui/ui/card";
 import { retrievePublishedPackages } from "./actions";
 import { cache } from "react";
 import type { Metadata } from "next";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { Badge } from "@beutl/ui/ui/badge";
+import { Separator } from "@beutl/ui/ui/separator";
 import { formatAmount } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 

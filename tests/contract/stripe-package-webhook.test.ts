@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   revokePackagePayment: vi.fn(),
 }));
 
-vi.mock("@/lib/audit-log", () => ({
+vi.mock("@beutl/next/audit-log", () => ({
   addAuditLog: mocks.addAuditLog,
   auditLogActions: {
     store: {

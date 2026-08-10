@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import {

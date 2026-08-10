@@ -127,3 +127,120 @@ export async function deleteUserById({
     }
   });
 }
+
+export async function listUsers({
+  query,
+  page,
+  pageSize,
+}: {
+  query?: string;
+  page: number;
+  pageSize: number;
+}) {
+  const db = await getDb();
+  const queryMode = "insensitive" as const;
+  const where =
+    query && query.length > 0
+      ? {
+          OR: [
+            {
+              email: {
+                contains: query,
+                mode: queryMode,
+              },
+            },
+            {
+              name: {
+                contains: query,
+                mode: queryMode,
+              },
+            },
+          ],
+        }
+      : {};
+  const [items, total] = await Promise.all([
+    db.user.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        createdAt: true,
+        emailVerified: true,
+      },
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.user.count({
+      where,
+    }),
+  ]);
+  return { items, total };
+}
+
+// 呼び出し側が「打ち切られたか」を判定できるよう、リレーションはこの上限より 1 件多く取得する。
+export const USER_DETAIL_RELATION_LIMIT = 50;
+
+export async function getUserDetail({ userId }: { userId: string }) {
+  const db = await getDb();
+  return db.user.findUnique({
+    where: {
+      id: userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      createdAt: true,
+      // スキーマ上、User のリレーションフィールド名は大文字始まり
+      Package: {
+        select: {
+          id: true,
+          name: true,
+          displayName: true,
+          published: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: USER_DETAIL_RELATION_LIMIT + 1,
+      },
+      UserPaymentHistory: {
+        select: {
+          id: true,
+          paymentId: true,
+          packageId: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: USER_DETAIL_RELATION_LIMIT + 1,
+      },
+      Feedback: {
+        select: {
+          id: true,
+          message: true,
+          category: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: USER_DETAIL_RELATION_LIMIT + 1,
+      },
+    },
+  });
+}
+
+export async function countUsers({
+  prisma,
+}: {
+  prisma?: PrismaTransaction;
+} = {}) {
+  const db = prisma ?? await getDb();
+  return db.user.count();
+}

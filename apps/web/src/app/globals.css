@@ -1,6 +1,9 @@
 @import 'tailwindcss';
 @plugin "tailwindcss-animate";
 
+/* 共有 UI パッケージ (packages/ui) を Tailwind のスキャン対象に含める */
+@source "../../../../packages/ui/src";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme {

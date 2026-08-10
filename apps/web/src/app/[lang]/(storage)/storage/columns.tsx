@@ -10,21 +10,21 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@beutl/ui/ui/button";
+import { Checkbox } from "@beutl/ui/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@beutl/ui/ui/dropdown-menu";
 import { formatBytes } from "@beutl/core";
 import type { FileVisibility } from "@prisma/client";
 import { useCallback, useTransition } from "react";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import type { File } from "./types";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 /* eslint-disable react-hooks/rules-of-hooks */
 

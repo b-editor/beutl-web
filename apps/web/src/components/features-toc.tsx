@@ -10,8 +10,8 @@ import {
 import { motion } from "framer-motion";
 import { remToPx } from "@/lib/client-utils";
 import { useRouter } from "next/navigation";
-import { Button } from "./ui/button";
-import { useTranslation } from "@/app/i18n/client";
+import { Button } from "@beutl/ui/ui/button";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 /**
  * Only the primary feature sections are listed. The order must match the

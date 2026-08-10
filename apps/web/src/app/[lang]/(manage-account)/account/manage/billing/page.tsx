@@ -1,11 +1,11 @@
 import { getTranslation } from "@beutl/i18n";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { createStripe } from "@/lib/stripe/config";
-import { Separator } from "@/components/ui/separator";
+import { Separator } from "@beutl/ui/ui/separator";
 import { formatAmount } from "@beutl/core";
 import { getUserPaymentHistory } from "@beutl/db";
 import { findPackageForBillingHistory } from "@beutl/db";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 

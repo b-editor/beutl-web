@@ -1,21 +1,21 @@
 "use client";
 
-import { Separator } from "@/components/ui/separator";
+import { Separator } from "@beutl/ui/ui/separator";
 import type { Package } from "./types";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@beutl/ui/ui/button";
+import { Badge } from "@beutl/ui/ui/badge";
 import { Plus, X } from "lucide-react";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
+} from "@beutl/ui/ui/popover";
+import { Label } from "@beutl/ui/ui/label";
+import { Input } from "@beutl/ui/ui/input";
 import { type FormEvent, useCallback, useOptimistic } from "react";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import { updateTag } from "./actions/package";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function PackageDetailsForm({
   pkg,

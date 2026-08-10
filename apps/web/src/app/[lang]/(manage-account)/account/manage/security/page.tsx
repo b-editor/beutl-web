@@ -2,7 +2,7 @@ import { Form, List, PasskeysList } from "./components";
 import { authOrSignIn } from "@/lib/auth-guard";
 import * as jose from "jose";
 import type { ComponentProps } from "react";
-import { Separator } from "@/components/ui/separator";
+import { Separator } from "@beutl/ui/ui/separator";
 import { getTranslation } from "@beutl/i18n";
 import { retrieveAccountsWithIdToken } from "@beutl/db";
 import { getPasskeysByUserId } from "@beutl/db";

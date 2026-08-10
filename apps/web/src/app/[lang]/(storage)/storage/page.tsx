@@ -1,4 +1,4 @@
-import { Progress } from "@/components/ui/progress";
+import { Progress } from "@beutl/ui/ui/progress";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { formatBytes } from "@beutl/core";
 import { retrieveFiles } from "./actions";

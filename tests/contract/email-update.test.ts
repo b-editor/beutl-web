@@ -7,16 +7,16 @@ const mocks = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   startTransaction: vi.fn(),
   transaction: { kind: "transaction" },
-  updateCustomerEmailIfExist: vi.fn(),
+  synchronizeMappedStripeCustomer: vi.fn(),
   updateUserEmail: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("@/resend", () => ({ sendEmail: vi.fn() }));
+vi.mock("@beutl/email", () => ({ sendEmail: vi.fn() }));
 vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn() }));
 vi.mock("@beutl/i18n", () => ({ getTranslation: vi.fn() }));
-vi.mock("@/lib/lang-utils", () => ({ getLanguage: mocks.getLanguage }));
+vi.mock("@beutl/next/language", () => ({ getLanguage: mocks.getLanguage }));
 vi.mock("@beutl/db", () => ({
   existsUserByEmail: vi.fn(),
   existsUserById: vi.fn(),
@@ -24,9 +24,9 @@ vi.mock("@beutl/db", () => ({
   updateUserEmail: mocks.updateUserEmail,
 }));
 vi.mock("@/lib/customer", () => ({
-  updateCustomerEmailIfExist: mocks.updateCustomerEmailIfExist,
+  synchronizeMappedStripeCustomer: mocks.synchronizeMappedStripeCustomer,
 }));
-vi.mock("@/lib/audit-log", () => ({
+vi.mock("@beutl/next/audit-log", () => ({
   addAuditLog: mocks.addAuditLog,
   auditLogActions: {
     account: {
@@ -60,7 +60,7 @@ describe("email update", () => {
   });
 
   it("reports failure and skips success effects when Stripe rejects", async () => {
-    mocks.updateCustomerEmailIfExist.mockRejectedValue(
+    mocks.synchronizeMappedStripeCustomer.mockRejectedValue(
       new Error("Stripe unavailable"),
     );
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -79,7 +79,7 @@ describe("email update", () => {
       digest: expect.stringContaining("status=emailUpdateFailed"),
     });
     expect(mocks.startTransaction).toHaveBeenCalledTimes(1);
-    expect(mocks.updateCustomerEmailIfExist).toHaveBeenCalledWith({
+    expect(mocks.synchronizeMappedStripeCustomer).toHaveBeenCalledWith({
       userId: "user-id",
       email: "new@example.com",
       prisma: mocks.transaction,

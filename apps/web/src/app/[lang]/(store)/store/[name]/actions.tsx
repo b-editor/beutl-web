@@ -1,7 +1,7 @@
 "use server";
 
 import { getTranslation } from "@beutl/i18n";
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { authenticated, authOrSignIn } from "@/lib/auth-guard";
 import { findPublishedPackageForLibrary } from "@beutl/db";
 import {
@@ -10,7 +10,7 @@ import {
   existsUserPackage,
 } from "@beutl/db";
 import { existsUserPaymentHistory } from "@beutl/db";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 

@@ -5,12 +5,12 @@ import {
   NavigationMenuItem,
   NavigationMenuLink,
   NavigationMenuList,
+  NavigationMenuPrimitive,
   navigationMenuTriggerStyle,
-} from "./ui/navigation-menu";
+} from "@beutl/ui/ui/navigation-menu";
 import { CircleUser } from "lucide-react";
 import { cn } from "@beutl/core";
 import { auth } from "@/lib/better-auth";
-import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
 import { navHref, type NavLinkKey } from "@/components/site-links";

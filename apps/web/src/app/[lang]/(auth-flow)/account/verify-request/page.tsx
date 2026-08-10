@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@beutl/ui/ui/card";
 import Link from "next/link";
 import Image from "next/image";
 import { getTranslation } from "@beutl/i18n";

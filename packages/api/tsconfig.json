@@ -14,7 +14,8 @@
     "paths": {
       "@beutl/core": ["../core/src/index.ts"],
       "@beutl/db": ["../db/src/index.ts"],
-      "@beutl/i18n": ["../i18n/src/index.ts"]
+      "@beutl/i18n": ["../i18n/src/index.ts"],
+      "@beutl/i18n/language": ["../i18n/src/language.ts"]
     }
   },
   "include": ["src/**/*.ts"]

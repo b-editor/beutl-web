@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { getEmailVerifiedByUserId } from "@beutl/db";
 import { deleteAccount, retrieveAccounts } from "@beutl/db";
@@ -13,7 +13,7 @@ import {
   getPasskeysByUserId,
   updatePasskeyName,
 } from "@beutl/db";
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 
 export type State = {
   success?: boolean;

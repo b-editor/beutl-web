@@ -1,8 +1,8 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { retrievePackages } from "./actions";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@beutl/ui/ui/card";
+import { Separator } from "@beutl/ui/ui/separator";
+import { Badge } from "@beutl/ui/ui/badge";
 import { formatAmount } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 

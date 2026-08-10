@@ -1,8 +1,8 @@
 import { getTranslation } from "@beutl/i18n";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
+import { Badge } from "@beutl/ui/ui/badge";
+import { Card, CardContent } from "@beutl/ui/ui/card";
+import { Input } from "@beutl/ui/ui/input";
+import { Separator } from "@beutl/ui/ui/separator";
 import { formatAmount } from "@beutl/core";
 import { retrievePackages } from "@/lib/store-utils";
 import Link from "next/link";

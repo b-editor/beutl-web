@@ -7,17 +7,21 @@
   },
   "scripts": {
     "dev": "pnpm --filter @beutl/web dev",
-    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api build",
+    "dev:admin": "pnpm --filter @beutl/admin dev",
+    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api typecheck && pnpm --filter @beutl/admin build",
     "start": "pnpm --filter @beutl/web start",
-    "lint": "pnpm --filter @beutl/web lint",
+    "lint": "pnpm --filter @beutl/web lint && pnpm --filter @beutl/admin lint",
+    "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "pnpm deploy:web",
     "deploy:web": "pnpm --filter @beutl/web run deploy",
     "deploy:api": "pnpm --filter @beutl/api run deploy",
+    "deploy:admin": "pnpm --filter @beutl/admin run deploy",
     "upload": "pnpm upload:web",
     "upload:web": "pnpm --filter @beutl/web upload",
     "upload:api": "pnpm --filter @beutl/api upload",
+    "upload:admin": "pnpm --filter @beutl/admin upload",
     "preview": "pnpm --filter @beutl/web preview"
   },
   "devDependencies": {

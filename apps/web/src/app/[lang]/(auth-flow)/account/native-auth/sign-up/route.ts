@@ -1,5 +1,5 @@
 import { getAuth } from "@/lib/better-auth";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { type NextRequest, NextResponse } from "next/server";
 import { headers } from "next/headers";
 

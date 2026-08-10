@@ -1,7 +1,7 @@
 import "server-only";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { deleteUserById } from "@beutl/db";
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { consumeConfirmationToken } from "@/lib/confirmation-token-flow";
 
 export async function deleteUser(token: string, identifier: string) {

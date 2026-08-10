@@ -1,13 +1,13 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
+import { Separator } from "@beutl/ui/ui/separator";
 import { createNewProject } from "./actions";
 import { useActionState } from "react";
-import { ErrorDisplay } from "@/components/error-display";
-import SubmitButton from "@/components/submit-button";
-import { useTranslation } from "@/app/i18n/client";
+import { ErrorDisplay } from "@beutl/ui/error-display";
+import SubmitButton from "@beutl/ui/submit-button";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function Form({ lang }: { lang: string }) {
   const [state, dispatch] = useActionState(createNewProject, {});

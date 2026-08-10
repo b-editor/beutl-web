@@ -6,9 +6,9 @@ import {
   removeAccount,
   renamePasskey,
 } from "./actions";
-import SubmitButton from "@/components/submit-button";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
-import { Button } from "@/components/ui/button";
+import SubmitButton from "@beutl/ui/submit-button";
+import { GitHubLogo, GoogleLogo } from "@beutl/ui/logo";
+import { Button } from "@beutl/ui/ui/button";
 import {
   Edit,
   KeyRound,
@@ -17,20 +17,20 @@ import {
   Save,
   Trash,
 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from "@beutl/ui/use-toast";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@beutl/core";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
+import { Separator } from "@beutl/ui/ui/separator";
+import { Badge } from "@beutl/ui/ui/badge";
 import { getRelativeTimeDifference } from "@beutl/core";
-import { Input } from "@/components/ui/input";
+import { Input } from "@beutl/ui/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useTranslation } from "@/app/i18n/client";
+} from "@beutl/ui/ui/dropdown-menu";
+import { useTranslation } from "@beutl/ui/i18n-client";
 import { useRouter } from "next/navigation";
 
 export function Form({

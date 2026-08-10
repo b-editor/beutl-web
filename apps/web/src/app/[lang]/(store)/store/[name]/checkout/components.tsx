@@ -7,7 +7,7 @@ import {
   useStripe,
 } from "@stripe/react-stripe-js";
 import { type FormEvent, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@beutl/ui/ui/button";
 import { Loader2 } from "lucide-react";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import Link from "next/link";
@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/carousel";
 import { formatAmount } from "@beutl/core";
 import type { Package } from "@/lib/store-utils";
-import { useTranslation } from "@/app/i18n/client";
+import { useTranslation } from "@beutl/ui/i18n-client";
 
 const stripePromise = loadStripe(
   process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string,

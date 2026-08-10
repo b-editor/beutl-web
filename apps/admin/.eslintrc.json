@@ -1,0 +1,29 @@
+{
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "@/prisma",
+              "./prisma",
+              "../prisma",
+              "@prisma/*"
+            ],
+            "message": "Get the Prisma client from @beutl/db (getDb) instead of importing Prisma directly."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/prisma.ts", "src/instrumentation.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
+}

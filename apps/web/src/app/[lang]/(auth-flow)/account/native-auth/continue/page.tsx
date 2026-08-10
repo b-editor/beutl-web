@@ -1,7 +1,7 @@
 import { getTranslation } from "@beutl/i18n";
 import { auth } from "@/lib/better-auth";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@beutl/ui/ui/avatar";
+import { Button } from "@beutl/ui/ui/button";
 import {
   Card,
   CardContent,
@@ -9,14 +9,15 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
+} from "@beutl/ui/ui/card";
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { resolveNativeAuthReturnUrl } from "@beutl/next/local-redirect";
 
 export default async function Page(
-  props: { searchParams: Promise<{ returnUrl: string }>; params: Promise<{ lang: string }> }
+  props: { searchParams: Promise<{ returnUrl?: string }>; params: Promise<{ lang: string }> }
 ) {
   const params = await props.params;
 
@@ -26,14 +27,17 @@ export default async function Page(
 
   const searchParams = await props.searchParams;
 
-  const {
-    returnUrl
-  } = searchParams;
+  const returnUrl =
+    (await resolveNativeAuthReturnUrl(searchParams.returnUrl)) ?? `/${lang}`;
+
+  // 遷移先の検証はこのページが一手に引き受けるため、サインイン/サインアップへは
+  // 遷移先そのものではなくこのページの URL を渡す (handler ページと同じ形)。
+  const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(returnUrl)}`;
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) {
     redirect(
-      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`,
+      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`,
     );
   }
   const user = session.user;
@@ -78,7 +82,7 @@ export default async function Page(
               <Link href={returnUrl}>{t("continue")}</Link>
             </Button>
             <Link
-              href={`/${lang}/account/native-auth/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`}
+              href={`/${lang}/account/native-auth/sign-up?returnUrl=${encodeURIComponent(continueUrl)}`}
               prefetch={false}
               className="text-sm font-medium inline-block mt-6"
             >

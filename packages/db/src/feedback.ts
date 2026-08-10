@@ -1,5 +1,21 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
+import { FeedbackCategory, FeedbackStatus } from "@prisma/client";
+
+export { FeedbackCategory, FeedbackStatus };
+
+// クライアントコンポーネントは @prisma/client を読み込めないため、列挙の一覧を
+// 公開しても使えない (UI 側は独自に列挙を持つ)。ここでは判定関数の実装にのみ使う。
+const feedbackStatuses = Object.values(FeedbackStatus);
+const feedbackCategories = Object.values(FeedbackCategory);
+
+export function isFeedbackStatus(value: unknown): value is FeedbackStatus {
+  return feedbackStatuses.includes(value as FeedbackStatus);
+}
+
+export function isFeedbackCategory(value: unknown): value is FeedbackCategory {
+  return feedbackCategories.includes(value as FeedbackCategory);
+}
 
 export async function createFeedback({
   name,
@@ -11,7 +27,7 @@ export async function createFeedback({
 }: {
   name: string;
   email: string;
-  category: "BUG_REPORT" | "FEATURE_REQUEST" | "QUESTION" | "OTHER";
+  category: FeedbackCategory;
   message: string;
   userId: string | null;
   prisma?: PrismaTransaction;
@@ -24,6 +40,67 @@ export async function createFeedback({
       category,
       message,
       userId,
+    },
+  });
+}
+
+export async function listFeedback({
+  status,
+  category,
+  page,
+  pageSize,
+}: {
+  status?: FeedbackStatus;
+  category?: FeedbackCategory;
+  page: number;
+  pageSize: number;
+}) {
+  const db = await getDb();
+  const where = { status, category };
+  const [items, total] = await Promise.all([
+    db.feedback.findMany({
+      where,
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.feedback.count({ where }),
+  ]);
+  return { items, total };
+}
+
+export async function countFeedback({
+  status,
+  prisma,
+}: {
+  status?: FeedbackStatus;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return db.feedback.count({
+    where: {
+      status,
+    },
+  });
+}
+
+export async function updateFeedbackStatus({
+  id,
+  status,
+  prisma,
+}: {
+  id: string;
+  status: FeedbackStatus;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return db.feedback.update({
+    where: {
+      id,
+    },
+    data: {
+      status,
     },
   });
 }

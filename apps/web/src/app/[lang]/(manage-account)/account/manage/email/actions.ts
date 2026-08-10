@@ -2,12 +2,12 @@
 
 import { authenticated } from "@/lib/auth-guard";
 import { headers } from "next/headers";
-import { sendEmail as sendEmailUsingResend } from "@/resend";
+import { sendEmail as sendEmailUsingResend } from "@beutl/email";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { getTranslation, type Zod } from "@beutl/i18n";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import {
   existsUserByEmail,
   existsUserById,
@@ -15,7 +15,7 @@ import {
 } from "@beutl/db";
 import { synchronizeMappedStripeCustomer } from "@/lib/customer";
 import { startTransaction } from "@beutl/db";
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import {
   consumeConfirmationToken,
   issueConfirmationToken,

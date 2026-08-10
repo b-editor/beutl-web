@@ -1,9 +1,9 @@
 "use server";
 
 import { getTranslation, type Zod } from "@beutl/i18n";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { createFeedback } from "@beutl/db";
-import { sendEmail } from "@/resend";
+import { sendEmail } from "@beutl/email";
 import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
 
