@@ -32,7 +32,7 @@
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-toast": "^1.2.6",
-    "@radix-ui/react-toggle": "^1.1.2",
+    "@radix-ui/react-toggle": "^1.1.18",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "class-variance-authority": "^0.7.1",
     "i18next": "^25.8.13",
