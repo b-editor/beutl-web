@@ -10,9 +10,9 @@ import { cn } from "@beutl/core";
 export function AdminNav({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
   const pathname = usePathname();
-  // pathname は /{lang}/admin/... の形。最初のセグメントが lang、
-  // 2 番目が "admin"、3 番目以降が実際のセクション (users / feedback / audit-log)。
-  // ダッシュボードは /{lang}/admin ちょうど (セグメント数 3) のときのみ active。
+  // pathname は /{lang}/admin/... の形。filter(Boolean) 後は
+  // [lang, "admin", section?] となり、section が users / feedback / audit-log。
+  // ダッシュボードは /{lang}/admin ちょうど (2 セグメント) のときのみ active。
   const segments = useMemo(() => pathname?.split("/").filter(Boolean) ?? [], [pathname]);
   const slug = segments[2] ?? "admin";
   const isDashboard = segments.length === 2;

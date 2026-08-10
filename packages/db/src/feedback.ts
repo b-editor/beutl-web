@@ -1,14 +1,19 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
-import type { Prisma } from "@prisma/client";
+import { FeedbackCategory, FeedbackStatus } from "@prisma/client";
 
-export type FeedbackStatus = "OPEN" | "IN_PROGRESS" | "RESOLVED";
+export { FeedbackCategory, FeedbackStatus };
 
-export type FeedbackCategory =
-  | "BUG_REPORT"
-  | "FEATURE_REQUEST"
-  | "QUESTION"
-  | "OTHER";
+export const feedbackStatuses = Object.values(FeedbackStatus);
+export const feedbackCategories = Object.values(FeedbackCategory);
+
+export function isFeedbackStatus(value: unknown): value is FeedbackStatus {
+  return feedbackStatuses.includes(value as FeedbackStatus);
+}
+
+export function isFeedbackCategory(value: unknown): value is FeedbackCategory {
+  return feedbackCategories.includes(value as FeedbackCategory);
+}
 
 export async function createFeedback({
   name,
@@ -54,7 +59,7 @@ export async function listFeedback({
       where: {
         status,
         category,
-      } as Prisma.FeedbackWhereInput,
+      },
       orderBy: {
         createdAt: "desc",
       },
@@ -65,7 +70,7 @@ export async function listFeedback({
       where: {
         status,
         category,
-      } as Prisma.FeedbackWhereInput,
+      },
     }),
   ]);
   return {
@@ -73,9 +78,9 @@ export async function listFeedback({
       id: item.id,
       name: item.name,
       email: item.email,
-      category: item.category as FeedbackCategory,
+      category: item.category,
       message: item.message,
-      status: (item as { status?: FeedbackStatus }).status as FeedbackStatus,
+      status: item.status,
       userId: item.userId,
       createdAt: item.createdAt,
     })),
@@ -88,7 +93,7 @@ export async function countFeedback({ status }: { status?: FeedbackStatus }) {
   return db.feedback.count({
     where: {
       status,
-    } as Prisma.FeedbackWhereInput,
+    },
   });
 }
 
@@ -108,6 +113,6 @@ export async function updateFeedbackStatus({
     },
     data: {
       status,
-    } as Prisma.FeedbackUpdateInput,
+    },
   });
 }

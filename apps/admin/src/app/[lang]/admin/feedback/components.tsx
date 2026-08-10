@@ -6,10 +6,16 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
 import { useEffect } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
-import type { FeedbackStatus } from "@prisma/client";
+import type { FeedbackStatus } from "@beutl/db";
 import type { ActionResult } from "@beutl/core";
 
-const statuses = ["OPEN", "IN_PROGRESS", "RESOLVED"] as const;
+// クライアントコンポーネントなので @beutl/db の値 (Prisma Client) は import しない。
+// satisfies により、enum からメンバーが削除・改名された場合はここで型エラーになる。
+const statuses = [
+  "OPEN",
+  "IN_PROGRESS",
+  "RESOLVED",
+] as const satisfies readonly FeedbackStatus[];
 
 export function FeedbackStatusSelect({
   lang,

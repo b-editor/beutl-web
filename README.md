@@ -64,7 +64,14 @@ local environment placeholders are documented in `apps/web/.env.sample`.
 `JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` must match between both Workers (CI deploys from GitHub Secrets).
 
 The admin console shares the better-auth session with the Web app via
-`crossSubDomainCookies` (root domain `beditor.net`). The admin Worker needs the
-same `BETTER_AUTH_SECRET` and OAuth client IDs (Google/GitHub) as the Web app;
-OAuth redirect URIs for `admin.beutl.beditor.net` must be registered on the
-provider side. Access is restricted to the user IDs in `ADMIN_USER_IDS`.
+`crossSubDomainCookies`. Set `BETTER_AUTH_COOKIE_DOMAIN` to the narrowest domain
+that covers both Workers (`beutl.beditor.net` in production); `admin.beutl.beditor.net`
+is a subdomain of it. Do not use the root domain `beditor.net`, which would send the
+session cookie to every unrelated host under it. The admin Worker needs the same
+`BETTER_AUTH_SECRET` and OAuth client IDs (Google/GitHub) as the Web app; OAuth
+redirect URIs for `admin.beutl.beditor.net` must be registered on the provider side.
+Access is restricted to the user IDs in `ADMIN_USER_IDS`.
+
+Note: adding a `Domain` attribute to previously host-only cookies creates a separate
+cookie entry in the browser. Both may be sent together during rollout, so existing
+session cookies should be explicitly expired when enabling this.

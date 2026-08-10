@@ -3,6 +3,7 @@ import { getTranslation } from "@beutl/i18n";
 import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
+import Link from "next/link";
 
 const PAGE_SIZE = 30;
 
@@ -55,12 +56,12 @@ export default async function Page(props: {
                   <TableCell className="font-mono text-xs">{log.action}</TableCell>
                   <TableCell className="font-mono text-xs">
                     {log.userId ? (
-                      <a
+                      <Link
                         href={`/${lang}/admin/users/${log.userId}`}
                         className="hover:underline"
                       >
                         {log.userId}
-                      </a>
+                      </Link>
                     ) : (
                       "-"
                     )}
@@ -79,7 +80,7 @@ export default async function Page(props: {
 
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2">
-              <a
+              <Link
                 href={`/${lang}/admin/audit-log?${new URLSearchParams({
                   action: action || "",
                   userId: userId || "",
@@ -88,11 +89,11 @@ export default async function Page(props: {
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
                 &laquo;
-              </a>
+              </Link>
               <span className="text-sm text-muted-foreground">
                 {currentPage} / {totalPages}
               </span>
-              <a
+              <Link
                 href={`/${lang}/admin/audit-log?${new URLSearchParams({
                   action: action || "",
                   userId: userId || "",
@@ -101,7 +102,7 @@ export default async function Page(props: {
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
                 &raquo;
-              </a>
+              </Link>
             </div>
           )}
         </>

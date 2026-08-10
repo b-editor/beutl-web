@@ -20,18 +20,6 @@ async function getSession() {
   return auth.api.getSession({ headers: headersList });
 }
 
-export async function authOrSignIn(): Promise<SafeSession> {
-  const result = await getSession();
-  if (!result?.user?.id) {
-    const headersList = await headers();
-    redirect(
-      `/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`,
-    );
-  }
-
-  return result as SafeSession;
-}
-
 export async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
 ) {
@@ -45,15 +33,6 @@ export async function authenticated<TResult>(
   }
 
   return await fnc(result as SafeSession);
-}
-
-export async function throwIfUnauth() {
-  const result = await getSession();
-  if (!result?.user?.id) {
-    throw new Error("Unauthenticated");
-  }
-
-  return result as SafeSession;
 }
 
 export async function requireAdmin(): Promise<SafeSession> {

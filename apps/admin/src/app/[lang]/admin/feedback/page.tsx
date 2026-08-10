@@ -1,22 +1,13 @@
-import { listFeedback } from "@beutl/db";
+import { isFeedbackCategory, isFeedbackStatus, listFeedback } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import { FeedbackStatusSelect } from "./components";
 import { FeedbackFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { Badge } from "@beutl/ui/ui/badge";
 import { requireAdmin } from "@/lib/auth-guard";
+import Link from "next/link";
 
 const PAGE_SIZE = 20;
-const statuses = ["OPEN", "IN_PROGRESS", "RESOLVED"] as const;
-const categories = ["BUG_REPORT", "FEATURE_REQUEST", "QUESTION", "OTHER"] as const;
-
-function isFeedbackStatus(value: string | undefined): value is (typeof statuses)[number] {
-  return statuses.includes(value as (typeof statuses)[number]);
-}
-
-function isFeedbackCategory(value: string | undefined): value is (typeof categories)[number] {
-  return categories.includes(value as (typeof categories)[number]);
-}
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
@@ -99,7 +90,7 @@ export default async function Page(props: {
 
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2">
-              <a
+              <Link
                 href={`/${lang}/admin/feedback?${new URLSearchParams({
                   ...(statusFilter ? { status: statusFilter } : {}),
                   ...(categoryFilter ? { category: categoryFilter } : {}),
@@ -108,11 +99,11 @@ export default async function Page(props: {
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
                 &laquo;
-              </a>
+              </Link>
               <span className="text-sm text-muted-foreground">
                 {currentPage} / {totalPages}
               </span>
-              <a
+              <Link
                 href={`/${lang}/admin/feedback?${new URLSearchParams({
                   ...(statusFilter ? { status: statusFilter } : {}),
                   ...(categoryFilter ? { category: categoryFilter } : {}),
@@ -121,7 +112,7 @@ export default async function Page(props: {
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
                 &raquo;
-              </a>
+              </Link>
             </div>
           )}
         </>

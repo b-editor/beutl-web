@@ -90,10 +90,11 @@ async function createAuthWithPrisma() {
     },
     advanced: {
       // 既存 Web (beutl.beditor.net) とセッションを共有する。
-      // better-auth は Domain 属性をルートドメインにして両サブドメインで
-      // 同一セッションクッキーを扱う。domain 未指定時は baseURL のホスト名
-      // 全体 (admin.beutl.beditor.net 等) が使われるため、本番でサブドメイン
-      // 間の共有には BETTER_AUTH_COOKIE_DOMAIN (例: beditor.net) が必須。
+      // BETTER_AUTH_COOKIE_DOMAIN には共有に必要な最小のドメインを設定する
+      // (本番では beutl.beditor.net)。admin.beutl.beditor.net はその配下なので
+      // これで共有できる。ルートドメイン (beditor.net) を指定すると配下の無関係な
+      // ホストにもセッションクッキーが送信される。
+      // domain 未指定時は host-only クッキーとなりサブドメイン間で共有されない。
       // ローカル開発 (localhost) では設定しないこと。
       crossSubDomainCookies: {
         enabled: true,

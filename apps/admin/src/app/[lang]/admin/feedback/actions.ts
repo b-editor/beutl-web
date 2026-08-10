@@ -4,8 +4,8 @@ import { addAuditLog, auditLogActions } from "@/lib/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import { isAdmin } from "@beutl/core";
-import { updateFeedbackStatus } from "@beutl/db";
-import type { FeedbackStatus } from "@prisma/client";
+import { isFeedbackStatus, updateFeedbackStatus } from "@beutl/db";
+import type { FeedbackStatus } from "@beutl/db";
 import { revalidatePath } from "next/cache";
 import { getLanguage } from "@/lib/lang-utils";
 
@@ -19,6 +19,14 @@ export async function updateStatus({
   return await authenticated(async (session) => {
     if (!isAdmin(session.user.id)) {
       return { success: false, message: "Forbidden" };
+    }
+
+    // Server Action の引数は型注釈が実行時に消えるため、値を検証してから永続化する。
+    if (!isFeedbackStatus(status)) {
+      return { success: false, message: "Invalid status" };
+    }
+    if (typeof id !== "string" || id.length === 0) {
+      return { success: false, message: "Invalid feedback id" };
     }
 
     await updateFeedbackStatus({ id, status });
