@@ -96,14 +96,13 @@ export async function listAuditLogs({
   const [items, total] = await Promise.all([
     db.auditLog.findMany({
       where,
-      // port は管理画面で使わないので取得しない。
+      // port と userAgent は管理画面で使わないので取得しない。
       select: {
         id: true,
         userId: true,
         action: true,
         details: true,
         ipAddress: true,
-        userAgent: true,
         createdAt: true,
       },
       // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。

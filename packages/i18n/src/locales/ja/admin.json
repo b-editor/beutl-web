@@ -30,6 +30,8 @@
     "packages": "パッケージ",
     "packageName": "パッケージ名",
     "published": "公開状態",
+    "publishedValue": "公開",
+    "draftValue": "下書き",
     "paymentHistory": "支払履歴",
     "feedback": "フィードバック",
     "delete": "ユーザーを削除",

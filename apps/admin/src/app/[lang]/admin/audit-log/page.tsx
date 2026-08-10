@@ -13,7 +13,7 @@ const PAGE_SIZE = 30;
 
 // auditLogActions は @beutl/db 経由で @prisma/client を引き込むため、
 // クライアントコンポーネントからは読めない。ここで平坦化して props で渡す。
-const ACTION_NAMES = Object.values(auditLogActions)
+const ACTION_NAMES: string[] = Object.values(auditLogActions)
   .flatMap((group) => Object.values(group))
   .sort();
 
@@ -29,7 +29,10 @@ export default async function Page(props: {
   const params = await props.params;
   const { lang } = params;
   const searchParams = await props.searchParams;
-  const action = firstSearchParam(searchParams.action);
+  // action は URL から任意の文字列が入りうる。既知のアクション名以外は
+  // 絞り込みなしとして扱う (feedback ページの isFeedbackStatus と同じ方針)。
+  const rawAction = firstSearchParam(searchParams.action);
+  const action = rawAction && ACTION_NAMES.includes(rawAction) ? rawAction : undefined;
   const userId = firstSearchParam(searchParams.userId);
   const { page } = searchParams;
   const { t } = await getTranslation(lang);

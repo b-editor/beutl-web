@@ -1,4 +1,4 @@
-import { countFeedback, countUsers, getDb, listAuditLogs } from "@beutl/db";
+import { countFeedback, countUsers, FeedbackStatus, getDb, listAuditLogs } from "@beutl/db";
 import { formatTimestamp } from "@/lib/format";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
@@ -17,7 +17,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   // listAuditLogs は絞り込みなしの total を返すため、総数は別クエリを発行せず流用する。
   const [userCount, openFeedbackCount, recentLogs] = await Promise.all([
     countUsers({ prisma }),
-    countFeedback({ status: "OPEN", prisma }),
+    countFeedback({ status: FeedbackStatus.OPEN, prisma }),
     listAuditLogs({ page: 1, pageSize: 10, prisma }),
   ]);
   const auditLogCount = recentLogs.total;

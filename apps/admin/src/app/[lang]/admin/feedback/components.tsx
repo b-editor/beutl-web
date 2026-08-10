@@ -28,6 +28,10 @@ export function FeedbackStatusSelect({
   const committedStatus = useRef<FeedbackStatus>(initialStatus);
 
   useEffect(() => {
+    // 更新処理の途中で届いた refresh の initialStatus は古いサーバー値のことがある。
+    // 永続化済みの値と一致する間は同期せず、直近の選択を守る。サーバーが本当に
+    // 変わったとき (別タブでの更新など) だけ同期する。
+    if (initialStatus === committedStatus.current) return;
     committedStatus.current = initialStatus;
     setSelectedStatus(initialStatus);
   }, [initialStatus]);

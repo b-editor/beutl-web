@@ -85,7 +85,9 @@ export default async function Page(props: {
                   <TableRow key={pkg.id}>
                     <TableCell className="font-mono text-xs">{pkg.name}</TableCell>
                     <TableCell>{pkg.displayName || "-"}</TableCell>
-                    <TableCell>{pkg.published ? "published" : "draft"}</TableCell>
+                    <TableCell>
+                      {t(pkg.published ? "admin:users.publishedValue" : "admin:users.draftValue")}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -108,8 +110,8 @@ export default async function Page(props: {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Package</TableHead>
+                  <TableHead>{t("admin:users.id")}</TableHead>
+                  <TableHead>{t("admin:users.packageName")}</TableHead>
                   <TableHead>{t("admin:auditLog.createdAt")}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -147,7 +149,9 @@ export default async function Page(props: {
                       {formatTimestamp(item.createdAt, lang)}
                     </div>
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">{item.category}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {t(`admin:category.${item.category}`)}
+                  </div>
                 </li>
               ))}
             </ul>

@@ -12,7 +12,20 @@ import type { Session, User } from "better-auth";
 export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
 
-let authInstance: Awaited<ReturnType<typeof createAuthWithPrisma>> | null = null;
+// インスタンスではなく Promise を保持する。初回の同時リクエストで createAuthWithPrisma
+// が二重実行されると PrismaClient が 2 つ作られ、最後に書いた方が残る。
+// 失敗時は Promise を捨てて次回に再試行させる (従来の null 保持と同じ挙動)。
+let authPromise: Promise<Awaited<ReturnType<typeof createAuthWithPrisma>>> | null = null;
+
+function getAuthInstance() {
+  if (!authPromise) {
+    authPromise = createAuthWithPrisma().catch((error) => {
+      authPromise = null;
+      throw error;
+    });
+  }
+  return authPromise;
+}
 
 async function createAuthWithPrisma() {
   const prisma = await getDb();
@@ -176,24 +189,17 @@ async function createAuthWithPrisma() {
 
 export const auth = {
   handler: async (request: Request) => {
-    if (!authInstance) {
-      authInstance = await createAuthWithPrisma();
-    }
-    return authInstance.handler(request);
+    const instance = await getAuthInstance();
+    return instance.handler(request);
   },
   api: {
     getSession: async (options: { headers: Headers }) => {
-      if (!authInstance) {
-        authInstance = await createAuthWithPrisma();
-      }
-      return authInstance.api.getSession(options);
+      const instance = await getAuthInstance();
+      return instance.api.getSession(options);
     },
   },
 };
 
 export async function getAuth() {
-  if (!authInstance) {
-    authInstance = await createAuthWithPrisma();
-  }
-  return authInstance;
+  return getAuthInstance();
 }

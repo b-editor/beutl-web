@@ -7,7 +7,11 @@ const MAX_PAGE = 1_000_000;
 // 渡すと "2.01" (小数) や "1e999" (Infinity)、"1e19" (整数だが巨大) でクエリ検証
 // エラーになるため、ここで MAX_PAGE 以下の正整数へ正規化する。
 export function parsePageParam(page: string | string[] | undefined): number {
-  const parsed = Number(firstSearchParam(page));
+  const raw = firstSearchParam(page);
+  // Number() は "0x10" (16進) や " 2 " (空白入り) も受理する。URL の page は
+  // 10進の数字列だけを正規化対象にする。
+  if (raw === undefined || !/^\d+$/.test(raw)) return 1;
+  const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return 1;
 
   return Math.min(MAX_PAGE, Math.max(1, Math.floor(parsed)));

@@ -38,6 +38,9 @@ export function useOAuthSignIn({
         description: t("auth:errors.oauth"),
         variant: "destructive",
       });
+    } finally {
+      // 成功時はページ遷移でアンマウントされるが、リダイレクトがブロックされた
+      // 場合はここで解除しないとボタンがローディングのまま残る。
       setOauthLoading(null);
     }
   };

@@ -8,11 +8,11 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
-export interface SafeUser extends BetterAuthUser {
+interface SafeUser extends BetterAuthUser {
   id: string;
 }
 
-export interface SafeSession {
+interface SafeSession {
   session: BetterAuthSession;
   user: SafeUser;
 }
@@ -24,35 +24,21 @@ const getSession = cache(async () => {
   return auth.api.getSession({ headers: headersList });
 });
 
-// エクスポートしない。BETTER_AUTH_COOKIE_DOMAIN によりセッションは公開サイトと
-// 共有されるため、認証だけを見るこの関数は管理画面では登録済みユーザー全員を
-// 通してしまう。外へ出すのは管理者判定込みの adminAction / requireAdmin だけ。
-async function authenticated<TResult>(
-  fnc: (session: SafeSession) => Promise<TResult>,
-) {
-  const result = await getSession();
-  if (!result?.user?.id) {
-    const actionResult: ActionResult = {
-      message: "Unauthenticated",
-      success: false,
-    };
-    return actionResult;
-  }
-
-  return await fnc(result as SafeSession);
-}
-
 // 管理画面の Server Action はこちらを使うこと。管理者判定を呼び出し側の任意にしない。
+// BETTER_AUTH_COOKIE_DOMAIN によりセッションは公開サイトと共有されるため、
+// 認証だけを見る関数を外に出すのは管理者判定込みの adminAction / requireAdmin だけ。
 export async function adminAction(
   fnc: (session: SafeSession) => Promise<ActionResult>,
 ): Promise<ActionResult> {
-  return await authenticated(async (session) => {
-    if (!isAdmin(session.user.id)) {
-      return { success: false, message: "Forbidden" };
-    }
+  const result = await getSession();
+  if (!result?.user?.id) {
+    return { message: "Unauthenticated", success: false };
+  }
+  if (!isAdmin(result.user.id)) {
+    return { success: false, message: "Forbidden" };
+  }
 
-    return await fnc(session);
-  });
+  return await fnc(result as SafeSession);
 }
 
 export async function requireAdmin(): Promise<SafeSession> {
