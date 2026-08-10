@@ -10,12 +10,13 @@ import { cn } from "@beutl/core";
 export function AdminNav({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
   const pathname = usePathname();
-  // pathname は /{lang}/admin/... の形。filter(Boolean) 後は
-  // [lang, "admin", section?] となり、section が users / feedback / audit-log。
-  // ダッシュボードは /{lang}/admin ちょうど (2 セグメント) のときのみ active。
+  // middleware は既定ロケールを redirect ではなく rewrite するため、pathname には
+  // ロケール接頭辞が付く場合 (/ja/admin/users) と付かない場合 (/admin/users) がある。
+  // どちらでも動くよう固定インデックスではなく "admin" の位置を基準に section を取る。
   const segments = useMemo(() => pathname?.split("/").filter(Boolean) ?? [], [pathname]);
-  const slug = segments[2] ?? "admin";
-  const isDashboard = segments.length === 2;
+  const adminIndex = segments.indexOf("admin");
+  const slug = (adminIndex === -1 ? undefined : segments[adminIndex + 1]) ?? "admin";
+  const isDashboard = adminIndex !== -1 && segments.length === adminIndex + 1;
 
   const items = [
     { slug: "admin", href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },

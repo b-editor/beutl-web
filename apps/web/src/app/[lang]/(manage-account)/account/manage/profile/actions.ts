@@ -8,7 +8,7 @@ import {
   upsertProfile,
   upsertSocialProfile,
 } from "@beutl/db";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { revalidatePath } from "next/cache";
 
 const emptyStringToUndefined = (z: Zod) =>

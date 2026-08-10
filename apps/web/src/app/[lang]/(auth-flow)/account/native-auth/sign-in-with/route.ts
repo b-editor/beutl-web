@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getAuth } from "@/lib/better-auth";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { headers } from "next/headers";
 
 export async function GET(request: NextRequest) {

@@ -1,3 +1,6 @@
+// AUTH_RESEND_KEY を読むため、クライアントバンドルに入らないことを保証する。
+import "server-only";
+
 export async function sendEmail(params: {
   to: string;
   subject: string;
@@ -22,12 +25,12 @@ export async function sendEmail(params: {
     throw new Error(`Resend error: ${JSON.stringify(await res.json())}`);
 }
 
-export const options = {
+const options = {
   from: "Beutl <noreply@notifications.beditor.net>",
   apiKey: process.env.AUTH_RESEND_KEY as string,
 };
 
-export function renderUnsafeEmailTemplate(content: string): string {
+function renderUnsafeEmailTemplate(content: string): string {
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns="http://www.w3.org/1999/xhtml">
 

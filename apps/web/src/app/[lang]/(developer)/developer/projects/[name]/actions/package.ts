@@ -1,6 +1,6 @@
 "use server";
 
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { contentPath } from "@/lib/content-url";
@@ -19,7 +19,7 @@ import {
 import {
   deleteStorageFile,
 } from "@/lib/storage";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";

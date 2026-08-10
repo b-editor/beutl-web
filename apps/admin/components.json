@@ -13,9 +13,9 @@
   "aliases": {
     "components": "@/components",
     "utils": "@/lib/utils",
-    "ui": "@/components/ui",
+    "ui": "@beutl/ui/ui",
     "lib": "@/lib",
-    "hooks": "@/hooks"
+    "hooks": "@beutl/ui/hooks"
   },
   "iconLibrary": "lucide"
 }

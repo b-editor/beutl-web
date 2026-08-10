@@ -15,7 +15,7 @@ import { useActionState } from "react";
 import SubmitButton from "@beutl/ui/submit-button";
 import { ErrorDisplay } from "@beutl/ui/error-display";
 import { useTranslation } from "@beutl/ui/i18n-client";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { GitHubLogo, GoogleLogo } from "@beutl/ui/logo";
 import { AuthLogo } from "@/components/auth/auth-logo";
 import { useOAuthSignIn } from "@/components/auth/oauth";
 

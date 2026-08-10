@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import Form from "./form";
-import { localRedirect } from "@/lib/localRedirect";
+import { localRedirect, resolveSafeReturnUrl } from "@beutl/next/local-redirect";
 import { headers } from "next/headers";
 
 export default async function Page(
@@ -17,10 +17,8 @@ export default async function Page(
 
   const searchParams = await props.searchParams;
 
-  const {
-    returnUrl,
-    email
-  } = searchParams;
+  const { email } = searchParams;
+  const returnUrl = await resolveSafeReturnUrl(searchParams.returnUrl);
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (session) {

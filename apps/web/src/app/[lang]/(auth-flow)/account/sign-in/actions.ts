@@ -3,9 +3,10 @@
 import { getAuth } from "@/lib/better-auth";
 import { redirect } from "next/navigation";
 import { getTranslation, type Zod } from "@beutl/i18n";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { existsUserByEmail } from "@beutl/db";
 import { headers } from "next/headers";
+import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
 
 const emailSchema = (z: Zod) =>
   z.object({
@@ -33,6 +34,10 @@ export async function signInWithEmailAction(
     return { errors: validationResult.error.flatten().fieldErrors };
   }
   const { email, returnUrl } = validationResult.data;
+  // hidden input はクライアントが差し替えられるため、ページ側で正規化済みでも
+  // ここで検証し直す。外部オリジンを callbackURL に渡すと better-auth の
+  // originCheck に弾かれ、サインイン自体が失敗する。
+  const safeReturnUrl = await resolveSafeReturnUrl(returnUrl);
 
   const userResult = await existsUserByEmail({ email });
 
@@ -40,8 +45,8 @@ export async function signInWithEmailAction(
     // アカウント未作成
     const params = new URLSearchParams();
     params.append("email", email);
-    if (returnUrl) {
-      params.append("returnUrl", returnUrl);
+    if (safeReturnUrl) {
+      params.append("returnUrl", safeReturnUrl);
     }
     redirect(`/${lang}/account/sign-up?${params.toString()}`);
   }
@@ -52,7 +57,7 @@ export async function signInWithEmailAction(
   const response = await auth.api.signInMagicLink({
     body: {
       email: email,
-      callbackURL: returnUrl || `/${lang}`,
+      callbackURL: safeReturnUrl || `/${lang}`,
       errorCallbackURL: "/account/error",
     },
     headers: await headers(),

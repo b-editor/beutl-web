@@ -1,4 +1,4 @@
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { createStripe } from "@/lib/stripe/config";
 import {
   refundPackagePayment,

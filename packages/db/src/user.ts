@@ -182,22 +182,59 @@ export async function listUsers({
   return { items, total };
 }
 
+export const USER_DETAIL_RELATION_LIMIT = 50;
+
 export async function getUserDetail({ userId }: { userId: string }) {
   const db = await getDb();
   return db.user.findUnique({
     where: {
       id: userId,
     },
-    include: {
-      // スキーマ上、User のリレーションフィールド名は Profile (大文字)
-      Profile: true,
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      createdAt: true,
+      // スキーマ上、User のリレーションフィールド名は大文字始まり
       Package: {
-        include: {
-          packagePricing: true,
+        select: {
+          id: true,
+          name: true,
+          displayName: true,
+          published: true,
         },
+        orderBy: {
+          createdAt: "desc",
+        },
+        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
+        take: USER_DETAIL_RELATION_LIMIT + 1,
       },
-      UserPaymentHistory: true,
-      Feedback: true,
+      UserPaymentHistory: {
+        select: {
+          id: true,
+          paymentId: true,
+          packageId: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
+        take: USER_DETAIL_RELATION_LIMIT + 1,
+      },
+      Feedback: {
+        select: {
+          id: true,
+          message: true,
+          category: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        // 1 件多く取得し、表示側で「打ち切られたか」を判定できるようにする。
+        take: USER_DETAIL_RELATION_LIMIT + 1,
+      },
     },
   });
 }

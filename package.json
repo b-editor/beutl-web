@@ -8,9 +8,10 @@
   "scripts": {
     "dev": "pnpm --filter @beutl/web dev",
     "dev:admin": "pnpm --filter @beutl/admin dev",
-    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api build && pnpm --filter @beutl/admin build",
+    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api typecheck && pnpm --filter @beutl/admin build",
     "start": "pnpm --filter @beutl/web start",
     "lint": "pnpm --filter @beutl/web lint && pnpm --filter @beutl/admin lint",
+    "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "pnpm deploy:web",

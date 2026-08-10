@@ -37,8 +37,26 @@
       "@beutl/db": [
         "../../packages/db/src/index.ts"
       ],
+      "@beutl/email": [
+        "../../packages/email/src/index.ts"
+      ],
       "@beutl/i18n": [
         "../../packages/i18n/src/index.ts"
+      ],
+      "@beutl/i18n/language": [
+        "../../packages/i18n/src/language.ts"
+      ],
+      "@beutl/next/audit-log": [
+        "../../packages/next/src/audit-log.ts"
+      ],
+      "@beutl/next/language": [
+        "../../packages/next/src/language.ts"
+      ],
+      "@beutl/next/local-redirect": [
+        "../../packages/next/src/local-redirect.ts"
+      ],
+      "@beutl/next/middleware": [
+        "../../packages/next/src/middleware.ts"
       ],
       "@beutl/ui/*": [
         "../../packages/ui/src/*"

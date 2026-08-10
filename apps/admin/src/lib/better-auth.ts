@@ -4,8 +4,8 @@ import { nextCookies } from "better-auth/next-js";
 import { passkey } from "@better-auth/passkey";
 import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
-import { addAuditLog, auditLogActions } from "./audit-log";
-import { sendEmail } from "@/resend";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
+import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
 
 // Export types for use elsewhere
@@ -89,19 +89,27 @@ async function createAuthWithPrisma() {
       },
     },
     advanced: {
-      // 既存 Web (beutl.beditor.net) とセッションを共有する。
-      // BETTER_AUTH_COOKIE_DOMAIN には共有に必要な最小のドメインを設定する
-      // (本番では beutl.beditor.net)。admin.beutl.beditor.net はその配下なので
-      // これで共有できる。ルートドメイン (beditor.net) を指定すると配下の無関係な
-      // ホストにもセッションクッキーが送信される。
-      // domain 未指定時は host-only クッキーとなりサブドメイン間で共有されない。
-      // ローカル開発 (localhost) では設定しないこと。
-      crossSubDomainCookies: {
-        enabled: true,
-        ...(process.env.BETTER_AUTH_COOKIE_DOMAIN
-          ? { domain: process.env.BETTER_AUTH_COOKIE_DOMAIN }
-          : {}),
-      },
+      // BETTER_AUTH_COOKIE_DOMAIN を設定したときだけ Domain 付きのセッションクッキーを
+      // 発行し、既存 Web (beutl.beditor.net) と共有する。
+      // 値には共有に必要な最小のドメインを指定する (本番では beutl.beditor.net)。
+      // admin.beutl.beditor.net はその配下なのでこれで共有できる。
+      // ルートドメイン (beditor.net) を指定すると配下の無関係なホストにも
+      // セッションクッキーが送信される。
+      // 未設定なら better-auth の既定どおり host-only クッキーのままで、
+      // Web とは共有されない。ローカル開発 (localhost) や
+      // サブドメイン間共有が不要な環境では設定しないこと。
+      //
+      // 注意: host-only だった既存クッキーに Domain 属性を付けると、ブラウザ上は
+      // 別エントリの新規クッキーになる。同名の 2 つが併送され、どちらが読まれるかは
+      // パスと生成時刻に依存するため、切り替え時は既存クッキーの明示的な失効が必要。
+      ...(process.env.BETTER_AUTH_COOKIE_DOMAIN
+        ? {
+            crossSubDomainCookies: {
+              enabled: true,
+              domain: process.env.BETTER_AUTH_COOKIE_DOMAIN,
+            },
+          }
+        : {}),
     },
     databaseHooks: {
       session: {

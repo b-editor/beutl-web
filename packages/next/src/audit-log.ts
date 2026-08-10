@@ -2,19 +2,7 @@ import "server-only";
 import { createAuditLog } from "@beutl/db";
 import { headers } from "next/headers";
 
-export const auditLogActions = {
-  authjs: {
-    signIn: "authjs.signIn",
-    signOut: "authjs.signOut",
-    linkAccount: "authjs.linkAccount",
-  },
-  admin: {
-    updatePackagePricing: "admin.updatePackagePricing",
-    updatePackageInterval: "admin.updatePackageInterval",
-    userDeleted: "admin.userDeleted",
-    feedbackStatusChanged: "admin.feedbackStatusChanged",
-  },
-};
+export { auditLogActions } from "@beutl/db";
 
 export async function addAuditLog({
   userId,

@@ -1,9 +1,9 @@
 "use server";
 
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { authenticated } from "@/lib/auth-guard";
 import { createDevPackage, existsPackageName } from "@beutl/db";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { getTranslation, type Translator } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";

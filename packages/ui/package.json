@@ -6,11 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./ui/*": "./src/ui/*.tsx",
-    "./use-toast": "./src/use-toast.ts",
+    "./use-toast": "./src/hooks/use-toast.ts",
+    "./hooks/*": "./src/hooks/*.ts",
     "./submit-button": "./src/submit-button.tsx",
     "./error-display": "./src/error-display.tsx",
     "./progress-bar-provider": "./src/progress-bar-provider.tsx",
-    "./i18n-client": "./src/i18n-client.tsx"
+    "./i18n-client": "./src/i18n-client.tsx",
+    "./logo": "./src/logo.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@beutl/core": "workspace:*",
@@ -38,7 +43,8 @@
   },
   "devDependencies": {
     "@types/react": "19.1.0",
-    "@types/react-dom": "19.1.1"
+    "@types/react-dom": "19.1.1",
+    "typescript": "^5.7.3"
   },
   "peerDependencies": {
     "react": "^19.1.0",

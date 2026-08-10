@@ -34,7 +34,8 @@
     "deleteConfirmTitle": "Delete this user?",
     "deleteConfirmDescription": "This permanently deletes the account, packages, and all related data. This action cannot be undone.",
     "deleteSuccess": "User deleted",
-    "deleteFailed": "Failed to delete user"
+    "deleteFailed": "Failed to delete user",
+    "truncatedNotice": "Showing the latest {{count}} entries only."
   },
   "feedback": {
     "title": "Feedback",

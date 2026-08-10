@@ -20,9 +20,10 @@ import { useToast } from "@beutl/ui/use-toast";
 import { authClient } from "@/lib/auth-client";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { useRouter } from "next/navigation";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { GitHubLogo, GoogleLogo } from "@beutl/ui/logo";
 import { AuthLogo } from "@/components/auth/auth-logo";
 import { useOAuthSignIn } from "@/components/auth/oauth";
+import { resolveSafeRedirectPath } from "@beutl/core";
 
 export default function Form({
   returnUrl,
@@ -42,8 +43,9 @@ export default function Form({
       if (result?.error) {
         throw new Error(result.error.message);
       }
-      // Redirect after successful passkey sign-in
-      router.push(returnUrl || "/");
+      router.push(
+        resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
+      );
     } catch {
       toast({
         title: t("error"),

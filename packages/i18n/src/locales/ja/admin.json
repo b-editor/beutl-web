@@ -34,7 +34,8 @@
     "deleteConfirmTitle": "このユーザーを削除しますか?",
     "deleteConfirmDescription": "アカウント・パッケージ・関連データが完全に削除されます。この操作は取り消せません。",
     "deleteSuccess": "ユーザーを削除しました",
-    "deleteFailed": "ユーザーの削除に失敗しました"
+    "deleteFailed": "ユーザーの削除に失敗しました",
+    "truncatedNotice": "最新 {{count}} 件のみ表示しています"
   },
   "feedback": {
     "title": "フィードバック",

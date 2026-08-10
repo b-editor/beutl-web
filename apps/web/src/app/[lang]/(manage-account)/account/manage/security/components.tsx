@@ -7,7 +7,7 @@ import {
   renamePasskey,
 } from "./actions";
 import SubmitButton from "@beutl/ui/submit-button";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { GitHubLogo, GoogleLogo } from "@beutl/ui/logo";
 import { Button } from "@beutl/ui/ui/button";
 import {
   Edit,

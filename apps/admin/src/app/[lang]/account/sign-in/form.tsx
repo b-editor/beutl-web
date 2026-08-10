@@ -18,27 +18,11 @@ import { ErrorDisplay } from "@beutl/ui/error-display";
 import { useToast } from "@beutl/ui/use-toast";
 import { authClient } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
-import { GitHubLogo, GoogleLogo } from "@/components/logo";
+import { GitHubLogo, GoogleLogo } from "@beutl/ui/logo";
 import { AuthLogo } from "@/components/auth/auth-logo";
 import { useOAuthSignIn } from "@/components/auth/oauth";
 import { useTranslation } from "@beutl/ui/i18n-client";
-
-function getSafeReturnUrl(returnUrl: string | undefined, fallback: string) {
-  if (!returnUrl) return fallback;
-
-  try {
-    const url = new URL(returnUrl, window.location.origin);
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.origin !== window.location.origin
-    ) {
-      return fallback;
-    }
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return fallback;
-  }
-}
+import { resolveSafeRedirectPath } from "@beutl/core";
 
 export default function Form({
   returnUrl,
@@ -58,7 +42,10 @@ export default function Form({
       if (result?.error) {
         throw new Error(result.error.message);
       }
-      router.push(getSafeReturnUrl(returnUrl, `/${lang}/admin`));
+      router.push(
+        resolveSafeRedirectPath(returnUrl, window.location.origin) ??
+          `/${lang}/admin`,
+      );
     } catch {
       toast({
         title: t("error"),

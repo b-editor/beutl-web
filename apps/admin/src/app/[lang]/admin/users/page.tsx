@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Button } from "@beutl/ui/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
+import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 
 const PAGE_SIZE = 20;
 
@@ -19,14 +20,12 @@ export default async function Page(props: {
   const { q, page } = searchParams;
   const { t } = await getTranslation(lang);
 
-  const currentPage = Math.max(1, Number(page) || 1);
-  const result = await listUsers({
-    query: q,
-    page: currentPage,
-    pageSize: PAGE_SIZE,
-  });
-
-  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const { result, currentPage, totalPages } = await fetchPaginated(
+    (pageNumber) =>
+      listUsers({ query: q, page: pageNumber, pageSize: PAGE_SIZE }),
+    parsePageParam(page),
+    PAGE_SIZE,
+  );
 
   return (
     <div className="flex flex-col gap-6">

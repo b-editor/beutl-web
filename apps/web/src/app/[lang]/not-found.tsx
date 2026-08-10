@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@beutl/ui/ui/card";
 import { Button } from "@beutl/ui/ui/button";
 import Link from "next/link";
 import { getTranslation } from "@beutl/i18n";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 
 export default async function NotFound() {
   const lang = await getLanguage();

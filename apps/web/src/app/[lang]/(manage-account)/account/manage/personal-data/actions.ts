@@ -3,14 +3,14 @@
 import { authenticated } from "@/lib/auth-guard";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { sendEmail as sendEmailUsingResend } from "@/resend";
+import { sendEmail as sendEmailUsingResend } from "@beutl/email";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { getTranslation } from "@beutl/i18n";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { findEmailByUserId } from "@beutl/db";
 import { deleteManyConfirmationTokens } from "@beutl/db";
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { issueConfirmationToken } from "@/lib/confirmation-token-flow";
 
 type State = {

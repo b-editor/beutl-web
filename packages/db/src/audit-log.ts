@@ -1,6 +1,50 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
+// AuditLog テーブルは web / admin の両方が書き込むため、action 名はここで一元管理する。
+export const auditLogActions = {
+  authjs: {
+    createUser: "authjs.createUser",
+    signIn: "authjs.signIn",
+    signOut: "authjs.signOut",
+    linkAccount: "authjs.linkAccount",
+  },
+  account: {
+    sentEmailChangeConfirmation: "account.sentEmailChangeConfirmation",
+    emailChanged: "account.emailChanged",
+    sentDeleteAccountConfirmation: "account.sentDeleteAccountConfirmation",
+    accountDeleted: "account.accountDeleted",
+    signInMethodDeleted: "account.signInMethodDeleted",
+  },
+  developer: {
+    createPackage: "developer.createPackage",
+    updatePackage: "developer.updatePackage",
+    deletePackage: "developer.deletePackage",
+    publishPackage: "developer.publishPackage",
+    unpublishPackage: "developer.unpublishPackage",
+    createRelease: "developer.createRelease",
+    updateRelease: "developer.updateRelease",
+    deleteRelease: "developer.deleteRelease",
+    publishRelease: "developer.publishRelease",
+    unpublishRelease: "developer.unpublishRelease",
+  },
+  store: {
+    addToLibrary: "store.addToLibrary",
+    removeFromLibrary: "store.removeFromLibrary",
+    paymentSucceeded: "store.paymentSucceeded",
+    paymentRevoked: "store.paymentRevoked",
+    paymentRestored: "store.paymentRestored",
+    paymentRefundFailed: "store.paymentRefundFailed",
+    paymentRefundRequiresAction: "store.paymentRefundRequiresAction",
+  },
+  admin: {
+    updatePackagePricing: "admin.updatePackagePricing",
+    updatePackageInterval: "admin.updatePackageInterval",
+    userDeleted: "admin.userDeleted",
+    feedbackStatusChanged: "admin.feedbackStatusChanged",
+  },
+} as const;
+
 export async function createAuditLog({
   userId,
   action,

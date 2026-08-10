@@ -1,7 +1,7 @@
 "use server";
 
 import { getAuth } from "@/lib/better-auth";
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 

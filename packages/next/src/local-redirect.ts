@@ -19,14 +19,20 @@ async function getRequestOrigin(): Promise<string | undefined> {
   }
 }
 
+// 外部入力の returnUrl を同一オリジンのパスへ正規化する。フォームの hidden
+// input や searchParams はクライアントが自由に変えられるため、リダイレクト先や
+// callbackURL に渡す前にサーバー側で必ず通すこと。
+export async function resolveSafeReturnUrl(
+  url: string | null | undefined,
+): Promise<string | undefined> {
+  return resolveSafeRedirectPath(url, await getRequestOrigin()) ?? undefined;
+}
+
 export async function localRedirect(
   url: string,
   type?: RedirectType,
 ): Promise<never> {
-  const origin = await getRequestOrigin();
-  // 検証を通らない入力はサイト内トップへ送る。admin のルートは
-  // /{lang}/admin へリダイレクトされるため、安全な既定の遷移先になる。
-  const safePath = resolveSafeRedirectPath(url, origin) ?? "/";
-
-  redirect(safePath, type);
+  // 検証を通らない入力はサイト内トップへ送る。両アプリともルートは
+  // /{lang}/... へリダイレクトされるため、安全な既定の遷移先になる。
+  redirect((await resolveSafeReturnUrl(url)) ?? "/", type);
 }

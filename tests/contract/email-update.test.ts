@@ -13,10 +13,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("@/resend", () => ({ sendEmail: vi.fn() }));
+vi.mock("@beutl/email", () => ({ sendEmail: vi.fn() }));
 vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn() }));
 vi.mock("@beutl/i18n", () => ({ getTranslation: vi.fn() }));
-vi.mock("@/lib/lang-utils", () => ({ getLanguage: mocks.getLanguage }));
+vi.mock("@beutl/next/language", () => ({ getLanguage: mocks.getLanguage }));
 vi.mock("@beutl/db", () => ({
   existsUserByEmail: vi.fn(),
   existsUserById: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock("@beutl/db", () => ({
 vi.mock("@/lib/customer", () => ({
   synchronizeMappedStripeCustomer: mocks.synchronizeMappedStripeCustomer,
 }));
-vi.mock("@/lib/audit-log", () => ({
+vi.mock("@beutl/next/audit-log", () => ({
   addAuditLog: mocks.addAuditLog,
   auditLogActions: {
     account: {

@@ -1,4 +1,4 @@
-import { getLanguage } from "@/lib/lang-utils";
+import { getLanguage } from "@beutl/next/language";
 import { cookies, headers } from "next/headers";
 import { NextResponse } from "next/server";
 

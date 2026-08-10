@@ -1,4 +1,4 @@
-import { getUserDetail } from "@beutl/db";
+import { getUserDetail, USER_DETAIL_RELATION_LIMIT } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import { notFound } from "next/navigation";
 import { DeleteUserButton } from "./components";
@@ -20,6 +20,11 @@ export default async function Page(props: {
   if (!user) {
     notFound();
   }
+
+  // getUserDetail は上限より 1 件多く取得する。余分な 1 件は表示せず、打ち切りの判定に使う。
+  const packages = user.Package.slice(0, USER_DETAIL_RELATION_LIMIT);
+  const payments = user.UserPaymentHistory.slice(0, USER_DETAIL_RELATION_LIMIT);
+  const feedback = user.Feedback.slice(0, USER_DETAIL_RELATION_LIMIT);
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,74 +67,95 @@ export default async function Page(props: {
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:users.packages")}</h2>
-        {user.Package.length === 0 ? (
+        {packages.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("admin:common.empty")}</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>{t("admin:users.name")}</TableHead>
-                <TableHead>{t("admin:feedback.status")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {user.Package.map((pkg) => (
-                <TableRow key={pkg.id}>
-                  <TableCell className="font-mono text-xs">{pkg.name}</TableCell>
-                  <TableCell>{pkg.displayName || "-"}</TableCell>
-                  <TableCell>{pkg.published ? "published" : "draft"}</TableCell>
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ID</TableHead>
+                  <TableHead>{t("admin:users.name")}</TableHead>
+                  <TableHead>{t("admin:feedback.status")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {packages.map((pkg) => (
+                  <TableRow key={pkg.id}>
+                    <TableCell className="font-mono text-xs">{pkg.name}</TableCell>
+                    <TableCell>{pkg.displayName || "-"}</TableCell>
+                    <TableCell>{pkg.published ? "published" : "draft"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {user.Package.length > USER_DETAIL_RELATION_LIMIT && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("admin:users.truncatedNotice", { count: USER_DETAIL_RELATION_LIMIT })}
+              </p>
+            )}
+          </>
         )}
       </section>
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:users.paymentHistory")}</h2>
-        {user.UserPaymentHistory.length === 0 ? (
+        {payments.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("admin:common.empty")}</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Package</TableHead>
-                <TableHead>{t("admin:auditLog.createdAt")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {user.UserPaymentHistory.map((payment) => (
-                <TableRow key={payment.id}>
-                  <TableCell className="font-mono text-xs">{payment.paymentId}</TableCell>
-                  <TableCell>{payment.packageId}</TableCell>
-                  <TableCell>{payment.createdAt.toLocaleString(lang)}</TableCell>
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ID</TableHead>
+                  <TableHead>Package</TableHead>
+                  <TableHead>{t("admin:auditLog.createdAt")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {payments.map((payment) => (
+                  <TableRow key={payment.id}>
+                    <TableCell className="font-mono text-xs">{payment.paymentId}</TableCell>
+                    <TableCell>{payment.packageId}</TableCell>
+                    <TableCell>{payment.createdAt.toLocaleString(lang)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {user.UserPaymentHistory.length > USER_DETAIL_RELATION_LIMIT && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("admin:users.truncatedNotice", { count: USER_DETAIL_RELATION_LIMIT })}
+              </p>
+            )}
+          </>
         )}
       </section>
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:users.feedback")}</h2>
-        {user.Feedback.length === 0 ? (
+        {feedback.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("admin:common.empty")}</p>
         ) : (
-          <ul className="divide-y">
-            {user.Feedback.map((item) => (
-              <li key={item.id} className="py-3">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="text-sm font-medium">{item.message}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {item.createdAt.toLocaleString(lang)}
+          <>
+            <ul className="divide-y">
+              {feedback.map((item) => (
+                <li key={item.id} className="py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="text-sm font-medium">{item.message}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {item.createdAt.toLocaleString(lang)}
+                    </div>
                   </div>
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">{item.category}</div>
-              </li>
-            ))}
-          </ul>
+                  <div className="mt-1 text-xs text-muted-foreground">{item.category}</div>
+                </li>
+              ))}
+            </ul>
+            {user.Feedback.length > USER_DETAIL_RELATION_LIMIT && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("admin:users.truncatedNotice", { count: USER_DETAIL_RELATION_LIMIT })}
+              </p>
+            )}
+          </>
         )}
       </section>
     </div>

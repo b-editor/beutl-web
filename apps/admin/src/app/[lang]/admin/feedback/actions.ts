@@ -1,13 +1,12 @@
 "use server";
 
-import { addAuditLog, auditLogActions } from "@/lib/audit-log";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import { isAdmin } from "@beutl/core";
 import { isFeedbackStatus, updateFeedbackStatus } from "@beutl/db";
 import type { FeedbackStatus } from "@beutl/db";
 import { revalidatePath } from "next/cache";
-import { getLanguage } from "@/lib/lang-utils";
 
 export async function updateStatus({
   id,
@@ -35,8 +34,9 @@ export async function updateStatus({
       action: auditLogActions.admin.feedbackStatusChanged,
       details: `feedbackId: ${id}, status: ${status}`,
     });
-    const lang = await getLanguage();
-    revalidatePath(`/${lang}/admin/feedback`);
+    // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
+    // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。
+    revalidatePath("/[lang]/admin/feedback", "page");
 
     return { success: true };
   });

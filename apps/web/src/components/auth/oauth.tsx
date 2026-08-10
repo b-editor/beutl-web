@@ -4,6 +4,7 @@ import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { useToast } from "@beutl/ui/use-toast";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import { resolveSafeRedirectPath } from "@beutl/core";
 
 type OAuthProvider = "google" | "github";
 
@@ -23,7 +24,8 @@ export function useOAuthSignIn({
     try {
       await authClient.signIn.social({
         provider,
-        callbackURL: returnUrl || "/",
+        callbackURL:
+          resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
       });
     } catch {
       toast({

@@ -3,6 +3,7 @@ import { getTranslation } from "@beutl/i18n";
 import { AuditLogFilterForm } from "./filter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
+import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import Link from "next/link";
 
 const PAGE_SIZE = 30;
@@ -18,15 +19,17 @@ export default async function Page(props: {
   const { action, userId, page } = searchParams;
   const { t } = await getTranslation(lang);
 
-  const currentPage = Math.max(1, Number(page) || 1);
-  const result = await listAuditLogs({
-    action: action || undefined,
-    userId: userId || undefined,
-    page: currentPage,
-    pageSize: PAGE_SIZE,
-  });
-
-  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const { result, currentPage, totalPages } = await fetchPaginated(
+    (pageNumber) =>
+      listAuditLogs({
+        action: action || undefined,
+        userId: userId || undefined,
+        page: pageNumber,
+        pageSize: PAGE_SIZE,
+      }),
+    parsePageParam(page),
+    PAGE_SIZE,
+  );
 
   return (
     <div className="flex flex-col gap-6">
