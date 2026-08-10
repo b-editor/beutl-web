@@ -5,7 +5,10 @@
 -- vanish from the extension listing. Backfill those rows and give the column the
 -- empty-array default so the negative predicate stays total from here on.
 
--- AlterTable
-UPDATE "Package" SET "tags" = ARRAY[]::text[] WHERE "tags" IS NULL;
+-- The empty-array literal is written as a string: an empty ARRAY[] constructor has no
+-- inferable element type in CockroachDB, while '{}' is cast implicitly.
 
-ALTER TABLE "Package" ALTER COLUMN "tags" SET DEFAULT ARRAY[]::text[];
+-- AlterTable
+UPDATE "Package" SET "tags" = '{}'::text[] WHERE "tags" IS NULL;
+
+ALTER TABLE "Package" ALTER COLUMN "tags" SET DEFAULT '{}'::text[];
