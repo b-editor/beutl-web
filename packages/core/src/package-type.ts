@@ -1,9 +1,10 @@
 // A package's kind is carried by reserved entries in `Package.tags` rather than a
 // column of its own, so the store, the desktop API and the developer portal all have
 // to agree on the same two strings and the same "neither tag means extension" rule.
-
-export const RESERVED_PACKAGE_TAGS = ["material", "template"] as const;
-export type ReservedPackageTag = (typeof RESERVED_PACKAGE_TAGS)[number];
+//
+// The tags are prefixed because the desktop client reads the same vocabulary out of a
+// package's nuspec, where a bare "material" is an ordinary tag plenty of unrelated
+// packages already carry.
 
 export const PACKAGE_TYPES = ["extension", "material", "template"] as const;
 export type PackageType = (typeof PACKAGE_TYPES)[number];
@@ -11,8 +12,18 @@ export type PackageType = (typeof PACKAGE_TYPES)[number];
 export const PACKAGE_TYPE_FILTERS = ["all", ...PACKAGE_TYPES] as const;
 export type PackageTypeFilter = (typeof PACKAGE_TYPE_FILTERS)[number];
 
+export const MATERIAL_TAG = "beutl-material";
+export const TEMPLATE_TAG = "beutl-template";
+
+export const RESERVED_PACKAGE_TAGS = [MATERIAL_TAG, TEMPLATE_TAG] as const;
+export type ReservedPackageTag = (typeof RESERVED_PACKAGE_TAGS)[number];
+
 export function isReservedPackageTag(tag: string): tag is ReservedPackageTag {
   return (RESERVED_PACKAGE_TAGS as readonly string[]).includes(tag);
+}
+
+function tagFor(type: Exclude<PackageType, "extension">): ReservedPackageTag {
+  return type === "material" ? MATERIAL_TAG : TEMPLATE_TAG;
 }
 
 export function isPackageType(value: unknown): value is PackageType {
@@ -32,8 +43,8 @@ export function getPackageType(
   tags: readonly string[] | null | undefined,
 ): PackageType {
   if (!tags) return "extension";
-  if (tags.includes("material")) return "material";
-  if (tags.includes("template")) return "template";
+  if (tags.includes(MATERIAL_TAG)) return "material";
+  if (tags.includes(TEMPLATE_TAG)) return "template";
   return "extension";
 }
 
@@ -50,7 +61,7 @@ export function applyPackageType(
   type: PackageType,
 ): string[] {
   const rest = visiblePackageTags(tags);
-  return type === "extension" ? rest : [type, ...rest];
+  return type === "extension" ? rest : [tagFor(type), ...rest];
 }
 
 /*
@@ -66,5 +77,5 @@ export function packageTypeWhere(type: PackageTypeFilter | undefined): {
   if (type === "extension") {
     return { NOT: { tags: { hasSome: [...RESERVED_PACKAGE_TAGS] } } };
   }
-  return { tags: { has: type } };
+  return { tags: { has: tagFor(type) } };
 }

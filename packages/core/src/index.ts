@@ -19,6 +19,8 @@ export type {
   ContentAccessResult,
 } from "./content-access";
 export {
+  MATERIAL_TAG,
+  TEMPLATE_TAG,
   RESERVED_PACKAGE_TAGS,
   PACKAGE_TYPES,
   PACKAGE_TYPE_FILTERS,

@@ -16,7 +16,9 @@ import {
   applyPackageType,
   getPackageType,
   isPackageTypeFilter,
+  MATERIAL_TAG,
   packageTypeWhere,
+  TEMPLATE_TAG,
   visiblePackageTags,
 } from "@beutl/core";
 import discover from "../../packages/api/src/v3/discover";
@@ -48,16 +50,22 @@ describe("package type derived from reserved tags", () => {
   });
 
   it("reads the kind off the reserved tag wherever it sits", () => {
-    expect(getPackageType(["fonts", "material"])).toBe("material");
-    expect(getPackageType(["template", "titles"])).toBe("template");
+    expect(getPackageType(["fonts", MATERIAL_TAG])).toBe("material");
+    expect(getPackageType([TEMPLATE_TAG, "titles"])).toBe("template");
+  });
+
+  it("does not treat a bare material tag as the kind marker", () => {
+    // "material" is an ordinary tag plenty of unrelated packages carry (e.g. Material
+    // Design themes), so only the prefixed marker classifies a package.
+    expect(getPackageType(["material", "design", "theme"])).toBe("extension");
   });
 
   it("resolves a package carrying both reserved tags to material", () => {
-    expect(getPackageType(["template", "material"])).toBe("material");
+    expect(getPackageType([TEMPLATE_TAG, MATERIAL_TAG])).toBe("material");
   });
 
   it("hides the reserved tags from the author's own tag list", () => {
-    expect(visiblePackageTags(["material", "fonts", "cc0"])).toEqual([
+    expect(visiblePackageTags([MATERIAL_TAG, "fonts", "cc0"])).toEqual([
       "fonts",
       "cc0",
     ]);
@@ -65,15 +73,15 @@ describe("package type derived from reserved tags", () => {
   });
 
   it("replaces the kind marker rather than stacking markers", () => {
-    expect(applyPackageType(["material", "fonts"], "template")).toEqual([
-      "template",
+    expect(applyPackageType([MATERIAL_TAG, "fonts"], "template")).toEqual([
+      TEMPLATE_TAG,
       "fonts",
     ]);
-    expect(applyPackageType(["template", "fonts"], "extension")).toEqual([
+    expect(applyPackageType([TEMPLATE_TAG, "fonts"], "extension")).toEqual([
       "fonts",
     ]);
     expect(applyPackageType(["fonts"], "material")).toEqual([
-      "material",
+      MATERIAL_TAG,
       "fonts",
     ]);
   });
@@ -88,9 +96,9 @@ describe("package type derived from reserved tags", () => {
   it("selects extensions by absence of every reserved tag", () => {
     // Prisma has no `hasNone`; the negated `hasSome` is the documented stand-in.
     expect(packageTypeWhere("extension")).toEqual({
-      NOT: { tags: { hasSome: ["material", "template"] } },
+      NOT: { tags: { hasSome: [MATERIAL_TAG, TEMPLATE_TAG] } },
     });
-    expect(packageTypeWhere("material")).toEqual({ tags: { has: "material" } });
+    expect(packageTypeWhere("material")).toEqual({ tags: { has: MATERIAL_TAG } });
     expect(packageTypeWhere("all")).toEqual({});
     expect(packageTypeWhere(undefined)).toEqual({});
   });
@@ -114,7 +122,7 @@ describe("retrievePackages type filtering", () => {
 
     expect(whereOf(0)).toEqual({
       published: true,
-      tags: { has: "template" },
+      tags: { has: TEMPLATE_TAG },
     });
   });
 
@@ -123,7 +131,7 @@ describe("retrievePackages type filtering", () => {
 
     expect(whereOf(0)).toEqual({
       published: true,
-      NOT: { tags: { hasSome: ["material", "template"] } },
+      NOT: { tags: { hasSome: [MATERIAL_TAG, TEMPLATE_TAG] } },
     });
   });
 
@@ -131,7 +139,7 @@ describe("retrievePackages type filtering", () => {
     await retrievePackages("noise", undefined, "material");
 
     const where = whereOf(0);
-    expect(where.tags).toEqual({ has: "material" });
+    expect(where.tags).toEqual({ has: MATERIAL_TAG });
     expect(where.OR).toHaveLength(5);
   });
 });
@@ -141,14 +149,14 @@ describe("v3 discover type query parameter", () => {
     const res = await discover.request("/search?query=noise&type=material");
 
     expect(res.status).toBe(200);
-    expect(whereOf(0).tags).toEqual({ has: "material" });
+    expect(whereOf(0).tags).toEqual({ has: MATERIAL_TAG });
   });
 
   it("passes the requested type through to /featured", async () => {
     const res = await discover.request("/featured?type=template");
 
     expect(res.status).toBe(200);
-    expect(whereOf(0).tags).toEqual({ has: "template" });
+    expect(whereOf(0).tags).toEqual({ has: TEMPLATE_TAG });
   });
 
   it("keeps listing every kind when the client omits type", async () => {
