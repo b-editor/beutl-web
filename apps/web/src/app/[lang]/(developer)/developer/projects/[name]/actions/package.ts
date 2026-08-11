@@ -1,6 +1,7 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
+import { isReservedPackageTag } from "@beutl/core";
 import type { ActionResult } from "@beutl/core";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { contentPath } from "@/lib/content-url";
@@ -243,6 +244,15 @@ export async function updateTag({
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     return await sameUser(packageId, session.user.id, t, async () => {
+      // The kind is a single reserved marker; more than one would be ambiguous, and
+      // the client already refuses to type them, so reject it at the boundary too.
+      if (tags.filter(isReservedPackageTag).length > 1) {
+        return {
+          success: false,
+          message: t("developer:details.reservedTag"),
+        };
+      }
+
       const { name } = await updateDevPackageTags({
         packageId,
         tags,

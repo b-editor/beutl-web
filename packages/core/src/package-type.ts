@@ -71,11 +71,16 @@ export function applyPackageType(
 */
 export function packageTypeWhere(type: PackageTypeFilter | undefined): {
   tags?: { has: ReservedPackageTag };
-  NOT?: { tags: { hasSome: string[] } };
+  NOT?: { tags: { has: ReservedPackageTag } | { hasSome: string[] } };
 } {
   if (!type || type === "all") return {};
   if (type === "extension") {
     return { NOT: { tags: { hasSome: [...RESERVED_PACKAGE_TAGS] } } };
+  }
+  if (type === "template") {
+    // A package carrying both markers resolves to material, so the template listing
+    // has to exclude it or it would appear in both.
+    return { tags: { has: TEMPLATE_TAG }, NOT: { tags: { has: MATERIAL_TAG } } };
   }
   return { tags: { has: tagFor(type) } };
 }

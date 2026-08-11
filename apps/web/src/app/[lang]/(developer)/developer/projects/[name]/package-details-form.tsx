@@ -52,7 +52,7 @@ export function PackageDetailsForm({
     pkg.tags,
     (_state, next) => next,
   );
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
   const { toast } = useToast();
   const { t } = useTranslation(lang);
 
@@ -81,6 +81,7 @@ export function PackageDetailsForm({
   const handleAddTag = useCallback(
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (isPending) return;
       const form = e.target as HTMLFormElement;
       const formData = new FormData(form);
       const newTag = (formData.get("newtag") as string).trim();
@@ -100,22 +101,24 @@ export function PackageDetailsForm({
 
       commitTags([...tags, newTag]);
     },
-    [commitTags, tags, t, toast],
+    [commitTags, isPending, tags, t, toast],
   );
 
   const handleDeleteTag = useCallback(
     (tag: string) => {
+      if (isPending) return;
       commitTags(tags.filter((t) => t !== tag));
     },
-    [commitTags, tags],
+    [commitTags, isPending, tags],
   );
 
   const handleChangeType = useCallback(
     (value: string) => {
+      if (isPending) return;
       if (!isPackageType(value)) return;
       commitTags(applyPackageType(tags, value));
     },
-    [commitTags, tags],
+    [commitTags, isPending, tags],
   );
 
   return (
@@ -125,7 +128,7 @@ export function PackageDetailsForm({
       </h4>
       <div className="flex gap-2 flex-col my-4">
         <h4>{t("developer:details.packageType")}</h4>
-        <Select value={getPackageType(tags)} onValueChange={handleChangeType}>
+        <Select value={getPackageType(tags)} onValueChange={handleChangeType} disabled={isPending}>
           <SelectTrigger className="md:max-w-xs">
             <SelectValue />
           </SelectTrigger>
@@ -146,7 +149,7 @@ export function PackageDetailsForm({
         <h4>{t("developer:details.tags")}</h4>
         <div className="flex gap-1 flex-wrap">
           {visiblePackageTags(tags).map((tag) => (
-            <Badge key={tag} onClick={() => handleDeleteTag(tag)}>
+            <Badge key={tag} onClick={() => handleDeleteTag(tag)} className={isPending ? "pointer-events-none opacity-60" : undefined}>
               {tag}
               <X className="ml-1 w-4 h-4" />
             </Badge>
@@ -165,7 +168,7 @@ export function PackageDetailsForm({
                   </Label>
                   <Input name="newtag" id="newtag" className="col-span-2 h-8" />
                 </div>
-                <Button type="submit" size="sm">
+                <Button type="submit" size="sm" disabled={isPending}>
                   {t("developer:common.add")}
                 </Button>
               </form>

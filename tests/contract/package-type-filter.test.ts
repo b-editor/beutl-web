@@ -102,6 +102,16 @@ describe("package type derived from reserved tags", () => {
     expect(packageTypeWhere("all")).toEqual({});
     expect(packageTypeWhere(undefined)).toEqual({});
   });
+
+  it("keeps a both-markers package out of the template listing", () => {
+    // getPackageType resolves a package carrying both markers to material, so the
+    // template predicate has to exclude the material marker or the package would
+    // appear in both listings.
+    expect(packageTypeWhere("template")).toEqual({
+      tags: { has: TEMPLATE_TAG },
+      NOT: { tags: { has: MATERIAL_TAG } },
+    });
+  });
 });
 
 describe("retrievePackages type filtering", () => {
@@ -123,6 +133,7 @@ describe("retrievePackages type filtering", () => {
     expect(whereOf(0)).toEqual({
       published: true,
       tags: { has: TEMPLATE_TAG },
+      NOT: { tags: { has: MATERIAL_TAG } },
     });
   });
 
