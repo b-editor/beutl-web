@@ -15,7 +15,8 @@
     "title": "Develop extensions",
     "createNewExtension": "Create a new extension",
     "documentation": "Documentation",
-    "projects": "Projects"
+    "projects": "Projects",
+    "publishDataPackage": "Publish materials or templates"
   },
   "newProject": {
     "title": "Create a new project",
@@ -115,5 +116,28 @@
     "targetVersion": "Target version",
     "title": "Title",
     "version": "Version"
+  },
+  "upload": {
+    "title": "Publish materials or templates",
+    "description": "Select a folder of files and publish them to the store. No packaging knowledge needed.",
+    "type": "Type",
+    "typeDescription": "Materials are media files (images, audio, video, fonts). Templates are object templates (JSON).",
+    "slug": "Name",
+    "slugDescription": "A short name for your package. It will be published as {{prefix}}.<name>.",
+    "titleLabel": "Title",
+    "titleDescription": "A short display title for the store listing.",
+    "descriptionLabel": "Description",
+    "descriptionHint": "What is in this package?",
+    "files": "Files",
+    "filesDescription": "Select a folder. The folder structure is preserved inside the package.",
+    "filesSelected": "{{count}} files selected",
+    "publish": "Publish",
+    "invalidType": "Choose a package type.",
+    "invalidSlug": "The name may only contain lowercase letters, digits and hyphens.",
+    "invalidTitle": "Enter a title of up to 50 characters.",
+    "invalidDescription": "Enter a description of up to 1000 characters.",
+    "noFiles": "Select at least one file.",
+    "invalidFile": "\"{{name}}\" is not a file type this package accepts.",
+    "nameTaken": "A package with this name already exists. Choose a different name."
   }
 }

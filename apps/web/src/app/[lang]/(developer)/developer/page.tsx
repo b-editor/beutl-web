@@ -20,10 +20,15 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
           <h2 className="text-3xl font-semibold">
             {t("developer:portal.title")}
           </h2>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button asChild>
               <Link href={`/${lang}/developer/new/project`}>
                 {t("developer:portal.createNewExtension")}
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/${lang}/developer/upload`}>
+                {t("developer:portal.publishDataPackage")}
               </Link>
             </Button>
             <Button variant="outline" disabled>

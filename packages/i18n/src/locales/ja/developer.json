@@ -15,7 +15,8 @@
     "title": "拡張機能を開発する",
     "createNewExtension": "新しい拡張機能を作成",
     "documentation": "ドキュメント",
-    "projects": "プロジェクト"
+    "projects": "プロジェクト",
+    "publishDataPackage": "素材・テンプレートを公開"
   },
   "newProject": {
     "title": "新しいプロジェクトを作成",
@@ -115,5 +116,28 @@
     "targetVersion": "ターゲットバージョン",
     "title": "タイトル",
     "version": "バージョン"
+  },
+  "upload": {
+    "title": "素材・テンプレートを公開",
+    "description": "ファイルのフォルダを選んでストアに公開します。パッケージの知識は不要です。",
+    "type": "種類",
+    "typeDescription": "素材はメディアファイル（画像・音声・動画・フォント）、テンプレートはオブジェクトテンプレート（JSON）です。",
+    "slug": "名前",
+    "slugDescription": "パッケージの短い名前です。{{prefix}}.<名前> として公開されます。",
+    "titleLabel": "タイトル",
+    "titleDescription": "ストアの一覧に表示される短いタイトルです。",
+    "descriptionLabel": "説明",
+    "descriptionHint": "このパッケージの内容を説明してください。",
+    "files": "ファイル",
+    "filesDescription": "フォルダを選択してください。フォルダ構造はパッケージ内に保持されます。",
+    "filesSelected": "{{count}} 個のファイルを選択",
+    "publish": "公開",
+    "invalidType": "パッケージの種類を選択してください。",
+    "invalidSlug": "名前は小文字の英数字とハイフンのみ使用できます。",
+    "invalidTitle": "50 文字以内のタイトルを入力してください。",
+    "invalidDescription": "1000 文字以内の説明を入力してください。",
+    "noFiles": "ファイルを 1 つ以上選択してください。",
+    "invalidFile": "「{{name}}」はこのパッケージで受け付けられないファイル形式です。",
+    "nameTaken": "この名前のパッケージは既に存在します。別の名前を選択してください。"
   }
 }
