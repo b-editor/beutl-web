@@ -21,6 +21,8 @@ import { Label } from "@beutl/ui/ui/label";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
+import { getPackageType } from "@beutl/core";
+import type { PackageType } from "@beutl/core";
 import SemVer from "semver";
 import { createRelease, deleteRelease, updateRelease } from "./actions/release";
 import {
@@ -60,6 +62,9 @@ export function ReleaseForm({
   >(releases?.[0]);
   const [title, setTitle] = useState(release?.title || "");
   const [file, setFile] = useState<File>();
+  const [folderFiles, setFolderFiles] = useState<File[]>([]);
+  const [source, setSource] = useState<"nupkg" | "folder">("nupkg");
+  const [type, setType] = useState<PackageType>(getPackageType(pkg.tags));
   const [description, setDescription] = useState(release?.description || "");
   const [targetVersion, setTargetVersion] = useState({
     value: release?.targetVersion || "",
@@ -76,13 +81,20 @@ export function ReleaseForm({
     setTargetVersion({ value: release?.targetVersion || "", message: "" });
     setPublished(release?.published || false);
     setFile(undefined);
+    setFolderFiles([]);
   }, [release]);
 
   const handleSave = useCallback(async () => {
     if (!release) return;
     startSaveTransition(async () => {
       const formData = new FormData();
-      if (file) {
+      formData.append("source", source);
+      if (source === "folder") {
+        formData.append("type", type);
+        for (const f of folderFiles) {
+          formData.append("file", f, f.webkitRelativePath || f.name);
+        }
+      } else if (file) {
         formData.append("file", file);
       }
       formData.append("id", release.id);
@@ -113,13 +125,16 @@ export function ReleaseForm({
   }, [
     description,
     file,
+    folderFiles,
     published,
     release,
     releases,
+    source,
     t,
     targetVersion.value,
     title,
     toast,
+    type,
   ]);
 
   const handleSelectFile = useCallback(async () => {
@@ -130,6 +145,13 @@ export function ReleaseForm({
     }
     setFile(file);
   }, []);
+
+  const handleSelectFolder = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setFolderFiles(Array.from(e.target.files ?? []));
+    },
+    [],
+  );
 
   const handleClose = useCallback(() => {
     setOpen(false);
@@ -314,18 +336,76 @@ export function ReleaseForm({
           <Label className="mt-2">
             {t("developer:release.packageFile")}
           </Label>
-          <Button
-            variant="outline"
-            className="flex w-full justify-start"
-            onClick={handleSelectFile}
-            disabled={saving}
-          >
-            {file
-              ? file.name
-              : release?.file?.name
-                ? release.file.name
-                : t("developer:release.selectFile")}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant={source === "nupkg" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setSource("nupkg")}
+              disabled={saving}
+            >
+              {t("developer:release.packageFile")}
+            </Button>
+            <Button
+              variant={source === "folder" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setSource("folder")}
+              disabled={saving}
+            >
+              {t("developer:upload.title")}
+            </Button>
+          </div>
+          {source === "nupkg" ? (
+            <Button
+              variant="outline"
+              className="flex w-full justify-start"
+              onClick={handleSelectFile}
+              disabled={saving}
+            >
+              {file
+                ? file.name
+                : release?.file?.name
+                  ? release.file.name
+                  : t("developer:release.selectFile")}
+            </Button>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <Select
+                value={type}
+                onValueChange={(v) => setType(v as PackageType)}
+                disabled={saving}
+              >
+                <SelectTrigger className="md:max-w-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="material">
+                    {t("developer:details.packageTypeMaterial")}
+                  </SelectItem>
+                  <SelectItem value="template">
+                    {t("developer:details.packageTypeTemplate")}
+                  </SelectItem>
+                  <SelectItem value="both">
+                    {t("developer:details.packageTypeBoth")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <input
+                className="text-sm"
+                type="file"
+                multiple
+                {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
+                onChange={handleSelectFolder}
+                disabled={saving}
+              />
+              {folderFiles.length > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {t("developer:upload.filesSelected", {
+                    count: folderFiles.length,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
           <div className="flex items-center space-x-2 mt-2">
             <Checkbox
               id="release-public"

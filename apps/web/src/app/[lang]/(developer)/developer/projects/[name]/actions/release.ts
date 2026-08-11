@@ -3,8 +3,12 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
+import { buildDataPackageNupkgFile } from "@/lib/data-package";
+import type { DataPackageType } from "@/lib/data-package";
 import {
   getPackageNameFromPackageId,
+  getProfileByUserId,
+  updateDevPackageTags,
 } from "@beutl/db";
 import {
   createRelease as createReleaseRecord,
@@ -56,7 +60,55 @@ export async function updateRelease(
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
       let fileId = release.file?.id;
-      if (validated.data.file) {
+      let tags: string[] | undefined;
+
+      const source = formData.get("source");
+      if (source === "folder") {
+        const type = formData.get("type");
+        if (type !== "material" && type !== "template" && type !== "both") {
+          return { success: false, message: t("developer:upload.invalidType") };
+        }
+
+        const packageName = await getPackageNameFromPackageId({
+          packageId: release.packageId,
+        });
+        if (!packageName) {
+          return { success: false, message: t("developer:errors.idNotFound") };
+        }
+        const profile = await getProfileByUserId(session.user.id);
+        const username = profile?.userName || session.user.name || session.user.id;
+
+        const built = await buildDataPackageNupkgFile({
+          type: type as DataPackageType,
+          files: formData.getAll("file") as File[],
+          id: packageName,
+          version: release.version,
+          title: validated.data.title,
+          description: validated.data.description,
+          username,
+          t,
+        });
+        if (!built.ok) {
+          return { success: false, message: built.message };
+        }
+
+        const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
+        const result = await createDedicatedFile(
+          session.user.id,
+          built.file,
+          deletedSize,
+          t,
+        );
+        if (!result.success) {
+          return { success: false, message: result.message };
+        }
+
+        if (release.file) {
+          await deleteStorageFile({ fileId: release.file.id });
+        }
+        fileId = result.record!.id;
+        tags = built.tags;
+      } else if (validated.data.file) {
         const deletedSize = release.file
           ? BigInt(release.file.size)
           : BigInt(0);
@@ -79,6 +131,10 @@ export async function updateRelease(
           });
         }
         fileId = result.record!.id;
+      }
+
+      if (tags) {
+        await updateDevPackageTags({ packageId: release.packageId, tags });
       }
 
       const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
