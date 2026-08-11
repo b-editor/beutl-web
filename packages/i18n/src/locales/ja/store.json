@@ -42,5 +42,6 @@
   "typeTemplates": "テンプレート",
   "typeExtension": "拡張機能",
   "typeMaterial": "素材",
-  "typeTemplate": "テンプレート"
+  "typeTemplate": "テンプレート",
+  "typeBoth": "Material + Template"
 }

@@ -60,8 +60,8 @@ describe("package type derived from reserved tags", () => {
     expect(getPackageType(["material", "design", "theme"])).toBe("extension");
   });
 
-  it("resolves a package carrying both reserved tags to material", () => {
-    expect(getPackageType([TEMPLATE_TAG, MATERIAL_TAG])).toBe("material");
+  it("resolves a package carrying both reserved tags to both", () => {
+    expect(getPackageType([TEMPLATE_TAG, MATERIAL_TAG])).toBe("both");
   });
 
   it("hides the reserved tags from the author's own tag list", () => {
@@ -72,7 +72,7 @@ describe("package type derived from reserved tags", () => {
     expect(visiblePackageTags(undefined)).toEqual([]);
   });
 
-  it("replaces the kind marker rather than stacking markers", () => {
+  it("replaces the kind markers rather than stacking them", () => {
     expect(applyPackageType([MATERIAL_TAG, "fonts"], "template")).toEqual([
       TEMPLATE_TAG,
       "fonts",
@@ -82,6 +82,11 @@ describe("package type derived from reserved tags", () => {
     ]);
     expect(applyPackageType(["fonts"], "material")).toEqual([
       MATERIAL_TAG,
+      "fonts",
+    ]);
+    expect(applyPackageType([MATERIAL_TAG, "fonts"], "both")).toEqual([
+      MATERIAL_TAG,
+      TEMPLATE_TAG,
       "fonts",
     ]);
   });
@@ -103,13 +108,11 @@ describe("package type derived from reserved tags", () => {
     expect(packageTypeWhere(undefined)).toEqual({});
   });
 
-  it("keeps a both-markers package out of the template listing", () => {
-    // getPackageType resolves a package carrying both markers to material, so the
-    // template predicate has to exclude the material marker or the package would
-    // appear in both listings.
+  it("lists a both-markers package under template as well as material", () => {
+    // A package carrying both markers ships templates too, so the template predicate
+    // must not exclude the material marker.
     expect(packageTypeWhere("template")).toEqual({
       tags: { has: TEMPLATE_TAG },
-      NOT: { tags: { has: MATERIAL_TAG } },
     });
   });
 });
@@ -133,7 +136,6 @@ describe("retrievePackages type filtering", () => {
     expect(whereOf(0)).toEqual({
       published: true,
       tags: { has: TEMPLATE_TAG },
-      NOT: { tags: { has: MATERIAL_TAG } },
     });
   });
 

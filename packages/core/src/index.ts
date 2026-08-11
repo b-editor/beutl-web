@@ -37,5 +37,11 @@ export type {
   PackageType,
   PackageTypeFilter,
 } from "./package-type";
-export { buildNuspec, buildNupkg, sanitizePayloadPath } from "./nupkg";
+export {
+  buildNuspec,
+  buildNupkg,
+  sanitizePayloadPath,
+  materialReferenceUri,
+  rewriteTemplateReferences,
+} from "./nupkg";
 export type { NupkgFile, NupkgOptions } from "./nupkg";

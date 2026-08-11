@@ -48,6 +48,7 @@ const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
   extension: "store:typeExtension",
   material: "store:typeMaterial",
   template: "store:typeTemplate",
+  both: "store:typeBoth",
 };
 
 type Price = {

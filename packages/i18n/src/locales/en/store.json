@@ -42,5 +42,6 @@
   "typeTemplates": "Templates",
   "typeExtension": "Extension",
   "typeMaterial": "Material",
-  "typeTemplate": "Template"
+  "typeTemplate": "Template",
+  "typeBoth": "Material + Template"
 }

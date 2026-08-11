@@ -2,8 +2,13 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { authenticated } from "@/lib/auth-guard";
-import { buildNupkg, MATERIAL_TAG, TEMPLATE_TAG } from "@beutl/core";
-import type { ActionResult } from "@beutl/core";
+import {
+  buildNupkg,
+  MATERIAL_TAG,
+  rewriteTemplateReferences,
+  TEMPLATE_TAG,
+} from "@beutl/core";
+import type { ActionResult, NupkgFile } from "@beutl/core";
 import {
   createDevPackage,
   createRelease as createReleaseRecord,
@@ -35,6 +40,10 @@ function sanitizeIdPart(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function extensionOf(name: string): string {
+  return `.${name.split(".").pop()?.toLowerCase() ?? ""}`;
+}
+
 export async function publishDataPackage(
   formData: FormData,
 ): Promise<ActionResult> {
@@ -48,7 +57,7 @@ export async function publishDataPackage(
     const description = ((formData.get("description") as string) ?? "").trim();
     const files = formData.getAll("file") as File[];
 
-    if (type !== "material" && type !== "template") {
+    if (type !== "material" && type !== "template" && type !== "both") {
       return { success: false, message: t("developer:upload.invalidType") };
     }
     if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(slug)) {
@@ -64,10 +73,41 @@ export async function publishDataPackage(
       return { success: false, message: t("developer:upload.noFiles") };
     }
 
-    const allowed = type === "material" ? MATERIAL_EXTENSIONS : [".json"];
+    // For a single kind the files are flat; for "both" the folder must carry
+    // materials/ and templates/ subdirectories.
+    const materialFiles: File[] = [];
+    const templateFiles: File[] = [];
     for (const file of files) {
-      const ext = `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`;
-      if (!allowed.includes(ext)) {
+      const first = file.name.split("/")[0];
+      if (type === "both") {
+        if (first === "materials") materialFiles.push(file);
+        else if (first === "templates") templateFiles.push(file);
+        else {
+          return {
+            success: false,
+            message: t("developer:upload.invalidFile", { name: file.name }),
+          };
+        }
+      } else if (type === "material") {
+        materialFiles.push(file);
+      } else {
+        templateFiles.push(file);
+      }
+    }
+    if (materialFiles.length === 0 && templateFiles.length === 0) {
+      return { success: false, message: t("developer:upload.noFiles") };
+    }
+
+    for (const file of materialFiles) {
+      if (!MATERIAL_EXTENSIONS.includes(extensionOf(file.name))) {
+        return {
+          success: false,
+          message: t("developer:upload.invalidFile", { name: file.name }),
+        };
+      }
+    }
+    for (const file of templateFiles) {
+      if (extensionOf(file.name) !== ".json") {
         return {
           success: false,
           message: t("developer:upload.invalidFile", { name: file.name }),
@@ -82,27 +122,52 @@ export async function publishDataPackage(
     const id =
       type === "material"
         ? `Beutl.Materials.${username}.${slug}`
-        : `Beutl.Templates.${username}.${slug}`;
+        : type === "template"
+          ? `Beutl.Templates.${username}.${slug}`
+          : `Beutl.Data.${username}.${slug}`;
 
     if (await existsPackageName({ name: id })) {
       return { success: false, message: t("developer:upload.nameTaken") };
     }
 
-    const tag = type === "material" ? MATERIAL_TAG : TEMPLATE_TAG;
+    const tags =
+      type === "both"
+        ? [MATERIAL_TAG, TEMPLATE_TAG]
+        : [type === "material" ? MATERIAL_TAG : TEMPLATE_TAG];
+
+    const nupkgFiles: NupkgFile[] = [];
+    for (const file of materialFiles) {
+      nupkgFiles.push({
+        path: `materials/${file.name}`,
+        data: new Uint8Array(await file.arrayBuffer()),
+      });
+    }
+    for (const file of templateFiles) {
+      const packagePath = `templates/${file.name}`;
+      const json = new TextDecoder().decode(await file.arrayBuffer());
+      const rewritten = rewriteTemplateReferences(
+        json,
+        packagePath,
+        materialFiles.map((m) => ({
+          packagePath: `materials/${m.name}`,
+          basename: m.name.split("/").pop() ?? m.name,
+        })),
+        id,
+      );
+      nupkgFiles.push({
+        path: packagePath,
+        data: new TextEncoder().encode(rewritten),
+      });
+    }
+
     const nupkg = buildNupkg({
       id,
       version: "1.0.0",
       title,
       description,
-      tags: [tag],
+      tags,
       authors: username,
-      contentDir: type === "material" ? "materials" : "templates",
-      files: await Promise.all(
-        files.map(async (file) => ({
-          path: file.name,
-          data: new Uint8Array(await file.arrayBuffer()),
-        })),
-      ),
+      files: nupkgFiles,
     });
 
     const nupkgFile = new File([nupkg], `${id}.1.0.0.nupkg`, {
@@ -114,7 +179,7 @@ export async function publishDataPackage(
     }
 
     const pkg = await createDevPackage({ name: id, userId: session.user.id });
-    await updateDevPackageTags({ packageId: pkg.id, tags: [tag] });
+    await updateDevPackageTags({ packageId: pkg.id, tags });
 
     const release = await createReleaseRecord({
       packageId: pkg.id,

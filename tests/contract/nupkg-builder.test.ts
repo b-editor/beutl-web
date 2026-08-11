@@ -3,6 +3,8 @@ import { strToU8, unzipSync } from "fflate";
 import {
   buildNupkg,
   buildNuspec,
+  materialReferenceUri,
+  rewriteTemplateReferences,
   sanitizePayloadPath,
 } from "@beutl/core";
 
@@ -13,10 +15,9 @@ const OPTIONS = {
   description: "Royalty-free city photography.",
   tags: ["beutl-material", "photography", "cc0"],
   authors: "tester",
-  contentDir: "materials" as const,
   files: [
-    { path: "logo.png", data: strToU8("png") },
-    { path: "audio/sting.wav", data: strToU8("wav") },
+    { path: "materials/logo.png", data: strToU8("png") },
+    { path: "materials/audio/sting.wav", data: strToU8("wav") },
   ],
 };
 
@@ -57,13 +58,27 @@ describe("buildNupkg", () => {
     const zip = unzipSync(
       buildNupkg({
         ...OPTIONS,
-        contentDir: "templates",
-        files: [{ path: "title.json", data: strToU8("{}") }],
+        files: [{ path: "templates/title.json", data: strToU8("{}") }],
       }),
     );
 
     expect(zip["templates/title.json"]).toBeDefined();
     expect(zip["materials/logo.png"]).toBeUndefined();
+  });
+
+  it("packs both payloads when the files carry both prefixes", () => {
+    const zip = unzipSync(
+      buildNupkg({
+        ...OPTIONS,
+        files: [
+          { path: "materials/logo.png", data: strToU8("png") },
+          { path: "templates/title.json", data: strToU8("{}") },
+        ],
+      }),
+    );
+
+    expect(zip["materials/logo.png"]).toBeDefined();
+    expect(zip["templates/title.json"]).toBeDefined();
   });
 });
 
@@ -76,5 +91,43 @@ describe("sanitizePayloadPath", () => {
     for (const bad of ["../evil.png", "a/../../evil.png", "/abs.png", "a:\\evil.png", "a//b.png"]) {
       expect(() => sanitizePayloadPath(bad)).toThrow();
     }
+  });
+});
+
+describe("materialReferenceUri", () => {
+  it("reaches a bundled material from a root template", () => {
+    expect(
+      materialReferenceUri("templates/title.json", "materials/logo.png", "pkg"),
+    ).toBe("../../materials/pkg/logo.png");
+  });
+
+  it("reaches a bundled material from a nested template", () => {
+    expect(
+      materialReferenceUri("templates/lower-thirds/title.json", "materials/logo.png", "pkg"),
+    ).toBe("../../../materials/pkg/logo.png");
+  });
+});
+
+describe("rewriteTemplateReferences", () => {
+  const materials = [{ packagePath: "materials/logo.png", basename: "logo.png" }];
+
+  it("rewrites a file reference to a relative URI", () => {
+    const json = JSON.stringify({
+      Json: { source: "file:///Users/me/Photos/logo.png" },
+    });
+
+    const rewritten = rewriteTemplateReferences(json, "templates/title.json", materials, "pkg");
+
+    expect(JSON.parse(rewritten).Json.source).toBe("../../materials/pkg/logo.png");
+  });
+
+  it("leaves references to files that are not bundled alone", () => {
+    const json = JSON.stringify({
+      Json: { source: "file:///Users/me/Photos/other.png" },
+    });
+
+    const rewritten = rewriteTemplateReferences(json, "templates/title.json", materials, "pkg");
+
+    expect(JSON.parse(rewritten).Json.source).toBe("file:///Users/me/Photos/other.png");
   });
 });

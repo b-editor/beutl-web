@@ -70,7 +70,8 @@
     "packageTypeMaterial": "素材",
     "packageTypeTemplate": "テンプレート",
     "packageTypeDescription": "拡張機能はコードを配布します。素材は materials/ 以下のメディアファイルを、テンプレートは templates/ 以下のオブジェクトテンプレートを配布し、どちらもアセンブリとして読み込まれません。",
-    "reservedTag": "「beutl-material」と「beutl-template」はパッケージの種類を表す予約タグです。種類の選択で設定してください。"
+    "reservedTag": "「beutl-material」と「beutl-template」はパッケージの種類を表す予約タグです。種類の選択で設定してください。",
+    "packageTypeBoth": "Both"
   },
   "screenshots": {
     "alreadyFirst": "既に先頭です",

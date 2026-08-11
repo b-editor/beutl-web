@@ -6,7 +6,7 @@
 import { strToU8, zipSync } from "fflate";
 
 export type NupkgFile = {
-  /** Path within the payload directory, e.g. `logo.png` or `audio/sting.wav`. */
+  /** Path within the package, e.g. `materials/logo.png` or `templates/title.json`. */
   path: string;
   data: Uint8Array;
 };
@@ -18,8 +18,6 @@ export type NupkgOptions = {
   description: string;
   tags: string[];
   authors: string;
-  /** The directory the payload is packed under. */
-  contentDir: "materials" | "templates";
   files: NupkgFile[];
 };
 
@@ -78,8 +76,81 @@ export function buildNupkg(options: NupkgOptions): Uint8Array {
 
   for (const file of options.files) {
     const path = sanitizePayloadPath(file.path);
-    entries[`${options.contentDir}/${path}`] = file.data;
+    entries[path] = file.data;
   }
 
   return zipSync(entries);
+}
+
+function splitPath(path: string): string[] {
+  return path.split("/").filter((s) => s !== "" && s !== ".");
+}
+
+function relativePath(fromDir: string, toPath: string): string {
+  const from = splitPath(fromDir);
+  const to = splitPath(toPath);
+  let common = 0;
+  while (common < from.length && common < to.length && from[common] === to[common]) {
+    common++;
+  }
+  const ups = from.length - common;
+  const downs = to.slice(common);
+  return [...Array(ups).fill(".."), ...downs].join("/");
+}
+
+/**
+ * The URI a template file uses to reach a bundled material after installation.
+ * The install layout is `{home}/templates/{package}/...` and
+ * `{home}/materials/{package}/...`, so the `{home}` prefix cancels out of the
+ * relative path and the result is portable across machines.
+ */
+export function materialReferenceUri(
+  templatePackagePath: string,
+  materialPackagePath: string,
+  packageId: string,
+): string {
+  const subdir = splitPath(templatePackagePath).slice(0, -1).join("/").replace(/^templates\/?/, "");
+  const templateDir = `templates/${packageId}${subdir ? `/${subdir}` : ""}`;
+  const materialPath = `materials/${packageId}/${materialPackagePath.replace(/^materials\//, "")}`;
+  return relativePath(templateDir, materialPath);
+}
+
+/**
+ * Rewrites `file://` references in a template JSON that point at bundled
+ * materials into URIs relative to the template file, so the reference survives
+ * installation on another machine. Matching is by file name.
+ */
+export function rewriteTemplateReferences(
+  json: string,
+  templatePackagePath: string,
+  materials: { packagePath: string; basename: string }[],
+  packageId: string,
+): string {
+  const byBasename = new Map(
+    materials.map((m) => [m.basename.toLowerCase(), m.packagePath]),
+  );
+
+  const rewrite = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      if (node.startsWith("file://")) {
+        const basename = decodeURIComponent(node.split("/").pop() ?? "").toLowerCase();
+        const materialPath = byBasename.get(basename);
+        if (materialPath) {
+          return materialReferenceUri(templatePackagePath, materialPath, packageId);
+        }
+      }
+      return node;
+    }
+    if (Array.isArray(node)) {
+      return node.map(rewrite);
+    }
+    if (node !== null && typeof node === "object") {
+      for (const key of Object.keys(node)) {
+        (node as Record<string, unknown>)[key] = rewrite((node as Record<string, unknown>)[key]);
+      }
+    }
+    return node;
+  };
+
+  return JSON.stringify(rewrite(JSON.parse(json)));
 }

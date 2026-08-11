@@ -42,6 +42,7 @@ const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
   extension: "developer:details.packageTypeExtension",
   material: "developer:details.packageTypeMaterial",
   template: "developer:details.packageTypeTemplate",
+  both: "developer:details.packageTypeBoth",
 };
 
 export function PackageDetailsForm({

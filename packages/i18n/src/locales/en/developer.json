@@ -70,7 +70,8 @@
     "packageTypeMaterial": "Material",
     "packageTypeTemplate": "Template",
     "packageTypeDescription": "Extensions ship code. Materials ship media files under materials/, and templates ship object templates under templates/ — neither is loaded as an assembly.",
-    "reservedTag": "\"beutl-material\" and \"beutl-template\" are reserved for the package type. Use the package type selector instead."
+    "reservedTag": "\"beutl-material\" and \"beutl-template\" are reserved for the package type. Use the package type selector instead.",
+    "packageTypeBoth": "Both"
   },
   "screenshots": {
     "alreadyFirst": "Already first",

@@ -6,10 +6,12 @@
 // package's nuspec, where a bare "material" is an ordinary tag plenty of unrelated
 // packages already carry.
 
-export const PACKAGE_TYPES = ["extension", "material", "template"] as const;
+export const PACKAGE_TYPES = ["extension", "material", "template", "both"] as const;
 export type PackageType = (typeof PACKAGE_TYPES)[number];
 
-export const PACKAGE_TYPE_FILTERS = ["all", ...PACKAGE_TYPES] as const;
+// The store tabs: a package carrying both markers appears in the material AND the
+// template listings, so there is no separate "both" tab.
+export const PACKAGE_TYPE_FILTERS = ["all", "extension", "material", "template"] as const;
 export type PackageTypeFilter = (typeof PACKAGE_TYPE_FILTERS)[number];
 
 export const MATERIAL_TAG = "beutl-material";
@@ -22,7 +24,7 @@ export function isReservedPackageTag(tag: string): tag is ReservedPackageTag {
   return (RESERVED_PACKAGE_TAGS as readonly string[]).includes(tag);
 }
 
-function tagFor(type: Exclude<PackageType, "extension">): ReservedPackageTag {
+function tagFor(type: Exclude<PackageType, "extension" | "both">): ReservedPackageTag {
   return type === "material" ? MATERIAL_TAG : TEMPLATE_TAG;
 }
 
@@ -43,8 +45,11 @@ export function getPackageType(
   tags: readonly string[] | null | undefined,
 ): PackageType {
   if (!tags) return "extension";
-  if (tags.includes(MATERIAL_TAG)) return "material";
-  if (tags.includes(TEMPLATE_TAG)) return "template";
+  const material = tags.includes(MATERIAL_TAG);
+  const template = tags.includes(TEMPLATE_TAG);
+  if (material && template) return "both";
+  if (material) return "material";
+  if (template) return "template";
   return "extension";
 }
 
@@ -55,13 +60,15 @@ export function visiblePackageTags(
   return (tags ?? []).filter((tag) => !isReservedPackageTag(tag));
 }
 
-/** Replaces whichever kind marker a package carries with the one for `type`. */
+/** Replaces whichever kind markers a package carries with the ones for `type`. */
 export function applyPackageType(
   tags: readonly string[] | null | undefined,
   type: PackageType,
 ): string[] {
   const rest = visiblePackageTags(tags);
-  return type === "extension" ? rest : [tagFor(type), ...rest];
+  if (type === "extension") return rest;
+  if (type === "both") return [MATERIAL_TAG, TEMPLATE_TAG, ...rest];
+  return [tagFor(type), ...rest];
 }
 
 /*
@@ -70,17 +77,17 @@ export function applyPackageType(
   backfills those rows and gives the column a `[]` default so this predicate stays total.
 */
 export function packageTypeWhere(type: PackageTypeFilter | undefined): {
-  tags?: { has: ReservedPackageTag };
-  NOT?: { tags: { has: ReservedPackageTag } | { hasSome: string[] } };
+  tags?: { has: ReservedPackageTag } | { hasEvery: ReservedPackageTag[] };
+  NOT?: { tags: { hasSome: string[] } };
 } {
   if (!type || type === "all") return {};
   if (type === "extension") {
     return { NOT: { tags: { hasSome: [...RESERVED_PACKAGE_TAGS] } } };
   }
   if (type === "template") {
-    // A package carrying both markers resolves to material, so the template listing
-    // has to exclude it or it would appear in both.
-    return { tags: { has: TEMPLATE_TAG }, NOT: { tags: { has: MATERIAL_TAG } } };
+    // A package carrying both markers ships templates too, so it belongs in the
+    // template listing as well as the material one.
+    return { tags: { has: TEMPLATE_TAG } };
   }
   return { tags: { has: tagFor(type) } };
 }

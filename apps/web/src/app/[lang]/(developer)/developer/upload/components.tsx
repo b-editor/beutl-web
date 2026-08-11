@@ -76,6 +76,9 @@ export function Form({ lang }: { lang: string }) {
                 <SelectItem value="template">
                   {t("developer:details.packageTypeTemplate")}
                 </SelectItem>
+                <SelectItem value="both">
+                  {t("developer:details.packageTypeBoth")}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -99,7 +102,12 @@ export function Form({ lang }: { lang: string }) {
           />
           <p className="text-sm text-muted-foreground m-6 mt-2">
             {t("developer:upload.slugDescription", {
-              prefix: type === "material" ? "Beutl.Materials" : "Beutl.Templates",
+              prefix:
+                type === "material"
+                  ? "Beutl.Materials"
+                  : type === "template"
+                    ? "Beutl.Templates"
+                    : "Beutl.Data",
             })}
           </p>
         </div>
