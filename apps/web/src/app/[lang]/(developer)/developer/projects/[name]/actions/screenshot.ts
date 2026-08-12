@@ -12,7 +12,8 @@ import {
   updateDevPackageScreenshotOrder,
 } from "@beutl/db";
 import {
-  deleteStorageFile,
+  abandonPendingStorageFile,
+  drainStorageCleanup,
 } from "@/lib/storage";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
@@ -42,14 +43,23 @@ export async function addScreenshot(formData: FormData): Promise<ActionResult> {
       if (!result.success) {
         return result;
       }
-      const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({
-        packageId: id,
-      });
-      await createDevPackageScreenshot({
-        packageId: id,
-        fileId: result.record!.id,
-        order: (lastScreenshot?.order || 0) + 1,
-      });
+      if (!result.record) {
+        throw new Error("The uploaded screenshot file record is missing.");
+      }
+      try {
+        const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({
+          packageId: id,
+        });
+        await createDevPackageScreenshot({
+          packageId: id,
+          fileId: result.record.id,
+          order: (lastScreenshot?.order || 0) + 1,
+        });
+      } catch (error) {
+        await abandonPendingStorageFile({ fileId: result.record.id });
+        throw error;
+      }
+      await drainStorageCleanup();
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -137,7 +147,7 @@ export async function deleteScreenshot({
     return await sameUser(packageId, session.user.id, t, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
       await deleteDevPackageScreenshot({ packageId, fileId });
-      await deleteStorageFile({ fileId });
+      await drainStorageCleanup();
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,

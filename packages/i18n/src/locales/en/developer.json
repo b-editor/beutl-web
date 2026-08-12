@@ -27,10 +27,13 @@
     "displayNamePlaceholder": "Display name (the ID is shown when blank)"
   },
   "errors": {
+    "analyticsManifestInvalid": "The package analytics manifest is invalid.",
+    "fileConflict": "This file was changed by another request. Reload it and try again.",
     "fileNotFound": "File not found",
     "idNotFound": "ID not found",
     "invalidInput": "There are errors in your input",
     "noPermission": "You do not have permission",
+    "releaseConflict": "This release was changed by another request. Reload it and try again.",
     "storageFull": "Not enough storage space"
   },
   "validation": {

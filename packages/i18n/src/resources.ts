@@ -8,8 +8,10 @@ import en_auth from "./locales/en/auth.json";
 import en_developer from "./locales/en/developer.json";
 import en_feedback from "./locales/en/feedback.json";
 import en_main from "./locales/en/main.json";
+import en_privacy from "./locales/en/privacy.json";
 import en_storage from "./locales/en/storage.json";
 import en_store from "./locales/en/store.json";
+import en_telemetry from "./locales/en/telemetry.json";
 import en_translation from "./locales/en/translation.json";
 import ja_account from "./locales/ja/account.json";
 import ja_admin from "./locales/ja/admin.json";
@@ -18,8 +20,10 @@ import ja_auth from "./locales/ja/auth.json";
 import ja_developer from "./locales/ja/developer.json";
 import ja_feedback from "./locales/ja/feedback.json";
 import ja_main from "./locales/ja/main.json";
+import ja_privacy from "./locales/ja/privacy.json";
 import ja_storage from "./locales/ja/storage.json";
 import ja_store from "./locales/ja/store.json";
+import ja_telemetry from "./locales/ja/telemetry.json";
 import ja_translation from "./locales/ja/translation.json";
 
 export const resources = {
@@ -31,8 +35,10 @@ export const resources = {
     developer: en_developer,
     feedback: en_feedback,
     main: en_main,
+    privacy: en_privacy,
     storage: en_storage,
     store: en_store,
+    telemetry: en_telemetry,
     translation: en_translation,
   },
   ja: {
@@ -43,8 +49,10 @@ export const resources = {
     developer: ja_developer,
     feedback: ja_feedback,
     main: ja_main,
+    privacy: ja_privacy,
     storage: ja_storage,
     store: ja_store,
+    telemetry: ja_telemetry,
     translation: ja_translation,
   },
 } as const;

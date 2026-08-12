@@ -7,8 +7,8 @@ import { contentPath } from "@/lib/content-url";
 import {
   deleteDevPackage,
   getPackagePublishedByIdOrThrow,
+  PackageFileConflictError,
   retrieveDevPackageByName,
-  retrieveDevPackageDependsFile,
   retrieveDevPackageIconFile,
   updateDevPackageDescription,
   updateDevPackageDisplay,
@@ -17,7 +17,8 @@ import {
   updateDevPackageTags,
 } from "@beutl/db";
 import {
-  deleteStorageFile,
+  abandonPendingStorageFile,
+  drainStorageCleanup,
 } from "@/lib/storage";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
@@ -131,15 +132,8 @@ export async function deletePackage(id: string): Promise<ActionResult> {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     return await sameUser(id, session.user.id, t, async () => {
-      const files = await retrieveDevPackageDependsFile({ packageId: id });
       await deleteDevPackage({ packageId: id });
-      const promises = files.map(async (file) => {
-        await deleteStorageFile({
-          fileId: file.id,
-        });
-      });
-
-      await Promise.all(promises);
+      await drainStorageCleanup();
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.deletePackage,
@@ -212,16 +206,27 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
         };
       }
 
-      if (iconFile) {
-        await deleteStorageFile({
-          fileId: iconFile.id,
-        });
+      if (!result.record) {
+        throw new Error("The uploaded icon file record is missing.");
       }
-
-      const { name } = await updateDevPackageIconFile({
-        packageId: id,
-        fileId: result.record!.id,
-      });
+      let name: string;
+      try {
+        ({ name } = await updateDevPackageIconFile({
+          packageId: id,
+          fileId: result.record.id,
+          expectedFileId: iconFile?.id ?? null,
+        }));
+      } catch (error) {
+        await abandonPendingStorageFile({ fileId: result.record.id });
+        if (error instanceof PackageFileConflictError) {
+          return {
+            success: false,
+            message: t("developer:errors.fileConflict"),
+          };
+        }
+        throw error;
+      }
+      await drainStorageCleanup();
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,

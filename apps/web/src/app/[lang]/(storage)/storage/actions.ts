@@ -5,10 +5,9 @@ import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { createStorageFile, drainStorageCleanup } from "@/lib/storage";
 import {
-  createFile,
-  deleteFile as deleteFileRecord,
+  enqueueFilesCleanup,
   retrieveFileNamesAndSizesByUserId,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
@@ -36,15 +35,16 @@ export async function deleteFile(ids: string[]): Promise<ActionResult> {
       };
     }
 
-    const promises = files.map(async (file) => {
-      await deleteFileRecord({
-        fileId: file.id,
-      });
-
-      const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-      await bucket.delete(file.objectKey);
+    const queued = await enqueueFilesCleanup({
+      fileIds: files.map((file) => file.id),
     });
-    await Promise.all(promises);
+    if (!queued) {
+      return {
+        success: false,
+        message: t("storage:cannotDeleteFileInUse"),
+      };
+    }
+    await drainStorageCleanup();
 
     revalidatePath(`/${lang}/storage`);
     return {
@@ -128,25 +128,8 @@ export async function uploadFile(formData: FormData): Promise<ActionResult> {
       };
     }
 
-    let filename = file.name;
-    const ext = file.name.split(".").pop();
-    for (let i = 1; files.some((f) => f.name === filename); i++) {
-      filename = ext
-        ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-        : `${file.name} (${i})`;
-    }
-
-    const objectKey = crypto.randomUUID();
-    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-    bucket.put(
-      objectKey,
-      await file.arrayBuffer(),
-    );
-    await createFile({
-      objectKey,
-      name: filename,
-      size: file.size,
-      mimeType: file.type,
+    await createStorageFile({
+      file,
       userId: session.user.id,
       visibility: "PRIVATE",
     });

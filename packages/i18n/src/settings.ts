@@ -12,6 +12,8 @@ export const namespaces = [
   "feedback",
   "developer",
   "admin",
+  "privacy",
+  "telemetry",
 ];
 
 export function getOptions(lng = defaultLanguage) {

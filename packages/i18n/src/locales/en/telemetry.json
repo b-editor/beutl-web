@@ -1,0 +1,42 @@
+{
+  "title": "Telemetry Policy",
+  "intro": "This policy describes telemetry from the Beutl desktop application. It is for improving product reliability and understanding observed use of active installations; it is not an in-app analytics screen.",
+  "activeInstallations": {
+    "title": "Active installations",
+    "body": "An active installation is a random installation identifier that successfully sends an app.session.start event during the selected UTC period. Offline activity is not reconstructed, so dashboards describe observed use rather than all use."
+  },
+  "identifiers": {
+    "title": "Identifiers",
+    "body": "When Usage Analytics is enabled, Beutl stores a random installation UUID and the first-seen month locally. They are not derived from an account, device, machine, project, or command line. A new random session UUID is created for each process; PackageTools may inherit only that session UUID for its child process."
+  },
+  "collected": {
+    "title": "What Usage Analytics collects",
+    "intro": "Usage Analytics records fixed semantic product events and low-cardinality quality measurements, not raw input.",
+    "sessions": "Successful application session starts and ends.",
+    "journey": "Project create, open, save, asset add, first edit, first preview frame, playback summaries, media export, package export, extension lifecycle, and aggregated Agent lifecycle summaries.",
+    "quality": "Bucketed durations, outcomes, error codes, renderer, operating-system family, architecture, release channel, and coarse counts or dimensions needed to assess reliability and performance.",
+    "aggregation": "Editing, playback, and Agent tool activity are counted in memory and summarized at most every five minutes and at normal process exit."
+  },
+  "notCollected": {
+    "title": "What Usage Analytics does not collect",
+    "paths": "Paths, URIs, project names or contents, media names, search terms, prompts, tool arguments or results, and property values.",
+    "identity": "Email addresses, account identifiers, machine identifiers, or identifiers derived from them.",
+    "diagnostics": "Detailed application logs, arbitrary messages, exception messages, and stack traces always remain in local files. If operational diagnostics are enabled under their separate consent, remote diagnostics contain only fixed allowlisted attributes such as component, error code, outcome, and an approved exception classification; they never contain those local details."
+  },
+  "marketplace": {
+    "title": "Marketplace extension identifiers",
+    "body": "A trusted Marketplace extension feature ID has the fixed form `extension/<public-marketplace-package-id>/<kind>/<key>` and contains the public Marketplace package ID plus the validated manifest kind and key. It is available only from a validated, approved manifest included with the exact published package. Sideloaded, local, legacy, unverified, mismatched, or invalid packages are recorded only as a generic category: no package ID or CLR type name is sent."
+  },
+  "storage": {
+    "title": "Storage and retention",
+    "raw": "Product journey spans are stored in ClickHouse for up to 90 days. ClickHouse is the raw product-event store, not a user profile database.",
+    "aggregates": "Grafana visualizes numeric aggregate views. Aggregates retain counts, rates, and percentiles without installation or session identifiers for up to 13 months. Low-cardinality quality metrics have the same 13-month retention target.",
+    "diagnostics": "Existing separately enabled operational traces and structured diagnostics are kept in Tempo and Loki for up to 90 days. Installation and session identifiers are removed from Tempo, Loki, and Prometheus-compatible metrics."
+  },
+  "choice": {
+    "title": "Your choice",
+    "optOut": "You can change Usage Analytics independently in Beutl settings. Turning it off immediately stops future product-event and quality-metric export, discards in-memory data, and removes the local installation identifier.",
+    "reset": "Resetting the identifier after confirmation removes the local identifier. The next eligible event creates a new unrelated random identifier.",
+    "history": "Opting out or resetting does not offer an immediate deletion API for already received data. Earlier raw events expire within 90 days, while identifier-free aggregates can remain for up to 13 months."
+  }
+}

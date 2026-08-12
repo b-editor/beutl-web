@@ -1,6 +1,20 @@
 import { getDb } from "./provider";
 import type { PaymentInterval } from "@prisma/client";
-import type { PrismaTransaction } from "./transaction";
+import {
+  startRetryableTransaction,
+  type PrismaTransaction,
+} from "./transaction";
+import {
+  claimPendingStorageFileReference,
+  enqueueFileCleanupIfUnreferenced,
+} from "./storage-cleanup";
+
+export class PackageFileConflictError extends Error {
+  constructor() {
+    super("The package file reference changed concurrently.");
+    this.name = "PackageFileConflictError";
+  }
+}
 
 export async function findPackageIdById({
   id,
@@ -568,74 +582,35 @@ export async function updateDevPackagePublished({
 export async function updateDevPackageIconFile({
   packageId,
   fileId,
+  expectedFileId,
   prisma,
 }: {
   packageId: string;
   fileId: string;
+  expectedFileId: string | null;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      iconFileId: fileId,
-    },
-    select: {
-      name: true,
-    },
-  });
-}
-
-export async function retrieveDevPackageDependsFile({
-  packageId,
-  prisma,
-}: {
-  packageId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  const pkg = await db.package.findFirstOrThrow({
-    where: {
-      id: packageId,
-    },
-    select: {
-      PackageScreenshot: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
-        },
-      },
-      iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-        },
-      },
-      Release: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
-        },
-      },
-    },
-  });
-  const files = pkg.PackageScreenshot.map((item) => item.file).concat(
-    pkg.Release.map((item) => item.file as NonNullable<typeof item.file>),
-  );
-  if (pkg.iconFile) {
-    files.push(pkg.iconFile);
-  }
-  return files;
+  const replace = async (tx: PrismaTransaction) => {
+    const changed = await tx.package.updateMany({
+      where: { id: packageId, iconFileId: expectedFileId },
+      data: { iconFileId: fileId },
+    });
+    if (changed.count !== 1) throw new PackageFileConflictError();
+    await claimPendingStorageFileReference({ fileId, prisma: tx });
+    if (expectedFileId) {
+      await enqueueFileCleanupIfUnreferenced({
+        fileId: expectedFileId,
+        prisma: tx,
+      });
+    }
+    return await tx.package.findUniqueOrThrow({
+      where: { id: packageId },
+      select: { name: true },
+    });
+  };
+  return prisma
+    ? await replace(prisma)
+    : await startRetryableTransaction(replace);
 }
 
 export async function retrieveDevPackageIconFile({
@@ -717,14 +692,16 @@ export async function createDevPackageScreenshot({
   order: number;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.packageScreenshot.create({
-    data: {
-      packageId: packageId,
-      fileId: fileId,
-      order: order,
-    },
-  });
+  const create = async (tx: PrismaTransaction) => {
+    const screenshot = await tx.packageScreenshot.create({
+      data: { packageId, fileId, order },
+    });
+    await claimPendingStorageFileReference({ fileId, prisma: tx });
+    return screenshot;
+  };
+  return prisma
+    ? await create(prisma)
+    : await startRetryableTransaction(create);
 }
 
 export async function updateDevPackageScreenshotOrder({
@@ -784,15 +761,16 @@ export async function deleteDevPackageScreenshot({
   fileId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.packageScreenshot.delete({
-    where: {
-      packageId_fileId: {
-        packageId: packageId,
-        fileId: fileId,
-      },
-    },
-  });
+  const remove = async (tx: PrismaTransaction) => {
+    const screenshot = await tx.packageScreenshot.delete({
+      where: { packageId_fileId: { packageId, fileId } },
+    });
+    await enqueueFileCleanupIfUnreferenced({ fileId, prisma: tx });
+    return screenshot;
+  };
+  return prisma
+    ? await remove(prisma)
+    : await startRetryableTransaction(remove);
 }
 
 export async function deleteDevPackage({
@@ -802,12 +780,30 @@ export async function deleteDevPackage({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.package.delete({
-    where: {
-      id: packageId,
-    },
-  });
+  const remove = async (tx: PrismaTransaction) => {
+    const pkg = await tx.package.findUniqueOrThrow({
+      where: { id: packageId },
+      select: {
+        iconFileId: true,
+        PackageScreenshot: { select: { fileId: true } },
+        Release: { select: { fileId: true } },
+      },
+    });
+    const deleted = await tx.package.delete({ where: { id: packageId } });
+    const fileIds = new Set<string>();
+    if (pkg.iconFileId) fileIds.add(pkg.iconFileId);
+    for (const item of pkg.PackageScreenshot) fileIds.add(item.fileId);
+    for (const item of pkg.Release) {
+      if (item.fileId) fileIds.add(item.fileId);
+    }
+    for (const fileId of fileIds) {
+      await enqueueFileCleanupIfUnreferenced({ fileId, prisma: tx });
+    }
+    return deleted;
+  };
+  return prisma
+    ? await remove(prisma)
+    : await startRetryableTransaction(remove);
 }
 
 export async function upsertPackagePricings({

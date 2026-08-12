@@ -1,5 +1,9 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import {
+  startRetryableTransaction,
+  type PrismaTransaction,
+} from "./transaction";
+import { storageCleanupReasons } from "./storage-cleanup";
 
 export async function findUserForLibrary({
   id: userId,
@@ -120,12 +124,33 @@ export async function deleteUserById({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  await db.user.delete({
-    where: {
-      id: userId,
+  const remove = async (tx: PrismaTransaction) => {
+    const files = await tx.file.findMany({
+      where: { userId },
+      select: { id: true, objectKey: true },
+    });
+    for (const file of files) {
+      await tx.storageCleanup.upsert({
+        where: { objectKey: file.objectKey },
+        create: {
+          id: crypto.randomUUID(),
+          fileId: file.id,
+          objectKey: file.objectKey,
+          reason: storageCleanupReasons.userDeletion,
+          availableAt: new Date(),
+        },
+        update: {
+          fileId: file.id,
+          reason: storageCleanupReasons.userDeletion,
+          availableAt: new Date(),
+        },
+      });
     }
-  });
+    await tx.user.delete({ where: { id: userId } });
+  };
+  return prisma
+    ? await remove(prisma)
+    : await startRetryableTransaction(remove);
 }
 
 export async function listUsers({

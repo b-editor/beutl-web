@@ -101,6 +101,8 @@ export async function findFileForApi({
       Release: {
         select: {
           published: true,
+          packageSha256: true,
+          approvedAnalyticsManifestSha256: true,
           package: {
             select: {
               id: true,
@@ -131,54 +133,6 @@ export async function retrieveFilesByUserId({
   return await db.file.findMany({
     where: {
       userId: userId,
-    },
-  });
-}
-
-export async function createFile({
-  userId,
-  name,
-  objectKey,
-  size,
-  mimeType,
-  visibility,
-  prisma,
-  sha256,
-}: {
-  userId: string;
-  name: string;
-  objectKey: string;
-  size: number;
-  mimeType: string;
-  visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
-  prisma?: PrismaTransaction;
-  sha256?: string;
-}) {
-  const db = prisma || await getDb();
-  return await db.file.create({
-    data: {
-      objectKey,
-      name,
-      size,
-      mimeType,
-      userId,
-      visibility,
-      sha256,
-    },
-  });
-}
-
-export async function deleteFile({
-  fileId,
-  prisma,
-}: {
-  fileId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return await db.file.delete({
-    where: {
-      id: fileId,
     },
   });
 }

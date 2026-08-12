@@ -7,22 +7,30 @@ import { setDbProvider } from "@beutl/db";
 // Hyperdrive の per-request 接続モデル (maxUses:1) に合わせ、毎リクエスト新規生成する。
 // NOTE: モジュールロード時に即座に PrismaClient を生成しない (Cloudflare の
 // getCloudflareContext はリクエストコンテキストでのみ利用可能なため遅延実行する)。
-const createPrismaClient = async () => {
-  const { env } = await getCloudflareContext({ async: true });
+type DatabaseEnvironment = Pick<
+  CloudflareEnv,
+  "BEUTL_DATABASE_HYPERDRIVE"
+>;
 
-  if (!env.BEUTL_DATABASE_HYPERDRIVE) {
-    throw new Error("BEUTL_DATABASE_HYPERDRIVE binding not found");
-  }
+export function configurePrismaProvider(suppliedEnv?: DatabaseEnvironment): void {
+  setDbProvider(async () => {
+    const env = suppliedEnv ??
+      (await getCloudflareContext({ async: true })).env;
 
-  const connectionString = env.BEUTL_DATABASE_HYPERDRIVE.connectionString;
-  if (!connectionString) {
-    throw new Error("Hyperdrive connection string not available");
-  }
+    if (!env.BEUTL_DATABASE_HYPERDRIVE) {
+      throw new Error("BEUTL_DATABASE_HYPERDRIVE binding not found");
+    }
 
-  const adapter = new PrismaPg({ connectionString, maxUses: 1 });
-  return new PrismaClient({ adapter });
-};
+    const connectionString = env.BEUTL_DATABASE_HYPERDRIVE.connectionString;
+    if (!connectionString) {
+      throw new Error("Hyperdrive connection string not available");
+    }
 
-setDbProvider(createPrismaClient);
+    const adapter = new PrismaPg({ connectionString, maxUses: 1 });
+    return new PrismaClient({ adapter });
+  });
+}
+
+configurePrismaProvider();
 
 export type { PrismaClient };

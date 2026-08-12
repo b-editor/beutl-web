@@ -4,6 +4,7 @@ import { apiErrorResponse } from "../api/error";
 import { getContentUrl } from "../content-url";
 import { resolveContentAccess } from "@beutl/core";
 import { existsUserPaymentHistory, findFileForApi } from "@beutl/db";
+import { resolveFileApprovedAnalyticsManifestSha256 } from "./release-response";
 
 const app = new Hono().get("/:id", async (c) => {
   c.header("Cache-Control", "no-store");
@@ -42,6 +43,8 @@ const app = new Hono().get("/:id", async (c) => {
     downloadUrl: await getContentUrl(file.id, c.req.raw),
     size: Number(file.size),
     sha256: file.sha256,
+    approvedAnalyticsManifestSha256:
+      resolveFileApprovedAnalyticsManifestSha256(file.sha256, file.Release),
   });
 });
 

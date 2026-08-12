@@ -14,6 +14,7 @@ export * from "./passkey";
 export * from "./profile";
 export * from "./release";
 export * from "./session";
+export * from "./storage-cleanup";
 export * from "./user-package";
 export * from "./user-payment-history";
 export * from "./user";

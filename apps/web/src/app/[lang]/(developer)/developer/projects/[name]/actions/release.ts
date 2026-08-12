@@ -8,15 +8,22 @@ import {
 } from "@beutl/db";
 import {
   createRelease as createReleaseRecord,
-  deleteReleaseById,
+  deleteReleaseAndEnqueueArtifact,
   getReleasePackageAndFileId,
-  getReleasePublishedByIdOrThrow,
   getReleaseWithFileById,
-  updateRelease as updateReleaseRecord,
+  ReleaseArtifactConflictError,
+  replaceReleaseArtifact,
+  updateReleaseMetadata,
 } from "@beutl/db";
 import {
-  deleteStorageFile,
+  abandonPendingStorageFile,
+  drainStorageCleanup,
 } from "@/lib/storage";
+import {
+  inspectPackageAnalyticsManifest,
+  PackageAnalyticsManifestError,
+} from "@/lib/analytics-manifest";
+import { publishReleaseArtifactReplacement } from "@/lib/release-artifact-publication";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
@@ -55,8 +62,27 @@ export async function updateRelease(
     }
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      let fileId = release.file?.id;
+      let approvedAnalyticsManifestSha256: string | null = null;
+      let uploadedFile:
+        | Readonly<{
+          id: string;
+          sha256: string | null;
+        }>
+        | undefined;
       if (validated.data.file) {
+        try {
+          approvedAnalyticsManifestSha256 =
+            await inspectPackageAnalyticsManifest(validated.data.file as File);
+        } catch (error) {
+          if (error instanceof PackageAnalyticsManifestError) {
+            return {
+              success: false,
+              message: t("developer:errors.analyticsManifestInvalid"),
+            };
+          }
+          throw error;
+        }
+
         const deletedSize = release.file
           ? BigInt(release.file.size)
           : BigInt(0);
@@ -73,25 +99,59 @@ export async function updateRelease(
           };
         }
 
-        if (release.file) {
-          await deleteStorageFile({
-            fileId: release.file.id,
-          });
+        if (!result.record) {
+          throw new Error("The uploaded file record is missing.");
         }
-        fileId = result.record!.id;
+        uploadedFile = result.record;
       }
 
-      const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
-        id: validated.data.id,
-      });
-      const data = await updateReleaseRecord({
-        id: validated.data.id,
+      const oldPublished = release.published;
+      const metadata = {
         title: validated.data.title,
         description: validated.data.description,
         targetVersion: validated.data.targetVersion,
         published: validated.data.published === "on",
-        fileId: fileId,
-      });
+      };
+      let data: ReleaseRecord;
+      if (uploadedFile) {
+        try {
+          data = await publishReleaseArtifactReplacement({
+            replace: async () => {
+              if (!uploadedFile.sha256) {
+                throw new Error("The uploaded package digest is missing.");
+              }
+
+              return await replaceReleaseArtifact({
+                id: validated.data.id,
+                expectedFileId: release.fileId,
+                metadata,
+                artifact: {
+                  fileId: uploadedFile.id,
+                  packageSha256: uploadedFile.sha256,
+                  approvedAnalyticsManifestSha256,
+                },
+              });
+            },
+            abandon: async () =>
+              await abandonPendingStorageFile({ fileId: uploadedFile.id }),
+            drain: drainStorageCleanup,
+          });
+        } catch (error) {
+          if (error instanceof ReleaseArtifactConflictError) {
+            return {
+              success: false,
+              message: t("developer:errors.releaseConflict"),
+            };
+          }
+          throw error;
+        }
+      } else {
+        data = await updateReleaseMetadata({
+          id: validated.data.id,
+          ...metadata,
+        });
+      }
+
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updateRelease,
@@ -107,7 +167,9 @@ export async function updateRelease(
         });
       }
 
-      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+      const name = await getPackageNameFromPackageId({
+        packageId: release.packageId,
+      });
       revalidatePath(`/${lang}/developer/projects/${name}`);
 
       return {
@@ -175,14 +237,21 @@ export async function deleteRelease({
       };
     }
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      if (release.fileId) {
-        await deleteStorageFile({
-          fileId: release.fileId,
+      try {
+        await deleteReleaseAndEnqueueArtifact({
+          id: releaseId,
+          expectedFileId: release.fileId,
         });
+      } catch (error) {
+        if (error instanceof ReleaseArtifactConflictError) {
+          return {
+            success: false,
+            message: t("developer:errors.releaseConflict"),
+          };
+        }
+        throw error;
       }
-      await deleteReleaseById({
-        id: releaseId,
-      });
+      await drainStorageCleanup();
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.deleteRelease,

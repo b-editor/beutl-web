@@ -1,0 +1,42 @@
+{
+  "title": "Privacy Policy",
+  "intro": "This policy covers the Beutl website, Marketplace, and the desktop application's Usage Analytics. The site processes the account and transaction data needed to provide those services; Usage Analytics is separate from account data.",
+  "account": {
+    "title": "Account and Marketplace information",
+    "body": "We process the information you provide for an account, profile, extension publication, purchases, support, and security. That information is used to operate the service, prevent abuse, provide support, and meet legal obligations."
+  },
+  "usageAnalytics": {
+    "title": "Desktop Usage Analytics",
+    "body": "Usage Analytics is optional and independent from account use. When enabled, it uses a random local installation UUID, a process session UUID, and a first-seen month. It records only fixed semantic product events and low-cardinality quality measurements.",
+    "noAccountLink": "The installation identifier is not derived from, or joined to, your account, device, machine, project, or command line."
+  },
+  "marketplace": {
+    "title": "Marketplace extension analytics",
+    "body": "Only a trusted static feature identifier from a verified public Marketplace package may be included in Usage Analytics. Its fixed form is `extension/<public-marketplace-package-id>/<kind>/<key>`, including the public Marketplace package ID and its validated manifest kind and key. Local, sideloaded, legacy, unverified, mismatched, and invalid packages are represented only as generic categories: no package ID or CLR type name is sent."
+  },
+  "notCollected": {
+    "title": "Excluded content",
+    "body": "Usage Analytics excludes paths, URIs, project and media names or contents, search terms, prompts, tool arguments and results, property values, email addresses, account identifiers, and machine identifiers. Detailed application logs, arbitrary messages, exception messages, and stack traces always remain in local files. Separately consented remote operational diagnostics contain only fixed allowlisted attributes such as component, error code, outcome, and an approved exception classification."
+  },
+  "retention": {
+    "title": "Analytics storage and retention",
+    "raw": "Raw product journey spans are stored in ClickHouse for up to 90 days. ClickHouse is limited to product-event processing.",
+    "aggregate": "Grafana reads aggregate numeric views for operational dashboards. Those views retain no installation or session identifiers and can be retained for up to 13 months."
+  },
+  "control": {
+    "title": "Controls",
+    "body": "You can opt out of Usage Analytics or reset its local identifier in Beutl settings. Opting out stops future export and deletes the local identifier. Resetting creates a new unrelated identifier on a future eligible event. These controls do not delete data already received immediately: raw data expires within 90 days and identifier-free aggregates can remain for up to 13 months."
+  },
+  "sharing": {
+    "title": "Sharing and security",
+    "body": "We do not sell personal information. We limit sharing to service providers needed to operate the service, legal requirements, and situations where you have given consent. We use reasonable technical and organizational safeguards, but no online system can guarantee absolute security."
+  },
+  "contact": {
+    "title": "Contact",
+    "body": "For privacy questions or requests, contact contact@beditor.net."
+  },
+  "changes": {
+    "title": "Changes to this policy",
+    "body": "We may update this policy when the service or its legal requirements change. Unless stated otherwise, updates take effect when published on this page."
+  }
+}

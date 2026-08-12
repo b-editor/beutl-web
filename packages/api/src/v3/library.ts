@@ -14,6 +14,7 @@ import {
 } from "@beutl/db";
 import { findReleaseForLibrary } from "@beutl/db";
 import { findUserForLibrary } from "@beutl/db";
+import { toMarketplaceReleaseResponse } from "./release-response";
 import {
   createUserPackage,
   deleteUserPackagesByUserAndPackageName,
@@ -77,15 +78,7 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
       },
     },
     latestRelease: latestRelease
-      ? {
-        id: latestRelease.id,
-        version: latestRelease.version,
-        title: latestRelease.title,
-        description: latestRelease.description,
-        targetVersion: latestRelease.targetVersion,
-        fileId: latestRelease.fileId,
-        fileUrl: await getContentUrl(latestRelease.fileId, request),
-      }
+      ? await toMarketplaceReleaseResponse(latestRelease, request)
       : null,
   };
 }

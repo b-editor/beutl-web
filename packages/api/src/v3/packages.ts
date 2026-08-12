@@ -3,10 +3,10 @@ import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import { guessCurrency } from "../currency";
 import { getPackage, mapPackage } from "../api/packages-db";
-import { getContentUrl } from "../content-url";
 import { findPackageBasicByName } from "@beutl/db";
 import { findReleaseByPackageAndVersion, findReleasesForPackage } from "@beutl/db";
 import { SemVer } from "semver";
+import { toMarketplaceReleaseResponse } from "./release-response";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -60,17 +60,13 @@ const app = new Hono()
       return new SemVer(b.version).compare(a.version);
     });
 
-    return c.json(await Promise.all(
-      releases.map(async (r) => ({
-        id: r.id,
-        version: r.version,
-        title: r.title,
-        description: r.description,
-        targetVersion: r.targetVersion,
-        fileId: r.fileId,
-        fileUrl: await getContentUrl(r.fileId, c.req.raw),
-      })),
-    ));
+    return c.json(
+      await Promise.all(
+        releases.map(async (release) =>
+          await toMarketplaceReleaseResponse(release, c.req.raw),
+        ),
+      ),
+    );
   })
   .get("/:name/releases/:version", async (c) => {
     const name = c.req.param("name");
@@ -100,15 +96,7 @@ const app = new Hono()
       });
     }
 
-    return c.json({
-      id: release.id,
-      version: release.version,
-      title: release.title,
-      description: release.description,
-      targetVersion: release.targetVersion,
-      fileId: release.fileId,
-      fileUrl: await getContentUrl(release.fileId, c.req.raw),
-    });
+    return c.json(await toMarketplaceReleaseResponse(release, c.req.raw));
   });
 
 export default app;

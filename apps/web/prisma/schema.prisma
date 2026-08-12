@@ -178,6 +178,25 @@ model File {
   @@index([userId])
 }
 
+// Durable R2 deletion outbox. fileId is intentionally not a foreign key:
+// uploads reserve an object key here before the File row exists.
+model StorageCleanup {
+  id             String    @id @default(uuid())
+  objectKey      String    @unique
+  fileId         String?
+  reason         String
+  availableAt    DateTime
+  leaseId        String?
+  leaseExpiresAt DateTime?
+  attempts       Int       @default(0)
+  lastErrorCode  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([availableAt, leaseExpiresAt])
+  @@index([fileId])
+}
+
 model Package {
   id                String              @id @default(uuid())
   name              String              @unique
@@ -265,18 +284,20 @@ model UserPackage {
 }
 
 model Release {
-  id            String         @id @default(uuid())
-  packageId     String
-  version       String
-  targetVersion String
-  title         String
-  description   String
-  fileId        String?
-  published     Boolean
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  file          File?          @relation(fields: [fileId], references: [id])
-  package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  id                              String   @id @default(uuid())
+  packageId                       String
+  version                         String
+  targetVersion                   String
+  title                           String
+  description                     String
+  fileId                          String?
+  packageSha256                   String?
+  approvedAnalyticsManifestSha256 String?
+  published                       Boolean
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
+  file                            File?    @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  package                         Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@index([packageId])
 }

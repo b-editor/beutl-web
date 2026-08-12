@@ -27,10 +27,13 @@
     "displayNamePlaceholder": "表示名 (空白の場合IDが表示されます)"
   },
   "errors": {
+    "analyticsManifestInvalid": "パッケージの分析機能マニフェストが不正です。",
+    "fileConflict": "別のリクエストによってこのファイルが変更されました。再読み込みしてからもう一度お試しください。",
     "fileNotFound": "ファイルが見つかりません",
     "idNotFound": "IDが見つかりません",
     "invalidInput": "入力内容に誤りがあります",
     "noPermission": "権限がありません",
+    "releaseConflict": "別のリクエストによってこのリリースが変更されました。再読み込みしてからもう一度お試しください。",
     "storageFull": "ストレージ容量が足りません"
   },
   "validation": {

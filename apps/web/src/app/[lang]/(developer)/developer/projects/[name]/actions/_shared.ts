@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getUserIdFromPackageId } from "@beutl/db";
-import type { updateRelease as updateReleaseRecord } from "@beutl/db";
+import type { updateReleaseMetadata } from "@beutl/db";
 import { isValidNuGetVersionRange } from "@beutl/core";
 import {
   calcTotalFileSize,
@@ -19,7 +19,7 @@ export type State = {
   success?: boolean;
   message?: string | null;
 };
-type ReleaseRecord = Awaited<ReturnType<typeof updateReleaseRecord>>;
+type ReleaseRecord = Awaited<ReturnType<typeof updateReleaseMetadata>>;
 
 const displayNameAndShortDescriptionSchema = (t: Translator) =>
   z.object({
@@ -95,6 +95,7 @@ async function createDedicatedFile(
     file,
     visibility: "DEDICATED",
     userId,
+    pendingReference: true,
   });
 
   return {

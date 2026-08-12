@@ -18,3 +18,18 @@ export type {
   ContentAccessFile,
   ContentAccessResult,
 } from "./content-access";
+export {
+  analyticsManifestV1MaxBytes,
+  analyticsManifestV1MaxFeatures,
+  analyticsManifestV1MaxTypeIdentifierCharacters,
+  analyticsManifestV1MaxTypesPerFeature,
+  analyticsManifestV1Path,
+  AnalyticsManifestValidationError,
+  parseAnalyticsManifestV1,
+  parseAnalyticsManifestV1Json,
+} from "./analytics-manifest";
+export type {
+  AnalyticsManifestFeatureV1,
+  AnalyticsManifestTypeV1,
+  AnalyticsManifestV1,
+} from "./analytics-manifest";

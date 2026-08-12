@@ -30,6 +30,8 @@ type FileRecord = {
   }>;
   Release: Array<{
     published: boolean;
+    packageSha256?: string | null;
+    approvedAnalyticsManifestSha256?: string | null;
     package: {
       id: string;
       userId: string;
@@ -105,6 +107,36 @@ describe("v3 file metadata access", () => {
       downloadUrl: "http://localhost/api/contents/file-1",
       size: 42,
       sha256: "abc123",
+      approvedAnalyticsManifestSha256: null,
+    });
+  });
+
+  it("exposes a manifest approval only for an unambiguous approved release", async () => {
+    dbMocks.findFileForApi.mockResolvedValue(
+      fileRecord({
+        visibility: "DEDICATED",
+        Release: [
+          {
+            published: true,
+            packageSha256: "abc123",
+            approvedAnalyticsManifestSha256: "approved-manifest-sha256",
+            package: {
+              id: "package-1",
+              userId: OWNER_ID,
+              published: true,
+              packagePricing: [],
+            },
+          },
+        ],
+      }),
+    );
+
+    const response = await requestFile();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      sha256: "abc123",
+      approvedAnalyticsManifestSha256: "approved-manifest-sha256",
     });
   });
 

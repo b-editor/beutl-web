@@ -37,6 +37,7 @@
     "better-auth": "^1.6.26",
     "country-to-currency": "^2.0.2",
     "embla-carousel-react": "^8.5.2",
+    "fflate": "0.8.2",
     "framer-motion": "^12.34.3",
     "hono": "^4.13.0",
     "jose": "^6.1.3",
