@@ -141,10 +141,6 @@ export async function updateRelease(
         fileId = result.record!.id;
       }
 
-      if (tags) {
-        await updateDevPackageTags({ packageId: release.packageId, tags });
-      }
-
       const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
         id: validated.data.id,
       });
@@ -156,6 +152,13 @@ export async function updateRelease(
         published: validated.data.published === "on",
         fileId: fileId,
       });
+
+      // The tags describe the artifact the release now points at, so they follow the
+      // release update — writing them first would reclassify the package in the store
+      // while users still download the previous payload.
+      if (tags) {
+        await updateDevPackageTags({ packageId: release.packageId, tags });
+      }
 
       if (replacedFileId) {
         await deleteStorageFile({ fileId: replacedFileId });
