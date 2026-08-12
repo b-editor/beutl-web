@@ -26,6 +26,8 @@
   },
   "devDependencies": {
     "fflate": "^0.8.3",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
     "hono": "^4.13.0",
     "vitest": "^4.1.10"
   },

@@ -7,7 +7,10 @@ import { tryGetUserIdFromHeaders } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/lib/better-auth";
-import { contentCacheHeaders } from "@/lib/content-cache";
+import {
+  contentCacheHeaders,
+  contentDeliveryHeaders,
+} from "@/lib/content-cache";
 
 export async function GET(
   request: NextRequest,
@@ -58,8 +61,8 @@ export async function GET(
 
     return new NextResponse(object.body, {
       headers: {
-        "Content-Type": file.mimeType || "application/octet-stream",
         "Content-Length": object.size.toString(),
+        ...contentDeliveryHeaders(file.mimeType),
         ...contentCacheHeaders(access.canUsePublicCache),
       },
       status: 200,

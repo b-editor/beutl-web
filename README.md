@@ -79,3 +79,46 @@ Access is restricted to the user IDs in `ADMIN_USER_IDS`.
 Note: adding a `Domain` attribute to previously host-only cookies creates a separate
 cookie entry in the browser. Both may be sent together during rollout, so existing
 session cookies should be explicitly expired when enabling this.
+
+### Paid AI configuration
+
+The Web Worker requires `STRIPE_PRO_PRICE_ID` for the monthly Pro subscription,
+`STRIPE_CREDIT_PRICE_ID` for the one-time 500-unit top-up, and an explicit
+`STRIPE_BILLING_PORTAL_CONFIGURATION_ID` whose configuration disables
+subscription price switching and cancels at period end. Rotated Pro offers must
+be listed as immutable `priceId:productId` pairs in
+`STRIPE_PRO_HISTORICAL_OFFERS`; they are never learned from a customer-edited
+subscription. The API Worker
+requires `OPENROUTER_WEBHOOK_SECRET` as a Cloudflare secret so ambiguous video
+submissions can be reconciled through signed provider callbacks. It also
+requires `OPENROUTER_API_KEY` as a Wrangler secret. Provider calls default to a
+120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`. Image,
+image-edit, STT, and video model IDs can be overridden with the optional `OPENROUTER_*_MODEL`
+variables listed in `apps/web/.env.sample`.
+
+Model IDs and per-operation usage-unit prices are also editable at runtime from
+the admin console (`/admin/ai`), which stores them in the `AiSetting` table.
+Each value resolves in the order database → environment variable → built-in
+default, so an empty table keeps the behaviour the environment variables
+describe. Every change is written to the audit log in the same transaction.
+API keys and other secrets are deliberately **not** configurable this way and
+stay in Wrangler secrets. A price change applies only to operations started
+afterwards: each job records the price reserved at its start and is refunded at
+that same price.
+
+The Stripe webhook endpoint must receive these paid-AI lifecycle events:
+
+- `customer.subscription.created`, `customer.subscription.updated`, and
+  `customer.subscription.deleted`
+- `invoice.paid` and `payment_intent.succeeded`
+- `charge.refunded`, `refund.created`, `refund.updated`, and `refund.failed`
+- `charge.dispute.created`, `charge.dispute.updated`,
+  `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, and
+  `charge.dispute.funds_reinstated`
+
+Successful transcription and translation response payloads are stored as
+private AI job outputs for 30 days. The authenticated job detail and history
+endpoints return their content URLs, allowing the desktop app to recover a paid
+result after a lost HTTP response. Subtitle timing context is retained in the
+private translation result but stripped before the text is sent to the AI
+provider.

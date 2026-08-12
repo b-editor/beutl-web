@@ -9,7 +9,7 @@ export async function findFileForContentAccess({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.file.findFirst({
+  const file = await db.file.findFirst({
     where: {
       id: fileId,
     },
@@ -53,8 +53,15 @@ export async function findFileForContentAccess({
           },
         },
       },
+      aiJobResult: {
+        select: { id: true },
+      },
     },
   });
+  if (file?.aiJobResult) {
+    file.visibility = "PRIVATE";
+  }
+  return file;
 }
 
 export async function findFileForApi({
@@ -65,7 +72,7 @@ export async function findFileForApi({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.file.findFirst({
+  const file = await db.file.findFirst({
     where: {
       id: id,
     },
@@ -116,8 +123,15 @@ export async function findFileForApi({
           },
         },
       },
+      aiJobResult: {
+        select: { id: true },
+      },
     },
   });
+  if (file?.aiJobResult) {
+    file.visibility = "PRIVATE";
+  }
+  return file;
 }
 
 export async function retrieveFilesByUserId({
@@ -131,6 +145,7 @@ export async function retrieveFilesByUserId({
   return await db.file.findMany({
     where: {
       userId: userId,
+      aiJobResult: null,
     },
   });
 }
@@ -176,11 +191,25 @@ export async function deleteFile({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
-  return await db.file.delete({
+  const file = await db.file.findFirst({
     where: {
       id: fileId,
+      aiJobResult: null,
     },
   });
+  if (!file) {
+    throw new Error(`Storage file ${fileId} was not found`);
+  }
+  const deleted = await db.file.deleteMany({
+    where: {
+      id: fileId,
+      aiJobResult: null,
+    },
+  });
+  if (deleted.count !== 1) {
+    throw new Error(`Storage file ${fileId} is owned by an AI job`);
+  }
+  return file;
 }
 
 export async function retrieveFilesByIdsAndUserId({
@@ -199,6 +228,7 @@ export async function retrieveFilesByIdsAndUserId({
         in: ids,
       },
       userId,
+      aiJobResult: null,
     },
     select: {
       objectKey: true,
@@ -218,14 +248,19 @@ export async function updateFileVisibility({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.file.update({
+  const result = await db.file.updateMany({
     where: {
       id: fileId,
+      aiJobResult: null,
     },
     data: {
       visibility: visibility,
     },
   });
+  if (result.count !== 1) {
+    throw new Error(`Storage file ${fileId} is owned by an AI job`);
+  }
+  return result;
 }
 
 export async function retrieveFileNamesAndSizesByUserId({
@@ -239,6 +274,7 @@ export async function retrieveFileNamesAndSizesByUserId({
   return await db.file.findMany({
     where: {
       userId,
+      aiJobResult: null,
     },
     select: {
       size: true,
@@ -259,6 +295,7 @@ export async function retrieveStorageFilesByUserId({
   return await db.file.findMany({
     where: {
       userId,
+      aiJobResult: null,
     },
     select: {
       id: true,

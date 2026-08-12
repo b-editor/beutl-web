@@ -46,3 +46,23 @@ export {
   rewriteTemplateReferences,
 } from "./nupkg";
 export type { NupkgFile, NupkgOptions } from "./nupkg";
+export {
+  AI_OPERATIONS,
+  AI_SETTINGS,
+  AI_IMAGE_EDIT_TASKS,
+  MAX_MODEL_ID_LENGTH,
+  MIN_PRICE_UNITS,
+  MAX_PRICE_UNITS,
+  aiModelSettingKey,
+  aiPriceSettingKey,
+  isAiSettingKey,
+  validateAiSettingValue,
+} from "./ai-settings";
+export type {
+  AiImageEditTask,
+  AiOperation,
+  AiSettingDefinition,
+  AiSettingKind,
+  AiSettingValidationError,
+  AiSettingValidationResult,
+} from "./ai-settings";

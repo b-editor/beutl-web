@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
 import { createStripe } from "@/lib/stripe/config";
 import {
   isOwnedPackagePaymentIntent,
@@ -44,7 +44,7 @@ export default async function Page(
     throw new Error("No price found");
   }
 
-  const customerId = await createOrRetrieveCustomerId({
+  const customerId = await createOrRetrieveOwnedCustomerId({
     email: session.user.email as string,
     userId: session.user.id,
   });
@@ -60,8 +60,8 @@ export default async function Page(
     limit: 1,
   });
 
-  const paymentIntent =
-    intents.data.find((intent) =>
+  let paymentIntent = intents.data.find(
+    (intent) =>
       isOwnedPackagePaymentIntent(intent, {
         customerId,
         userId: session.user.id,
@@ -69,18 +69,19 @@ export default async function Page(
         amount: price.price,
         currency: price.currency,
       }),
-    ) ||
-    (await stripe.paymentIntents.create({
-      customer: customerId,
-      setup_future_usage: "off_session",
-      amount: price.price,
-      currency: price.currency,
-      metadata: packagePaymentIntentMetadata(session.user.id, pkg.id),
-      // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
-      automatic_payment_methods: {
-        enabled: true,
-      },
-    }));
+  );
+
+  paymentIntent ??= await stripe.paymentIntents.create({
+    customer: customerId,
+    setup_future_usage: "off_session",
+    amount: price.price,
+    currency: price.currency,
+    metadata: packagePaymentIntentMetadata(session.user.id, pkg.id),
+    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
+    automatic_payment_methods: {
+      enabled: true,
+    },
+  });
 
   const clientSecret = paymentIntent.client_secret;
 

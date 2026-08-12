@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@better-auth/passkey": "^1.6.26",
+    "@beutl/api": "workspace:*",
     "@beutl/ui": "workspace:*",
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",

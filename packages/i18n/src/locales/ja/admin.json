@@ -3,6 +3,7 @@
     "dashboard": "ダッシュボード",
     "users": "ユーザー",
     "feedback": "フィードバック",
+    "ai": "AI",
     "auditLog": "監査ログ",
     "signOut": "サインアウト"
   },
@@ -71,6 +72,34 @@
     "OPEN": "未対応",
     "IN_PROGRESS": "対応中",
     "RESOLVED": "対応済み"
+  },
+  "ai": {
+    "title": "AI 設定",
+    "description": "各 AI 機能が使うモデルと、消費する使用ユニット数を変更します。変更は以降に開始される処理に適用され、実行中のジョブは開始時の単価のまま処理されます。",
+    "model": "モデル",
+    "price": "使用ユニット",
+    "save": "保存",
+    "reset": "既定に戻す",
+    "defaultValue": "既定値",
+    "updateSuccess": "設定を更新しました",
+    "updateFailed": "設定の更新に失敗しました",
+    "resetSuccess": "設定を既定値に戻しました",
+    "source": {
+      "database": "この画面で設定",
+      "environment": "環境変数",
+      "default": "組み込みの既定値"
+    },
+    "operation": {
+      "image.generate": "画像生成",
+      "image.edit.remove_background": "画像編集: 背景除去",
+      "image.edit.upscale": "画像編集: アップスケール",
+      "image.edit.restyle": "画像編集: スタイル変更",
+      "image.edit.remove_object": "画像編集: オブジェクト除去",
+      "image.edit.outpaint": "画像編集: 拡張",
+      "audio.transcribe": "文字起こし (1 分単位・切り上げ)",
+      "subtitle.translate": "字幕翻訳 (1,000 文字単位・切り上げ)",
+      "video.generate": "動画生成 (1 秒あたり)"
+    }
   },
   "category": {
     "BUG_REPORT": "バグ報告",

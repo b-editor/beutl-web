@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { getUserId } from "../api/auth";
 import { getContentUrl } from "../content-url";
 import { findProfileForApi } from "@beutl/db";
+import { getEntitlements } from "../ai/entitlements";
 
 export async function getUserProfile(
   query: Prisma.ProfileWhereInput,
@@ -37,6 +38,16 @@ const app = new Hono().get("/", async (c) => {
     return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
   }
   return c.json(profile);
-});
+})
+  .get("/entitlements", async (c) => {
+    const currentUserId = await getUserId(c);
+    if (!currentUserId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+
+    return c.json(await getEntitlements(currentUserId));
+  });
 
 export default app;

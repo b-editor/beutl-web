@@ -244,3 +244,36 @@ export async function countUsers({
   const db = prisma ?? await getDb();
   return db.user.count();
 }
+
+export async function enqueueUserStorageCleanups({
+  userId,
+  now = new Date(),
+  prisma,
+}: {
+  userId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma || await getDb();
+  const files = await db.file.findMany({
+    where: { userId },
+    select: { objectKey: true },
+  });
+  for (const file of files) {
+    await db.aiStorageCleanup.upsert({
+      where: { objectKey: file.objectKey },
+      create: {
+        objectKey: file.objectKey,
+        aiJobId: null,
+        state: "cleanup",
+        notBefore: now,
+      },
+      update: {
+        aiJobId: null,
+        state: "cleanup",
+        notBefore: now,
+      },
+    });
+  }
+  return files.length;
+}

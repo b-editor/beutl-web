@@ -52,6 +52,14 @@ export const errorCodes = [
   "fileIsTooLarge",
   "virtualAssetCannotBeDownloaded",
   "cannotDeleteReleaseAssets",
+
+  // AI
+  "aiPlanRequired",
+  "aiUsageLimitExceeded",
+  "aiProviderError",
+  "aiJobNotFound",
+  "aiJobLimitReached",
+  "aiJobIsActive",
 ] as const;
 
 export type ApiErrorCode = (typeof errorCodes)[number];

@@ -4,7 +4,6 @@ import { createHash } from "@beutl/core";
 const mocks = vi.hoisted(() => ({
   createCustomer: vi.fn(),
   findCustomerByUserId: vi.fn(),
-  findCustomerOwnersByStripeId: vi.fn(),
   retrieveCustomer: vi.fn(),
   updateCustomer: vi.fn(),
   upsertCustomerMapping: vi.fn(),
@@ -12,7 +11,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@beutl/db", () => ({
   findCustomerByUserId: mocks.findCustomerByUserId,
-  findCustomerOwnersByStripeId: mocks.findCustomerOwnersByStripeId,
   upsertCustomerMapping: mocks.upsertCustomerMapping,
 }));
 vi.mock("@/lib/stripe/config", () => ({
@@ -35,8 +33,16 @@ describe("Stripe customer ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findCustomerByUserId.mockResolvedValue(null);
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([]);
     mocks.createCustomer.mockResolvedValue({ id: "cus_new" });
+    mocks.retrieveCustomer.mockImplementation(async (customerId: string) => ({
+      id: customerId,
+      deleted: false,
+      email: null,
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+      },
+    }));
     mocks.upsertCustomerMapping.mockResolvedValue({
       userId: "user-1",
       stripeId: "cus_new",
@@ -69,19 +75,15 @@ describe("Stripe customer ownership", () => {
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
       stripeId: "cus_new",
-      prisma: undefined,
     });
   });
 
-  it("adopts a uniquely mapped legacy customer by stamping ownership", async () => {
+  it("replaces a metadata-free legacy mapping instead of claiming it", async () => {
     mocks.findCustomerByUserId.mockResolvedValue({
       userId: "user-1",
       stripeId: "cus_legacy",
     });
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
-      { userId: "user-1" },
-    ]);
-    mocks.retrieveCustomer.mockResolvedValue({
+    mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_legacy",
       deleted: false,
       email: "old@example.com",
@@ -93,14 +95,53 @@ describe("Stripe customer ownership", () => {
         email: "user@example.com",
         userId: "user-1",
       }),
-    ).resolves.toBe("cus_legacy");
+    ).resolves.toBe("cus_new");
 
-    expect(mocks.updateCustomer).toHaveBeenCalledWith("cus_legacy", {
-      email: "user@example.com",
+    expect(mocks.updateCustomer).not.toHaveBeenCalledWith(
+      "cus_legacy",
+      expect.anything(),
+    );
+    expect(mocks.createCustomer).toHaveBeenCalledWith(
+      {
+        email: "user@example.com",
+        metadata: {
+          beutlApplication: "beutl-web",
+          beutlUserId: "user-1",
+        },
+      },
+      {
+        idempotencyKey: await idempotencyKey(
+          "user@example.com",
+          "beutl:customer:user-1:replace:cus_legacy",
+        ),
+      },
+    );
+  });
+
+  it("reuses a customer with matching Stripe owner metadata", async () => {
+    mocks.findCustomerByUserId.mockResolvedValue({
+      userId: "user-1",
+      stripeId: "cus_owned",
+    });
+    mocks.retrieveCustomer.mockResolvedValue({
+      id: "cus_owned",
+      deleted: false,
+      email: "old@example.com",
       metadata: {
         beutlApplication: "beutl-web",
         beutlUserId: "user-1",
       },
+    });
+
+    await expect(
+      createOrRetrieveCustomerId({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    ).resolves.toBe("cus_owned");
+
+    expect(mocks.updateCustomer).toHaveBeenCalledWith("cus_owned", {
+      email: "user@example.com",
     });
     expect(mocks.createCustomer).not.toHaveBeenCalled();
   });
@@ -110,11 +151,7 @@ describe("Stripe customer ownership", () => {
       userId: "user-1",
       stripeId: "cus_shared",
     });
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
-      { userId: "user-1" },
-      { userId: "user-2" },
-    ]);
-    mocks.retrieveCustomer.mockResolvedValue({
+    mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_shared",
       deleted: false,
       email: "user@example.com",
@@ -145,7 +182,6 @@ describe("Stripe customer ownership", () => {
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
       stripeId: "cus_new",
-      prisma: undefined,
     });
   });
 
@@ -154,10 +190,7 @@ describe("Stripe customer ownership", () => {
       userId: "user-1",
       stripeId: "cus_conflict",
     });
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
-      { userId: "user-1" },
-    ]);
-    mocks.retrieveCustomer.mockResolvedValue({
+    mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_conflict",
       deleted: false,
       email: "user@example.com",
@@ -177,7 +210,6 @@ describe("Stripe customer ownership", () => {
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
       stripeId: "cus_new",
-      prisma: undefined,
     });
   });
 
@@ -186,10 +218,7 @@ describe("Stripe customer ownership", () => {
       userId: "user-1",
       stripeId: "cus_deleted",
     });
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
-      { userId: "user-1" },
-    ]);
-    mocks.retrieveCustomer.mockResolvedValue({
+    mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_deleted",
       deleted: true,
     });
@@ -203,7 +232,6 @@ describe("Stripe customer ownership", () => {
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
       stripeId: "cus_new",
-      prisma: undefined,
     });
   });
 
@@ -212,10 +240,7 @@ describe("Stripe customer ownership", () => {
       userId: "user-1",
       stripeId: "cus_missing",
     });
-    mocks.findCustomerOwnersByStripeId.mockResolvedValue([
-      { userId: "user-1" },
-    ]);
-    mocks.retrieveCustomer.mockRejectedValue(
+    mocks.retrieveCustomer.mockRejectedValueOnce(
       Object.assign(new Error("No such customer"), {
         statusCode: 404,
         code: "resource_missing",
@@ -231,7 +256,6 @@ describe("Stripe customer ownership", () => {
     expect(mocks.upsertCustomerMapping).toHaveBeenCalledWith({
       userId: "user-1",
       stripeId: "cus_new",
-      prisma: undefined,
     });
   });
 

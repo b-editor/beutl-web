@@ -1,0 +1,655 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
+import { sign } from "hono/jwt";
+import {
+  createAiJob,
+  createFile,
+  deleteFile,
+  findFileForApi,
+  findFileForContentAccess,
+  retrieveFilesByIdsAndUserId,
+  retrieveStorageFilesByUserId,
+  setDbProvider,
+  updateFileVisibility,
+  upsertSubscription,
+} from "@beutl/db";
+import {
+  createReservedAiJob,
+  reconcileAiJobs,
+  setR2BucketProvider,
+  v3,
+} from "@beutl/api";
+import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
+
+const USER_ID = "ai-history-user";
+const OTHER_USER_ID = "ai-history-other-user";
+const JWT_SECRET = "test-secret-for-ai-history";
+const PUBLIC_ORIGIN = "https://beutl.beditor.net";
+
+function makeApp() {
+  return new Hono().basePath("/api/v3").route("/", v3);
+}
+
+async function authHeaders(userId = USER_ID) {
+  const token = await sign(
+    {
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":
+        userId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+    },
+    JWT_SECRET,
+    "HS256",
+  );
+  return { Authorization: `Bearer ${token}` };
+}
+
+describe("v3 AI job history contract", () => {
+  let prisma: ReturnType<typeof createInMemoryPrisma>["prisma"];
+  let state: ReturnType<typeof createInMemoryPrisma>["state"];
+  let deleteObject: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    const memory = createInMemoryPrisma();
+    prisma = memory.prisma;
+    state = memory.state;
+    setDbProvider(async () => prisma as never);
+    deleteObject = vi.fn().mockResolvedValue(undefined);
+    setR2BucketProvider(() => ({
+      put: vi.fn().mockResolvedValue(undefined),
+      delete: deleteObject,
+    }));
+    process.env.JWT_SECRET = JWT_SECRET;
+    process.env.PUBLIC_ORIGIN = PUBLIC_ORIGIN;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.JWT_SECRET;
+    delete process.env.PUBLIC_ORIGIN;
+  });
+
+  async function seedJob({
+    userId = USER_ID,
+    kind,
+    status = "succeeded",
+    inputParams,
+    usageUnits = 20,
+    createdAt,
+    resultFileId = null,
+    error = null,
+  }: {
+    userId?: string;
+    kind: string;
+    status?: string;
+    inputParams?: object;
+    usageUnits?: number;
+    createdAt: Date;
+    resultFileId?: string | null;
+    error?: string | null;
+  }) {
+    const created = await createAiJob({
+      userId,
+      kind,
+      provider: "openrouter",
+      status,
+      inputParams,
+      usageUnits,
+    });
+    const job = state.aiJobs.get(created.id);
+    if (!job) throw new Error("Seeded AI job was not retained");
+    Object.assign(job, {
+      status,
+      resultFileId,
+      error,
+      createdAt,
+      updatedAt: new Date(createdAt.getTime() + 1_000),
+    });
+    return job;
+  }
+
+  it("requires authentication for list, detail, and deletion", async () => {
+    const id = crypto.randomUUID();
+    for (const [method, path] of [
+      ["GET", "/api/v3/ai/jobs"],
+      ["GET", `/api/v3/ai/jobs/${id}`],
+      ["DELETE", `/api/v3/ai/jobs/${id}`],
+    ] as const) {
+      const response = await makeApp().request(path, { method });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({
+        error_code: "authenticationIsRequired",
+      });
+    }
+  });
+
+  it("lists only owned, non-deleted jobs newest-first with a stable cursor", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "result.mp4",
+      objectKey: "ai/video/history-result",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    const oldest = await seedJob({
+      kind: "image",
+      inputParams: {
+        prompt: "oldest",
+        size: "1024x1024",
+        providerSecret: "must-not-leak",
+      },
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    const middle = await seedJob({
+      kind: "stt",
+      inputParams: { filename: "speech.wav", durationSeconds: 30 },
+      createdAt: new Date("2026-08-02T00:00:00.000Z"),
+    });
+    const newest = await seedJob({
+      kind: "video",
+      inputParams: {
+        prompt: "newest",
+        durationSeconds: 4,
+        resolution: "720p",
+      },
+      usageUnits: 160,
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+    await seedJob({
+      userId: OTHER_USER_ID,
+      kind: "video",
+      inputParams: {
+        prompt: "other user",
+        durationSeconds: 4,
+        resolution: "720p",
+      },
+      createdAt: new Date("2026-08-05T00:00:00.000Z"),
+    });
+    const deleted = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "deleted", size: "1024x1024" },
+      createdAt: new Date("2026-08-04T00:00:00.000Z"),
+    });
+    deleted.deletedAt = new Date("2026-08-06T00:00:00.000Z");
+
+    const firstResponse = await makeApp().request(
+      "/api/v3/ai/jobs?limit=2",
+      { headers: await authHeaders() },
+    );
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first).toEqual({
+      jobs: [
+        {
+          id: newest.id,
+          kind: "video",
+          status: "succeeded",
+          inputParams: {
+            prompt: "newest",
+            durationSeconds: 4,
+            resolution: "720p",
+          },
+          fileId: file.id,
+          url: `${PUBLIC_ORIGIN}/api/contents/${file.id}`,
+          error: null,
+          canRetry: true,
+          createdAt: newest.createdAt.toISOString(),
+          updatedAt: newest.updatedAt.toISOString(),
+        },
+        {
+          id: middle.id,
+          kind: "stt",
+          status: "succeeded",
+          inputParams: {
+            durationSeconds: 30,
+          },
+          fileId: null,
+          url: null,
+          error: null,
+          canRetry: false,
+          createdAt: middle.createdAt.toISOString(),
+          updatedAt: middle.updatedAt.toISOString(),
+        },
+      ],
+      nextCursor: expect.any(String),
+    });
+
+    const secondResponse = await makeApp().request(
+      `/api/v3/ai/jobs?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`,
+      { headers: await authHeaders() },
+    );
+    expect(secondResponse.status).toBe(200);
+    const second = await secondResponse.json();
+    expect(second).toEqual({
+      jobs: [
+        {
+          id: oldest.id,
+          kind: "image",
+          status: "succeeded",
+          inputParams: { prompt: "oldest", size: "1024x1024" },
+          fileId: null,
+          url: null,
+          error: null,
+          canRetry: true,
+          createdAt: oldest.createdAt.toISOString(),
+          updatedAt: oldest.updatedAt.toISOString(),
+        },
+      ],
+      nextCursor: null,
+    });
+  });
+
+  it("uses the job id as a cursor tie-breaker for identical timestamps", async () => {
+    const createdAt = new Date("2026-08-03T00:00:00.000Z");
+    const jobs = await Promise.all(
+      ["first", "second", "third"].map((prompt) =>
+        seedJob({
+          kind: "image",
+          inputParams: { prompt, size: "1024x1024" },
+          createdAt,
+        }),
+      ),
+    );
+    const expectedIds = jobs
+      .map((job) => job.id)
+      .sort((left, right) => (left === right ? 0 : left < right ? 1 : -1));
+
+    const firstResponse = await makeApp().request(
+      "/api/v3/ai/jobs?limit=2",
+      { headers: await authHeaders() },
+    );
+    const first = await firstResponse.json();
+    expect(first.jobs.map((job: { id: string }) => job.id)).toEqual(
+      expectedIds.slice(0, 2),
+    );
+
+    const secondResponse = await makeApp().request(
+      `/api/v3/ai/jobs?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`,
+      { headers: await authHeaders() },
+    );
+    const second = await secondResponse.json();
+    expect(second.jobs.map((job: { id: string }) => job.id)).toEqual(
+      expectedIds.slice(2),
+    );
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("returns the exact detail shape and hides other users and deleted jobs", async () => {
+    const job = await seedJob({
+      kind: "image",
+      status: "failed",
+      inputParams: { prompt: "retry me", size: "invalid-size" },
+      error: "provider failed with private upstream detail",
+      createdAt: new Date("2026-08-03T12:00:00.000Z"),
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      headers: await authHeaders(),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id: job.id,
+      kind: "image",
+      status: "failed",
+      inputParams: null,
+      fileId: null,
+      url: null,
+      error: "aiProviderError",
+      canRetry: false,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+    });
+
+    const otherResponse = await makeApp().request(
+      `/api/v3/ai/jobs/${job.id}`,
+      { headers: await authHeaders(OTHER_USER_ID) },
+    );
+    expect(otherResponse.status).toBe(404);
+    expect(await otherResponse.json()).toMatchObject({
+      error_code: "aiJobNotFound",
+    });
+
+    job.deletedAt = new Date();
+    const deletedResponse = await makeApp().request(
+      `/api/v3/ai/jobs/${job.id}`,
+      { headers: await authHeaders() },
+    );
+    expect(deletedResponse.status).toBe(404);
+  });
+
+  it("does not offer a text-only retry for a video that used source frames", async () => {
+    const job = await seedJob({
+      kind: "video",
+      status: "failed",
+      inputParams: {
+        prompt: "Animate this frame",
+        durationSeconds: 4,
+        resolution: "720p",
+        firstFrame: { filename: "private.png", mimeType: "image/png" },
+      },
+      createdAt: new Date("2026-08-03T12:00:00.000Z"),
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      inputParams: {
+        prompt: "Animate this frame",
+        durationSeconds: 4,
+        resolution: "720p",
+      },
+      canRetry: false,
+    });
+  });
+
+  it("rejects malformed pagination and job identifiers", async () => {
+    const headers = await authHeaders();
+    for (const path of [
+      "/api/v3/ai/jobs?limit=0",
+      "/api/v3/ai/jobs?limit=101",
+      "/api/v3/ai/jobs?cursor=not-a-valid-cursor",
+      "/api/v3/ai/jobs/not-a-uuid",
+    ]) {
+      const response = await makeApp().request(path, { headers });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error_code: "invalidRequestBody",
+      });
+    }
+  });
+
+  it("rejects active jobs and does not reveal ownership on deletion", async () => {
+    const active = await seedJob({
+      kind: "video",
+      status: "running",
+      inputParams: {
+        prompt: "still running",
+        durationSeconds: 4,
+        resolution: "720p",
+      },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+    });
+
+    const activeResponse = await makeApp().request(
+      `/api/v3/ai/jobs/${active.id}`,
+      { method: "DELETE", headers: await authHeaders() },
+    );
+    expect(activeResponse.status).toBe(409);
+    expect(await activeResponse.json()).toMatchObject({
+      error_code: "aiJobIsActive",
+    });
+    expect(active.deletedAt).toBeNull();
+    expect(deleteObject).not.toHaveBeenCalled();
+
+    active.status = "failed";
+    const otherResponse = await makeApp().request(
+      `/api/v3/ai/jobs/${active.id}`,
+      { method: "DELETE", headers: await authHeaders(OTHER_USER_ID) },
+    );
+    expect(otherResponse.status).toBe(404);
+    expect(active.deletedAt).toBeNull();
+  });
+
+  it("keeps AI-owned outputs private and outside ordinary storage operations", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "legacy-public-result.png",
+      objectKey: "ai/images/legacy-public-result",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PUBLIC",
+    });
+    await seedJob({
+      kind: "image",
+      inputParams: { prompt: "legacy", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+
+    expect(await findFileForApi({ id: file.id })).toMatchObject({
+      id: file.id,
+      visibility: "PRIVATE",
+    });
+    expect(await findFileForContentAccess({ id: file.id })).toMatchObject({
+      visibility: "PRIVATE",
+    });
+    expect(
+      await retrieveStorageFilesByUserId({ userId: USER_ID }),
+    ).toEqual([]);
+    expect(
+      await retrieveFilesByIdsAndUserId({
+        ids: [file.id],
+        userId: USER_ID,
+      }),
+    ).toEqual([]);
+    await expect(
+      updateFileVisibility({ fileId: file.id, visibility: "PUBLIC" }),
+    ).rejects.toThrow("owned by an AI job");
+    await expect(deleteFile({ fileId: file.id })).rejects.toThrow();
+    expect(state.files.has(file.id)).toBe(true);
+
+    const anonymous = await makeApp().request(`/api/v3/files/${file.id}`);
+    expect(anonymous.status).toBe(404);
+  });
+
+  it("deletes a legacy PUBLIC AI output from both File and R2", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "public-result.png",
+      objectKey: "ai/images/public-result",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PUBLIC",
+    });
+    const job = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "delete public", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(deleteObject).toHaveBeenCalledWith("ai/images/public-result");
+    expect(state.files.has(file.id)).toBe(false);
+    expect(state.aiJobs.get(job.id)?.resultFileId).toBeNull();
+    expect(state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("deletes the job but preserves an output reused by package content", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "shared-result.png",
+      objectKey: "ai/images/shared-result",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PRIVATE",
+    });
+    const job = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "shared", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+    const findFile = prisma.file.findFirst.bind(prisma.file);
+    vi.spyOn(prisma.file, "findFirst").mockImplementation(async (args) => {
+      const output = await findFile(args);
+      return output
+        ? { ...output, Package: [{ id: "package-1" }] }
+        : null;
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(state.files.has(file.id)).toBe(true);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      resultFileId: null,
+      deletedAt: expect.any(Date),
+    });
+    expect(state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("scrubs and hides the job while retaining cleanup metadata when object deletion fails", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "result.png",
+      objectKey: "ai/images/retry-delete",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PRIVATE",
+    });
+    const job = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "keep metadata", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+    deleteObject.mockRejectedValueOnce(new Error("R2 unavailable"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error_code: "unknown" });
+    expect(state.files.has(file.id)).toBe(true);
+    expect(state.aiStorageCleanups.size).toBe(1);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      resultFileId: file.id,
+      inputParams: null,
+      error: null,
+      deletedAt: expect.any(Date),
+    });
+    const hidden = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      headers: await authHeaders(),
+    });
+    expect(hidden.status).toBe(404);
+
+    const reconciliation = await reconcileAiJobs(
+      new Date(Date.now() + 1_000),
+    );
+    expect(reconciliation).toMatchObject({
+      cleanupInspected: 1,
+      cleanupDeleted: 1,
+      cleanupErrors: 0,
+    });
+    expect(state.files.has(file.id)).toBe(false);
+    expect(state.aiJobs.get(job.id)?.resultFileId).toBeNull();
+    expect(state.aiStorageCleanups.size).toBe(0);
+
+    const retry = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    expect(retry.status).toBe(200);
+    consoleError.mockRestore();
+  });
+
+  it("soft-deletes the job and private output while retaining the usage ledger", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_ai_history",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
+      currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    const reservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      inputParams: { prompt: "private result", size: "1024x1024" },
+      usageUnits: 20,
+    });
+    if (!reservation.ok) throw new Error("AI job reservation failed");
+
+    const file = await createFile({
+      userId: USER_ID,
+      name: "result.png",
+      objectKey: "ai/images/private-result",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PRIVATE",
+    });
+    const job = state.aiJobs.get(reservation.job.id);
+    if (!job) throw new Error("Reserved AI job was not retained");
+    job.status = "succeeded";
+    job.resultFileId = file.id;
+    job.providerJobId = "provider-secret";
+    job.error = "old provider detail";
+    const ledgerBefore = state.creditTransactions.map((transaction) => ({
+      ...transaction,
+    }));
+
+    const response = await makeApp().request(
+      `/api/v3/ai/jobs/${reservation.job.id}`,
+      { method: "DELETE", headers: await authHeaders() },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+    expect(deleteObject).toHaveBeenCalledOnce();
+    expect(deleteObject).toHaveBeenCalledWith("ai/images/private-result");
+    expect(state.files.has(file.id)).toBe(false);
+    expect(state.aiJobs.has(job.id)).toBe(true);
+    const deletedJob = state.aiJobs.get(job.id);
+    expect(deletedJob).toMatchObject({
+      id: reservation.job.id,
+      status: "succeeded",
+      usageUnits: 20,
+      inputParams: null,
+      error: null,
+      providerJobId: null,
+      resultFileId: null,
+      deletedAt: expect.any(Date),
+    });
+    expect(state.creditTransactions).toEqual(ledgerBefore);
+    expect(
+      state.creditTransactions.some(
+        (transaction) =>
+          transaction.aiJobId === reservation.job.id &&
+          transaction.kind === "usage",
+      ),
+    ).toBe(true);
+    expect(state.creditAccounts.get(USER_ID)?.monthlyUsageUsed).toBe(20);
+
+    const detail = await makeApp().request(
+      `/api/v3/ai/jobs/${reservation.job.id}`,
+      {
+        headers: await authHeaders(),
+      },
+    );
+    expect(detail.status).toBe(404);
+    const list = await makeApp().request("/api/v3/ai/jobs", {
+      headers: await authHeaders(),
+    });
+    expect(await list.json()).toEqual({ jobs: [], nextCursor: null });
+
+    const repeated = await makeApp().request(
+      `/api/v3/ai/jobs/${reservation.job.id}`,
+      {
+        method: "DELETE",
+        headers: await authHeaders(),
+      },
+    );
+    expect(repeated.status).toBe(200);
+    expect(deleteObject).toHaveBeenCalledOnce();
+  });
+});

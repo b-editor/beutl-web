@@ -3,6 +3,7 @@
     "dashboard": "Dashboard",
     "users": "Users",
     "feedback": "Feedback",
+    "ai": "AI",
     "auditLog": "Audit log",
     "signOut": "Sign out"
   },
@@ -71,6 +72,34 @@
     "OPEN": "Open",
     "IN_PROGRESS": "In progress",
     "RESOLVED": "Resolved"
+  },
+  "ai": {
+    "title": "AI settings",
+    "description": "Change the model each AI operation uses and how many usage units it costs. Changes apply to operations started afterwards; jobs already running keep the price reserved when they started.",
+    "model": "Model",
+    "price": "Usage units",
+    "save": "Save",
+    "reset": "Reset",
+    "defaultValue": "Default",
+    "updateSuccess": "Setting updated",
+    "updateFailed": "Failed to update setting",
+    "resetSuccess": "Setting reset to default",
+    "source": {
+      "database": "Configured here",
+      "environment": "From environment",
+      "default": "Built-in default"
+    },
+    "operation": {
+      "image.generate": "Image generation",
+      "image.edit.remove_background": "Image edit: remove background",
+      "image.edit.upscale": "Image edit: upscale",
+      "image.edit.restyle": "Image edit: restyle",
+      "image.edit.remove_object": "Image edit: remove object",
+      "image.edit.outpaint": "Image edit: outpaint",
+      "audio.transcribe": "Transcription (per started minute)",
+      "subtitle.translate": "Subtitle translation (per started 1,000 characters)",
+      "video.generate": "Video generation (per second)"
+    }
   },
   "category": {
     "BUG_REPORT": "Bug report",

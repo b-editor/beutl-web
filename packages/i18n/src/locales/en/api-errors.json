@@ -27,6 +27,12 @@
   "virtualAssetCannotBeDownloaded": "Virtual assets cannot be downloaded from this URL.",
   "cannotDeleteReleaseAssets": "Cannot delete release assets.",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "Cannot publish a release that does not have an asset.",
+  "aiPlanRequired": "A Pro plan is required to use AI features.",
+  "aiUsageLimitExceeded": "Your monthly AI allowance and additional credits are insufficient.",
+  "aiProviderError": "The AI provider returned an error. Please try again later.",
+  "aiJobNotFound": "AI job not found.",
+  "aiJobLimitReached": "A video generation job is already in progress. Please wait for it to complete.",
+  "aiJobIsActive": "An active AI job cannot be deleted.",
   "unknown": "An unknown error occurred.",
   "invalidVersionFormat": "Invalid version format."
 }

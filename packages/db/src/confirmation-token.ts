@@ -58,6 +58,50 @@ export async function deleteConfirmationTokenByIdentifierToken(
   });
 }
 
+export async function findConfirmationTokenByIdentifierToken(
+  where: ConfirmationTokenIdentifierTokenWhere,
+  prisma?: PrismaTransaction,
+) {
+  const db = prisma ?? await getDb();
+  return await db.confirmationToken.findUnique({
+    where: {
+      identifier_token: where,
+    },
+    select: {
+      identifier: true,
+      expires: true,
+      userId: true,
+      purpose: true,
+    },
+  });
+}
+
+export async function consumeConfirmationTokenByIdentifierToken({
+  identifier,
+  token,
+  purpose,
+  userId,
+  now,
+  prisma,
+}: ConfirmationTokenIdentifierTokenWhere & {
+  purpose: ConfirmationTokenPurpose;
+  userId: string;
+  now: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const consumed = await db.confirmationToken.deleteMany({
+    where: {
+      identifier,
+      token,
+      purpose,
+      userId,
+      expires: { gt: now },
+    },
+  });
+  return consumed.count === 1;
+}
+
 export async function deleteManyConfirmationTokens(
   where: ConfirmationTokenUserPurposeWhere,
   prisma?: PrismaTransaction,

@@ -2,8 +2,11 @@ import "server-only";
 import type { ConfirmationTokenPurpose } from "@prisma/client";
 import { createHash, randomString } from "@beutl/core";
 import {
+  authorizeAccountDeletionIntent,
+  consumeConfirmationTokenByIdentifierToken,
   createConfirmationToken,
-  deleteConfirmationTokenByIdentifierToken,
+  findConfirmationTokenByIdentifierToken,
+  type PrismaTransaction,
 } from "@beutl/db";
 
 type ConfirmationTokenData = {
@@ -23,6 +26,7 @@ type ConsumeConfirmationTokenOptions = {
   token: string;
   identifier: string;
   purpose: ConfirmationTokenPurpose;
+  prisma?: PrismaTransaction;
 };
 
 type ConsumeConfirmationTokenResult =
@@ -36,13 +40,28 @@ type ConsumeConfirmationTokenResult =
       tokenData?: ConfirmationTokenData;
     };
 
-function isRecordNotFoundError(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "P2025"
-  );
+type ValidateConfirmationTokenResult =
+  | {
+      valid: true;
+      tokenData: ConfirmationTokenData;
+      tokenHash: string;
+    }
+  | {
+      valid: false;
+      reason: "invalid" | "expired";
+      tokenData?: ConfirmationTokenData;
+    };
+
+function confirmationSecret(): string {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) {
+    throw new Error("AUTH_SECRET is not configured");
+  }
+  return secret;
+}
+
+async function hashConfirmationToken(token: string): Promise<string> {
+  return await createHash(`${token}${confirmationSecret()}`);
 }
 
 export async function issueConfirmationToken({
@@ -52,8 +71,7 @@ export async function issueConfirmationToken({
 }: IssueConfirmationTokenOptions) {
   const token = randomString(32);
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`);
+  const hash = await hashConfirmationToken(token);
   await createConfirmationToken({
     token: hash,
     identifier,
@@ -68,26 +86,59 @@ export async function consumeConfirmationToken({
   token,
   identifier,
   purpose,
+  prisma,
 }: ConsumeConfirmationTokenOptions): Promise<ConsumeConfirmationTokenResult> {
-  const secret = process.env.AUTH_SECRET;
-  const hash = await createHash(`${token}${secret}`);
-  const tokenData = await deleteConfirmationTokenByIdentifierToken({
+  const result = await validateConfirmationToken({ token, identifier, purpose, prisma });
+  if (!result.valid) return result;
+
+  const consumed = await consumeConfirmationTokenByIdentifierToken({
+    identifier,
+    token: result.tokenHash,
+    purpose,
+    userId: result.tokenData.userId,
+    now: new Date(),
+    prisma,
+  });
+  return consumed
+    ? { valid: true, tokenData: result.tokenData }
+    : { valid: false, reason: "invalid" };
+}
+
+export async function validateConfirmationToken({
+  token,
+  identifier,
+  purpose,
+  prisma,
+}: ConsumeConfirmationTokenOptions): Promise<ValidateConfirmationTokenResult> {
+  const hash = await hashConfirmationToken(token);
+  const tokenData = await findConfirmationTokenByIdentifierToken({
     identifier,
     token: hash,
-  }).catch((error: unknown) => {
-    if (isRecordNotFoundError(error)) {
-      return null;
-    }
-    return Promise.reject(error);
-  });
+  }, prisma);
 
   if (!tokenData || tokenData.purpose !== purpose) {
     return { valid: false, reason: "invalid" };
   }
 
-  if (tokenData.expires.valueOf() < Date.now()) {
+  if (tokenData.expires.valueOf() <= Date.now()) {
     return { valid: false, reason: "expired", tokenData };
   }
 
-  return { valid: true, tokenData };
+  return { valid: true, tokenData, tokenHash: hash };
+}
+
+export async function authorizeAccountDeletion({
+  token,
+  identifier,
+  now,
+}: {
+  token: string;
+  identifier: string;
+  now?: Date;
+}) {
+  return await authorizeAccountDeletionIntent({
+    identifier,
+    tokenHash: await hashConfirmationToken(token),
+    now,
+  });
 }

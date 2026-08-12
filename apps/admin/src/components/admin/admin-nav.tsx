@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@beutl/ui/i18n-client";
-import { LayoutDashboard, Users, MessageSquare, ScrollText, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, MessageSquare, ScrollText, LogOut, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@beutl/core";
@@ -21,6 +21,7 @@ export function AdminNav({ lang }: { lang: string }) {
     { slug: "admin", href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },
     { slug: "users", href: `/${lang}/admin/users`, label: t("admin:nav.users"), icon: Users },
     { slug: "feedback", href: `/${lang}/admin/feedback`, label: t("admin:nav.feedback"), icon: MessageSquare },
+    { slug: "ai", href: `/${lang}/admin/ai`, label: t("admin:nav.ai"), icon: Sparkles },
     { slug: "audit-log", href: `/${lang}/admin/audit-log`, label: t("admin:nav.auditLog"), icon: ScrollText },
   ] as const;
 

@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   addAuditLog: vi.fn(),
   constructEvent: vi.fn(),
+  findCreditPurchaseByStripePaymentId: vi.fn(),
   findPackagePaymentReference: vi.fn(),
+  listInvoicePayments: vi.fn(),
+  observeBillingRefundForPaymentIntent: vi.fn(),
   recordPackagePaymentSucceeded: vi.fn(),
   refundPackagePayment: vi.fn(),
   resolvePackagePayment: vi.fn(),
@@ -15,6 +18,12 @@ const mocks = vi.hoisted(() => ({
   retrievePaymentIntent: vi.fn(),
   retrieveRefund: vi.fn(),
   revokePackagePayment: vi.fn(),
+}));
+
+vi.mock("@beutl/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@beutl/api")>()),
+  observeBillingRefundForPaymentIntent:
+    mocks.observeBillingRefundForPaymentIntent,
 }));
 
 vi.mock("@beutl/next/audit-log", () => ({
@@ -33,6 +42,7 @@ vi.mock("@/lib/stripe/config", () => ({
   createStripe: () => ({
     charges: { retrieve: mocks.retrieveCharge },
     disputes: { retrieve: mocks.retrieveDispute },
+    invoicePayments: { list: mocks.listInvoicePayments },
     paymentIntents: { retrieve: mocks.retrievePaymentIntent },
     refunds: {
       list: mocks.listRefunds,
@@ -53,6 +63,8 @@ vi.mock("@beutl/db", () => ({
     disputeRestored: 30,
     refundSucceeded: 40,
   },
+  findCreditPurchaseByStripePaymentId:
+    mocks.findCreditPurchaseByStripePaymentId,
   findPackagePaymentReference: mocks.findPackagePaymentReference,
   recordPackagePaymentSucceeded: mocks.recordPackagePaymentSucceeded,
   restorePackagePayment: mocks.restorePackagePayment,
@@ -96,7 +108,10 @@ describe("package payment webhook state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.STRIPE_ENDPOINT_SECRET = "whsec_test";
+    mocks.findCreditPurchaseByStripePaymentId.mockResolvedValue(null);
     mocks.findPackagePaymentReference.mockResolvedValue(null);
+    mocks.listInvoicePayments.mockResolvedValue({ data: [] });
+    mocks.observeBillingRefundForPaymentIntent.mockResolvedValue(false);
     mocks.recordPackagePaymentSucceeded.mockResolvedValue({
       ...reference,
       active: true,
@@ -116,6 +131,13 @@ describe("package payment webhook state", () => {
       id: "pi_package",
       metadata: {},
     });
+    mocks.retrieveRefund.mockImplementation(async (id: string) => ({
+      id,
+      amount: 1_000,
+      currency: "usd",
+      payment_intent: "pi_package",
+      status: "succeeded",
+    }));
     mocks.listRefunds.mockResolvedValue({ data: [], has_more: false });
   });
 

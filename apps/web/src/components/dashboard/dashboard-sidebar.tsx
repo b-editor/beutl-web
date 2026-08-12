@@ -34,6 +34,7 @@ import {
   LogOut,
   Mail,
   Shield,
+  Sparkles,
   Store,
   Trash,
 } from "lucide-react";
@@ -114,6 +115,7 @@ export function DashboardSidebar({
     { slug: "profile", label: t("account:profile.title"), icon: CircleUser },
     { slug: "email", label: t("account:email.title"), icon: Mail },
     { slug: "billing", label: t("account:billing.title"), icon: CreditCard },
+    { slug: "ai-plan", label: t("account:aiPlan.title"), icon: Sparkles },
     { slug: "security", label: t("account:security.title"), icon: Shield },
     { slug: "personal-data", label: t("account:data.title"), icon: Trash },
   ] as const;

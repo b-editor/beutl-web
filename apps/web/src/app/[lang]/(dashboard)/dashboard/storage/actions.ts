@@ -138,20 +138,28 @@ export async function uploadFile(formData: FormData): Promise<ActionResult> {
 
     const objectKey = crypto.randomUUID();
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-    // R2 への書き込みを待たずに createFile すると、put が失敗したときに
-    // 実体のないファイルレコードが残る。
-    await bucket.put(
-      objectKey,
-      await file.arrayBuffer(),
-    );
-    await createFile({
-      objectKey,
-      name: filename,
-      size: file.size,
-      mimeType: file.type,
-      userId: session.user.id,
-      visibility: "PRIVATE",
-    });
+    const contents = await file.arrayBuffer();
+    try {
+      await bucket.put(objectKey, contents);
+      await createFile({
+        objectKey,
+        name: filename,
+        size: file.size,
+        mimeType: file.type,
+        userId: session.user.id,
+        visibility: "PRIVATE",
+      });
+    } catch (error) {
+      try {
+        await bucket.delete(objectKey);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Upload failed and the R2 object could not be cleaned up",
+        );
+      }
+      throw error;
+    }
     revalidatePath(`/${lang}/dashboard/storage`);
     return {
       success: true,

@@ -1,0 +1,212 @@
+import {
+  getCreditAccount,
+  getMonthlyUsageAccount,
+  getSubscriptionByUserId,
+  startRetryableTransaction,
+} from "@beutl/db";
+import { AI_PRICING_CATALOG, PRO_PLAN } from "./pricing";
+import { loadAiSettings, type AiSettingsSnapshot } from "./settings";
+
+export type AiBalanceSnapshot = {
+  monthlyUsage: {
+    used: number;
+    limit: number;
+  };
+  additionalCredits: number;
+  additionalCreditDebt: number;
+};
+
+// What the account surface is allowed to show. Monthly raw units stay server-side,
+// while the exact purchased-credit balance remains visible by product requirement.
+export type AiBalancePresentation = {
+  monthlyUsage: {
+    usedPercent: number;
+    remainingPercent: number;
+    isExhausted: boolean;
+  };
+  // The account-only entitlement snapshot shows the remaining quantity the user
+  // purchased. Ordinary operation responses carry no balance snapshot.
+  additionalCredits: number;
+  hasAdditionalCreditDebt: boolean;
+};
+
+// Whether each operation can be started right now. This replaces the price
+// catalog the client used to evaluate locally.
+export type AiOperationAvailability = Record<string, boolean>;
+
+// Wire contract for GET /api/v3/user/entitlements.
+export type EntitlementsResponse = {
+  plan: "pro" | null;
+  subscriptionStatus: string | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  // True when the plan stays usable until currentPeriodEnd and then stops. A
+  // cancellation made in the Stripe customer portal shows up here, not in status.
+  cancelAtPeriodEnd: boolean;
+  canUseAi: boolean;
+  balance: AiBalancePresentation;
+  availability: AiOperationAvailability;
+};
+
+export function toAiBalanceSnapshot(
+  account: {
+    monthlyUsageUsed: number;
+    purchasedCredits: number;
+    purchasedCreditDebt: number;
+  },
+  monthlyUsageLimit: number,
+): AiBalanceSnapshot {
+  const used = Math.min(account.monthlyUsageUsed, monthlyUsageLimit);
+  return {
+    monthlyUsage: {
+      used,
+      limit: monthlyUsageLimit,
+    },
+    additionalCredits: account.purchasedCredits,
+    additionalCreditDebt: account.purchasedCreditDebt,
+  };
+}
+
+export function getMonthlyUsageRemaining(balance: AiBalanceSnapshot): number {
+  return Math.max(balance.monthlyUsage.limit - balance.monthlyUsage.used, 0);
+}
+
+export function toUsedPercent(used: number, limit: number): number {
+  if (limit <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
+}
+
+export function toAiBalancePresentation(
+  balance: AiBalanceSnapshot,
+): AiBalancePresentation {
+  const usedPercent = toUsedPercent(
+    balance.monthlyUsage.used,
+    balance.monthlyUsage.limit,
+  );
+  return {
+    monthlyUsage: {
+      usedPercent,
+      remainingPercent: 100 - usedPercent,
+      isExhausted: getMonthlyUsageRemaining(balance) <= 0,
+    },
+    additionalCredits: balance.additionalCredits,
+    hasAdditionalCreditDebt: balance.additionalCreditDebt > 0,
+  };
+}
+
+// The smallest chargeable amount for an operation. Metered operations are billed
+// per unit of input, so one unit is the floor for "can this be started at all".
+// The configured unit price is authoritative; the catalog only enumerates the
+// operations and their billing units.
+function minimumChargeFor(
+  operation: string,
+  settings: AiSettingsSnapshot,
+): number {
+  if (!(operation in AI_PRICING_CATALOG)) {
+    return 0;
+  }
+  return settings.getPrice(operation);
+}
+
+export function toAiOperationAvailability(
+  balance: AiBalanceSnapshot,
+  canUseAi: boolean,
+  settings: AiSettingsSnapshot,
+): AiOperationAvailability {
+  const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
+  const availability: AiOperationAvailability = {};
+  for (const operation of Object.keys(AI_PRICING_CATALOG)) {
+    const minimumCharge = minimumChargeFor(operation, settings);
+    availability[operation] =
+      canUseAi && minimumCharge > 0 && available >= minimumCharge;
+  }
+  return availability;
+}
+
+type SubscriptionState = {
+  status: string;
+  planId: string;
+  billingOfferId: string | null;
+  currentPeriodStart: Date | null;
+  currentPeriodEnd: Date | null;
+  cancelAt: Date | null;
+  entitlementHeld?: boolean;
+};
+
+export function getEffectiveSubscriptionEnd(
+  subscription: Pick<SubscriptionState, "currentPeriodEnd" | "cancelAt">,
+): Date | null {
+  if (subscription.currentPeriodEnd === null) return null;
+  if (
+    subscription.cancelAt != null &&
+    subscription.cancelAt.getTime() < subscription.currentPeriodEnd.getTime()
+  ) {
+    return subscription.cancelAt;
+  }
+  return subscription.currentPeriodEnd;
+}
+
+export function isActiveProSubscription(
+  subscription: SubscriptionState | null,
+): boolean {
+  const effectiveEnd = subscription
+    ? getEffectiveSubscriptionEnd(subscription)
+    : null;
+  return (
+    subscription?.status === "active" &&
+    subscription.entitlementHeld !== true &&
+    subscription.planId === PRO_PLAN.id &&
+    typeof subscription.billingOfferId === "string" &&
+    subscription.billingOfferId.length > 0 &&
+    effectiveEnd !== null &&
+    effectiveEnd.getTime() > Date.now()
+  );
+}
+
+export async function getEntitlements(
+  userId: string,
+): Promise<EntitlementsResponse> {
+  return await startRetryableTransaction(async (prisma) => {
+    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const settings = await loadAiSettings({ prisma });
+    const isActive = isActiveProSubscription(subscription);
+    const effectiveEnd = subscription
+      ? getEffectiveSubscriptionEnd(subscription)
+      : null;
+    const account = isActive && subscription
+      ? await getMonthlyUsageAccount({
+          userId,
+          usagePeriod: {
+            start: subscription.currentPeriodStart,
+            end: subscription.currentPeriodEnd,
+          },
+          prisma,
+        })
+      : await getCreditAccount({ userId, prisma });
+    const balance = toAiBalanceSnapshot(
+      account,
+      isActive ? PRO_PLAN.monthlyUsageLimit : 0,
+    );
+
+    return {
+      plan: isActive ? "pro" : null,
+      subscriptionStatus: subscription?.status ?? null,
+      currentPeriodStart: subscription?.currentPeriodStart
+        ? subscription.currentPeriodStart.toISOString()
+        : null,
+      currentPeriodEnd: effectiveEnd
+        ? effectiveEnd.toISOString()
+        : null,
+      cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
+      canUseAi: isActive,
+      balance: toAiBalancePresentation(balance),
+      availability: toAiOperationAvailability(balance, isActive, settings),
+    };
+  });
+}
+
+export function isAiPlanActive(entitlements: EntitlementsResponse): boolean {
+  return entitlements.canUseAi;
+}

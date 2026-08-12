@@ -42,6 +42,8 @@ export const auditLogActions = {
     updatePackageInterval: "admin.updatePackageInterval",
     userDeleted: "admin.userDeleted",
     feedbackStatusChanged: "admin.feedbackStatusChanged",
+    aiSettingChanged: "admin.aiSettingChanged",
+    aiSettingReset: "admin.aiSettingReset",
   },
 } as const;
 

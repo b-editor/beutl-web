@@ -12,6 +12,9 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   // 同一ドメイン・パス分割: デスクトップアプリ向け API のみ受ける。
   // /api/auth・/api/contents・/api/stripe は beutl-web が処理するためパターンに含めない。
   "routes": [
@@ -34,10 +37,17 @@
       "id": "34ad44345f2f45ea97c3608b0567a878"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "BEUTL_R2_BUCKET",
+      "bucket_name": "beutl-dev"
+    }
+  ],
   "vars": {
     // MUST MATCH beutl-web (apps/web/wrangler.jsonc)
     "JWT_EXPIRATION_MINUTES": "5",
     "JWT_REFRESH_TOKEN_EXPIRATION_DAYS": "30",
+    "OPENROUTER_REQUEST_TIMEOUT_MS": "120000",
     "PUBLIC_ORIGIN": "https://beutl.beditor.net"
   }
 }

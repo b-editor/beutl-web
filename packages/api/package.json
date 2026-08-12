@@ -15,7 +15,10 @@
     "@prisma/client": "^7.9.1",
     "country-to-currency": "^2.0.2",
     "hono": "^4.13.0",
+    "music-metadata": "^11.14.0",
+    "negotiator": "^1.0.0",
     "semver": "^7.7.1",
+    "stripe": "^20.3.1",
     "zod": "^4.3.6"
   },
   "scripts": {

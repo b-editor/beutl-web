@@ -1,28 +1,71 @@
 import "server-only";
-import { ConfirmationTokenPurpose } from "@prisma/client";
-import { deleteUserById } from "@beutl/db";
+import {
+  deleteUserById,
+  enqueueUserStorageCleanups,
+  findAccountDeletionIntent,
+  prepareAccountDeletionOutboxes,
+  startRetryableTransaction,
+} from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import { consumeConfirmationToken } from "@/lib/confirmation-token-flow";
+import { authorizeAccountDeletion } from "@/lib/confirmation-token-flow";
+import { closeStripeCustomerForAccountDeletion } from "@/lib/customer";
 
 export async function deleteUser(token: string, identifier: string) {
-  const result = await consumeConfirmationToken({
-    token,
-    identifier,
-    purpose: ConfirmationTokenPurpose.ACCOUNT_DELETE,
-  });
-
-  if (!result.valid) {
-    if (result.reason === "expired") {
+  const authorization = await authorizeAccountDeletion({ token, identifier });
+  if (authorization.status !== "authorized") {
+    if (authorization.status === "expired") {
       throw new Error("Token has expired");
     }
     throw new Error("Invalid token");
   }
-  const { tokenData } = result;
+  const { intent } = authorization;
 
-  await deleteUserById({ userId: tokenData.userId });
-  await addAuditLog({
-    userId: null,
-    action: auditLogActions.account.accountDeleted,
-    details: `User ${tokenData.userId} deleted their account`,
+  // Authorization and token consumption are already durable. A retry of this
+  // same link resumes the intent even after the original token expiration.
+  const stripeClosure = await closeStripeCustomerForAccountDeletion({
+    userId: intent.userId,
+    stripeCustomerId: intent.stripeCustomerId,
   });
+  if (stripeClosure.status === "owner-mismatch") {
+    throw new Error("Stripe customer ownership could not be verified");
+  }
+  const deleted = await startRetryableTransaction(async (prisma) => {
+    const currentIntent = await findAccountDeletionIntent({
+      identifier: intent.identifier,
+      tokenHash: intent.tokenHash,
+      prisma,
+    });
+    if (!currentIntent) {
+      // A concurrent invocation already completed the same durable intent.
+      return false;
+    }
+    if (
+      currentIntent.userId !== intent.userId ||
+      currentIntent.stripeCustomerId !== intent.stripeCustomerId
+    ) {
+      throw new Error("Account deletion intent changed unexpectedly");
+    }
+    await enqueueUserStorageCleanups({
+      userId: intent.userId,
+      prisma,
+    });
+    await addAuditLog({
+      userId: null,
+      action: auditLogActions.account.accountDeleted,
+      details: `User ${intent.userId} deleted their account`,
+      prisma,
+    });
+    // Re-snapshot billing attempts and provider jobs in the same serializable
+    // transaction that performs the User cascade. This closes the interval
+    // between durable authorization and final local deletion.
+    await prepareAccountDeletionOutboxes({
+      userId: intent.userId,
+      prisma,
+    });
+    await deleteUserById({ userId: intent.userId, prisma });
+    return true;
+  });
+  if (!deleted) {
+    return;
+  }
 }
