@@ -45,6 +45,13 @@ const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
   both: "developer:details.packageTypeBoth",
 };
 
+const PACKAGE_TYPE_DESCRIPTION_KEYS: Record<PackageType, string> = {
+  extension: "developer:details.packageTypeDescriptionExtension",
+  material: "developer:details.packageTypeDescriptionMaterial",
+  template: "developer:details.packageTypeDescriptionTemplate",
+  both: "developer:details.packageTypeDescriptionBoth",
+};
+
 export function PackageDetailsForm({
   pkg,
   lang,
@@ -142,7 +149,7 @@ export function PackageDetailsForm({
           </SelectContent>
         </Select>
         <p className="text-sm text-muted-foreground">
-          {t("developer:details.packageTypeDescription")}
+          {t(PACKAGE_TYPE_DESCRIPTION_KEYS[getPackageType(tags)])}
         </p>
       </div>
       <Separator />

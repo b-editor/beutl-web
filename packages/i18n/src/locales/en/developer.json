@@ -69,9 +69,12 @@
     "packageTypeExtension": "Extension",
     "packageTypeMaterial": "Material",
     "packageTypeTemplate": "Template",
-    "packageTypeDescription": "Extensions ship code. Materials ship media files under materials/, and templates ship object templates under templates/ — neither is loaded as an assembly.",
     "reservedTag": "\"beutl-material\" and \"beutl-template\" are reserved for the package type. Use the package type selector instead.",
-    "packageTypeBoth": "Both"
+    "packageTypeBoth": "Both",
+    "packageTypeDescriptionExtension": "Extensions ship code that is loaded into the editor.",
+    "packageTypeDescriptionMaterial": "Materials ship media files (images, audio, video, fonts) under materials/.",
+    "packageTypeDescriptionTemplate": "Templates ship object templates (JSON) under templates/.",
+    "packageTypeDescriptionBoth": "Ships both media files under materials/ and object templates under templates/."
   },
   "screenshots": {
     "alreadyFirst": "Already first",
@@ -116,7 +119,8 @@
     "selectFile": "Select file",
     "targetVersion": "Target version",
     "title": "Title",
-    "version": "Version"
+    "version": "Version",
+    "packageFileHelp": "Select a folder. For an extension, the folder should contain your .nupkg file. For materials or templates, select the folder of files — with materials/ and templates/ subdirectories when the package carries both."
   },
   "upload": {
     "title": "Publish materials or templates",
