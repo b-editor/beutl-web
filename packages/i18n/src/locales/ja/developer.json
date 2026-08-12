@@ -70,7 +70,7 @@
     "packageTypeMaterial": "素材",
     "packageTypeTemplate": "テンプレート",
     "reservedTag": "「beutl-material」と「beutl-template」はパッケージの種類を表す予約タグです。種類の選択で設定してください。",
-    "packageTypeBoth": "Both",
+    "packageTypeBoth": "両方",
     "packageTypeDescriptionExtension": "拡張機能はエディタに読み込まれるコードを配布します。",
     "packageTypeDescriptionMaterial": "素材は materials/ 以下のメディアファイル（画像・音声・動画・フォント）を配布します。",
     "packageTypeDescriptionTemplate": "テンプレートは templates/ 以下のオブジェクトテンプレート（JSON）を配布します。",
