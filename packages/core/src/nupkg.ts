@@ -112,7 +112,16 @@ export function materialReferenceUri(
   const subdir = splitPath(templatePackagePath).slice(0, -1).join("/").replace(/^templates\/?/, "");
   const templateDir = `templates/${packageId}${subdir ? `/${subdir}` : ""}`;
   const materialPath = `materials/${packageId}/${materialPackagePath.replace(/^materials\//, "")}`;
-  return relativePath(templateDir, materialPath);
+  return encodeUriPath(relativePath(templateDir, materialPath));
+}
+
+// A legal file name can hold characters a URI reads as syntax — `logo#dark.png`
+// would truncate at the fragment — so every segment except `..` is escaped.
+function encodeUriPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => (segment === ".." ? segment : encodeURIComponent(segment)))
+    .join("/");
 }
 
 /**

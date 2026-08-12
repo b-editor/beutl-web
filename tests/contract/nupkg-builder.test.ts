@@ -106,6 +106,20 @@ describe("materialReferenceUri", () => {
       materialReferenceUri("templates/lower-thirds/title.json", "materials/logo.png", "pkg"),
     ).toBe("../../../materials/pkg/logo.png");
   });
+
+  // A raw `#` would make the rest of the name a fragment, so the installed
+  // template could not resolve the material.
+  it("percent-encodes characters a URI reads as syntax", () => {
+    expect(
+      materialReferenceUri("templates/title.json", "materials/logo#dark.png", "pkg"),
+    ).toBe("../../materials/pkg/logo%23dark.png");
+  });
+
+  it("keeps the parent segments unescaped", () => {
+    expect(
+      materialReferenceUri("templates/title.json", "materials/a b.png", "pkg"),
+    ).toBe("../../materials/pkg/a%20b.png");
+  });
 });
 
 describe("rewriteTemplateReferences", () => {
