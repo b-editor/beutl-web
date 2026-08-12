@@ -120,7 +120,8 @@
     "targetVersion": "Target version",
     "title": "Title",
     "version": "Version",
-    "packageFileHelp": "Select a folder. For an extension, the folder should contain your .nupkg file. For materials or templates, select the folder of files — with materials/ and templates/ subdirectories when the package carries both. A template that references a bundled material must name a file that is also in the materials/ folder."
+    "packageFileHelp": "Select one or more files. For an extension, select your .nupkg file. For materials or templates, select the media (images, audio, video, fonts) and JSON files — the kind follows the files, so a mix of media and JSON becomes a package carrying both. A template that references a bundled material must name a file that is also among the selected files.",
+    "selectFiles": "Select files"
   },
   "upload": {
     "title": "Publish materials or templates",

@@ -2,13 +2,11 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
-import { getPackageType } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import { buildDataPackageNupkgFile } from "@/lib/data-package";
 import {
   getPackageNameFromPackageId,
   getProfileByUserId,
-  retrieveDevPackageByName,
   updateDevPackageTags,
 } from "@beutl/db";
 import {
@@ -97,23 +95,11 @@ export async function updateRelease(
         if (!packageName) {
           return { success: false, message: t("developer:errors.idNotFound") };
         }
-        const devPackage = await retrieveDevPackageByName({
-          name: packageName,
-          userId: session.user.id,
-        });
-        const type = getPackageType(devPackage?.tags);
-        if (type === "extension") {
-          return {
-            success: false,
-            message: t("developer:upload.invalidType"),
-          };
-        }
 
         const profile = await getProfileByUserId(session.user.id);
         const username = profile?.userName || session.user.name || session.user.id;
 
         const built = await buildDataPackageNupkgFile({
-          type,
           files: uploaded,
           id: packageName,
           version: release.version,

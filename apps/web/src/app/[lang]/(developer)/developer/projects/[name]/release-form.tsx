@@ -20,6 +20,7 @@ import {
 import { Label } from "@beutl/ui/ui/label";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { useToast } from "@beutl/ui/use-toast";
+import { showOpenFileDialog } from "@/lib/fileDialog";
 import { Info } from "lucide-react";
 import {
   Popover,
@@ -127,12 +128,12 @@ export function ReleaseForm({
     toast,
   ]);
 
-  const handleSelectFolder = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setFiles(Array.from(e.target.files ?? []));
-    },
-    [],
-  );
+  const handleSelectFiles = useCallback(async () => {
+    const files = await showOpenFileDialog({ multiple: true });
+    if (files) {
+      setFiles(Array.from(files));
+    }
+  }, []);
 
   const handleClose = useCallback(() => {
     setOpen(false);
@@ -334,14 +335,14 @@ export function ReleaseForm({
               </PopoverContent>
             </Popover>
           </div>
-          <input
-            className="text-sm"
-            type="file"
-            multiple
-            {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
-            onChange={handleSelectFolder}
+          <Button
+            variant="outline"
+            className="flex w-full justify-start"
+            onClick={handleSelectFiles}
             disabled={saving}
-          />
+          >
+            {t("developer:release.selectFiles")}
+          </Button>
           {files.length > 0 && (
             <p className="text-sm text-muted-foreground">
               {t("developer:upload.filesSelected", {
