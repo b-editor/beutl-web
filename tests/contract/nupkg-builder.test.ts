@@ -163,6 +163,14 @@ describe("rewriteTemplateReferences", () => {
     );
   });
 
+  // Token replacement only reads string literals, so a document broken outside a string
+  // would otherwise be packaged unchanged.
+  it("rejects a template that is malformed outside a string token", () => {
+    expect(() =>
+      rewriteTemplateReferences('{"name":"x"', "templates/title.json", materials, "pkg"),
+    ).toThrow();
+  });
+
   it("rejects material names that differ only in letter case", () => {
     const colliding = [
       { packagePath: "materials/Logo.png", basename: "Logo.png" },

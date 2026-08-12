@@ -9,6 +9,7 @@ import {
   getPackageNameFromPackageId,
   getProfileByUserId,
   retrieveDevPackageByName,
+  startTransaction,
   updateDevPackageTags,
 } from "@beutl/db";
 import {
@@ -144,21 +145,30 @@ export async function updateRelease(
       const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
         id: validated.data.id,
       });
-      const data = await updateReleaseRecord({
-        id: validated.data.id,
-        title: validated.data.title,
-        description: validated.data.description,
-        targetVersion: validated.data.targetVersion,
-        published: validated.data.published === "on",
-        fileId: fileId,
-      });
+      // The tags describe the artifact the release points at, so either both writes land
+      // or neither does — a partial commit leaves the store classifying the package from
+      // an artifact the release does not serve.
+      const data = await startTransaction(async (tx) => {
+        const updated = await updateReleaseRecord({
+          id: validated.data.id,
+          title: validated.data.title,
+          description: validated.data.description,
+          targetVersion: validated.data.targetVersion,
+          published: validated.data.published === "on",
+          fileId: fileId,
+          prisma: tx,
+        });
 
-      // The tags describe the artifact the release now points at, so they follow the
-      // release update — writing them first would reclassify the package in the store
-      // while users still download the previous payload.
-      if (tags) {
-        await updateDevPackageTags({ packageId: release.packageId, tags });
-      }
+        if (tags) {
+          await updateDevPackageTags({
+            packageId: release.packageId,
+            tags,
+            prisma: tx,
+          });
+        }
+
+        return updated;
+      });
 
       if (replacedFileId) {
         await deleteStorageFile({ fileId: replacedFileId });

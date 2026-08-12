@@ -146,6 +146,10 @@ export function rewriteTemplateReferences(
     byBasename.set(key, m.packagePath);
   }
 
+  // Token replacement only reads the string literals, so the document is validated here
+  // — a template broken outside a string would otherwise be packaged unchanged.
+  JSON.parse(json);
+
   // Rewriting string tokens in place keeps every other byte — notably integers outside
   // JS's safe range, which a JSON.parse/stringify round trip would silently round.
   return json.replace(JSON_STRING_TOKEN, (token) => {
