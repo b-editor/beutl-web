@@ -12,15 +12,3 @@ export function showOpenFileDialog(
     input.click();
   });
 }
-
-export function showOpenDirectoryDialog() {
-  return new Promise<FileList | null>((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.setAttribute("webkitdirectory", "");
-    input.onchange = () => {
-      resolve(input.files);
-    };
-    input.click();
-  });
-}
