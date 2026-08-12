@@ -37,9 +37,11 @@ const nextConfig = {
     ];
     return config;
   },
-  // Material packages routinely exceed the 1 MB default Server Action body limit.
-  serverActions: {
-    bodySizeLimit: "100mb",
+  experimental: {
+    // Material packages routinely exceed the 1 MB default Server Action body limit.
+    serverActions: {
+      bodySizeLimit: "100mb",
+    },
   },
 };
 

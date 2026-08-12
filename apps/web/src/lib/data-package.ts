@@ -102,15 +102,22 @@ export async function buildDataPackageNupkgFile({
     });
   }
 
-  const nupkg = buildNupkg({
-    id,
-    version,
-    title,
-    description,
-    tags,
-    authors: username,
-    files: nupkgFiles,
-  });
+  let nupkg: Uint8Array;
+  try {
+    nupkg = buildNupkg({
+      id,
+      version,
+      title,
+      description,
+      tags,
+      authors: username,
+      files: nupkgFiles,
+    });
+  } catch {
+    // sanitizePayloadPath rejects names a package cannot carry (e.g. a colon),
+    // which are legal filenames on Unix.
+    return { ok: false, message: t("developer:upload.invalidFileName") };
+  }
 
   return {
     ok: true,

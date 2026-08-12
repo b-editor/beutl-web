@@ -144,6 +144,7 @@
     "invalidDescription": "Enter a description of up to 1000 characters.",
     "noFiles": "Select at least one file.",
     "invalidFile": "\"{{name}}\" is not a file type this package accepts.",
-    "nameTaken": "A package with this name already exists. Choose a different name."
+    "nameTaken": "A package with this name already exists. Choose a different name.",
+    "invalidFileName": "One of the selected file names cannot be used in a package. Rename files that contain characters like ':' and try again."
   }
 }

@@ -89,7 +89,7 @@ export function ReleaseForm({
     startSaveTransition(async () => {
       const formData = new FormData();
       for (const f of files) {
-        formData.append("file", f, f.webkitRelativePath || f.name);
+        formData.append("file", f);
       }
       formData.append("id", release.id);
       formData.append("title", title);
