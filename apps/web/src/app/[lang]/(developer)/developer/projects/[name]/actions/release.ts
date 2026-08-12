@@ -62,6 +62,10 @@ export async function updateRelease(
     return await sameUser(release.packageId, session.user.id, t, async () => {
       let fileId = release.file?.id;
       let tags: string[] | undefined;
+      // Deleting the old artifact clears the release's file relation, so it waits until
+      // the replacement is committed — a failure in between would leave a published
+      // release with nothing to download.
+      let replacedFileId: string | undefined;
 
       const packageName = await getPackageNameFromPackageId({
         packageId: release.packageId,
@@ -100,11 +104,7 @@ export async function updateRelease(
           };
         }
 
-        if (release.file) {
-          await deleteStorageFile({
-            fileId: release.file.id,
-          });
-        }
+        replacedFileId = release.file?.id;
         fileId = result.record!.id;
       } else if (uploaded.length > 0) {
         const profile = await getProfileByUserId(session.user.id);
@@ -137,9 +137,7 @@ export async function updateRelease(
           return { success: false, message: result.message };
         }
 
-        if (release.file) {
-          await deleteStorageFile({ fileId: release.file.id });
-        }
+        replacedFileId = release.file?.id;
         fileId = result.record!.id;
       }
 
@@ -158,6 +156,11 @@ export async function updateRelease(
         published: validated.data.published === "on",
         fileId: fileId,
       });
+
+      if (replacedFileId) {
+        await deleteStorageFile({ fileId: replacedFileId });
+      }
+
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updateRelease,
