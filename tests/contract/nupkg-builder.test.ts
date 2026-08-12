@@ -144,4 +144,12 @@ describe("rewriteTemplateReferences", () => {
 
     expect(JSON.parse(rewritten).Json.source).toBe("file:///Users/me/Photos/other.png");
   });
+
+  // A parse/stringify round trip rounds integers outside JS's safe range, so a
+  // template with nothing to rewrite must come back byte-identical.
+  it("returns the original text when nothing is rewritten", () => {
+    const json = '{"id":9007199254740993,"source":"file:///Users/me/Photos/other.png"}';
+
+    expect(rewriteTemplateReferences(json, "templates/title.json", materials, "pkg")).toBe(json);
+  });
 });

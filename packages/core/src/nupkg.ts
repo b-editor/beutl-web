@@ -139,12 +139,14 @@ export function rewriteTemplateReferences(
     materials.map((m) => [m.basename.toLowerCase(), m.packagePath]),
   );
 
+  let rewrote = false;
   const rewrite = (node: unknown): unknown => {
     if (typeof node === "string") {
       if (node.startsWith("file://")) {
         const basename = decodeURIComponent(node.split("/").pop() ?? "").toLowerCase();
         const materialPath = byBasename.get(basename);
         if (materialPath) {
+          rewrote = true;
           return materialReferenceUri(templatePackagePath, materialPath, packageId);
         }
       }
@@ -161,5 +163,8 @@ export function rewriteTemplateReferences(
     return node;
   };
 
-  return JSON.stringify(rewrite(JSON.parse(json)));
+  const rewritten = rewrite(JSON.parse(json));
+  // The parse/stringify round trip rounds integers outside JS's safe range, so a
+  // template with nothing to rewrite is shipped exactly as the author wrote it.
+  return rewrote ? JSON.stringify(rewritten) : json;
 }
