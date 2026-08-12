@@ -79,15 +79,23 @@ export async function buildDataPackageNupkgFile({
   for (const file of templateFiles) {
     const packagePath = `templates/${file.name}`;
     const json = new TextDecoder().decode(await file.arrayBuffer());
-    const rewritten = rewriteTemplateReferences(
-      json,
-      packagePath,
-      materialFiles.map((m) => ({
-        packagePath: `materials/${m.name}`,
-        basename: m.name,
-      })),
-      id,
-    );
+    let rewritten: string;
+    try {
+      rewritten = rewriteTemplateReferences(
+        json,
+        packagePath,
+        materialFiles.map((m) => ({
+          packagePath: `materials/${m.name}`,
+          basename: m.name,
+        })),
+        id,
+      );
+    } catch {
+      return {
+        ok: false,
+        message: t("developer:upload.invalidFile", { name: file.name }),
+      };
+    }
     nupkgFiles.push({
       path: packagePath,
       data: new TextEncoder().encode(rewritten),

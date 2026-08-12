@@ -316,7 +316,7 @@ export function ReleaseForm({
             <p className="text-sm text-red-300">{targetVersion.message}</p>
           )}
           <div className="flex items-center gap-2 mt-2">
-            <Label>
+            <Label htmlFor="release-package-file">
               {t("developer:release.packageFile")}
             </Label>
             <Popover>
@@ -325,6 +325,7 @@ export function ReleaseForm({
                   variant="ghost"
                   size="icon"
                   className="w-6 h-6"
+                  aria-label={t("developer:release.packageFileHelp")}
                   disabled={saving}
                 >
                   <Info className="w-4 h-4" />
@@ -336,6 +337,7 @@ export function ReleaseForm({
             </Popover>
           </div>
           <Button
+            id="release-package-file"
             variant="outline"
             className="flex w-full justify-start"
             onClick={handleSelectFiles}

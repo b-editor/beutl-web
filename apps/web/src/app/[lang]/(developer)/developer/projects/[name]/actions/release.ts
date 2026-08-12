@@ -2,11 +2,13 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
+import { applyPackageType, getPackageType } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import { buildDataPackageNupkgFile } from "@/lib/data-package";
 import {
   getPackageNameFromPackageId,
   getProfileByUserId,
+  retrieveDevPackageByName,
   updateDevPackageTags,
 } from "@beutl/db";
 import {
@@ -61,11 +63,27 @@ export async function updateRelease(
       let fileId = release.file?.id;
       let tags: string[] | undefined;
 
+      const packageName = await getPackageNameFromPackageId({
+        packageId: release.packageId,
+      });
+      if (!packageName) {
+        return { success: false, message: t("developer:errors.idNotFound") };
+      }
+      const devPackage = await retrieveDevPackageByName({
+        name: packageName,
+        userId: session.user.id,
+      });
+      const currentTags = devPackage?.tags ?? [];
+
       const uploaded = formData.getAll("file") as File[];
       const singleNupkg =
         uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");
 
       if (singleNupkg) {
+        // A lone .nupkg is an extension release; drop any data markers a previous
+        // upload may have left so the store stops classifying it as a data package.
+        tags = applyPackageType(currentTags, "extension");
+
         const deletedSize = release.file
           ? BigInt(release.file.size)
           : BigInt(0);
@@ -89,13 +107,6 @@ export async function updateRelease(
         }
         fileId = result.record!.id;
       } else if (uploaded.length > 0) {
-        const packageName = await getPackageNameFromPackageId({
-          packageId: release.packageId,
-        });
-        if (!packageName) {
-          return { success: false, message: t("developer:errors.idNotFound") };
-        }
-
         const profile = await getProfileByUserId(session.user.id);
         const username = profile?.userName || session.user.name || session.user.id;
 
@@ -112,6 +123,9 @@ export async function updateRelease(
           return { success: false, message: built.message };
         }
 
+        // Keep the author's visible tags; only the kind markers change.
+        tags = applyPackageType(currentTags, getPackageType(built.tags));
+
         const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
@@ -127,7 +141,6 @@ export async function updateRelease(
           await deleteStorageFile({ fileId: release.file.id });
         }
         fileId = result.record!.id;
-        tags = built.tags;
       }
 
       if (tags) {
