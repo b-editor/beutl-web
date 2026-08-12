@@ -135,36 +135,38 @@ export function rewriteTemplateReferences(
   materials: { packagePath: string; basename: string }[],
   packageId: string,
 ): string {
-  const byBasename = new Map(
-    materials.map((m) => [m.basename.toLowerCase(), m.packagePath]),
-  );
+  const byBasename = new Map<string, string>();
+  for (const m of materials) {
+    const key = m.basename.toLowerCase();
+    if (byBasename.has(key)) {
+      // Matching is case-insensitive, so `Logo.png` and `logo.png` would both claim this
+      // key and a reference to either could resolve to the wrong file.
+      throw new Error(`Ambiguous material file name: ${m.basename}`);
+    }
+    byBasename.set(key, m.packagePath);
+  }
 
-  let rewrote = false;
-  const rewrite = (node: unknown): unknown => {
-    if (typeof node === "string") {
-      if (node.startsWith("file://")) {
-        const basename = decodeURIComponent(node.split("/").pop() ?? "").toLowerCase();
-        const materialPath = byBasename.get(basename);
-        if (materialPath) {
-          rewrote = true;
-          return materialReferenceUri(templatePackagePath, materialPath, packageId);
-        }
-      }
-      return node;
+  // Rewriting string tokens in place keeps every other byte — notably integers outside
+  // JS's safe range, which a JSON.parse/stringify round trip would silently round.
+  return json.replace(JSON_STRING_TOKEN, (token) => {
+    let value: string;
+    try {
+      value = JSON.parse(token) as string;
+    } catch {
+      return token;
     }
-    if (Array.isArray(node)) {
-      return node.map(rewrite);
-    }
-    if (node !== null && typeof node === "object") {
-      for (const key of Object.keys(node)) {
-        (node as Record<string, unknown>)[key] = rewrite((node as Record<string, unknown>)[key]);
-      }
-    }
-    return node;
-  };
+    if (!value.startsWith("file://")) return token;
 
-  const rewritten = rewrite(JSON.parse(json));
-  // The parse/stringify round trip rounds integers outside JS's safe range, so a
-  // template with nothing to rewrite is shipped exactly as the author wrote it.
-  return rewrote ? JSON.stringify(rewritten) : json;
+    const basename = decodeURIComponent(value.split("/").pop() ?? "").toLowerCase();
+    const materialPath = byBasename.get(basename);
+    if (!materialPath) return token;
+
+    return JSON.stringify(
+      materialReferenceUri(templatePackagePath, materialPath, packageId),
+    );
+  });
 }
+
+// A complete JSON string literal, including escapes, so a `file://` value is replaced
+// without touching the numbers around it.
+const JSON_STRING_TOKEN = /"(?:[^"\\]|\\.)*"/g;

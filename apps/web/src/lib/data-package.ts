@@ -62,6 +62,20 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.noFiles") };
   }
 
+  // Template references match a material by file name, case-insensitively, so two names
+  // differing only in case would make a reference resolve to either file.
+  const seenBasenames = new Set<string>();
+  for (const file of materialFiles) {
+    const key = file.name.toLowerCase();
+    if (seenBasenames.has(key)) {
+      return {
+        ok: false,
+        message: t("developer:upload.ambiguousFileName", { name: file.name }),
+      };
+    }
+    seenBasenames.add(key);
+  }
+
   const tags =
     materialFiles.length > 0 && templateFiles.length > 0
       ? [MATERIAL_TAG, TEMPLATE_TAG]
@@ -78,9 +92,12 @@ export async function buildDataPackageNupkgFile({
   }
   for (const file of templateFiles) {
     const packagePath = `templates/${file.name}`;
-    const json = new TextDecoder().decode(await file.arrayBuffer());
     let rewritten: string;
     try {
+      // A non-fatal decoder would replace malformed bytes with U+FFFD and package the
+      // altered text, so bad input is rejected instead of silently rewritten.
+      const json = new TextDecoder("utf-8", { fatal: true })
+        .decode(await file.arrayBuffer());
       rewritten = rewriteTemplateReferences(
         json,
         packagePath,

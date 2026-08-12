@@ -152,4 +152,25 @@ describe("rewriteTemplateReferences", () => {
 
     expect(rewriteTemplateReferences(json, "templates/title.json", materials, "pkg")).toBe(json);
   });
+
+  it("keeps large integers intact while rewriting a reference", () => {
+    const json = '{"id":9007199254740993,"source":"file:///Users/me/Photos/logo.png"}';
+
+    const rewritten = rewriteTemplateReferences(json, "templates/title.json", materials, "pkg");
+
+    expect(rewritten).toBe(
+      '{"id":9007199254740993,"source":"../../materials/pkg/logo.png"}',
+    );
+  });
+
+  it("rejects material names that differ only in letter case", () => {
+    const colliding = [
+      { packagePath: "materials/Logo.png", basename: "Logo.png" },
+      { packagePath: "materials/logo.png", basename: "logo.png" },
+    ];
+
+    expect(() =>
+      rewriteTemplateReferences("{}", "templates/title.json", colliding, "pkg"),
+    ).toThrow();
+  });
 });

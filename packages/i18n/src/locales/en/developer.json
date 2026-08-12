@@ -145,6 +145,7 @@
     "noFiles": "Select at least one file.",
     "invalidFile": "\"{{name}}\" is not a file type this package accepts.",
     "nameTaken": "A package with this name already exists. Choose a different name.",
-    "invalidFileName": "One of the selected file names cannot be used in a package. Rename files that contain characters like ':' and try again."
+    "invalidFileName": "One of the selected file names cannot be used in a package. Rename files that contain characters like ':' and try again.",
+    "ambiguousFileName": "Two selected material files share the name \"{{name}}\" apart from letter case. Templates match materials by file name regardless of case, so rename one of them and try again."
   }
 }
