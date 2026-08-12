@@ -62,18 +62,21 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.noFiles") };
   }
 
-  // Template references match a material by file name, case-insensitively, so two names
-  // differing only in case would make a reference resolve to either file.
-  const seenBasenames = new Set<string>();
-  for (const file of materialFiles) {
-    const key = file.name.toLowerCase();
-    if (seenBasenames.has(key)) {
-      return {
-        ok: false,
-        message: t("developer:upload.ambiguousFileName", { name: file.name }),
-      };
+  // Two names differing only in case collide on a case-insensitive filesystem when the
+  // package is installed, and among materials they also make a template reference — which
+  // matches by name, case-insensitively — resolve to either file.
+  for (const group of [materialFiles, templateFiles]) {
+    const seen = new Set<string>();
+    for (const file of group) {
+      const key = file.name.toLowerCase();
+      if (seen.has(key)) {
+        return {
+          ok: false,
+          message: t("developer:upload.ambiguousFileName", { name: file.name }),
+        };
+      }
+      seen.add(key);
     }
-    seenBasenames.add(key);
   }
 
   const tags =

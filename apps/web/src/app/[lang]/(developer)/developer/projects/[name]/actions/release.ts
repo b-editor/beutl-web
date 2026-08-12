@@ -1,7 +1,7 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import type { ActionResult } from "@beutl/core";
+import type { ActionResult, PackageType } from "@beutl/core";
 import { applyPackageType, getPackageType } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import { buildDataPackageNupkgFile } from "@/lib/data-package";
@@ -62,7 +62,9 @@ export async function updateRelease(
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
       let fileId = release.file?.id;
-      let tags: string[] | undefined;
+      // Only the kind is decided here; it is merged into the package's visible tags
+      // inside the write transaction, so a tag edit landing meanwhile is not discarded.
+      let packageType: PackageType | undefined;
       // Deleting the old artifact clears the release's file relation, so it waits until
       // the replacement is committed — a failure in between would leave a published
       // release with nothing to download.
@@ -74,11 +76,6 @@ export async function updateRelease(
       if (!packageName) {
         return { success: false, message: t("developer:errors.idNotFound") };
       }
-      const devPackage = await retrieveDevPackageByName({
-        name: packageName,
-        userId: session.user.id,
-      });
-      const currentTags = devPackage?.tags ?? [];
 
       const uploaded = formData.getAll("file") as File[];
       const singleNupkg =
@@ -87,7 +84,7 @@ export async function updateRelease(
       if (singleNupkg) {
         // A lone .nupkg is an extension release; drop any data markers a previous
         // upload may have left so the store stops classifying it as a data package.
-        tags = applyPackageType(currentTags, "extension");
+        packageType = "extension";
 
         const deletedSize = release.file
           ? BigInt(release.file.size)
@@ -124,8 +121,7 @@ export async function updateRelease(
           return { success: false, message: built.message };
         }
 
-        // Keep the author's visible tags; only the kind markers change.
-        tags = applyPackageType(currentTags, getPackageType(built.tags));
+        packageType = getPackageType(built.tags);
 
         const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
         const result = await createDedicatedFile(
@@ -159,10 +155,17 @@ export async function updateRelease(
           prisma: tx,
         });
 
-        if (tags) {
+        if (packageType) {
+          // Read the visible tags here rather than before the upload, so a tag edit
+          // that landed while the archive was being built is not discarded.
+          const devPackage = await retrieveDevPackageByName({
+            name: packageName,
+            userId: session.user.id,
+            prisma: tx,
+          });
           await updateDevPackageTags({
             packageId: release.packageId,
-            tags,
+            tags: applyPackageType(devPackage?.tags ?? [], packageType),
             prisma: tx,
           });
         }
