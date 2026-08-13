@@ -60,6 +60,19 @@ describe("buildNuspec", () => {
     }
   });
 
+  // NuGet rejects these at install time, so the upload has to catch them first.
+  it("rejects ids NuGet does not accept", () => {
+    for (const bad of [".abc", "abc.", "a..b", "a b", "a/b", "-abc", "abc-"]) {
+      expect(() => buildNuspec({ ...OPTIONS, id: bad }), bad).toThrow();
+    }
+  });
+
+  it("keeps the ids NuGet does accept", () => {
+    for (const good of ["Beutl.Materials.tester.city-photos", "a", "a_b-c.d"]) {
+      expect(() => buildNuspec({ ...OPTIONS, id: good }), good).not.toThrow();
+    }
+  });
+
   it("keeps the characters XML 1.0 does allow", () => {
     const nuspec = buildNuspec({ ...OPTIONS, description: "tab\there 😀" });
 

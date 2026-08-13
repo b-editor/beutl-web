@@ -67,7 +67,9 @@ export async function updateRelease(
       let packageType: PackageType | undefined;
       // Deleting the old artifact clears the release's file relation, so it waits until
       // the replacement is committed — a failure in between would leave a published
-      // release with nothing to download.
+      // release with nothing to download. Which file that is can only be read inside the
+      // transaction: a concurrent save may have replaced it since this request started.
+      let replacesArtifact = false;
       let replacedFileId: string | undefined;
       // Tracked so a failed release transaction does not strand the upload against
       // the publisher's quota.
@@ -79,6 +81,12 @@ export async function updateRelease(
       if (!packageName) {
         return { success: false, message: t("developer:errors.idNotFound") };
       }
+
+      // Read before the upload: a failure here would otherwise strand the file the
+      // cleanup below only covers once the transaction is reached.
+      const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
+        id: validated.data.id,
+      });
 
       const uploaded = formData.getAll("file") as File[];
       const singleNupkg =
@@ -105,7 +113,7 @@ export async function updateRelease(
           };
         }
 
-        replacedFileId = release.file?.id;
+        replacesArtifact = true;
         fileId = result.record!.id;
         uploadedFileId = result.record!.id;
       } else if (uploaded.length > 0) {
@@ -138,20 +146,27 @@ export async function updateRelease(
           return { success: false, message: result.message };
         }
 
-        replacedFileId = release.file?.id;
+        replacesArtifact = true;
         fileId = result.record!.id;
         uploadedFileId = result.record!.id;
       }
 
-      const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
-        id: validated.data.id,
-      });
       // The tags describe the artifact the release points at, so either both writes land
       // or neither does — a partial commit leaves the store classifying the package from
       // an artifact the release does not serve.
       let data: ReleaseRecord;
       try {
         data = await startTransaction(async (tx) => {
+          if (replacesArtifact) {
+            // A concurrent save may have replaced the artifact since this request read
+            // it, and the file this one actually displaces is the one to clean up.
+            const current = await getReleaseWithFileById({
+              id: validated.data.id,
+              prisma: tx,
+            });
+            replacedFileId = current?.file?.id;
+          }
+
           const updated = await updateReleaseRecord({
             id: validated.data.id,
             title: validated.data.title,

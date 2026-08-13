@@ -51,6 +51,10 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
+// NuGet's package-id rule: word characters at both ends, single `.`/`-`/`_` separators
+// between them. `.abc`, `abc.`, and `a..b` are all rejected at install time.
+const NUGET_PACKAGE_ID = /^\w+(?:[.\-_]\w+)*$/;
+
 export function buildNuspec({
   id,
   version,
@@ -65,6 +69,10 @@ export function buildNuspec({
     if (value.trim() === "") {
       throw new Error(`Package metadata is missing a required field: ${field}.`);
     }
+  }
+
+  if (!NUGET_PACKAGE_ID.test(id)) {
+    throw new Error(`'${id}' is not a usable NuGet package id.`);
   }
 
   return `<?xml version="1.0" encoding="utf-8"?>
