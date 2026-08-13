@@ -178,6 +178,18 @@ describe("rewriteTemplateReferences", () => {
     expect(JSON.parse(rewritten).Json.source).toBe("../../materials/pkg/logo.png");
   });
 
+  // URI schemes are case-insensitive, so a template spelling it `FILE://` still points
+  // at the bundled material and has to be rewritten.
+  it("matches the file scheme case-insensitively", () => {
+    const json = JSON.stringify({
+      Json: { source: "FILE:///Users/me/Photos/logo.png" },
+    });
+
+    const rewritten = rewriteTemplateReferences(json, "templates/title.json", materials, "pkg");
+
+    expect(JSON.parse(rewritten).Json.source).toBe("../../materials/pkg/logo.png");
+  });
+
   it("leaves references to files that are not bundled alone", () => {
     const json = JSON.stringify({
       Json: { source: "file:///Users/me/Photos/other.png" },

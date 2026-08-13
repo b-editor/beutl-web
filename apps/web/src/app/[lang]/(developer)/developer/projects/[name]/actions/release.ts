@@ -174,7 +174,17 @@ export async function updateRelease(
       });
 
       if (replacedFileId) {
-        await deleteStorageFile({ fileId: replacedFileId });
+        // The release already points at the new artifact, so a failure here must not
+        // report the save as failed — a retry would upload another copy while the
+        // orphaned file keeps consuming the publisher's quota either way.
+        try {
+          await deleteStorageFile({ fileId: replacedFileId });
+        } catch (error) {
+          console.error(
+            `Failed to delete the replaced artifact ${replacedFileId}:`,
+            error,
+          );
+        }
       }
 
       await addAuditLog({

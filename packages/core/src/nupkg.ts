@@ -202,7 +202,8 @@ export function rewriteTemplateReferences(
     } catch {
       return token;
     }
-    if (!value.startsWith("file://")) return token;
+    // URI schemes are case-insensitive, so `FILE://` names the same thing.
+    if (!value.toLowerCase().startsWith("file://")) return token;
 
     const basename = decodeURIComponent(value.split("/").pop() ?? "").toLowerCase();
     const materialPath = byBasename.get(basename);
