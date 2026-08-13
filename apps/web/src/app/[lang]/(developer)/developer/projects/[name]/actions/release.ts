@@ -69,6 +69,9 @@ export async function updateRelease(
       // the replacement is committed — a failure in between would leave a published
       // release with nothing to download.
       let replacedFileId: string | undefined;
+      // Tracked so a failed release transaction does not strand the upload against
+      // the publisher's quota.
+      let uploadedFileId: string | undefined;
 
       const packageName = await getPackageNameFromPackageId({
         packageId: release.packageId,
@@ -104,6 +107,7 @@ export async function updateRelease(
 
         replacedFileId = release.file?.id;
         fileId = result.record!.id;
+        uploadedFileId = result.record!.id;
       } else if (uploaded.length > 0) {
         const profile = await getProfileByUserId(session.user.id);
         const username = profile?.userName || session.user.name || session.user.id;
@@ -136,6 +140,7 @@ export async function updateRelease(
 
         replacedFileId = release.file?.id;
         fileId = result.record!.id;
+        uploadedFileId = result.record!.id;
       }
 
       const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
@@ -144,34 +149,51 @@ export async function updateRelease(
       // The tags describe the artifact the release points at, so either both writes land
       // or neither does — a partial commit leaves the store classifying the package from
       // an artifact the release does not serve.
-      const data = await startTransaction(async (tx) => {
-        const updated = await updateReleaseRecord({
-          id: validated.data.id,
-          title: validated.data.title,
-          description: validated.data.description,
-          targetVersion: validated.data.targetVersion,
-          published: validated.data.published === "on",
-          fileId: fileId,
-          prisma: tx,
+      let data: ReleaseRecord;
+      try {
+        data = await startTransaction(async (tx) => {
+          const updated = await updateReleaseRecord({
+            id: validated.data.id,
+            title: validated.data.title,
+            description: validated.data.description,
+            targetVersion: validated.data.targetVersion,
+            published: validated.data.published === "on",
+            fileId: fileId,
+            prisma: tx,
+          });
+
+          if (packageType) {
+            // Read the visible tags here rather than before the upload, so a tag edit
+            // that landed while the archive was being built is not discarded.
+            const devPackage = await retrieveDevPackageByName({
+              name: packageName,
+              userId: session.user.id,
+              prisma: tx,
+            });
+            await updateDevPackageTags({
+              packageId: release.packageId,
+              tags: applyPackageType(devPackage?.tags ?? [], packageType),
+              prisma: tx,
+            });
+          }
+
+          return updated;
         });
-
-        if (packageType) {
-          // Read the visible tags here rather than before the upload, so a tag edit
-          // that landed while the archive was being built is not discarded.
-          const devPackage = await retrieveDevPackageByName({
-            name: packageName,
-            userId: session.user.id,
-            prisma: tx,
-          });
-          await updateDevPackageTags({
-            packageId: release.packageId,
-            tags: applyPackageType(devPackage?.tags ?? [], packageType),
-            prisma: tx,
-          });
+      } catch (error) {
+        // Nothing references the upload now, and it would still count against the
+        // publisher's quota, so every retry would cost them another copy.
+        if (uploadedFileId) {
+          try {
+            await deleteStorageFile({ fileId: uploadedFileId });
+          } catch (cleanupError) {
+            console.error(
+              `Failed to delete the orphaned upload ${uploadedFileId}:`,
+              cleanupError,
+            );
+          }
         }
-
-        return updated;
-      });
+        throw error;
+      }
 
       if (replacedFileId) {
         // The release already points at the new artifact, so a failure here must not
