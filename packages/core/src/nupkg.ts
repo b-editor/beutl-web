@@ -21,7 +21,28 @@ export type NupkgOptions = {
   files: NupkgFile[];
 };
 
+// XML 1.0 has no representation at all for most C0 controls, unpaired surrogates, or
+// U+FFFE/U+FFFF — not even an escape — so a nuspec carrying one is rejected by NuGet's
+// reader at install time rather than at upload.
+function isXmlChar(code: number): boolean {
+  return (
+    code === 0x9 ||
+    code === 0xa ||
+    code === 0xd ||
+    (code >= 0x20 && code <= 0xd7ff) ||
+    (code >= 0xe000 && code <= 0xfffd) ||
+    (code >= 0x10000 && code <= 0x10ffff)
+  );
+}
+
 function escapeXml(value: string): string {
+  // Iterating by code point pairs surrogates, so a lone one falls outside every range.
+  for (const ch of value) {
+    if (!isXmlChar(ch.codePointAt(0)!)) {
+      throw new Error("Metadata contains a character XML 1.0 cannot represent.");
+    }
+  }
+
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

@@ -40,6 +40,24 @@ describe("buildNuspec", () => {
     expect(nuspec).toContain("<title>A &amp; B &lt;C&gt;</title>");
     expect(nuspec).toContain("<description>say &quot;hi&quot;</description>");
   });
+
+  // A C0 control has no XML 1.0 representation, so NuGet's reader would reject the
+  // nuspec at install time instead of the upload failing here.
+  it("rejects metadata holding a character XML 1.0 cannot represent", () => {
+    expect(() =>
+      buildNuspec({ ...OPTIONS, title: `A${String.fromCharCode(0x0c)}B` }),
+    ).toThrow();
+
+    expect(() =>
+      buildNuspec({ ...OPTIONS, description: `A${String.fromCharCode(0xd800)}B` }),
+    ).toThrow();
+  });
+
+  it("keeps the characters XML 1.0 does allow", () => {
+    const nuspec = buildNuspec({ ...OPTIONS, description: "tab\there 😀" });
+
+    expect(nuspec).toContain("<description>tab\there 😀</description>");
+  });
 });
 
 describe("buildNupkg", () => {

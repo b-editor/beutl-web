@@ -3,6 +3,7 @@ import {
   buildNupkg,
   MATERIAL_TAG,
   rewriteTemplateReferences,
+  sanitizePayloadPath,
   TEMPLATE_TAG,
 } from "@beutl/core";
 import type { NupkgFile } from "@beutl/core";
@@ -86,30 +87,36 @@ export async function buildDataPackageNupkgFile({
         ? [MATERIAL_TAG]
         : [TEMPLATE_TAG];
 
+  // buildNupkg stores each entry at its sanitized path, so reference rewriting has to
+  // work from the same value — a name holding a backslash lands in a subdirectory the
+  // unsanitized path does not describe.
+  let materialEntries: { packagePath: string; basename: string }[];
+  try {
+    materialEntries = materialFiles.map((m) => ({
+      packagePath: sanitizePayloadPath(`materials/${m.name}`),
+      basename: m.name,
+    }));
+  } catch {
+    return { ok: false, message: t("developer:upload.invalidFileName") };
+  }
+
   const nupkgFiles: NupkgFile[] = [];
-  for (const file of materialFiles) {
+  for (const [index, file] of materialFiles.entries()) {
     nupkgFiles.push({
-      path: `materials/${file.name}`,
+      path: materialEntries[index].packagePath,
       data: new Uint8Array(await file.arrayBuffer()),
     });
   }
   for (const file of templateFiles) {
-    const packagePath = `templates/${file.name}`;
+    let packagePath: string;
     let rewritten: string;
     try {
+      packagePath = sanitizePayloadPath(`templates/${file.name}`);
       // A non-fatal decoder would replace malformed bytes with U+FFFD and package the
       // altered text, so bad input is rejected instead of silently rewritten.
       const json = new TextDecoder("utf-8", { fatal: true })
         .decode(await file.arrayBuffer());
-      rewritten = rewriteTemplateReferences(
-        json,
-        packagePath,
-        materialFiles.map((m) => ({
-          packagePath: `materials/${m.name}`,
-          basename: m.name,
-        })),
-        id,
-      );
+      rewritten = rewriteTemplateReferences(json, packagePath, materialEntries, id);
     } catch {
       return {
         ok: false,
