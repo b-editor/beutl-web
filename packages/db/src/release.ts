@@ -91,6 +91,7 @@ export async function getReleaseWithFileById({
     },
     select: {
       packageId: true,
+      version: true,
       file: {
         select: {
           id: true,

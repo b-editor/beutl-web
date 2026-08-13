@@ -34,6 +34,14 @@
   "author": "作者",
   "tags": "タグ",
   "targetVersion": "ターゲットバージョン",
-  "searchForExtensions": "拡張機能を探す",
-  "search": "検索"
+  "searchForPackages": "パッケージを探す",
+  "search": "検索",
+  "typeAll": "すべて",
+  "typeExtensions": "拡張機能",
+  "typeMaterials": "素材",
+  "typeTemplates": "テンプレート",
+  "typeExtension": "拡張機能",
+  "typeMaterial": "素材",
+  "typeTemplate": "テンプレート",
+  "typeBoth": "素材 + テンプレート"
 }

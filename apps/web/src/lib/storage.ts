@@ -59,10 +59,9 @@ export async function createStorageFile({
   const objectKey = crypto.randomUUID();
   const array = await file.arrayBuffer();
   const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-  bucket.put(
-    objectKey,
-    array,
-  );
+  // The File record below is what callers commit against, so the object has to exist
+  // first — an unawaited write can reject, or outlive the request, after they succeed.
+  await bucket.put(objectKey, array);
   // sha256を計算
   const hashBuffer = await crypto.subtle.digest("SHA-256", array);
   const hashArray = Array.from(new Uint8Array(hashBuffer));

@@ -21,6 +21,12 @@ import { Label } from "@beutl/ui/ui/label";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
+import { Info } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@beutl/ui/ui/popover";
 import SemVer from "semver";
 import { createRelease, deleteRelease, updateRelease } from "./actions/release";
 import {
@@ -59,7 +65,7 @@ export function ReleaseForm({
     Package["Release"][number] | undefined
   >(releases?.[0]);
   const [title, setTitle] = useState(release?.title || "");
-  const [file, setFile] = useState<File>();
+  const [files, setFiles] = useState<File[]>([]);
   const [description, setDescription] = useState(release?.description || "");
   const [targetVersion, setTargetVersion] = useState({
     value: release?.targetVersion || "",
@@ -75,15 +81,15 @@ export function ReleaseForm({
     setDescription(release?.description || "");
     setTargetVersion({ value: release?.targetVersion || "", message: "" });
     setPublished(release?.published || false);
-    setFile(undefined);
+    setFiles([]);
   }, [release]);
 
   const handleSave = useCallback(async () => {
     if (!release) return;
     startSaveTransition(async () => {
       const formData = new FormData();
-      if (file) {
-        formData.append("file", file);
+      for (const f of files) {
+        formData.append("file", f);
       }
       formData.append("id", release.id);
       formData.append("title", title);
@@ -112,7 +118,7 @@ export function ReleaseForm({
     });
   }, [
     description,
-    file,
+    files,
     published,
     release,
     releases,
@@ -122,13 +128,11 @@ export function ReleaseForm({
     toast,
   ]);
 
-  const handleSelectFile = useCallback(async () => {
-    const files = await showOpenFileDialog();
-    const file = files?.[0];
-    if (!file) {
-      return;
+  const handleSelectFiles = useCallback(async () => {
+    const files = await showOpenFileDialog({ multiple: true });
+    if (files) {
+      setFiles(Array.from(files));
     }
-    setFile(file);
   }, []);
 
   const handleClose = useCallback(() => {
@@ -154,7 +158,7 @@ export function ReleaseForm({
         setDescription(data.description);
         setTargetVersion({ value: data.targetVersion, message: "" });
         setPublished(data.published);
-        setFile(undefined);
+        setFiles([]);
         toast({
           variant: "default",
           title: t("developer:release.createSuccess"),
@@ -179,7 +183,7 @@ export function ReleaseForm({
         setDescription(data?.description || "");
         setTargetVersion({ value: data?.targetVersion || "", message: "" });
         setPublished(data?.published || false);
-        setFile(undefined);
+        setFiles([]);
         setEdit(false);
         toast({
           variant: "default",
@@ -311,21 +315,43 @@ export function ReleaseForm({
           {targetVersion.message && (
             <p className="text-sm text-red-300">{targetVersion.message}</p>
           )}
-          <Label className="mt-2">
-            {t("developer:release.packageFile")}
-          </Label>
+          <div className="flex items-center gap-2 mt-2">
+            <Label htmlFor="release-package-file">
+              {t("developer:release.packageFile")}
+            </Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="w-6 h-6"
+                  aria-label={t("developer:release.packageFileHelp")}
+                  disabled={saving}
+                >
+                  <Info className="w-4 h-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 text-sm">
+                {t("developer:release.packageFileHelp")}
+              </PopoverContent>
+            </Popover>
+          </div>
           <Button
+            id="release-package-file"
             variant="outline"
             className="flex w-full justify-start"
-            onClick={handleSelectFile}
+            onClick={handleSelectFiles}
             disabled={saving}
           >
-            {file
-              ? file.name
-              : release?.file?.name
-                ? release.file.name
-                : t("developer:release.selectFile")}
+            {t("developer:release.selectFiles")}
           </Button>
+          {files.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t("developer:upload.filesSelected", {
+                count: files.length,
+              })}
+            </p>
+          )}
           <div className="flex items-center space-x-2 mt-2">
             <Checkbox
               id="release-public"

@@ -27,7 +27,12 @@ import { useMemo, useState, useTransition } from "react";
 import { addToLibrary, removeFromLibrary } from "./actions";
 import { useMatchMedia } from "@/hooks/use-match-media";
 import type { Package } from "@/lib/store-utils";
-import { formatAmount } from "@beutl/core";
+import {
+  formatAmount,
+  getPackageType,
+  visiblePackageTags,
+} from "@beutl/core";
+import type { PackageType } from "@beutl/core";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,6 +43,13 @@ import {
   AlertDialogTitle,
 } from "@beutl/ui/ui/alert-dialog";
 import { useTranslation } from "@beutl/ui/i18n-client";
+
+const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
+  extension: "store:typeExtension",
+  material: "store:typeMaterial",
+  template: "store:typeTemplate",
+  both: "store:typeBoth",
+};
 
 type Price = {
   price: number;
@@ -173,9 +185,14 @@ export function ClientPage({
               <div className="w-16 h-16 rounded-md bg-secondary" />
             )}
             <div>
-              <h2 className="font-bold text-2xl">
-                {pkg.displayName || pkg.name}
-              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-bold text-2xl">
+                  {pkg.displayName || pkg.name}
+                </h2>
+                <Badge variant="secondary">
+                  {t(PACKAGE_TYPE_LABEL_KEYS[getPackageType(pkg.tags)])}
+                </Badge>
+              </div>
               <Button
                 asChild
                 variant="link"
@@ -315,7 +332,7 @@ export function ClientPage({
           <div className="flex gap-2 flex-col my-4">
             <h4>{t("store:tags")}</h4>
             <div className="flex gap-1 flex-wrap">
-              {pkg.tags.map((tag) => (
+              {visiblePackageTags(pkg.tags).map((tag) => (
                 <Badge key={tag}>{tag}</Badge>
               ))}
             </div>

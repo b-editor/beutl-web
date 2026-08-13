@@ -2,7 +2,8 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { getDb } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
-import { selectPricing } from "@beutl/core";
+import { selectPricing, packageTypeWhere } from "@beutl/core";
+import type { PackageTypeFilter } from "@beutl/core";
 import { guessCurrency } from "./currency";
 import {
   existsUserPaymentHistory,
@@ -190,109 +191,46 @@ export type ListedPackage = {
 
 export async function retrievePackages(
   query?: string,
+  type?: PackageTypeFilter,
 ): Promise<ListedPackage[]> {
   const db = await getDb();
   const currency = await guessCurrency();
 
-  if (query) {
-    const tmp = await db.package.findMany({
-      where: {
-        published: true,
-        OR: [
-          {
-            name: {
-              contains: query,
-            },
-          },
-          {
-            displayName: {
-              contains: query,
-            },
-          },
-          {
-            description: {
-              contains: query,
-            },
-          },
-          {
-            shortDescription: {
-              contains: query,
-            },
-          },
-          {
-            tags: {
-              hasSome: [query],
-            },
-          },
-        ],
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      select: {
-        id: true,
-        displayName: true,
-        name: true,
-        shortDescription: true,
-        tags: true,
-        iconFileId: true,
-        userId: true,
-        user: {
-          select: {
-            Profile: {
-              select: {
-                userName: true,
-              },
-            },
-          },
-        },
-        packagePricing: {
-          where: currency ? {
-            OR: [
-              {
-                currency: {
-                  equals: currency,
-                  mode: "insensitive",
-                },
-              },
-              {
-                fallback: true,
-              },
-            ],
-          } : {
-            fallback: true,
-          },
-          select: {
-            price: true,
-            currency: true,
-            fallback: true,
-          },
-        },
-      },
-    });
-
-    return await Promise.all(
-      tmp.map(async (pkg) => {
-        const url = pkg.iconFileId && contentPath(pkg.iconFileId);
-
-        return {
-          id: pkg.id,
-          name: pkg.name,
-          displayName: pkg.displayName,
-          shortDescription: pkg.shortDescription,
-          userName: pkg.user.Profile?.userName || null,
-          userId: pkg.userId,
-          iconFileUrl: url,
-          iconFileId: pkg.iconFileId,
-          tags: pkg.tags,
-          price: selectPricing(pkg.packagePricing, currency) || null,
-        };
-      }),
-    );
-  }
   const tmp = await db.package.findMany({
     where: {
       published: true,
+      ...packageTypeWhere(type),
+      ...(query
+        ? {
+            OR: [
+              {
+                name: {
+                  contains: query,
+                },
+              },
+              {
+                displayName: {
+                  contains: query,
+                },
+              },
+              {
+                description: {
+                  contains: query,
+                },
+              },
+              {
+                shortDescription: {
+                  contains: query,
+                },
+              },
+              {
+                tags: {
+                  hasSome: [query],
+                },
+              },
+            ],
+          }
+        : {}),
     },
     orderBy: {
       createdAt: "desc",

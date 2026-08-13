@@ -25,6 +25,7 @@
     "preview": "pnpm --filter @beutl/web preview"
   },
   "devDependencies": {
+    "fflate": "^0.8.3",
     "hono": "^4.13.0",
     "vitest": "^4.1.10"
   },

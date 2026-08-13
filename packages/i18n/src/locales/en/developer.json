@@ -15,7 +15,8 @@
     "title": "Develop extensions",
     "createNewExtension": "Create a new extension",
     "documentation": "Documentation",
-    "projects": "Projects"
+    "projects": "Projects",
+    "publishDataPackage": "Publish materials or templates"
   },
   "newProject": {
     "title": "Create a new project",
@@ -63,7 +64,17 @@
   "details": {
     "title": "Details",
     "tags": "Tags",
-    "tagName": "Tag name"
+    "tagName": "Tag name",
+    "packageType": "Package type",
+    "packageTypeExtension": "Extension",
+    "packageTypeMaterial": "Material",
+    "packageTypeTemplate": "Template",
+    "reservedTag": "\"beutl-material\" and \"beutl-template\" are reserved for the package type. Use the package type selector instead.",
+    "packageTypeBoth": "Both",
+    "packageTypeDescriptionExtension": "Extensions ship code that is loaded into the editor.",
+    "packageTypeDescriptionMaterial": "Materials ship media files (images, audio, video, fonts) under materials/.",
+    "packageTypeDescriptionTemplate": "Templates ship object templates (JSON) under templates/.",
+    "packageTypeDescriptionBoth": "Ships both media files under materials/ and object templates under templates/."
   },
   "screenshots": {
     "alreadyFirst": "Already first",
@@ -108,6 +119,34 @@
     "selectFile": "Select file",
     "targetVersion": "Target version",
     "title": "Title",
-    "version": "Version"
+    "version": "Version",
+    "packageFileHelp": "Select one or more files. For an extension, select your .nupkg file. For materials or templates, select the media (images, audio, video, fonts) and JSON files — the kind follows the files, so a mix of media and JSON becomes a package carrying both. A template that references a bundled material must name a file that is also among the selected files.",
+    "selectFiles": "Select files"
+  },
+  "upload": {
+    "title": "Publish materials or templates",
+    "description": "Select a folder of files and publish them to the store. No packaging knowledge needed.",
+    "type": "Type",
+    "typeDescription": "Materials are media files (images, audio, video, fonts). Templates are object templates (JSON).",
+    "slug": "Name",
+    "slugDescription": "A short name for your package. It will be published as {{prefix}}.<name>.",
+    "titleLabel": "Title",
+    "titleDescription": "A short display title for the store listing.",
+    "descriptionLabel": "Description",
+    "descriptionHint": "What is in this package?",
+    "files": "Files",
+    "filesDescription": "Select a folder. The folder structure is preserved inside the package.",
+    "filesSelected": "{{count}} files selected",
+    "publish": "Publish",
+    "invalidType": "Choose a package type.",
+    "invalidSlug": "The name may only contain lowercase letters, digits and hyphens.",
+    "invalidTitle": "Enter a title of up to 50 characters.",
+    "invalidDescription": "Enter a description of up to 1000 characters.",
+    "noFiles": "Select at least one file.",
+    "invalidFile": "\"{{name}}\" is not a file type this package accepts.",
+    "nameTaken": "A package with this name already exists. Choose a different name.",
+    "invalidFileName": "One of the selected file names cannot be used in a package. Rename files that contain characters like ':' and try again.",
+    "ambiguousFileName": "Two selected material files share the name \"{{name}}\" apart from letter case. Templates match materials by file name regardless of case, so rename one of them and try again.",
+    "descriptionRequired": "Enter a description for this release before uploading files. It becomes required package metadata."
   }
 }

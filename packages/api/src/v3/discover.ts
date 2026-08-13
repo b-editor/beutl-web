@@ -10,11 +10,20 @@ import {
 import { getUserId } from "../api/auth";
 import { getContentUrl } from "../content-url";
 import { findProfileForDiscover } from "@beutl/db";
+import { PACKAGE_TYPE_FILTERS } from "@beutl/core";
+
+// Omitting `type` keeps the pre-data-package behaviour: every kind is listed.
+const packageTypeSchema = z.enum(PACKAGE_TYPE_FILTERS).optional().default("all");
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),
+  type: packageTypeSchema,
   offset: z.coerce.number().min(0).optional().default(0),
   count: z.coerce.number().min(1).max(100).optional().default(30),
+});
+
+const featuredQuerySchema = z.object({
+  type: packageTypeSchema,
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null, request?: Request) {
@@ -56,17 +65,18 @@ const app = new Hono()
     const query = c.req.valid("query");
     const userId = await getUserId(c);
 
-    const packages = await retrievePackages(query.query, c.req.raw);
+    const packages = await retrievePackages(query.query, c.req.raw, query.type);
     const result = await Promise.all(
       packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
     );
 
     return c.json(result);
   })
-  .get("/featured", async (c) => {
+  .get("/featured", zValidator("query", featuredQuerySchema), async (c) => {
+    const query = c.req.valid("query");
     const userId = await getUserId(c);
 
-    const packages = await retrievePackages(undefined, c.req.raw);
+    const packages = await retrievePackages(undefined, c.req.raw, query.type);
     const result = await Promise.all(
       packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
     );

@@ -18,3 +18,30 @@ export type {
   ContentAccessFile,
   ContentAccessResult,
 } from "./content-access";
+export {
+  MATERIAL_TAG,
+  TEMPLATE_TAG,
+  RESERVED_PACKAGE_TAGS,
+  PACKAGE_TYPES,
+  PACKAGE_TYPE_FILTERS,
+  isReservedPackageTag,
+  isPackageType,
+  isPackageTypeFilter,
+  getPackageType,
+  visiblePackageTags,
+  applyPackageType,
+  packageTypeWhere,
+} from "./package-type";
+export type {
+  ReservedPackageTag,
+  PackageType,
+  PackageTypeFilter,
+} from "./package-type";
+export {
+  buildNuspec,
+  buildNupkg,
+  sanitizePayloadPath,
+  materialReferenceUri,
+  rewriteTemplateReferences,
+} from "./nupkg";
+export type { NupkgFile, NupkgOptions } from "./nupkg";

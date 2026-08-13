@@ -15,7 +15,8 @@
     "title": "拡張機能を開発する",
     "createNewExtension": "新しい拡張機能を作成",
     "documentation": "ドキュメント",
-    "projects": "プロジェクト"
+    "projects": "プロジェクト",
+    "publishDataPackage": "素材・テンプレートを公開"
   },
   "newProject": {
     "title": "新しいプロジェクトを作成",
@@ -63,7 +64,17 @@
   "details": {
     "title": "詳細",
     "tags": "タグ",
-    "tagName": "タグ名"
+    "tagName": "タグ名",
+    "packageType": "パッケージの種類",
+    "packageTypeExtension": "拡張機能",
+    "packageTypeMaterial": "素材",
+    "packageTypeTemplate": "テンプレート",
+    "reservedTag": "「beutl-material」と「beutl-template」はパッケージの種類を表す予約タグです。種類の選択で設定してください。",
+    "packageTypeBoth": "両方",
+    "packageTypeDescriptionExtension": "拡張機能はエディタに読み込まれるコードを配布します。",
+    "packageTypeDescriptionMaterial": "素材は materials/ 以下のメディアファイル（画像・音声・動画・フォント）を配布します。",
+    "packageTypeDescriptionTemplate": "テンプレートは templates/ 以下のオブジェクトテンプレート（JSON）を配布します。",
+    "packageTypeDescriptionBoth": "materials/ 以下のメディアファイルと templates/ 以下のオブジェクトテンプレートの両方を配布します。"
   },
   "screenshots": {
     "alreadyFirst": "既に先頭です",
@@ -108,6 +119,34 @@
     "selectFile": "ファイルを選択",
     "targetVersion": "ターゲットバージョン",
     "title": "タイトル",
-    "version": "バージョン"
+    "version": "バージョン",
+    "packageFileHelp": "ファイルを 1 つ以上選択してください。拡張機能の場合は .nupkg ファイルを選択します。素材・テンプレートの場合はメディアファイル（画像・音声・動画・フォント）と JSON ファイルを選択します。種類はファイルから判別されるため、メディアと JSON の両方を含めると両方のパッケージになります。テンプレートが同梱素材を参照する場合、参照するファイル名は選択したファイルの中に同じ名前で含まれている必要があります。",
+    "selectFiles": "ファイルを選択"
+  },
+  "upload": {
+    "title": "素材・テンプレートを公開",
+    "description": "ファイルのフォルダを選んでストアに公開します。パッケージの知識は不要です。",
+    "type": "種類",
+    "typeDescription": "素材はメディアファイル（画像・音声・動画・フォント）、テンプレートはオブジェクトテンプレート（JSON）です。",
+    "slug": "名前",
+    "slugDescription": "パッケージの短い名前です。{{prefix}}.<名前> として公開されます。",
+    "titleLabel": "タイトル",
+    "titleDescription": "ストアの一覧に表示される短いタイトルです。",
+    "descriptionLabel": "説明",
+    "descriptionHint": "このパッケージの内容を説明してください。",
+    "files": "ファイル",
+    "filesDescription": "フォルダを選択してください。フォルダ構造はパッケージ内に保持されます。",
+    "filesSelected": "{{count}} 個のファイルを選択",
+    "publish": "公開",
+    "invalidType": "パッケージの種類を選択してください。",
+    "invalidSlug": "名前は小文字の英数字とハイフンのみ使用できます。",
+    "invalidTitle": "50 文字以内のタイトルを入力してください。",
+    "invalidDescription": "1000 文字以内の説明を入力してください。",
+    "noFiles": "ファイルを 1 つ以上選択してください。",
+    "invalidFile": "「{{name}}」はこのパッケージで受け付けられないファイル形式です。",
+    "nameTaken": "この名前のパッケージは既に存在します。別の名前を選択してください。",
+    "invalidFileName": "選択したファイル名の中にパッケージで使用できないものがあります。':' などの文字を含むファイル名を変更してから再試行してください。",
+    "ambiguousFileName": "選択した素材ファイルに、大文字小文字だけが異なる同名のファイル「{{name}}」が含まれています。テンプレートは大文字小文字を区別せずにファイル名で素材を参照するため、いずれかの名前を変更してから再試行してください。",
+    "descriptionRequired": "ファイルをアップロードする前に、このリリースの説明を入力してください。パッケージの必須メタデータになります。"
   }
 }

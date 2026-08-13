@@ -3,7 +3,7 @@ import { retrievePackages } from "./actions";
 import { Card, CardContent } from "@beutl/ui/ui/card";
 import { Separator } from "@beutl/ui/ui/separator";
 import { Badge } from "@beutl/ui/ui/badge";
-import { formatAmount } from "@beutl/core";
+import { formatAmount, visiblePackageTags } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
@@ -21,7 +21,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     <div className="container max-w-6xl mx-auto px-2">
       <h2 className="text-3xl font-semibold mx-4 py-6">{t("store:library")}</h2>
       <div className="flex flex-wrap">
-        {packages.map((item) => (
+        {packages.map((item) => {
+          const tags = visiblePackageTags(item.tags);
+
+          return (
           <a
             href={`/store/${item.name}`}
             className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
@@ -62,8 +65,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
                           )
                         : t("store:free")}
                     </Badge>
-                    <Separator orientation="vertical" className="h-auto my-1" />
-                    {item.tags.map((tag) => (
+                    {tags.length > 0 && (
+                      <Separator orientation="vertical" className="h-auto my-1" />
+                    )}
+                    {tags.map((tag) => (
                       <Badge
                         variant="outline"
                         className="border-input text-nowrap"
@@ -77,7 +82,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
               </CardContent>
             </Card>
           </a>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
