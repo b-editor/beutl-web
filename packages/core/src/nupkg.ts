@@ -59,6 +59,14 @@ export function buildNuspec({
   tags,
   authors,
 }: NupkgOptions): string {
+  // NuGet requires these, and a consumer validating the manifest rejects the package
+  // rather than installing it.
+  for (const [field, value] of Object.entries({ id, version, description, authors })) {
+    if (value.trim() === "") {
+      throw new Error(`Package metadata is missing a required field: ${field}.`);
+    }
+  }
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
   <metadata>
@@ -90,7 +98,14 @@ function isWindowsHostileSegment(segment: string): boolean {
 
   if (segment.endsWith(".") || segment.endsWith(" ")) return true;
 
-  const stem = segment.split(".")[0].toLowerCase();
+  // Windows reads the superscript digits as 1-3, so `COM¹` names the same device as
+  // `COM1`.
+  const stem = segment
+    .split(".")[0]
+    .toLowerCase()
+    .replaceAll("¹", "1")
+    .replaceAll("²", "2")
+    .replaceAll("³", "3");
   return WINDOWS_RESERVED_NAMES.has(stem);
 }
 

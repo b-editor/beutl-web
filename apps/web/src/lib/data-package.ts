@@ -129,6 +129,12 @@ export async function buildDataPackageNupkgFile({
     });
   }
 
+  // A release starts with an empty description, which NuGet requires; catching it here
+  // keeps the message about the description rather than the file names.
+  if (description.trim() === "") {
+    return { ok: false, message: t("developer:upload.descriptionRequired") };
+  }
+
   let nupkg: Uint8Array;
   try {
     nupkg = buildNupkg({

@@ -53,6 +53,13 @@ describe("buildNuspec", () => {
     ).toThrow();
   });
 
+  // NuGet requires these, so a consumer validating the manifest rejects the package.
+  it("rejects metadata missing a required field", () => {
+    for (const missing of ["id", "version", "description", "authors"] as const) {
+      expect(() => buildNuspec({ ...OPTIONS, [missing]: "  " }), missing).toThrow();
+    }
+  });
+
   it("keeps the characters XML 1.0 does allow", () => {
     const nuspec = buildNuspec({ ...OPTIONS, description: "tab\there 😀" });
 
@@ -122,6 +129,10 @@ describe("sanitizePayloadPath", () => {
       "aux.png",
       "materials/CON.png",
       "com1",
+      // Windows reads these superscripts as 1-3, so they name the same devices.
+      "COM¹.png",
+      "lpt².png",
+      "com³",
       "trailing..",
       "trailing ",
       `ctrl${String.fromCharCode(0x01)}.png`,
