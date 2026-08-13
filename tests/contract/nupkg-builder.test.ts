@@ -110,6 +110,31 @@ describe("sanitizePayloadPath", () => {
       expect(() => sanitizePayloadPath(bad)).toThrow();
     }
   });
+
+  // These are legal on Unix but cannot be created on Windows, where the installed
+  // package has to extract too.
+  it("rejects names Windows cannot create", () => {
+    for (const bad of [
+      "logo?.png",
+      'q"uote.png',
+      "pipe|.png",
+      "star*.png",
+      "aux.png",
+      "materials/CON.png",
+      "com1",
+      "trailing..",
+      "trailing ",
+      `ctrl${String.fromCharCode(0x01)}.png`,
+    ]) {
+      expect(() => sanitizePayloadPath(bad), bad).toThrow();
+    }
+  });
+
+  it("keeps names Windows does accept", () => {
+    for (const good of ["logo.png", "audio/sting.wav", "auxiliary.png", "a.b.c.png"]) {
+      expect(sanitizePayloadPath(good), good).toBe(good);
+    }
+  });
 });
 
 describe("materialReferenceUri", () => {

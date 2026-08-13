@@ -73,16 +73,38 @@ export function buildNuspec({
 `;
 }
 
+// Names Windows refuses regardless of extension, so `aux.png` is rejected too.
+const WINDOWS_RESERVED_NAMES = new Set([
+  "con", "prn", "aux", "nul",
+  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+]);
+
+// A segment Windows cannot create: a reserved character, a C0 control, a trailing dot
+// or space, or a reserved device name.
+function isWindowsHostileSegment(segment: string): boolean {
+  for (const ch of segment) {
+    const code = ch.codePointAt(0)!;
+    if (code < 0x20 || '<>:"|?*'.includes(ch)) return true;
+  }
+
+  if (segment.endsWith(".") || segment.endsWith(" ")) return true;
+
+  const stem = segment.split(".")[0].toLowerCase();
+  return WINDOWS_RESERVED_NAMES.has(stem);
+}
+
 /**
- * Sanitizes a payload-relative path so it cannot escape the package: no absolute
- * paths, no `..`, no backslashes, and no empty segments.
+ * Sanitizes a payload-relative path so it cannot escape the package and can be
+ * extracted on every platform Beutl runs on: no absolute paths, no `..`, no
+ * backslashes, no empty segments, and nothing Windows refuses to create.
  */
 export function sanitizePayloadPath(path: string): string {
   const normalized = path.replaceAll("\\", "/");
   const segments = normalized.split("/");
   if (
     segments.some(
-      (s) => s === "" || s === "." || s === ".." || s.includes(":"),
+      (s) => s === "" || s === "." || s === ".." || isWindowsHostileSegment(s),
     )
   ) {
     throw new Error(`Invalid payload path: ${path}`);
