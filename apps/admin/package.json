@@ -30,7 +30,7 @@
     "@prisma/client": "^7.9.1",
     "better-auth": "^1.6.26",
     "lucide-react": "^0.575.0",
-    "next": "15.5.22",
+    "next": "16.3.0",
     "pg": "^8.18.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
