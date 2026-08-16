@@ -11,6 +11,7 @@ export const namespaces = [
   "api-errors",
   "feedback",
   "developer",
+  "dashboard",
   "admin",
 ];
 

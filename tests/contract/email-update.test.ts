@@ -40,7 +40,7 @@ vi.mock("@/lib/confirmation-token-flow", () => ({
   issueConfirmationToken: vi.fn(),
 }));
 
-import { updateEmail } from "../../apps/web/src/app/[lang]/(manage-account)/account/manage/email/actions";
+import { updateEmail } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/email/actions";
 
 describe("email update", () => {
   beforeEach(() => {

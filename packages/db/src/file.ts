@@ -270,3 +270,23 @@ export async function retrieveStorageFilesByUserId({
     },
   });
 }
+
+export async function sumFileSizeByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  // 一覧を必要としない使用量表示用。行を引かずに合計サイズだけを 1 クエリで取る。
+  const result = await db.file.aggregate({
+    where: {
+      userId,
+    },
+    _sum: {
+      size: true,
+    },
+  });
+  return result._sum.size ?? BigInt(0);
+}

@@ -5,6 +5,7 @@ import en_account from "./locales/en/account.json";
 import en_admin from "./locales/en/admin.json";
 import en_apiErrors from "./locales/en/api-errors.json";
 import en_auth from "./locales/en/auth.json";
+import en_dashboard from "./locales/en/dashboard.json";
 import en_developer from "./locales/en/developer.json";
 import en_feedback from "./locales/en/feedback.json";
 import en_main from "./locales/en/main.json";
@@ -15,6 +16,7 @@ import ja_account from "./locales/ja/account.json";
 import ja_admin from "./locales/ja/admin.json";
 import ja_apiErrors from "./locales/ja/api-errors.json";
 import ja_auth from "./locales/ja/auth.json";
+import ja_dashboard from "./locales/ja/dashboard.json";
 import ja_developer from "./locales/ja/developer.json";
 import ja_feedback from "./locales/ja/feedback.json";
 import ja_main from "./locales/ja/main.json";
@@ -28,6 +30,7 @@ export const resources = {
     admin: en_admin,
     "api-errors": en_apiErrors,
     auth: en_auth,
+    dashboard: en_dashboard,
     developer: en_developer,
     feedback: en_feedback,
     main: en_main,
@@ -40,6 +43,7 @@ export const resources = {
     admin: ja_admin,
     "api-errors": ja_apiErrors,
     auth: ja_auth,
+    dashboard: ja_dashboard,
     developer: ja_developer,
     feedback: ja_feedback,
     main: ja_main,

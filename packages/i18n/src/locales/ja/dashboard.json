@@ -1,0 +1,20 @@
+{
+  "title": "ダッシュボード",
+  "toggleSidebar": "サイドバーを開閉",
+  "nav": {
+    "overview": "概要",
+    "storage": "ストレージ",
+    "library": "ライブラリ",
+    "developer": "開発者向け",
+    "account": "アカウント"
+  },
+  "overview": {
+    "title": "概要",
+    "greeting": "ようこそ、{{name}} さん",
+    "storageUsage": "ストレージ使用量",
+    "myLibrary": "ライブラリのパッケージ",
+    "noLibraryPackages": "ライブラリにパッケージがありません",
+    "browseStore": "ストアを見る",
+    "viewAll": "すべて見る"
+  }
+}

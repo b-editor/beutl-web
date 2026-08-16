@@ -22,7 +22,12 @@ export const socialLinks: SocialLink[] = [
   },
 ];
 
-export type NavLinkKey = "docs" | "store" | "privacy" | "telemetry";
+export type NavLinkKey =
+  | "docs"
+  | "store"
+  | "dashboard"
+  | "privacy"
+  | "telemetry";
 
 export function navHref(key: NavLinkKey, lang: string): string {
   switch (key) {
@@ -30,6 +35,8 @@ export function navHref(key: NavLinkKey, lang: string): string {
       return `https://docs.beutl.beditor.net/${lang}`;
     case "store":
       return `/${lang}/store`;
+    case "dashboard":
+      return `/${lang}/dashboard`;
     case "privacy":
       return `/${lang}/docs/privacy`;
     case "telemetry":

@@ -64,41 +64,39 @@ export default async function NavBar({ lang }: { lang: string }) {
                   <CircleUser className="w-5 h-5" />
                 </NavigationMenuPrimitive.Trigger>
                 <NavigationMenuContent>
-                  <ul className="flex flex-col gap-3 p-2 w-auto">
-                    <li>
-                      <NavigationMenuLink asChild>
-                        <Link
-                          href={`/${lang}/account`}
-                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                        >
-                          {t("account")}
-                        </Link>
-                      </NavigationMenuLink>
-                      <NavigationMenuLink asChild>
-                        <Link
-                          href={`/${lang}/storage`}
-                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                        >
-                          {t("storage")}
-                        </Link>
-                      </NavigationMenuLink>
-                      <NavigationMenuLink asChild>
-                        <Link
-                          href={`/${lang}/developer`}
-                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                        >
-                          {t("developer")}
-                        </Link>
-                      </NavigationMenuLink>
-                      <NavigationMenuLink asChild>
-                        <Link
-                          href={`/${lang}/library`}
-                          className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                        >
-                          {t("library")}
-                        </Link>
-                      </NavigationMenuLink>
-                    </li>
+                  {/* 個々の画面への導線はダッシュボードのサイドバーが持つので、
+                      ここは入口とサインアウトだけに絞る。 */}
+                  <ul className="flex flex-col gap-1 p-2 w-auto">
+                    {(
+                      [
+                        {
+                          key: "dashboard",
+                          href: navHref("dashboard", lang),
+                          label: t("dashboard"),
+                        },
+                        {
+                          key: "account",
+                          href: `/${lang}/dashboard/account/profile`,
+                          label: t("account"),
+                        },
+                        {
+                          key: "signOut",
+                          href: `/${lang}/account/sign-out`,
+                          label: t("signOut"),
+                        },
+                      ] as const
+                    ).map((item) => (
+                      <li key={item.key}>
+                        <NavigationMenuLink asChild>
+                          <Link
+                            href={item.href}
+                            className="block whitespace-nowrap select-none space-y-1 rounded-md p-3 leading-none no-underline outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+                          >
+                            {item.label}
+                          </Link>
+                        </NavigationMenuLink>
+                      </li>
+                    ))}
                   </ul>
                 </NavigationMenuContent>
               </NavigationMenuItem>
