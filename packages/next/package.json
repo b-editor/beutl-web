@@ -20,7 +20,7 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
-    "next": "15.5.22",
+    "next": "16.3.0",
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
