@@ -122,14 +122,20 @@ export async function deleteUserPackage(
 export async function retrieveLibraryPackagesByUserId({
   userId,
   currency,
+  take,
   prisma,
 }: {
   userId: string;
   currency: string | null;
+  /** 先頭 N 件だけ要るとき (ダッシュボードの概要など) に指定する。 */
+  take?: number;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
   return await db.userPackage.findMany({
+    // take で切り取る先頭を確定させるため、順序を明示する。
+    orderBy: [{ createdAt: "desc" }, { packageId: "desc" }],
+    take,
     where: {
       userId: userId,
       package: {
@@ -185,3 +191,4 @@ export async function retrieveLibraryPackagesByUserId({
     },
   });
 }
+

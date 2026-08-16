@@ -16,5 +16,5 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
   }
 
-  redirect(`/${lang}/account/manage/profile`);
+  redirect(`/${lang}/dashboard/account/profile`);
 }

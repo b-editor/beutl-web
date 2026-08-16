@@ -1,0 +1,20 @@
+{
+  "title": "Dashboard",
+  "toggleSidebar": "Toggle sidebar",
+  "nav": {
+    "overview": "Overview",
+    "storage": "Storage",
+    "library": "Library",
+    "developer": "Developer",
+    "account": "Account"
+  },
+  "overview": {
+    "title": "Overview",
+    "greeting": "Welcome back, {{name}}",
+    "storageUsage": "Storage used",
+    "myLibrary": "Your library",
+    "noLibraryPackages": "Your library is empty",
+    "browseStore": "Browse the store",
+    "viewAll": "View all"
+  }
+}

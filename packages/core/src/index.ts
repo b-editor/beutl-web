@@ -6,6 +6,7 @@ export { getRelativeTimeDifference } from "./relative-time";
 export { isValidNuGetVersionRange } from "./nuget-version-range";
 export { randomString, createHash } from "./create-hash";
 export { cn, formatBytes } from "./utils";
+export { STORAGE_QUOTA_BYTES } from "./storage-quota";
 export type { ActionResult } from "./action-result";
 export {
   isAllowedContinueUrlHost,

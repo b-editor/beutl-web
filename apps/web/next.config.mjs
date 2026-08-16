@@ -1,5 +1,10 @@
+import { dashboardRedirects } from "./next.redirects.mjs";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async redirects() {
+    return dashboardRedirects();
+  },
   images: {
     remotePatterns: [
       {

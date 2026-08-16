@@ -37,6 +37,17 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* The sidebar keeps its own scale so the shell can sit a step above the page
+     without dragging --card around with it. */
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -130,6 +141,15 @@
     --input: 247 9% 80%;
     --ring: 243 36% 72%;
 
+    --sidebar: 240 10% 94%;
+    --sidebar-foreground: 240 8% 5%;
+    --sidebar-primary: 244 86% 57%;
+    --sidebar-primary-foreground: 240 9% 98%;
+    --sidebar-accent: 240 8% 91%;
+    --sidebar-accent-foreground: 240 8% 5%;
+    --sidebar-border: 250 9% 87%;
+    --sidebar-ring: 243 36% 72%;
+
     --radius: 0.5rem;
   }
 
@@ -169,6 +189,24 @@
     --border: hsl(0 0% 100% / 0.09);
     --input: 250 6% 20%;
     --ring: 247 91% 66%;
+
+    /*
+      The sidebar sits on the same raised surface as --card, so the page body
+      (--background) reads as the recessed side of the shell.
+    */
+    --sidebar: 249 14% 7%;
+    --sidebar-foreground: 249 50% 95%;
+    --sidebar-primary: 247 91% 66%;
+    --sidebar-primary-foreground: 249 50% 98%;
+    --sidebar-accent: 247 30% 20%;
+    --sidebar-accent-foreground: 249 50% 95%;
+    /*
+      Unlike --border this one has to stay an H S L triple: sidebar.tsx feeds it
+      to a box-shadow, so it is wrapped in hsl() at both use sites. The value is
+      the translucent --border flattened onto the 7% sidebar surface.
+    */
+    --sidebar-border: 249 8% 15%;
+    --sidebar-ring: 247 91% 66%;
   }
 }
 
