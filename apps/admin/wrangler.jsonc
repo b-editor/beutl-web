@@ -7,6 +7,7 @@
     "nodejs_compat",
     "global_fetch_strictly_public"
   ],
+  "keep_vars": true,
   // 管理画面: admin.beutl.beditor.net にカスタムドメインで配信する。
   // ルート設定は Cloudflare ダッシュボード側で行う。
   "assets": {

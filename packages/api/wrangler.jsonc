@@ -7,6 +7,7 @@
     "nodejs_compat",
     "global_fetch_strictly_public"
   ],
+  "keep_vars": true,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

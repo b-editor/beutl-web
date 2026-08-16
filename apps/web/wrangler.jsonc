@@ -11,6 +11,7 @@
     // see https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public
     "global_fetch_strictly_public",
   ],
+  "keep_vars": true,
   // 同一ドメイン・パス分割: /api/v{1,2,3}/* は beutl-web-api (packages/api/wrangler.jsonc) が処理。
   // 最長一致で api パターンが優先されるため、この Worker は Web ページと
   // /api/auth・/api/contents・/api/stripe を受ける。カスタムドメインはダッシュボード側で設定済み。
