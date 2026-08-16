@@ -7,9 +7,6 @@ import Link from "next/link";
 import { LibraryPackageCard } from "./library/package-card";
 import { retrieveDashboardOverview } from "./queries";
 
-// 概要に出すライブラリのパッケージ数。これを超える分は一覧ページで見てもらう。
-const LIBRARY_PREVIEW_COUNT = 6;
-
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
 }) {
@@ -75,7 +72,7 @@ export default async function Page(props: {
           </div>
         ) : (
           <div className="flex flex-wrap -mx-2">
-            {libraryPackages.slice(0, LIBRARY_PREVIEW_COUNT).map((item) => (
+            {libraryPackages.map((item) => (
               <LibraryPackageCard
                 key={item.id}
                 item={item}

@@ -15,35 +15,34 @@ type Redirect = {
 describe("旧 URL から /dashboard へのリダイレクト", () => {
   const redirects = dashboardRedirects() as Redirect[];
 
-  const OLD_PREFIXES = [
-    "/storage",
-    "/library",
-    "/developer",
-    "/account/manage",
-  ] as const;
+  // source → destination を 1 件ずつ固定する。移設先を後から変えるときは、
+  // 旧 URL を指しているブックマークやメールのリンクが壊れないか、この表で確かめる。
+  const EXPECTED: ReadonlyArray<readonly [string, string]> = [
+    ["/storage/:path*", "/dashboard/storage/:path*"],
+    ["/:lang(ja|en)/storage/:path*", "/:lang/dashboard/storage/:path*"],
+    ["/library/:path*", "/dashboard/library/:path*"],
+    ["/:lang(ja|en)/library/:path*", "/:lang/dashboard/library/:path*"],
+    ["/developer/:path*", "/dashboard/developer/:path*"],
+    ["/:lang(ja|en)/developer/:path*", "/:lang/dashboard/developer/:path*"],
+    ["/account/manage/:path*", "/dashboard/account/:path*"],
+    ["/:lang(ja|en)/account/manage/:path*", "/:lang/dashboard/account/:path*"],
+  ];
 
-  it("4 パターンをロケール接頭辞あり / なしの両方で持つ", () => {
-    expect(redirects).toHaveLength(OLD_PREFIXES.length * 2);
+  it("対応表がそのまま登録されている", () => {
+    expect(redirects.map((r) => [r.source, r.destination])).toEqual(
+      EXPECTED.map(([source, destination]) => [source, destination]),
+    );
   });
 
-  for (const prefix of OLD_PREFIXES) {
-    it(`${prefix} が接頭辞なしと /:lang(ja|en) の両方で登録されている`, () => {
-      expect(redirects).toContainEqual(
-        expect.objectContaining({ source: `${prefix}/:path*` }),
-      );
-      expect(redirects).toContainEqual(
-        expect.objectContaining({ source: `/:lang(ja|en)${prefix}/:path*` }),
-      );
+  for (const [source, destination] of EXPECTED) {
+    it(`${source} → ${destination}`, () => {
+      expect(redirects).toContainEqual({
+        source,
+        destination,
+        permanent: false,
+      });
     });
   }
-
-  it("すべての行き先が /dashboard 配下を指す", () => {
-    for (const redirect of redirects) {
-      expect(redirect.destination).toMatch(
-        /^(\/dashboard\/|\/:lang\/dashboard\/)/,
-      );
-    }
-  });
 
   it("permanent を立てない (307 のまま)", () => {
     // 308 をブラウザにキャッシュさせると、確認メールのリンクのような一回性 URL の

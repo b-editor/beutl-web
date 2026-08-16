@@ -20,6 +20,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  useSidebar,
 } from "@beutl/ui/ui/sidebar";
 import {
   BookOpen,
@@ -38,6 +39,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect } from "react";
 import { navHref } from "@/components/site-links";
 
 export type SidebarUser = {
@@ -55,6 +57,14 @@ export function DashboardSidebar({
 }) {
   const { t } = useTranslation(lang);
   const pathname = usePathname();
+  const { setOpenMobile } = useSidebar();
+
+  // モバイルではサイドバーが Sheet になる。ダッシュボードの layout は子ルート間の
+  // 遷移でマウントされたままなので、閉じないとシートとオーバーレイが遷移先に
+  // 残り続ける。
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
   // middleware は既定ロケールを redirect ではなく rewrite するため、pathname には
   // ロケール接頭辞が付く場合 (/en/dashboard/storage) と付かない場合
   // (/dashboard/storage) がある。どちらでも動くよう固定インデックスではなく
@@ -164,7 +174,9 @@ export function DashboardSidebar({
                   // アカウントは設定ページを子に持つので、shadcn の nav-main と
                   // 同じ Collapsible + SidebarMenuSub で開閉する。
                   <Collapsible
-                    key={item.section}
+                    // defaultOpen は uncontrolled なのでマウント時にしか効かない。
+                    // アカウント配下への出入りで張り直し、開閉状態を追従させる。
+                    key={`${item.section}-${section === "account"}`}
                     asChild
                     defaultOpen={section === "account"}
                     className="group/collapsible"

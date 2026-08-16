@@ -138,7 +138,9 @@ export async function uploadFile(formData: FormData): Promise<ActionResult> {
 
     const objectKey = crypto.randomUUID();
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-    bucket.put(
+    // R2 への書き込みを待たずに createFile すると、put が失敗したときに
+    // 実体のないファイルレコードが残る。
+    await bucket.put(
       objectKey,
       await file.arrayBuffer(),
     );

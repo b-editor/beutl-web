@@ -10,18 +10,18 @@ export async function GET(req: NextRequest) {
 
   const session = await auth.api.getSession({ headers: req.headers });
   if (token && identifier) {
+    // deleteUser は確認トークンを消費し、二度目は throw する。以前はこの後
+    // 同じハンドラへ token 付きでリダイレクトしていたため、削除は済んでいるのに
+    // 続くリクエストが invalid-token で落ちていた。
     await deleteUser(token, identifier);
 
-    if (!session?.user) {
-      const redirectUrl = new URL('/dashboard/account/personal-data/handle', req.nextUrl.origin);
-      redirectUrl.searchParams.set('token', token);
-      redirectUrl.searchParams.set('identifier', identifier);
+    if (session?.user) {
       await auth.api.signOut({
         headers: req.headers
       });
-      return NextResponse.redirect(redirectUrl.toString());
     }
   }
 
+  // ロケール接頭辞なしで返し、middleware に解決させる。
   return NextResponse.redirect(new URL('/', req.nextUrl.origin));
 }

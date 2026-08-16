@@ -20,14 +20,19 @@ export type ListedPackage = {
 
 export async function retrievePackages(
   userId: string,
-  // 概要ページは他のクエリと 1 つの接続を共有するため注入できるようにしてある。
-  prisma?: PrismaTransaction,
+  options: {
+    // 概要ページは他のクエリと 1 つの接続を共有するため注入できるようにしてある。
+    prisma?: PrismaTransaction;
+    // 概要ページは数件しか描画しないので、DB 側で切っておく。
+    take?: number;
+  } = {},
 ): Promise<ListedPackage[]> {
   const currency = await guessCurrency();
   const tmp = await retrieveLibraryPackagesByUserId({
     userId,
     currency,
-    prisma,
+    take: options.take,
+    prisma: options.prisma,
   });
 
   return await Promise.all(
