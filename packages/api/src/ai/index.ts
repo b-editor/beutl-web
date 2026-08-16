@@ -1,4 +1,6 @@
 export * from "./credits";
+export * from "./job-response";
+export * from "./audio-validation";
 export * from "./audio-metadata";
 export * from "./billing-refunds";
 export * from "./entitlements";

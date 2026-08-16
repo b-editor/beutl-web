@@ -13,6 +13,7 @@ import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { getContentUrl } from "../../content-url";
 import { PUBLIC_AI_JOB_ERROR } from "../../ai/job-errors";
+import { publicAiJobStatus, type PublicAiJobStatus } from "../../ai/job-response";
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -97,10 +98,12 @@ type AiJobRecord = NonNullable<
 export type AiJobSummary = {
   id: string;
   kind: string;
-  status: string;
+  status: PublicAiJobStatus;
   inputParams: Record<string, unknown> | null;
   fileId: string | null;
   url: string | null;
+  fileName: string | null;
+  contentType: string | null;
   error: string | null;
   canRetry: boolean;
   createdAt: string;
@@ -151,6 +154,12 @@ function decodeCursor(value: string): AiJobHistoryCursor | null {
 }
 
 function canRetry(job: AiJobRecord): boolean {
+  if (
+    job.status !== "succeeded" &&
+    job.status !== "failed"
+  ) {
+    return false;
+  }
   if (job.kind === "image") {
     return imageRetryInputSchema.safeParse(job.inputParams).success;
   }
@@ -188,12 +197,14 @@ async function toSummary(
   return {
     id: job.id,
     kind: job.kind,
-    status: job.status,
+    status: publicAiJobStatus(job.status),
     inputParams: sanitizedInputParams(job),
     fileId: job.resultFileId,
     url: job.resultFileId
       ? await getContentUrl(job.resultFileId, request)
       : null,
+    fileName: job.resultFile?.name ?? null,
+    contentType: job.resultFile?.mimeType ?? null,
     error: job.status === "failed" ? PUBLIC_AI_JOB_ERROR : null,
     canRetry: canRetry(job),
     createdAt: job.createdAt.toISOString(),

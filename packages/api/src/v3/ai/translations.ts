@@ -17,7 +17,9 @@ import {
   parseJsonWithBodyLimit,
 } from "../../ai/upload-limits";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
-import { saveAiJsonResult } from "../../ai/storage";
+import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
+import { getAiJobResultFile } from "@beutl/db";
+import { getAiRequestIdentity } from "../../ai/request-integrity";
 
 const MAX_TRANSLATION_SEGMENTS = 200;
 const MAX_TRANSLATION_CHARACTERS = 20_000;
@@ -103,6 +105,15 @@ const translationRequestSchema = z
     }
   });
 
+const storedTranslationResultSchema = z.object({
+  version: z.literal(1),
+  kind: z.literal("translation"),
+  segments: z.array(z.object({
+    id: z.string().regex(SAFE_SEGMENT_ID_PATTERN),
+    text: z.string().refine((value) => value.trim().length > 0),
+  }).passthrough()),
+}).passthrough();
+
 function isJsonRequest(request: Request): boolean {
   return (
     request.headers
@@ -144,6 +155,20 @@ const app = new Hono().post("/", async (c) => {
   }
 
   const { sourceLanguage, targetLanguage, segments } = parsedRequest.data;
+  const requestIdentity = await getAiRequestIdentity({
+    request: c.req.raw,
+    operation: "subtitle.translate",
+    input: {
+      ...(sourceLanguage ? { sourceLanguage } : {}),
+      targetLanguage,
+      segments,
+    },
+  });
+  if (!requestIdentity) {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
   const characterCount = segments.reduce(
     (total, segment) => total + segment.text.length,
     0,
@@ -164,6 +189,7 @@ const app = new Hono().post("/", async (c) => {
       characterCount,
     },
     usageUnits,
+    ...requestIdentity,
   });
   if (!reservation.ok) {
     return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -171,6 +197,49 @@ const app = new Hono().post("/", async (c) => {
     });
   }
   const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    if (job.status === "succeeded" && job.resultFileId) {
+      const fileRecord = await getAiJobResultFile({
+        jobId: job.id,
+        userId,
+      });
+      if (fileRecord) {
+        try {
+          const stored = storedTranslationResultSchema.parse(
+            await readAiJsonResult({ objectKey: fileRecord.objectKey }),
+          );
+          const translatedById = new Map(
+            stored.segments.map((segment) => [segment.id, segment.text]),
+          );
+          if (
+            translatedById.size === segments.length &&
+            segments.every((segment) => translatedById.has(segment.id))
+          ) {
+            return c.json({
+              jobId: job.id,
+              segments: segments.map((segment) => ({
+                id: segment.id,
+                text: translatedById.get(segment.id)!,
+              })),
+            });
+          }
+        } catch (error) {
+          console.error("Failed to recover AI translation result", error);
+        }
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), {
+        status: 500,
+      });
+    }
+    if (job.status === "queued" ||
+      job.status === "running" ||
+      job.status === "finalizing") {
+      return c.json(await apiErrorResponse("aiRequestInProgress"), {
+        status: 409,
+      });
+    }
+    return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+  }
 
   try {
     const translatedSegments = await translateSegments({
@@ -178,6 +247,7 @@ const app = new Hono().post("/", async (c) => {
       targetLanguage,
       segments: segments.map(({ id, text }) => ({ id, text })),
       model: settings.getModel("subtitle.translate"),
+      signal: c.req.raw.signal,
     });
     const contextById = new Map(
       segments.map((segment) => [segment.id, segment.context] as const),

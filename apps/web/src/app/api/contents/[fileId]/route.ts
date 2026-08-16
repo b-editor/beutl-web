@@ -12,6 +12,13 @@ import {
   contentDeliveryHeaders,
 } from "@/lib/content-cache";
 
+function contentDisposition(disposition: string, fileName: string): string {
+  const fallback = fileName
+    .replace(/[^\x20-\x7e]/gu, "_")
+    .replace(/["\\]/gu, "_");
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 export async function GET(
   request: NextRequest,
   props: { params: Promise<{ fileId: string }> },
@@ -59,10 +66,15 @@ export async function GET(
       );
     }
 
+    const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
     return new NextResponse(object.body, {
       headers: {
         "Content-Length": object.size.toString(),
-        ...contentDeliveryHeaders(file.mimeType),
+        ...deliveryHeaders,
+        "Content-Disposition": contentDisposition(
+          deliveryHeaders["Content-Disposition"],
+          file.name,
+        ),
         ...contentCacheHeaders(access.canUsePublicCache),
       },
       status: 200,

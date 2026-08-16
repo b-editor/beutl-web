@@ -1,9 +1,9 @@
-// AI 設定の解決層。
+// AI setting resolution layer.
 //
-// 値域の定義と検証は @beutl/core (ai-settings) が持ち、ここは
-// 「DB (AiSetting) → 環境変数 → コード上の既定値」の解決だけを担当する。
-// DB に行が無いキーは従来どおり環境変数/既定値で動くため、この仕組みを
-// 入れても既存デプロイの挙動は変わらない。
+// @beutl/core owns the definitions and validation. This module only resolves
+// database values, environment variables, and built-in defaults in that order.
+// Missing database rows retain the behavior of existing deployments by falling
+// back to the environment and then the built-in default.
 import { getAiSettingMap } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import {
@@ -18,7 +18,7 @@ export type AiSettingSource = "database" | "environment" | "default";
 
 export type ResolvedAiSetting = AiSettingDefinition & {
   value: string;
-  // 現在その値がどこから来ているか。管理画面が「既定のまま」を示すのに使う。
+  // Lets the admin UI identify whether the value is still using a fallback.
   source: AiSettingSource;
 };
 
@@ -34,8 +34,8 @@ function resolveDefinition(
 ): ResolvedAiSetting {
   const dbValue = stored.get(definition.key);
   if (dbValue !== undefined) {
-    // 保存済みの値も検証を通す。レジストリの値域を後から狭めた場合に、
-    // 不正な値をそのままプロバイダや課金へ流さないため。
+    // Revalidate persisted values so a future registry restriction cannot pass
+    // a now-invalid value through to the provider or billing logic.
     const validated = validateAiSettingValue(definition.key, dbValue);
     if (validated.ok) {
       return { ...definition, value: validated.value, source: "database" };
@@ -88,7 +88,7 @@ export async function loadAiSettings({
   return toSnapshot(stored);
 }
 
-// 環境変数と既定値だけで解決したスナップショット。DB を参照できない文脈で使う。
+// Resolve a snapshot without database access for contexts that only have env.
 export function loadAiSettingsWithoutDatabase(): AiSettingsSnapshot {
   return toSnapshot(new Map());
 }

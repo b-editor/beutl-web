@@ -10,10 +10,12 @@ import { createHmac } from "node:crypto";
 import {
   AiProviderError,
   AiVideoSubmissionError,
+  InvalidAiProviderOutputError,
   createVideoJob,
   downloadVideoContent,
   editImage,
   generateImage,
+  getOpenRouterRequestTimeoutMilliseconds,
   getVideoJob,
   MAX_OPENROUTER_JSON_RESPONSE_BYTES,
   OPENROUTER_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
@@ -24,7 +26,7 @@ import { MAX_AI_GENERATED_VIDEO_BYTES } from "../../packages/api/src/ai/video-va
 
 const VALID_MP4_BYTES = Uint8Array.from(
   Buffer.from(
-    "AAAAFGZ0eXBpc29tAAAAAW1wNDIAAABPbW9vdgAAAAltdmhkAAAAAD50cmFrAAAACXRraGQAAAAALW1kaWEAAAAJbWRoZAAAAAAUaGRscgAAAAAAAAAAdmlkZQAAAAhtaW5mAAAAC21kYXQBAgM=",
+    "AAAAFGZ0eXBpc29tAAAAAW1wNDIAAAAPbWRhdAAAAANliIQAAAFzbW9vdgAAABxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAAFPdHJhawAAACB0a2hkAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAPoAAABJ21kaWEAAAAcbWRoZAAAAAAAAAAAAAAAAAAAA+gAAAPoAAAAFGhkbHIAAAAAAAAAAHZpZGUAAADvbWluZgAAAOdzdGJsAAAAf3N0c2QAAAAAAAAAAQAAAG9hdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGWF2Y0MBQgAe/+EABGdCAB4BAAJozgAAABhzdHRzAAAAAAAAAAEAAAABAAAD6AAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAAAAEAAAAYc3RzegAAAAAAAAAAAAAAAQAAAAcAAAAUc3RjbwAAAAAAAAABAAAAHA==",
     "base64",
   ),
 );
@@ -119,6 +121,13 @@ describe("OpenRouter client contract", () => {
       generateImage({ prompt: "a lighthouse", size: "1024x1024", model: "openai/gpt-image-1" }),
     ).rejects.toThrow("OpenRouter request timed out");
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("resolves the request timeout used by polling leases", () => {
+    expect(getOpenRouterRequestTimeoutMilliseconds(undefined)).toBe(120_000);
+    expect(getOpenRouterRequestTimeoutMilliseconds("185000")).toBe(185_000);
+    expect(() => getOpenRouterRequestTimeoutMilliseconds("invalid"))
+      .toThrow("must be a positive integer");
   });
 
   it("preserves the HTTP status on provider response errors", async () => {
@@ -423,12 +432,10 @@ describe("OpenRouter client contract", () => {
         language: " ja ",
         segments: [
           { start: 0, end: 1.5, text: " First line " },
-          { start: 1.5, end: 1.5, text: "invalid" },
           { start: 1.5, end: 3, text: "Second line" },
         ],
         words: [
           { start: 0, end: 0.5, word: " First " },
-          { start: 0.5, end: 0.5, word: "invalid" },
           { start: 0.5, end: 1, word: "line" },
         ],
       }),
@@ -438,6 +445,7 @@ describe("OpenRouter client contract", () => {
     await expect(
       transcribeAudio({
         audio: Uint8Array.from([1, 2, 3]).buffer,
+        durationSeconds: 3,
         filename: "voice.wav",
         mimeType: "audio/wav",
         language: "ja",
@@ -470,6 +478,50 @@ describe("OpenRouter client contract", () => {
     expect(body.get("file")).toBeInstanceOf(File);
   });
 
+  it("clamps a tiny transcription duration overshoot", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          segments: [{ start: 0, end: 3.01, text: "Rounded duration" }],
+        }),
+      ),
+    );
+
+    await expect(
+      transcribeAudio({
+        audio: Uint8Array.from([1]).buffer,
+        durationSeconds: 3,
+        filename: "voice.wav",
+        mimeType: "audio/wav",
+        model: "openai/whisper-large-v3-turbo",
+      }),
+    ).resolves.toEqual({
+      segments: [{ start: 0, end: 3, text: "Rounded duration" }],
+    });
+  });
+
+  it("rejects transcription timestamps materially beyond the audio duration", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          segments: [{ start: 0, end: 3.1, text: "Out of bounds" }],
+        }),
+      ),
+    );
+
+    await expect(
+      transcribeAudio({
+        audio: Uint8Array.from([1]).buffer,
+        durationSeconds: 3,
+        filename: "voice.wav",
+        mimeType: "audio/wav",
+        model: "openai/whisper-large-v3-turbo",
+      }),
+    ).rejects.toThrow("invalid transcription data");
+  });
+
   it("preserves the segment-only transcription response shape", async () => {
     vi.stubGlobal(
       "fetch",
@@ -483,6 +535,7 @@ describe("OpenRouter client contract", () => {
     await expect(
       transcribeAudio({
         audio: Uint8Array.from([1]).buffer,
+        durationSeconds: 1,
         filename: "voice.mp3",
         mimeType: "audio/mpeg",
         model: "openai/whisper-large-v3-turbo",
@@ -580,9 +633,22 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oversized.response));
 
     await expect(downloadVideoContent("video-large")).rejects.toBeInstanceOf(
-      AiProviderError,
+      InvalidAiProviderOutputError,
     );
     expect(oversized.wasCancelled()).toBe(true);
+  });
+
+  it("rejects declared oversized generated video content as invalid provider output", async () => {
+    const response = new Response(VALID_MP4_BYTES, {
+      headers: {
+        "content-type": "video/mp4",
+        "content-length": String(MAX_AI_GENERATED_VIDEO_BYTES + 1),
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(downloadVideoContent("video-large-declared"))
+      .rejects.toBeInstanceOf(InvalidAiProviderOutputError);
   });
 
   it("sends first and last frame images with the documented frame types", async () => {

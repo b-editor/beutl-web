@@ -3,12 +3,18 @@ import {
   claimAiJobForFinalization,
   getAiJobById,
   hasFreshAiJobFinalizationLease,
+  releaseAiJobProviderPoll,
   renewAiJobFinalizationLease,
 } from "@beutl/db";
-import { failAiJobAndRefundUsage } from "./credits";
+import {
+  failFinalizingAiJobAndRefundUsage,
+  failPolledAiJobAndRefundUsage,
+} from "./credits";
 import {
   AiProviderError,
+  InvalidAiProviderOutputError,
   downloadVideoContent,
+  getOpenRouterRequestTimeoutMilliseconds,
   getVideoJob,
 } from "./openrouter";
 import {
@@ -18,7 +24,17 @@ import {
 import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
 
 const FINALIZATION_LEASE_MILLISECONDS = 10 * 60 * 1000;
-const PROVIDER_POLL_LEASE_MILLISECONDS = 10 * 1000;
+export const PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS = 30 * 1000;
+
+export function getProviderPollLeaseMilliseconds(): number {
+  const timeout = getOpenRouterRequestTimeoutMilliseconds();
+  if (timeout > Number.MAX_SAFE_INTEGER - PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS) {
+    throw new AiProviderError(
+      "OPENROUTER_REQUEST_TIMEOUT_MS is too large for a safe provider poll lease",
+    );
+  }
+  return timeout + PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS;
+}
 
 type AiVideoJobRecord = {
   id: string;
@@ -54,12 +70,13 @@ export async function synchronizeAiVideoJob({
     throw new AiProviderError("AI video job has no provider job ID");
   }
 
+  const pollLeaseExpiresAt = new Date(
+    pollNow.getTime() + getProviderPollLeaseMilliseconds(),
+  );
   const pollClaim = await claimAiJobForProviderPoll({
     jobId: job.id,
     now: pollNow,
-    leaseExpiresAt: new Date(
-      pollNow.getTime() + PROVIDER_POLL_LEASE_MILLISECONDS,
-    ),
+    leaseExpiresAt: pollLeaseExpiresAt,
   });
   if (!pollClaim.claimed || !pollClaim.job) {
     return pollClaim.job;
@@ -68,21 +85,36 @@ export async function synchronizeAiVideoJob({
     throw new AiProviderError("AI video job has no provider job ID");
   }
 
-  const providerJob = await getVideoJob(pollClaim.job.providerJobId);
+  let providerJob: Awaited<ReturnType<typeof getVideoJob>>;
+  try {
+    providerJob = await getVideoJob(pollClaim.job.providerJobId);
+  } catch (error) {
+    await releaseAiJobProviderPoll({
+      jobId: job.id,
+      leaseExpiresAt: pollLeaseExpiresAt,
+    });
+    throw error;
+  }
   if (
     providerJob.status === "failed" ||
     providerJob.status === "cancelled" ||
     providerJob.status === "expired"
   ) {
-    await failAiJobAndRefundUsage({
+    await failPolledAiJobAndRefundUsage({
       userId: job.userId,
       aiJobId: job.id,
       error: AI_JOB_FAILURE_MESSAGES.videoGeneration,
+      providerPollLeaseExpiresAt: pollLeaseExpiresAt,
+      expectedProviderJobId: pollClaim.job.providerJobId,
     });
     return await getAiJobById({ jobId: job.id });
   }
 
   if (providerJob.status !== "completed") {
+    await releaseAiJobProviderPoll({
+      jobId: job.id,
+      leaseExpiresAt: pollLeaseExpiresAt,
+    });
     return await getAiJobById({ jobId: job.id });
   }
 
@@ -98,9 +130,23 @@ export async function synchronizeAiVideoJob({
     return claim.job;
   }
 
-  const { bytes, mimeType, extension } = await downloadVideoContent(
-    pollClaim.job.providerJobId,
-  );
+  let content: Awaited<ReturnType<typeof downloadVideoContent>>;
+  try {
+    content = await downloadVideoContent(pollClaim.job.providerJobId);
+  } catch (error) {
+    if (error instanceof InvalidAiProviderOutputError) {
+      await failFinalizingAiJobAndRefundUsage({
+        userId: job.userId,
+        aiJobId: job.id,
+        finalizationToken: claim.finalizationToken,
+        error: AI_JOB_FAILURE_MESSAGES.videoGeneration,
+        expectedProviderJobId: pollClaim.job.providerJobId,
+      });
+      return await getAiJobById({ jobId: job.id });
+    }
+    throw error;
+  }
+  const { bytes, mimeType, extension } = content;
   const renewalBase = Math.max(Date.now(), leaseNow.getTime());
   const renewed = await renewAiJobFinalizationLease({
     jobId: job.id,

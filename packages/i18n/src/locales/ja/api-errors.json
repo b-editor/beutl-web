@@ -33,6 +33,8 @@
   "aiJobNotFound": "AIジョブが見つかりませんでした。",
   "aiJobLimitReached": "進行中の動画生成ジョブがあります。完了するまでお待ちください。",
   "aiJobIsActive": "実行中のAIジョブは削除できません。",
+  "aiRequestInProgress": "このAIリクエストは処理中です。少し待ってから再試行してください。",
+  "aiRequestWasDeleted": "このAIリクエストは削除されています。再実行するには新しいリクエストを開始してください。",
   "unknown": "不明なエラーが発生しました。",
   "invalidVersionFormat": "バージョンの形式が無効です。"
 }

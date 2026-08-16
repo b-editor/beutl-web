@@ -1,6 +1,7 @@
 import {
   getAiJobById,
   hasFreshAiJobFinalizationLease,
+  isActiveAiJobStatus,
   listActiveAiJobsForReconciliation,
   touchActiveAiJob,
 } from "@beutl/db";
@@ -130,6 +131,7 @@ export async function reconcileAiJobs(
         });
         await recordFailureOutcome(job.id);
       } else {
+        await touchAiJobIfStillActive(job.id);
         result.pending++;
       }
     } catch (error) {
@@ -156,10 +158,7 @@ export async function reconcileAiJobs(
         }
       }
       console.error(`Failed to reconcile AI job ${job.id}`, error);
-      await touchActiveAiJob({
-        jobId: job.id,
-        status: job.status,
-      }).catch((touchError) => {
+      await touchAiJobIfStillActive(job.id).catch((touchError) => {
         console.error(`Failed to rotate AI job ${job.id}`, touchError);
       });
       result.errors++;
@@ -167,4 +166,14 @@ export async function reconcileAiJobs(
   }
 
   return result;
+}
+
+async function touchAiJobIfStillActive(jobId: string): Promise<void> {
+  const current = await getAiJobById({ jobId });
+  if (current && isActiveAiJobStatus(current.status)) {
+    await touchActiveAiJob({
+      jobId,
+      status: current.status,
+    });
+  }
 }

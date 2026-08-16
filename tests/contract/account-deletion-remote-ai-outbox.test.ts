@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAiJob,
+  enqueueAiRemoteJobCleanup,
   enqueueUserRemoteAiJobCleanups,
   setDbProvider,
 } from "@beutl/db";
@@ -122,5 +123,33 @@ describe("deleted-account remote AI job outbox", () => {
       errors: 0,
     });
     expect(store.state.aiRemoteJobCleanups.has(cleanupKey)).toBe(false);
+  });
+
+  it("drops a stale cleanup intent without touching a provider job that has a live owner", async () => {
+    const now = new Date("2026-08-11T00:00:00.000Z");
+    await createAiJob({
+      userId: "user-1",
+      kind: "video",
+      provider: "openrouter",
+      providerJobId: "provider-video-owned",
+      status: "running",
+      usageUnits: 160,
+    });
+    await enqueueAiRemoteJobCleanup({
+      provider: "openrouter",
+      providerJobId: "provider-video-owned",
+      now,
+    });
+
+    await expect(reconcileDeletedAccountRemoteJobs(now)).resolves.toEqual({
+      inspected: 1,
+      completed: 1,
+      pending: 0,
+      errors: 0,
+    });
+    expect(getVideoJob).not.toHaveBeenCalled();
+    expect(
+      store.state.aiRemoteJobCleanups.has("openrouter:provider-video-owned"),
+    ).toBe(false);
   });
 });

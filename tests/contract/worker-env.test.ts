@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import worker from "../../packages/api/src/worker";
+import worker, { type Env } from "../../packages/api/src/worker";
 
 // 独立 Worker (beutl-web-api) は workerd 上で動くため、vars/secrets は
 // env バインディングとして渡され、process.env には自動投入されない。
@@ -29,7 +29,8 @@ describe("worker.ts env → process.env コピー", () => {
       JWT_ISSUER: "https://beutl.beditor.net",
       JWT_AUDIENCE: "beutl",
       PUBLIC_ORIGIN: "https://beutl.beditor.net",
-    };
+      OPENROUTER_TRANSLATION_MODEL: "openai/translation-model",
+    } satisfies Env;
 
     const res = await worker.fetch(
       new Request(
@@ -44,6 +45,9 @@ describe("worker.ts env → process.env コピー", () => {
     expect(process.env.JWT_ISSUER).toBe("https://beutl.beditor.net");
     expect(process.env.JWT_AUDIENCE).toBe("beutl");
     expect(process.env.PUBLIC_ORIGIN).toBe("https://beutl.beditor.net");
+    expect(process.env.OPENROUTER_TRANSLATION_MODEL).toBe(
+      "openai/translation-model",
+    );
   });
 
   it("非文字列バインディング (Hyperdrive) は process.env にコピーしない", async () => {

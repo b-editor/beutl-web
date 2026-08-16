@@ -418,8 +418,8 @@ async function hasBlockingStripeSubscription(
   }
 }
 
-// Pro サブスクリプションの Checkout セッションを作成する。
-// 価格は環境変数 STRIPE_PRO_PRICE_ID で指定する (実価格は後で設定)。
+// Create a Checkout Session for the Pro subscription.
+// Configure the price through STRIPE_PRO_PRICE_ID.
 export async function createProCheckout(): Promise<void> {
   const session = await throwIfUnauth();
   const stripe = createStripe();
@@ -684,8 +684,8 @@ export async function createProCheckout(): Promise<void> {
   redirect("/dashboard/account/ai-plan");
 }
 
-// クレジット追加購入の Checkout セッションを作成する。
-// 価格は環境変数 STRIPE_CREDIT_PRICE_ID で指定する。
+// Create a Checkout Session for a credit top-up.
+// Configure the price through STRIPE_CREDIT_PRICE_ID.
 export async function createCreditCheckout(): Promise<void> {
   const session = await throwIfUnauth();
   if (!(await hasActiveProSubscription(session.user.id))) {
@@ -982,7 +982,7 @@ export async function reconcileAiCheckoutSuccess(
   return false;
 }
 
-// Stripe カスタマーポータルへのリンクを作成する (解約・請求情報の管理)。
+// Create a Stripe Customer Portal link for cancellations and billing management.
 export async function createBillingPortalLink(): Promise<void> {
   const session = await throwIfUnauth();
   const customerId = await createOrRetrieveOwnedCustomerId({

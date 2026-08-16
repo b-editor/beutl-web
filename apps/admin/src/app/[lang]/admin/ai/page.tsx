@@ -5,7 +5,7 @@ import { loadAiSettings } from "@beutl/api";
 import { Separator } from "@beutl/ui/ui/separator";
 import { AiSettingField, type AiSettingRow } from "./components";
 
-// 設定は管理者が変更した直後の値を見せる必要があるため、常に最新を読む。
+// Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
 
 export default async function Page(props: {

@@ -42,13 +42,13 @@ export function AiSettingField({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [value, setValue] = useState(setting.value);
-  // 保存が失敗したときの戻り先。setting.value は再描画されるまで古いままなので、
-  // 直近で永続化に成功した値を保持する。
+  // Keep the most recently persisted value as the rollback target because
+  // setting.value remains stale until the component is rendered again.
   const committedValue = useRef(setting.value);
 
   useEffect(() => {
-    // 保存処理の途中で届いた refresh の値は古いサーバー値のことがある。
-    // 永続化済みの値と一致する間は同期せず、編集中の入力を守る。
+    // A refresh arriving while a save is in flight may contain a stale server
+    // value. Preserve the user's edit while it still matches the committed value.
     if (setting.value === committedValue.current) return;
     committedValue.current = setting.value;
     setValue(setting.value);
@@ -62,8 +62,8 @@ export function AiSettingField({
         description: message,
         variant: "destructive",
       });
-      // 失敗は設定永続化の後 (監査ログ書き込みなど) でも起こりうるため、
-      // 直前の値へ戻すだけでなくサーバーの値を取り直す。
+      // A failure can happen after the transaction commits, so reload the
+      // server value as well as rolling back the local input.
       router.refresh();
     },
     [toast, t, router],

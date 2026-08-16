@@ -5,10 +5,13 @@ import {
   createAiJob,
   findAccountDeletionIntentByUserId,
   getAiJobById,
+  getAiJobByIdempotency,
   getSubscriptionByUserId,
   refundUsage,
   startRetryableTransaction,
   updateActiveAiJobToFailed,
+  failAiJobOwnedByFinalizer,
+  failAiJobOwnedByProviderPoll,
 } from "@beutl/db";
 import { isActiveProSubscription } from "./entitlements";
 import { PRO_PLAN } from "./pricing";
@@ -31,6 +34,9 @@ export async function createReservedAiJob({
   inputParams,
   usageUnits,
   activeJobLimit,
+  idempotencyKeyHash,
+  requestFingerprint,
+  callbackNonceHash,
 }: {
   userId: string;
   kind: string;
@@ -39,9 +45,33 @@ export async function createReservedAiJob({
   inputParams?: object;
   usageUnits: number;
   activeJobLimit?: number;
+  idempotencyKeyHash?: string;
+  requestFingerprint?: string;
+  callbackNonceHash?: string;
 }) {
+  if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
+    throw new TypeError(
+      "AI idempotency key hash and request fingerprint must be provided together",
+    );
+  }
   try {
     const result = await startRetryableTransaction(async (prisma) => {
+      if (idempotencyKeyHash && requestFingerprint) {
+        const existing = await getAiJobByIdempotency({
+          userId,
+          idempotencyKeyHash,
+          prisma,
+        });
+        if (existing) {
+          if (existing.requestFingerprint !== requestFingerprint) {
+            return { outcome: "idempotencyConflict" as const };
+          }
+          return existing.deletedAt
+            ? { outcome: "deleted" as const }
+            : { outcome: "existing" as const, job: existing };
+        }
+      }
+
       if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
         return { outcome: "accountDeletionAuthorized" as const };
       }
@@ -68,6 +98,9 @@ export async function createReservedAiJob({
         status,
         inputParams,
         usageUnits,
+        idempotencyKeyHash,
+        requestFingerprint,
+        callbackNonceHash,
         prisma,
       });
       await consumeUsage({
@@ -100,9 +133,28 @@ export async function createReservedAiJob({
           errorCode: "aiJobLimitReached" as const,
           status: 429 as const,
         };
+      case "idempotencyConflict":
+        return {
+          ok: false as const,
+          errorCode: "invalidRequestBody" as const,
+          status: 409 as const,
+        };
+      case "deleted":
+        return {
+          ok: false as const,
+          errorCode: "aiRequestWasDeleted" as const,
+          status: 409 as const,
+        };
       case "reserved":
         return {
           ok: true as const,
+          outcome: "reserved" as const,
+          job: result.job,
+        };
+      case "existing":
+        return {
+          ok: true as const,
+          outcome: "existing" as const,
           job: result.job,
         };
     }
@@ -113,6 +165,40 @@ export async function createReservedAiJob({
         errorCode: "aiUsageLimitExceeded" as const,
         status: 402 as const,
       };
+    }
+    if (
+      idempotencyKeyHash &&
+      requestFingerprint &&
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      err.code === "P2002"
+    ) {
+      const existing = await getAiJobByIdempotency({
+        userId,
+        idempotencyKeyHash,
+      });
+      if (existing) {
+        if (existing.requestFingerprint !== requestFingerprint) {
+          return {
+            ok: false as const,
+            errorCode: "invalidRequestBody" as const,
+            status: 409 as const,
+          };
+        }
+        if (existing.deletedAt) {
+          return {
+            ok: false as const,
+            errorCode: "aiRequestWasDeleted" as const,
+            status: 409 as const,
+          };
+        }
+        return {
+          ok: true as const,
+          outcome: "existing" as const,
+          job: existing,
+        };
+      }
     }
     throw err;
   }
@@ -135,7 +221,13 @@ export async function failAiJobAndRefundUsage({
       ? toUsagePeriod(subscription)
       : { start: null, end: null };
     const job = await getAiJobById({ jobId: aiJobId, prisma });
-    if (!job || job.userId !== userId) {
+    // Account deletion can cascade the reservation while provider or storage
+    // work is still unwinding. With no user-owned job or ledger left, refunding
+    // is already complete and this cleanup path is intentionally idempotent.
+    if (!job) {
+      return;
+    }
+    if (job.userId !== userId) {
       throw new Error(`AI job ${aiJobId} was not found for user ${userId}`);
     }
 
@@ -179,5 +271,65 @@ export async function failAiJobAndRefundUsage({
       aiJobId,
       prisma,
     });
+  });
+}
+
+export async function failFinalizingAiJobAndRefundUsage({
+  userId,
+  aiJobId,
+  finalizationToken,
+  expectedProviderJobId,
+  error,
+}: {
+  userId: string;
+  aiJobId: string;
+  finalizationToken: string;
+  expectedProviderJobId: string;
+  error: string;
+}) {
+  await startRetryableTransaction(async (prisma) => {
+    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const usagePeriod = subscription
+      ? toUsagePeriod(subscription)
+      : { start: null, end: null };
+    const changed = await failAiJobOwnedByFinalizer({
+      jobId: aiJobId,
+      finalizationToken,
+      expectedProviderJobId,
+      error,
+      prisma,
+    });
+    if (!changed) return;
+    await refundUsage({ userId, usagePeriod, aiJobId, prisma });
+  });
+}
+
+export async function failPolledAiJobAndRefundUsage({
+  userId,
+  aiJobId,
+  providerPollLeaseExpiresAt,
+  expectedProviderJobId,
+  error,
+}: {
+  userId: string;
+  aiJobId: string;
+  providerPollLeaseExpiresAt: Date;
+  expectedProviderJobId: string;
+  error: string;
+}) {
+  await startRetryableTransaction(async (prisma) => {
+    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const usagePeriod = subscription
+      ? toUsagePeriod(subscription)
+      : { start: null, end: null };
+    const changed = await failAiJobOwnedByProviderPoll({
+      jobId: aiJobId,
+      providerPollLeaseExpiresAt,
+      expectedProviderJobId,
+      error,
+      prisma,
+    });
+    if (!changed) return;
+    await refundUsage({ userId, usagePeriod, aiJobId, prisma });
   });
 }

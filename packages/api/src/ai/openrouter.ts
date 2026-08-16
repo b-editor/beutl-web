@@ -6,22 +6,40 @@ import {
   type GeneratedVideoExtension,
   type GeneratedVideoMimeType,
 } from "./video-validation";
+import {
+  InvalidTranscriptionResultError,
+  validateTranscriptionResult,
+  type TranscriptionResult,
+} from "./audio-validation";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_OPENROUTER_JSON_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_OPENROUTER_ERROR_RESPONSE_BYTES = 16 * 1024;
 
 export class AiProviderError extends Error {
   readonly httpStatus: number | null;
+  readonly execution: "definite_failure" | "unknown";
 
   constructor(
     message: string,
-    options?: { cause?: unknown; httpStatus?: number },
+    options?: {
+      cause?: unknown;
+      httpStatus?: number;
+      execution?: "definite_failure" | "unknown";
+    },
   ) {
-    super(message, options);
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "AiProviderError";
     this.httpStatus = options?.httpStatus ?? null;
+    this.execution = options?.execution ?? "definite_failure";
+  }
+}
+
+export class InvalidAiProviderOutputError extends AiProviderError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, { ...options, execution: "definite_failure" });
+    this.name = "InvalidAiProviderOutputError";
   }
 }
 
@@ -36,11 +54,25 @@ class OpenRouterRequestError extends AiProviderError {
   constructor(
     message: string,
     requestState: OpenRouterRequestState,
-    options?: { cause?: unknown; httpStatus?: number },
+    options?: {
+      cause?: unknown;
+      httpStatus?: number;
+      execution?: "definite_failure" | "unknown";
+    },
   ) {
-    super(message, options);
+    super(message, {
+      ...options,
+      execution: options?.execution ??
+        (requestState === "unknown" ? "unknown" : "definite_failure"),
+    });
     this.requestState = requestState;
   }
+}
+
+export function isProviderExecutionOutcomeUnknown(
+  error: unknown,
+): error is AiProviderError {
+  return error instanceof AiProviderError && error.execution === "unknown";
 }
 
 export type AiVideoSubmissionOutcome = "definite_failure" | "unknown";
@@ -154,10 +186,26 @@ function getApiKey(): string {
   return key;
 }
 
+export function getOpenRouterRequestTimeoutMilliseconds(
+  configuredTimeout = process.env.OPENROUTER_REQUEST_TIMEOUT_MS,
+): number {
+  const timeoutMs = configuredTimeout === undefined
+    ? DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS
+    : Number(configuredTimeout);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new AiProviderError(
+      "OPENROUTER_REQUEST_TIMEOUT_MS must be a positive integer",
+    );
+  }
+  return timeoutMs;
+}
+
 async function readBoundedResponseBytes(
   response: Response,
   maximumBytes: number,
   description: string,
+  createSizeLimitError: (message: string) => AiProviderError = (message) =>
+    new AiProviderError(message),
 ): Promise<Uint8Array> {
   const contentLengthHeader = response.headers.get("content-length");
   if (contentLengthHeader) {
@@ -168,7 +216,7 @@ async function readBoundedResponseBytes(
       contentLength > maximumBytes
     ) {
       await response.body?.cancel().catch(() => undefined);
-      throw new AiProviderError(`${description} exceeds the size limit`);
+      throw createSizeLimitError(`${description} exceeds the size limit`);
     }
   }
   if (!response.body) return new Uint8Array();
@@ -182,7 +230,7 @@ async function readBoundedResponseBytes(
       if (done) break;
       totalBytes += value.byteLength;
       if (totalBytes > maximumBytes) {
-        const error = new AiProviderError(
+        const error = createSizeLimitError(
           `${description} exceeds the size limit`,
         );
         await reader.cancel(error).catch(() => undefined);
@@ -192,7 +240,10 @@ async function readBoundedResponseBytes(
     }
   } catch (cause) {
     if (cause instanceof AiProviderError) throw cause;
-    throw new AiProviderError(`${description} could not be read`, { cause });
+    throw new AiProviderError(`${description} could not be read`, {
+      cause,
+      execution: "unknown",
+    });
   }
 
   const result = new Uint8Array(totalBytes);
@@ -228,14 +279,16 @@ async function request(
   response: Response;
   release(): void;
 }> {
-  const configuredTimeout = process.env.OPENROUTER_REQUEST_TIMEOUT_MS;
-  const timeoutMs = configuredTimeout === undefined
-    ? DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS
-    : Number(configuredTimeout);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+  let timeoutMs: number;
+  try {
+    timeoutMs = getOpenRouterRequestTimeoutMilliseconds();
+  } catch (cause) {
     throw new OpenRouterRequestError(
-      "OPENROUTER_REQUEST_TIMEOUT_MS must be a positive integer",
+      cause instanceof Error
+        ? cause.message
+        : "OPENROUTER_REQUEST_TIMEOUT_MS must be a positive integer",
       "not_sent",
+      { cause },
     );
   }
 
@@ -290,7 +343,13 @@ async function request(
         { cause },
       );
     }
-    if (upstreamSignal?.aborted) throw cause;
+    if (upstreamSignal?.aborted) {
+      throw new OpenRouterRequestError(
+        "OpenRouter request was cancelled before its outcome was known",
+        "unknown",
+        { cause },
+      );
+    }
     throw new OpenRouterRequestError(
       "OpenRouter request could not be completed",
       "unknown",
@@ -309,7 +368,12 @@ async function request(
     throw new OpenRouterRequestError(
       `OpenRouter request failed: ${response.status} ${body.slice(0, 1_000)}`,
       "response_received",
-      { httpStatus: response.status },
+      {
+        httpStatus: response.status,
+        execution: response.status >= 400 && response.status < 500
+          ? "definite_failure"
+          : "unknown",
+      },
     );
   }
 
@@ -330,10 +394,9 @@ async function requestJson(
     );
     return JSON.parse(text) as unknown;
   } catch (cause) {
+    if (cause instanceof AiProviderError) throw cause;
     throw new OpenRouterRequestError(
-      cause instanceof AiProviderError
-        ? cause.message
-        : "OpenRouter returned invalid JSON",
+      "OpenRouter returned invalid JSON",
       "response_received",
       { cause },
     );
@@ -391,11 +454,13 @@ export async function generateImage({
   prompt,
   size,
   model,
+  signal,
 }: {
   prompt: string;
   size: ImageGenerationSize;
-  // 管理画面から設定できるモデル ID。解決は呼び出し側 (loadAiSettings) が担う。
+  // The model ID is administrator-configurable and resolved by loadAiSettings.
   model: string;
+  signal?: AbortSignal;
 }): Promise<GeneratedImage> {
   const data = await requestJson("/images", {
     method: "POST",
@@ -409,6 +474,7 @@ export async function generateImage({
       n: 1,
       output_format: "png",
     }),
+    signal,
   });
 
   return parseGeneratedImage(data);
@@ -441,12 +507,14 @@ export async function editImage({
   mimeType,
   prompt,
   model,
+  signal,
 }: {
   task: ImageEditTask;
   image: ArrayBuffer;
   mimeType: string;
   prompt?: string;
   model: string;
+  signal?: AbortSignal;
 }): Promise<GeneratedImage> {
   const resolvedPrompt =
     task === "remove_background"
@@ -484,28 +552,17 @@ export async function editImage({
       output_format: "png",
       ...taskOptions,
     }),
+    signal,
   });
 
   return parseGeneratedImage(data);
 }
 
-export type TranscriptionSegment = {
-  start: number;
-  end: number;
-  text: string;
-};
-
-export type TranscriptionWord = {
-  start: number;
-  end: number;
-  word: string;
-};
-
-export type TranscriptionResult = {
-  segments: TranscriptionSegment[];
-  language?: string;
-  words?: TranscriptionWord[];
-};
+export type {
+  TranscriptionResult,
+  TranscriptionSegment,
+  TranscriptionWord,
+} from "./audio-validation";
 
 export type TranslationSegment = {
   id: string;
@@ -612,11 +669,13 @@ export async function translateSegments({
   targetLanguage,
   segments,
   model,
+  signal,
 }: {
   sourceLanguage?: string;
   targetLanguage: string;
   segments: TranslationSegment[];
   model: string;
+  signal?: AbortSignal;
 }): Promise<TranslationSegment[]> {
   const data = await requestJson("/chat/completions", {
     method: "POST",
@@ -680,6 +739,7 @@ export async function translateSegments({
       },
       stream: false,
     }),
+    signal,
   }).catch((cause: unknown) => {
     if (cause instanceof AiProviderError) {
       throw cause;
@@ -696,16 +756,20 @@ export async function translateSegments({
 // the segment timestamps required to build subtitles.
 export async function transcribeAudio({
   audio,
+  durationSeconds,
   filename,
   mimeType,
   language,
   model,
+  signal,
 }: {
   audio: ArrayBuffer;
+  durationSeconds: number;
   filename: string;
   mimeType: string;
   language?: string;
   model: string;
+  signal?: AbortSignal;
 }): Promise<TranscriptionResult> {
   const form = new FormData();
   form.append("model", model);
@@ -721,68 +785,23 @@ export async function transcribeAudio({
     form.append("language", language);
   }
 
-  const data = (await requestJson("/audio/transcriptions", {
+  const data = await requestJson("/audio/transcriptions", {
     method: "POST",
     body: form,
-  })) as {
-    language?: unknown;
-    segments?: Array<{
-      start?: number;
-      end?: number;
-      text?: string;
-    }>;
-    words?: Array<{
-      start?: number;
-      end?: number;
-      word?: string;
-    }>;
-  };
+    signal,
+  });
 
-  const segments = (data.segments ?? [])
-    .filter(
-      (segment) =>
-        typeof segment.start === "number" &&
-        typeof segment.end === "number" &&
-        segment.end > segment.start &&
-        typeof segment.text === "string",
-    )
-    .map((segment) => ({
-      start: segment.start as number,
-      end: segment.end as number,
-      text: (segment.text as string).trim(),
-    }))
-    .filter((segment) => segment.text.length > 0);
-
-  if (segments.length === 0) {
-    throw new AiProviderError(
-      "OpenRouter returned no transcription segments",
-    );
+  try {
+    return validateTranscriptionResult(data, durationSeconds);
+  } catch (cause) {
+    if (cause instanceof InvalidTranscriptionResultError) {
+      throw new AiProviderError(
+        `OpenRouter returned invalid transcription data: ${cause.message}`,
+        { cause },
+      );
+    }
+    throw cause;
   }
-
-  const detectedLanguage =
-    typeof data.language === "string" && data.language.trim().length > 0
-      ? data.language.trim()
-      : undefined;
-  const words = (data.words ?? [])
-    .filter(
-      (word) =>
-        typeof word.start === "number" &&
-        typeof word.end === "number" &&
-        word.end > word.start &&
-        typeof word.word === "string",
-    )
-    .map((word) => ({
-      start: word.start as number,
-      end: word.end as number,
-      word: (word.word as string).trim(),
-    }))
-    .filter((word) => word.word.length > 0);
-
-  return {
-    segments,
-    ...(detectedLanguage ? { language: detectedLanguage } : {}),
-    ...(words.length > 0 ? { words } : {}),
-  };
 }
 
 export type VideoGenerationStatus =
@@ -840,7 +859,9 @@ function providerErrorMessage(value: unknown): string | null {
 function parseVideoJob(data: unknown): VideoJobInfo {
   const parsed = videoJobResponseSchema.safeParse(data);
   if (!parsed.success) {
-    throw new AiProviderError("OpenRouter returned invalid video job data");
+    throw new AiProviderError("OpenRouter returned invalid video job data", {
+      execution: "unknown",
+    });
   }
   return {
     id: parsed.data.id,
@@ -857,6 +878,7 @@ export async function createVideoJob({
   frameImages,
   callbackUrl,
   model,
+  signal,
 }: {
   prompt: string;
   durationSeconds: number;
@@ -864,6 +886,7 @@ export async function createVideoJob({
   frameImages?: VideoFrameImage[];
   callbackUrl: string;
   model: string;
+  signal?: AbortSignal;
 }): Promise<VideoJobInfo> {
   let parsedCallbackUrl: URL;
   try {
@@ -898,6 +921,7 @@ export async function createVideoJob({
           ? { frame_images: frameImages }
           : {}),
       }),
+      signal,
     });
   } catch (cause) {
     const definiteFailure =
@@ -952,6 +976,7 @@ export async function downloadVideoContent(id: string): Promise<{
       requestScope.response,
       MAX_AI_GENERATED_VIDEO_BYTES,
       "OpenRouter video response",
+      (message) => new InvalidAiProviderOutputError(message),
     );
   } finally {
     requestScope.release();
@@ -968,9 +993,10 @@ export async function downloadVideoContent(id: string): Promise<{
     };
   } catch (cause) {
     if (cause instanceof InvalidGeneratedVideoError) {
-      throw new AiProviderError("OpenRouter returned invalid video bytes", {
-        cause,
-      });
+      throw new InvalidAiProviderOutputError(
+        "OpenRouter returned invalid video bytes",
+        { cause },
+      );
     }
     throw cause;
   }

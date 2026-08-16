@@ -28,21 +28,47 @@ describe("AI settings registry", () => {
       expect(AI_SETTINGS[aiModelSettingKey(operation)]).toBeDefined();
       expect(AI_SETTINGS[aiPriceSettingKey(operation)]).toBeDefined();
     }
-    // モデルと単価で 2 件ずつ。取り違えると課金かモデル解決のどちらかが欠ける。
+    // Each operation has a model and price; a mismatch would omit one category.
     expect(Object.keys(AI_SETTINGS)).toHaveLength(AI_OPERATIONS.length * 2);
   });
 
   it("never exposes secrets as configurable settings", () => {
-    // API キーを DB 経由で書き換えられるようにしてはいけない。
+    // API keys must never become writable through the settings database.
     for (const definition of Object.values(AI_SETTINGS)) {
       expect(definition.envVar ?? "").not.toMatch(/API_KEY|SECRET|TOKEN/i);
     }
+  });
+
+  it("maps every model setting to its environment override", () => {
+    expect(
+      Object.fromEntries(
+        AI_OPERATIONS.map((operation) => [
+          operation,
+          AI_SETTINGS[aiModelSettingKey(operation)].envVar,
+        ]),
+      ),
+    ).toEqual({
+      "image.generate": "OPENROUTER_IMAGE_MODEL",
+      "image.edit.remove_background":
+        "OPENROUTER_IMAGE_EDIT_MODEL_REMOVE_BACKGROUND",
+      "image.edit.upscale": "OPENROUTER_IMAGE_EDIT_MODEL_UPSCALE",
+      "image.edit.restyle": "OPENROUTER_IMAGE_EDIT_MODEL_RESTYLE",
+      "image.edit.remove_object":
+        "OPENROUTER_IMAGE_EDIT_MODEL_REMOVE_OBJECT",
+      "image.edit.outpaint": "OPENROUTER_IMAGE_EDIT_MODEL_OUTPAINT",
+      "audio.transcribe": "OPENROUTER_STT_MODEL",
+      "subtitle.translate": "OPENROUTER_TRANSLATION_MODEL",
+      "video.generate": "OPENROUTER_VIDEO_MODEL",
+    });
   });
 
   it("rejects unknown keys", () => {
     expect(isAiSettingKey("model.image.generate")).toBe(true);
     expect(isAiSettingKey("model.unknown.operation")).toBe(false);
     expect(isAiSettingKey(undefined)).toBe(false);
+    expect(isAiSettingKey("toString")).toBe(false);
+    expect(isAiSettingKey("constructor")).toBe(false);
+    expect(isAiSettingKey("__proto__")).toBe(false);
     expect(validateAiSettingValue("nope", "x")).toEqual({
       ok: false,
       error: "unknownKey",
@@ -83,7 +109,7 @@ describe("AI settings registry", () => {
     [String(MIN_PRICE_UNITS), true],
     [String(MAX_PRICE_UNITS), true],
     ["20", true],
-    // 0 は「無料」になり実質無制限利用を許してしまう。
+    // Zero would make the operation free and effectively unlimited.
     ["0", false],
     ["-1", false],
     ["1.5", false],
@@ -142,7 +168,7 @@ describe("AI settings resolution", () => {
   });
 
   it("ignores a stored value that no longer passes validation", async () => {
-    // レジストリの値域を後から狭めた場合に、不正な値をプロバイダや課金へ流さない。
+    // A future registry restriction must not pass stale invalid values onward.
     await upsertAiSetting({
       key: "price.image.generate",
       value: "999999",
@@ -173,6 +199,19 @@ describe("AI settings resolution", () => {
     const settings = loadAiSettingsWithoutDatabase();
     expect(settings.getModel("audio.transcribe")).toBe(
       "openai/whisper-from-env",
+    );
+  });
+
+  it.each([
+    ["OPENROUTER_IMAGE_EDIT_MODEL_RESTYLE", "image.edit.restyle"],
+    ["OPENROUTER_IMAGE_EDIT_MODEL_REMOVE_OBJECT", "image.edit.remove_object"],
+    ["OPENROUTER_IMAGE_EDIT_MODEL_OUTPAINT", "image.edit.outpaint"],
+    ["OPENROUTER_TRANSLATION_MODEL", "subtitle.translate"],
+  ] as const)("resolves %s for %s", (envVar, operation) => {
+    vi.stubEnv(envVar, "openai/model-from-env");
+
+    expect(loadAiSettingsWithoutDatabase().getModel(operation)).toBe(
+      "openai/model-from-env",
     );
   });
 

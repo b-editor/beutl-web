@@ -19,7 +19,8 @@ export async function updateAiSetting({
   value: string;
 }): Promise<ActionResult> {
   return await adminAction(async (session) => {
-    // Server Action の引数は型注釈が実行時に消えるため、値域をここで検証する。
+    // Server Action arguments lose their type annotations at runtime, so
+    // validate their ranges here.
     if (!isAiSettingKey(key)) {
       return { success: false, message: "Invalid setting key" };
     }
@@ -31,8 +32,8 @@ export async function updateAiSetting({
       return { success: false, message: `Invalid value: ${validated.error}` };
     }
 
-    // 監査ログと設定の書き込みは同一トランザクションで確定させる。
-    // 課金単価を変えうる操作なので「誰が何をいつ変えたか」を必ず残す。
+    // Commit the audit log and setting update in the same transaction. This
+    // operation can change billing rates, so always record who changed what.
     await startRetryableTransaction(async (tx) => {
       await upsertAiSetting({
         key,

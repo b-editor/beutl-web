@@ -1,4 +1,5 @@
 import {
+  findAccountDeletionIntentByUserId,
   getCreditAccount,
   getMonthlyUsageAccount,
   getSubscriptionByUserId,
@@ -204,6 +205,67 @@ export async function getEntitlements(
       balance: toAiBalancePresentation(balance),
       availability: toAiOperationAvailability(balance, isActive, settings),
     };
+  });
+}
+
+export async function canStartAiOperation(
+  userId: string,
+  request: {
+    operation: string;
+    durationSeconds?: number;
+    characterCount?: number;
+  },
+): Promise<boolean> {
+  const { operation } = request;
+  if (!(operation in AI_PRICING_CATALOG)) {
+    throw new RangeError("operation must identify a billable AI operation");
+  }
+  return await startRetryableTransaction(async (prisma) => {
+    if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
+      return false;
+    }
+    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    if (!subscription || !isActiveProSubscription(subscription)) {
+      return false;
+    }
+
+    const settings = await loadAiSettings({ prisma });
+    const quantity = operation === "video.generate"
+      ? request.durationSeconds
+      : operation === "audio.transcribe"
+        ? request.durationSeconds === undefined
+          ? undefined
+          : Math.max(1, Math.ceil(request.durationSeconds / 60))
+        : operation === "subtitle.translate"
+          ? request.characterCount === undefined
+            ? undefined
+            : Math.max(1, Math.ceil(request.characterCount / 1_000))
+          : 1;
+    if (
+      quantity === undefined ||
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      throw new RangeError("operation quantity must be a positive integer");
+    }
+    const requiredUsage = settings.getPrice(operation) * quantity;
+    if (!Number.isSafeInteger(requiredUsage) || requiredUsage <= 0) {
+      return false;
+    }
+
+    const account = await getMonthlyUsageAccount({
+      userId,
+      usagePeriod: {
+        start: subscription.currentPeriodStart,
+        end: subscription.currentPeriodEnd,
+      },
+      prisma,
+    });
+    const balance = toAiBalanceSnapshot(account, PRO_PLAN.monthlyUsageLimit);
+    return (
+      getMonthlyUsageRemaining(balance) + balance.additionalCredits >=
+      requiredUsage
+    );
   });
 }
 

@@ -79,7 +79,7 @@ function makeApp() {
   return new Hono().basePath("/api/v3").route("/", v3);
 }
 
-async function authHeaders() {
+async function authHeaders(idempotencyKey = crypto.randomUUID()) {
   const token = await sign(
     {
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":
@@ -89,7 +89,10 @@ async function authHeaders() {
     JWT_SECRET,
     "HS256",
   );
-  return { Authorization: `Bearer ${token}` };
+  return {
+    Authorization: `Bearer ${token}`,
+    "Idempotency-Key": idempotencyKey,
+  };
 }
 
 async function activatePro() {
@@ -106,13 +109,19 @@ async function activatePro() {
 
 async function requestTranslation(
   body: unknown,
-  options?: { authenticated?: boolean; contentType?: string },
+  options?: {
+    authenticated?: boolean;
+    contentType?: string;
+    idempotencyKey?: string;
+  },
 ) {
   return await makeApp().request("/api/v3/ai/translations", {
     method: "POST",
     headers: {
       "content-type": options?.contentType ?? "application/json",
-      ...(options?.authenticated === false ? {} : await authHeaders()),
+      ...(options?.authenticated === false
+        ? {}
+        : await authHeaders(options?.idempotencyKey)),
     },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
@@ -361,6 +370,7 @@ describe("POST /api/v3/ai/translations contract", () => {
       targetLanguage: "en",
       segments,
       model: "openai/gpt-4.1-mini",
+      signal: expect.any(AbortSignal),
     });
     expect([...state.aiJobs.values()][0]).toMatchObject({
       inputParams: {
@@ -433,6 +443,7 @@ describe("POST /api/v3/ai/translations contract", () => {
       targetLanguage: "ja",
       segments: segments.map(({ id, text }) => ({ id, text })),
       model: "openai/gpt-4.1-mini",
+      signal: expect.any(AbortSignal),
     });
 
     const job = [...state.aiJobs.values()][0];
@@ -556,9 +567,28 @@ describe("POST /api/v3/ai/translations contract", () => {
     expect(account.purchasedCredits).toBe(0);
   });
 
+  it("refunds an ambiguous synchronous provider failure", async () => {
+    await activatePro();
+    vi.mocked(translateSegments).mockRejectedValue(
+      new AiProviderError("provider request timed out", {
+        execution: "unknown",
+      }),
+    );
+
+    const response = await requestTranslation({
+      targetLanguage: "ja",
+      segments: [{ id: "line-1", text: "Hello" }],
+    });
+
+    expect(response.status).toBe(500);
+    expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+      .toBe(0);
+  });
+
   it("charges the administrator-configured price and calls the configured model", async () => {
     await activatePro();
-    // 管理画面での変更に相当する。単価は 1,000 文字あたりなので 1 単位分課金される。
+    // Simulate an admin change. Pricing is per 1,000 characters, so this costs one unit.
     await upsertAiSetting({
       key: "price.subtitle.translate",
       value: "37",
@@ -583,8 +613,9 @@ describe("POST /api/v3/ai/translations contract", () => {
       targetLanguage: "ja",
       segments: [{ id: "line-1", text: "Hello" }],
       model: "anthropic/claude-haiku-4.5",
+      signal: expect.any(AbortSignal),
     });
-    // 予約時の単価がジョブに記録され、返金もこの値を基準にする。
+    // The job records its reservation price and uses that value for refunds.
     expect([...state.aiJobs.values()][0]).toMatchObject({ usageUnits: 37 });
     const account = await getCreditAccount({ userId: USER_ID });
     expect(account.monthlyUsageUsed).toBe(37);
@@ -592,7 +623,7 @@ describe("POST /api/v3/ai/translations contract", () => {
 
   it("keeps an in-flight job on its reserved price when the setting changes mid-run", async () => {
     await activatePro();
-    // 実行中に単価を上げても、返金は予約時の単価で行われ差額が発生しない。
+    // Raising the price in flight must not change the refund for the reservation.
     vi.mocked(translateSegments).mockImplementation(async () => {
       await upsertAiSetting({
         key: "price.subtitle.translate",

@@ -9,10 +9,9 @@ import {
   registerAiStorageCleanup,
 } from "@beutl/db";
 
-// R2 バケットの注入ポイント。独立 Worker (beutl-web-api) は wrangler.jsonc の
-// r2_buckets バインディングを、Web (Next.js) は getCloudflareContext の env を
-// それぞれ setR2BucketProvider() で登録する。これにより packages/api の
-// AI エンドポイントは実行環境に依存せず R2 へ保存できる。
+// R2 bucket injection point. The standalone worker registers its wrangler.jsonc
+// binding and Next.js registers the getCloudflareContext environment through
+// setR2BucketProvider, keeping API storage independent of either runtime.
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
 
 export type R2BucketLike = {
@@ -21,6 +20,11 @@ export type R2BucketLike = {
     value: ArrayBuffer | ReadableStream | string,
     options?: { httpMetadata?: { contentType?: string } },
   ): Promise<unknown>;
+  get?(key: string): Promise<{
+    body?: ReadableStream<Uint8Array>;
+    arrayBuffer?: () => Promise<ArrayBuffer>;
+    size?: number;
+  } | null>;
   delete?(key: string): Promise<unknown>;
 };
 
@@ -59,6 +63,62 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
     throw new Error("The configured R2 bucket does not support deletion.");
   }
   await bucket.delete(objectKey);
+}
+
+export async function readAiJsonResult({
+  objectKey,
+  maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
+}: {
+  objectKey: string;
+  maximumBytes?: number;
+}): Promise<unknown> {
+  const bucket = getR2Bucket();
+  if (!bucket.get) {
+    throw new Error("The configured R2 bucket does not support reads.");
+  }
+  const object = await bucket.get(objectKey);
+  if (!object) throw new Error(`AI result ${objectKey} was not found`);
+  if (object.size !== undefined && object.size > maximumBytes) {
+    throw new Error(`AI result ${objectKey} exceeds the size limit`);
+  }
+
+  let bytes: ArrayBuffer;
+  if (object.body) {
+    const reader = object.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maximumBytes) {
+          await reader.cancel("AI result size limit exceeded");
+          throw new Error(`AI result ${objectKey} exceeds the size limit`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const combined = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    bytes = combined.buffer;
+  } else if (object.arrayBuffer) {
+    // Legacy adapters without a stream cannot be bounded during the read. Keep
+    // the post-read check, but prefer body whenever both forms are available.
+    bytes = await object.arrayBuffer();
+  } else {
+    throw new Error(`AI result ${objectKey} cannot be read`);
+  }
+  if (bytes.byteLength > maximumBytes) {
+    throw new Error(`AI result ${objectKey} exceeds the size limit`);
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
 async function compensateAiOutputWrite(
@@ -218,7 +278,7 @@ export async function saveAiImage({
   });
 }
 
-// 生成された動画バイト列を R2 に保存し、File レコードを作成する。
+// Store generated video bytes in R2 and create the corresponding File record.
 export async function saveAiVideo({
   jobId,
   finalizationToken,

@@ -8,8 +8,8 @@ export type AiSettingRecord = {
   updatedAt: Date;
 };
 
-// 設定は数十件程度なので、キー指定で引くより一括で読んで呼び出し側で引く方が
-// ラウンドトリップが少ない。AI の各操作は 1 リクエストで 1 回だけ呼ぶ。
+// There are only a few dozen settings, so one bulk read costs fewer round trips
+// than querying each key. Each AI operation loads this snapshot once.
 export async function listAiSettings({
   prisma,
 }: {
@@ -55,8 +55,8 @@ export async function upsertAiSetting({
   });
 }
 
-// 既定値へ戻す操作は行の削除で表現する。解決側が「DB → 環境変数 → 既定値」の
-// 順にフォールバックするため、行が無い状態がそのまま「既定に従う」を意味する。
+// Deleting a row restores fallback resolution from environment to built-in
+// default, so absence directly represents "use the configured fallback."
 export async function deleteAiSetting({
   key,
   prisma,

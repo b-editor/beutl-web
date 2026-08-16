@@ -57,6 +57,9 @@ type AiJob = {
   kind: string;
   provider: string;
   providerJobId: string | null;
+  idempotencyKeyHash: string | null;
+  requestFingerprint: string | null;
+  callbackNonceHash: string | null;
   status: string;
   inputParams: unknown;
   resultFileId: string | null;
@@ -246,13 +249,15 @@ export function createInMemoryPrisma() {
     kind?: string;
     provider?: string;
     providerJobId?: string | null;
+    idempotencyKeyHash?: string | null;
+    callbackNonceHash?: string | null;
     status?: string | { in?: string[]; notIn?: string[] };
     updatedAt?: Date | { lte: Date };
     deletedAt?: null | { not: null };
-    providerPollLeaseExpiresAt?: null | { lte: Date };
+    providerPollLeaseExpiresAt?: Date | null | { lte: Date };
     finalizationToken?: string | null;
     finalizationLeaseExpiresAt?: null | { lte: Date };
-    resultFileId?: string | null;
+    resultFileId?: string | null | { not: null };
     OR?: AiJobWhere[];
     AND?: AiJobWhere[];
   };
@@ -284,9 +289,12 @@ export function createInMemoryPrisma() {
       where.providerPollLeaseExpiresAt === undefined ||
       (where.providerPollLeaseExpiresAt === null
         ? job.providerPollLeaseExpiresAt === null
-        : job.providerPollLeaseExpiresAt !== null &&
-          job.providerPollLeaseExpiresAt.getTime() <=
-            where.providerPollLeaseExpiresAt.lte.getTime());
+        : where.providerPollLeaseExpiresAt instanceof Date
+          ? job.providerPollLeaseExpiresAt?.getTime() ===
+            where.providerPollLeaseExpiresAt.getTime()
+          : job.providerPollLeaseExpiresAt !== null &&
+            job.providerPollLeaseExpiresAt.getTime() <=
+              where.providerPollLeaseExpiresAt.lte.getTime());
     return (
       (!where.id || job.id === where.id) &&
       (!where.userId || job.userId === where.userId) &&
@@ -299,8 +307,14 @@ export function createInMemoryPrisma() {
       deletedAtMatches &&
       (where.finalizationToken === undefined ||
         job.finalizationToken === where.finalizationToken) &&
+      (where.idempotencyKeyHash === undefined ||
+        job.idempotencyKeyHash === where.idempotencyKeyHash) &&
+      (where.callbackNonceHash === undefined ||
+        job.callbackNonceHash === where.callbackNonceHash) &&
       (where.resultFileId === undefined ||
-        job.resultFileId === where.resultFileId) &&
+        (typeof where.resultFileId === "object"
+          ? job.resultFileId !== null
+          : job.resultFileId === where.resultFileId)) &&
       providerPollLeaseMatches &&
       leaseMatches &&
       (!where.AND || where.AND.every((condition) =>
@@ -434,10 +448,54 @@ export function createInMemoryPrisma() {
   };
   const aiJobResultForFile = (fileId: string) =>
     [...state.aiJobs.values()].find((job) => job.resultFileId === fileId);
+  const projectSelectedFields = (
+    record: Record<string, unknown>,
+    selection: unknown,
+  ): Record<string, unknown> => {
+    if (
+      typeof selection !== "object" ||
+      selection === null ||
+      !("select" in selection) ||
+      typeof selection.select !== "object" ||
+      selection.select === null
+    ) {
+      return { ...record };
+    }
+    return Object.fromEntries(
+      Object.entries(selection.select as Record<string, unknown>)
+        .filter(([, selected]) => selected === true)
+        .map(([key]) => [key, record[key]]),
+    );
+  };
+  const aiJobWithResultFile = (
+    job: AiJob,
+    include?: { resultFile?: unknown },
+    select?: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    const selectedJob = select
+      ? Object.fromEntries(
+          Object.entries(select)
+            .filter(([key, selected]) => key !== "resultFile" && selected === true)
+            .map(([key]) => [key, job[key as keyof AiJob]]),
+        )
+      : { ...job };
+    const resultFileSelection = include?.resultFile ?? select?.resultFile;
+    if (resultFileSelection !== undefined) {
+      const resultFile = job.resultFileId
+        ? state.files.get(job.resultFileId) ?? null
+        : null;
+      selectedJob.resultFile = resultFile
+        ? projectSelectedFields(
+            resultFile as unknown as Record<string, unknown>,
+            resultFileSelection,
+          )
+        : null;
+    }
+    return selectedJob;
+  };
 
-  // $transaction のロールバック用スナップショット。
-  // 本物の DB はトランザクション内で失敗すると変更が破棄されるため、
-  // 契約テストでも同じ挙動をシミュレートする。
+  // Snapshot state for $transaction rollback so contract tests reproduce the
+  // discard-on-failure behavior of the real database.
   const snapshot = () => ({
     creditAccounts: new Map(
       [...state.creditAccounts].map(([k, v]) => [k, { ...v }]),
@@ -924,17 +982,49 @@ export function createInMemoryPrisma() {
           kind: string;
           provider: string;
           providerJobId?: string;
+          idempotencyKeyHash?: string;
+          requestFingerprint?: string;
+          callbackNonceHash?: string;
           status: string;
           inputParams?: object;
           usageUnits: number;
         };
       }) => {
+        if (
+          data.idempotencyKeyHash &&
+          [...state.aiJobs.values()].some(
+            (job) =>
+              job.userId === data.userId &&
+              job.idempotencyKeyHash === data.idempotencyKeyHash,
+          )
+        ) {
+          throw Object.assign(
+            new Error("Unique constraint failed on userId and idempotencyKeyHash"),
+            { code: "P2002" },
+          );
+        }
+        if (
+          data.providerJobId &&
+          [...state.aiJobs.values()].some(
+            (job) =>
+              job.provider === data.provider &&
+              job.providerJobId === data.providerJobId,
+          )
+        ) {
+          throw Object.assign(
+            new Error("Unique constraint failed on provider and providerJobId"),
+            { code: "P2002" },
+          );
+        }
         const job: AiJob = {
           id: crypto.randomUUID(),
           userId: data.userId,
           kind: data.kind,
           provider: data.provider,
           providerJobId: data.providerJobId ?? null,
+          idempotencyKeyHash: data.idempotencyKeyHash ?? null,
+          requestFingerprint: data.requestFingerprint ?? null,
+          callbackNonceHash: data.callbackNonceHash ?? null,
           status: data.status,
           inputParams: data.inputParams ?? null,
           resultFileId: null,
@@ -991,6 +1081,9 @@ export function createInMemoryPrisma() {
             | "resultFileId"
             | "error"
             | "providerJobId"
+            | "idempotencyKeyHash"
+            | "requestFingerprint"
+            | "callbackNonceHash"
             | "inputParams"
             | "deletedAt"
             | "providerPollLeaseExpiresAt"
@@ -1002,6 +1095,20 @@ export function createInMemoryPrisma() {
         let count = 0;
         for (const [id, job] of state.aiJobs) {
           if (matchesAiJobWhere(job, where)) {
+            if (
+              data.providerJobId &&
+              [...state.aiJobs.values()].some(
+                (candidate) =>
+                  candidate.id !== id &&
+                  candidate.provider === job.provider &&
+                  candidate.providerJobId === data.providerJobId,
+              )
+            ) {
+              throw Object.assign(
+                new Error("Unique constraint failed on provider and providerJobId"),
+                { code: "P2002" },
+              );
+            }
             state.aiJobs.set(id, {
               ...job,
               ...data,
@@ -1014,19 +1121,58 @@ export function createInMemoryPrisma() {
         }
         return { count };
       },
-      findUnique: async ({ where }: { where: { id: string } }) => {
-        const job = state.aiJobs.get(where.id);
-        return job ? { ...job } : null;
+      findUnique: async ({
+        where,
+        include,
+        select,
+      }: {
+        where:
+          | { id: string }
+          | {
+              userId_idempotencyKeyHash: {
+                userId: string;
+                idempotencyKeyHash: string;
+              };
+            }
+          | {
+              provider_providerJobId: {
+                provider: string;
+                providerJobId: string;
+              };
+            };
+        include?: { resultFile?: unknown };
+        select?: Record<string, unknown>;
+      }) => {
+        const job = "id" in where
+          ? state.aiJobs.get(where.id)
+          : "userId_idempotencyKeyHash" in where
+            ? [...state.aiJobs.values()].find(
+                (candidate) =>
+                  candidate.userId === where.userId_idempotencyKeyHash.userId &&
+                  candidate.idempotencyKeyHash ===
+                    where.userId_idempotencyKeyHash.idempotencyKeyHash,
+              )
+            : [...state.aiJobs.values()].find(
+                (candidate) =>
+                  candidate.provider === where.provider_providerJobId.provider &&
+                  candidate.providerJobId ===
+                    where.provider_providerJobId.providerJobId,
+              );
+        return job ? aiJobWithResultFile(job, include, select) : null;
       },
       findFirst: async ({
         where,
+        include,
+        select,
       }: {
         where: AiJobWhere;
+        include?: { resultFile?: unknown };
+        select?: Record<string, unknown>;
       }) => {
         const job = [...state.aiJobs.values()].find(
           (item) => matchesAiJobWhere(item, where),
         );
-        return job ? { ...job } : null;
+        return job ? aiJobWithResultFile(job, include, select) : null;
       },
       count: async ({
         where,
@@ -1057,6 +1203,7 @@ export function createInMemoryPrisma() {
         where,
         orderBy,
         take,
+        include,
       }: {
         where?: {
           userId?: string;
@@ -1075,6 +1222,7 @@ export function createInMemoryPrisma() {
               | { id: "asc" | "desc" }
             >;
         take?: number;
+        include?: { resultFile?: unknown };
       }) => {
         let jobs = [...state.aiJobs.values()];
         if (where?.userId) {
@@ -1133,7 +1281,7 @@ export function createInMemoryPrisma() {
           );
         }
         const page = take === undefined ? jobs : jobs.slice(0, take);
-        return page.map((job) => ({ ...job }));
+        return page.map((job) => aiJobWithResultFile(job, include));
       },
     },
     subscription: {

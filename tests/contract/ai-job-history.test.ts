@@ -192,6 +192,8 @@ describe("v3 AI job history contract", () => {
           },
           fileId: file.id,
           url: `${PUBLIC_ORIGIN}/api/contents/${file.id}`,
+          fileName: "result.mp4",
+          contentType: "video/mp4",
           error: null,
           canRetry: true,
           createdAt: newest.createdAt.toISOString(),
@@ -206,6 +208,8 @@ describe("v3 AI job history contract", () => {
           },
           fileId: null,
           url: null,
+          fileName: null,
+          contentType: null,
           error: null,
           canRetry: false,
           createdAt: middle.createdAt.toISOString(),
@@ -230,6 +234,8 @@ describe("v3 AI job history contract", () => {
           inputParams: { prompt: "oldest", size: "1024x1024" },
           fileId: null,
           url: null,
+          fileName: null,
+          contentType: null,
           error: null,
           canRetry: true,
           createdAt: oldest.createdAt.toISOString(),
@@ -295,6 +301,8 @@ describe("v3 AI job history contract", () => {
       inputParams: null,
       fileId: null,
       url: null,
+      fileName: null,
+      contentType: null,
       error: "aiProviderError",
       canRetry: false,
       createdAt: job.createdAt.toISOString(),
@@ -617,6 +625,9 @@ describe("v3 AI job history contract", () => {
       inputParams: null,
       error: null,
       providerJobId: null,
+      idempotencyKeyHash: reservation.job.idempotencyKeyHash,
+      requestFingerprint: reservation.job.requestFingerprint,
+      callbackNonceHash: null,
       resultFileId: null,
       deletedAt: expect.any(Date),
     });
@@ -651,5 +662,61 @@ describe("v3 AI job history contract", () => {
     );
     expect(repeated.status).toBe(200);
     expect(deleteObject).toHaveBeenCalledOnce();
+  });
+
+  it("retains an idempotency tombstone when a job is deleted", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_ai_idempotency_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
+      currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    const identity = {
+      idempotencyKeyHash: "a".repeat(64),
+      requestFingerprint: "b".repeat(64),
+    };
+    const first = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      ...identity,
+    });
+    if (!first.ok) throw new Error("AI job reservation failed");
+    state.aiJobs.get(first.job.id)!.status = "failed";
+
+    const deleted = await makeApp().request(
+      `/api/v3/ai/jobs/${first.job.id}`,
+      { method: "DELETE", headers: await authHeaders() },
+    );
+    expect(deleted.status).toBe(200);
+
+    const second = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      ...identity,
+    });
+    expect(second).toEqual({
+      ok: false,
+      errorCode: "aiRequestWasDeleted",
+      status: 409,
+    });
+    expect(state.aiJobs.size).toBe(1);
+    expect(state.aiJobs.get(first.job.id)).toMatchObject({
+      status: "failed",
+      idempotencyKeyHash: identity.idempotencyKeyHash,
+      requestFingerprint: identity.requestFingerprint,
+      deletedAt: expect.any(Date),
+    });
+    expect(
+      state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+    ).toHaveLength(1);
   });
 });

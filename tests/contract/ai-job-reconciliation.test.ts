@@ -15,6 +15,7 @@ import {
   reconcileAiJobs,
   saveAiJsonResult,
   saveAiImage,
+  readAiJsonResult,
   setR2BucketProvider,
   synchronizeAiVideoJob,
 } from "@beutl/api";
@@ -34,6 +35,7 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
 import {
   downloadVideoContent,
   getVideoJob,
+  InvalidAiProviderOutputError,
 } from "../../packages/api/src/ai/openrouter";
 
 const USER_ID = "user-1";
@@ -143,6 +145,34 @@ describe("AI job reconciliation", () => {
     expect(result).toMatchObject({ inspected: 1, pending: 1, failed: 0 });
     expect(store.state.aiJobs.get(job.id)?.status).toBe("queued");
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(200);
+  });
+
+  it("rotates a pending video from its current status after synchronization", async () => {
+    const reservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "queued",
+      usageUnits: 200,
+    });
+    if (!reservation.ok) throw new Error("AI job reservation failed");
+    await setQueuedAiJobRunning({
+      jobId: reservation.job.id,
+      providerJobId: "provider-video-current-status",
+    });
+    const now = new Date("2026-08-08T12:00:00.000Z");
+    const job = store.state.aiJobs.get(reservation.job.id)!;
+    job.createdAt = new Date(now.getTime() - 5 * 60 * 1000);
+    job.updatedAt = new Date(now.getTime() - 2 * 60 * 1000);
+    vi.mocked(getVideoJob).mockResolvedValue({
+      id: "provider-video-current-status",
+      status: "in_progress",
+    });
+
+    const result = await reconcileAiJobs(now);
+
+    expect(result).toMatchObject({ pending: 1, failed: 0, errors: 0 });
+    expect(store.state.aiJobs.get(job.id)?.status).toBe("running");
   });
 
   it("does not refund an unknown submission after a callback attaches its provider ID", async () => {
@@ -275,6 +305,43 @@ describe("AI job reconciliation", () => {
     ).toHaveLength(0);
   });
 
+  it("fails and refunds a completed provider job with invalid video output", async () => {
+    const reservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "queued",
+      usageUnits: 200,
+      activeJobLimit: 1,
+    });
+    if (!reservation.ok) throw new Error("AI job reservation failed");
+    await setQueuedAiJobRunning({
+      jobId: reservation.job.id,
+      providerJobId: "provider-invalid-video",
+    });
+    const now = new Date("2026-08-08T12:00:00.000Z");
+    const job = store.state.aiJobs.get(reservation.job.id)!;
+    job.createdAt = new Date(now.getTime() - 7 * 60 * 60 * 1000);
+    job.updatedAt = job.createdAt;
+    vi.mocked(getVideoJob).mockResolvedValue({
+      id: "provider-invalid-video",
+      status: "completed",
+    });
+    vi.mocked(downloadVideoContent).mockRejectedValue(
+      new InvalidAiProviderOutputError("invalid video"),
+    );
+
+    const result = await reconcileAiJobs(now);
+
+    expect(result).toMatchObject({ failed: 1, pending: 0, errors: 0 });
+    expect(store.state.aiJobs.get(job.id)?.status).toBe("failed");
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+      .toBe(0);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "refund"),
+    ).toHaveLength(1);
+  });
+
   it("retries finalization after an abandoned finalizer lease expires", async () => {
     const reservation = await createReservedAiJob({
       userId: USER_ID,
@@ -361,6 +428,41 @@ describe("AI job reconciliation", () => {
     },
   );
 
+  it("does not refund a stale terminal poll after another poll takes ownership", async () => {
+    const reservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "queued",
+      usageUnits: 200,
+    });
+    if (!reservation.ok) throw new Error("AI job reservation failed");
+    await setQueuedAiJobRunning({
+      jobId: reservation.job.id,
+      providerJobId: "provider-video-poll-takeover",
+    });
+    const snapshot = { ...store.state.aiJobs.get(reservation.job.id)! };
+    vi.mocked(getVideoJob).mockImplementationOnce(async () => {
+      const current = store.state.aiJobs.get(reservation.job.id)!;
+      current.providerPollLeaseExpiresAt = new Date(
+        current.providerPollLeaseExpiresAt!.getTime() + 1,
+      );
+      return {
+        id: "provider-video-poll-takeover",
+        status: "failed",
+      };
+    });
+
+    const current = await synchronizeAiVideoJob({ job: snapshot });
+
+    expect(current).toMatchObject({ status: "running" });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+      .toBe(200);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "refund"),
+    ).toHaveLength(0);
+  });
+
   it("does not refund from a stale snapshot after a fresh finalizer claims the job", async () => {
     const reservation = await createReservedAiJob({
       userId: USER_ID,
@@ -437,6 +539,91 @@ describe("AI job reconciliation", () => {
       store.state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(0);
     expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
+  });
+
+  it("does not expire or refund a video while a concurrent provider poll owns the lease", async () => {
+    const reservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "queued",
+      usageUnits: 200,
+    });
+    if (!reservation.ok) throw new Error("AI job reservation failed");
+    await setQueuedAiJobRunning({
+      jobId: reservation.job.id,
+      providerJobId: "provider-video-concurrent-poll",
+    });
+
+    const reconcileAt = new Date();
+    const job = store.state.aiJobs.get(reservation.job.id)!;
+    job.createdAt = new Date(
+      reconcileAt.getTime() - 7 * 60 * 60 * 1000,
+    );
+    job.updatedAt = job.createdAt;
+    const findMany = store.prisma.aiJob.findMany.bind(store.prisma.aiJob);
+    let releaseReconciliationScan!: () => void;
+    let markReconciliationScanReady!: () => void;
+    const reconciliationScanReady = new Promise<void>((resolve) => {
+      markReconciliationScanReady = resolve;
+    });
+    const reconciliationScanBlocked = new Promise<void>((resolve) => {
+      releaseReconciliationScan = resolve;
+    });
+    vi.spyOn(store.prisma.aiJob, "findMany").mockImplementationOnce(
+      async (args: any) => {
+        const staleJobs = await findMany(args);
+        markReconciliationScanReady();
+        await reconciliationScanBlocked;
+        return staleJobs;
+      },
+    );
+
+    let finishProviderPoll!: () => void;
+    vi.mocked(getVideoJob).mockImplementationOnce(
+      () => new Promise((resolve) => {
+        finishProviderPoll = () => resolve({
+          id: "provider-video-concurrent-poll",
+          status: "in_progress",
+        });
+      }),
+    );
+
+    const expiringReconciliation = reconcileAiJobs(reconcileAt);
+    await reconciliationScanReady;
+    const concurrentPoll = synchronizeAiVideoJob({
+      job: { ...job },
+      now: reconcileAt,
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(getVideoJob)).toHaveBeenCalledOnce();
+    });
+    const activePollLease = store.state.aiJobs.get(job.id)
+      ?.providerPollLeaseExpiresAt;
+    expect(activePollLease).toBeInstanceOf(Date);
+
+    releaseReconciliationScan();
+    const result = await expiringReconciliation;
+
+    expect(result).toMatchObject({
+      inspected: 1,
+      pending: 1,
+      failed: 0,
+    });
+    expect(store.state.aiJobs.get(job.id)).toMatchObject({
+      status: "running",
+      providerPollLeaseExpiresAt: activePollLease,
+    });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+      .toBe(200);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "refund"),
+    ).toHaveLength(0);
+
+    finishProviderPoll();
+    await expect(concurrentPoll).resolves.toMatchObject({
+      status: "running",
+    });
   });
 
   it("compensates the losing finalizer's File and R2 object after takeover", async () => {
@@ -663,5 +850,27 @@ describe("AI job reconciliation", () => {
     expect(putObject).not.toHaveBeenCalled();
     expect(store.state.files.size).toBe(0);
     expect(store.state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("stops an oversized streamed text result before buffering the whole object", async () => {
+    let cancelled = false;
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(6));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    setR2BucketProvider(() => ({
+      put: putObject,
+      get: vi.fn().mockResolvedValue({ body: oversized }),
+    }));
+
+    await expect(readAiJsonResult({
+      objectKey: "ai/json/oversized",
+      maximumBytes: 10,
+    })).rejects.toThrow("exceeds the size limit");
+    expect(cancelled).toBe(true);
   });
 });

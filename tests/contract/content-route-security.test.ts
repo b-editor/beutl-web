@@ -49,6 +49,7 @@ const CONTENT_BYTES = new Uint8Array([1, 2, 3, 4]);
 
 function publicFile(mimeType: string) {
   return {
+    name: "result file.webm",
     objectKey: "public/file-1",
     visibility: "PUBLIC" as const,
     userId: "owner",
@@ -125,7 +126,9 @@ describe("content route security", () => {
     expect(response.headers.get("Content-Type")).toBe(
       "application/octet-stream",
     );
-    expect(response.headers.get("Content-Disposition")).toBe("attachment");
+    expect(response.headers.get("Content-Disposition")).toBe(
+      "attachment; filename=\"result file.webm\"; filename*=UTF-8''result%20file.webm",
+    );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Content-Security-Policy")).toBe(
       "default-src 'none'; sandbox",
@@ -146,7 +149,9 @@ describe("content route security", () => {
 
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Type")).toBe(mimeType);
-      expect(response.headers.get("Content-Disposition")).toBe("inline");
+      expect(response.headers.get("Content-Disposition")).toBe(
+        "inline; filename=\"result file.webm\"; filename*=UTF-8''result%20file.webm",
+      );
       expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
       expect(response.headers.get("Content-Security-Policy")).toBe(
         "default-src 'none'; sandbox",
@@ -176,7 +181,9 @@ describe("content route security", () => {
     expect(response.headers.get("Content-Type")).toBe(
       "application/octet-stream",
     );
-    expect(response.headers.get("Content-Disposition")).toBe("attachment");
+    expect(response.headers.get("Content-Disposition")).toBe(
+      "attachment; filename=\"result file.webm\"; filename*=UTF-8''result%20file.webm",
+    );
     expect(response.headers.get("Content-Length")).toBe(
       CONTENT_BYTES.byteLength.toString(),
     );

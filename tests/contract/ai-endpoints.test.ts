@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { createHmac } from "node:crypto";
-import { setDbProvider } from "@beutl/db";
+import { createAiJob, setDbProvider } from "@beutl/db";
 import {
   addPurchasedCredits,
   consumeUsage,
@@ -32,12 +32,14 @@ import {
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
 } from "../../packages/api/src/ai/upload-limits";
-// v3 AI エンドポイントの契約テスト。
-// 認可 (未認証 401) / プランなし 402 / 残高不足 402 / 成功時のレスポンス形状を検証する。
-// OpenRouter 呼び出しは vi.mock で差し替える。
+import {
+  getAiRequestIdentity,
+} from "../../packages/api/src/ai/request-integrity";
+// Contract tests for the v3 AI endpoints, covering authorization, plan and
+// balance failures, and successful response shapes. OpenRouter is mocked.
 
-// v3/ai/images.ts は相対 import (../../ai/openrouter) で OpenRouter クライアントを
-// 参照するため、テストからも同じ実ファイルへの相対パスでモックする。
+// v3/ai/images.ts imports the OpenRouter client relatively, so mock the same
+// physical module through its test-relative path.
 vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("../../packages/api/src/ai/openrouter")
@@ -210,7 +212,7 @@ function makeApp() {
   return new Hono().basePath("/api/v3").route("/", v3);
 }
 
-async function authHeaders() {
+async function authHeaders(idempotencyKey = crypto.randomUUID()) {
   const token = await sign(
     {
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":
@@ -220,7 +222,41 @@ async function authHeaders() {
     JWT_SECRET,
     "HS256",
   );
-  return { Authorization: `Bearer ${token}` };
+  return {
+    Authorization: `Bearer ${token}`,
+    "Idempotency-Key": idempotencyKey,
+  };
+}
+
+async function getAiRequestIdentityForTest({
+  key,
+  operation,
+  input,
+}: {
+  key: string;
+  operation: string;
+  input: unknown;
+}) {
+  const identity = await getAiRequestIdentity({
+    request: new Request("http://localhost", {
+      headers: { "Idempotency-Key": key },
+    }),
+    operation,
+    input,
+  });
+  if (!identity) throw new Error("Test idempotency identity is invalid");
+  return identity;
+}
+
+function expectOpaqueCallbackUrl(value: string, jobId: string): URL {
+  const callbackUrl = new URL(value);
+  expect(callbackUrl.origin).toBe("https://beutl.beditor.net");
+  expect(callbackUrl.pathname).toBe(
+    `/api/v3/ai/videos/${jobId}/openrouter-callback`,
+  );
+  expect([...callbackUrl.searchParams.keys()]).toEqual(["nonce"]);
+  expect(callbackUrl.searchParams.get("nonce")).toMatch(/^[0-9a-f]{64}$/);
+  return callbackUrl;
 }
 
 function signedOpenRouterWebhook(
@@ -377,7 +413,7 @@ describe("v3 AI endpoints contract", () => {
       }
     });
 
-    it("未認証なら 401 authenticationIsRequired", async () => {
+    it("returns 401 authenticationIsRequired when unauthenticated", async () => {
       const res = await makeApp().request("/api/v3/user/entitlements");
       expect(res.status).toBe(401);
       expect(await res.json()).toMatchObject({
@@ -466,7 +502,7 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
-    it("未加入なら plan=null を返す", async () => {
+    it("returns a null plan without a subscription", async () => {
       const res = await makeApp().request("/api/v3/user/entitlements", {
         headers: await authHeaders(),
       });
@@ -599,7 +635,7 @@ describe("v3 AI endpoints contract", () => {
   });
 
   describe("POST /api/v3/ai/images", () => {
-    it("未認証なら 401 authenticationIsRequired", async () => {
+    it("returns 401 authenticationIsRequired when unauthenticated", async () => {
       const res = await makeApp().request("/api/v3/ai/images", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -611,7 +647,7 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
-    it("Pro 未加入なら 402 aiPlanRequired", async () => {
+    it("returns 402 aiPlanRequired without Pro", async () => {
       const res = await makeApp().request("/api/v3/ai/images", {
         method: "POST",
         headers: {
@@ -625,6 +661,157 @@ describe("v3 AI endpoints contract", () => {
         error_code: "aiPlanRequired",
       });
       expect(state.aiJobs.size).toBe(0);
+    });
+
+    it("requires an idempotency key before reserving paid usage", async () => {
+      await activatePro();
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: (await authHeaders()).Authorization,
+        },
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(state.aiJobs.size).toBe(0);
+      expect(state.creditTransactions).toHaveLength(0);
+      expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+    });
+
+    it("replays a completed request without invoking the provider or charging twice", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const headers = {
+        "content-type": "application/json",
+        ...(await authHeaders("image-replay-key")),
+      };
+      const request = () => makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      const first = await request();
+      const second = await request();
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual(await first.json());
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      expect(state.aiJobs.size).toBe(1);
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
+    });
+
+    it("does not invoke the provider or charge again after idempotent history is deleted", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const headers = {
+        "content-type": "application/json",
+        ...(await authHeaders("image-deleted-replay-key")),
+      };
+      const request = () => makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "deleted replay", size: "1024x1024" }),
+      });
+
+      const first = await request();
+      expect(first.status).toBe(200);
+      const firstPayload = await first.json() as { jobId: string };
+      const deleted = await makeApp().request(
+        `/api/v3/ai/jobs/${firstPayload.jobId}`,
+        { method: "DELETE", headers: await authHeaders() },
+      );
+      expect(deleted.status).toBe(200);
+
+      const replay = await request();
+      expect(replay.status).toBe(409);
+      expect(await replay.json()).toMatchObject({
+        error_code: "aiRequestWasDeleted",
+      });
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      expect(state.aiJobs.size).toBe(1);
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
+    });
+
+    it("returns a typed conflict while an idempotent request is still running", async () => {
+      await activatePro();
+      const key = "image-running-replay-key";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { prompt: "test", size: "1024x1024" },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.generate",
+          input: { prompt: "test", size: "1024x1024" },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders(key)),
+        },
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error_code: "aiRequestInProgress",
+      });
+      expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
+    });
+
+    it("rejects reuse of an idempotency key for a different request", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const headers = {
+        "content-type": "application/json",
+        ...(await authHeaders("image-conflict-key")),
+      };
+      const first = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "first", size: "1024x1024" }),
+      });
+      const conflicting = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "second", size: "1024x1024" }),
+      });
+
+      expect(first.status).toBe(200);
+      expect(conflicting.status).toBe(409);
+      expect(state.aiJobs.size).toBe(1);
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
     });
 
     it("rejects an overlong image prompt before reserving usage", async () => {
@@ -696,7 +883,7 @@ describe("v3 AI endpoints contract", () => {
     it("returns the balance after consuming monthly usage", async () => {
       await activatePro();
 
-      // 1x1 の PNG (b64)
+      // 1x1 PNG encoded as base64.
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
       vi.mocked(generateImage).mockResolvedValue({
@@ -715,13 +902,16 @@ describe("v3 AI endpoints contract", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toMatchObject({
+        jobId: expect.any(String),
         fileId: expect.any(String),
         url: `https://beutl.beditor.net/api/contents/${body.fileId}`,
+        fileName: `ai-image-${body.jobId}.png`,
+        contentType: "image/png",
       });
       expect(body).not.toHaveProperty("balance");
       expectOperationResponseToHideUsage(body);
 
-      // クレジットが消費され、AiJob が succeeded になっている
+      // Credits are consumed and the job reaches succeeded.
       const job = [...state.aiJobs.values()][0];
       expect(job).toMatchObject({
         kind: "image",
@@ -735,6 +925,7 @@ describe("v3 AI endpoints contract", () => {
         prompt: "test",
         size: "1024x1024",
         model: "openai/gpt-image-1",
+        signal: expect.any(AbortSignal),
       });
       expect(
         state.creditTransactions.some(
@@ -814,7 +1005,7 @@ describe("v3 AI endpoints contract", () => {
       expect(JSON.stringify([...state.aiJobs.values()][0])).not.toContain(
         "OpenRouter request failed: 500",
       );
-      // 事前消費 (usage) と返金 (refund) の両方が記録される
+      // Both the reservation and refund are recorded.
       expect(
         state.creditTransactions.some(
           (t) => t.kind === "usage" && t.usageAmount === 20,
@@ -825,10 +1016,36 @@ describe("v3 AI endpoints contract", () => {
           (t) => t.kind === "refund" && t.usageAmount === -20,
         ),
       ).toBe(true);
-      // 残高は元に戻る
+      // The balance is restored.
       const account = await getCreditAccount({ userId: USER_ID });
       expect(account.monthlyUsageUsed).toBe(0);
       expect(account.purchasedCredits).toBe(0);
+    });
+
+    it("refunds usage when the provider execution outcome is unknown", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockRejectedValue(
+        new AiProviderError("OpenRouter request timed out", {
+          execution: "unknown",
+        }),
+      );
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      expect(response.status).toBe(500);
+      expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "refund"),
+      ).toHaveLength(1);
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+        .toBe(0);
     });
 
     it.each([
@@ -923,8 +1140,14 @@ describe("v3 AI endpoints contract", () => {
         mediaType: "image/png",
       });
       const headers = await authHeaders();
-      vi.spyOn(crypto.subtle, "digest").mockRejectedValueOnce(
-        new Error("digest unavailable"),
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let digestCalls = 0;
+      vi.spyOn(crypto.subtle, "digest").mockImplementation(
+        async (...args: Parameters<typeof crypto.subtle.digest>) => {
+          digestCalls++;
+          if (digestCalls === 3) throw new Error("digest unavailable");
+          return await digest(...args);
+        },
       );
       const consoleError = vi
         .spyOn(console, "error")
@@ -1027,7 +1250,7 @@ describe("v3 AI endpoints contract", () => {
   });
 
   describe("POST /api/v3/ai/images/edit", () => {
-    it("未認証なら 401 authenticationIsRequired", async () => {
+    it("returns 401 authenticationIsRequired when unauthenticated", async () => {
       const form = new FormData();
       form.append("task", "remove_background");
       form.append("file", new File([PNG_BYTES], "a.png", { type: "image/png" }));
@@ -1091,8 +1314,11 @@ describe("v3 AI endpoints contract", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toMatchObject({
+        jobId: expect.any(String),
         fileId: expect.any(String),
         url: `https://beutl.beditor.net/api/contents/${body.fileId}`,
+        fileName: `ai-edit-${body.jobId}.png`,
+        contentType: "image/png",
       });
       expect(body).not.toHaveProperty("balance");
       expectOperationResponseToHideUsage(body);
@@ -1107,6 +1333,7 @@ describe("v3 AI endpoints contract", () => {
         image: expect.any(ArrayBuffer),
         mimeType: "image/png",
         model: "openai/gpt-image-1",
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -1298,13 +1525,14 @@ describe("v3 AI endpoints contract", () => {
         image: expect.any(ArrayBuffer),
         mimeType: "image/gif",
         model: "openai/gpt-image-1",
+        signal: expect.any(AbortSignal),
       });
       expect(
         new Uint8Array(vi.mocked(editImage).mock.calls[0][0].image),
       ).toEqual(GIF_BYTES);
     });
 
-    it("task が不正なら 400 invalidRequestBody", async () => {
+    it("returns 400 invalidRequestBody for an invalid task", async () => {
       await activatePro();
       const form = new FormData();
       form.append("task", "unknown_task");
@@ -1325,7 +1553,7 @@ describe("v3 AI endpoints contract", () => {
   });
 
   describe("POST /api/v3/ai/transcriptions", () => {
-    it("未認証なら 401 authenticationIsRequired", async () => {
+    it("returns 401 authenticationIsRequired when unauthenticated", async () => {
       const form = new FormData();
       form.append("file", new File([new Uint8Array(8)], "a.mp3", { type: "audio/mpeg" }));
       const res = await makeApp().request("/api/v3/ai/transcriptions", {
@@ -1518,10 +1746,12 @@ describe("v3 AI endpoints contract", () => {
       });
       expect(vi.mocked(transcribeAudio)).toHaveBeenCalledWith({
         audio: expect.any(ArrayBuffer),
+        durationSeconds: 1,
         filename: "japanese.wav",
         mimeType: "audio/wav",
         language: "ja",
         model: "openai/whisper-large-v3-turbo",
+        signal: expect.any(AbortSignal),
       });
       expect([...state.aiJobs.values()][0]).toMatchObject({
         inputParams: {
@@ -1572,7 +1802,7 @@ describe("v3 AI endpoints contract", () => {
   });
 
   describe("POST /api/v3/ai/videos", () => {
-    it("未認証なら 401 authenticationIsRequired", async () => {
+    it("returns 401 authenticationIsRequired when unauthenticated", async () => {
       const res = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1584,7 +1814,7 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
-    it("Pro 未加入なら 402 aiPlanRequired", async () => {
+    it("returns 402 aiPlanRequired without Pro", async () => {
       const res = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: {
@@ -1720,7 +1950,7 @@ describe("v3 AI endpoints contract", () => {
         providerJobId: "provider-video-1",
         usageUnits: 160,
       });
-      // ジョブ作成時にクレジットを予約 (usage) する
+      // Reserve credits when the job is created.
       expect(
         state.creditTransactions.some(
           (t) =>
@@ -1729,24 +1959,26 @@ describe("v3 AI endpoints contract", () => {
             t.aiJobId === job.id,
         ),
       ).toBe(true);
-      expect(vi.mocked(createVideoJob)).toHaveBeenCalledWith({
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledOnce();
+      const createRequest = vi.mocked(createVideoJob).mock.calls[0][0];
+      expect(createRequest).toMatchObject({
         prompt: "test",
         durationSeconds: 4,
         resolution: "720p",
-        callbackUrl:
-          `https://beutl.beditor.net/api/v3/ai/videos/${job.id}/openrouter-callback`,
         model: "google/veo-3.1",
+        signal: expect.any(AbortSignal),
       });
+      expectOpaqueCallbackUrl(createRequest.callbackUrl, job.id);
     });
 
-    it("進行中のジョブがある場合は 429 aiJobLimitReached", async () => {
+    it("returns 429 aiJobLimitReached while another job is active", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockResolvedValue({
         id: "provider-video-1",
         status: "pending",
       });
 
-      // 1件目のジョブを作成
+      // Create the first job.
       const first = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: {
@@ -1757,7 +1989,7 @@ describe("v3 AI endpoints contract", () => {
       });
       expect(first.status).toBe(200);
 
-      // 2件目は 429
+      // Reject the second job with 429.
       const second = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: {
@@ -1861,7 +2093,7 @@ describe("v3 AI endpoints contract", () => {
         "OpenRouter request failed: 400",
       );
 
-      // 予約 (usage) と返金 (refund) の両方が記録され、残高は元に戻る
+      // Record both reservation and refund, restoring the balance.
       expect(
         state.creditTransactions.some(
           (t) => t.kind === "usage" && t.usageAmount === 160,
@@ -1976,6 +2208,88 @@ describe("v3 AI endpoints contract", () => {
         provider: "openrouter",
         providerJobId: "provider-video-orphan",
         attempts: 0,
+      });
+      expect(
+        state.creditTransactions.filter(
+          (transaction) => transaction.kind === "refund",
+        ),
+      ).toHaveLength(0);
+    });
+
+    it("does not enqueue cleanup for a provider job owned by another local job", async () => {
+      await activatePro();
+      await createAiJob({
+        userId: "another-user",
+        kind: "video",
+        provider: "openrouter",
+        status: "queued",
+        providerJobId: "provider-collision",
+        usageUnits: 1,
+      });
+      vi.mocked(createVideoJob).mockResolvedValue({
+        id: "provider-collision",
+        status: "pending",
+      });
+
+      const response = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("provider-collision-request")),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(state.aiRemoteJobCleanups.has(
+        "openrouter:provider-collision",
+      )).toBe(false);
+      const current = [...state.aiJobs.values()].find(
+        (job) => job.userId === USER_ID,
+      );
+      expect(current?.status).toBe("failed");
+    });
+
+    it("keeps the job pending when attachment ownership cannot be verified", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockResolvedValue({
+        id: "provider-verification-unavailable",
+        status: "pending",
+      });
+      const originalUpdateMany = prisma.aiJob.updateMany;
+      const originalFindFirst = prisma.aiJob.findFirst;
+      const updateSpy = vi.spyOn(prisma.aiJob, "updateMany")
+        .mockImplementation(async (args) => {
+          if (args.data?.providerJobId === "provider-verification-unavailable") {
+            throw new Error("attachment write unavailable");
+          }
+          return await originalUpdateMany(args);
+        });
+      const findSpy = vi.spyOn(prisma.aiJob, "findFirst")
+        .mockImplementation(async (args) => {
+          if (args.where?.providerJobId === "provider-verification-unavailable") {
+            throw new Error("attachment read unavailable");
+          }
+          return await originalFindFirst(args);
+        });
+
+      const response = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("attachment-verification-unavailable")),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+      });
+      updateSpy.mockRestore();
+      findSpy.mockRestore();
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ status: "running" });
+      expect(state.aiRemoteJobCleanups.size).toBe(0);
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        status: "queued",
+        providerJobId: null,
       });
       expect(
         state.creditTransactions.filter(
@@ -2187,12 +2501,12 @@ describe("v3 AI endpoints contract", () => {
       expect(body).not.toHaveProperty("balance");
       expectOperationResponseToHideUsage(body);
       const job = [...state.aiJobs.values()][0];
-      expect(vi.mocked(createVideoJob)).toHaveBeenCalledWith({
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledOnce();
+      const createRequest = vi.mocked(createVideoJob).mock.calls[0][0];
+      expect(createRequest).toMatchObject({
         prompt: "Transition from sunrise to sunset",
         durationSeconds: 6,
         resolution: "1080p",
-        callbackUrl:
-          `https://beutl.beditor.net/api/v3/ai/videos/${job.id}/openrouter-callback`,
         frameImages: [
           {
             type: "image_url",
@@ -2210,7 +2524,9 @@ describe("v3 AI endpoints contract", () => {
           },
         ],
         model: "google/veo-3.1",
+        signal: expect.any(AbortSignal),
       });
+      expectOpaqueCallbackUrl(createRequest.callbackUrl, job.id);
       expect(job).toMatchObject({
         kind: "video",
         status: "running",
@@ -2256,12 +2572,12 @@ describe("v3 AI endpoints contract", () => {
 
       expect(res.status).toBe(200);
       const job = [...state.aiJobs.values()][0];
-      expect(vi.mocked(createVideoJob)).toHaveBeenCalledWith({
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledOnce();
+      const createRequest = vi.mocked(createVideoJob).mock.calls[0][0];
+      expect(createRequest).toMatchObject({
         prompt: "A gentle camera push-in",
         durationSeconds: 4,
         resolution: "720p",
-        callbackUrl:
-          `https://beutl.beditor.net/api/v3/ai/videos/${job.id}/openrouter-callback`,
         frameImages: [
           {
             type: "image_url",
@@ -2272,12 +2588,14 @@ describe("v3 AI endpoints contract", () => {
           },
         ],
         model: "google/veo-3.1",
+        signal: expect.any(AbortSignal),
       });
+      expectOpaqueCallbackUrl(createRequest.callbackUrl, job.id);
     });
   });
 
   describe("POST /api/v3/ai/videos/:id/openrouter-callback", () => {
-    it("allows the callback to attach before the submission response", async () => {
+    it("attaches from a signed callback that arrives before the submission response", async () => {
       await activatePro();
       vi.mocked(getVideoJob).mockResolvedValue({
         id: "provider-video-callback-race",
@@ -2292,11 +2610,15 @@ describe("v3 AI endpoints contract", () => {
             status: "completed",
           },
         });
-        const callback = await makeApp().request(new URL(callbackUrl).pathname, {
-          method: "POST",
-          headers: signedOpenRouterWebhook(webhookBody),
-          body: webhookBody,
-        });
+        const parsedCallbackUrl = new URL(callbackUrl);
+        const callback = await makeApp().request(
+          `${parsedCallbackUrl.pathname}${parsedCallbackUrl.search}`,
+          {
+            method: "POST",
+            headers: signedOpenRouterWebhook(webhookBody),
+            body: webhookBody,
+          },
+        );
         expect(callback.status).toBe(204);
         return { id: "provider-video-callback-race", status: "pending" };
       });
@@ -2323,7 +2645,7 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(getVideoJob)).toHaveBeenCalledOnce();
     });
 
-    it("verifies the signature, attaches before canonical sync, and deduplicates", async () => {
+    it("recovers a terminal job when the accepted submission response was lost", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockRejectedValue(
         new AiVideoSubmissionError(
@@ -2341,6 +2663,11 @@ describe("v3 AI endpoints contract", () => {
         body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
       });
       const { jobId } = await createResponse.json();
+      const callbackUrl = expectOpaqueCallbackUrl(
+        vi.mocked(createVideoJob).mock.calls[0][0].callbackUrl,
+        jobId,
+      );
+      const callbackPath = `${callbackUrl.pathname}${callbackUrl.search}`;
       const webhookBody = JSON.stringify({
         type: "video.generation.completed",
         created_at: new Date().toISOString(),
@@ -2364,9 +2691,7 @@ describe("v3 AI endpoints contract", () => {
         extension: "mp4",
       });
 
-      const invalidSignature = await makeApp().request(
-        `/api/v3/ai/videos/${jobId}/openrouter-callback`,
-        {
+      const invalidSignature = await makeApp().request(callbackPath, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -2374,8 +2699,7 @@ describe("v3 AI endpoints contract", () => {
               `t=${Math.floor(Date.now() / 1_000)},v1=${"0".repeat(64)}`,
           },
           body: webhookBody,
-        },
-      );
+      });
       expect(invalidSignature.status).toBe(401);
       expect(state.aiJobs.get(jobId)).toMatchObject({
         status: "queued",
@@ -2384,14 +2708,11 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
 
       const deliver = async () =>
-        await makeApp().request(
-          `/api/v3/ai/videos/${jobId}/openrouter-callback`,
-          {
-            method: "POST",
-            headers: signedOpenRouterWebhook(webhookBody),
-            body: webhookBody,
-          },
-        );
+        await makeApp().request(callbackPath, {
+          method: "POST",
+          headers: signedOpenRouterWebhook(webhookBody),
+          body: webhookBody,
+        });
       expect((await deliver()).status).toBe(204);
       expect(state.aiJobs.get(jobId)).toMatchObject({
         status: "succeeded",
@@ -2411,10 +2732,155 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(downloadVideoContent)).toHaveBeenCalledOnce();
       expect(state.files.size).toBe(1);
     });
+
+    it("rejects callback recovery when another local job owns the provider ID", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockRejectedValue(
+        new AiVideoSubmissionError("Submission outcome unknown", {
+          outcome: "unknown",
+        }),
+      );
+      const createResponse = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("video-callback-conflict")),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+      });
+      const { jobId } = await createResponse.json() as { jobId: string };
+      const callbackUrl = new URL(
+        vi.mocked(createVideoJob).mock.calls[0][0].callbackUrl,
+      );
+      const owner = await createAiJob({
+        userId: "another-user",
+        kind: "video",
+        provider: "openrouter",
+        providerJobId: "provider-owned-by-another-job",
+        status: "running",
+        usageUnits: 1,
+      });
+      const webhookBody = JSON.stringify({
+        type: "video.generation.completed",
+        created_at: new Date().toISOString(),
+        data: {
+          id: "provider-owned-by-another-job",
+          status: "completed",
+        },
+      });
+
+      const response = await makeApp().request(
+        `${callbackUrl.pathname}${callbackUrl.search}`,
+        {
+          method: "POST",
+          headers: signedOpenRouterWebhook(webhookBody),
+          body: webhookBody,
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(state.aiJobs.get(jobId)).toMatchObject({
+        status: "queued",
+        providerJobId: null,
+      });
+      expect(state.aiJobs.get(owner.id)).toMatchObject({
+        status: "running",
+        providerJobId: "provider-owned-by-another-job",
+      });
+      expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
+    });
+
+    it("rejects a signed callback replayed against another job", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockRejectedValue(
+        new AiVideoSubmissionError("Submission outcome unknown", {
+          outcome: "unknown",
+        }),
+      );
+      const create = async (key: string, prompt: string) => {
+        const response = await makeApp().request("/api/v3/ai/videos", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authHeaders(key)),
+          },
+          body: JSON.stringify({ prompt, durationSeconds: 4 }),
+        });
+        expect(response.status).toBe(200);
+        return await response.json() as { jobId: string };
+      };
+
+      const jobA = await create("video-callback-a", "first");
+      // The normal one-video limit intentionally prevents a second active job.
+      // Mark A terminal without attaching a provider ID, then reserve B.
+      state.aiJobs.get(jobA.jobId)!.status = "failed";
+      const jobB = await create("video-callback-b", "second");
+      const callbackA = new URL(
+        vi.mocked(createVideoJob).mock.calls[0][0].callbackUrl,
+      );
+      const replayPath =
+        `/api/v3/ai/videos/${jobB.jobId}/openrouter-callback${callbackA.search}`;
+      const webhookBody = JSON.stringify({
+        type: "video.generation.completed",
+        created_at: new Date().toISOString(),
+        data: { id: "provider-replay", status: "completed" },
+      });
+
+      const replay = await makeApp().request(replayPath, {
+        method: "POST",
+        headers: signedOpenRouterWebhook(webhookBody),
+        body: webhookBody,
+      });
+
+      expect(replay.status).toBe(401);
+      expect(state.aiJobs.get(jobB.jobId)).toMatchObject({
+        status: "queued",
+        providerJobId: null,
+      });
+      expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
+    });
+
+    it("rejects a signed body for another provider job on the correct callback URL", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockResolvedValue({
+        id: "provider-owned-by-a",
+        status: "pending",
+      });
+      const created = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("video-cross-body")),
+        },
+        body: JSON.stringify({ prompt: "first", durationSeconds: 4 }),
+      });
+      const { jobId } = await created.json() as { jobId: string };
+      const callback = new URL(
+        vi.mocked(createVideoJob).mock.calls[0][0].callbackUrl,
+      );
+      const bodyFromB = JSON.stringify({
+        type: "video.generation.completed",
+        created_at: new Date().toISOString(),
+        data: { id: "provider-owned-by-b", status: "completed" },
+      });
+
+      const response = await makeApp().request(
+        `${callback.pathname}${callback.search}`,
+        {
+          method: "POST",
+          headers: signedOpenRouterWebhook(bodyFromB),
+          body: bodyFromB,
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(state.aiJobs.get(jobId)?.providerJobId).toBe("provider-owned-by-a");
+      expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
+    });
   });
 
   describe("GET /api/v3/ai/videos/:id", () => {
-    it("他人のジョブなら 404 aiJobNotFound", async () => {
+    it("returns 404 aiJobNotFound for another user's job", async () => {
       const res = await makeApp().request("/api/v3/ai/videos/unknown", {
         headers: await authHeaders(),
       });
@@ -2461,6 +2927,8 @@ describe("v3 AI endpoints contract", () => {
         status: "succeeded",
         fileId: expect.any(String),
         url: `https://beutl.beditor.net/api/contents/${body.fileId}`,
+        fileName: `ai-video-${jobId}.webm`,
+        contentType: "video/webm",
       });
       expect(body).not.toHaveProperty("balance");
       expectOperationResponseToHideUsage(body);
@@ -2497,7 +2965,7 @@ describe("v3 AI endpoints contract", () => {
       expect(state.files.size).toBe(1);
     });
 
-    it("実行中は running を返す", async () => {
+    it("returns running while the provider job is active", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockResolvedValue({
         id: "provider-video-1",
@@ -2528,6 +2996,8 @@ describe("v3 AI endpoints contract", () => {
         status: "running",
         fileId: null,
         url: null,
+        fileName: null,
+        contentType: null,
       });
       expect(body).not.toHaveProperty("balance");
     });
@@ -2611,6 +3081,10 @@ describe("v3 AI endpoints contract", () => {
       expect(body).toMatchObject({
         jobId,
         status: "failed",
+        fileId: null,
+        url: null,
+        fileName: null,
+        contentType: null,
         error: "aiProviderError",
       });
       expect(body).not.toHaveProperty("balance");

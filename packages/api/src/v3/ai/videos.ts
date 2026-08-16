@@ -33,12 +33,19 @@ import {
   attachProviderJobIdToQueuedAiJob,
   enqueueAiRemoteJobCleanup,
   getAiJobById,
+  getAiJobByProviderJobId,
 } from "@beutl/db";
-import { getContentUrl } from "../../content-url";
+import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import {
-  AI_JOB_FAILURE_MESSAGES,
-  PUBLIC_AI_JOB_ERROR,
-} from "../../ai/job-errors";
+  callbackNonceMatches,
+  createCallbackNonce,
+  getAiRequestIdentity,
+  sha256Hex,
+} from "../../ai/request-integrity";
+import {
+  isTerminalAiJobStatus,
+  publicAiJobPayload,
+} from "../../ai/job-response";
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
@@ -84,15 +91,33 @@ const webhookStatusByType = {
 
 class DetachedRemoteVideoJobError extends AiProviderError {}
 
+class ProviderVideoJobOwnershipConflictError extends AiProviderError {}
+
 class OpenRouterWebhookBodyTooLargeError extends Error {}
 
-function openRouterVideoCallbackUrl(request: Request, jobId: string): string {
+function attachmentVerificationError(...causes: unknown[]): AiProviderError {
+  return new AiProviderError(
+    "AI video job attachment could not be verified",
+    {
+      cause: new AggregateError(causes),
+      execution: "unknown",
+    },
+  );
+}
+
+function openRouterVideoCallbackUrl(
+  request: Request,
+  jobId: string,
+  callbackNonce: string,
+): string {
   try {
     const origin = process.env.PUBLIC_ORIGIN || new URL(request.url).origin;
-    return new URL(
+    const callbackUrl = new URL(
       `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
       origin,
-    ).toString();
+    );
+    callbackUrl.searchParams.set("nonce", callbackNonce);
+    return callbackUrl.toString();
   } catch (cause) {
     throw new AiVideoSubmissionError(
       "OpenRouter video callback URL could not be constructed",
@@ -142,7 +167,9 @@ async function createAndAttachVideoJob({
   resolution,
   frameImages,
   callbackUrl,
+  callbackNonceHash,
   model,
+  signal,
 }: {
   jobId: string;
   prompt: string;
@@ -150,7 +177,9 @@ async function createAndAttachVideoJob({
   resolution: "720p" | "1080p";
   frameImages?: VideoFrameImage[];
   callbackUrl: string;
+  callbackNonceHash: string;
   model: string;
+  signal?: AbortSignal;
 }) {
   // A transport timeout can hide a provider-side acceptance before any job ID
   // reaches us. Once OpenRouter returns an ID, however, it is always persisted
@@ -162,6 +191,7 @@ async function createAndAttachVideoJob({
     callbackUrl,
     ...(frameImages ? { frameImages } : {}),
     model,
+    signal,
   });
   let attachment: Awaited<ReturnType<typeof attachProviderJobIdToQueuedAiJob>>;
   try {
@@ -170,23 +200,71 @@ async function createAndAttachVideoJob({
       kind: "video",
       provider: "openrouter",
       providerJobId: providerJob.id,
+      expectedCallbackNonceHash: callbackNonceHash,
     });
   } catch (cause) {
-    throw new AiProviderError(
+    let localJob: Awaited<ReturnType<typeof getAiJobById>>;
+    let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
+    try {
+      [localJob, providerOwner] = await Promise.all([
+        getAiJobById({ jobId }),
+        getAiJobByProviderJobId({
+          provider: "openrouter",
+          providerJobId: providerJob.id,
+        }),
+      ]);
+    } catch (verificationCause) {
+      throw attachmentVerificationError(cause, verificationCause);
+    }
+    if (
+      localJob?.providerJobId === providerJob.id &&
+      providerOwner?.id === jobId
+    ) {
+      return providerJob;
+    }
+    if (providerOwner && providerOwner.id !== jobId) {
+      throw new ProviderVideoJobOwnershipConflictError(
+        "OpenRouter returned a provider job ID already owned by another job",
+        { cause, execution: "unknown" },
+      );
+    }
+    await enqueueAiRemoteJobCleanup({
+      provider: "openrouter",
+      providerJobId: providerJob.id,
+    });
+    throw new DetachedRemoteVideoJobError(
       "AI video job attachment could not be confirmed",
-      { cause },
+      { cause, execution: "unknown" },
     );
   }
   if (
     attachment.outcome === "notFound" ||
     attachment.outcome === "conflict"
   ) {
-    await enqueueAiRemoteJobCleanup({
-      provider: "openrouter",
-      providerJobId: providerJob.id,
-    });
+    let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
+    try {
+      providerOwner = await getAiJobByProviderJobId({
+        provider: "openrouter",
+        providerJobId: providerJob.id,
+      });
+    } catch (cause) {
+      throw attachmentVerificationError(cause);
+    }
+    if (providerOwner && providerOwner.id !== jobId) {
+      throw new ProviderVideoJobOwnershipConflictError(
+        "OpenRouter returned a provider job ID already owned by another job",
+        { execution: "unknown" },
+      );
+    }
+    if (!providerOwner) {
+      await enqueueAiRemoteJobCleanup({
+        provider: "openrouter",
+        providerJobId: providerJob.id,
+      });
+    }
     throw new DetachedRemoteVideoJobError(
       "AI video job was deleted after remote submission",
+      { execution: "unknown" },
     );
   }
   return providerJob;
@@ -218,10 +296,9 @@ function toVideoFrameImage(
   };
 }
 
-// 動画生成: POST /api/v3/ai/videos (ジョブ作成)
-// クライアント駆動ポーリング: GET /api/v3/ai/videos/{id} で状態を確認する。
-// Workers で長時間処理を持たないため、ジョブ作成時に OpenRouter へ投入し、
-// ポーリング時に状態を同期する。
+// Create a video job with POST /api/v3/ai/videos and synchronize its status
+// through client-driven GET /api/v3/ai/videos/{id} polling. Submit to OpenRouter
+// at creation time so the worker does not retain a long-running request.
 const app = new Hono()
   .post("/", async (c) => {
     const userId = await getUserId(c);
@@ -247,6 +324,17 @@ const app = new Hono()
     }
 
     const { prompt, durationSeconds, resolution } = parsedBody.data;
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "video.generate",
+      input: { prompt, durationSeconds, resolution },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const callbackNonce = await createCallbackNonce();
     const settings = await loadAiSettings();
     const cost = settings.getPrice("video.generate") * durationSeconds;
 
@@ -258,6 +346,8 @@ const app = new Hono()
       inputParams: { prompt, durationSeconds, resolution },
       usageUnits: cost,
       activeJobLimit: 1,
+      callbackNonceHash: callbackNonce.hash,
+      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -265,6 +355,11 @@ const app = new Hono()
       });
     }
     const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      return c.json(await publicAiJobPayload(job, c.req.raw), {
+        status: isTerminalAiJobStatus(job.status) ? 200 : 202,
+      });
+    }
 
     try {
       await createAndAttachVideoJob({
@@ -272,16 +367,37 @@ const app = new Hono()
         prompt,
         durationSeconds,
         resolution,
-        callbackUrl: openRouterVideoCallbackUrl(c.req.raw, job.id),
+        callbackUrl: openRouterVideoCallbackUrl(
+          c.req.raw,
+          job.id,
+          callbackNonce.nonce,
+        ),
+        callbackNonceHash: callbackNonce.hash,
         model: settings.getModel("video.generate"),
+        signal: c.req.raw.signal,
       });
 
-      return c.json({
-        jobId: job.id,
-        status: "running",
-      });
+      const current = await getAiJobById({ jobId: job.id });
+      return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
       if (err instanceof DetachedRemoteVideoJobError) {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          expectedProviderJobId: null,
+        });
+        return c.json(await apiErrorResponse("aiProviderError"), {
+          status: 500,
+        });
+      }
+      if (err instanceof ProviderVideoJobOwnershipConflictError) {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          expectedProviderJobId: null,
+        });
         return c.json(await apiErrorResponse("aiProviderError"), {
           status: 500,
         });
@@ -301,10 +417,7 @@ const app = new Hono()
           `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
           err,
         );
-        return c.json({
-          jobId: job.id,
-          status: "running",
-        });
+        return c.json(await publicAiJobPayload(job, c.req.raw));
       }
       throw err;
     }
@@ -383,6 +496,37 @@ const app = new Hono()
     }
 
     const { prompt, durationSeconds, resolution } = fields.data;
+    const [firstFrameSha256, lastFrameSha256] = await Promise.all([
+      sha256Hex(firstFrameImage.bytes),
+      lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
+    ]);
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "video.generate.frames",
+      input: {
+        prompt,
+        durationSeconds,
+        resolution,
+        firstFrame: {
+          contentType: firstFrameImage.mimeType,
+          sha256: firstFrameSha256,
+        },
+        ...(lastFrameImage
+          ? {
+              lastFrame: {
+                contentType: lastFrameImage.mimeType,
+                sha256: lastFrameSha256,
+              },
+            }
+          : {}),
+      },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const callbackNonce = await createCallbackNonce();
     const frameImages = [
       toVideoFrameImage(
         firstFrameImage.bytes,
@@ -426,6 +570,8 @@ const app = new Hono()
       },
       usageUnits: cost,
       activeJobLimit: 1,
+      callbackNonceHash: callbackNonce.hash,
+      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -433,6 +579,11 @@ const app = new Hono()
       });
     }
     const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      return c.json(await publicAiJobPayload(job, c.req.raw), {
+        status: isTerminalAiJobStatus(job.status) ? 200 : 202,
+      });
+    }
 
     try {
       await createAndAttachVideoJob({
@@ -441,16 +592,37 @@ const app = new Hono()
         durationSeconds,
         resolution,
         frameImages,
-        callbackUrl: openRouterVideoCallbackUrl(c.req.raw, job.id),
+        callbackUrl: openRouterVideoCallbackUrl(
+          c.req.raw,
+          job.id,
+          callbackNonce.nonce,
+        ),
+        callbackNonceHash: callbackNonce.hash,
         model: settings.getModel("video.generate"),
+        signal: c.req.raw.signal,
       });
 
-      return c.json({
-        jobId: job.id,
-        status: "running",
-      });
+      const current = await getAiJobById({ jobId: job.id });
+      return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
       if (err instanceof DetachedRemoteVideoJobError) {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          expectedProviderJobId: null,
+        });
+        return c.json(await apiErrorResponse("aiProviderError"), {
+          status: 500,
+        });
+      }
+      if (err instanceof ProviderVideoJobOwnershipConflictError) {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          expectedProviderJobId: null,
+        });
         return c.json(await apiErrorResponse("aiProviderError"), {
           status: 500,
         });
@@ -470,10 +642,7 @@ const app = new Hono()
           `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
           err,
         );
-        return c.json({
-          jobId: job.id,
-          status: "running",
-        });
+        return c.json(await publicAiJobPayload(job, c.req.raw));
       }
       throw err;
     }
@@ -512,36 +681,95 @@ const app = new Hono()
       return new Response(null, { status: 400 });
     }
 
-    const providerJobId = event.data.data.id;
-    const attachment = await attachProviderJobIdToQueuedAiJob({
-      jobId: c.req.param("id"),
-      kind: "video",
-      provider: "openrouter",
-      providerJobId,
-    });
+    const jobId = c.req.param("id");
+    const job = await getAiJobById({ jobId });
+    const callbackNonce = c.req.query("nonce");
     if (
-      attachment.outcome === "notFound" ||
-      attachment.outcome === "conflict"
+      !job ||
+      job.kind !== "video" ||
+      job.provider !== "openrouter" ||
+      !job.callbackNonceHash ||
+      typeof callbackNonce !== "string" ||
+      !(await callbackNonceMatches(callbackNonce, job.callbackNonceHash))
     ) {
-      await enqueueAiRemoteJobCleanup({
-        provider: "openrouter",
-        providerJobId,
-      });
-      return new Response(null, { status: 204 });
+      return new Response(null, { status: 401 });
     }
 
-    // Provider-ID attachment is a durable compare-and-set. Together with the
-    // canonical synchronization leases, it makes repeated webhook deliveries
-    // safe without trusting the event payload as the source of job state.
+    const providerJobId = event.data.data.id;
+    let currentJob = job;
+    if (job.providerJobId === null) {
+      try {
+        const attachment = await attachProviderJobIdToQueuedAiJob({
+          jobId,
+          kind: "video",
+          provider: "openrouter",
+          providerJobId,
+          expectedCallbackNonceHash: job.callbackNonceHash,
+        });
+        if (
+          attachment.outcome === "notFound" ||
+          attachment.outcome === "conflict"
+        ) {
+          return new Response(null, { status: 409 });
+        }
+        const attachedJob = await getAiJobById({ jobId });
+        if (attachedJob?.providerJobId !== providerJobId) {
+          return new Response(null, { status: 409 });
+        }
+        currentJob = attachedJob;
+      } catch (attachmentError) {
+        let latestJob: Awaited<ReturnType<typeof getAiJobById>>;
+        let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
+        try {
+          [latestJob, providerOwner] = await Promise.all([
+            getAiJobById({ jobId }),
+            getAiJobByProviderJobId({
+              provider: "openrouter",
+              providerJobId,
+            }),
+          ]);
+        } catch (verificationError) {
+          console.error(
+            `Failed to verify OpenRouter callback attachment for AI job ${jobId}`,
+            new AggregateError([attachmentError, verificationError]),
+          );
+          return new Response(null, { status: 500 });
+        }
+        if (
+          (providerOwner && providerOwner.id !== jobId) ||
+          (latestJob?.providerJobId !== null &&
+            latestJob?.providerJobId !== providerJobId)
+        ) {
+          return new Response(null, { status: 409 });
+        }
+        if (
+          latestJob?.providerJobId !== providerJobId ||
+          providerOwner?.id !== jobId
+        ) {
+          console.error(
+            `Failed to attach OpenRouter callback provider job to AI job ${jobId}`,
+            attachmentError,
+          );
+          return new Response(null, { status: 500 });
+        }
+        currentJob = latestJob;
+      }
+    } else if (job.providerJobId !== providerJobId) {
+      return new Response(null, { status: 409 });
+    }
+
+    // The nonce binds the signed terminal callback to this local job. The
+    // provider-ID uniqueness constraint and queued-state compare-and-set above
+    // prevent a callback from taking ownership from another job.
     if (
-      attachment.job.status !== "succeeded" &&
-      attachment.job.status !== "failed"
+      currentJob.status !== "succeeded" &&
+      currentJob.status !== "failed"
     ) {
       try {
-        await synchronizeAiVideoJob({ job: attachment.job });
+        await synchronizeAiVideoJob({ job: currentJob });
       } catch (error) {
         console.error(
-          `Failed to synchronize OpenRouter callback for AI job ${attachment.job.id}`,
+          `Failed to synchronize OpenRouter callback for AI job ${currentJob.id}`,
           error,
         );
         return new Response(null, { status: 500 });
@@ -567,7 +795,7 @@ const app = new Hono()
 
     try {
       const current =
-        job.status === "succeeded" || job.status === "failed"
+        isTerminalAiJobStatus(job.status)
           ? job
           : !job.providerJobId
             ? job
@@ -577,18 +805,7 @@ const app = new Hono()
           status: 404,
         });
       }
-      return c.json({
-        jobId: current.id,
-        status:
-          current.status === "queued" || current.status === "finalizing"
-            ? "running"
-            : current.status,
-        fileId: current.resultFileId,
-        url: current.resultFileId
-          ? await getContentUrl(current.resultFileId, c.req.raw)
-          : null,
-        error: current.status === "failed" ? PUBLIC_AI_JOB_ERROR : null,
-      });
+      return c.json(await publicAiJobPayload(current, c.req.raw));
     } catch (err) {
       if (err instanceof AiProviderError) {
         return c.json(await apiErrorResponse("aiProviderError"), {

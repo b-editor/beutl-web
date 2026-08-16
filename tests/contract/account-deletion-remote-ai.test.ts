@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   claimAiRemoteJobCleanup: vi.fn(),
   completeAiRemoteJobCleanup: vi.fn(),
+  getAiJobByProviderJobId: vi.fn(),
   getVideoJob: vi.fn(),
   listDueAiRemoteJobCleanups: vi.fn(),
   rescheduleAiRemoteJobCleanup: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@beutl/db", () => ({
   claimAiRemoteJobCleanup: mocks.claimAiRemoteJobCleanup,
   completeAiRemoteJobCleanup: mocks.completeAiRemoteJobCleanup,
+  getAiJobByProviderJobId: mocks.getAiJobByProviderJobId,
   listDueAiRemoteJobCleanups: mocks.listDueAiRemoteJobCleanups,
   rescheduleAiRemoteJobCleanup: mocks.rescheduleAiRemoteJobCleanup,
 }));
@@ -36,6 +38,7 @@ describe("deleted-account remote AI cleanup", () => {
     vi.clearAllMocks();
     mocks.listDueAiRemoteJobCleanups.mockResolvedValue([cleanup]);
     mocks.claimAiRemoteJobCleanup.mockResolvedValue(cleanup);
+    mocks.getAiJobByProviderJobId.mockResolvedValue(null);
   });
 
   it("retains a pending remote job without downloading its output", async () => {

@@ -1,6 +1,7 @@
 import {
   claimAiRemoteJobCleanup,
   completeAiRemoteJobCleanup,
+  getAiJobByProviderJobId,
   listDueAiRemoteJobCleanups,
   rescheduleAiRemoteJobCleanup,
 } from "@beutl/db";
@@ -35,6 +36,21 @@ export async function reconcileDeletedAccountRemoteJobs(now = new Date()) {
     try {
       if (cleanup.provider !== "openrouter") {
         throw new Error(`Unsupported AI cleanup provider: ${cleanup.provider}`);
+      }
+      // A cleanup intent can race with a successful local attachment. Never
+      // poll or retire a provider job while a live AiJob owns its identifier.
+      const localOwner = await getAiJobByProviderJobId({
+        provider: cleanup.provider,
+        providerJobId: cleanup.providerJobId,
+      });
+      if (localOwner) {
+        await completeAiRemoteJobCleanup({
+          provider: cleanup.provider,
+          providerJobId: cleanup.providerJobId,
+          leaseExpiresAt,
+        });
+        result.completed++;
+        continue;
       }
       let remoteJob: Awaited<ReturnType<typeof getVideoJob>> | null;
       try {

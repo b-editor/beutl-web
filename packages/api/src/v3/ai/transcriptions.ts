@@ -15,9 +15,15 @@ import {
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   parseBodyWithUploadLimit,
 } from "../../ai/upload-limits";
-import { AiProviderError, transcribeAudio } from "../../ai/openrouter";
+import {
+  AiProviderError,
+  transcribeAudio,
+} from "../../ai/openrouter";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
-import { saveAiJsonResult } from "../../ai/storage";
+import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
+import { getAiJobResultFile } from "@beutl/db";
+import { getAiRequestIdentity, sha256Hex } from "../../ai/request-integrity";
+import { validateTranscriptionResult } from "../../ai/audio-validation";
 
 const iso6391LanguageCodes = new Set(
   [
@@ -39,7 +45,7 @@ const languageSchema = z
   .toLowerCase()
   .refine((value) => iso6391LanguageCodes.has(value));
 
-// 音声認識 (字幕自動化): POST /api/v3/ai/transcriptions
+// Speech recognition for caption automation: POST /api/v3/ai/transcriptions
 // multipart/form-data: file (audio)
 // Response includes the segments only. Balance snapshots, raw usage units, and
 // exact per-operation credit deltas stay server-side.
@@ -109,8 +115,29 @@ const app = new Hono().post("/", async (c) => {
   }
 
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
+  const requestIdentity = await getAiRequestIdentity({
+    request: c.req.raw,
+    operation: "audio.transcribe",
+    input: {
+      fileName: file.name,
+      contentType: file.type || "audio/mpeg",
+      durationSeconds: parsedAudio.durationSeconds,
+      contentSha256: await sha256Hex(parsedAudio.bytes),
+      ...(language ? { language } : {}),
+    },
+  });
+  if (!requestIdentity) {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
   const settings = await loadAiSettings();
   const cost = settings.getPrice("audio.transcribe") * minutes;
+  if (!Number.isSafeInteger(cost) || cost <= 0 || cost > 2_147_483_647) {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
   const reservation = await createReservedAiJob({
     userId,
     kind: "stt",
@@ -122,6 +149,7 @@ const app = new Hono().post("/", async (c) => {
       ...(language ? { language } : {}),
     },
     usageUnits: cost,
+    ...requestIdentity,
   });
   if (!reservation.ok) {
     return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -129,14 +157,55 @@ const app = new Hono().post("/", async (c) => {
     });
   }
   const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    if (job.status === "succeeded" && job.resultFileId) {
+      const fileRecord = await getAiJobResultFile({
+        jobId: job.id,
+        userId,
+      });
+      if (fileRecord) {
+        try {
+          const stored = validateTranscriptionResult(
+            (await readAiJsonResult({ objectKey: fileRecord.objectKey }) as {
+              segments?: unknown;
+              language?: unknown;
+              words?: unknown;
+            }),
+            parsedAudio.durationSeconds,
+          );
+          return c.json({
+            jobId: job.id,
+            segments: stored.segments,
+            ...(stored.language ? { language: stored.language } : {}),
+            ...(stored.words ? { words: stored.words } : {}),
+          });
+        } catch (error) {
+          console.error("Failed to recover AI transcription result", error);
+        }
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), {
+        status: 500,
+      });
+    }
+    if (job.status === "queued" ||
+      job.status === "running" ||
+      job.status === "finalizing") {
+      return c.json(await apiErrorResponse("aiRequestInProgress"), {
+        status: 409,
+      });
+    }
+    return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+  }
 
   try {
     const result = await transcribeAudio({
       audio: parsedAudio.bytes,
+      durationSeconds: parsedAudio.durationSeconds,
       filename: file.name,
       mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
       model: settings.getModel("audio.transcribe"),
+      signal: c.req.raw.signal,
     });
     await saveAiJsonResult({
       jobId: job.id,

@@ -14,6 +14,7 @@ export async function findFileForContentAccess({
       id: fileId,
     },
     select: {
+      name: true,
       objectKey: true,
       visibility: true,
       userId: true,

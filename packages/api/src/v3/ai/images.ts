@@ -34,6 +34,7 @@ import {
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
+import { getAiRequestIdentity, sha256Hex } from "../../ai/request-integrity";
 
 const generateSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
@@ -118,8 +119,18 @@ const app = new Hono()
     }
 
     const { prompt, size } = parsedBody.data;
-    // 単価とモデルは管理画面から変更できる。予約時に確定した単価が AiJob に
-    // 記録され、返金もその値を使うため、実行中に設定が変わっても影響しない。
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "image.generate",
+      input: { prompt, size },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    // The admin can change the model and price. Persist the reserved price on
+    // the job so later setting changes do not alter this operation or its refund.
     const settings = await loadAiSettings();
     const cost = settings.getPrice("image.generate");
     const reservation = await createReservedAiJob({
@@ -129,6 +140,7 @@ const app = new Hono()
       status: "running",
       inputParams: { prompt, size },
       usageUnits: cost,
+      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -136,12 +148,37 @@ const app = new Hono()
       });
     }
     const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      const existingJob = reservation.job;
+      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
+        return c.json({
+          jobId: existingJob.id,
+          fileId: existingJob.resultFileId,
+          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
+          ...(existingJob.resultFile
+            ? {
+              fileName: existingJob.resultFile.name,
+              contentType: existingJob.resultFile.mimeType,
+            }
+            : {}),
+        });
+      }
+      if (existingJob.status === "queued" ||
+        existingJob.status === "running" ||
+        existingJob.status === "finalizing") {
+        return c.json(await apiErrorResponse("aiRequestInProgress"), {
+          status: 409,
+        });
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    }
 
     try {
       const result = await generateImage({
         prompt,
         size: size as ImageGenerationSize,
         model: settings.getModel("image.generate"),
+        signal: c.req.raw.signal,
       });
       const { bytes, mimeType } = await decodeImageResult(result);
       const file = await saveAiImage({
@@ -155,8 +192,13 @@ const app = new Hono()
         jobId: job.id,
         fileId: file.id,
         url: await getContentUrl(file.id, c.req.raw),
+        fileName: file.name,
+        contentType: file.mimeType,
       });
     } catch (err) {
+      // Synchronous provider calls have no durable handle that can recover an
+      // ambiguous result. Customer usage is therefore refunded on every
+      // unsuccessful response, even if the provider may have accepted work.
       await failAiJobAndRefundUsage({
         userId,
         aiJobId: job.id,
@@ -242,6 +284,23 @@ const app = new Hono()
       });
     }
 
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: `image.edit.${editTask}`,
+      input: {
+        task: editTask,
+        ...(editPrompt ? { prompt: editPrompt } : {}),
+        fileName: file.name,
+        contentType: inputImage.mimeType,
+        contentSha256: await sha256Hex(inputImage.bytes),
+      },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
     const settings = await loadAiSettings();
     const cost = settings.getPrice(`image.edit.${editTask}`);
     const reservation = await createReservedAiJob({
@@ -255,6 +314,7 @@ const app = new Hono()
         ...(editPrompt ? { prompt: editPrompt } : {}),
       },
       usageUnits: cost,
+      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -262,6 +322,30 @@ const app = new Hono()
       });
     }
     const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      const existingJob = reservation.job;
+      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
+        return c.json({
+          jobId: existingJob.id,
+          fileId: existingJob.resultFileId,
+          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
+          ...(existingJob.resultFile
+            ? {
+              fileName: existingJob.resultFile.name,
+              contentType: existingJob.resultFile.mimeType,
+            }
+            : {}),
+        });
+      }
+      if (existingJob.status === "queued" ||
+        existingJob.status === "running" ||
+        existingJob.status === "finalizing") {
+        return c.json(await apiErrorResponse("aiRequestInProgress"), {
+          status: 409,
+        });
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    }
 
     try {
       const result = await editImage({
@@ -270,6 +354,7 @@ const app = new Hono()
         mimeType: inputImage.mimeType,
         ...(editPrompt ? { prompt: editPrompt } : {}),
         model: settings.getModel(`image.edit.${editTask}`),
+        signal: c.req.raw.signal,
       });
       const { bytes, mimeType: outputMimeType } =
         await decodeImageResult(result);
@@ -284,6 +369,8 @@ const app = new Hono()
         jobId: job.id,
         fileId: saved.id,
         url: await getContentUrl(saved.id, c.req.raw),
+        fileName: saved.name,
+        contentType: saved.mimeType,
       });
     } catch (err) {
       await failAiJobAndRefundUsage({

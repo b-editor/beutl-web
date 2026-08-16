@@ -8,6 +8,10 @@ import {
 
 const ACTIVE_AI_JOB_STATUSES = ["queued", "running", "finalizing"];
 const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
+const AI_JOB_RESULT_FILE_SELECT = {
+  name: true,
+  mimeType: true,
+} as const;
 
 export type AiJobHistoryCursor = {
   createdAt: Date;
@@ -23,6 +27,9 @@ export async function createAiJob({
   kind,
   provider,
   providerJobId,
+  idempotencyKeyHash,
+  requestFingerprint,
+  callbackNonceHash,
   status,
   inputParams,
   usageUnits,
@@ -32,6 +39,9 @@ export async function createAiJob({
   kind: string;
   provider: string;
   providerJobId?: string;
+  idempotencyKeyHash?: string;
+  requestFingerprint?: string;
+  callbackNonceHash?: string;
   status: string;
   inputParams?: object;
   usageUnits: number;
@@ -44,9 +54,33 @@ export async function createAiJob({
       kind,
       provider,
       providerJobId,
+      idempotencyKeyHash,
+      requestFingerprint,
+      callbackNonceHash,
       status,
       inputParams: inputParams ?? undefined,
       usageUnits,
+    },
+  });
+}
+
+export async function getAiJobByIdempotency({
+  userId,
+  idempotencyKeyHash,
+  prisma,
+}: {
+  userId: string;
+  idempotencyKeyHash: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.aiJob.findFirst({
+    where: {
+      userId,
+      idempotencyKeyHash,
+    },
+    include: {
+      resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
 }
@@ -72,17 +106,93 @@ export async function updateActiveAiJobToFailed({
       ...(expectedProviderJobId === undefined
         ? {}
         : { providerJobId: expectedProviderJobId }),
-      OR: [
-        { status: { in: ["queued", "running"] } },
+      AND: [
         {
-          status: "finalizing",
           OR: [
-            { finalizationToken: null },
-            { finalizationLeaseExpiresAt: null },
-            { finalizationLeaseExpiresAt: { lte: now } },
+            { providerPollLeaseExpiresAt: null },
+            { providerPollLeaseExpiresAt: { lte: now } },
+          ],
+        },
+        {
+          OR: [
+            { status: { in: ["queued", "running"] } },
+            {
+              status: "finalizing",
+              OR: [
+                { finalizationToken: null },
+                { finalizationLeaseExpiresAt: null },
+                { finalizationLeaseExpiresAt: { lte: now } },
+              ],
+            },
           ],
         },
       ],
+    },
+    data: {
+      status: "failed",
+      error,
+      providerPollLeaseExpiresAt: null,
+      finalizationToken: null,
+      finalizationLeaseExpiresAt: null,
+    },
+  });
+  return result.count === 1;
+}
+
+export async function failAiJobOwnedByFinalizer({
+  jobId,
+  finalizationToken,
+  expectedProviderJobId,
+  error,
+  prisma,
+}: {
+  jobId: string;
+  finalizationToken: string;
+  expectedProviderJobId: string;
+  error: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const result = await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      status: "finalizing",
+      finalizationToken,
+      providerJobId: expectedProviderJobId,
+      deletedAt: null,
+    },
+    data: {
+      status: "failed",
+      error,
+      providerPollLeaseExpiresAt: null,
+      finalizationToken: null,
+      finalizationLeaseExpiresAt: null,
+    },
+  });
+  return result.count === 1;
+}
+
+export async function failAiJobOwnedByProviderPoll({
+  jobId,
+  providerPollLeaseExpiresAt,
+  expectedProviderJobId,
+  error,
+  prisma,
+}: {
+  jobId: string;
+  providerPollLeaseExpiresAt: Date;
+  expectedProviderJobId: string;
+  error: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const result = await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      status: { in: ["queued", "running"] },
+      providerJobId: expectedProviderJobId,
+      providerPollLeaseExpiresAt,
+      deletedAt: null,
     },
     data: {
       status: "failed",
@@ -127,12 +237,14 @@ export async function attachProviderJobIdToQueuedAiJob({
   kind,
   provider,
   providerJobId,
+  expectedCallbackNonceHash,
   prisma,
 }: {
   jobId: string;
   kind: string;
   provider: string;
   providerJobId: string;
+  expectedCallbackNonceHash?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -142,6 +254,9 @@ export async function attachProviderJobIdToQueuedAiJob({
       kind,
       provider,
       providerJobId: null,
+      ...(expectedCallbackNonceHash
+        ? { callbackNonceHash: expectedCallbackNonceHash }
+        : {}),
       status: "queued",
       deletedAt: null,
     },
@@ -173,6 +288,21 @@ export async function attachProviderJobIdToQueuedAiJob({
       : "alreadyAttached" as const,
     job,
   };
+}
+
+export async function getAiJobByProviderJobId({
+  provider,
+  providerJobId,
+  prisma,
+}: {
+  provider: string;
+  providerJobId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.aiJob.findFirst({
+    where: { provider, providerJobId, deletedAt: null },
+  });
 }
 
 export async function touchActiveAiJob({
@@ -245,6 +375,29 @@ export async function claimAiJobForProviderPoll({
   });
   const job = await getAiJobById({ jobId, prisma: db });
   return { claimed: updated.count === 1, job };
+}
+
+export async function releaseAiJobProviderPoll({
+  jobId,
+  leaseExpiresAt,
+  prisma,
+}: {
+  jobId: string;
+  leaseExpiresAt: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const result = await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      deletedAt: null,
+      providerPollLeaseExpiresAt: leaseExpiresAt,
+    },
+    data: {
+      providerPollLeaseExpiresAt: null,
+    },
+  });
+  return result.count === 1;
 }
 
 export async function claimAiJobForFinalization({
@@ -445,7 +598,34 @@ export async function getAiJobById({
       id: jobId,
       deletedAt: null,
     },
+    include: {
+      resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
+    },
   });
+}
+
+export async function getAiJobResultFile({
+  jobId,
+  userId,
+  prisma,
+}: {
+  jobId: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const job = await db.aiJob.findFirst({
+    where: {
+      id: jobId,
+      userId,
+      deletedAt: null,
+      resultFileId: { not: null },
+    },
+    include: {
+      resultFile: true,
+    },
+  });
+  return job?.resultFile ?? null;
 }
 
 export async function listAiJobsByUserId({
@@ -488,6 +668,9 @@ export async function listAiJobsByUserId({
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
+    include: {
+      resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
+    },
   });
   const page = jobs.slice(0, limit);
   const last = page.at(-1);
@@ -516,6 +699,9 @@ export async function getAiJobByUserId({
       id: jobId,
       userId,
       deletedAt: null,
+    },
+    include: {
+      resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
 }
@@ -555,6 +741,7 @@ export async function prepareAiJobDeletionByUserId({
           inputParams: Prisma.DbNull,
           error: null,
           providerJobId: null,
+          callbackNonceHash: null,
           providerPollLeaseExpiresAt: null,
           deletedAt: new Date(),
         },
@@ -728,7 +915,7 @@ export async function makeAiStorageCleanupDue({
 }) {
   const db = prisma ?? await getDb();
   const result = await db.aiStorageCleanup.updateMany({
-    where: { objectKey },
+    where: { objectKey, state: "writing" },
     data: { state: "cleanup", notBefore: now },
   });
   return result.count === 1;

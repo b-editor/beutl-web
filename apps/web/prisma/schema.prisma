@@ -314,6 +314,9 @@ model AiJob {
   kind                       String
   provider                   String
   providerJobId              String?
+  idempotencyKeyHash         String?
+  requestFingerprint         String?
+  callbackNonceHash          String?
   status                     String
   inputParams                Json?
   resultFileId               String?             @unique
@@ -330,6 +333,8 @@ model AiJob {
   storageCleanups            AiStorageCleanup[]
   transactions               CreditTransaction[]
 
+  @@unique([userId, idempotencyKeyHash])
+  @@unique([provider, providerJobId])
   @@index([userId])
   @@index([userId, deletedAt, createdAt, id])
 }
