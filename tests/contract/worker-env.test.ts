@@ -29,7 +29,6 @@ describe("worker.ts env → process.env コピー", () => {
       JWT_ISSUER: "https://beutl.beditor.net",
       JWT_AUDIENCE: "beutl",
       PUBLIC_ORIGIN: "https://beutl.beditor.net",
-      OPENROUTER_TRANSLATION_MODEL: "openai/translation-model",
     } satisfies Env;
 
     const res = await worker.fetch(
@@ -45,9 +44,6 @@ describe("worker.ts env → process.env コピー", () => {
     expect(process.env.JWT_ISSUER).toBe("https://beutl.beditor.net");
     expect(process.env.JWT_AUDIENCE).toBe("beutl");
     expect(process.env.PUBLIC_ORIGIN).toBe("https://beutl.beditor.net");
-    expect(process.env.OPENROUTER_TRANSLATION_MODEL).toBe(
-      "openai/translation-model",
-    );
   });
 
   it("非文字列バインディング (Hyperdrive) は process.env にコピーしない", async () => {

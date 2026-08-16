@@ -14,8 +14,7 @@ export type AiSettingRow = {
   key: string;
   kind: "model" | "price";
   value: string;
-  source: "database" | "environment" | "default";
-  envVar?: string;
+  source: "database" | "default";
   fallback: string;
 };
 
@@ -23,9 +22,6 @@ function SourceBadge({ lang, source }: { lang: string; source: AiSettingRow["sou
   const { t } = useTranslation(lang);
   if (source === "database") {
     return <Badge variant="default">{t("admin:ai.source.database")}</Badge>;
-  }
-  if (source === "environment") {
-    return <Badge variant="secondary">{t("admin:ai.source.environment")}</Badge>;
   }
   return <Badge variant="outline">{t("admin:ai.source.default")}</Badge>;
 }
@@ -116,9 +112,6 @@ export function AiSettingField({
           </span>
           <SourceBadge lang={lang} source={setting.source} />
         </div>
-        {setting.envVar ? (
-          <code className="text-xs text-muted-foreground">{setting.envVar}</code>
-        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Input

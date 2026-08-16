@@ -11,8 +11,6 @@ export type AiSettingKind = "model" | "price";
 export type AiSettingDefinition = {
   key: string;
   kind: AiSettingKind;
-  // The corresponding environment variable; prices do not have one.
-  envVar?: string;
   fallback: string;
   // Operation name used for admin grouping and shared with AI_PRICING_CATALOG.
   operation: string;
@@ -57,21 +55,6 @@ const DEFAULTS = {
 
 export type AiOperation = keyof typeof DEFAULTS;
 
-// Map each operation to its legacy environment override. Resolution falls
-// back to the code default only when neither the database nor the environment
-// defines a value.
-const MODEL_ENV_VARS: Partial<Record<AiOperation, string>> = {
-  "image.generate": "OPENROUTER_IMAGE_MODEL",
-  "image.edit.remove_background":
-    "OPENROUTER_IMAGE_EDIT_MODEL_REMOVE_BACKGROUND",
-  "image.edit.upscale": "OPENROUTER_IMAGE_EDIT_MODEL_UPSCALE",
-  "image.edit.restyle": "OPENROUTER_IMAGE_EDIT_MODEL_RESTYLE",
-  "image.edit.remove_object": "OPENROUTER_IMAGE_EDIT_MODEL_REMOVE_OBJECT",
-  "image.edit.outpaint": "OPENROUTER_IMAGE_EDIT_MODEL_OUTPAINT",
-  "audio.transcribe": "OPENROUTER_STT_MODEL",
-  "subtitle.translate": "OPENROUTER_TRANSLATION_MODEL",
-  "video.generate": "OPENROUTER_VIDEO_MODEL",
-};
 
 export const AI_OPERATIONS = Object.keys(DEFAULTS) as AiOperation[];
 
@@ -79,13 +62,11 @@ function buildSettings(): Record<string, AiSettingDefinition> {
   const settings: Record<string, AiSettingDefinition> = {};
   for (const operation of AI_OPERATIONS) {
     const defaults = DEFAULTS[operation];
-    const envVar = MODEL_ENV_VARS[operation];
     settings[`model.${operation}`] = {
       key: `model.${operation}`,
       kind: "model",
       fallback: defaults.model,
       operation,
-      ...(envVar ? { envVar } : {}),
     };
     settings[`price.${operation}`] = {
       key: `price.${operation}`,

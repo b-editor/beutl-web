@@ -86,7 +86,6 @@
     "resetSuccess": "Setting reset to default",
     "source": {
       "database": "Configured here",
-      "environment": "From environment",
       "default": "Built-in default"
     },
     "operation": {

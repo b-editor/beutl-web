@@ -28,7 +28,6 @@ export default async function Page(props: {
       value: entry.value,
       source: entry.source,
       fallback: entry.fallback,
-      ...(entry.envVar ? { envVar: entry.envVar } : {}),
     };
   };
 

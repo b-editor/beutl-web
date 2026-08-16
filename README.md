@@ -92,15 +92,13 @@ subscription. The API Worker
 requires `OPENROUTER_WEBHOOK_SECRET` as a Cloudflare secret so ambiguous video
 submissions can be reconciled through signed provider callbacks. It also
 requires `OPENROUTER_API_KEY` as a Wrangler secret. Provider calls default to a
-120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`. Image,
-image-edit, STT, and video model IDs can be overridden with the optional `OPENROUTER_*_MODEL`
-variables listed in `apps/web/.env.sample`.
+120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`.
 
 Model IDs and per-operation usage-unit prices are also editable at runtime from
 the admin console (`/admin/ai`), which stores them in the `AiSetting` table.
-Each value resolves in the order database → environment variable → built-in
-default, so an empty table keeps the behaviour the environment variables
-describe. Every change is written to the audit log in the same transaction.
+Model IDs are configured exclusively through that console; each value resolves
+from the database or the built-in default. Every change is written to the
+audit log in the same transaction.
 API keys and other secrets are deliberately **not** configurable this way and
 stay in Wrangler secrets. A price change applies only to operations started
 afterwards: each job records the price reserved at its start and is refunded at

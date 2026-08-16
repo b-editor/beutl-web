@@ -86,7 +86,6 @@
     "resetSuccess": "設定を既定値に戻しました",
     "source": {
       "database": "この画面で設定",
-      "environment": "環境変数",
       "default": "組み込みの既定値"
     },
     "operation": {
