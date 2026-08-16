@@ -37,6 +37,9 @@
       "@beutl/email": [
         "../../packages/email/src/index.ts"
       ],
+      "@beutl/forgejo": [
+        "../../packages/forgejo/src/index.ts"
+      ],
       "@beutl/i18n": [
         "../../packages/i18n/src/index.ts"
       ],

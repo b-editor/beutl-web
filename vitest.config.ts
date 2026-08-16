@@ -40,6 +40,7 @@ export default defineConfig({
       ...workspacePackage("core"),
       ...workspacePackage("db"),
       ...workspacePackage("email"),
+      ...workspacePackage("forgejo"),
       ...workspacePackage("i18n"),
       // @beutl/next / @beutl/ui はバレルを持たずサブパスのみを公開する。
       {

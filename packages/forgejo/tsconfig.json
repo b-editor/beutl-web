@@ -12,11 +12,7 @@
     "isolatedModules": true,
     "types": ["node"],
     "paths": {
-      "@beutl/core": ["../core/src/index.ts"],
-      "@beutl/db": ["../db/src/index.ts"],
-      "@beutl/forgejo": ["../forgejo/src/index.ts"],
-      "@beutl/i18n": ["../i18n/src/index.ts"],
-      "@beutl/i18n/language": ["../i18n/src/language.ts"]
+      "@beutl/db": ["../db/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

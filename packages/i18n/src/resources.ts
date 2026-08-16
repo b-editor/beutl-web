@@ -9,6 +9,7 @@ import en_dashboard from "./locales/en/dashboard.json";
 import en_developer from "./locales/en/developer.json";
 import en_feedback from "./locales/en/feedback.json";
 import en_main from "./locales/en/main.json";
+import en_repositories from "./locales/en/repositories.json";
 import en_storage from "./locales/en/storage.json";
 import en_store from "./locales/en/store.json";
 import en_translation from "./locales/en/translation.json";
@@ -20,6 +21,7 @@ import ja_dashboard from "./locales/ja/dashboard.json";
 import ja_developer from "./locales/ja/developer.json";
 import ja_feedback from "./locales/ja/feedback.json";
 import ja_main from "./locales/ja/main.json";
+import ja_repositories from "./locales/ja/repositories.json";
 import ja_storage from "./locales/ja/storage.json";
 import ja_store from "./locales/ja/store.json";
 import ja_translation from "./locales/ja/translation.json";
@@ -34,6 +36,7 @@ export const resources = {
     developer: en_developer,
     feedback: en_feedback,
     main: en_main,
+    repositories: en_repositories,
     storage: en_storage,
     store: en_store,
     translation: en_translation,
@@ -47,6 +50,7 @@ export const resources = {
     developer: ja_developer,
     feedback: ja_feedback,
     main: ja_main,
+    repositories: ja_repositories,
     storage: ja_storage,
     store: ja_store,
     translation: ja_translation,

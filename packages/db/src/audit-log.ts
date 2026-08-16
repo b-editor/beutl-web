@@ -63,6 +63,13 @@ export const auditLogActions = {
     packagePaymentRefundInterventionResumed: "admin.packagePaymentRefundInterventionResumed",
     storageObjectMoved: "admin.storageObjectMoved",
   },
+  git: {
+    accountProvisioned: "git.accountProvisioned",
+    createRepository: "git.createRepository",
+    renameRepository: "git.renameRepository",
+    deleteRepository: "git.deleteRepository",
+    issueCredential: "git.issueCredential",
+  },
 } as const;
 
 export async function createAuditLog({

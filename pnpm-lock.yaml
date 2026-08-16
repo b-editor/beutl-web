@@ -160,6 +160,9 @@ importers:
       '@beutl/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@beutl/forgejo':
+        specifier: workspace:*
+        version: link:../../packages/forgejo
       '@beutl/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
@@ -281,6 +284,9 @@ importers:
       '@beutl/db':
         specifier: workspace:*
         version: link:../db
+      '@beutl/forgejo':
+        specifier: workspace:*
+        version: link:../forgejo
       '@beutl/i18n':
         specifier: workspace:*
         version: link:../i18n
@@ -367,6 +373,19 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
+
+  packages/forgejo:
+    dependencies:
+      '@beutl/db':
+        specifier: workspace:*
+        version: link:../db
+    devDependencies:
+      '@types/node':
+        specifier: ^22.14.0
+        version: 22.14.0
+      typescript:
+        specifier: ^5.7.3
+        version: 5.7.3
 
   packages/i18n:
     dependencies:

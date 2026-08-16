@@ -42,6 +42,7 @@ model User {
   StorageFolder                StorageFolder[]
   AiOperationModel             AiOperationModel[]
   StorageUpload                StorageUpload[]
+  GitAccount                   GitAccount?
 }
 
 model Account {
@@ -149,6 +150,18 @@ model Profile {
   iconFileId  String?
   iconFile    File?   @relation(fields: [iconFileId], references: [id])
   user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Beutl アカウントと Forgejo (git.beutl.beditor.net) 上のユーザーの対応表。
+// Forgejo 側のユーザーは beutl-web が管理 API で作るので、ここが唯一の紐付けになる。
+// ユーザーが Forgejo に対話ログインすることはないため、パスワードは保存しない
+// (git 用トークンが要るたびに管理 API で振り直す)。
+model GitAccount {
+  userId          String   @id
+  forgejoUserId   Int      @unique
+  forgejoUsername String   @unique
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model SocialProfile {

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import discover from "./v3/discover";
 import files from "./v3/files";
+import git from "./v3/git";
 import library from "./v3/library";
 import packages from "./v3/packages";
 import users from "./v3/users";
@@ -19,6 +20,7 @@ import { apiOnErrorHandler } from "./api/error";
 export const v3 = new Hono()
   .route("/discover", discover)
   .route("/files", files)
+  .route("/git", git)
   .route("/account/library", library)
   .route("/packages", packages)
   .route("/users", users)
