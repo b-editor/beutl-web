@@ -198,19 +198,36 @@ export async function findPublishedPackageForLibrary({
   });
 }
 
-export async function findPackageForBillingHistory({
-  packageId,
+export type BillingHistoryPackage = {
+  id: string;
+  name: string;
+  displayName: string | null;
+  user: {
+    name: string | null;
+    Profile: { displayName: string | null } | null;
+  };
+};
+
+// Takes every package id on a billing history page at once. A per-row lookup
+// turns the history into one query per purchase.
+export async function findPackagesForBillingHistory({
+  packageIds,
   prisma,
 }: {
-  packageId: string;
+  packageIds: string[];
   prisma?: PrismaTransaction;
-}) {
+}): Promise<Map<string, BillingHistoryPackage>> {
+  const uniqueIds = [...new Set(packageIds)];
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
   const db = prisma || await getDb();
-  return await db.package.findFirst({
+  const packages = await db.package.findMany({
     where: {
-      id: packageId,
+      id: { in: uniqueIds },
     },
     select: {
+      id: true,
       name: true,
       displayName: true,
       user: {
@@ -225,6 +242,7 @@ export async function findPackageForBillingHistory({
       },
     },
   });
+  return new Map(packages.map((item) => [item.id, item]));
 }
 
 export async function retrievePublishedPackagesByUserName({

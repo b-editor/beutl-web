@@ -43,6 +43,8 @@ export type PackagePaymentRecord = PackagePaymentReference & {
 type PaymentHistoryState = PackagePaymentReference & {
   fulfillmentValidated: boolean;
   revokedAt: Date | null;
+  stripePaymentAmount: number | null;
+  stripeCurrency: string | null;
   stripeStateEventId: string | null;
   stripeStateEventCreatedAt: Date | null;
   stripeStateEventRank: number;
@@ -54,6 +56,8 @@ const paymentStateSelect = {
   packageId: true,
   fulfillmentValidated: true,
   revokedAt: true,
+  stripePaymentAmount: true,
+  stripeCurrency: true,
   stripeStateEventId: true,
   stripeStateEventCreatedAt: true,
   stripeStateEventRank: true,
@@ -190,6 +194,7 @@ async function reconcileLibraryEntitlement(
 async function applyPackagePaymentState({
   active,
   allowReactivation,
+  billing,
   event,
   reason,
   reference,
@@ -198,6 +203,9 @@ async function applyPackagePaymentState({
 }: {
   active: boolean;
   allowReactivation: boolean;
+  // Only the succeeded path knows what was actually charged. A revocation that
+  // arrives first legitimately creates a row with no amount to record.
+  billing?: PackagePaymentBilling;
   event: PackagePaymentStateEvent;
   reason?: string;
   reference?: PackagePaymentReference;
@@ -225,6 +233,8 @@ async function applyPackagePaymentState({
         userId: reference.userId,
         packageId: reference.packageId,
         fulfillmentValidated: validateFulfillment,
+        stripePaymentAmount: billing?.amount ?? null,
+        stripeCurrency: billing?.currency.toLowerCase() ?? null,
         revokedAt: active ? null : event.createdAt,
         revocationReason: active ? null : reason ?? "payment reversed",
         stripeStateEventId: event.id,
@@ -242,13 +252,24 @@ async function applyPackagePaymentState({
       validateFulfillment && !existing.fulfillmentValidated;
     const mayReactivate = !active || !existing.revokedAt || allowReactivation;
     const shouldApplyEvent = mayReactivate && isNewerEvent(existing, event);
-    if (shouldValidateFulfillment || shouldApplyEvent) {
+    // The charged amount is append-only evidence. Fill it in when a row predates
+    // amount capture or was created by an out-of-order revocation, but never let
+    // a later event rewrite what the user was actually billed.
+    const shouldRecordBilling =
+      billing !== undefined && existing.stripePaymentAmount === null;
+    if (shouldValidateFulfillment || shouldApplyEvent || shouldRecordBilling) {
       changed = shouldApplyEvent && Boolean(existing.revokedAt) === active;
       state = await tx.userPaymentHistory.update({
         where: { paymentId },
         data: {
           ...(shouldValidateFulfillment
             ? { fulfillmentValidated: true }
+            : {}),
+          ...(shouldRecordBilling
+            ? {
+                stripePaymentAmount: billing.amount,
+                stripeCurrency: billing.currency.toLowerCase(),
+              }
             : {}),
           ...(shouldApplyEvent
             ? {
@@ -354,6 +375,7 @@ export async function recordPackagePaymentSucceeded({
     return await applyPackagePaymentState({
       active: true,
       allowReactivation: false,
+      billing,
       event,
       reference,
       validateFulfillment: true,

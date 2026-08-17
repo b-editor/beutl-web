@@ -2,6 +2,12 @@
 // デスクトップ API (v1/v2/v3) と Web UI の両方から参照される。
 export { selectPricing } from "./pricing";
 export { formatAmount } from "./currency-formatter";
+export {
+  toLocaleTag,
+  formatDate,
+  formatDateTime,
+  formatCount,
+} from "./locale";
 export { getRelativeTimeDifference } from "./relative-time";
 export { isValidNuGetVersionRange } from "./nuget-version-range";
 export { randomString, createHash } from "./create-hash";

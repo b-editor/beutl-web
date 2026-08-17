@@ -227,6 +227,8 @@ model UserPaymentHistory {
   id                        String    @id @default(uuid())
   userId                    String
   paymentId                 String    @unique
+  stripePaymentAmount       Int?
+  stripeCurrency            String?
   packageId                 String
   fulfillmentValidated      Boolean   @default(true)
   revokedAt                 DateTime?

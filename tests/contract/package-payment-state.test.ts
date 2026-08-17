@@ -16,6 +16,8 @@ type History = {
   fulfillmentValidated: boolean;
   revokedAt: Date | null;
   revocationReason: string | null;
+  stripePaymentAmount: number | null;
+  stripeCurrency: string | null;
   stripeStateEventId: string | null;
   stripeStateEventCreatedAt: Date | null;
   stripeStateEventRank: number;
@@ -244,6 +246,23 @@ describe("package payment migration cutover", () => {
     );
     expect(migration).not.toContain('UPDATE "UserPackage"');
   });
+
+  it("adds the package payment amount columns as nullable without backfilling in SQL", () => {
+    const migration = readFileSync(
+      new URL(
+        "../../apps/web/prisma/migrations/20260817000000_store_package_payment_amount/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(migration).toContain('ADD COLUMN "stripePaymentAmount" INT4;');
+    expect(migration).toContain('ADD COLUMN "stripeCurrency" STRING;');
+    expect(migration).not.toContain("NOT NULL");
+    // Historical amounts live in Stripe, not in this database. Filling them in
+    // needs an API call per row, so the backfill script does it out of band.
+    expect(migration).not.toContain('UPDATE "UserPaymentHistory"');
+  });
 });
 
 describe("package payment entitlement state", () => {
@@ -276,6 +295,104 @@ describe("package payment entitlement state", () => {
     expect(store.package("user-1", "package-1")).toEqual({
       paymentManaged: true,
     });
+  });
+
+  it("records what the user was charged so the billing page needs no Stripe call", async () => {
+    await recordPackagePaymentSucceeded({
+      reference: {
+        paymentId: "pi_amount",
+        userId: "user-1",
+        packageId: "package-1",
+      },
+      billing: { amount: 1_000, currency: "USD" },
+      event: {
+        id: "evt_amount",
+        createdAt: SUCCEEDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.paymentSucceeded,
+      },
+    });
+
+    expect(store.history("pi_amount")).toMatchObject({
+      stripePaymentAmount: 1_000,
+      // formatAmount compares against lower-case Stripe currencies.
+      stripeCurrency: "usd",
+    });
+  });
+
+  it("never rewrites a recorded amount when the success event is re-delivered", async () => {
+    await recordSuccess("pi_replay");
+
+    await recordPackagePaymentSucceeded({
+      reference: {
+        paymentId: "pi_replay",
+        userId: "user-1",
+        packageId: "package-1",
+      },
+      billing: { amount: 9_999, currency: "eur" },
+      event: {
+        id: "evt_replay_later",
+        createdAt: new Date(SUCCEEDED_AT.getTime() + 60_000),
+        rank: PACKAGE_PAYMENT_EVENT_RANK.paymentSucceeded,
+      },
+    });
+
+    expect(store.history("pi_replay")).toMatchObject({
+      stripePaymentAmount: 1_000,
+      stripeCurrency: "usd",
+    });
+  });
+
+  it("leaves the amount unset when a revocation creates the row first", async () => {
+    await revokePackagePayment({
+      paymentId: "pi_revoked_first",
+      reference: { userId: "user-1", packageId: "package-1" },
+      event: {
+        id: "evt_refund_first",
+        createdAt: REFUNDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded,
+      },
+      reason: "refunded",
+    });
+
+    expect(store.history("pi_revoked_first")).toMatchObject({
+      stripePaymentAmount: null,
+      stripeCurrency: null,
+    });
+  });
+
+  it("fills a missing amount when the success event arrives after the row exists", async () => {
+    await revokePackagePayment({
+      paymentId: "pi_late_success",
+      reference: { userId: "user-1", packageId: "package-1" },
+      event: {
+        id: "evt_refund_before_success",
+        createdAt: REFUNDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.refundSucceeded,
+      },
+      reason: "refunded",
+    });
+
+    await recordPackagePaymentSucceeded({
+      reference: {
+        paymentId: "pi_late_success",
+        userId: "user-1",
+        packageId: "package-1",
+      },
+      billing: { amount: 1_000, currency: "usd" },
+      event: {
+        id: "evt_success_after_refund",
+        createdAt: SUCCEEDED_AT,
+        rank: PACKAGE_PAYMENT_EVENT_RANK.paymentSucceeded,
+      },
+    });
+
+    const history = store.history("pi_late_success");
+    expect(history).toMatchObject({
+      stripePaymentAmount: 1_000,
+      stripeCurrency: "usd",
+    });
+    // A late success must not resurrect the entitlement the refund revoked.
+    expect(history?.revokedAt).not.toBeNull();
   });
 
   it("retries a concurrent payment-history insert", async () => {

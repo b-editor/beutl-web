@@ -71,8 +71,9 @@ vi.mock("@beutl/db", () => ({
 import {
   createBillingPortalLink,
   createCreditCheckout,
+  createPaymentMethodPortalLink,
   createProCheckout,
-} from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/ai-plan/actions";
+} from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/billing/actions";
 
 describe("AI checkout actions", () => {
   beforeEach(() => {
@@ -182,7 +183,7 @@ describe("AI checkout actions", () => {
       expect.objectContaining({
         mode: "subscription",
         success_url:
-          "https://beutl.example/dashboard/account/ai-plan?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+          "https://beutl.example/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
         subscription_data: {
           metadata: {
             beutlApplication: "beutl-web",
@@ -559,7 +560,7 @@ describe("AI checkout actions", () => {
 
     expect(redirectError).toMatchObject({
       message: "NEXT_REDIRECT",
-      digest: expect.stringContaining("/dashboard/account/ai-plan"),
+      digest: expect.stringContaining("/dashboard/account/billing"),
     });
     expect(mocks.checkoutRetrieve).toHaveBeenCalledWith("cs_1", {
       expand: ["line_items.data.price"],
@@ -644,7 +645,7 @@ describe("AI checkout actions", () => {
 
     expect(redirectError).toMatchObject({
       message: "NEXT_REDIRECT",
-      digest: expect.stringContaining("/dashboard/account/ai-plan"),
+      digest: expect.stringContaining("/dashboard/account/billing"),
     });
     expect(mocks.scheduleBillingRefundAttempt).toHaveBeenCalledWith({
       disposition: "superseded-pro-checkout",
@@ -730,7 +731,7 @@ describe("AI checkout actions", () => {
 
     expect(redirectError).toMatchObject({
       message: "NEXT_REDIRECT",
-      digest: expect.stringContaining("/dashboard/account/ai-plan"),
+      digest: expect.stringContaining("/dashboard/account/billing"),
     });
     expect(mocks.scheduleBillingRefundAttempt).toHaveBeenCalled();
     expect(mocks.subscriptionCancel).toHaveBeenCalledWith(
@@ -798,7 +799,7 @@ describe("AI checkout actions", () => {
 
     expect(redirectError).toMatchObject({
       message: "NEXT_REDIRECT",
-      digest: expect.stringContaining("/dashboard/account/ai-plan"),
+      digest: expect.stringContaining("/dashboard/account/billing"),
     });
     expect(mocks.recordBillingRefundCancellation).not.toHaveBeenCalled();
     expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
@@ -957,7 +958,7 @@ describe("AI checkout actions", () => {
       // The marker lets the plan page read Stripe on return, so a portal
       // cancellation is visible before its webhook arrives.
       return_url:
-        "https://beutl.example/dashboard/account/ai-plan?portal=returned",
+        "https://beutl.example/dashboard/account/billing?portal=returned",
     });
   });
 
@@ -975,5 +976,79 @@ describe("AI checkout actions", () => {
       "disable subscription switching",
     );
     expect(mocks.portalCreate).not.toHaveBeenCalled();
+  });
+
+  it("opens the payment method update flow for the owned customer", async () => {
+    mocks.portalConfigurationRetrieve.mockResolvedValue({
+      id: "bpc_safe",
+      active: true,
+      features: {
+        subscription_cancel: { enabled: true, mode: "at_period_end" },
+        subscription_update: { enabled: false },
+        payment_method_update: { enabled: true },
+      },
+    });
+    mocks.createOrRetrieveOwnedCustomerId.mockResolvedValue("cus_remediated");
+    mocks.portalCreate.mockResolvedValue({
+      url: "https://billing.stripe.com/payment-method",
+    });
+
+    await expect(createPaymentMethodPortalLink()).rejects.toThrow(
+      "NEXT_REDIRECT",
+    );
+
+    expect(mocks.portalCreate).toHaveBeenCalledWith({
+      customer: "cus_remediated",
+      configuration: "bpc_safe",
+      // The deep link drops the customer straight into the card form instead of
+      // the portal home, where the button's label would be a lie.
+      flow_data: {
+        type: "payment_method_update",
+        after_completion: {
+          type: "redirect",
+          redirect: {
+            return_url:
+              "https://beutl.example/dashboard/account/billing?portal=returned",
+          },
+        },
+      },
+      return_url:
+        "https://beutl.example/dashboard/account/billing?portal=returned",
+    });
+  });
+
+  it("rejects a portal configuration that does not allow payment method updates", async () => {
+    mocks.portalConfigurationRetrieve.mockResolvedValue({
+      id: "bpc_no_pm",
+      active: true,
+      features: {
+        subscription_cancel: { enabled: true, mode: "at_period_end" },
+        subscription_update: { enabled: false },
+        payment_method_update: { enabled: false },
+      },
+    });
+
+    await expect(createPaymentMethodPortalLink()).rejects.toThrow(
+      "must allow payment method updates",
+    );
+    expect(mocks.portalCreate).not.toHaveBeenCalled();
+  });
+
+  // Cancellation must never depend on a feature it does not use. The default
+  // mock has no payment_method_update key at all, which is the shape a portal
+  // configured only for cancellation returns.
+  it("keeps the cancellation portal working when payment method updates are unavailable", async () => {
+    mocks.portalCreate.mockResolvedValue({
+      url: "https://billing.stripe.com/session",
+    });
+
+    await expect(createBillingPortalLink()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.portalCreate).toHaveBeenCalledWith({
+      customer: "cus_1",
+      configuration: "bpc_safe",
+      return_url:
+        "https://beutl.example/dashboard/account/billing?portal=returned",
+    });
   });
 });

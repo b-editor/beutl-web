@@ -76,7 +76,7 @@ vi.mock("@beutl/db", () => ({
   startRetryableTransaction: mocks.startRetryableTransaction,
 }));
 
-import { reconcileAiCheckoutSuccess } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/ai-plan/actions";
+import { reconcileAiCheckoutSuccess } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/billing/actions";
 
 const ownerMetadata = {
   beutlApplication: "beutl-web",

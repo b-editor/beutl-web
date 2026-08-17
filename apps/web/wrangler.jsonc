@@ -46,5 +46,8 @@
       "binding": "BEUTL_DATABASE_HYPERDRIVE",
       "id": "34ad44345f2f45ea97c3608b0567a878"
     }
-  ]
+  ],
+  "vars": {
+    "OPENROUTER_REQUEST_TIMEOUT_MS": "120000"
+  }
 }

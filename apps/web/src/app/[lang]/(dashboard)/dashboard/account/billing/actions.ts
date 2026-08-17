@@ -366,6 +366,10 @@ async function hasActiveProSubscription(userId: string): Promise<boolean> {
 
 async function getSafeBillingPortalConfigurationId(
   stripe: ReturnType<typeof createStripe>,
+  // Required only by the flow that actually needs it. Demanding it globally
+  // would make cancellation fail whenever an operator turns payment method
+  // updates off, which is a feature cancellation does not depend on.
+  options?: { requirePaymentMethodUpdate?: boolean },
 ): Promise<string> {
   const configurationId = process.env.STRIPE_BILLING_PORTAL_CONFIGURATION_ID;
   if (!configurationId) {
@@ -382,6 +386,14 @@ async function getSafeBillingPortalConfigurationId(
   ) {
     throw new Error(
       "The Stripe billing portal must cancel at period end and disable subscription switching",
+    );
+  }
+  if (
+    options?.requirePaymentMethodUpdate &&
+    !configuration.features.payment_method_update?.enabled
+  ) {
+    throw new Error(
+      "The Stripe billing portal must allow payment method updates",
     );
   }
   return configuration.id;
@@ -440,7 +452,7 @@ export async function createProCheckout(): Promise<void> {
       recognizedProPriceIds,
     )
   ) {
-    redirect("/dashboard/account/ai-plan");
+    redirect("/dashboard/account/billing");
   }
 
   const origin = process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net";
@@ -502,7 +514,7 @@ export async function createProCheckout(): Promise<void> {
         existingSession.status === "complete"
       ) {
         redirect(
-          `/dashboard/account/ai-plan?checkout=success&session_id=${existingSession.id}`,
+          `/dashboard/account/billing?checkout=success&session_id=${existingSession.id}`,
         );
       }
 
@@ -557,7 +569,7 @@ export async function createProCheckout(): Promise<void> {
           expectedUserId: session.user.id,
         });
         if (!cancellationConfirmed) {
-          redirect("/dashboard/account/ai-plan");
+          redirect("/dashboard/account/billing");
         }
         await deleteBoundProCheckoutAttempt({
           userId: session.user.id,
@@ -601,8 +613,8 @@ export async function createProCheckout(): Promise<void> {
             billingOfferId: offer.id,
           },
         },
-        success_url: `${origin}/dashboard/account/ai-plan?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/dashboard/account/ai-plan`,
+        success_url: `${origin}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/dashboard/account/billing`,
       },
       {
         idempotencyKey: `ai-pro-checkout:${attempt.checkoutKey}`,
@@ -626,14 +638,14 @@ export async function createProCheckout(): Promise<void> {
         expectedUserId: session.user.id,
       });
       if (!cancellationConfirmed) {
-        redirect("/dashboard/account/ai-plan");
+        redirect("/dashboard/account/billing");
       }
       await deleteBoundProCheckoutAttempt({
         userId: session.user.id,
         checkoutKey: attempt.checkoutKey,
         stripeCheckoutSessionId: checkoutSession.id,
       });
-      redirect("/dashboard/account/ai-plan");
+      redirect("/dashboard/account/billing");
     }
     if (binding === "superseded") {
       let finalSession: Stripe.Checkout.Session;
@@ -668,7 +680,7 @@ export async function createProCheckout(): Promise<void> {
           expectedUserId: session.user.id,
         });
         if (!cancellationConfirmed) {
-          redirect("/dashboard/account/ai-plan");
+          redirect("/dashboard/account/billing");
         }
       }
       continue;
@@ -676,12 +688,12 @@ export async function createProCheckout(): Promise<void> {
 
     if (!checkoutSession.url) {
       console.error("Checkout session URL is missing");
-      redirect("/dashboard/account/ai-plan");
+      redirect("/dashboard/account/billing");
     }
     redirect(checkoutSession.url);
   }
 
-  redirect("/dashboard/account/ai-plan");
+  redirect("/dashboard/account/billing");
 }
 
 // Create a Checkout Session for a credit top-up.
@@ -689,7 +701,7 @@ export async function createProCheckout(): Promise<void> {
 export async function createCreditCheckout(): Promise<void> {
   const session = await throwIfUnauth();
   if (!(await hasActiveProSubscription(session.user.id))) {
-    redirect("/dashboard/account/ai-plan");
+    redirect("/dashboard/account/billing");
   }
   const customerId = await createOrRetrieveOwnedCustomerId({
     email: session.user.email as string,
@@ -728,8 +740,8 @@ export async function createCreditCheckout(): Promise<void> {
           topUpAttemptId: attempt.id,
         },
       },
-      success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/ai-plan?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/ai-plan`,
+      success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing`,
     },
     { idempotencyKey: `ai-top-up-checkout:${attempt.id}` },
   );
@@ -747,7 +759,7 @@ export async function createCreditCheckout(): Promise<void> {
 
   if (!session_.url) {
     console.error("Checkout session URL is missing");
-    redirect("/dashboard/account/ai-plan");
+    redirect("/dashboard/account/billing");
   }
   redirect(session_.url);
 }
@@ -982,6 +994,36 @@ export async function reconcileAiCheckoutSuccess(
   return false;
 }
 
+// Deep-link into the portal's payment method update flow. Kept separate from
+// createBillingPortalLink so the flow is fixed on the server rather than chosen
+// by a form field, and so each flow's Stripe call shape is pinned by its own test.
+export async function createPaymentMethodPortalLink(): Promise<void> {
+  const session = await throwIfUnauth();
+  const customerId = await createOrRetrieveOwnedCustomerId({
+    email: session.user.email as string,
+    userId: session.user.id,
+  });
+  const stripe = createStripe();
+  const configuration = await getSafeBillingPortalConfigurationId(stripe, {
+    requirePaymentMethodUpdate: true,
+  });
+  const returnUrl = `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?portal=returned`;
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    configuration,
+    flow_data: {
+      type: "payment_method_update",
+      after_completion: {
+        type: "redirect",
+        redirect: { return_url: returnUrl },
+      },
+    },
+    return_url: returnUrl,
+  });
+
+  redirect(portal.url);
+}
+
 // Create a Stripe Customer Portal link for cancellations and billing management.
 export async function createBillingPortalLink(): Promise<void> {
   const session = await throwIfUnauth();
@@ -996,7 +1038,7 @@ export async function createBillingPortalLink(): Promise<void> {
     configuration,
     // Mark the return trip so the page can pull the current subscription state
     // instead of waiting for the cancellation webhook to arrive.
-    return_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/ai-plan?portal=returned`,
+    return_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?portal=returned`,
   });
 
   redirect(portal.url);
