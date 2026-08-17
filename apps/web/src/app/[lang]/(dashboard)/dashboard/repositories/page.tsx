@@ -39,7 +39,9 @@ export default async function Page(props: {
     listRepositories(username),
     listGitCredentials(session.user.id),
   ]);
-  // Forgejo の size は KiB 単位で、LFS に載せた素材も含まれる。
+  // リポジトリの size は KiB 単位で、LFS に載せた素材も含む (保存先が S3 でも同じ)。
+  // 同名だが contents API のエントリの size とは別物で、あちらは LFS ファイルに対して
+  // ポインタのバイト数を返す (resolveContentSizes が実サイズに直す)。
   const totalBytes = repositories.reduce(
     (total, repository) => total + repository.size * 1024,
     0,

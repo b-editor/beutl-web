@@ -3,20 +3,38 @@ import { notFound } from "next/navigation";
 import { getTranslation } from "@beutl/i18n";
 import { formatBytes } from "@beutl/core";
 import { listContents, resolveContentSizes } from "@beutl/forgejo";
-import { File, FileVideo, Folder } from "lucide-react";
+import {
+  File,
+  FileAudio,
+  FileImage,
+  FileVideo,
+  Folder,
+  Type,
+} from "lucide-react";
 import { loadRepository } from "./repository";
 import { Breadcrumbs } from "./breadcrumbs";
 
-/** .gitattributes で LFS に載せている拡張子。アイコンの出し分けにだけ使う。 */
-const MEDIA_EXTENSIONS = new Set([
-  "mp4", "mov", "mkv", "webm", "avi", "m4v",
-  "wav", "mp3", "flac", "aac", "m4a", "ogg",
-  "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "psd", "exr",
-]);
+/**
+ * アイコンの出し分けだけに使う対応表。GITATTRIBUTES_TEMPLATE で LFS に載せている
+ * 拡張子を全て網羅する (漏れると素材が汎用ファイルのアイコンで並ぶ)。
+ *
+ * 表示にしか影響しない。LFS ポインタの実サイズ解決は拡張子ではなくファイルサイズで
+ * 判定するので (resolveContentSizes)、ここに漏れがあってもサイズは正しく出る。
+ */
+const ICONS_BY_EXTENSION = new Map(
+  Object.entries({
+    "mp4 mov mkv webm avi m4v": FileVideo,
+    "wav mp3 flac aac m4a ogg": FileAudio,
+    "png jpg jpeg gif webp bmp tif tiff psd exr": FileImage,
+    "ttf otf ttc woff woff2": Type,
+  }).flatMap(([extensions, icon]) =>
+    extensions.split(" ").map((extension) => [extension, icon] as const),
+  ),
+);
 
 function iconFor(name: string) {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  return MEDIA_EXTENSIONS.has(extension) ? FileVideo : File;
+  return ICONS_BY_EXTENSION.get(extension) ?? File;
 }
 
 export async function FileTree({

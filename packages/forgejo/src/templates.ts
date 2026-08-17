@@ -14,6 +14,9 @@ export const GITATTRIBUTES_TEMPLATE = `# Beutl プロジェクト用の既定 .g
 *.scene text eol=lf
 *.belm  text eol=lf
 *.json  text eol=lf
+# SVG はテキスト。Beutl はファイルとしてではなくパスデータの文字列として扱うので、
+# LFS に載せる理由がない (差分が読めなくなるだけ)。
+*.svg   text eol=lf
 
 # --- 素材は Git LFS ---------------------------------------------------------
 # 動画
@@ -43,7 +46,6 @@ export const GITATTRIBUTES_TEMPLATE = `# Beutl プロジェクト用の既定 .g
 *.tiff filter=lfs diff=lfs merge=lfs -text
 *.psd  filter=lfs diff=lfs merge=lfs -text
 *.exr  filter=lfs diff=lfs merge=lfs -text
-*.svg  filter=lfs diff=lfs merge=lfs -text
 
 # フォント・LUT
 *.ttf  filter=lfs diff=lfs merge=lfs -text

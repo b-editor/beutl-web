@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CREDENTIAL_NAME_MAX_LENGTH,
+  GITATTRIBUTES_TEMPLATE,
   ForgejoError,
   MAX_LFS_POINTER_BYTES,
   forgejoRequest,
@@ -170,6 +171,32 @@ describe("端末ラベルの正規化", () => {
     );
     expect(name.length).toBeLessThanOrEqual(CREDENTIAL_NAME_MAX_LENGTH);
     expect(name).toBe(name.trim());
+  });
+});
+
+describe("テンプレートの LFS 対象", () => {
+  // SVG はテキストで、Beutl もファイルとしては読み込まない (パスデータの文字列として扱う)。
+  // LFS に載せると差分が読めなくなるだけなので、テキスト側に置く。
+  it("SVG は LFS ではなくテキスト扱い", () => {
+    expect(GITATTRIBUTES_TEMPLATE).toContain("*.svg   text eol=lf");
+    expect(GITATTRIBUTES_TEMPLATE).not.toMatch(/\*\.svg\s+filter=lfs/);
+  });
+
+  it("プロジェクトファイルは LFS に載せない", () => {
+    for (const extension of ["bep", "scene", "belm"]) {
+      expect(GITATTRIBUTES_TEMPLATE).toContain(`*.${extension}`);
+      expect(GITATTRIBUTES_TEMPLATE).not.toMatch(
+        new RegExp(`\\*\\.${extension}\\s+filter=lfs`),
+      );
+    }
+  });
+
+  it("素材は LFS に載せる", () => {
+    for (const extension of ["mp4", "wav", "png", "ttf", "cube"]) {
+      expect(GITATTRIBUTES_TEMPLATE).toMatch(
+        new RegExp(`\\*\\.${extension}\\s+filter=lfs diff=lfs merge=lfs -text`),
+      );
+    }
   });
 });
 
