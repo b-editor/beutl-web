@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // 実サーバーとの疎通は git-server/docs/local-setup.md の手順で確認する。
 
 import {
+  CREDENTIAL_NAME_MAX_LENGTH,
   ForgejoError,
   MAX_LFS_POINTER_BYTES,
   forgejoRequest,
   getForgejoConfig,
   isForgejoConfigured,
+  normalizeCredentialName,
   normalizeUsername,
   parseLfsPointer,
 } from "@beutl/forgejo";
@@ -140,6 +142,34 @@ describe("ユーザー名の正規化", () => {
   it("30 文字を超えたら切り詰める", () => {
     const long = normalizeUsername("a".repeat(60));
     expect(long).toHaveLength(30);
+  });
+});
+
+describe("端末ラベルの正規化", () => {
+  // Forgejo のトークン名は空白も日本語もスラッシュも受け付ける (実機で確認済み)。
+  // 一方、空文字は 422、255 文字超は 500 を返すので、その手前で落とす。
+  it("空白や日本語はそのまま通す", () => {
+    expect(normalizeCredentialName("My MacBook Pro")).toBe("My MacBook Pro");
+    expect(normalizeCredentialName("ノート PC")).toBe("ノート PC");
+    expect(normalizeCredentialName("home/desktop")).toBe("home/desktop");
+  });
+
+  it("前後の空白と制御文字を落とす", () => {
+    expect(normalizeCredentialName("  desktop  ")).toBe("desktop");
+    expect(normalizeCredentialName("desk\u0000top\u007f")).toBe("desktop");
+  });
+
+  it("空になる入力は空文字にする (呼び出し側が弾く)", () => {
+    expect(normalizeCredentialName("   ")).toBe("");
+    expect(normalizeCredentialName("\u0000")).toBe("");
+  });
+
+  it("上限で切り詰めても末尾に空白を残さない", () => {
+    const name = normalizeCredentialName(
+      `${"a".repeat(CREDENTIAL_NAME_MAX_LENGTH - 1)} tail`,
+    );
+    expect(name.length).toBeLessThanOrEqual(CREDENTIAL_NAME_MAX_LENGTH);
+    expect(name).toBe(name.trim());
   });
 });
 

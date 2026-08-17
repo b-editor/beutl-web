@@ -44,12 +44,10 @@
   "delete": "削除する",
   "cancel": "キャンセル",
   "credentials": "Git の資格情報",
-  "credentialsDescription": "Beutl やコマンドラインから clone / push するときのパスワードとして使います。",
+  "credentialsDescription": "Beutl やコマンドラインから clone / push するときのパスワードとして使います。端末ごとに 1 本発行してください。",
   "issueCredential": "トークンを発行",
-  "credentialIssued": "トークンを発行しました。この画面を閉じると二度と表示されません。",
-  "credentialReplaced": "以前のトークンは無効になりました。",
+  "credentialIssued": "この画面を離れると二度と表示されません。ほかの端末のトークンはそのまま使えます。",
   "username": "ユーザー名",
-  "token": "トークン",
   "errors": {
     "notConfigured": "Git サービスが設定されていません。管理者に連絡してください。",
     "nameRequired": "名前を入力してください。",
@@ -57,6 +55,16 @@
     "nameTaken": "その名前のリポジトリは既にあります。",
     "notFound": "リポジトリが見つかりません。",
     "confirmMismatch": "入力された名前が一致しません。",
-    "unknown": "処理に失敗しました。時間をおいて試してください。"
-  }
+    "unknown": "処理に失敗しました。時間をおいて試してください。",
+    "labelRequired": "端末名を入力してください。",
+    "labelTaken": "その端末名は既に使われています。",
+    "credentialLimit": "トークンは {{limit}} 本までです。使っていないものを失効させてください。"
+  },
+  "issuedCredentials": "発行済みのトークン",
+  "credentialMeta": "末尾 {{lastEight}}・{{date}} 発行",
+  "deviceLabel": "端末名",
+  "deviceLabelPlaceholder": "デスクトップ / ノート PC など",
+  "deviceLabelHint": "どの端末のトークンか後から見分けるための名前です。50 文字まで。",
+  "tokenFor": "{{name}} のトークン",
+  "revoke": "このトークンを失効させる"
 }

@@ -18,6 +18,7 @@ export * from "./customer";
 export * from "./feedback";
 export * from "./file";
 export * from "./git-account";
+export * from "./git-credential";
 export * from "./native-app-auth";
 export * from "./package";
 export * from "./package-payment";

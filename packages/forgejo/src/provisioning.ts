@@ -6,10 +6,7 @@ import {
 } from "@beutl/db";
 import { forgejoRequest, getForgejoConfig } from "./client";
 import { ForgejoError } from "./errors";
-import type { ForgejoAccessToken, ForgejoUser } from "./types";
-
-/** デスクトップに渡す git 資格情報のトークン名。ユーザーごとに 1 本だけ持つ。 */
-export const DESKTOP_TOKEN_NAME = "beutl-desktop";
+import type { ForgejoUser } from "./types";
 
 const USERNAME_MAX_LENGTH = 30;
 const USERNAME_FALLBACK = "beutl-user";
@@ -37,7 +34,8 @@ function candidateAt(base: string, attempt: number): string {
   return `${base.slice(0, USERNAME_MAX_LENGTH - suffix.length)}${suffix}`;
 }
 
-function randomSecret(): string {
+/** 保存しない使い捨ての秘密値 (Forgejo ユーザーの初期パスワードなど)。 */
+export function randomSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -123,55 +121,3 @@ export async function ensureGitAccount(userId: string): Promise<{
   );
 }
 
-/**
- * デスクトップが git のパスワードとして使うアクセストークンを発行する。
- *
- * Forgejo のトークン管理エンドポイントは Sudo 代理もトークン認証も受け付けず、
- * 対象ユーザー自身の Basic 認証だけを許す。ユーザーは Forgejo に対話ログインしないので、
- * 発行のたびに使い捨てのパスワードを管理 API で設定し、それで Basic 認証してから捨てる。
- * こうすると beutl-web 側に長期保存する資格情報が増えない。
- */
-export async function issueGitCredential(userId: string): Promise<{
-  username: string;
-  token: string;
-}> {
-  const account = await ensureGitAccount(userId);
-  const username = account.forgejoUsername;
-  const password = randomSecret();
-
-  // source_id と login_name を省くと 422 になる。
-  await forgejoRequest(`/admin/users/${username}`, {
-    method: "PATCH",
-    body: { source_id: 0, login_name: username, password },
-    responseType: "none",
-  });
-
-  const basicAuth = { username, password };
-  const tokensPath = `/users/${username}/tokens`;
-
-  const existing = await forgejoRequest<ForgejoAccessToken[]>(tokensPath, {
-    basicAuth,
-  });
-  if (existing.some((token) => token.name === DESKTOP_TOKEN_NAME)) {
-    await forgejoRequest(`${tokensPath}/${DESKTOP_TOKEN_NAME}`, {
-      method: "DELETE",
-      basicAuth,
-      responseType: "none",
-    });
-  }
-
-  const issued = await forgejoRequest<ForgejoAccessToken>(tokensPath, {
-    method: "POST",
-    basicAuth,
-    body: {
-      name: DESKTOP_TOKEN_NAME,
-      scopes: ["write:repository"],
-    },
-  });
-
-  if (!issued.sha1) {
-    throw new Error("Forgejo did not return an access token");
-  }
-
-  return { username, token: issued.sha1 };
-}

@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import {
+  CREDENTIAL_NAME_MAX_LENGTH,
+  CredentialLimitReachedError,
+  CredentialNameInvalidError,
+  CredentialNameTakenError,
   ForgejoError,
   buildCloneUrl,
   createRepository,
@@ -9,7 +13,9 @@ import {
   getForgejoConfig,
   isForgejoConfigured,
   issueGitCredential,
+  listGitCredentials,
   listRepositories,
+  revokeGitCredential,
 } from "@beutl/forgejo";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
@@ -25,6 +31,12 @@ import { apiErrorResponse } from "../api/error";
 const createSchema = z.object({
   name: z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/),
   description: z.string().max(500).optional(),
+});
+
+// 端末名は必須。省略できると、起動のたびに発行するクライアントがトークンを
+// 際限なく積み上げてしまう。
+const credentialSchema = z.object({
+  deviceName: z.string().min(1).max(CREDENTIAL_NAME_MAX_LENGTH),
 });
 
 async function requireUserId(c: Parameters<typeof getUserId>[0]) {
@@ -49,7 +61,7 @@ const app = new Hono()
       baseUrl: getForgejoConfig().baseUrl,
     });
   })
-  .post("/credentials", async (c) => {
+  .get("/credentials", async (c) => {
     const userId = await requireUserId(c);
     if (!userId) {
       return c.json(await apiErrorResponse("authenticationIsRequired"), {
@@ -60,13 +72,77 @@ const app = new Hono()
       return c.json(await apiErrorResponse("unknown"), { status: 503 });
     }
 
-    // 発行するたびに以前のトークンは失効する。平文はこのレスポンスにしかない。
-    const credential = await issueGitCredential(userId);
-    return c.json({
-      username: credential.username,
-      // git の HTTPS Basic 認証でパスワードとして使う。
-      password: credential.token,
-    });
+    // 平文は含まない。どの端末に何を渡したかを見るためのもの。
+    const credentials = await listGitCredentials(userId);
+    return c.json(
+      credentials.map((credential) => ({
+        id: credential.id,
+        deviceName: credential.name,
+        lastEight: credential.lastEight,
+        createdAt: credential.createdAt.toISOString(),
+      })),
+    );
+  })
+  .post("/credentials", zValidator("json", credentialSchema), async (c) => {
+    const userId = await requireUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+    if (!isForgejoConfigured()) {
+      return c.json(await apiErrorResponse("unknown"), { status: 503 });
+    }
+
+    const { deviceName } = c.req.valid("json");
+    try {
+      // 端末ごとに 1 本。既存のトークンには触らないので、他の端末は使い続けられる。
+      // 平文はこのレスポンスにしか現れない。
+      const issued = await issueGitCredential(userId, deviceName);
+      return c.json(
+        {
+          id: issued.credential.id,
+          deviceName: issued.credential.name,
+          username: issued.username,
+          // git の HTTPS Basic 認証でパスワードとして使う。
+          password: issued.token,
+        },
+        201,
+      );
+    } catch (error) {
+      if (
+        error instanceof CredentialNameTakenError ||
+        error instanceof CredentialNameInvalidError
+      ) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 409,
+        });
+      }
+      if (error instanceof CredentialLimitReachedError) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 409,
+        });
+      }
+      throw error;
+    }
+  })
+  .delete("/credentials/:id", async (c) => {
+    const userId = await requireUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+    if (!isForgejoConfigured()) {
+      return c.json(await apiErrorResponse("unknown"), { status: 503 });
+    }
+
+    // 指定した 1 本だけを失効させる。他の端末の資格情報は生きたまま。
+    const revoked = await revokeGitCredential(userId, c.req.param("id"));
+    if (!revoked) {
+      return c.json(await apiErrorResponse("unknown"), { status: 404 });
+    }
+    return c.body(null, 204);
   })
   .get("/repositories", async (c) => {
     const userId = await requireUserId(c);

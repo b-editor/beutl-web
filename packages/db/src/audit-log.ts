@@ -69,6 +69,7 @@ export const auditLogActions = {
     renameRepository: "git.renameRepository",
     deleteRepository: "git.deleteRepository",
     issueCredential: "git.issueCredential",
+    revokeCredential: "git.revokeCredential",
   },
 } as const;
 

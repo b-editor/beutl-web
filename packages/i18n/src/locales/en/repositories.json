@@ -44,12 +44,10 @@
   "delete": "Delete",
   "cancel": "Cancel",
   "credentials": "Git credentials",
-  "credentialsDescription": "Use this as the password when cloning or pushing from Beutl or the command line.",
+  "credentialsDescription": "Use this as the password when cloning or pushing from Beutl or the command line. Issue one per device.",
   "issueCredential": "Issue token",
-  "credentialIssued": "Token issued. It will not be shown again once you leave this page.",
-  "credentialReplaced": "The previous token has been revoked.",
+  "credentialIssued": "It will not be shown again once you leave this page. Tokens on your other devices keep working.",
   "username": "Username",
-  "token": "Token",
   "errors": {
     "notConfigured": "The Git service is not configured. Please contact an administrator.",
     "nameRequired": "Enter a name.",
@@ -57,6 +55,16 @@
     "nameTaken": "A repository with that name already exists.",
     "notFound": "Repository not found.",
     "confirmMismatch": "The name does not match.",
-    "unknown": "The operation failed. Please try again later."
-  }
+    "unknown": "The operation failed. Please try again later.",
+    "labelRequired": "Enter a device name.",
+    "labelTaken": "That device name is already in use.",
+    "credentialLimit": "You can hold at most {{limit}} tokens. Revoke one you no longer use."
+  },
+  "issuedCredentials": "Issued tokens",
+  "credentialMeta": "ending {{lastEight}} · issued {{date}}",
+  "deviceLabel": "Device name",
+  "deviceLabelPlaceholder": "Desktop, Laptop, …",
+  "deviceLabelHint": "A name to tell your devices apart later. Up to 50 characters.",
+  "tokenFor": "Token for {{name}}",
+  "revoke": "Revoke this token"
 }

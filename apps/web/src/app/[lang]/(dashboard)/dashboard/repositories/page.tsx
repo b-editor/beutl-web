@@ -3,7 +3,11 @@ import { authOrSignIn } from "@/lib/auth-guard";
 import { resolveGitUsername } from "@/lib/git-account";
 import { formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
-import { listRepositories } from "@beutl/forgejo";
+import {
+  MAX_CREDENTIALS_PER_USER,
+  listGitCredentials,
+  listRepositories,
+} from "@beutl/forgejo";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { GitBranch } from "lucide-react";
 import { CreateRepositoryDialog } from "./create-dialog";
@@ -31,7 +35,10 @@ export default async function Page(props: {
     );
   }
 
-  const repositories = await listRepositories(username);
+  const [repositories, credentials] = await Promise.all([
+    listRepositories(username),
+    listGitCredentials(session.user.id),
+  ]);
   // Forgejo の size は KiB 単位で、LFS に載せた素材も含まれる。
   const totalBytes = repositories.reduce(
     (total, repository) => total + repository.size * 1024,
@@ -96,7 +103,16 @@ export default async function Page(props: {
         </div>
       )}
 
-      <CredentialsCard lang={lang} username={username} />
+      <CredentialsCard
+        lang={lang}
+        username={username}
+        limit={MAX_CREDENTIALS_PER_USER}
+        // Date はクライアントコンポーネントにそのまま渡せないので ISO 文字列にする。
+        credentials={credentials.map((credential) => ({
+          ...credential,
+          createdAt: credential.createdAt.toISOString(),
+        }))}
+      />
     </div>
   );
 }

@@ -43,6 +43,7 @@ model User {
   AiOperationModel             AiOperationModel[]
   StorageUpload                StorageUpload[]
   GitAccount                   GitAccount?
+  GitCredential                GitCredential[]
 }
 
 model Account {
@@ -162,6 +163,27 @@ model GitAccount {
   forgejoUsername String   @unique
   createdAt       DateTime @default(now())
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// 発行済み git アクセストークンの控え。平文は保持しない (発行時のレスポンスにしか現れない)。
+//
+// Forgejo のトークン一覧は対象ユーザーの Basic 認証を要求し、そのために毎回パスワードを
+// 振り直すことになる。一覧表示のたびにそれをやるのは重いので、表示に必要なメタ情報だけ
+// こちらに持つ。Forgejo を触るのは発行と失効のときだけ。
+model GitCredential {
+  id             String   @id @default(uuid())
+  userId         String
+  // ユーザーに見せるラベル。Forgejo 上のトークン名と同じ値にする。
+  name           String
+  // 失効は名前ではなくこの id で行う (名前に / や空白が入りうるため)。
+  forgejoTokenId Int
+  // どのトークンかを見分けるための末尾 8 文字。
+  lastEight      String
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
 }
 
 model SocialProfile {

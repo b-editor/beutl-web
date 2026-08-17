@@ -59,15 +59,33 @@ beutl-web が管理 API で作る。ユーザー名は `Profile.userName` を Fo
 トークン管理エンドポイント (`/api/v1/users/{username}/tokens`) は **トークン認証も `Sudo`
 代理も受け付けず**、対象ユーザー自身の Basic 認証だけを許す (`auth method not allowed`)。
 
-そのため `issueGitCredential` は次の順で発行する。
+そのため発行・失効は次の順で行う。
 
 1. `PATCH /api/v1/admin/users/{username}` で使い捨てのランダムパスワードを設定する
    (`source_id` と `login_name` を必ず含める。欠けると 422)
-2. そのパスワードで Basic 認証し、`POST /api/v1/users/{username}/tokens` でトークンを作る
+2. そのパスワードで Basic 認証し、`/api/v1/users/{username}/tokens` を叩く
 3. パスワードは保存せず捨てる
 
 ユーザーは Forgejo に対話ログインしないので、パスワードが毎回変わっても誰も困らない。
+**パスワードを変えても発行済みのトークンは失効しない**ことは実機で確認済みで、
 この方式なら beutl-web 側に長期保存する資格情報が 1 つも増えない。
+
+### 5. トークンは端末ごとに 1 本持てる
+
+トークンを 1 本に固定すると、ある端末で発行した瞬間に他の端末の資格情報が切れる。
+Forgejo は名前が違えば何本でも保持できる (実機で確認済み) ので、端末名をラベルにして
+複数本を並存させる。失効は 1 本ずつで、他の端末には影響しない。
+
+一覧表示のためだけに Forgejo へ問い合わせるとパスワードの振り直しが要るので、
+表示に必要なメタ情報 (ラベル・トークン id・末尾 8 文字・発行日) は `GitCredential` に控える。
+Forgejo を触るのは発行と失効のときだけ。平文は控えない。
+
+失効は名前ではなく Forgejo 側のトークン id で行う。Forgejo はトークン名に空白や
+スラッシュを許すため、名前を URL パスに載せる形は避ける。控えと Forgejo がずれて
+対象が既に無い場合も、控えを消して成功として扱う。
+
+歯止めとして、ラベルは 50 文字まで (Forgejo は 255 文字を超えると 500 を返す)、
+1 ユーザーあたり 20 本までとしている。
 
 ## Consequences
 
@@ -88,9 +106,15 @@ Beutl 本体の Git クライアントは `/api/v3/git/*` を使う。認証は 
 | エンドポイント | 用途 |
 | --- | --- |
 | `GET /api/v3/git/account` | Forgejo ユーザー名とベース URL |
-| `POST /api/v3/git/credentials` | git の Basic 認証に使うユーザー名とパスワード (トークン) |
+| `GET /api/v3/git/credentials` | 発行済みトークンの一覧 (平文は含まない) |
+| `POST /api/v3/git/credentials` | トークンを 1 本発行。`{"deviceName": "..."}` が必須 |
+| `DELETE /api/v3/git/credentials/{id}` | そのトークンだけを失効させる |
 | `GET /api/v3/git/repositories` | リポジトリ一覧 |
 | `POST /api/v3/git/repositories` | リポジトリ作成 (`.gitattributes` 込みで初期化) |
+
+`deviceName` を必須にしているのは、省略できると起動のたびに発行するクライアントが
+トークンを際限なく積み上げてしまうため。同じ名前で 2 本目を作ろうとすると 409 を返すので、
+クライアントは端末ごとに安定した名前を送り、409 なら既存のものを使い回すか失効させる。
 
 git 本体の通信 (clone / fetch / push / LFS) はこの API を通らず、Forgejo に直接 HTTPS で繋ぐ。
 この API が渡すのは接続先と資格情報だけ。

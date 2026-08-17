@@ -9,18 +9,26 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import {
+  CredentialLimitReachedError,
+  CredentialNameInvalidError,
+  CredentialNameTakenError,
   ForgejoError,
   createRepository,
   deleteRepository,
   issueGitCredential,
   renameRepository,
+  revokeGitCredential,
   updateRepositoryDescription,
 } from "@beutl/forgejo";
 
 /** Forgejo が受け付けるリポジトリ名。 */
 const NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
-export type CredentialResult = { username: string; token: string };
+export type CredentialResult = {
+  username: string;
+  token: string;
+  name: string;
+};
 
 type Context = {
   userId: string;
@@ -184,29 +192,88 @@ export async function deleteRepositoryAction(
 }
 
 /**
- * git 用のアクセストークンを発行する。同じ名前の既存トークンは失効する。
- * 平文の値はこのレスポンスにしか現れない。
+ * git 用のアクセストークンを発行する。端末ごとに 1 本持てて、既存のトークンは
+ * そのまま生きる。平文の値はこのレスポンスにしか現れない。
  */
-export async function issueCredentialAction(): Promise<
-  ActionResult<CredentialResult>
-> {
+export async function issueCredentialAction(
+  _prev: ActionResult<CredentialResult>,
+  formData: FormData,
+): Promise<ActionResult<CredentialResult>> {
+  const label = String(formData.get("label") ?? "");
+
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
 
-    let credential: CredentialResult;
     try {
-      credential = await issueGitCredential(session.user.id);
+      const issued = await issueGitCredential(session.user.id, label);
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.git.issueCredential,
+        details: `${issued.username}: ${issued.credential.name}`,
+      });
+      revalidatePath(`/${lang}/dashboard/repositories`);
+      return {
+        success: true,
+        data: {
+          username: issued.username,
+          token: issued.token,
+          name: issued.credential.name,
+        },
+      };
+    } catch (error) {
+      if (error instanceof CredentialNameInvalidError) {
+        return {
+          success: false,
+          errors: { label: [t("repositories:errors.labelRequired")] },
+        };
+      }
+      if (error instanceof CredentialNameTakenError) {
+        return {
+          success: false,
+          errors: { label: [t("repositories:errors.labelTaken")] },
+        };
+      }
+      if (error instanceof CredentialLimitReachedError) {
+        return {
+          success: false,
+          message: t("repositories:errors.credentialLimit", {
+            limit: error.limit,
+          }),
+        };
+      }
+      console.error(error);
+      return { success: false, message: t("repositories:errors.unknown") };
+    }
+  });
+}
+
+/** トークンを 1 本だけ失効させる。他の端末の資格情報には影響しない。 */
+export async function revokeCredentialAction(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const credentialId = String(formData.get("credentialId") ?? "");
+
+  return await authenticated(async (session) => {
+    const lang = await getLanguage();
+    const { t } = await getTranslation(lang);
+
+    try {
+      const revoked = await revokeGitCredential(session.user.id, credentialId);
+      if (!revoked) {
+        return { success: false, message: t("repositories:errors.notFound") };
+      }
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.git.revokeCredential,
+        details: revoked.name,
+      });
+      revalidatePath(`/${lang}/dashboard/repositories`);
+      return { success: true };
     } catch (error) {
       console.error(error);
       return { success: false, message: t("repositories:errors.unknown") };
     }
-
-    await addAuditLog({
-      userId: session.user.id,
-      action: auditLogActions.git.issueCredential,
-      details: credential.username,
-    });
-    return { success: true, data: credential };
   });
 }
