@@ -14,7 +14,7 @@ import {
   failAiJobOwnedByProviderPoll,
 } from "@beutl/db";
 import { isActiveProSubscription } from "./entitlements";
-import { PRO_PLAN } from "./pricing";
+import { loadAiSettings } from "./settings";
 
 function toUsagePeriod(subscription: {
   currentPeriodStart: Date | null;
@@ -103,10 +103,14 @@ export async function createReservedAiJob({
         callbackNonceHash,
         prisma,
       });
+      // Read the allowance inside the reservation transaction so a concurrent
+      // change in the admin console cannot let a job spend against a limit that
+      // no longer applies.
+      const settings = await loadAiSettings({ prisma });
       await consumeUsage({
         userId,
         amount: usageUnits,
-        monthlyUsageLimit: PRO_PLAN.monthlyUsageLimit,
+        monthlyUsageLimit: settings.getMonthlyUsageLimit(),
         usagePeriod: toUsagePeriod(subscription),
         aiJobId: job.id,
         prisma,

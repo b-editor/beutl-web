@@ -207,7 +207,23 @@ type FileRecord = {
   updatedAt: Date;
 };
 
+type BillingOffer = {
+  id: string;
+  kind: string;
+  stripePriceId: string;
+  stripeProductId: string;
+  unitAmount: number;
+  currency: string;
+  creditAmount: number | null;
+  recurringInterval: string | null;
+  recurringIntervalCount: number | null;
+  checkoutEnabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type InMemoryPrismaState = {
+  billingOffers: Map<string, BillingOffer>;
   creditAccounts: Map<string, CreditAccount>;
   creditTransactions: CreditTransaction[];
   stripeCreditReversals: Map<string, StripeCreditReversal>;
@@ -223,9 +239,81 @@ export type InMemoryPrismaState = {
   files: Map<string, FileRecord>;
 };
 
+type AggregateSpec = {
+  _count?: { _all?: boolean };
+  _sum?: Record<string, boolean>;
+};
+
+type GroupByArgs = AggregateSpec & {
+  by: string[];
+  orderBy?: { _sum?: Record<string, "asc" | "desc"> };
+  take?: number;
+};
+
+function sumField(rows: Record<string, unknown>[], field: string): number {
+  return rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
+}
+
+function aggregateRows(
+  rows: Record<string, unknown>[],
+  spec: AggregateSpec,
+): { _count: { _all: number }; _sum: Record<string, number> } {
+  return {
+    _count: { _all: rows.length },
+    _sum: Object.fromEntries(
+      Object.keys(spec._sum ?? {}).map((field) => [field, sumField(rows, field)]),
+    ),
+  };
+}
+
+// groupBy over an already filtered row set. Prisma returns the grouped columns
+// alongside the aggregates, which is what @beutl/db reads.
+function groupRows(
+  rows: Record<string, unknown>[],
+  args: GroupByArgs,
+): Record<string, unknown>[] {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const id = JSON.stringify(args.by.map((field) => row[field]));
+    const group = groups.get(id) ?? [];
+    group.push(row);
+    groups.set(id, group);
+  }
+
+  let grouped = [...groups.values()].map((groupedRows) => ({
+    ...Object.fromEntries(
+      args.by.map((field) => [field, groupedRows[0][field]]),
+    ),
+    ...aggregateRows(groupedRows, args),
+  }));
+
+  const sumOrder = args.orderBy?._sum;
+  if (sumOrder) {
+    const [field, direction] = Object.entries(sumOrder)[0];
+    grouped = grouped.sort((left, right) => {
+      const difference =
+        Number((left._sum as Record<string, number>)[field] ?? 0) -
+        Number((right._sum as Record<string, number>)[field] ?? 0);
+      return direction === "desc" ? -difference : difference;
+    });
+  }
+  return args.take === undefined ? grouped : grouped.slice(0, args.take);
+}
+
+function matchesCreatedAt(
+  value: Date,
+  filter: { gte?: Date; lt?: Date } | undefined,
+): boolean {
+  if (!filter) return true;
+  if (filter.gte && value.getTime() < filter.gte.getTime()) return false;
+  if (filter.lt && value.getTime() >= filter.lt.getTime()) return false;
+  return true;
+}
+
 export function createInMemoryPrisma() {
   let transactionTail: Promise<void> = Promise.resolve();
   let state: InMemoryPrismaState = {
+    billingOffers: new Map(),
     creditAccounts: new Map(),
     creditTransactions: [],
     stripeCreditReversals: new Map(),
@@ -613,6 +701,28 @@ export function createInMemoryPrisma() {
         const account = state.creditAccounts.get(where.userId);
         return account ? { ...account } : null;
       },
+      findMany: async ({
+        take,
+      }: {
+        select?: Record<string, boolean>;
+        orderBy?: { userId?: "asc" | "desc" };
+        take?: number;
+      } = {}) => {
+        const rows = [...state.creditAccounts.values()].sort((left, right) =>
+          left.userId < right.userId ? -1 : left.userId > right.userId ? 1 : 0,
+        );
+        return (take === undefined ? rows : rows.slice(0, take)).map((row) => ({
+          ...row,
+        }));
+      },
+      aggregate: async (spec: AggregateSpec) =>
+        aggregateRows(
+          [...state.creditAccounts.values()] as unknown as Record<
+            string,
+            unknown
+          >[],
+          spec,
+        ),
     },
     creditTransaction: {
       create: async ({
@@ -699,6 +809,7 @@ export function createInMemoryPrisma() {
           kind?: string;
           stripeSourcePaymentId?: string;
           stripePaymentId?: { not: null };
+          createdAt?: { gte?: Date; lt?: Date };
         };
         orderBy?: { createdAt: "asc" | "desc" };
       }) => {
@@ -706,6 +817,7 @@ export function createInMemoryPrisma() {
           (transaction) =>
             (!where.userId || transaction.userId === where.userId) &&
             (!where.kind || transaction.kind === where.kind) &&
+            matchesCreatedAt(transaction.createdAt, where.createdAt) &&
             (!where.stripePaymentId ||
               (transaction.stripePaymentId !== null &&
                 transaction.stripePaymentId !== undefined)) &&
@@ -717,6 +829,19 @@ export function createInMemoryPrisma() {
           items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
         }
         return items.map((t) => ({ ...t }));
+      },
+      groupBy: async ({
+        where,
+        ...args
+      }: GroupByArgs & {
+        where?: { kind?: string; createdAt?: { gte?: Date; lt?: Date } };
+      }) => {
+        const rows = state.creditTransactions.filter(
+          (transaction) =>
+            (!where?.kind || transaction.kind === where.kind) &&
+            matchesCreatedAt(transaction.createdAt, where?.createdAt),
+        );
+        return groupRows(rows as unknown as Record<string, unknown>[], args);
       },
       findUnique: async ({
         where,
@@ -974,6 +1099,19 @@ export function createInMemoryPrisma() {
       },
     },
     aiJob: {
+      groupBy: async ({
+        where,
+        ...args
+      }: GroupByArgs & {
+        where?: { createdAt?: { gte?: Date; lt?: Date }; status?: string };
+      }) => {
+        const rows = [...state.aiJobs.values()].filter(
+          (job) =>
+            (!where?.status || job.status === where.status) &&
+            matchesCreatedAt(job.createdAt, where?.createdAt),
+        );
+        return groupRows(rows as unknown as Record<string, unknown>[], args);
+      },
       create: async ({
         data,
       }: {
@@ -1285,6 +1423,19 @@ export function createInMemoryPrisma() {
       },
     },
     subscription: {
+      count: async ({
+        where,
+      }: {
+        where?: { status?: string; currentPeriodEnd?: { gt?: Date } };
+      } = {}) =>
+        [...state.subscriptions.values()].filter(
+          (subscription) =>
+            (!where?.status || subscription.status === where.status) &&
+            (!where?.currentPeriodEnd?.gt ||
+              (subscription.currentPeriodEnd !== null &&
+                subscription.currentPeriodEnd.getTime() >
+                  where.currentPeriodEnd.gt.getTime())),
+        ).length,
       upsert: async ({
         where,
         create,
@@ -1762,6 +1913,30 @@ export function createInMemoryPrisma() {
           count++;
         }
         return { count };
+      },
+    },
+    billingOffer: {
+      findFirst: async ({
+        where,
+      }: {
+        where?: { kind?: string; checkoutEnabled?: boolean };
+        orderBy?: unknown;
+      } = {}) => {
+        const rows = [...state.billingOffers.values()]
+          .filter(
+            (offer) =>
+              (where?.kind === undefined || offer.kind === where.kind) &&
+              (where?.checkoutEnabled === undefined ||
+                offer.checkoutEnabled === where.checkoutEnabled),
+          )
+          // findCheckoutBillingOffer orders by updatedAt then id, both desc.
+          .sort((left, right) => {
+            const byUpdated =
+              right.updatedAt.getTime() - left.updatedAt.getTime();
+            if (byUpdated !== 0) return byUpdated;
+            return right.id < left.id ? -1 : right.id > left.id ? 1 : 0;
+          });
+        return rows.length === 0 ? null : { ...rows[0] };
       },
     },
     aiSetting: {

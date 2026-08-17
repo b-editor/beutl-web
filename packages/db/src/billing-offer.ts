@@ -161,6 +161,24 @@ export async function findBillingOfferByStripePriceId({
   return await db.billingOffer.findUnique({ where: { stripePriceId } });
 }
 
+// The offer new purchases are made against. "One row per kind" is enforced
+// inside activateBillingOffer's transaction rather than by a unique index, so a
+// rotation interrupted midway could leave two rows enabled. Order the result so
+// the caller always sees the same one.
+export async function findCheckoutBillingOffer({
+  kind,
+  prisma,
+}: {
+  kind: BillingOfferKind;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.billingOffer.findFirst({
+    where: { kind, checkoutEnabled: true },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+  });
+}
+
 export async function listBillingOfferPriceIds({
   kind,
   prisma,

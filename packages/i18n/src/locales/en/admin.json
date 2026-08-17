@@ -40,7 +40,44 @@
     "deleteConfirmDescription": "This permanently deletes the account, packages, and all related data. This action cannot be undone.",
     "deleteSuccess": "User deleted",
     "deleteFailed": "Failed to delete user",
-    "truncatedNotice": "Showing the latest {{count}} entries only."
+    "truncatedNotice": "Showing the latest {{count}} entries only.",
+    "aiPlan": "AI plan",
+    "aiPlanActive": "Active",
+    "aiPlanNone": "No plan",
+    "aiMonthlyUsage": "Usage this period",
+    "aiMonthlyUsageValue": "{{used}} / {{limit}} units ({{remaining}} left)",
+    "aiPurchasedCredits": "Additional credits",
+    "aiCreditDebt": "Credit debt",
+    "aiUsagePeriod": "Usage period",
+    "aiSubscriptionPeriod": "Subscription ends",
+    "aiRecentJobs": "Recent AI jobs",
+    "aiRecentTransactions": "Recent credit ledger",
+    "aiTransactionKind": "Kind",
+    "aiTransactionCredit": "Credits",
+    "aiTransactionUsage": "Monthly usage",
+    "aiTransactionKinds": {
+      "purchase": "Purchase",
+      "usage": "Usage",
+      "refund": "Refund",
+      "purchase_reversal": "Purchase reversal",
+      "admin_credit_adjustment": "Administrator credit adjustment",
+      "admin_usage_adjustment": "Administrator usage adjustment"
+    },
+    "aiAdjustCredits": "Adjust additional credits",
+    "aiAdjustCreditsHint": "A positive value grants credits, a negative one revokes them. A grant settles outstanding debt first, and a revoke cannot exceed the current balance.",
+    "aiAdjustApply": "Apply",
+    "aiAdjustCreditsConfirmTitle": "Adjust additional credits?",
+    "aiAdjustCreditsConfirmDescription": "This changes the user's additional credits by {{amount}} units. The action is recorded in the audit log.",
+    "aiAdjustMonthlyUsage": "Set usage this period",
+    "aiAdjustMonthlyUsageHint": "Set the consumed amount directly, between 0 and {{limit}} units.",
+    "aiAdjustMonthlyUsageDisabled": "The monthly allowance belongs to a Pro billing period, so it can only be changed for users with an active plan.",
+    "aiAdjustMonthlyUsageConfirmTitle": "Change the usage this period?",
+    "aiAdjustMonthlyUsageConfirmDescription": "This sets the consumed amount to {{value}} units. The action is recorded in the audit log.",
+    "aiResetMonthlyUsage": "Reset usage",
+    "aiResetMonthlyUsageConfirmTitle": "Reset the usage this period?",
+    "aiResetMonthlyUsageConfirmDescription": "This returns the consumed amount to 0, making the full monthly allowance available again. The action is recorded in the audit log.",
+    "aiAdjustSuccess": "AI plan updated",
+    "aiAdjustFailed": "Failed to update the AI plan"
   },
   "feedback": {
     "title": "Feedback",
@@ -78,12 +115,141 @@
     "description": "Change the model each AI operation uses and how many usage units it costs. Changes apply to operations started afterwards; jobs already running keep the price reserved when they started.",
     "model": "Model",
     "price": "Usage units",
-    "save": "Save",
+    "monthlyUsageLimit": "Monthly allowance (units)",
+    "tab": {
+      "settings": "Settings",
+      "usage": "Usage"
+    },
+    "plan": {
+      "title": "Plan",
+      "description": "Usage units granted to each Pro subscription every billing period. A change applies to operations started afterwards and to the remaining balance shown to users; already consumed usage is left as it is.",
+      "digest": "In practice: median {{median}} units, 90th percentile {{p90}} units, {{exhausted}}% exhausted the allowance (across {{accounts}} accounts).",
+      "digestEmpty": "There is not enough usage yet to judge whether the allowance fits.",
+      "digestLoading": "Summarizing usage…",
+      "digestLink": "See the breakdown",
+      "unaffordableTitle": "Some operations cost more than the allowance",
+      "unaffordableDescription": "These operations are priced above the {{limit}}-unit monthly allowance: {{operations}}. They cannot be started without purchased credits."
+    },
+    "economics": {
+      "allowanceBuys": "Covered by the allowance",
+      "proOffer": "Pro subscription",
+      "topUpOffer": "Credit top-up",
+      "planRateValue": "{{rate}} per unit",
+      "planRateDetail": "price ÷ {{limit}}-unit allowance",
+      "topUpRateValue": "{{rate}} per unit",
+      "topUpRateDetail": "price ÷ {{credits}} units granted",
+      "source": {
+        "stripe": "From Stripe",
+        "database": "Recorded offer",
+        "missing": "Unavailable",
+        "mismatch": "The Stripe price differs from the recorded offer. Purchases still settle against the recorded terms.",
+        "error": {
+          "notConfigured": "No Stripe price ID is configured, so it cannot be looked up.",
+          "unavailable": "Could not be read from Stripe.",
+          "notFound": "Stripe has no such price."
+        }
+      },
+      "providerCost": "Estimated cost per run",
+      "costNote": "Costs are estimated from OpenRouter's published rates. What was actually billed is not recorded, so real spend will differ.",
+      "assumptionsLabel": "Assuming:",
+      "assumption": {
+        "imageTokens": "one image = {{tokens}} tokens",
+        "imageMegapixels": "images at 1024×1024",
+        "transcriptionMinute": "exactly one minute of audio (billing rounds up, so real cost is at most this)",
+        "translationTokens": "one character = {{min}}–{{max}} tokens (Latin to CJK)",
+        "videoSku": "video priced by {{sku}}"
+      },
+      "costUnknown": {
+        "provider_unavailable": "Could not be fetched",
+        "model_not_found": "Model not found",
+        "invalid_response": "Unexpected price format",
+        "unsupported_pricing_shape": "Pricing shape not supported",
+        "unknown_stt_pricing_unit": "Price unit is unknown",
+        "zero_price_reported": "No price reported"
+      },
+      "unaffordable": "Not even once",
+      "quantity": {
+        "request": "requests",
+        "second": "seconds",
+        "minute": "minutes",
+        "character": "characters"
+      },
+      "loading": "Loading prices…",
+      "costRatioPlan": "Cost ratio (allowance)",
+      "costRatioTopUp": "Cost ratio (top-up)",
+      "revenueHint": "revenue",
+      "preview": "Preview (unsaved)"
+    },
+    "usage": {
+      "title": "AI usage",
+      "description": "AI jobs and usage units aggregated over the selected window. Per-user balances are adjusted from each user's detail page.",
+      "since": "Since {{timestamp}}",
+      "range": {
+        "24h": "Last 24 hours",
+        "7d": "Last 7 days",
+        "30d": "Last 30 days",
+        "90d": "Last 90 days"
+      },
+      "consumedUnits": "Units consumed",
+      "consumedUnitsHint": "Net of refunds returned by failed jobs",
+      "jobCount": "Jobs",
+      "jobCountHint": "AI jobs started within the window",
+      "activeSubscriptions": "Active Pro plans",
+      "activeSubscriptionsHint": "Each plan is granted {{limit}} units per period",
+      "purchasedCredits": "Credits purchased",
+      "purchasedCreditsHint": "Credits bought within the window, net of refunds and disputes",
+      "balanceTitle": "Balances held",
+      "balanceDescription": "What every account holds right now, independent of the selected window.",
+      "balanceMonthlyUsed": "Monthly allowance consumed",
+      "balancePurchased": "Additional credits",
+      "balanceDebt": "Credit debt",
+      "balanceAccounts": "Accounts",
+      "byStatus": "By status",
+      "byKind": "By operation",
+      "status": "Status",
+      "kind": "Operation",
+      "reservedUnits": "Units reserved",
+      "jobKind": {
+        "image": "Image generation",
+        "image_edit": "Image editing",
+        "stt": "Transcription",
+        "translation": "Subtitle translation",
+        "video": "Video generation"
+      },
+      "topUsers": "Highest consumption (top {{count}})",
+      "adjustmentTitle": "Administrator adjustments",
+      "adjustmentDescription": "Manual corrections made from the admin console within the window. The audit log records who made each one.",
+      "adminGranted": "Credits granted",
+      "adminRevoked": "Credits revoked",
+      "adminUsageAdjustment": "Monthly usage change",
+      "distribution": {
+        "title": "How much of the allowance is used",
+        "description": "Consumption per account within the current billing period. It reflects the present state regardless of the window selected above. The allowance is currently {{limit}} units.",
+        "median": "Median (units)",
+        "p90": "90th percentile (units)",
+        "exhausted": "Exhausted the allowance",
+        "unused": "Used nothing",
+        "bucket": "Share of the allowance",
+        "accounts": "Accounts",
+        "buckets": {
+          "zero": "0 (unused)",
+          "upTo25": "Up to 25%",
+          "upTo50": "Up to 50%",
+          "upTo75": "Up to 75%",
+          "upTo99": "Up to 99%",
+          "exhausted": "Exhausted"
+        },
+        "projected": "Extrapolated to the end of the period: median {{p50}} units, 90th percentile {{p90}} units (from {{sampleSize}} accounts).",
+        "scope": "{{measured}} of {{accounts}} accounts. {{stale}} whose billing period has already ended are excluded.",
+        "noData": "No account can be summarized yet ({{stale}} excluded because their billing period has ended).",
+        "censoredNote": "Consumption stops once the allowance runs out, so the upper percentiles understate real demand. Read them together with the exhaustion rate.",
+        "midPeriodNote": "An account partway through its period always reads low. The extrapolated figures scale by elapsed time and leave out accounts less than 10% into their period.",
+        "purchasedNote": "{{holders}} accounts hold purchased credits, which indicates demand beyond the allowance.",
+        "truncatedNote": "More accounts exist than the {{limit}} scanned, so these figures cover only the first {{limit}}."
+      }
+    },
     "reset": "Reset",
     "defaultValue": "Default",
-    "updateSuccess": "Setting updated",
-    "updateFailed": "Failed to update setting",
-    "resetSuccess": "Setting reset to default",
     "source": {
       "database": "Configured here",
       "default": "Built-in default"
@@ -98,6 +264,14 @@
       "audio.transcribe": "Transcription (per started minute)",
       "subtitle.translate": "Subtitle translation (per started 1,000 characters)",
       "video.generate": "Video generation (per second)"
+    },
+    "form": {
+      "unsaved": "Unsaved",
+      "pendingCount": "{{total}} pending changes",
+      "save": "Save changes",
+      "discard": "Discard",
+      "saveSuccess": "Saved {{total}} settings",
+      "saveFailed": "Failed to save the settings"
     }
   },
   "category": {

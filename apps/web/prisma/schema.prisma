@@ -288,6 +288,9 @@ model CreditTransaction {
   @@index([userId])
   @@index([stripeSourcePaymentId])
   @@index([billingOfferId])
+  // 管理画面の利用状況集計は期間で絞ってから kind で集約する。kind を先頭に
+  // 置くと期間の範囲述語がインデックスに乗らず、全体スキャンになる。
+  @@index([createdAt(sort: Desc)])
 }
 
 model StripeCreditReversal {
@@ -339,6 +342,8 @@ model AiJob {
   @@unique([provider, providerJobId])
   @@index([userId])
   @@index([userId, deletedAt, createdAt, id])
+  // 管理画面の利用状況集計は期間で絞ってから status / kind / userId で集約する。
+  @@index([createdAt(sort: Desc)])
 }
 
 model AiStorageCleanup {

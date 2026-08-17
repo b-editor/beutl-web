@@ -1,141 +1,89 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { resetAiSetting, updateAiSetting } from "./actions";
 import { useTranslation } from "@beutl/ui/i18n-client";
-import { useToast } from "@beutl/ui/use-toast";
 import { Input } from "@beutl/ui/ui/input";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
-import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
+import {
+  MAX_MONTHLY_USAGE_LIMIT,
+  MAX_PRICE_UNITS,
+  MIN_MONTHLY_USAGE_LIMIT,
+  MIN_PRICE_UNITS,
+} from "@beutl/core";
+import { useAiSettingField, type AiSettingRow } from "./settings-form";
 
-export type AiSettingRow = {
-  key: string;
-  kind: "model" | "price";
-  value: string;
-  source: "database" | "default";
-  fallback: string;
-};
+export type { AiSettingRow };
 
-function SourceBadge({ lang, source }: { lang: string; source: AiSettingRow["source"] }) {
-  const { t } = useTranslation(lang);
-  if (source === "database") {
-    return <Badge variant="default">{t("admin:ai.source.database")}</Badge>;
-  }
-  return <Badge variant="outline">{t("admin:ai.source.default")}</Badge>;
-}
+const LABEL_KEYS = {
+  model: "admin:ai.model",
+  price: "admin:ai.price",
+  limit: "admin:ai.monthlyUsageLimit",
+} as const;
 
-export function AiSettingField({
+const NUMBER_RANGES = {
+  price: { min: MIN_PRICE_UNITS, max: MAX_PRICE_UNITS },
+  limit: { min: MIN_MONTHLY_USAGE_LIMIT, max: MAX_MONTHLY_USAGE_LIMIT },
+} as const;
+
+function SourceBadge({
   lang,
-  setting,
+  source,
+  reset,
 }: {
   lang: string;
-  setting: AiSettingRow;
+  source: AiSettingRow["source"];
+  reset: boolean;
 }) {
   const { t } = useTranslation(lang);
-  const { toast } = useToast();
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-  const [value, setValue] = useState(setting.value);
-  // Keep the most recently persisted value as the rollback target because
-  // setting.value remains stale until the component is rendered again.
-  const committedValue = useRef(setting.value);
+  if (reset || source === "default") {
+    return <Badge variant="outline">{t("admin:ai.source.default")}</Badge>;
+  }
+  return <Badge variant="default">{t("admin:ai.source.database")}</Badge>;
+}
 
-  useEffect(() => {
-    // A refresh arriving while a save is in flight may contain a stale server
-    // value. Preserve the user's edit while it still matches the committed value.
-    if (setting.value === committedValue.current) return;
-    committedValue.current = setting.value;
-    setValue(setting.value);
-  }, [setting.value]);
-
-  const notifyFailure = useCallback(
-    (message?: string) => {
-      setValue(committedValue.current);
-      toast({
-        title: t("admin:ai.updateFailed"),
-        description: message,
-        variant: "destructive",
-      });
-      // A failure can happen after the transaction commits, so reload the
-      // server value as well as rolling back the local input.
-      router.refresh();
-    },
-    [toast, t, router],
-  );
-
-  const handleSave = useCallback(() => {
-    const nextValue = value.trim();
-    if (nextValue === committedValue.current) return;
-    startTransition(async () => {
-      try {
-        const res = await updateAiSetting({ key: setting.key, value: nextValue });
-        if (res.success) {
-          committedValue.current = nextValue;
-          setValue(nextValue);
-          toast({ title: t("admin:ai.updateSuccess") });
-          router.refresh();
-        } else {
-          notifyFailure(res.message);
-        }
-      } catch (e) {
-        notifyFailure(e instanceof Error ? e.message : String(e));
-      }
-    });
-  }, [value, setting.key, notifyFailure, toast, t, router]);
-
-  const handleReset = useCallback(() => {
-    startTransition(async () => {
-      try {
-        const res = await resetAiSetting({ key: setting.key });
-        if (res.success) {
-          toast({ title: t("admin:ai.resetSuccess") });
-          router.refresh();
-        } else {
-          notifyFailure(res.message);
-        }
-      } catch (e) {
-        notifyFailure(e instanceof Error ? e.message : String(e));
-      }
-    });
-  }, [setting.key, notifyFailure, toast, t, router]);
-
-  const isDirty = value.trim() !== committedValue.current;
+// The field holds no save button of its own: every setting on this page is
+// committed together by the bar in AiSettingsForm, because repricing usually
+// means touching several at once.
+export function AiSettingField({
+  lang,
+  settingKey,
+}: {
+  lang: string;
+  settingKey: string;
+}) {
+  const { t } = useTranslation(lang);
+  const { setting, value, reset, changed, isPending, setValue, markReset } =
+    useAiSettingField(settingKey);
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">
-            {setting.kind === "model" ? t("admin:ai.model") : t("admin:ai.price")}
-          </span>
-          <SourceBadge lang={lang} source={setting.source} />
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">{t(LABEL_KEYS[setting.kind])}</span>
+        <SourceBadge lang={lang} source={setting.source} reset={reset} />
+        {changed && (
+          <Badge variant="secondary">{t("admin:ai.form.unsaved")}</Badge>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={value}
           disabled={isPending}
           onChange={(e) => setValue(e.target.value)}
-          {...(setting.kind === "price"
-            ? {
+          {...(setting.kind === "model"
+            ? { className: "min-w-64 flex-1" }
+            : {
                 type: "number",
-                min: MIN_PRICE_UNITS,
-                max: MAX_PRICE_UNITS,
+                min: NUMBER_RANGES[setting.kind].min,
+                max: NUMBER_RANGES[setting.kind].max,
                 step: 1,
                 className: "w-32",
-              }
-            : { className: "min-w-64 flex-1" })}
+              })}
         />
-        <Button size="sm" disabled={isPending || !isDirty} onClick={handleSave}>
-          {t("admin:ai.save")}
-        </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={isPending || setting.source !== "database"}
-          onClick={handleReset}
+          disabled={isPending || (reset ? true : setting.source !== "database")}
+          onClick={markReset}
         >
           {t("admin:ai.reset")}
         </Button>

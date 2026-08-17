@@ -26,3 +26,20 @@ function getFormatter(lang: string): Intl.DateTimeFormat {
 export function formatTimestamp(value: Date, lang: string): string {
   return getFormatter(lang).format(value);
 }
+
+// 利用状況の集計は 1 画面で数十個の数値を描画するため、書式化器を使い回す。
+const numberFormatters = new Map<string, Intl.NumberFormat>();
+
+export function formatNumber(value: number, lang: string): string {
+  let formatter = numberFormatters.get(lang);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(lang);
+    numberFormatters.set(lang, formatter);
+  }
+  return formatter.format(value);
+}
+
+// 増減はどちらの向きかが一目で分かる必要があるため、正の値にも符号を付ける。
+export function formatSignedNumber(value: number, lang: string): string {
+  return value > 0 ? `+${formatNumber(value, lang)}` : formatNumber(value, lang);
+}

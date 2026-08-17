@@ -7,9 +7,13 @@ import {
 } from "@beutl/db";
 import {
   AI_OPERATIONS,
+  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
+  DEFAULT_MONTHLY_USAGE_LIMIT,
   MAX_MODEL_ID_LENGTH,
+  MAX_MONTHLY_USAGE_LIMIT,
   MAX_PRICE_UNITS,
+  MIN_MONTHLY_USAGE_LIMIT,
   MIN_PRICE_UNITS,
   aiModelSettingKey,
   aiPriceSettingKey,
@@ -26,7 +30,35 @@ describe("AI settings registry", () => {
       expect(AI_SETTINGS[aiPriceSettingKey(operation)]).toBeDefined();
     }
     // Each operation has a model and price; a mismatch would omit one category.
-    expect(Object.keys(AI_SETTINGS)).toHaveLength(AI_OPERATIONS.length * 2);
+    // The plan-wide monthly allowance is the one setting without an operation.
+    expect(Object.keys(AI_SETTINGS)).toHaveLength(AI_OPERATIONS.length * 2 + 1);
+    expect(AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]).toMatchObject({
+      kind: "limit",
+      fallback: String(DEFAULT_MONTHLY_USAGE_LIMIT),
+    });
+    expect(AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]?.operation).toBeUndefined();
+  });
+
+  it.each([
+    [String(MIN_MONTHLY_USAGE_LIMIT), true],
+    [String(MAX_MONTHLY_USAGE_LIMIT), true],
+    ["500", true],
+    // Zero would silently disable the plan for every subscriber.
+    ["0", false],
+    ["-1", false],
+    ["1.5", false],
+    [String(MAX_MONTHLY_USAGE_LIMIT + 1), false],
+    ["abc", false],
+    ["", false],
+  ])("validates the monthly allowance %s as %s", (value, expected) => {
+    const result = validateAiSettingValue(
+      AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+      value,
+    );
+    expect(result.ok).toBe(expected);
+    if (!result.ok) {
+      expect(result.error).toMatch(/^(invalidLimit|limitOutOfRange)$/);
+    }
   });
 
   it("rejects unknown keys", () => {
@@ -157,6 +189,36 @@ describe("AI settings resolution", () => {
     await deleteAiSetting({ key: "price.video.generate" });
     expect((await loadAiSettings()).getPrice("video.generate")).toBe(40);
     expect(await listAiSettings()).toHaveLength(0);
+  });
+
+  it("resolves the monthly allowance from the database", async () => {
+    expect((await loadAiSettings()).getMonthlyUsageLimit()).toBe(
+      DEFAULT_MONTHLY_USAGE_LIMIT,
+    );
+
+    await upsertAiSetting({
+      key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+      value: "1200",
+      updatedBy: "admin-1",
+    });
+    expect((await loadAiSettings()).getMonthlyUsageLimit()).toBe(1200);
+
+    await deleteAiSetting({ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY });
+    expect((await loadAiSettings()).getMonthlyUsageLimit()).toBe(
+      DEFAULT_MONTHLY_USAGE_LIMIT,
+    );
+  });
+
+  it("ignores a stored allowance that no longer passes validation", async () => {
+    await upsertAiSetting({
+      key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+      value: "0",
+      updatedBy: "admin-1",
+    });
+
+    expect((await loadAiSettings()).getMonthlyUsageLimit()).toBe(
+      DEFAULT_MONTHLY_USAGE_LIMIT,
+    );
   });
 
   it("exposes every operation through the snapshot", async () => {

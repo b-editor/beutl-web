@@ -188,7 +188,7 @@ export async function getEntitlements(
       : await getCreditAccount({ userId, prisma });
     const balance = toAiBalanceSnapshot(
       account,
-      isActive ? PRO_PLAN.monthlyUsageLimit : 0,
+      isActive ? settings.getMonthlyUsageLimit() : 0,
     );
 
     return {
@@ -261,7 +261,10 @@ export async function canStartAiOperation(
       },
       prisma,
     });
-    const balance = toAiBalanceSnapshot(account, PRO_PLAN.monthlyUsageLimit);
+    const balance = toAiBalanceSnapshot(
+      account,
+      settings.getMonthlyUsageLimit(),
+    );
     return (
       getMonthlyUsageRemaining(balance) + balance.additionalCredits >=
       requiredUsage

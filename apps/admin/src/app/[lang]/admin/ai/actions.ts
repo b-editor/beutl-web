@@ -8,70 +8,60 @@ import {
   startRetryableTransaction,
   upsertAiSetting,
 } from "@beutl/db";
-import { isAiSettingKey, validateAiSettingValue } from "@beutl/core";
+import {
+  validateAiSettingChanges,
+  type AiSettingChange,
+} from "@/lib/ai-setting-changes";
 import { revalidatePath } from "next/cache";
 
-export async function updateAiSetting({
-  key,
-  value,
+// Nothing but Server Actions may be exported from this file — not even a type.
+// Turbopack walks every export at runtime to register the actions, so a
+// re-exported type is evaluated as a value and throws. Callers import
+// AiSettingChange from @/lib/ai-setting-changes instead.
+
+// One page holds every model, price, and the allowance. Editing several and
+// pressing save once is the normal case, so the whole set is applied in a
+// single transaction: a repricing that landed half-applied would bill some
+// operations at the new rate and some at the old one.
+export async function updateAiSettings({
+  changes,
 }: {
-  key: string;
-  value: string;
+  changes: AiSettingChange[];
 }): Promise<ActionResult> {
   return await adminAction(async (session) => {
-    // Server Action arguments lose their type annotations at runtime, so
-    // validate their ranges here.
-    if (!isAiSettingKey(key)) {
-      return { success: false, message: "Invalid setting key" };
-    }
-    if (typeof value !== "string") {
-      return { success: false, message: "Invalid setting value" };
-    }
-    const validated = validateAiSettingValue(key, value);
+    const validated = validateAiSettingChanges(changes);
     if (!validated.ok) {
-      return { success: false, message: `Invalid value: ${validated.error}` };
+      return { success: false, message: validated.message };
     }
 
-    // Commit the audit log and setting update in the same transaction. This
-    // operation can change billing rates, so always record who changed what.
+    // Commit the audit log and the setting updates in the same transaction.
+    // These values can change billing rates, so always record who changed what,
+    // one entry per setting so the log stays greppable by key.
     await startRetryableTransaction(async (tx) => {
-      await upsertAiSetting({
-        key,
-        value: validated.value,
-        updatedBy: session.user.id,
-        prisma: tx,
-      });
-      await addAuditLog({
-        userId: session.user.id,
-        action: auditLogActions.admin.aiSettingChanged,
-        details: `key: ${key}, value: ${validated.value}`,
-        prisma: tx,
-      });
-    });
-    revalidatePath("/[lang]/admin/ai", "page");
-
-    return { success: true };
-  });
-}
-
-export async function resetAiSetting({
-  key,
-}: {
-  key: string;
-}): Promise<ActionResult> {
-  return await adminAction(async (session) => {
-    if (!isAiSettingKey(key)) {
-      return { success: false, message: "Invalid setting key" };
-    }
-
-    await startRetryableTransaction(async (tx) => {
-      await deleteAiSetting({ key, prisma: tx });
-      await addAuditLog({
-        userId: session.user.id,
-        action: auditLogActions.admin.aiSettingReset,
-        details: `key: ${key}`,
-        prisma: tx,
-      });
+      for (const change of validated.changes) {
+        if (change.value === null) {
+          await deleteAiSetting({ key: change.key, prisma: tx });
+          await addAuditLog({
+            userId: session.user.id,
+            action: auditLogActions.admin.aiSettingReset,
+            details: `key: ${change.key}`,
+            prisma: tx,
+          });
+          continue;
+        }
+        await upsertAiSetting({
+          key: change.key,
+          value: change.value,
+          updatedBy: session.user.id,
+          prisma: tx,
+        });
+        await addAuditLog({
+          userId: session.user.id,
+          action: auditLogActions.admin.aiSettingChanged,
+          details: `key: ${change.key}, value: ${change.value}`,
+          prisma: tx,
+        });
+      }
     });
     revalidatePath("/[lang]/admin/ai", "page");
 

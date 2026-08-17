@@ -181,6 +181,32 @@ export async function listUsers({
   return { items, total };
 }
 
+// 集計結果は userId しか持たないため、表示名を引くための最小限の読み取り。
+export async function listUserLabels({
+  userIds,
+  prisma,
+}: {
+  userIds: string[];
+  prisma?: PrismaTransaction;
+}) {
+  if (userIds.length === 0) {
+    return [];
+  }
+  const db = prisma ?? await getDb();
+  return db.user.findMany({
+    where: {
+      id: {
+        in: userIds,
+      },
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  });
+}
+
 // 呼び出し側が「打ち切られたか」を判定できるよう、リレーションはこの上限より 1 件多く取得する。
 export const USER_DETAIL_RELATION_LIMIT = 50;
 

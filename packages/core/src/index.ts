@@ -1,7 +1,11 @@
 // @beutl/core: Next.js/Cloudflare に依存しない純粋ロジックの共有パッケージ。
 // デスクトップ API (v1/v2/v3) と Web UI の両方から参照される。
 export { selectPricing } from "./pricing";
-export { formatAmount } from "./currency-formatter";
+export {
+  formatAmount,
+  formatFractionalAmount,
+  isZeroDecimalCurrency,
+} from "./currency-formatter";
 export {
   toLocaleTag,
   formatDate,
@@ -54,11 +58,15 @@ export {
 export type { NupkgFile, NupkgOptions } from "./nupkg";
 export {
   AI_OPERATIONS,
+  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
   AI_IMAGE_EDIT_TASKS,
+  DEFAULT_MONTHLY_USAGE_LIMIT,
   MAX_MODEL_ID_LENGTH,
   MIN_PRICE_UNITS,
   MAX_PRICE_UNITS,
+  MIN_MONTHLY_USAGE_LIMIT,
+  MAX_MONTHLY_USAGE_LIMIT,
   aiModelSettingKey,
   aiPriceSettingKey,
   isAiSettingKey,
@@ -72,3 +80,17 @@ export type {
   AiSettingValidationError,
   AiSettingValidationResult,
 } from "./ai-settings";
+export { AI_PRICING_CATALOG, aiBillingUnitOf } from "./ai-pricing-catalog";
+export type { AiBillingUnit } from "./ai-pricing-catalog";
+export {
+  derivePlanUnitValue,
+  deriveTopUpUnitValue,
+  describeAllowanceEquivalent,
+  describeAllowanceEquivalents,
+  operationAmount,
+} from "./ai-allowance";
+export type {
+  AiAllowanceEquivalent,
+  AiAllowanceQuantityKind,
+  AiUnitValue,
+} from "./ai-allowance";

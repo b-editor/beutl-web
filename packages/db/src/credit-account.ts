@@ -11,6 +11,18 @@ export class AiUsageLimitExceededError extends Error {
   }
 }
 
+// An administrator adjustment must never silently do less than it says. It is
+// rejected outright when the account cannot absorb it.
+export class CreditAdjustmentRejectedError extends Error {
+  constructor(
+    readonly reason: "insufficientCredits" | "usageOutOfRange",
+    message: string,
+  ) {
+    super(message);
+    this.name = "CreditAdjustmentRejectedError";
+  }
+}
+
 export type UsagePeriod = {
   start: Date | null;
   end: Date | null;
@@ -37,6 +49,8 @@ type StripeCreditReversalInput = {
 };
 
 const PURCHASE_REVERSAL_TRANSACTION_KIND = "purchase_reversal";
+export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
+export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
 const MAX_REVERSAL_CAS_ATTEMPTS = 8;
 
 const TERMINAL_REFUND_STATUSES = new Set([
@@ -799,6 +813,139 @@ export async function consumeUsage({
         usagePeriodEnd: usagePeriod.end,
         kind: "usage",
         aiJobId,
+      },
+    });
+
+    return updated;
+  };
+
+  if (prisma) {
+    return await run(prisma);
+  }
+  return await startRetryableTransaction(run);
+}
+
+// Grant or revoke purchased credits by administrator decision. A grant settles
+// outstanding purchased-credit debt first, exactly as a paid top-up does. A
+// revoke is rejected when it exceeds the current balance instead of turning
+// into debt, because a manual correction must not leave an account owing value
+// it never received.
+export async function adjustPurchasedCreditsByAdmin({
+  userId,
+  creditDelta,
+  prisma,
+}: {
+  userId: string;
+  creditDelta: number;
+  prisma?: PrismaTransaction;
+}) {
+  if (!Number.isSafeInteger(creditDelta) || creditDelta === 0) {
+    throw new RangeError("creditDelta must be a non-zero integer");
+  }
+
+  const run = async (tx: PrismaTransaction) => {
+    const account = await getCreditAccount({ userId, prisma: tx });
+    let creditsDelta: number;
+    let debtDelta: number;
+    if (creditDelta > 0) {
+      const debtPaid = Math.min(account.purchasedCreditDebt, creditDelta);
+      creditsDelta = creditDelta - debtPaid;
+      debtDelta = debtPaid === 0 ? 0 : -debtPaid;
+    } else {
+      const revoked = -creditDelta;
+      if (account.purchasedCredits < revoked) {
+        throw new CreditAdjustmentRejectedError(
+          "insufficientCredits",
+          `User ${userId} holds fewer than ${revoked} purchased credits`,
+        );
+      }
+      creditsDelta = creditDelta;
+      debtDelta = 0;
+    }
+
+    const updated = await tx.creditAccount.update({
+      where: {
+        userId,
+      },
+      data: {
+        purchasedCredits: account.purchasedCredits + creditsDelta,
+        purchasedCreditDebt: account.purchasedCreditDebt + debtDelta,
+      },
+    });
+
+    await tx.creditTransaction.create({
+      data: {
+        userId,
+        creditAmount: creditDelta,
+        debtAmount: debtDelta,
+        kind: ADMIN_CREDIT_ADJUSTMENT_KIND,
+      },
+    });
+
+    return updated;
+  };
+
+  if (prisma) {
+    return await run(prisma);
+  }
+  return await startRetryableTransaction(run);
+}
+
+// Set the monthly usage counter to an absolute value by administrator
+// decision. The absolute form is what an operator can act on, because the
+// stored counter is the only thing the balance is derived from. The period is
+// synchronized first so an adjustment made after a renewal is not undone by the
+// next lazy reset.
+export async function setMonthlyUsageUsedByAdmin({
+  userId,
+  monthlyUsageUsed,
+  monthlyUsageLimit,
+  usagePeriod,
+  prisma,
+}: {
+  userId: string;
+  monthlyUsageUsed: number;
+  monthlyUsageLimit: number;
+  usagePeriod: UsagePeriod;
+  prisma?: PrismaTransaction;
+}) {
+  assertNonNegativeInteger(monthlyUsageUsed, "monthlyUsageUsed");
+  assertNonNegativeInteger(monthlyUsageLimit, "monthlyUsageLimit");
+  if (monthlyUsageUsed > monthlyUsageLimit) {
+    throw new CreditAdjustmentRejectedError(
+      "usageOutOfRange",
+      `monthlyUsageUsed must not exceed the ${monthlyUsageLimit} unit allowance`,
+    );
+  }
+
+  const run = async (tx: PrismaTransaction) => {
+    const account = await getAccountForUsagePeriod({
+      userId,
+      usagePeriod,
+      prisma: tx,
+    });
+    const delta = monthlyUsageUsed - account.monthlyUsageUsed;
+    if (delta === 0) {
+      return account;
+    }
+
+    const updated = await tx.creditAccount.update({
+      where: {
+        userId,
+      },
+      data: {
+        monthlyUsageUsed,
+      },
+    });
+
+    await tx.creditTransaction.create({
+      data: {
+        userId,
+        creditAmount: 0,
+        usageAmount: delta,
+        usagePeriodStart: usagePeriod.start,
+        usagePeriodEnd: usagePeriod.end,
+        kind: ADMIN_USAGE_ADJUSTMENT_KIND,
       },
     });
 

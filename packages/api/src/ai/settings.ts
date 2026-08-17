@@ -7,6 +7,7 @@
 import { getAiSettingMap } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import {
+  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
   aiModelSettingKey,
   aiPriceSettingKey,
@@ -41,6 +42,8 @@ function resolveDefinition(
 export type AiSettingsSnapshot = {
   getModel(operation: string): string;
   getPrice(operation: string): number;
+  // Monthly allowance an active Pro subscription receives, in usage units.
+  getMonthlyUsageLimit(): number;
   all(): ResolvedAiSetting[];
 };
 
@@ -59,6 +62,8 @@ function toSnapshot(stored: Map<string, string>): AiSettingsSnapshot {
   return {
     getModel: (operation) => read(aiModelSettingKey(operation)).value,
     getPrice: (operation) => Number(read(aiPriceSettingKey(operation)).value),
+    getMonthlyUsageLimit: () =>
+      Number(read(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY).value),
     all: () =>
       Object.values(AI_SETTINGS).map(
         (definition) => resolved.get(definition.key) as ResolvedAiSetting,

@@ -94,15 +94,53 @@ submissions can be reconciled through signed provider callbacks. It also
 requires `OPENROUTER_API_KEY` as a Wrangler secret. Provider calls default to a
 120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`.
 
-Model IDs and per-operation usage-unit prices are also editable at runtime from
-the admin console (`/admin/ai`), which stores them in the `AiSetting` table.
-Model IDs are configured exclusively through that console; each value resolves
-from the database or the built-in default. Every change is written to the
-audit log in the same transaction.
+Model IDs, per-operation usage-unit prices, and the monthly allowance granted to
+each Pro subscription are also editable at runtime from the admin console
+(`/admin/ai`), which stores them in the `AiSetting` table. Model IDs are
+configured exclusively through that console; each value resolves from the
+database or the built-in default (500 units per period for the allowance). Every
+change is written to the audit log in the same transaction.
 API keys and other secrets are deliberately **not** configurable this way and
 stay in Wrangler secrets. A price change applies only to operations started
 afterwards: each job records the price reserved at its start and is refunded at
-that same price.
+that same price. An allowance change likewise applies to operations started
+afterwards; usage already consumed in the current period is left untouched.
+
+The settings page shows what each price and the allowance actually amount to,
+so they are not set blind: how far the allowance goes for each operation, what
+one usage unit is worth in money (per allowance unit and per purchased unit),
+and an estimated provider cost with its resulting cost ratio.
+
+Prices are read from Stripe directly, so the page is accurate before the first
+sale — `BillingOffer` only holds terms a checkout has already been created
+against. The admin Worker needs `STRIPE_SECRET_KEY`, `STRIPE_PRO_PRICE_ID`, and
+`STRIPE_CREDIT_PRICE_ID` for this; **use a Stripe restricted key limited to
+`prices: read`**, since the admin console has no reason to be able to move
+money. Without them the page falls back to the recorded offer and says so, and
+when Stripe and the stored offer disagree it flags that too (purchases still
+settle against the stored terms).
+
+Costs come from OpenRouter's public price endpoints, which need no API key, so
+the admin Worker holds no provider credentials. They
+are estimates from a published rate card, not recorded spend: where a rate is
+quoted per token rather than per image or per second, the assumption used to
+bridge it is stated on screen, and anything whose unit cannot be determined is
+reported as unknown rather than shown as free.
+
+`/admin/ai/usage` reports jobs and usage units over a selected window, the
+balances every account currently holds, the heaviest consumers, and how much of
+the allowance subscribers actually consume (median, 90th percentile, and the
+share who exhaust it). That distribution reads the current billing period only,
+and rows whose period has already ended are excluded, because the usage counter
+is not cleared until the account next runs a job. Individual
+balances are corrected from the user detail page (`/admin/users/<id>`): an
+administrator can grant or revoke additional credits and set the usage consumed
+in the current period. A grant settles outstanding credit debt first, a revoke
+never exceeds the current balance, and the monthly counter can only be changed
+while the user has an active Pro plan, because the allowance belongs to a
+billing period. Each adjustment writes both a `CreditTransaction` row
+(`admin_credit_adjustment` / `admin_usage_adjustment`) and an audit log entry in
+the same transaction.
 
 The Stripe webhook endpoint must receive these paid-AI lifecycle events:
 
