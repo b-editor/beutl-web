@@ -17,6 +17,7 @@ import {
   AiAccessNotice,
   AiWorkspace,
   DownloadButton,
+  IdempotencyKeyField,
   ResultPanel,
   ResultPlaceholder,
   blockedReason,
@@ -61,6 +62,7 @@ export function ImageGenerateForm({
   const form = (
     <Card>
       <form action={dispatch} className="flex flex-col gap-4 p-6">
+        <IdempotencyKeyField state={state} />
         <PromptLibrary
           lang={lang}
           onApply={applyTemplate}

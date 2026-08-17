@@ -77,6 +77,41 @@ describe("AI usage distribution", () => {
     expect(result.quantiles?.p50).toBe(100);
   });
 
+  it("excludes accounts that never held the plan and says how many", () => {
+    // Anyone signed in can end up with a CreditAccount row; without a billing
+    // period there is no allowance for them to have consumed, and counting
+    // their zero would drag the median and the exhaustion rate to nothing.
+    const result = summarize([
+      account(300),
+      account(0, { usagePeriodStart: null, usagePeriodEnd: null }),
+      account(0, { usagePeriodStart: null, usagePeriodEnd: null }),
+      account(0, { usagePeriodStart: null, usagePeriodEnd: null }),
+    ]);
+
+    expect(result.totalRows).toBe(4);
+    expect(result.withoutPeriodCount).toBe(3);
+    expect(result.measuredCount).toBe(1);
+    expect(result.staleCount).toBe(0);
+    expect(result.zeroCount).toBe(0);
+    expect(result.quantiles?.p50).toBe(300);
+  });
+
+  it("counts purchased credits held outside a billing period", () => {
+    // Credits are bought and kept regardless of the plan, so this figure is
+    // about every account scanned rather than the measurable subset.
+    const result = summarize([
+      account(300),
+      account(0, {
+        usagePeriodStart: null,
+        usagePeriodEnd: null,
+        purchasedCredits: 200,
+      }),
+    ]);
+
+    expect(result.measuredCount).toBe(1);
+    expect(result.purchasedCreditHolders).toBe(1);
+  });
+
   it("counts an account as exhausted after the allowance is lowered below it", () => {
     const result = summarizeAiUsageDistribution({
       rows: [account(600)],

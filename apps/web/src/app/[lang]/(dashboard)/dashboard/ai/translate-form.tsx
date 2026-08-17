@@ -9,7 +9,13 @@ import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
 import { Languages, Plus, Trash2 } from "lucide-react";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import {
+  useActionState,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   applyTranslationToCues,
   parseSubtitleSource,
@@ -30,6 +36,7 @@ import {
   AiWorkspace,
   CopyButton,
   DownloadButton,
+  IdempotencyKeyField,
   ResultPanel,
   ResultPlaceholder,
   blockedReason,
@@ -51,6 +58,16 @@ export function TranslateForm({
   const [source, setSource] = useState("");
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
   const [translated, setTranslated] = useState<TranslatableSegment[]>([]);
+  // The source the translation on screen belongs to. Editing the field after a
+  // run leaves the two out of step, and re-timing then writes the old text onto
+  // the new cues — a subtitle file that looks finished and is not.
+  const [translatedSource, setTranslatedSource] = useState<string | null>(null);
+  // Read when a result lands. Keeping the source out of that effect's
+  // dependencies is the point: it must not re-run on every keystroke.
+  const sourceRef = useRef(source);
+  useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
 
   // Picking up where the transcription screen left off. Consumed once so a
   // later visit starts from an empty field rather than a stale transcript.
@@ -70,6 +87,7 @@ export function TranslateForm({
           text: segment.text,
         })),
       );
+      setTranslatedSource(sourceRef.current);
     }
   }, [state.segments]);
 
@@ -79,14 +97,17 @@ export function TranslateForm({
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
 
   const blocked = blockedReason(access, ["subtitle.translate"]);
+  const sourceChanged =
+    translatedSource !== null && translatedSource !== source;
   const translatedCues =
-    sourceCues && sourceCues.length === translated.length
+    !sourceChanged && sourceCues && sourceCues.length === translated.length
       ? applyTranslationToCues(sourceCues, translated)
       : null;
 
   const form = (
     <Card>
       <form action={dispatch} className="flex flex-col gap-4 p-6">
+        <IdempotencyKeyField state={state} />
         {importedFrom !== null && (
           <Alert>
             <AlertTitle>{t("dashboard:ai.importedTitle")}</AlertTitle>
@@ -103,12 +124,14 @@ export function TranslateForm({
             <Label htmlFor="targetLanguage">
               {t("dashboard:ai.targetLanguage")}
             </Label>
+            {/* ISO 639-1, matching what the endpoint accepts. */}
             <Input
               id="targetLanguage"
               name="targetLanguage"
               placeholder="en"
               list="aiTranslateLanguages"
-              maxLength={16}
+              maxLength={2}
+              pattern="[A-Za-z]{2}"
               required
             />
           </div>
@@ -121,7 +144,8 @@ export function TranslateForm({
               name="sourceLanguage"
               placeholder="ja"
               list="aiTranslateLanguages"
-              maxLength={16}
+              maxLength={2}
+              pattern="[A-Za-z]{2}"
             />
           </div>
           <datalist id="aiTranslateLanguages">
@@ -238,7 +262,9 @@ export function TranslateForm({
       >
         {!translatedCues && (
           <p className="text-sm text-muted-foreground">
-            {t("dashboard:ai.translationWithoutTimings")}
+            {sourceChanged
+              ? t("dashboard:ai.translationSourceChanged")
+              : t("dashboard:ai.translationWithoutTimings")}
           </p>
         )}
         <div className="flex items-center justify-between gap-4">
@@ -270,7 +296,7 @@ export function TranslateForm({
                 <span className="text-sm font-bold tabular-nums text-muted-foreground">
                   {index + 1}
                 </span>
-                {sourceCues?.[index] && (
+                {!sourceChanged && sourceCues?.[index] && (
                   <span className="truncate text-xs text-muted-foreground">
                     {sourceCues[index].text}
                   </span>

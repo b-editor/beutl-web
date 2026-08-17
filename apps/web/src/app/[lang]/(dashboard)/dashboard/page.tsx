@@ -18,9 +18,12 @@ export default async function Page(props: {
 
   // File.size は BigInt。1GB 上限なので Number 化しても精度は落ちない。
   const usedBytes = Number(storageUsedBytes);
-  const usagePercent = entitlements.balance.monthlyUsage.usedPercent;
-  const remainingPercent = entitlements.balance.monthlyUsage.remainingPercent;
-  const isActive = entitlements.canUseAi;
+  // entitlements が null なのは残高を読めなかったときだけ。数値は出さず、
+  // AI のページ側で実際の状態を出す。
+  const usagePercent = entitlements?.balance.monthlyUsage.usedPercent ?? 0;
+  const remainingPercent =
+    entitlements?.balance.monthlyUsage.remainingPercent ?? 0;
+  const isActive = entitlements?.canUseAi ?? false;
 
   return (
     <div className="flex flex-col gap-8">
@@ -51,7 +54,7 @@ export default async function Page(props: {
 
         <Link
           href={
-            isActive
+            isActive || entitlements === null
               ? `/${lang}/dashboard/ai`
               : `/${lang}/dashboard/account/billing`
           }
@@ -61,14 +64,18 @@ export default async function Page(props: {
             <Sparkles className="h-8 w-8 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <div className="truncate text-2xl font-bold">
-                {isActive ? `${usagePercent}%` : t("dashboard:overview.aiNotSubscribed")}
+                {entitlements === null
+                  ? "—"
+                  : isActive
+                    ? `${usagePercent}%`
+                    : t("dashboard:overview.aiNotSubscribed")}
               </div>
               <div className="truncate text-sm text-muted-foreground">
                 {t("dashboard:overview.aiUsage")}
               </div>
             </div>
           </div>
-          {isActive ? (
+          {entitlements === null ? null : isActive ? (
             <>
               <Progress value={usagePercent} max={100} />
               <p className="text-sm text-muted-foreground">

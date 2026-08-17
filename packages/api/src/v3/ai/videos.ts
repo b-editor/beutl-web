@@ -19,19 +19,20 @@ import {
 import {
   AiProviderError,
   AiVideoSubmissionError,
-  createVideoJob,
-  isDefiniteVideoSubmissionFailure,
   verifyOpenRouterWebhookSignature,
   type VideoFrameImage,
 } from "../../ai/openrouter";
-import { synchronizeAiVideoJob } from "../../ai/video-jobs";
+import {
+  classifyVideoSubmissionFailure,
+  createAndAttachVideoJob,
+  synchronizeAiVideoJob,
+} from "../../ai/video-jobs";
 import {
   validateAiInputImage,
   type AiInputImageMimeType,
 } from "../../ai/input-image-validation";
 import {
   attachProviderJobIdToQueuedAiJob,
-  enqueueAiRemoteJobCleanup,
   getAiJobById,
   getAiJobByProviderJobId,
 } from "@beutl/db";
@@ -89,21 +90,7 @@ const webhookStatusByType = {
   "video.generation.expired": "expired",
 } as const;
 
-class DetachedRemoteVideoJobError extends AiProviderError {}
-
-class ProviderVideoJobOwnershipConflictError extends AiProviderError {}
-
 class OpenRouterWebhookBodyTooLargeError extends Error {}
-
-function attachmentVerificationError(...causes: unknown[]): AiProviderError {
-  return new AiProviderError(
-    "AI video job attachment could not be verified",
-    {
-      cause: new AggregateError(causes),
-      execution: "unknown",
-    },
-  );
-}
 
 function openRouterVideoCallbackUrl(
   request: Request,
@@ -158,116 +145,6 @@ async function readOpenRouterWebhookBody(request: Request): Promise<Uint8Array> 
     offset += chunk.byteLength;
   }
   return body;
-}
-
-async function createAndAttachVideoJob({
-  jobId,
-  prompt,
-  durationSeconds,
-  resolution,
-  frameImages,
-  callbackUrl,
-  callbackNonceHash,
-  model,
-  signal,
-}: {
-  jobId: string;
-  prompt: string;
-  durationSeconds: number;
-  resolution: "720p" | "1080p";
-  frameImages?: VideoFrameImage[];
-  callbackUrl: string;
-  callbackNonceHash: string;
-  model: string;
-  signal?: AbortSignal;
-}) {
-  // A transport timeout can hide a provider-side acceptance before any job ID
-  // reaches us. Once OpenRouter returns an ID, however, it is always persisted
-  // either on the local job or in the User-independent cleanup outbox.
-  const providerJob = await createVideoJob({
-    prompt,
-    durationSeconds,
-    resolution,
-    callbackUrl,
-    ...(frameImages ? { frameImages } : {}),
-    model,
-    signal,
-  });
-  let attachment: Awaited<ReturnType<typeof attachProviderJobIdToQueuedAiJob>>;
-  try {
-    attachment = await attachProviderJobIdToQueuedAiJob({
-      jobId,
-      kind: "video",
-      provider: "openrouter",
-      providerJobId: providerJob.id,
-      expectedCallbackNonceHash: callbackNonceHash,
-    });
-  } catch (cause) {
-    let localJob: Awaited<ReturnType<typeof getAiJobById>>;
-    let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
-    try {
-      [localJob, providerOwner] = await Promise.all([
-        getAiJobById({ jobId }),
-        getAiJobByProviderJobId({
-          provider: "openrouter",
-          providerJobId: providerJob.id,
-        }),
-      ]);
-    } catch (verificationCause) {
-      throw attachmentVerificationError(cause, verificationCause);
-    }
-    if (
-      localJob?.providerJobId === providerJob.id &&
-      providerOwner?.id === jobId
-    ) {
-      return providerJob;
-    }
-    if (providerOwner && providerOwner.id !== jobId) {
-      throw new ProviderVideoJobOwnershipConflictError(
-        "OpenRouter returned a provider job ID already owned by another job",
-        { cause, execution: "unknown" },
-      );
-    }
-    await enqueueAiRemoteJobCleanup({
-      provider: "openrouter",
-      providerJobId: providerJob.id,
-    });
-    throw new DetachedRemoteVideoJobError(
-      "AI video job attachment could not be confirmed",
-      { cause, execution: "unknown" },
-    );
-  }
-  if (
-    attachment.outcome === "notFound" ||
-    attachment.outcome === "conflict"
-  ) {
-    let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
-    try {
-      providerOwner = await getAiJobByProviderJobId({
-        provider: "openrouter",
-        providerJobId: providerJob.id,
-      });
-    } catch (cause) {
-      throw attachmentVerificationError(cause);
-    }
-    if (providerOwner && providerOwner.id !== jobId) {
-      throw new ProviderVideoJobOwnershipConflictError(
-        "OpenRouter returned a provider job ID already owned by another job",
-        { execution: "unknown" },
-      );
-    }
-    if (!providerOwner) {
-      await enqueueAiRemoteJobCleanup({
-        provider: "openrouter",
-        providerJobId: providerJob.id,
-      });
-    }
-    throw new DetachedRemoteVideoJobError(
-      "AI video job was deleted after remote submission",
-      { execution: "unknown" },
-    );
-  }
-  return providerJob;
 }
 
 function arrayBufferToBase64(value: ArrayBuffer): string {
@@ -380,39 +257,19 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      if (err instanceof DetachedRemoteVideoJobError) {
+      const handling = classifyVideoSubmissionFailure(err);
+      if (handling.action === "refund") {
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
           error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-          expectedProviderJobId: null,
+          ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
         return c.json(await apiErrorResponse("aiProviderError"), {
           status: 500,
         });
       }
-      if (err instanceof ProviderVideoJobOwnershipConflictError) {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-          expectedProviderJobId: null,
-        });
-        return c.json(await apiErrorResponse("aiProviderError"), {
-          status: 500,
-        });
-      }
-      if (isDefiniteVideoSubmissionFailure(err)) {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-        });
-        return c.json(await apiErrorResponse("aiProviderError"), {
-          status: 500,
-        });
-      }
-      if (err instanceof AiProviderError) {
+      if (handling.action === "keepQueued") {
         console.error(
           `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
           err,
@@ -605,39 +462,19 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      if (err instanceof DetachedRemoteVideoJobError) {
+      const handling = classifyVideoSubmissionFailure(err);
+      if (handling.action === "refund") {
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
           error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-          expectedProviderJobId: null,
+          ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
         return c.json(await apiErrorResponse("aiProviderError"), {
           status: 500,
         });
       }
-      if (err instanceof ProviderVideoJobOwnershipConflictError) {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-          expectedProviderJobId: null,
-        });
-        return c.json(await apiErrorResponse("aiProviderError"), {
-          status: 500,
-        });
-      }
-      if (isDefiniteVideoSubmissionFailure(err)) {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-        });
-        return c.json(await apiErrorResponse("aiProviderError"), {
-          status: 500,
-        });
-      }
-      if (err instanceof AiProviderError) {
+      if (handling.action === "keepQueued") {
         console.error(
           `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
           err,

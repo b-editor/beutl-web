@@ -23,6 +23,9 @@ export async function getAiScreenState(userId: string): Promise<{
       additionalCredits: entitlements.balance.additionalCredits,
       hasAdditionalCreditDebt: entitlements.balance.hasAdditionalCreditDebt,
       periodEnd: entitlements.currentPeriodEnd,
+      // On a cancelled plan the same date is when the plan stops, not when the
+      // allowance comes back.
+      endsAtPeriodEnd: entitlements.cancelAtPeriodEnd,
     },
   };
 }

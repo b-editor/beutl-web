@@ -8,6 +8,7 @@ import {
   startRetryableTransaction,
   upsertAiSetting,
 } from "@beutl/db";
+import { loadAiSettings } from "@beutl/api";
 import {
   validateAiSettingChanges,
   type AiSettingChange,
@@ -29,7 +30,16 @@ export async function updateAiSettings({
   changes: AiSettingChange[];
 }): Promise<ActionResult> {
   return await adminAction(async (session) => {
-    const validated = validateAiSettingChanges(changes);
+    // Settings the batch leaves alone still take part in validation: a lowered
+    // allowance has to be checked against the prices already stored.
+    const current = await loadAiSettings();
+    const stored = new Map(
+      current.all().map((setting) => [setting.key, setting.value]),
+    );
+    const validated = validateAiSettingChanges(
+      changes,
+      (key) => stored.get(key) ?? "",
+    );
     if (!validated.ok) {
       return { success: false, message: validated.message };
     }

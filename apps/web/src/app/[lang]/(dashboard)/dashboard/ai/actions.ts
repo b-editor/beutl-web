@@ -18,11 +18,17 @@ import {
   failAiJobAndRefundUsage,
   generateImage,
   inspectGeneratedImage,
+  isIso6391LanguageCode,
   loadAiSettings,
   parseAudio,
   saveAiImage,
   saveAiJsonResult,
+  sha256Hex,
+  MAX_TRANSLATION_CHARACTERS,
+  MAX_TRANSLATION_SEGMENTS,
+  SAFE_SEGMENT_ID_PATTERN,
   synchronizeAiVideoJob,
+  toAiRequestIdentity,
   transcribeAudio,
   translateSegments,
   validateAiInputImage,
@@ -31,16 +37,16 @@ import {
   type ImageGenerationSize,
 } from "@beutl/api";
 import {
-  attachProviderJobIdToQueuedAiJob,
-  enqueueAiRemoteJobCleanup,
   finalizeAiJobDeletionByUserId,
   getAiJobById,
-  getAiJobByProviderJobId,
   listAiJobsByUserId,
   prepareAiJobDeletionByUserId,
 } from "@beutl/db";
-import { createVideoJob, isDefiniteVideoSubmissionFailure } from "@beutl/api";
-import { deleteAiOutputObject } from "@beutl/api";
+import {
+  classifyVideoSubmissionFailure,
+  createAndAttachVideoJob,
+  deleteAiOutputObject,
+} from "@beutl/api";
 import { getContentUrl } from "@/lib/content-url";
 
 export type AiActionResult = {
@@ -97,6 +103,60 @@ function composePrompt({
   return sections.join("\n");
 }
 
+// The form sends a key that stays the same across every arrival of one
+// submission, so a double click or a retried POST lands on the job the first
+// arrival created instead of reserving and charging again. A missing or
+// malformed key means the request cannot be made safely repeatable, so it is
+// refused rather than charged — the v3 endpoints answer a missing
+// Idempotency-Key header the same way.
+async function requestIdentityOf(
+  formData: FormData,
+  operation: string,
+  input: unknown,
+) {
+  return await toAiRequestIdentity({
+    idempotencyKey: formData.get("idempotencyKey"),
+    operation,
+    input,
+  });
+}
+
+// Submitting a video is the one AI operation whose failure is not simply a
+// refund: OpenRouter may have accepted a job we lost track of. The shared
+// classifier decides, so this path and the v3 endpoints cannot drift apart.
+async function handleVideoSubmissionFailure({
+  userId,
+  jobId,
+  error,
+  t,
+}: {
+  userId: string;
+  jobId: string;
+  error: unknown;
+  t: (key: string) => string;
+}): Promise<AiActionResult> {
+  const handling = classifyVideoSubmissionFailure(error);
+  if (handling.action === "refund") {
+    await failAiJobAndRefundUsage({
+      userId,
+      aiJobId: jobId,
+      error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+      ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
+    });
+    return { success: false, message: t("api-errors:aiProviderError") };
+  }
+  if (handling.action === "keepQueued") {
+    // The provider may still call back, so the job stays queued rather than
+    // being refunded out from under a submission that was accepted.
+    console.error(
+      `OpenRouter video submission outcome is unknown for AI job ${jobId}`,
+      error,
+    );
+    return { success: true, jobId };
+  }
+  throw error;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof AiProviderError) {
     return "aiProviderError";
@@ -134,6 +194,14 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  const identity = await requestIdentityOf(formData, "image.generate", {
+    prompt,
+    size,
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
   const settings = await loadAiSettings();
   const cost = settings.getPrice("image.generate");
   const reservation = await createReservedAiJob({
@@ -143,6 +211,7 @@ export async function generateImageAction(
     status: "running",
     inputParams: { prompt, size },
     usageUnits: cost,
+    ...identity,
   });
   if (!reservation.ok) {
     return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -242,17 +311,32 @@ export async function editImageAction(
     task === "outpaint"
       ? `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`
       : prompt;
+  const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
+    task,
+    ...(editPrompt ? { prompt: editPrompt } : {}),
+    fileName: file.name,
+    contentType: validated.mimeType,
+    contentSha256: await sha256Hex(validated.bytes),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   const reservation = await createReservedAiJob({
     userId: session.user.id,
-    kind: "image",
+    // The same kind the v3 edit endpoint writes. Tagging an edit as "image"
+    // makes it indistinguishable from a generation, and the retry path then
+    // reruns it as text-to-image: no source picture, and the generation price.
+    kind: "image_edit",
     provider: "openrouter",
     status: "running",
     inputParams: {
       task,
+      filename: file.name,
       ...(editPrompt ? { prompt: editPrompt } : {}),
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
     usageUnits: cost,
+    ...identity,
   });
   if (!reservation.ok) {
     return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -313,8 +397,14 @@ export async function transcribeAction(
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
   const file = formData.get("file");
-  const language = String(formData.get("language") ?? "").trim() || undefined;
+  const language =
+    String(formData.get("language") ?? "").trim().toLowerCase() || undefined;
   if (!(file instanceof File) || file.size === 0 || file.size > MAX_AI_TRANSCRIPTION_UPLOAD_BYTES) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  // The value reaches the provider prompt and is stored on the job, so it is
+  // held to the same ISO 639-1 allowlist the v3 endpoint applies.
+  if (language !== undefined && !isIso6391LanguageCode(language)) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
@@ -325,6 +415,16 @@ export async function transcribeAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
+  const identity = await requestIdentityOf(formData, "audio.transcribe", {
+    fileName: file.name,
+    contentType: file.type || "audio/mpeg",
+    durationSeconds: parsedAudio.durationSeconds,
+    contentSha256: await sha256Hex(parsedAudio.bytes),
+    ...(language ? { language } : {}),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   const settings = await loadAiSettings();
   const cost = settings.getPrice("audio.transcribe") * minutes;
   const reservation = await createReservedAiJob({
@@ -338,6 +438,7 @@ export async function transcribeAction(
       ...(language ? { language } : {}),
     },
     usageUnits: cost,
+    ...identity,
   });
   if (!reservation.ok) {
     return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -396,20 +497,27 @@ export async function translateAction(
   const targetLanguage = String(formData.get("targetLanguage") ?? "").trim().toLowerCase();
   const sourceLanguage = String(formData.get("sourceLanguage") ?? "").trim().toLowerCase() || undefined;
   const segmentsText = String(formData.get("segments") ?? "").trim();
-  if (!targetLanguage || !segmentsText) {
+  if (!segmentsText || !isIso6391LanguageCode(targetLanguage)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (sourceLanguage !== undefined && !isIso6391LanguageCode(sourceLanguage)) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   let segments: { id: string; text: string }[];
   try {
     const parsed = JSON.parse(segmentsText) as unknown;
-    if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 200) {
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      parsed.length > MAX_TRANSLATION_SEGMENTS
+    ) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     segments = parsed.map((item) => {
       const record = item as { id?: unknown; text?: unknown };
       if (
         typeof record.id !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(record.id) ||
+        !SAFE_SEGMENT_ID_PATTERN.test(record.id) ||
         typeof record.text !== "string" ||
         record.text.trim().length === 0
       ) {
@@ -421,7 +529,16 @@ export async function translateAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   const characterCount = segments.reduce((total, s) => total + s.text.length, 0);
-  if (characterCount > 20_000) {
+  if (characterCount > MAX_TRANSLATION_CHARACTERS) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const identity = await requestIdentityOf(formData, "subtitle.translate", {
+    ...(sourceLanguage ? { sourceLanguage } : {}),
+    targetLanguage,
+    segments,
+  });
+  if (!identity) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
@@ -441,6 +558,7 @@ export async function translateAction(
       characterCount,
     },
     usageUnits,
+    ...identity,
   });
   if (!reservation.ok) {
     return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -516,6 +634,10 @@ export async function createVideoAction(
     image_url: { url: string };
     frame_type: "first_frame" | "last_frame";
   }> = [];
+  // Two runs of the same prompt with different start frames are different
+  // requests, so the frames belong in the fingerprint.
+  const frameDigests: Record<string, { contentType: string; sha256: string }> =
+    {};
   for (const [frame, frameType] of [
     [firstFrame, "first_frame"],
     [lastFrame, "last_frame"],
@@ -543,7 +665,21 @@ export async function createVideoAction(
         },
         frame_type: frameType,
       });
+      frameDigests[frameType] = {
+        contentType: validated.mimeType,
+        sha256: await sha256Hex(validated.bytes),
+      };
     }
+  }
+
+  const identity = await requestIdentityOf(formData, "video.generate", {
+    prompt,
+    durationSeconds,
+    resolution,
+    ...frameDigests,
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
   const callbackNonce = await createCallbackNonce();
@@ -558,6 +694,7 @@ export async function createVideoAction(
     usageUnits: cost,
     activeJobLimit: 1,
     callbackNonceHash: callbackNonce.hash,
+    ...identity,
   });
   if (!reservation.ok) {
     return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -579,58 +716,24 @@ export async function createVideoAction(
   callbackUrl.searchParams.set("nonce", callbackNonce.nonce);
 
   try {
-    const providerJob = await createVideoJob({
+    await createAndAttachVideoJob({
+      jobId: job.id,
       prompt,
       durationSeconds,
       resolution,
       ...(frameImages.length > 0 ? { frameImages } : {}),
       callbackUrl: callbackUrl.toString(),
+      callbackNonceHash: callbackNonce.hash,
       model: settings.getModel("video.generate"),
     });
-    const attachment = await attachProviderJobIdToQueuedAiJob({
-      jobId: job.id,
-      kind: "video",
-      provider: "openrouter",
-      providerJobId: providerJob.id,
-      expectedCallbackNonceHash: callbackNonce.hash,
-    });
-    if (attachment.outcome === "notFound" || attachment.outcome === "conflict") {
-      const providerOwner = await getAiJobByProviderJobId({
-        provider: "openrouter",
-        providerJobId: providerJob.id,
-      });
-      if (!providerOwner) {
-        await enqueueAiRemoteJobCleanup({
-          provider: "openrouter",
-          providerJobId: providerJob.id,
-        });
-      }
-      await failAiJobAndRefundUsage({
-        userId: session.user.id,
-        aiJobId: job.id,
-        error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-        expectedProviderJobId: null,
-      });
-      return { success: false, message: t("api-errors:aiProviderError") };
-    }
     return { success: true, jobId: job.id };
   } catch (error) {
-    if (isDefiniteVideoSubmissionFailure(error)) {
-      await failAiJobAndRefundUsage({
-        userId: session.user.id,
-        aiJobId: job.id,
-        error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-      });
-      return { success: false, message: t("api-errors:aiProviderError") };
-    }
-    if (error instanceof AiProviderError) {
-      console.error(
-        `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
-        error,
-      );
-      return { success: true, jobId: job.id };
-    }
-    throw error;
+    return await handleVideoSubmissionFailure({
+      userId: session.user.id,
+      jobId: job.id,
+      error,
+      t,
+    });
   }
 }
 
@@ -674,7 +777,10 @@ export async function listJobsAction(
   };
 }
 
-export async function retryJobAction(jobId: string): Promise<AiActionResult> {
+export async function retryJobAction(
+  jobId: string,
+  idempotencyKey: string,
+): Promise<AiActionResult> {
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
@@ -691,8 +797,21 @@ export async function retryJobAction(jobId: string): Promise<AiActionResult> {
   }
 
   if (job.kind === "image") {
-    const size = String(input.size ?? "1024x1024");
-    if (!["1024x1024", "1024x1536", "1536x1024"].includes(size)) {
+    // Required rather than defaulted: a generation always stored its size, so a
+    // job without one is not a generation and must not be rerun as one.
+    const size = input.size;
+    if (
+      typeof size !== "string" ||
+      !["1024x1024", "1024x1536", "1536x1024"].includes(size)
+    ) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const identity = await toAiRequestIdentity({
+      idempotencyKey,
+      operation: "image.generate",
+      input: { prompt: input.prompt, size },
+    });
+    if (!identity) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     const settings = await loadAiSettings();
@@ -704,6 +823,7 @@ export async function retryJobAction(jobId: string): Promise<AiActionResult> {
       status: "running",
       inputParams: { prompt: input.prompt, size },
       usageUnits: cost,
+      ...identity,
     });
     if (!reservation.ok) {
       return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -753,6 +873,14 @@ export async function retryJobAction(jobId: string): Promise<AiActionResult> {
     if (resolution !== "720p" && resolution !== "1080p") {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
+    const identity = await toAiRequestIdentity({
+      idempotencyKey,
+      operation: "video.generate",
+      input: { prompt: input.prompt, durationSeconds, resolution },
+    });
+    if (!identity) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
     const callbackNonce = await createCallbackNonce();
     const settings = await loadAiSettings();
     const cost = settings.getPrice("video.generate") * durationSeconds;
@@ -765,6 +893,7 @@ export async function retryJobAction(jobId: string): Promise<AiActionResult> {
       usageUnits: cost,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
+      ...identity,
     });
     if (!reservation.ok) {
       return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
@@ -780,57 +909,23 @@ export async function retryJobAction(jobId: string): Promise<AiActionResult> {
     );
     callbackUrl.searchParams.set("nonce", callbackNonce.nonce);
     try {
-      const providerJob = await createVideoJob({
+      await createAndAttachVideoJob({
+        jobId: retried.id,
         prompt: input.prompt,
         durationSeconds,
         resolution,
         callbackUrl: callbackUrl.toString(),
+        callbackNonceHash: callbackNonce.hash,
         model: settings.getModel("video.generate"),
       });
-      const attachment = await attachProviderJobIdToQueuedAiJob({
-        jobId: retried.id,
-        kind: "video",
-        provider: "openrouter",
-        providerJobId: providerJob.id,
-        expectedCallbackNonceHash: callbackNonce.hash,
-      });
-      if (attachment.outcome === "notFound" || attachment.outcome === "conflict") {
-        const providerOwner = await getAiJobByProviderJobId({
-          provider: "openrouter",
-          providerJobId: providerJob.id,
-        });
-        if (!providerOwner) {
-          await enqueueAiRemoteJobCleanup({
-            provider: "openrouter",
-            providerJobId: providerJob.id,
-          });
-        }
-        await failAiJobAndRefundUsage({
-          userId: session.user.id,
-          aiJobId: retried.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-          expectedProviderJobId: null,
-        });
-        return { success: false, message: t("api-errors:aiProviderError") };
-      }
       return { success: true, jobId: retried.id };
     } catch (error) {
-      if (isDefiniteVideoSubmissionFailure(error)) {
-        await failAiJobAndRefundUsage({
-          userId: session.user.id,
-          aiJobId: retried.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
-        });
-        return { success: false, message: t("api-errors:aiProviderError") };
-      }
-      if (error instanceof AiProviderError) {
-        console.error(
-          `OpenRouter video submission outcome is unknown for AI job ${retried.id}`,
-          error,
-        );
-        return { success: true, jobId: retried.id };
-      }
-      throw error;
+      return await handleVideoSubmissionFailure({
+        userId: session.user.id,
+        jobId: retried.id,
+        error,
+        t,
+      });
     }
   }
 

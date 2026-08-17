@@ -18,6 +18,7 @@ import {
   AdvancedOptions,
   AiAccessNotice,
   AiWorkspace,
+  IdempotencyKeyField,
   ResultPanel,
   blockedReason,
   type AiAccess,
@@ -121,6 +122,7 @@ export function VideoForm({
   const form = (
     <Card>
       <form action={dispatch} className="flex flex-col gap-4 p-6">
+        <IdempotencyKeyField state={state} />
         <PromptLibrary
           lang={lang}
           onApply={applyTemplate}

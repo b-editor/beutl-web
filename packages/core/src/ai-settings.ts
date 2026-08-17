@@ -23,19 +23,21 @@ const MODEL_ID_PATTERN =
   /^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
 export const MAX_MODEL_ID_LENGTH = 128;
 
-// Permit at most the built-in monthly allowance for one operation. The
-// allowance itself is configurable, so a lowered allowance can make an
-// operation unaffordable; the admin console warns about that rather than
-// coupling the two ranges. Zero would make an operation effectively unlimited
-// and is not allowed.
-export const MIN_PRICE_UNITS = 1;
-export const MAX_PRICE_UNITS = 500;
-
 // Monthly allowance granted to an active Pro subscription, in usage units.
 // Zero is rejected because it silently disables the plan for everyone; use the
 // per-user adjustment instead when a single account must be cut off.
 export const MIN_MONTHLY_USAGE_LIMIT = 1;
 export const MAX_MONTHLY_USAGE_LIMIT = 1_000_000;
+
+// A price above the allowance leaves its operation unstartable for everyone, so
+// the allowance is the real ceiling. It is configurable, which is why this is
+// not a smaller fixed number: pinning it to the built-in default meant raising
+// the allowance for a costlier model still needed a redeploy. The pair is
+// checked against each other where a batch of edits is saved; this range only
+// keeps a single value inside what any allowance could ever be. Zero would make
+// an operation effectively unlimited and is not allowed.
+export const MIN_PRICE_UNITS = 1;
+export const MAX_PRICE_UNITS = MAX_MONTHLY_USAGE_LIMIT;
 
 export const AI_PLAN_MONTHLY_USAGE_LIMIT_KEY = "plan.monthlyUsageLimit";
 

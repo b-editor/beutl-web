@@ -133,10 +133,14 @@ export function JobHistory({
   const [brokenThumbnails, setBrokenThumbnails] = useState<Set<string>>(
     () => new Set(),
   );
-  const [confirmAction, setConfirmAction] = useState<{
-    type: "delete" | "retry";
-    jobId: string;
-  } | null>(null);
+  // A retry reserves and charges again, so it carries the key that makes one
+  // confirmation land on one job however many times it reaches the server. The
+  // key belongs to the confirmation, not to the click.
+  const [confirmAction, setConfirmAction] = useState<
+    | { type: "delete"; jobId: string }
+    | { type: "retry"; jobId: string; idempotencyKey: string }
+    | null
+  >(null);
 
   const loadJobs = useCallback(async () => {
     const result = await listJobsAction();
@@ -208,9 +212,9 @@ export function JobHistory({
     });
   }
 
-  function confirmRetry(jobId: string) {
+  function confirmRetry(jobId: string, idempotencyKey: string) {
     startRetry(async () => {
-      const result = await retryJobAction(jobId);
+      const result = await retryJobAction(jobId, idempotencyKey);
       if (result.success) {
         setJobsMessage(null);
         await loadJobs();
@@ -258,7 +262,10 @@ export function JobHistory({
                 if (confirmAction?.type === "delete") {
                   confirmDelete(confirmAction.jobId);
                 } else if (confirmAction?.type === "retry") {
-                  confirmRetry(confirmAction.jobId);
+                  confirmRetry(
+                    confirmAction.jobId,
+                    confirmAction.idempotencyKey,
+                  );
                 }
                 setConfirmAction(null);
               }}
@@ -408,7 +415,11 @@ export function JobHistory({
                           title={t("dashboard:ai.retry")}
                           disabled={isRetrying}
                           onClick={() =>
-                            setConfirmAction({ type: "retry", jobId: job.id })
+                            setConfirmAction({
+                              type: "retry",
+                              jobId: job.id,
+                              idempotencyKey: crypto.randomUUID(),
+                            })
                           }
                         >
                           <RotateCcw className="h-4 w-4" />

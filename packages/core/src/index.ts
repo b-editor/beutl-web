@@ -80,7 +80,11 @@ export type {
   AiSettingValidationError,
   AiSettingValidationResult,
 } from "./ai-settings";
-export { AI_PRICING_CATALOG, aiBillingUnitOf } from "./ai-pricing-catalog";
+export {
+  AI_PRICING_CATALOG,
+  aiBillingUnitOf,
+  aiMinimumQuantityOf,
+} from "./ai-pricing-catalog";
 export type { AiBillingUnit } from "./ai-pricing-catalog";
 export {
   derivePlanUnitValue,

@@ -12,6 +12,10 @@
 //    a job, so a row whose period already ended still holds the previous
 //    period's total. Those rows are excluded and counted separately: including
 //    them overstates exhaustion, dropping them silently overstates the median.
+// 4. Accounts with no billing period at all — nobody who never held the plan
+//    has an allowance to consume, so counting their zero would pull the median
+//    and the exhaustion rate toward nothing. They are excluded and counted
+//    separately for the same reason stale rows are.
 
 // CreditAccount is indexed only by its primary key, so reading it is a full
 // scan either way. The cap keeps one page load bounded; the account total is
@@ -36,6 +40,7 @@ export type AiUsageDistribution = {
   totalRows: number;
   truncated: boolean;
   staleCount: number;
+  withoutPeriodCount: number;
   measuredCount: number;
   zeroCount: number;
   exhaustedCount: number;
@@ -111,8 +116,16 @@ export function summarizeAiUsageDistribution({
 
   const measured: AiUsageDistributionRow[] = [];
   let staleCount = 0;
+  let withoutPeriodCount = 0;
   for (const row of scanned) {
-    if (row.usagePeriodEnd && row.usagePeriodEnd.getTime() <= now.getTime()) {
+    // A row gets its period from the subscription that spent against it. No
+    // period means no allowance was ever granted to this account, so it has
+    // nothing to contribute to how the allowance is being consumed.
+    if (!row.usagePeriodStart || !row.usagePeriodEnd) {
+      withoutPeriodCount += 1;
+      continue;
+    }
+    if (row.usagePeriodEnd.getTime() <= now.getTime()) {
       staleCount += 1;
       continue;
     }
@@ -125,8 +138,13 @@ export function summarizeAiUsageDistribution({
   );
   let zeroCount = 0;
   let exhaustedCount = 0;
-  let purchasedCreditHolders = 0;
   const projectedSamples: number[] = [];
+
+  // Holding purchased credits says nothing about a billing period, so this one
+  // is counted over everything scanned rather than over the measured subset.
+  const purchasedCreditHolders = scanned.filter(
+    (row) => row.purchasedCredits > 0,
+  ).length;
 
   for (const row of measured) {
     if (row.monthlyUsageUsed <= 0) zeroCount += 1;
@@ -135,7 +153,6 @@ export function summarizeAiUsageDistribution({
     if (monthlyUsageLimit > 0 && row.monthlyUsageUsed >= monthlyUsageLimit) {
       exhaustedCount += 1;
     }
-    if (row.purchasedCredits > 0) purchasedCreditHolders += 1;
     if (monthlyUsageLimit > 0) {
       const bucket = bucketOf(row.monthlyUsageUsed, monthlyUsageLimit);
       histogram.set(bucket, (histogram.get(bucket) ?? 0) + 1);
@@ -155,6 +172,7 @@ export function summarizeAiUsageDistribution({
     totalRows: scanned.length,
     truncated,
     staleCount,
+    withoutPeriodCount,
     measuredCount: measured.length,
     zeroCount,
     exhaustedCount,

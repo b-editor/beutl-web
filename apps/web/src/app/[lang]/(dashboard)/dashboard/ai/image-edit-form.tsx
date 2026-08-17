@@ -30,6 +30,7 @@ import {
   AiAccessNotice,
   AiWorkspace,
   DownloadButton,
+  IdempotencyKeyField,
   ResultPanel,
   ResultPlaceholder,
   blockedReason,
@@ -57,7 +58,13 @@ export function ImageEditForm({
   access: AiAccess;
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch] = useActionState(editImageAction, { success: false });
+  // Outpaint has to redraw the upload on a canvas before it can be sent, so this
+  // form submits through onSubmit instead of `action={dispatch}`. That is also
+  // why it reads `isPending` here: useFormStatus only reports a form that React
+  // owns the submission of, so SubmitButton cannot disable itself on this one.
+  const [state, dispatch, isPending] = useActionState(editImageAction, {
+    success: false,
+  });
   const [editTask, setEditTask] = useState<string>("");
   const [outpaintExpansion, setOutpaintExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
@@ -118,6 +125,8 @@ export function ImageEditForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Pressing Enter in a field submits even while the button is disabled.
+    if (isPending || isPreparing) return;
     const form = event.currentTarget;
     const formData = new FormData(form);
     const file = formData.get("file");
@@ -153,6 +162,7 @@ export function ImageEditForm({
   const form = (
     <Card>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
+        <IdempotencyKeyField state={state} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="editFile">{t("dashboard:ai.image")}</Label>
           <Input
@@ -274,8 +284,14 @@ export function ImageEditForm({
 
         <SubmitButton
           className="w-full"
-          forceSpinner={isPreparing}
-          disabled={blocked !== null || editTask === "" || taskUnaffordable}
+          forceSpinner={isPreparing || isPending}
+          disabled={
+            blocked !== null ||
+            editTask === "" ||
+            taskUnaffordable ||
+            isPreparing ||
+            isPending
+          }
         >
           {t("dashboard:ai.edit")}
         </SubmitButton>

@@ -179,6 +179,7 @@ export async function AiUsageDistributionSection({
         <p className="text-sm text-muted-foreground">
           {t("admin:ai.usage.distribution.noData", {
             stale: formatNumber(distribution.staleCount, lang),
+            withoutPeriod: formatNumber(distribution.withoutPeriodCount, lang),
           })}
         </p>
       ) : (
@@ -241,6 +242,7 @@ export async function AiUsageDistributionSection({
             measured: formatNumber(measuredCount, lang),
             accounts: formatNumber(accountCount, lang),
             stale: formatNumber(distribution.staleCount, lang),
+            withoutPeriod: formatNumber(distribution.withoutPeriodCount, lang),
           })}
         </p>
         <p>{t("admin:ai.usage.distribution.censoredNote")}</p>

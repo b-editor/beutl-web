@@ -33,6 +33,7 @@
     "monthlyUsage": "Monthly usage",
     "monthlyUsageExhausted": "This month's allowance is used up.",
     "usageResetsOn": "Resets on {{date}}",
+    "planEnds": "Plan ends",
     "nextReset": "Next reset",
     "activeJobs": "{{total}} job(s) are still running.",
     "imageGeneration": "Image generation",
@@ -111,6 +112,7 @@
       "invalidSegment": "The subtitle format is not valid.",
       "tooMany": "At most 200 subtitles can be translated at once."
     },
+    "translationSourceChanged": "The source has been edited since this translation ran, so its timings no longer match. Translate again to export a subtitle file.",
     "translationWithoutTimings": "The source carried no timings, so only text can be exported.",
     "importedTitle": "Transcription loaded",
     "importedDescription": "The transcription of {{source}} is in the subtitle field, ready to translate.",

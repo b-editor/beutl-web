@@ -105,6 +105,49 @@ describe("subtitle source parsing", () => {
     expect(result.ok && result.cues?.length).toBe(2);
   });
 
+  it("drops a WebVTT cue identifier instead of reading it as dialogue", () => {
+    // An identifier is any text on the line before the timing, so nothing about
+    // the line itself separates it from a line of speech.
+    const result = parseSubtitleSource(
+      "WEBVTT\n\nintro\n00:00:00.000 --> 00:00:02.000\nこんにちは\n\nouttro\n00:00:02.000 --> 00:00:04.000\nさようなら\n",
+    );
+
+    expect(result.ok && result.segments).toEqual([
+      { id: "1", text: "こんにちは" },
+      { id: "2", text: "さようなら" },
+    ]);
+  });
+
+  it("keeps a cue whose only line is a number", () => {
+    const result = parseSubtitleSource(
+      "1\n00:00:00,000 --> 00:00:02,000\n42\n\n2\n00:00:02,000 --> 00:00:04,000\nnext\n",
+    );
+
+    expect(result.ok && result.segments.map((segment) => segment.text)).toEqual([
+      "42",
+      "next",
+    ]);
+  });
+
+  it("skips WebVTT NOTE blocks", () => {
+    const result = parseSubtitleSource(
+      "WEBVTT\n\nNOTE recorded in one take\n\n00:00:00.000 --> 00:00:02.000\nこんにちは\n",
+    );
+
+    expect(result.ok && result.segments).toEqual([{ id: "1", text: "こんにちは" }]);
+  });
+
+  it("still separates cues run together without a blank line", () => {
+    const result = parseSubtitleSource(
+      "1\n00:00:00,000 --> 00:00:02,000\nこんにちは\n2\n00:00:02,000 --> 00:00:04,000\nはじめまして\n",
+    );
+
+    expect(result.ok && result.segments.map((segment) => segment.text)).toEqual([
+      "こんにちは",
+      "はじめまして",
+    ]);
+  });
+
   it("reads one segment per line of plain text", () => {
     const result = parseSubtitleSource("one\n\ntwo\n");
     expect(result).toEqual({

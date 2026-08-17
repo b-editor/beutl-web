@@ -117,46 +117,54 @@ function toSeconds(
   );
 }
 
-function nextMeaningfulLine(lines: string[], from: number): string {
-  for (let index = from; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    if (line.length > 0) return line;
-  }
-  return "";
-}
-
+// Both formats separate cues with a blank line, and within one cue everything
+// ahead of the timing is a label: the cue number in SRT, the optional cue
+// identifier in WebVTT. Reading block by block is what tells a label apart from
+// dialogue — a line saying "42" is a cue number before the timing and spoken
+// text after it, and WebVTT identifiers are arbitrary words that no pattern
+// distinguishes from a line of speech. It also drops the WEBVTT header and any
+// NOTE or STYLE block, since those carry no timing.
 function parseCueBlocks(text: string): SubtitleCue[] | null {
-  const lines = text.replace(/\r\n?/gu, "\n").split("\n");
+  const blocks = text.replace(/\r\n?/gu, "\n").split(/\n{2,}/u);
   const cues: SubtitleCue[] = [];
-  let current: SubtitleCue | null = null;
   let sawTimestamp = false;
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    const match = TIMESTAMP_LINE.exec(line);
-    if (match) {
-      sawTimestamp = true;
-      if (current) cues.push(current);
-      current = {
-        start: toSeconds(match[1], match[2], match[3], match[4]),
-        end: toSeconds(match[5], match[6], match[7], match[8]),
-        text: "",
-      };
-      continue;
+  for (const block of blocks) {
+    const lines = block
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    let current: SubtitleCue | null = null;
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const match = TIMESTAMP_LINE.exec(line);
+      if (match) {
+        sawTimestamp = true;
+        if (current) cues.push(current);
+        current = {
+          start: toSeconds(match[1], match[2], match[3], match[4]),
+          end: toSeconds(match[5], match[6], match[7], match[8]),
+          text: "",
+        };
+        continue;
+      }
+      // Ahead of this block's first timing, so it is the label.
+      if (!current) continue;
+      // A file written without blank lines between cues puts the next cue's
+      // label here with nothing to mark the boundary. A number is the only
+      // label that can still be recognized, so that is where the line goes.
+      if (
+        index + 1 < lines.length &&
+        /^\d+$/u.test(line) &&
+        TIMESTAMP_LINE.test(lines[index + 1])
+      ) {
+        continue;
+      }
+      current.text = current.text ? `${current.text}\n${line}` : line;
     }
-    if (!current || line.length === 0) continue;
-    // An SRT cue number sits on its own line ahead of the timing, so it lands
-    // here while the previous cue is still open and would otherwise be read as
-    // that cue's last line of dialogue.
-    if (
-      /^\d+$/u.test(line) &&
-      TIMESTAMP_LINE.test(nextMeaningfulLine(lines, index + 1))
-    ) {
-      continue;
-    }
-    current.text = current.text ? `${current.text}\n${line}` : line;
+    if (current) cues.push(current);
   }
-  if (current) cues.push(current);
   if (!sawTimestamp) return null;
 
   return cues.filter((cue) => cue.text.trim().length > 0);

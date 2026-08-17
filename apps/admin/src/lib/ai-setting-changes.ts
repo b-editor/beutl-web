@@ -1,4 +1,9 @@
-import { isAiSettingKey, validateAiSettingValue } from "@beutl/core";
+import {
+  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  AI_SETTINGS,
+  isAiSettingKey,
+  validateAiSettingValue,
+} from "@beutl/core";
 
 // Validation for a batch of AI setting edits saved together.
 //
@@ -20,6 +25,10 @@ export type AiSettingChangesResult =
 
 export function validateAiSettingChanges(
   input: unknown,
+  // The stored value of any setting this batch does not touch. Prices and the
+  // allowance constrain each other, and only the batch knows what both will be
+  // once it lands.
+  currentValueOf: (key: string) => string,
 ): AiSettingChangesResult {
   if (!Array.isArray(input) || input.length === 0) {
     return { ok: false, message: "No changes were submitted" };
@@ -58,6 +67,32 @@ export function validateAiSettingChanges(
       };
     }
     changes.push({ key, value: validated.value });
+  }
+
+  // An operation priced above the allowance can never be started by anyone on
+  // the plan. Each value passes its own range check, so nothing but a
+  // whole-batch comparison catches an allowance typed one digit short — which
+  // would take every operation offline while every field still looked valid.
+  const submitted = new Map(changes.map((change) => [change.key, change.value]));
+  const effectiveValueOf = (key: string): string => {
+    if (!submitted.has(key)) return currentValueOf(key);
+    // A null resets the setting, which puts its built-in default in force.
+    return submitted.get(key) ?? AI_SETTINGS[key].fallback;
+  };
+
+  const allowance = Number(effectiveValueOf(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY));
+  if (!Number.isSafeInteger(allowance) || allowance <= 0) {
+    return { ok: false, message: "Invalid monthly allowance" };
+  }
+  for (const definition of Object.values(AI_SETTINGS)) {
+    if (definition.kind !== "price") continue;
+    const price = Number(effectiveValueOf(definition.key));
+    if (Number.isSafeInteger(price) && price > allowance) {
+      return {
+        ok: false,
+        message: `${definition.key} is ${price} units, above the ${allowance} unit monthly allowance`,
+      };
+    }
   }
 
   return { ok: true, changes };

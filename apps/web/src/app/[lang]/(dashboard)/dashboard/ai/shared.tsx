@@ -21,7 +21,12 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+
+// The field name the AI server actions read the idempotency key from. The v3
+// API takes the same value in an Idempotency-Key header; a Server Action has no
+// header the caller controls, so it travels as a form field.
+export const IDEMPOTENCY_KEY_FIELD = "idempotencyKey";
 
 // What the server decided about this user's plan and balance. `availability` is
 // keyed by operation and already accounts for the monthly allowance, purchased
@@ -38,8 +43,10 @@ export type AiBalance = {
   isExhausted: boolean;
   additionalCredits: number;
   hasAdditionalCreditDebt: boolean;
-  // The end of the current billing period, when the monthly allowance resets.
+  // The end of the current billing period, when the monthly allowance resets —
+  // or, when `endsAtPeriodEnd` is true, when the plan stops instead.
   periodEnd: string | null;
+  endsAtPeriodEnd: boolean;
 };
 
 export type AiBlockReason = "plan" | "balance";
@@ -204,7 +211,11 @@ export function AiUsageCard({
         />
         {balance.periodEnd && (
           <Stat
-            label={t("dashboard:ai.nextReset")}
+            label={t(
+              balance.endsAtPeriodEnd
+                ? "dashboard:ai.planEnds"
+                : "dashboard:ai.nextReset",
+            )}
             value={formatDate(balance.periodEnd, lang)}
           />
         )}
@@ -237,6 +248,25 @@ export function AiUsageCard({
       )}
     </Card>
   );
+}
+
+// One submission is one attempt, and every arrival of that attempt at the server
+// — a double click, a retried POST, a second tab — would otherwise reserve and
+// charge again. The key identifies the attempt so duplicates collapse onto the
+// first job.
+//
+// It is generated after mount rather than during render: a value produced on the
+// server would either differ from the hydrated one or, if derived from the tree,
+// repeat across page loads and collide with an unrelated attempt. It rotates when
+// the action settles, so the next deliberate run is a new attempt.
+export function IdempotencyKeyField({ state }: { state: unknown }) {
+  const [key, setKey] = useState("");
+
+  useEffect(() => {
+    setKey(crypto.randomUUID());
+  }, [state]);
+
+  return <input type="hidden" name={IDEMPOTENCY_KEY_FIELD} value={key} />;
 }
 
 // Input on the left, what the run produced on the right. Splitting them fills

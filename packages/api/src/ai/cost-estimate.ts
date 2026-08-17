@@ -26,6 +26,7 @@ export type AiCostAssumption =
   | { kind: "imageOutputTokens"; value: number }
   | { kind: "imageInputTokens"; value: number }
   | { kind: "imageMegapixels"; value: number }
+  | { kind: "imageInputNotPriced" }
   | { kind: "transcriptionMinute" }
   | { kind: "translationTokensPerCharacter"; min: number; max: number }
   | { kind: "videoSku"; value: string };
@@ -154,9 +155,16 @@ function estimateImageEndpoint(
     if (input === null) {
       return null;
     }
+    if (input === undefined) {
+      // The endpoint publishes no separate charge for a reference image. That
+      // is a claim about the estimate, not a zero: an edit sends one, and the
+      // admin setting a price for it has to know it was not counted.
+      assumptions.push({ kind: "imageInputNotPriced" });
+    } else {
+      total += input;
+    }
     // Text prompt tokens are left out: they are about 1% of an image request
     // and cannot be sized without knowing the prompt.
-    total += input ?? 0;
   }
   return { usd: total, assumptions };
 }
@@ -304,7 +312,11 @@ export function estimateVideoCost({
       key.startsWith(prefix),
     );
     const usd = isCents ? value / 100 : value;
-    if (!best || score > best.score) {
+    // Two SKUs can match equally well — same audio variant, neither naming a
+    // resolution — and then the object's key order would decide the figure.
+    // Take the dearer one: this estimate exists to check that a price covers
+    // its cost, and understating the cost is the direction that misleads.
+    if (!best || score > best.score || (score === best.score && usd > best.usd)) {
       best = { key, usd, score };
     }
   }

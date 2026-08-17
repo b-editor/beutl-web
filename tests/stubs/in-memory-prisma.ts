@@ -31,6 +31,7 @@ type CreditTransaction = {
   stripeReversalKind: string | null;
   stripeReversalId: string | null;
   stripeReversalRevision: number | null;
+  adminAdjustmentKey: string | null;
   createdAt: Date;
 };
 
@@ -744,6 +745,7 @@ export function createInMemoryPrisma() {
           stripeReversalKind?: string;
           stripeReversalId?: string;
           stripeReversalRevision?: number;
+          adminAdjustmentKey?: string;
         };
       }) => {
         if (
@@ -778,6 +780,15 @@ export function createInMemoryPrisma() {
         ) {
           throw new Error("Unique constraint failed on aiJobId and kind");
         }
+        if (
+          data.adminAdjustmentKey &&
+          state.creditTransactions.some(
+            (transaction) =>
+              transaction.adminAdjustmentKey === data.adminAdjustmentKey,
+          )
+        ) {
+          throw new Error("Unique constraint failed on adminAdjustmentKey");
+        }
         const transaction: CreditTransaction = {
           id: crypto.randomUUID(),
           userId: data.userId,
@@ -795,6 +806,7 @@ export function createInMemoryPrisma() {
           stripeReversalKind: data.stripeReversalKind ?? null,
           stripeReversalId: data.stripeReversalId ?? null,
           stripeReversalRevision: data.stripeReversalRevision ?? null,
+          adminAdjustmentKey: data.adminAdjustmentKey ?? null,
           createdAt: now(),
         };
         state.creditTransactions.push(transaction);
@@ -848,6 +860,7 @@ export function createInMemoryPrisma() {
       }: {
         where:
           | { stripePaymentId: string }
+          | { adminAdjustmentKey: string }
           | {
               stripeReversalKind_stripeReversalId_stripeReversalRevision: {
                 stripeReversalKind: string;
@@ -861,6 +874,11 @@ export function createInMemoryPrisma() {
             ? state.creditTransactions.find(
                 (transaction) =>
                   transaction.stripePaymentId === where.stripePaymentId,
+              )
+            : "adminAdjustmentKey" in where
+            ? state.creditTransactions.find(
+                (transaction) =>
+                  transaction.adminAdjustmentKey === where.adminAdjustmentKey,
               )
             : state.creditTransactions.find(
                 (transaction) =>

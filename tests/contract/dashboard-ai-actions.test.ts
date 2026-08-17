@@ -61,13 +61,34 @@ describe("dashboard AI actions", () => {
     }));
   });
 
-  it("rejects an empty prompt", async () => {
+  // Every submission carries the key that makes a resubmission land on the job
+  // the first arrival created instead of reserving and charging again.
+  function generateForm(prompt = "a cat"): FormData {
     const formData = new FormData();
-    formData.set("prompt", "  ");
+    formData.set("prompt", prompt);
     formData.set("size", "1024x1024");
+    formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000001");
+    return formData;
+  }
+
+  it("rejects an empty prompt", async () => {
+    const formData = generateForm("  ");
     const result = await generateImageAction({ success: false }, formData);
     expect(result.success).toBe(false);
     expect(result.message).toContain("invalidRequestBody");
+  });
+
+  it("refuses a submission that carries no idempotency key", async () => {
+    const formData = generateForm();
+    formData.delete("idempotencyKey");
+
+    const result = await generateImageAction({ success: false }, formData);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("invalidRequestBody");
+    // Nothing may be reserved for a request that cannot be recognized on its
+    // way back in.
+    expect(createReservedAiJob).not.toHaveBeenCalled();
   });
 
   it("reports plan-required when the reservation is rejected", async () => {
@@ -76,10 +97,7 @@ describe("dashboard AI actions", () => {
       errorCode: "aiPlanRequired",
       status: 402,
     });
-    const formData = new FormData();
-    formData.set("prompt", "a cat");
-    formData.set("size", "1024x1024");
-    const result = await generateImageAction({ success: false }, formData);
+    const result = await generateImageAction({ success: false }, generateForm());
     expect(result.success).toBe(false);
     expect(result.message).toContain("aiPlanRequired");
   });
@@ -104,15 +122,49 @@ describe("dashboard AI actions", () => {
       name: "ai-image-job-1.png",
       mimeType: "image/png",
     });
-    const formData = new FormData();
-    formData.set("prompt", "a cat");
-    formData.set("size", "1024x1024");
-    const result = await generateImageAction({ success: false }, formData);
+    const result = await generateImageAction({ success: false }, generateForm());
     if (!result.success) {
       throw new Error(`generateImageAction failed: ${result.message}`);
     }
     expect(result.jobId).toBe("job-1");
     expect(result.url).toContain("/api/contents/file-1");
+    expect(createReservedAiJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKeyHash: expect.any(String),
+        requestFingerprint: expect.any(String),
+      }),
+    );
+  });
+
+  it("derives the same identity for a resubmission and a different one for a new prompt", async () => {
+    vi.mocked(createReservedAiJob).mockResolvedValue({
+      ok: true,
+      outcome: "reserved",
+      job: { id: "job-1", status: "running", resultFileId: null, resultFile: null },
+    });
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      mediaType: "image/png",
+    });
+    vi.mocked(saveAiImage).mockResolvedValue({
+      id: "file-1",
+      name: "ai-image-job-1.png",
+      mimeType: "image/png",
+    });
+
+    await generateImageAction({ success: false }, generateForm());
+    await generateImageAction({ success: false }, generateForm());
+    await generateImageAction({ success: false }, generateForm("a dog"));
+
+    const [first, second, third] = vi
+      .mocked(createReservedAiJob)
+      .mock.calls.map(([args]) => args);
+    expect(second.idempotencyKeyHash).toBe(first.idempotencyKeyHash);
+    expect(second.requestFingerprint).toBe(first.requestFingerprint);
+    // Same key, different content: the reservation layer answers this with a
+    // conflict rather than charging for the second prompt.
+    expect(third.requestFingerprint).not.toBe(first.requestFingerprint);
   });
 
   it("lists jobs for the signed-in user", async () => {

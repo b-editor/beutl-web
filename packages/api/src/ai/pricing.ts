@@ -1,7 +1,7 @@
 // The catalog itself now lives in @beutl/core so the admin console can derive
 // what an allowance buys without pulling in @beutl/db. It is re-exported here
 // because every AI module already reads it from this path.
-export { AI_PRICING_CATALOG } from "@beutl/core";
+export { AI_PRICING_CATALOG, aiMinimumQuantityOf } from "@beutl/core";
 export type { AiBillingUnit } from "@beutl/core";
 
 // The monthly allowance is not defined here: it is administrator-configurable

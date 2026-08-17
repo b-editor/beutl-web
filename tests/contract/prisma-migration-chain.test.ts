@@ -11,6 +11,10 @@ async function readMigrations() {
   return await Promise.all(
     directories
       .filter((entry) => entry.isDirectory())
+      // readdir returns whatever order the filesystem holds — sorted on APFS,
+      // hash order on ext4 — and the assertions below compare ordered lists.
+      // Migration names are timestamp-prefixed, so this is also apply order.
+      .sort((left, right) => left.name.localeCompare(right.name))
       .map(async (entry) => ({
         name: entry.name,
         sql: await readFile(

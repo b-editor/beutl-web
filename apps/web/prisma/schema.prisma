@@ -276,6 +276,10 @@ model CreditTransaction {
   stripeReversalRevision Int?
   billingOfferId         String?
   topUpCheckoutAttemptId String?               @unique
+  // 管理者による手動調整の一意キー。台帳のほかの入金・消費は Stripe の支払い ID や
+  // AiJob との組で二重適用を防いでいるが、手動調整だけは束ねる相手がいないため、
+  // 操作ごとに発行したキーをここに持たせて二度押しと再送を弾く。
+  adminAdjustmentKey     String?               @unique
   createdAt              DateTime              @default(now())
   user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   creditAccount          CreditAccount         @relation("CreditTransactionToCreditAccount", fields: [userId], references: [userId], onDelete: Cascade, map: "CreditTransaction_creditAccountId_fkey")

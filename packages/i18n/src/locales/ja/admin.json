@@ -154,6 +154,7 @@
       "assumptionsLabel": "前提:",
       "assumption": {
         "imageTokens": "画像 1 枚 = {{tokens}} トークン",
+        "imageInputNotPriced": "参照画像に対する課金がエンドポイントに無いため、編集で送る入力画像は含めていません",
         "imageMegapixels": "画像は 1024×1024",
         "transcriptionMinute": "音声はちょうど 1 分 (切り上げ課金のため実原価はこれ以下)",
         "translationTokens": "1 文字 = {{min}}〜{{max}} トークン (英語〜日本語)",
@@ -175,6 +176,7 @@
         "character": "文字"
       },
       "loading": "価格を取得しています…",
+      "costRatioForeignCurrency": "原価率は売上と原価が同じ通貨のときだけ出せます。販売価格は {{currency}}、プロバイダの原価は USD 建てで、ここに為替レートは持たせていません。",
       "costRatioPlan": "原価率 (割当分)",
       "costRatioTopUp": "原価率 (追加クレジット)",
       "revenueHint": "収入",
@@ -240,8 +242,8 @@
           "exhausted": "使い切り"
         },
         "projected": "期間終了時点の見込みは中央値 {{p50}} ユニット、90 パーセンタイル {{p90}} ユニットです ({{sampleSize}} 件から算出)。",
-        "scope": "対象 {{measured}} 件 / 全アカウント {{accounts}} 件。請求期間が終了済みの {{stale}} 件は除外しています。",
-        "noData": "集計できるアカウントがありません (請求期間が終了済みの {{stale}} 件は除外しています)。",
+        "scope": "対象 {{measured}} 件 / 全アカウント {{accounts}} 件。請求期間が終了済みの {{stale}} 件と、プランを持ったことがない {{withoutPeriod}} 件は除外しています。",
+        "noData": "集計できるアカウントがありません (請求期間が終了済みの {{stale}} 件と、プランを持ったことがない {{withoutPeriod}} 件は除外しています)。",
         "censoredNote": "割当を使い切るとそこで消費が止まるため、上位のパーセンタイルは実際の需要より小さく出ます。使い切った割合と併せて読んでください。",
         "midPeriodNote": "請求期間の途中にいるアカウントは必ず低く出ます。見込みの行は経過時間から換算した推定値で、経過が 10% 未満のアカウントは除いています。",
         "purchasedNote": "追加クレジットを保有しているアカウントが {{holders}} 件あります。割当を超える需要の目安になります。",

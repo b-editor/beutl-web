@@ -154,6 +154,7 @@
       "assumptionsLabel": "Assuming:",
       "assumption": {
         "imageTokens": "one image = {{tokens}} tokens",
+        "imageInputNotPriced": "the endpoint prices no separate reference-image charge, so the edit's input image is not counted",
         "imageMegapixels": "images at 1024×1024",
         "transcriptionMinute": "exactly one minute of audio (billing rounds up, so real cost is at most this)",
         "translationTokens": "one character = {{min}}–{{max}} tokens (Latin to CJK)",
@@ -175,6 +176,7 @@
         "character": "characters"
       },
       "loading": "Loading prices…",
+      "costRatioForeignCurrency": "The cost ratio needs revenue and provider cost in the same currency. Store prices are in {{currency}} and provider costs are quoted in USD, and no exchange rate is configured here.",
       "costRatioPlan": "Cost ratio (allowance)",
       "costRatioTopUp": "Cost ratio (top-up)",
       "revenueHint": "revenue",
@@ -240,8 +242,8 @@
           "exhausted": "Exhausted"
         },
         "projected": "Extrapolated to the end of the period: median {{p50}} units, 90th percentile {{p90}} units (from {{sampleSize}} accounts).",
-        "scope": "{{measured}} of {{accounts}} accounts. {{stale}} whose billing period has already ended are excluded.",
-        "noData": "No account can be summarized yet ({{stale}} excluded because their billing period has ended).",
+        "scope": "{{measured}} of {{accounts}} accounts. Excluded: {{stale}} whose billing period has already ended, and {{withoutPeriod}} that never held the plan.",
+        "noData": "No account can be summarized yet ({{stale}} excluded because their billing period has ended, {{withoutPeriod}} because they never held the plan).",
         "censoredNote": "Consumption stops once the allowance runs out, so the upper percentiles understate real demand. Read them together with the exhaustion rate.",
         "midPeriodNote": "An account partway through its period always reads low. The extrapolated figures scale by elapsed time and leave out accounts less than 10% into their period.",
         "purchasedNote": "{{holders}} accounts hold purchased credits, which indicates demand beyond the allowance.",

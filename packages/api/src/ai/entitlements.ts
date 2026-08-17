@@ -1,11 +1,11 @@
 import {
   findAccountDeletionIntentByUserId,
-  getCreditAccount,
+  findCreditAccount,
   getMonthlyUsageAccount,
   getSubscriptionByUserId,
   startRetryableTransaction,
 } from "@beutl/db";
-import { AI_PRICING_CATALOG, PRO_PLAN } from "./pricing";
+import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
 import { loadAiSettings, type AiSettingsSnapshot } from "./settings";
 
 export type AiBalanceSnapshot = {
@@ -97,18 +97,19 @@ export function toAiBalancePresentation(
   };
 }
 
-// The smallest chargeable amount for an operation. Metered operations are billed
-// per unit of input, so one unit is the floor for "can this be started at all".
-// The configured unit price is authoritative; the catalog only enumerates the
-// operations and their billing units.
+// The smallest charge an operation can actually incur: the configured unit
+// price times the smallest request its entry point accepts. Using one unit
+// would report a four-second video as startable on a quarter of what it costs,
+// and the reservation would then reject a prompt the user had already written.
 function minimumChargeFor(
   operation: string,
   settings: AiSettingsSnapshot,
 ): number {
-  if (!(operation in AI_PRICING_CATALOG)) {
+  const minimumQuantity = aiMinimumQuantityOf(operation);
+  if (minimumQuantity === null) {
     return 0;
   }
-  return settings.getPrice(operation);
+  return settings.getPrice(operation) * minimumQuantity;
 }
 
 export function toAiOperationAvailability(
@@ -176,6 +177,10 @@ export async function getEntitlements(
     const effectiveEnd = subscription
       ? getEffectiveSubscriptionEnd(subscription)
       : null;
+    // Reading what someone is entitled to must not create a ledger row for
+    // them. A subscriber's account is opened by the operation that first spends
+    // against it; everyone else — every signed-in visitor to a page that shows
+    // an allowance — reads as an empty balance and leaves nothing behind.
     const account = isActive && subscription
       ? await getMonthlyUsageAccount({
           userId,
@@ -185,7 +190,11 @@ export async function getEntitlements(
           },
           prisma,
         })
-      : await getCreditAccount({ userId, prisma });
+      : (await findCreditAccount({ userId, prisma })) ?? {
+          monthlyUsageUsed: 0,
+          purchasedCredits: 0,
+          purchasedCreditDebt: 0,
+        };
     const balance = toAiBalanceSnapshot(
       account,
       isActive ? settings.getMonthlyUsageLimit() : 0,

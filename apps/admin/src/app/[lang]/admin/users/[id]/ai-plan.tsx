@@ -70,6 +70,10 @@ export async function AiPlanSection({
     balance.monthlyUsage.used,
     balance.monthlyUsage.limit,
   );
+  // toAiBalanceSnapshot は利用者向けに消費量を割当まで丸める。管理画面が出すのは
+  // 実際に保存されている値: 割当を下げた後は保存値が割当を超えることがあり、
+  // 丸めた値を出すと、下の調整フォームが「見えていない差分」を書き戻してしまう。
+  const storedMonthlyUsageUsed = account?.monthlyUsageUsed ?? 0;
 
   return (
     <section className="rounded-lg border bg-card p-6">
@@ -93,7 +97,7 @@ export async function AiPlanSection({
           <dd className="mt-1 flex flex-col gap-1">
             <span className="font-medium">
               {t("admin:users.aiMonthlyUsageValue", {
-                used: formatNumber(balance.monthlyUsage.used, lang),
+                used: formatNumber(storedMonthlyUsageUsed, lang),
                 limit: formatNumber(balance.monthlyUsage.limit, lang),
                 remaining: formatNumber(
                   getMonthlyUsageRemaining(balance),
@@ -147,7 +151,7 @@ export async function AiPlanSection({
           lang={lang}
           userId={userId}
           canAdjustMonthlyUsage={isActive}
-          monthlyUsageUsed={balance.monthlyUsage.used}
+          monthlyUsageUsed={storedMonthlyUsageUsed}
           monthlyUsageLimit={balance.monthlyUsage.limit}
         />
       </div>

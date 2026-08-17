@@ -80,7 +80,20 @@ export function AiPlanAdjustmentForm({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [creditDelta, setCreditDelta] = useState("");
+  // 入力されている訂正を一意に識別するキー。同じ訂正が二回届いても付与は一度しか
+  // 適用されない。入力が変わるたびに発行し直すため、適用後に空になった欄へ同じ額を
+  // 打ち直せば、それは新しい訂正として通る。
+  const [creditAdjustmentKey, setCreditAdjustmentKey] = useState(() =>
+    crypto.randomUUID(),
+  );
   const [usageValue, setUsageValue] = useState(String(monthlyUsageUsed));
+  // router.refresh() でサーバーの値が変わっても、この入力は初期値のまま残る。
+  // 古い値を掴んだまま適用すると、その間に動いた分を無自覚に打ち消してしまう。
+  const [syncedUsage, setSyncedUsage] = useState(monthlyUsageUsed);
+  if (syncedUsage !== monthlyUsageUsed) {
+    setSyncedUsage(monthlyUsageUsed);
+    setUsageValue(String(monthlyUsageUsed));
+  }
 
   const run = useCallback(
     (action: () => Promise<ActionResult>, onSuccess?: () => void) => {
@@ -143,7 +156,10 @@ export function AiPlanAdjustmentForm({
             placeholder="0"
             value={creditDelta}
             disabled={isPending}
-            onChange={(e) => setCreditDelta(e.target.value)}
+            onChange={(e) => {
+              setCreditDelta(e.target.value);
+              setCreditAdjustmentKey(crypto.randomUUID());
+            }}
           />
           <ConfirmButton
             lang={lang}
@@ -155,7 +171,12 @@ export function AiPlanAdjustmentForm({
             disabled={isPending || !creditDeltaValid}
             onConfirm={() =>
               run(
-                () => adjustAiCredits({ userId, creditDelta: parsedCreditDelta }),
+                () =>
+                  adjustAiCredits({
+                    userId,
+                    creditDelta: parsedCreditDelta,
+                    adjustmentKey: creditAdjustmentKey,
+                  }),
                 () => setCreditDelta(""),
               )
             }

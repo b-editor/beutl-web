@@ -40,6 +40,9 @@ describe("admin Stripe price resolution", () => {
     setDbProvider(async () => memory.prisma as never);
     vi.stubEnv("STRIPE_PRO_PRICE_ID", PRO_PRICE_ID);
     vi.stubEnv("STRIPE_CREDIT_PRICE_ID", TOP_UP_PRICE_ID);
+    // Start every case from "no key configured" so a key in the developer's own
+    // environment cannot change what these tests exercise.
+    vi.stubEnv("STRIPE_SECRET_KEY", undefined);
   });
 
   afterEach(() => {

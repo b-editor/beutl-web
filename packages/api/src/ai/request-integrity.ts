@@ -51,6 +51,28 @@ function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
+// Server Actions carry no request headers the caller controls, so the web forms
+// send their key as a field. Both entry points must derive the fingerprint the
+// same way or the same submission would reserve twice depending on how it came in.
+export async function toAiRequestIdentity({
+  idempotencyKey,
+  operation,
+  input,
+}: {
+  idempotencyKey: unknown;
+  operation: string;
+  input: unknown;
+}): Promise<AiRequestIdentity | null> {
+  const key = idempotencyKeySchema.safeParse(idempotencyKey);
+  if (!key.success) return null;
+
+  const [idempotencyKeyHash, requestFingerprint] = await Promise.all([
+    sha256Hex(key.data),
+    sha256Hex(canonicalJson({ operation, input })),
+  ]);
+  return { idempotencyKeyHash, requestFingerprint };
+}
+
 export async function getAiRequestIdentity({
   request,
   operation,
@@ -60,16 +82,11 @@ export async function getAiRequestIdentity({
   operation: string;
   input: unknown;
 }): Promise<AiRequestIdentity | null> {
-  const key = idempotencyKeySchema.safeParse(
-    request.headers.get(IDEMPOTENCY_KEY_HEADER),
-  );
-  if (!key.success) return null;
-
-  const [idempotencyKeyHash, requestFingerprint] = await Promise.all([
-    sha256Hex(key.data),
-    sha256Hex(canonicalJson({ operation, input })),
-  ]);
-  return { idempotencyKeyHash, requestFingerprint };
+  return await toAiRequestIdentity({
+    idempotencyKey: request.headers.get(IDEMPOTENCY_KEY_HEADER),
+    operation,
+    input,
+  });
 }
 
 export async function createCallbackNonce(): Promise<{

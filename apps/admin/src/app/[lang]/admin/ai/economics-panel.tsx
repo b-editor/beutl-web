@@ -7,6 +7,7 @@ import {
   describeAllowanceEquivalent,
   formatAmount,
   formatFractionalAmount,
+  isZeroDecimalCurrency,
   operationAmount,
   type AiAllowanceEquivalent,
   type AiUnitValue,
@@ -91,6 +92,8 @@ function describeAssumption(
       });
     case "imageMegapixels":
       return t("admin:ai.economics.assumption.imageMegapixels");
+    case "imageInputNotPriced":
+      return t("admin:ai.economics.assumption.imageInputNotPriced");
     default:
       return t("admin:ai.economics.assumption.imageTokens", {
         tokens: formatNumber(assumption.value, lang),
@@ -100,16 +103,34 @@ function describeAssumption(
 
 // Cost as a share of revenue, only when both are in the same currency. There is
 // no exchange rate anywhere in this codebase and inventing one would put a
-// number on screen that nobody maintains.
-function costRatioPercent(
+// number on screen that nobody maintains — but the panel says so rather than
+// leaving the figure out, because a store priced in anything but USD would
+// otherwise show no cost ratio at all and no reason for its absence.
+type CostRatio =
+  | { status: "ratio"; percent: number }
+  | { status: "foreignCurrency"; currency: string }
+  | { status: "unavailable" };
+
+function costRatioOf(
   estimate: AiCostEstimate | undefined,
   revenue: { minorUnits: number; currency: string } | null,
-): number | null {
-  if (!estimate || estimate.status !== "estimated" || !revenue) return null;
-  if (revenue.currency.toLowerCase() !== "usd") return null;
-  const revenueUsd = revenue.minorUnits / 100;
-  if (!(revenueUsd > 0)) return null;
-  return Math.round((estimate.usdMax / revenueUsd) * 100);
+): CostRatio {
+  if (!estimate || estimate.status !== "estimated" || !revenue) {
+    return { status: "unavailable" };
+  }
+  if (revenue.currency.toLowerCase() !== "usd") {
+    return { status: "foreignCurrency", currency: revenue.currency };
+  }
+  // Provider costs are quoted in whole dollars, so the revenue has to be read
+  // the same way. A zero-decimal currency stores no minor units to divide out.
+  const revenueUsd = isZeroDecimalCurrency(revenue.currency)
+    ? revenue.minorUnits
+    : revenue.minorUnits / 100;
+  if (!(revenueUsd > 0)) return { status: "unavailable" };
+  return {
+    status: "ratio",
+    percent: Math.round((estimate.usdMax / revenueUsd) * 100),
+  };
 }
 
 // A bar makes "is this price out of line" readable at a glance, which a bare
@@ -182,9 +203,7 @@ function RatioFigure({
         {revenue && (
           <span className="text-xs font-normal text-muted-foreground">
             {revenueLabel}{" "}
-            {formatFractionalAmount(revenue.minorUnits, revenue.currency, lang, {
-              extraFractionDigits: 0,
-            })}
+            {formatFractionalAmount(revenue.minorUnits, revenue.currency, lang)}
           </span>
         )}
       </dd>
@@ -231,8 +250,14 @@ export function AiOperationEconomicsPanel({
   const planRevenue = price !== null ? operationAmount(planUnitValue, price) : null;
   const topUpRevenue =
     price !== null ? operationAmount(topUpUnitValue, price) : null;
-  const planRatio = costRatioPercent(estimate, planRevenue);
-  const topUpRatio = costRatioPercent(estimate, topUpRevenue);
+  const planRatio = costRatioOf(estimate, planRevenue);
+  const topUpRatio = costRatioOf(estimate, topUpRevenue);
+  const foreignCurrency =
+    planRatio.status === "foreignCurrency"
+      ? planRatio.currency
+      : topUpRatio.status === "foreignCurrency"
+        ? topUpRatio.currency
+        : null;
 
   const assumptions =
     estimate?.status === "estimated"
@@ -275,26 +300,34 @@ export function AiOperationEconomicsPanel({
           )}
         </Figure>
 
-        {planRatio !== null && (
+        {planRatio.status === "ratio" && (
           <RatioFigure
             lang={lang}
             label={t("admin:ai.economics.costRatioPlan")}
             revenueLabel={t("admin:ai.economics.revenueHint")}
-            percent={planRatio}
+            percent={planRatio.percent}
             revenue={planRevenue}
           />
         )}
 
-        {topUpRatio !== null && (
+        {topUpRatio.status === "ratio" && (
           <RatioFigure
             lang={lang}
             label={t("admin:ai.economics.costRatioTopUp")}
             revenueLabel={t("admin:ai.economics.revenueHint")}
-            percent={topUpRatio}
+            percent={topUpRatio.percent}
             revenue={topUpRevenue}
           />
         )}
       </dl>
+
+      {foreignCurrency && (
+        <p className="text-xs text-muted-foreground">
+          {t("admin:ai.economics.costRatioForeignCurrency", {
+            currency: foreignCurrency.toUpperCase(),
+          })}
+        </p>
+      )}
 
       {assumptions.length > 0 && (
         <p className="text-xs text-muted-foreground">

@@ -26,6 +26,7 @@ import {
   AiWorkspace,
   CopyButton,
   DownloadButton,
+  IdempotencyKeyField,
   ResultPanel,
   ResultPlaceholder,
   blockedReason,
@@ -47,6 +48,35 @@ function readCues(value: unknown): SubtitleCue[] {
       },
     ];
   });
+}
+
+// An empty field means "use the default"; anything else is held to at least 1.
+// `Number(value) || fallback` sent a typed 0 to the fallback instead.
+function positiveLimit(value: string, fallback: number): number {
+  const trimmed = value.trim();
+  if (trimmed === "") return fallback;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function wrapText(text: string, lengthLimit: number): string[] {
+  const lines: string[] = [];
+  for (const line of text.split("\n")) {
+    let remaining = line;
+    while (remaining.length > lengthLimit) {
+      let breakAt = remaining.lastIndexOf(" ", lengthLimit);
+      if (breakAt <= 0) {
+        breakAt = lengthLimit;
+      }
+      lines.push(remaining.slice(0, breakAt).trim());
+      remaining = remaining.slice(breakAt).trim();
+    }
+    if (remaining) {
+      lines.push(remaining);
+    }
+  }
+  return lines;
 }
 
 function baseNameOf(fileName: string): string {
@@ -137,26 +167,38 @@ export function TranscribeForm({
   }
 
   function wrapCues() {
-    const lengthLimit = Math.max(1, Number(maxLineLength) || 42);
-    const countLimit = Math.max(1, Number(maxLineCount) || 2);
+    const lengthLimit = positiveLimit(maxLineLength, 42);
+    const countLimit = positiveLimit(maxLineCount, 2);
     setCues((current) =>
-      current.map((cue) => {
-        const lines: string[] = [];
-        for (const line of cue.text.split("\n")) {
-          let remaining = line;
-          while (remaining.length > lengthLimit) {
-            let breakAt = remaining.lastIndexOf(" ", lengthLimit);
-            if (breakAt <= 0) {
-              breakAt = lengthLimit;
-            }
-            lines.push(remaining.slice(0, breakAt).trim());
-            remaining = remaining.slice(breakAt).trim();
-          }
-          if (remaining) {
-            lines.push(remaining);
-          }
+      current.flatMap((cue) => {
+        const lines = wrapText(cue.text, lengthLimit);
+        if (lines.length <= countLimit) {
+          return [{ ...cue, text: lines.join("\n") }];
         }
-        return { ...cue, text: lines.slice(0, countLimit).join("\n") };
+        // What does not fit becomes the next cue. Keeping only the first lines
+        // would delete transcribed speech the user has already paid for, with
+        // nothing on screen to say it happened.
+        const groups: string[][] = [];
+        for (let index = 0; index < lines.length; index += countLimit) {
+          groups.push(lines.slice(index, index + countLimit));
+        }
+        // Split the original duration by how much text each part carries, so
+        // the cues stay roughly in step with the speech.
+        const totalLength = Math.max(
+          groups.reduce((total, group) => total + group.join("").length, 0),
+          1,
+        );
+        const duration = Math.max(cue.end - cue.start, 0);
+        let start = cue.start;
+        return groups.map((group, index) => {
+          const end =
+            index === groups.length - 1
+              ? cue.end
+              : start + (duration * group.join("").length) / totalLength;
+          const piece = { start, end, text: group.join("\n") };
+          start = end;
+          return piece;
+        });
       }),
     );
   }
@@ -175,6 +217,7 @@ export function TranscribeForm({
   const form = (
     <Card>
       <form action={dispatch} className="flex flex-col gap-4 p-6">
+        <IdempotencyKeyField state={state} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="transcribeFile">{t("dashboard:ai.audio")}</Label>
           <Input
@@ -190,11 +233,14 @@ export function TranscribeForm({
           <Label htmlFor="transcribeLanguage">
             {t("dashboard:ai.language")}
           </Label>
+          {/* The endpoint takes an ISO 639-1 code, so the field reports a
+              longer entry here rather than after a round trip. */}
           <Input
             id="transcribeLanguage"
             name="language"
             placeholder="ja"
-            maxLength={16}
+            maxLength={2}
+            pattern="[A-Za-z]{2}"
             className="max-w-[12rem]"
           />
           <p className="text-xs text-muted-foreground">

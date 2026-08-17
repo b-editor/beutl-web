@@ -67,9 +67,13 @@ export async function deleteUser({
 export async function adjustAiCredits({
   userId,
   creditDelta,
+  adjustmentKey,
 }: {
   userId: string;
   creditDelta: number;
+  // 一回の操作を表すキー。確定の二度押しや Server Action の再送が同じ付与を
+  // 二回適用しないよう、画面が確認ダイアログを開いた時点で発行する。
+  adjustmentKey: string;
 }): Promise<ActionResult> {
   return await adminAction(async (session) => {
     // Server Action の引数は型注釈が実行時に消えるため、値域をここで検証する。
@@ -84,6 +88,12 @@ export async function adjustAiCredits({
     ) {
       return { success: false, message: "Invalid credit amount" };
     }
+    if (
+      typeof adjustmentKey !== "string" ||
+      !/^[0-9a-f-]{36}$/u.test(adjustmentKey)
+    ) {
+      return { success: false, message: "Invalid adjustment key" };
+    }
 
     try {
       const result = await startRetryableTransaction(async (tx) => {
@@ -95,6 +105,7 @@ export async function adjustAiCredits({
         const account = await adjustPurchasedCreditsByAdmin({
           userId,
           creditDelta,
+          adjustmentKey,
           prisma: tx,
         });
         await addAuditLog({

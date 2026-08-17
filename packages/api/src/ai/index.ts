@@ -17,6 +17,7 @@ export * from "./reconcile-jobs";
 export * from "./refund-state";
 export * from "./settings";
 export * from "./storage";
+export * from "./subtitle-validation";
 export * from "./top-up-refunds";
 export * from "./video-jobs";
 export * from "./video-validation";

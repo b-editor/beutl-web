@@ -35,6 +35,7 @@ describe("administrator credit adjustments", () => {
     const account = await adjustPurchasedCreditsByAdmin({
       userId: USER_ID,
       creditDelta: 250,
+      adjustmentKey: "adjust-grant",
     });
 
     expect(account.purchasedCredits).toBe(250);
@@ -81,7 +82,11 @@ describe("administrator credit adjustments", () => {
       aiJobId: "job-debt-setup",
     }).catch(() => undefined);
 
-    await adjustPurchasedCreditsByAdmin({ userId: USER_ID, creditDelta: 300 });
+    await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 300,
+      adjustmentKey: "adjust-settle-debt",
+    });
     const account = await getCreditAccount({ userId: USER_ID });
     expect(account.purchasedCredits).toBe(300);
   });
@@ -118,6 +123,7 @@ describe("administrator credit adjustments", () => {
     const account = await adjustPurchasedCreditsByAdmin({
       userId: USER_ID,
       creditDelta: 300,
+      adjustmentKey: "adjust-pay-debt",
     });
     expect(account.purchasedCreditDebt).toBe(200);
     expect(account.purchasedCredits).toBe(0);
@@ -129,11 +135,16 @@ describe("administrator credit adjustments", () => {
   });
 
   it("revokes credits down to the current balance", async () => {
-    await adjustPurchasedCreditsByAdmin({ userId: USER_ID, creditDelta: 100 });
+    await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 100,
+      adjustmentKey: "adjust-revoke-setup",
+    });
 
     const account = await adjustPurchasedCreditsByAdmin({
       userId: USER_ID,
       creditDelta: -60,
+      adjustmentKey: "adjust-revoke",
     });
     expect(account.purchasedCredits).toBe(40);
     expect(account.purchasedCreditDebt).toBe(0);
@@ -145,10 +156,18 @@ describe("administrator credit adjustments", () => {
   });
 
   it("rejects a revoke that exceeds the balance instead of creating debt", async () => {
-    await adjustPurchasedCreditsByAdmin({ userId: USER_ID, creditDelta: 50 });
+    await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 50,
+      adjustmentKey: "adjust-over-revoke-setup",
+    });
 
     await expect(
-      adjustPurchasedCreditsByAdmin({ userId: USER_ID, creditDelta: -51 }),
+      adjustPurchasedCreditsByAdmin({
+        userId: USER_ID,
+        creditDelta: -51,
+        adjustmentKey: "adjust-over-revoke",
+      }),
     ).rejects.toBeInstanceOf(CreditAdjustmentRejectedError);
 
     const account = await getCreditAccount({ userId: USER_ID });
@@ -158,11 +177,49 @@ describe("administrator credit adjustments", () => {
     expect(state.creditTransactions).toHaveLength(1);
   });
 
+  it("applies one adjustment key once however often it is submitted", async () => {
+    const first = await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 100,
+      adjustmentKey: "adjust-repeat",
+    });
+    expect(first.purchasedCredits).toBe(100);
+
+    const repeated = await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 100,
+      adjustmentKey: "adjust-repeat",
+    });
+
+    expect(repeated.purchasedCredits).toBe(100);
+    expect(state.creditTransactions).toHaveLength(1);
+  });
+
+  it("treats a different key as a deliberate second adjustment", async () => {
+    await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 100,
+      adjustmentKey: "adjust-first",
+    });
+    const account = await adjustPurchasedCreditsByAdmin({
+      userId: USER_ID,
+      creditDelta: 100,
+      adjustmentKey: "adjust-second",
+    });
+
+    expect(account.purchasedCredits).toBe(200);
+    expect(state.creditTransactions).toHaveLength(2);
+  });
+
   it.each([0, 1.5, Number.NaN])(
     "rejects the invalid credit delta %s",
     async (delta) => {
       await expect(
-        adjustPurchasedCreditsByAdmin({ userId: USER_ID, creditDelta: delta }),
+        adjustPurchasedCreditsByAdmin({
+          userId: USER_ID,
+          creditDelta: delta,
+          adjustmentKey: "adjust-invalid",
+        }),
       ).rejects.toBeInstanceOf(RangeError);
     },
   );

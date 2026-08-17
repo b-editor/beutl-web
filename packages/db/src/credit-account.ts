@@ -151,6 +151,15 @@ function datesEqual(left: Date | null, right: Date | null): boolean {
   return left?.getTime() === right?.getTime();
 }
 
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
+}
+
 function periodsEqual(
   left: UsagePeriod,
   right: UsagePeriod,
@@ -830,20 +839,39 @@ export async function consumeUsage({
 // revoke is rejected when it exceeds the current balance instead of turning
 // into debt, because a manual correction must not leave an account owing value
 // it never received.
+//
+// `adjustmentKey` identifies the operator's decision. Every other money-moving
+// write in the ledger is bound to something that cannot repeat — a Stripe
+// payment, an AI job — but a manual adjustment has no such counterpart, and
+// read-modify-write applies twice if the confirmation arrives twice.
 export async function adjustPurchasedCreditsByAdmin({
   userId,
   creditDelta,
+  adjustmentKey,
   prisma,
 }: {
   userId: string;
   creditDelta: number;
+  adjustmentKey: string;
   prisma?: PrismaTransaction;
 }) {
   if (!Number.isSafeInteger(creditDelta) || creditDelta === 0) {
     throw new RangeError("creditDelta must be a non-zero integer");
   }
+  if (adjustmentKey.length === 0) {
+    throw new RangeError("adjustmentKey must not be empty");
+  }
 
   const run = async (tx: PrismaTransaction) => {
+    const applied = await tx.creditTransaction.findUnique({
+      where: {
+        adminAdjustmentKey: adjustmentKey,
+      },
+    });
+    if (applied) {
+      return await getCreditAccount({ userId, prisma: tx });
+    }
+
     const account = await getCreditAccount({ userId, prisma: tx });
     let creditsDelta: number;
     let debtDelta: number;
@@ -879,16 +907,29 @@ export async function adjustPurchasedCreditsByAdmin({
         creditAmount: creditDelta,
         debtAmount: debtDelta,
         kind: ADMIN_CREDIT_ADJUSTMENT_KIND,
+        adminAdjustmentKey: adjustmentKey,
       },
     });
 
     return updated;
   };
 
+  // A caller-supplied transaction owns its own failure handling: a rejected
+  // insert has already aborted it, so nothing can be read back here.
   if (prisma) {
     return await run(prisma);
   }
-  return await startRetryableTransaction(run);
+  try {
+    return await startRetryableTransaction(run);
+  } catch (error) {
+    // The lookup above settles a repeat that arrives after the first one
+    // committed. Two that overlap are separated by the unique index instead,
+    // and the adjustment the loser was carrying is the one that landed.
+    if (isUniqueConstraintViolation(error)) {
+      return await getCreditAccount({ userId });
+    }
+    throw error;
+  }
 }
 
 // Set the monthly usage counter to an absolute value by administrator

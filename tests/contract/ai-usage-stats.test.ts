@@ -193,10 +193,12 @@ describe("AI usage aggregates", () => {
     await adjustPurchasedCreditsByAdmin({
       userId: "user-a",
       creditDelta: 500,
+      adjustmentKey: "stats-grant-a",
     });
     await adjustPurchasedCreditsByAdmin({
       userId: "user-a",
       creditDelta: -120,
+      adjustmentKey: "stats-revoke-a",
     });
     await setMonthlyUsageUsedByAdmin({
       userId: "user-a",
@@ -281,6 +283,7 @@ describe("AI usage aggregates", () => {
     await adjustPurchasedCreditsByAdmin({
       userId: "user-b",
       creditDelta: 400,
+      adjustmentKey: "stats-grant-b",
     });
 
     expect(await getAiBalanceTotals()).toEqual({
@@ -293,7 +296,11 @@ describe("AI usage aggregates", () => {
 
   it("returns one row more than asked so truncation is detectable", async () => {
     for (const userId of ["user-a", "user-b", "user-c"]) {
-      await adjustPurchasedCreditsByAdmin({ userId, creditDelta: 100 });
+      await adjustPurchasedCreditsByAdmin({
+        userId,
+        creditDelta: 100,
+        adjustmentKey: `stats-grant-${userId}`,
+      });
     }
 
     // The caller asks for two and gets three, which is how it knows more exist.

@@ -169,7 +169,7 @@ describe("AI settings resolution", () => {
     // A future registry restriction must not pass stale invalid values onward.
     await upsertAiSetting({
       key: "price.image.generate",
-      value: "999999",
+      value: String(MAX_PRICE_UNITS + 1),
       updatedBy: "admin-1",
     });
 
