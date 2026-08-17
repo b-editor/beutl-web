@@ -60,6 +60,9 @@ export type IssuedCredential = {
   createdAt: Date;
 };
 
+/** 同じユーザーの発行/失効がぶつかったときの再試行回数。 */
+const PASSWORD_RACE_ATTEMPTS = 3;
+
 /**
  * トークン管理エンドポイント越しの操作をまとめる。
  *
@@ -67,21 +70,35 @@ export type IssuedCredential = {
  * 受け付けず、対象ユーザー自身の Basic 認証だけを許す。ユーザーは Forgejo に対話
  * ログインしないので、必要になるたび管理 API で使い捨てのパスワードを設定し、
  * それで Basic 認証してから捨てる。パスワードを変えても発行済みのトークンは失効しない。
+ *
+ * 同じユーザーが 2 つの操作を同時に走らせると、後から設定されたパスワードによって
+ * 先の操作の Basic 認証が 401 になる。稀だが起こりうるので、その場合はパスワードを
+ * 引き直してやり直す。
  */
 async function withTemporaryPassword<T>(
   username: string,
   fn: (basicAuth: { username: string; password: string }) => Promise<T>,
 ): Promise<T> {
-  const password = randomSecret();
+  for (let attempt = 1; ; attempt++) {
+    const password = randomSecret();
 
-  // source_id と login_name を省くと 422 になる。
-  await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
-    method: "PATCH",
-    body: { source_id: 0, login_name: username, password },
-    responseType: "none",
-  });
+    // source_id と login_name を省くと 422 になる。
+    await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
+      method: "PATCH",
+      body: { source_id: 0, login_name: username, password },
+      responseType: "none",
+    });
 
-  return await fn({ username, password });
+    try {
+      return await fn({ username, password });
+    } catch (error) {
+      const raced =
+        error instanceof ForgejoError &&
+        error.status === 401 &&
+        attempt < PASSWORD_RACE_ATTEMPTS;
+      if (!raced) throw error;
+    }
+  }
 }
 
 /**
@@ -132,15 +149,20 @@ export async function issueGitCredential(
     }
   });
 
+  // 平文は発行直後のこのレスポンスにしか入らない。取れなかったら黙って進めず落とす
+  // (中途半端な控えを作ると、使えないトークンが一覧に残る)。
   if (!issued.sha1) {
-    throw new Error("Forgejo did not return an access token");
+    throw new Error(
+      `Forgejo returned no token for "${name}" (fields: ${Object.keys(issued).join(", ")})`,
+    );
   }
 
   const record = await createGitCredential({
     userId,
     name,
     forgejoTokenId: issued.id,
-    lastEight: issued.sha1.slice(-8),
+    // Forgejo が末尾 8 文字を返すならそれを使う。自前で切るのは返らない場合の保険。
+    lastEight: issued.token_last_eight ?? issued.sha1.slice(-8),
   });
 
   return {

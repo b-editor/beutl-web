@@ -14,8 +14,13 @@ export type ForgejoUser = {
 export type ForgejoAccessToken = {
   id: number;
   name: string;
-  /** 発行直後のレスポンスにしか入らない。 */
+  /**
+   * トークンの平文。発行直後のレスポンスにしか入らない。
+   * Forgejo 16.0.2 では 40 文字の 16 進文字列。
+   */
   sha1?: string;
+  /** 識別用の末尾 8 文字。一覧の応答にも入る。 */
+  token_last_eight?: string;
   scopes: string[];
 };
 
