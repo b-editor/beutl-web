@@ -1,7 +1,7 @@
 import { getTranslation } from "@beutl/i18n";
 import { authOrSignIn } from "@/lib/auth-guard";
-import { getEntitlements } from "@beutl/api";
-import { AiFeatureLinks } from "./components";
+import { AiFeatureLinks } from "./feature-links";
+import { countActiveAiJobs, getAiScreenState } from "./queries";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,10 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const entitlements = await getEntitlements(session.user.id);
+  const { access, balance } = await getAiScreenState(session.user.id);
+  const activeJobCount = access.canUseAi
+    ? await countActiveAiJobs(session.user.id)
+    : 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -23,10 +26,9 @@ export default async function Page(props: {
       </div>
       <AiFeatureLinks
         lang={lang}
-        canUseAi={entitlements.canUseAi}
-        usagePercent={entitlements.balance.monthlyUsage.usedPercent}
-        remainingPercent={entitlements.balance.monthlyUsage.remainingPercent}
-        additionalCredits={entitlements.balance.additionalCredits}
+        access={access}
+        balance={balance}
+        activeJobCount={activeJobCount}
       />
     </div>
   );

@@ -1,7 +1,8 @@
 import { getTranslation } from "@beutl/i18n";
 import { authOrSignIn } from "@/lib/auth-guard";
-import { getEntitlements } from "@beutl/api";
-import { AiPageHeader, TranslateForm } from "../components";
+import { AiPageHeader } from "../shared";
+import { TranslateForm } from "../translate-form";
+import { getAiScreenState } from "../queries";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const entitlements = await getEntitlements(session.user.id);
+  const { access, balance } = await getAiScreenState(session.user.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -19,8 +20,9 @@ export default async function Page(props: {
         lang={lang}
         title={t("dashboard:ai.translation")}
         description={t("dashboard:ai.translationDescription")}
+        balance={balance}
       />
-      <TranslateForm lang={lang} canUseAi={entitlements.canUseAi} />
+      <TranslateForm lang={lang} access={access} />
     </div>
   );
 }

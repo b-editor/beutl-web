@@ -1,0 +1,411 @@
+"use client";
+
+import { useTranslation } from "@beutl/ui/i18n-client";
+import SubmitButton from "@beutl/ui/submit-button";
+import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
+import { Button } from "@beutl/ui/ui/button";
+import { Card } from "@beutl/ui/ui/card";
+import { Input } from "@beutl/ui/ui/input";
+import { Label } from "@beutl/ui/ui/label";
+import { Textarea } from "@beutl/ui/ui/textarea";
+import { useToast } from "@beutl/ui/use-toast";
+import { AudioLines, Languages, Merge, Plus, Scissors, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useActionState, useEffect, useState, type ChangeEvent } from "react";
+import {
+  formatCueClock,
+  toPlainText,
+  toSrt,
+  toVtt,
+  type SubtitleCue,
+} from "@/lib/subtitle-format";
+import { saveSubtitleHandoff } from "@/lib/subtitle-handoff";
+import { transcribeAction } from "./actions";
+import {
+  AiAccessNotice,
+  AiWorkspace,
+  CopyButton,
+  DownloadButton,
+  ResultPanel,
+  ResultPlaceholder,
+  blockedReason,
+  downloadTextFile,
+  type AiAccess,
+} from "./shared";
+
+function readCues(value: unknown): SubtitleCue[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (entry === null || typeof entry !== "object") return [];
+    const record = entry as { start?: unknown; end?: unknown; text?: unknown };
+    if (typeof record.text !== "string") return [];
+    return [
+      {
+        start: typeof record.start === "number" ? record.start : 0,
+        end: typeof record.end === "number" ? record.end : 0,
+        text: record.text,
+      },
+    ];
+  });
+}
+
+function baseNameOf(fileName: string): string {
+  const withoutExtension = fileName.replace(/\.[^.]+$/u, "");
+  return withoutExtension.length > 0 ? withoutExtension : "transcription";
+}
+
+export function TranscribeForm({
+  lang,
+  access,
+}: {
+  lang: string;
+  access: AiAccess;
+}) {
+  const { t } = useTranslation(lang);
+  const { toast } = useToast();
+  const router = useRouter();
+  const [state, dispatch] = useActionState(transcribeAction, { success: false });
+  const [cues, setCues] = useState<SubtitleCue[]>([]);
+  const [audioName, setAudioName] = useState<string>("transcription");
+  const [maxLineLength, setMaxLineLength] = useState<string>("42");
+  const [maxLineCount, setMaxLineCount] = useState<string>("2");
+
+  // The action result is the starting point for editing, not the thing that is
+  // rendered: every correction the user makes afterwards lives in `cues`.
+  // A failed run carries no segments and must leave the current edits alone.
+  useEffect(() => {
+    if (state.segments === undefined) return;
+    setCues(readCues(state.segments));
+  }, [state.segments]);
+
+  const blocked = blockedReason(access, ["audio.transcribe"]);
+
+  function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setAudioName(file ? baseNameOf(file.name) : "transcription");
+  }
+
+  function updateCue(index: number, patch: Partial<SubtitleCue>) {
+    setCues((current) =>
+      current.map((cue, position) =>
+        position === index ? { ...cue, ...patch } : cue,
+      ),
+    );
+  }
+
+  function removeCue(index: number) {
+    setCues((current) => current.filter((_, position) => position !== index));
+  }
+
+  function addCue() {
+    setCues((current) => {
+      const last = current.at(-1);
+      return [
+        ...current,
+        { start: last?.end ?? 0, end: (last?.end ?? 0) + 1, text: "" },
+      ];
+    });
+  }
+
+  function splitCue(index: number) {
+    setCues((current) => {
+      const cue = current[index];
+      if (!cue) return current;
+      const midpoint = (cue.start + cue.end) / 2;
+      return [
+        ...current.slice(0, index),
+        { ...cue, end: midpoint },
+        { start: midpoint, end: cue.end, text: "" },
+        ...current.slice(index + 1),
+      ];
+    });
+  }
+
+  function mergeWithNext(index: number) {
+    setCues((current) => {
+      if (index + 1 >= current.length) return current;
+      return [
+        ...current.slice(0, index),
+        {
+          start: current[index].start,
+          end: current[index + 1].end,
+          text: `${current[index].text} ${current[index + 1].text}`.trim(),
+        },
+        ...current.slice(index + 2),
+      ];
+    });
+  }
+
+  function wrapCues() {
+    const lengthLimit = Math.max(1, Number(maxLineLength) || 42);
+    const countLimit = Math.max(1, Number(maxLineCount) || 2);
+    setCues((current) =>
+      current.map((cue) => {
+        const lines: string[] = [];
+        for (const line of cue.text.split("\n")) {
+          let remaining = line;
+          while (remaining.length > lengthLimit) {
+            let breakAt = remaining.lastIndexOf(" ", lengthLimit);
+            if (breakAt <= 0) {
+              breakAt = lengthLimit;
+            }
+            lines.push(remaining.slice(0, breakAt).trim());
+            remaining = remaining.slice(breakAt).trim();
+          }
+          if (remaining) {
+            lines.push(remaining);
+          }
+        }
+        return { ...cue, text: lines.slice(0, countLimit).join("\n") };
+      }),
+    );
+  }
+
+  function sendToTranslation() {
+    if (!saveSubtitleHandoff({ cues, sourceName: audioName })) {
+      toast({
+        title: t("dashboard:ai.handoffFailed"),
+        variant: "destructive",
+      });
+      return;
+    }
+    router.push(`/${lang}/dashboard/ai/translate`);
+  }
+
+  const form = (
+    <Card>
+      <form action={dispatch} className="flex flex-col gap-4 p-6">
+        <div className="flex flex-col space-y-1.5">
+          <Label htmlFor="transcribeFile">{t("dashboard:ai.audio")}</Label>
+          <Input
+            id="transcribeFile"
+            name="file"
+            type="file"
+            accept="audio/*"
+            required
+            onChange={handleAudioChange}
+          />
+        </div>
+        <div className="flex flex-col space-y-1.5">
+          <Label htmlFor="transcribeLanguage">
+            {t("dashboard:ai.language")}
+          </Label>
+          <Input
+            id="transcribeLanguage"
+            name="language"
+            placeholder="ja"
+            maxLength={16}
+            className="max-w-[12rem]"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("dashboard:ai.languageHint")}
+          </p>
+        </div>
+
+        {state.message && (
+          <Alert variant="destructive">
+            <AlertTitle>{t("error")}</AlertTitle>
+            <AlertDescription>{state.message}</AlertDescription>
+          </Alert>
+        )}
+
+        <SubmitButton className="w-full" disabled={blocked !== null}>
+          {t("dashboard:ai.transcribe")}
+        </SubmitButton>
+      </form>
+    </Card>
+  );
+
+  const result =
+    cues.length > 0 ? (
+      <ResultPanel
+        title={t("dashboard:ai.transcriptionDone")}
+        actions={
+          <>
+            <DownloadButton
+              label="SRT"
+              onDownload={() =>
+                downloadTextFile(
+                  toSrt(cues),
+                  `${audioName}.srt`,
+                  "application/x-subrip;charset=utf-8",
+                )
+              }
+            />
+            <DownloadButton
+              label="VTT"
+              onDownload={() =>
+                downloadTextFile(
+                  toVtt(cues),
+                  `${audioName}.vtt`,
+                  "text/vtt;charset=utf-8",
+                )
+              }
+            />
+            <CopyButton
+              lang={lang}
+              text={() => toPlainText(cues)}
+              label={t("dashboard:ai.copyText")}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={sendToTranslation}
+            >
+              <Languages className="mr-2 h-4 w-4" />
+              {t("dashboard:ai.sendToTranslation")}
+            </Button>
+          </>
+        }
+      >
+        {/* Cue length limits are a subtitle convention, not a general text
+            setting, so they sit with the cues they reshape. */}
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <p className="text-sm text-muted-foreground">
+            {t("dashboard:ai.cueCount", { total: cues.length })}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1">
+              <Label
+                htmlFor="maxLineLength"
+                className="text-xs text-muted-foreground"
+              >
+                {t("dashboard:ai.maxLineLength")}
+              </Label>
+              <Input
+                id="maxLineLength"
+                type="number"
+                min="1"
+                max="200"
+                value={maxLineLength}
+                onChange={(event) => setMaxLineLength(event.target.value)}
+                className="w-20"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <Label
+                htmlFor="maxLineCount"
+                className="text-xs text-muted-foreground"
+              >
+                {t("dashboard:ai.maxLineCount")}
+              </Label>
+              <Input
+                id="maxLineCount"
+                type="number"
+                min="1"
+                max="10"
+                value={maxLineCount}
+                onChange={(event) => setMaxLineCount(event.target.value)}
+                className="w-16"
+              />
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={wrapCues}>
+              {t("dashboard:ai.wrapCues")}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={addCue}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t("dashboard:ai.addCue")}
+            </Button>
+          </div>
+        </div>
+
+        <ul className="flex flex-col gap-2">
+          {cues.map((cue, index) => (
+            <li
+              key={index}
+              className="flex flex-col gap-2 rounded-lg border bg-background p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-6 shrink-0 text-sm font-bold tabular-nums text-muted-foreground">
+                  {index + 1}
+                </span>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={cue.start}
+                  onChange={(event) =>
+                    updateCue(index, { start: Number(event.target.value) })
+                  }
+                  className="w-24"
+                  aria-label={t("dashboard:ai.cueStart")}
+                />
+                <span className="text-muted-foreground">–</span>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={cue.end}
+                  onChange={(event) =>
+                    updateCue(index, { end: Number(event.target.value) })
+                  }
+                  className="w-24"
+                  aria-label={t("dashboard:ai.cueEnd")}
+                />
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {formatCueClock(cue.start)} – {formatCueClock(cue.end)}
+                </span>
+                <div className="ml-auto flex gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    aria-label={t("dashboard:ai.splitCue")}
+                    title={t("dashboard:ai.splitCue")}
+                    onClick={() => splitCue(index)}
+                  >
+                    <Scissors className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    aria-label={t("dashboard:ai.mergeCue")}
+                    title={t("dashboard:ai.mergeCue")}
+                    disabled={index + 1 >= cues.length}
+                    onClick={() => mergeWithNext(index)}
+                  >
+                    <Merge className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    aria-label={t("dashboard:ai.delete")}
+                    title={t("dashboard:ai.delete")}
+                    onClick={() => removeCue(index)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <Textarea
+                value={cue.text}
+                onChange={(event) =>
+                  updateCue(index, { text: event.target.value })
+                }
+                className="min-h-[48px]"
+                aria-label={t("dashboard:ai.cueText", { number: index + 1 })}
+              />
+            </li>
+          ))}
+        </ul>
+      </ResultPanel>
+    ) : (
+      <ResultPlaceholder
+        icon={AudioLines}
+        label={t("dashboard:ai.resultPlaceholderTranscription")}
+      />
+    );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {blocked && <AiAccessNotice lang={lang} reason={blocked} />}
+      <AiWorkspace form={form} result={result} />
+    </div>
+  );
+}
