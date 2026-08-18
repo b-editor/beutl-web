@@ -68,8 +68,6 @@ export {
   MAX_PRICE_UNITS,
   MIN_MONTHLY_USAGE_LIMIT,
   MAX_MONTHLY_USAGE_LIMIT,
-  aiModelSettingKey,
-  aiPriceSettingKey,
   isAiModelId,
   isAiSettingKey,
   validateAiSettingValue,

@@ -4,24 +4,16 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { Input } from "@beutl/ui/ui/input";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
-import {
-  MAX_MONTHLY_USAGE_LIMIT,
-  MAX_PRICE_UNITS,
-  MIN_MONTHLY_USAGE_LIMIT,
-  MIN_PRICE_UNITS,
-} from "@beutl/core";
+import { MAX_MONTHLY_USAGE_LIMIT, MIN_MONTHLY_USAGE_LIMIT } from "@beutl/core";
 import { useAiSettingField, type AiSettingRow } from "./settings-form";
 
 export type { AiSettingRow };
 
 const LABEL_KEYS = {
-  model: "admin:ai.model",
-  price: "admin:ai.price",
   limit: "admin:ai.monthlyUsageLimit",
 } as const;
 
 const NUMBER_RANGES = {
-  price: { min: MIN_PRICE_UNITS, max: MAX_PRICE_UNITS },
   limit: { min: MIN_MONTHLY_USAGE_LIMIT, max: MAX_MONTHLY_USAGE_LIMIT },
 } as const;
 
@@ -41,9 +33,8 @@ function SourceBadge({
   return <Badge variant="default">{t("admin:ai.source.database")}</Badge>;
 }
 
-// The field holds no save button of its own: every setting on this page is
-// committed together by the bar in AiSettingsForm, because repricing usually
-// means touching several at once.
+// The field holds no save button of its own: it is committed by the bar in
+// AiSettingsForm, which is also what shows that an edit is pending.
 export function AiSettingField({
   lang,
   settingKey,
@@ -66,18 +57,14 @@ export function AiSettingField({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Input
+          type="number"
+          min={NUMBER_RANGES[setting.kind].min}
+          max={NUMBER_RANGES[setting.kind].max}
+          step={1}
+          className="w-32"
           value={value}
           disabled={isPending}
           onChange={(e) => setValue(e.target.value)}
-          {...(setting.kind === "model"
-            ? { className: "min-w-64 flex-1" }
-            : {
-                type: "number",
-                min: NUMBER_RANGES[setting.kind].min,
-                max: NUMBER_RANGES[setting.kind].max,
-                step: 1,
-                className: "w-32",
-              })}
         />
         <Button
           size="sm"

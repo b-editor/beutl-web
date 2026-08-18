@@ -7,20 +7,24 @@ import {
   deleteAiOperationModel,
   deleteAiSetting,
   listAiOperationModels,
+  setAiOperationModelSortOrder,
   startRetryableTransaction,
   upsertAiOperationModel,
   upsertAiSetting,
 } from "@beutl/db";
-import { loadAiSettings } from "@beutl/api";
+import { loadAiModelCatalog, loadAiSettings } from "@beutl/api";
 import {
   validateAiSettingChanges,
   type AiSettingChange,
 } from "@/lib/ai-setting-changes";
 import {
   aiOperationWouldGoOffline,
+  aiOperationsGoingOffline,
+  orderWithDefaultFirst,
+  sortOrderForSavedModel,
   validateAiOperationModelInput,
 } from "@/lib/ai-operation-model-changes";
-import { aiMinimumChargeOf } from "@beutl/core";
+import { AI_OPERATIONS, aiMinimumChargeOf } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 
 // Nothing but Server Actions may be exported from this file — not even a type.
@@ -59,6 +63,33 @@ export async function updateAiSettings({
       );
       if (!validated.ok) {
         return { ok: false as const, message: validated.message };
+      }
+      // An allowance below every model's price takes that operation offline for
+      // everyone on the plan. The prices are rows rather than settings, so the
+      // check reads them here — in the same transaction, because a concurrent
+      // repricing would otherwise be evaluated against a snapshot this save
+      // invalidates.
+      const catalog = await loadAiModelCatalog({ prisma: tx });
+      const offline = aiOperationsGoingOffline({
+        minimumChargeOf: (operation, priceUnits) =>
+          aiMinimumChargeOf(operation, priceUnits) ?? priceUnits,
+        // The catalog already resolves an operation with no rows to its
+        // built-in model, and only lists the selectable ones.
+        modelsByOperation: Object.fromEntries(
+          AI_OPERATIONS.map((operation) => [
+            operation,
+            catalog
+              .list(operation)
+              .map((entry) => ({ priceUnits: entry.priceUnits, enabled: true })),
+          ]),
+        ),
+        allowance: validated.allowance,
+      });
+      if (offline.length > 0) {
+        return {
+          ok: false as const,
+          message: `A ${validated.allowance} unit allowance cannot start any model registered for ${offline.join(", ")}`,
+        };
       }
       for (const change of validated.changes) {
         if (change.value === null) {
@@ -136,8 +167,13 @@ export async function saveAiOperationModel(input: unknown): Promise<ActionResult
         };
       }
 
+      const sortOrder = sortOrderForSavedModel({
+        rows,
+        modelId: model.modelId,
+      });
       await upsertAiOperationModel({
         ...model,
+        sortOrder,
         updatedBy: session.user.id,
         prisma: tx,
       });
@@ -179,6 +215,66 @@ export async function removeAiOperationModel(input: unknown): Promise<ActionResu
         prisma: tx,
       });
     });
+    revalidatePath("/[lang]/admin/ai", "page");
+    return { success: true };
+  });
+}
+
+// Making a model the default, which is the lowest sort order within its
+// operation. Renumbering every row keeps that unambiguous: two rows sharing the
+// lowest order would leave the default to the id tie-break.
+export async function setDefaultAiOperationModel(
+  input: unknown,
+): Promise<ActionResult> {
+  if (typeof input !== "object" || input === null) {
+    return { success: false, message: "Invalid model" };
+  }
+  const { operation, modelId } = input as Record<string, unknown>;
+  if (typeof operation !== "string" || typeof modelId !== "string") {
+    return { success: false, message: "Invalid model" };
+  }
+
+  return await adminAction(async (session) => {
+    const outcome = await startRetryableTransaction(async (tx) => {
+      const rows = (await listAiOperationModels({ prisma: tx })).filter(
+        (row) => row.operation === operation,
+      );
+      const chosen = rows.find((row) => row.modelId === modelId);
+      if (!chosen) {
+        return { ok: false as const, message: "That model is not registered" };
+      }
+      if (!chosen.enabled) {
+        // The default is the first model a request can actually run on, so a
+        // model nobody may pick cannot be it.
+        return {
+          ok: false as const,
+          message: "A model that is not selectable cannot be the default",
+        };
+      }
+
+      const ordered = orderWithDefaultFirst({ rows, modelId });
+      for (const [index, orderedModelId] of ordered.entries()) {
+        const row = rows.find((entry) => entry.modelId === orderedModelId);
+        if (row?.sortOrder === index) continue;
+        await setAiOperationModelSortOrder({
+          operation,
+          modelId: orderedModelId,
+          sortOrder: index,
+          updatedBy: session.user.id,
+          prisma: tx,
+        });
+      }
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.aiOperationModelDefaulted,
+        details: `operation: ${operation}, model: ${modelId}`,
+        prisma: tx,
+      });
+      return { ok: true as const };
+    });
+    if (!outcome.ok) {
+      return { success: false, message: outcome.message };
+    }
     revalidatePath("/[lang]/admin/ai", "page");
     return { success: true };
   });

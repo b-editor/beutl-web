@@ -9,22 +9,22 @@ import {
 // Validation for one registered model row.
 //
 // Model rows are saved one at a time rather than through the settings page's
-// batch: a batch is capped at 64 changes and one row already carries five
-// fields, so a page with several models per operation would exceed it. The
-// cross-field rule that used to live in ai-setting-changes still applies, but
-// its meaning is different here and is checked against the other rows in the
-// same transaction — see the note on aiOperationWouldGoOffline.
+// batch: a batch is capped at 64 changes and one row already carries several
+// fields, so a page with several models per operation would exceed it.
+//
+// The display order is not taken from the caller. It decides which model a
+// request that names none runs on, and typing a number is an indirect way to
+// express that; the server appends a new row and a separate action moves one to
+// the front — see the note on aiOperationWouldGoOffline for the other rule.
 export type AiOperationModelInput = {
   operation: string;
   modelId: string;
   priceUnits: number;
   displayName: string | null;
-  sortOrder: number;
   enabled: boolean;
 };
 
 export const MAX_MODEL_DISPLAY_NAME_LENGTH = 80;
-export const MAX_MODEL_SORT_ORDER = 9_999;
 
 export type AiOperationModelValidation =
   | { ok: true; value: AiOperationModelInput }
@@ -38,7 +38,7 @@ export function validateAiOperationModelInput(
   if (typeof input !== "object" || input === null) {
     return { ok: false, message: "Invalid model" };
   }
-  const { operation, modelId, priceUnits, displayName, sortOrder, enabled } =
+  const { operation, modelId, priceUnits, displayName, enabled } =
     input as Record<string, unknown>;
 
   if (
@@ -65,14 +65,6 @@ export function validateAiOperationModelInput(
   ) {
     return { ok: false, message: "Invalid usage-unit price" };
   }
-  if (
-    typeof sortOrder !== "number" ||
-    !Number.isSafeInteger(sortOrder) ||
-    sortOrder < 0 ||
-    sortOrder > MAX_MODEL_SORT_ORDER
-  ) {
-    return { ok: false, message: "Invalid display order" };
-  }
   if (typeof enabled !== "boolean") {
     return { ok: false, message: "Invalid enabled flag" };
   }
@@ -95,14 +87,14 @@ export function validateAiOperationModelInput(
       modelId: trimmedModelId,
       priceUnits,
       displayName: trimmedDisplayName,
-      sortOrder,
       enabled,
     },
   };
 }
 
 // Whether the operation would be left with nothing anyone on the plan can
-// start.
+// start. The one rule that ties a price to the allowance, checked from both
+// sides: saving a model row, and saving the allowance itself.
 //
 // The single-model rule was "no price above the allowance". With several models
 // that is too strict: an expensive model beside an affordable one is a
@@ -120,12 +112,71 @@ export function aiOperationWouldGoOffline({
   allowance: number;
 }): boolean {
   const enabled = models.filter((model) => model.enabled);
+  // Every model disabled is a deliberate "this operation is off", not the
+  // accident this guards against.
   if (enabled.length === 0) {
-    // No rows at all means the operation falls back to its configured single
-    // model, which the settings page validates.
     return false;
   }
   return enabled.every(
     (model) => minimumChargeOf(model.priceUnits) > allowance,
   );
+}
+
+// Where a saved row lands in the display order.
+//
+// A new one goes last. Which model is the default is the lowest order, and a
+// row silently landing in front of the one an administrator chose would change
+// what every request that names no model runs on. An edit keeps its place.
+export function sortOrderForSavedModel({
+  rows,
+  modelId,
+}: {
+  rows: { modelId: string; sortOrder: number }[];
+  modelId: string;
+}): number {
+  const existing = rows.find((row) => row.modelId === modelId);
+  if (existing) return existing.sortOrder;
+  return rows.reduce((highest, row) => Math.max(highest, row.sortOrder + 1), 0);
+}
+
+// The order that makes one model the default: it first, everything else
+// keeping its relative position. Renumbering the whole operation is what keeps
+// "lowest wins" unambiguous — two rows sharing the lowest order would leave the
+// default to the id tie-break.
+export function orderWithDefaultFirst({
+  rows,
+  modelId,
+}: {
+  rows: { modelId: string }[];
+  modelId: string;
+}): string[] {
+  const chosen = rows.find((row) => row.modelId === modelId);
+  if (!chosen) return rows.map((row) => row.modelId);
+  return [
+    modelId,
+    ...rows.filter((row) => row.modelId !== modelId).map((row) => row.modelId),
+  ];
+}
+
+// The operations an allowance would take offline, given what each can run on.
+// Checked when the allowance is saved; saving a model row checks the same rule
+// from the other side.
+export function aiOperationsGoingOffline({
+  minimumChargeOf,
+  modelsByOperation,
+  allowance,
+}: {
+  minimumChargeOf: (operation: string, priceUnits: number) => number;
+  modelsByOperation: Record<string, { priceUnits: number; enabled: boolean }[]>;
+  allowance: number;
+}): string[] {
+  return Object.entries(modelsByOperation)
+    .filter(([operation, models]) =>
+      aiOperationWouldGoOffline({
+        minimumChargeOf: (priceUnits) => minimumChargeOf(operation, priceUnits),
+        models,
+        allowance,
+      }),
+    )
+    .map(([operation]) => operation);
 }

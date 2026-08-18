@@ -2,7 +2,6 @@
 
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
-  aiPriceSettingKey,
   derivePlanUnitValue,
   describeAllowanceEquivalent,
   formatAmount,
@@ -208,10 +207,12 @@ function RatioFigure({
   );
 }
 
+// The model this describes is the row it sits under, so it is not named again
+// here. The allowance is: it is edited on this page, and the figures follow the
+// unsaved value so a change can be judged before it is saved.
 export function AiOperationEconomicsPanel({
   lang,
   operation,
-  model,
   priceUnits,
   estimate,
   proOffer,
@@ -219,11 +220,7 @@ export function AiOperationEconomicsPanel({
 }: {
   lang: string;
   operation: string;
-  model: string;
-  // The registered row's price, or null when the operation has no rows and runs
-  // on the settings page's single model — only then does the figure follow an
-  // unsaved edit of the price field.
-  priceUnits: number | null;
+  priceUnits: number;
   // Undefined while the estimates are still loading; null-ish states inside the
   // estimate itself are distinct from that.
   estimate: AiCostEstimate | undefined;
@@ -231,20 +228,17 @@ export function AiOperationEconomicsPanel({
   topUpUnitValue: AiUnitValue | null;
 }) {
   const { t } = useTranslation(lang);
-  const priceField = useAiSettingField(aiPriceSettingKey(operation));
   const limitField = useAiSettingField(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY);
 
-  const price = priceUnits ?? usableNumber(priceField.value);
   const allowance = usableNumber(limitField.value);
-  const previewing =
-    (priceUnits === null && priceField.changed) || limitField.changed;
+  const previewing = limitField.changed;
 
   const equivalent =
-    price !== null && allowance !== null
+    allowance !== null
       ? describeAllowanceEquivalent({
           operation,
           allowanceUnits: allowance,
-          price,
+          price: priceUnits,
         })
       : null;
 
@@ -252,9 +246,9 @@ export function AiOperationEconomicsPanel({
   // rate as well as the quantity.
   const planUnitValue =
     allowance !== null ? derivePlanUnitValue(proOffer, allowance) : null;
-  const planRevenue = price !== null ? operationAmount(planUnitValue, price) : null;
+  const planRevenue = operationAmount(planUnitValue, priceUnits);
   const topUpRevenue =
-    price !== null ? operationAmount(topUpUnitValue, price) : null;
+    operationAmount(topUpUnitValue, priceUnits);
   const planRatio = costRatioOf(estimate, planRevenue);
   const topUpRatio = costRatioOf(estimate, topUpRevenue);
   const foreignCurrency =
@@ -272,13 +266,12 @@ export function AiOperationEconomicsPanel({
       : [];
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <code className="text-xs text-muted-foreground">{model}</code>
-        {previewing && (
+    <div className="flex flex-col gap-2 border-t bg-muted/30 p-4">
+      {previewing && (
+        <div>
           <Badge variant="secondary">{t("admin:ai.economics.preview")}</Badge>
-        )}
-      </div>
+        </div>
+      )}
       <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Figure label={t("admin:ai.economics.allowanceBuys")}>
           {!equivalent ? (

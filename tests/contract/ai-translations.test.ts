@@ -11,7 +11,7 @@ import {
 import {
   getCreditAccount,
   setDbProvider,
-  upsertAiSetting,
+  upsertAiOperationModel,
   upsertSubscription,
 } from "@beutl/db";
 import {
@@ -593,17 +593,16 @@ describe("POST /api/v3/ai/translations contract", () => {
       .toBe(0);
   });
 
-  it("charges the administrator-configured price and calls the configured model", async () => {
+  it("charges the administrator-registered price and calls that model", async () => {
     await activatePro();
     // Simulate an admin change. Pricing is per 1,000 characters, so this costs one unit.
-    await upsertAiSetting({
-      key: "price.subtitle.translate",
-      value: "37",
-      updatedBy: "admin-1",
-    });
-    await upsertAiSetting({
-      key: "model.subtitle.translate",
-      value: "anthropic/claude-haiku-4.5",
+    await upsertAiOperationModel({
+      operation: "subtitle.translate",
+      modelId: "anthropic/claude-haiku-4.5",
+      priceUnits: 37,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
       updatedBy: "admin-1",
     });
     vi.mocked(translateSegments).mockResolvedValue([
@@ -628,13 +627,17 @@ describe("POST /api/v3/ai/translations contract", () => {
     expect(account.monthlyUsageUsed).toBe(37);
   });
 
-  it("keeps an in-flight job on its reserved price when the setting changes mid-run", async () => {
+  it("keeps an in-flight job on its reserved price when it is repriced mid-run", async () => {
     await activatePro();
     // Raising the price in flight must not change the refund for the reservation.
     vi.mocked(translateSegments).mockImplementation(async () => {
-      await upsertAiSetting({
-        key: "price.subtitle.translate",
-        value: "100",
+      await upsertAiOperationModel({
+        operation: "subtitle.translate",
+        modelId: "openai/gpt-4.1-mini",
+        priceUnits: 100,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
         updatedBy: "admin-1",
       });
       throw new AiProviderError("provider exploded");

@@ -4,7 +4,6 @@ import {
   AI_OPERATIONS,
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   aiMinimumChargeOf,
-  aiPriceSettingKey,
 } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
@@ -16,12 +15,12 @@ import { useAiSettingValues } from "./settings-form";
 // step with the per-operation panels below.
 export function AiUnaffordableAlert({
   lang,
-  // Registered models per operation, saved values only: unlike the settings
-  // fields these are not part of the batch being drafted.
-  registeredModels,
+  // What each operation can run on, saved values only: unlike the allowance
+  // these are rows rather than part of the batch being drafted.
+  modelsByOperation,
 }: {
   lang: string;
-  registeredModels: Record<string, { priceUnits: number; enabled: boolean }[]>;
+  modelsByOperation: Record<string, { priceUnits: number; enabled: boolean }[]>;
 }) {
   const { t } = useTranslation(lang);
   const values = useAiSettingValues();
@@ -41,17 +40,13 @@ export function AiUnaffordableAlert({
       Number.isFinite(price) &&
       (aiMinimumChargeOf(operation, price) ?? price) > allowance;
 
-    const enabled = (registeredModels[operation] ?? []).filter(
+    const enabled = (modelsByOperation[operation] ?? []).filter(
       (model) => model.enabled,
     );
-    if (enabled.length > 0) {
-      // Being unable to afford the dearest model is a choice on offer, not a
-      // misconfiguration; only losing every one of them takes the operation off.
-      return enabled.every((model) => exceedsAllowance(model.priceUnits));
-    }
-    return exceedsAllowance(
-      Number((values.get(aiPriceSettingKey(operation)) ?? "").trim()),
-    );
+    // Being unable to afford the dearest model is a choice on offer, not a
+    // misconfiguration; only losing every one of them takes the operation off.
+    return enabled.length > 0
+      && enabled.every((model) => exceedsAllowance(model.priceUnits));
   });
   if (unaffordable.length === 0) {
     return null;

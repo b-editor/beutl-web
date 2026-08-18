@@ -1,11 +1,6 @@
 import { getTranslation } from "@beutl/i18n";
 import { requireAdmin } from "@/lib/auth-guard";
-import {
-  AI_OPERATIONS,
-  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
-  aiModelSettingKey,
-  aiPriceSettingKey,
-} from "@beutl/core";
+import { AI_OPERATIONS, AI_PLAN_MONTHLY_USAGE_LIMIT_KEY } from "@beutl/core";
 import { Separator } from "@beutl/ui/ui/separator";
 import { Suspense } from "react";
 import { AiSettingField } from "./components";
@@ -20,7 +15,11 @@ import {
 import { AiUnaffordableAlert } from "./unaffordable-alert";
 import { AllowanceDigest, AllowanceDigestFallback } from "./digest";
 import { AiTabs } from "./tabs";
-import { getAiOperationModels, getAiSettings } from "./queries";
+import {
+  getAiModelCatalog,
+  getAiOperationModels,
+  getAiSettings,
+} from "./queries";
 
 // Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
@@ -31,11 +30,34 @@ export default async function Page(props: {
   await requireAdmin();
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels] = await Promise.all([
+  const [settings, registeredModels, catalog] = await Promise.all([
     getAiSettings(),
     getAiOperationModels(),
+    getAiModelCatalog(),
   ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
+  // An operation with nothing registered still offers the built-in model, and
+  // the catalog is where that fallback is resolved; the page shows what a
+  // request would actually run on rather than an empty list.
+  const modelsOf = (operation: string) => {
+    const rows = registeredModels.filter((row) => row.operation === operation);
+    if (rows.length > 0) {
+      return rows.map((row) => ({
+        operation: row.operation,
+        modelId: row.modelId,
+        priceUnits: row.priceUnits,
+        displayName: row.displayName,
+        enabled: row.enabled,
+      }));
+    }
+    return catalog.list(operation).map((entry) => ({
+      operation,
+      modelId: entry.modelId,
+      priceUnits: entry.priceUnits,
+      displayName: null,
+      enabled: true,
+    }));
+  };
   const rows: AiSettingRow[] = settings.all().map((entry) => ({
     key: entry.key,
     kind: entry.kind,
@@ -96,15 +118,13 @@ export default async function Page(props: {
             </Suspense>
             <AiUnaffordableAlert
               lang={lang}
-              registeredModels={Object.fromEntries(
+              modelsByOperation={Object.fromEntries(
                 AI_OPERATIONS.map((operation) => [
                   operation,
-                  registeredModels
-                    .filter((model) => model.operation === operation)
-                    .map((model) => ({
-                      priceUnits: model.priceUnits,
-                      enabled: model.enabled,
-                    })),
+                  modelsOf(operation).map((model) => ({
+                    priceUnits: model.priceUnits,
+                    enabled: model.enabled,
+                  })),
                 ]),
               )}
             />
@@ -121,47 +141,39 @@ export default async function Page(props: {
                 </code>
               </div>
               <Separator />
-              {/* The single model the operation falls back to while it has no
-                  registered rows. */}
-              <div className="grid gap-3 lg:grid-cols-2">
-                <AiSettingField
-                  lang={lang}
-                  settingKey={aiModelSettingKey(operation)}
-                />
-                <AiSettingField
-                  lang={lang}
-                  settingKey={aiPriceSettingKey(operation)}
-                />
-              </div>
+              {/* Every model this operation offers, and nothing else: a second
+                  place to type a model would be a control that silently does
+                  nothing once a row exists. */}
               <AiOperationModels
                 lang={lang}
                 operation={operation}
-                models={registeredModels
-                  .filter((model) => model.operation === operation)
-                  .map((model) => ({
-                    operation: model.operation,
-                    modelId: model.modelId,
-                    priceUnits: model.priceUnits,
-                    displayName: model.displayName,
-                    sortOrder: model.sortOrder,
-                    enabled: model.enabled,
-                  }))}
+                models={modelsOf(operation)}
+                // Prices and provider costs are network calls, so each figure
+                // sits behind its own boundary and the rows stay interactive
+                // while they load. They all await the same cached lookup.
+                economicsByModel={Object.fromEntries(
+                  modelsOf(operation).map((model) => [
+                    model.modelId,
+                    <Suspense
+                      key={model.modelId}
+                      fallback={
+                        <AiOperationEconomicsFallback
+                          lang={lang}
+                          operation={operation}
+                          priceUnits={model.priceUnits}
+                        />
+                      }
+                    >
+                      <AiOperationEconomics
+                        lang={lang}
+                        operation={operation}
+                        model={model.modelId}
+                        priceUnits={model.priceUnits}
+                      />
+                    </Suspense>,
+                  ]),
+                )}
               />
-              {/* Prices and provider costs are network calls. Each section
-                  keeps its own boundary so the fields stay interactive, and
-                  they all await the same cached lookup. */}
-              <Suspense
-                fallback={
-                  <AiOperationEconomicsFallback
-                    lang={lang}
-                    operation={operation}
-                    model={settings.getModel(operation)}
-                    priceUnits={null}
-                  />
-                }
-              >
-                <AiOperationEconomics lang={lang} operation={operation} />
-              </Suspense>
             </section>
           ))}
 

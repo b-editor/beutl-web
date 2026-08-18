@@ -4,17 +4,22 @@
 // environment. @beutl/api resolves values. Both the admin UI and API worker use
 // these definitions so validation remains consistent across entry points.
 //
+// Only settings that are genuinely one value belong here. Models and their
+// prices are per-operation lists an administrator edits at runtime, which is
+// the AiOperationModel table; they were briefly in both places, and a value
+// that can be typed into two controls is one control that silently does
+// nothing.
+//
 // Secrets such as API keys must never be registered or stored in plaintext here.
 
-export type AiSettingKind = "model" | "price" | "limit";
+// One kind, because one setting: everything per-operation moved to the
+// AiOperationModel table.
+export type AiSettingKind = "limit";
 
 export type AiSettingDefinition = {
   key: string;
   kind: AiSettingKind;
   fallback: string;
-  // Operation name used for admin grouping and shared with AI_PRICING_CATALOG.
-  // Plan-wide settings apply to no single operation and leave this undefined.
-  operation?: string;
 };
 
 // Model IDs use OpenRouter's "provider/model" form. Validate only their length
@@ -29,13 +34,13 @@ export const MAX_MODEL_ID_LENGTH = 128;
 export const MIN_MONTHLY_USAGE_LIMIT = 1;
 export const MAX_MONTHLY_USAGE_LIMIT = 1_000_000;
 
-// A price above the allowance leaves its operation unstartable for everyone, so
-// the allowance is the real ceiling. It is configurable, which is why this is
-// not a smaller fixed number: pinning it to the built-in default meant raising
-// the allowance for a costlier model still needed a redeploy. The pair is
-// checked against each other where a batch of edits is saved; this range only
-// keeps a single value inside what any allowance could ever be. Zero would make
-// an operation effectively unlimited and is not allowed.
+// A model priced above the allowance is unstartable for everyone on the plan,
+// so the allowance is the real ceiling. It is configurable, which is why this
+// is not a smaller fixed number: pinning it to the built-in default meant
+// raising the allowance for a costlier model still needed a redeploy. The two
+// are checked against each other where a model row or the allowance is saved;
+// this range only keeps a single value inside what any allowance could ever be.
+// Zero would make an operation effectively unlimited and is not allowed.
 export const MIN_PRICE_UNITS = 1;
 export const MAX_PRICE_UNITS = MAX_MONTHLY_USAGE_LIMIT;
 
@@ -57,10 +62,11 @@ export type AiImageEditTask = (typeof AI_IMAGE_EDIT_TASKS)[number];
 
 // The built-in model and price for every operation.
 //
-// This is now the fallback and the seed rather than the whole story: an
-// operation's selectable models live in the AiOperationModel table, and an
-// operation with no rows there resolves to the entry below — the same way a
-// missing AiSetting row resolves to its fallback.
+// This is the seed and the last-resort fallback rather than the whole story:
+// an operation's selectable models live in the AiOperationModel table, and one
+// with no rows there resolves to the entry below. That only happens for an
+// operation added in code before it has been registered, since the migration
+// seeds a row for every operation that exists today.
 export const AI_DEFAULT_OPERATION_MODELS = {
   "image.generate": { model: "openai/gpt-image-1", price: 20 },
   "image.edit.remove_background": { model: "openai/gpt-image-1", price: 10 },
@@ -83,33 +89,13 @@ export const AI_OPERATIONS = Object.keys(
   AI_DEFAULT_OPERATION_MODELS,
 ) as AiOperation[];
 
-function buildSettings(): Record<string, AiSettingDefinition> {
-  const settings: Record<string, AiSettingDefinition> = {
-    [AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]: {
-      key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
-      kind: "limit",
-      fallback: String(DEFAULT_MONTHLY_USAGE_LIMIT),
-    },
-  };
-  for (const operation of AI_OPERATIONS) {
-    const defaults = AI_DEFAULT_OPERATION_MODELS[operation];
-    settings[`model.${operation}`] = {
-      key: `model.${operation}`,
-      kind: "model",
-      fallback: defaults.model,
-      operation,
-    };
-    settings[`price.${operation}`] = {
-      key: `price.${operation}`,
-      kind: "price",
-      fallback: String(defaults.price),
-      operation,
-    };
-  }
-  return settings;
-}
-
-export const AI_SETTINGS: Record<string, AiSettingDefinition> = buildSettings();
+export const AI_SETTINGS: Record<string, AiSettingDefinition> = {
+  [AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]: {
+    key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+    kind: "limit",
+    fallback: String(DEFAULT_MONTHLY_USAGE_LIMIT),
+  },
+};
 
 export function isAiSettingKey(value: unknown): value is keyof typeof AI_SETTINGS {
   return typeof value === "string" && Object.hasOwn(AI_SETTINGS, value);
@@ -126,20 +112,8 @@ export function isAiModelId(value: unknown): value is string {
   );
 }
 
-export function aiModelSettingKey(operation: string): string {
-  return `model.${operation}`;
-}
-
-export function aiPriceSettingKey(operation: string): string {
-  return `price.${operation}`;
-}
-
 export type AiSettingValidationError =
   | "unknownKey"
-  | "invalidModelId"
-  | "modelIdTooLong"
-  | "invalidPrice"
-  | "priceOutOfRange"
   | "invalidLimit"
   | "limitOutOfRange";
 
@@ -158,29 +132,17 @@ export function validateAiSettingValue(
     return { ok: false, error: "unknownKey" };
   }
   const trimmed = typeof value === "string" ? value.trim() : "";
-  if (definition.kind === "model") {
-    if (trimmed.length > MAX_MODEL_ID_LENGTH) {
-      return { ok: false, error: "modelIdTooLong" };
-    }
-    if (!MODEL_ID_PATTERN.test(trimmed)) {
-      return { ok: false, error: "invalidModelId" };
-    }
-    return { ok: true, value: trimmed };
-  }
-  // Prices and allowances are whole usage units; reject values that would
-  // require rounding.
-  const isLimit = definition.kind === "limit";
+  // An allowance is whole usage units; reject a value that would need rounding.
   if (!/^\d+$/.test(trimmed)) {
-    return { ok: false, error: isLimit ? "invalidLimit" : "invalidPrice" };
+    return { ok: false, error: "invalidLimit" };
   }
   const parsed = Number(trimmed);
-  const min = isLimit ? MIN_MONTHLY_USAGE_LIMIT : MIN_PRICE_UNITS;
-  const max = isLimit ? MAX_MONTHLY_USAGE_LIMIT : MAX_PRICE_UNITS;
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    return {
-      ok: false,
-      error: isLimit ? "limitOutOfRange" : "priceOutOfRange",
-    };
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < MIN_MONTHLY_USAGE_LIMIT ||
+    parsed > MAX_MONTHLY_USAGE_LIMIT
+  ) {
+    return { ok: false, error: "limitOutOfRange" };
   }
   return { ok: true, value: String(parsed) };
 }

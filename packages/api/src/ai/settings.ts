@@ -2,15 +2,12 @@
 //
 // @beutl/core owns the definitions and validation. This module only resolves
 // database values and built-in defaults in that order. Missing database rows
-// fall back to the built-in default; model names are configured exclusively
-// through the admin console.
+// fall back to the built-in default.
 import { getAiSettingMap } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
-  aiModelSettingKey,
-  aiPriceSettingKey,
   validateAiSettingValue,
   type AiSettingDefinition,
 } from "@beutl/core";
@@ -40,9 +37,9 @@ function resolveDefinition(
 }
 
 export type AiSettingsSnapshot = {
-  getModel(operation: string): string;
-  getPrice(operation: string): number;
   // Monthly allowance an active Pro subscription receives, in usage units.
+  // Models and their prices are not here: they are per-operation lists, which
+  // loadAiModelCatalog resolves.
   getMonthlyUsageLimit(): number;
   all(): ResolvedAiSetting[];
 };
@@ -60,8 +57,6 @@ function toSnapshot(stored: Map<string, string>): AiSettingsSnapshot {
     return entry;
   };
   return {
-    getModel: (operation) => read(aiModelSettingKey(operation)).value,
-    getPrice: (operation) => Number(read(aiPriceSettingKey(operation)).value),
     getMonthlyUsageLimit: () =>
       Number(read(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY).value),
     all: () =>

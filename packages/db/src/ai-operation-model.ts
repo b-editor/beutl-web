@@ -75,6 +75,30 @@ export async function upsertAiOperationModel({
   });
 }
 
+// Which model a request that names none runs on is the lowest sortOrder, so
+// making one the default is a renumbering of the whole operation rather than a
+// flag on one row: a flag cannot be constrained to exactly one row, and two
+// rows both claiming it would leave the default to chance.
+export async function setAiOperationModelSortOrder({
+  operation,
+  modelId,
+  sortOrder,
+  updatedBy,
+  prisma,
+}: {
+  operation: string;
+  modelId: string;
+  sortOrder: number;
+  updatedBy: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.aiOperationModel.update({
+    where: { operation_modelId: { operation, modelId } },
+    data: { sortOrder, updatedBy },
+  });
+}
+
 // Removing every row for an operation restores the built-in default, exactly as
 // deleting an AiSetting row does.
 export async function deleteAiOperationModel({

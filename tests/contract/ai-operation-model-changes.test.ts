@@ -11,7 +11,6 @@ function input(overrides: Record<string, unknown> = {}) {
     modelId: "openai/gpt-image-1",
     priceUnits: 20,
     displayName: null,
-    sortOrder: 0,
     enabled: true,
     ...overrides,
   };
@@ -30,7 +29,6 @@ describe("registering a model for an operation", () => {
         modelId: "openai/gpt-image-1",
         priceUnits: 20,
         displayName: "Fast",
-        sortOrder: 0,
         enabled: true,
       },
     });
@@ -68,10 +66,16 @@ describe("registering a model for an operation", () => {
     expect(validateAiOperationModelInput(input({ enabled: "true" })).ok).toBe(
       false,
     );
-    expect(validateAiOperationModelInput(input({ sortOrder: -1 })).ok).toBe(
-      false,
-    );
     expect(validateAiOperationModelInput(null).ok).toBe(false);
+  });
+
+  it("takes no display order from the caller", () => {
+    // Which model a request without one runs on is the lowest order, so the
+    // server appends a new row and a separate action moves one to the front;
+    // a number typed here would decide that indirectly.
+    const result = validateAiOperationModelInput(input({ sortOrder: 5 }));
+
+    expect(result.ok && "sortOrder" in result.value).toBe(false);
   });
 });
 

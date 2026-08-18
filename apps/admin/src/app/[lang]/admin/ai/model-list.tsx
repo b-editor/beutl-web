@@ -9,29 +9,28 @@ import { Input } from "@beutl/ui/ui/input";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
+import { MAX_MODEL_DISPLAY_NAME_LENGTH } from "@/lib/ai-operation-model-changes";
 import {
-  MAX_MODEL_DISPLAY_NAME_LENGTH,
-  MAX_MODEL_SORT_ORDER,
-} from "@/lib/ai-operation-model-changes";
-import { removeAiOperationModel, saveAiOperationModel } from "./actions";
+  removeAiOperationModel,
+  saveAiOperationModel,
+  setDefaultAiOperationModel,
+} from "./actions";
 
 export type AiOperationModelRow = {
   operation: string;
   modelId: string;
   priceUnits: number;
   displayName: string | null;
-  sortOrder: number;
   enabled: boolean;
 };
 
-// Each row is saved on its own, unlike the settings above: a row carries five
-// fields, so a page-wide batch of them would run past the save cap, and adding
-// a model is a single decision rather than part of a repricing.
+// Each row is saved on its own rather than through the allowance's batch: a row
+// carries several fields, so a page-wide batch of them would run past the save
+// cap, and adding a model is a single decision rather than part of a repricing.
 type Draft = {
   modelId: string;
   displayName: string;
   priceUnits: string;
-  sortOrder: string;
   enabled: boolean;
 };
 
@@ -40,7 +39,6 @@ function draftOf(row: AiOperationModelRow): Draft {
     modelId: row.modelId,
     displayName: row.displayName ?? "",
     priceUnits: String(row.priceUnits),
-    sortOrder: String(row.sortOrder),
     enabled: row.enabled,
   };
 }
@@ -49,7 +47,6 @@ const EMPTY_DRAFT: Draft = {
   modelId: "",
   displayName: "",
   priceUnits: "",
-  sortOrder: "0",
   enabled: true,
 };
 
@@ -127,17 +124,6 @@ function ModelEditor({
             onChange={(e) => setDraft({ ...draft, priceUnits: e.target.value })}
           />
         </Field>
-        <Field label={t("admin:ai.models.sortOrder")}>
-          <Input
-            type="number"
-            min={0}
-            max={MAX_MODEL_SORT_ORDER}
-            step={1}
-            value={draft.sortOrder}
-            disabled={isPending}
-            onChange={(e) => setDraft({ ...draft, sortOrder: e.target.value })}
-          />
-        </Field>
         <label className="flex items-end gap-2 pb-2">
           <Checkbox
             checked={draft.enabled}
@@ -184,10 +170,16 @@ export function AiOperationModels({
   lang,
   operation,
   models,
+  economicsByModel,
 }: {
   lang: string;
   operation: string;
+  // In display order. The first selectable one is what a request that names no
+  // model runs on.
   models: AiOperationModelRow[];
+  // What each model costs to run, rendered under its own row so the figures do
+  // not have to be matched back to a model by eye.
+  economicsByModel: Record<string, ReactNode>;
 }) {
   const { t } = useTranslation(lang);
   const { toast } = useToast();
@@ -196,6 +188,7 @@ export function AiOperationModels({
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [adding, setAdding] = useState(false);
+  const defaultModelId = models.find((model) => model.enabled)?.modelId;
 
   const run = useCallback(
     (work: () => Promise<{ success: boolean; message?: string }>) => {
@@ -235,7 +228,6 @@ export function AiOperationModels({
           // The server treats an empty name as absent and shows the id.
           displayName: current.displayName.trim() || null,
           priceUnits: Number(current.priceUnits),
-          sortOrder: Number(current.sortOrder),
           enabled: current.enabled,
         }),
       );
@@ -293,44 +285,68 @@ export function AiOperationModels({
             }
           />
         ) : (
-          <div
-            key={model.modelId}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">
-                {model.displayName ?? model.modelId}
-              </span>
-              {/* The id is already the label when no display name was given;
-                  printing it twice reads as two different things. */}
-              {model.displayName && (
-                <code className="text-xs text-muted-foreground">
-                  {model.modelId}
-                </code>
-              )}
-              {!model.enabled && (
-                <Badge variant="outline">
-                  {t("admin:ai.models.disabled")}
-                </Badge>
-              )}
+          <div key={model.modelId} className="rounded-lg border">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">
+                  {model.displayName ?? model.modelId}
+                </span>
+                {/* The id is already the label when no display name was given;
+                    printing it twice reads as two different things. */}
+                {model.displayName && (
+                  <code className="text-xs text-muted-foreground">
+                    {model.modelId}
+                  </code>
+                )}
+                {model.modelId === defaultModelId && (
+                  <Badge variant="default">
+                    {t("admin:ai.models.default")}
+                  </Badge>
+                )}
+                {!model.enabled && (
+                  <Badge variant="outline">
+                    {t("admin:ai.models.disabled")}
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">
+                  {t("admin:ai.models.priceValue", { units: model.priceUnits })}
+                </span>
+                {/* Only on a model a request could actually land on: the
+                    default is the first selectable one. */}
+                {model.enabled && model.modelId !== defaultModelId && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={isPending}
+                    onClick={() =>
+                      run(async () =>
+                        await setDefaultAiOperationModel({
+                          operation,
+                          modelId: model.modelId,
+                        }),
+                      )
+                    }
+                  >
+                    {t("admin:ai.models.makeDefault")}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isPending}
+                  onClick={() => {
+                    setAdding(false);
+                    setDraft(draftOf(model));
+                    setEditing(model.modelId);
+                  }}
+                >
+                  {t("admin:ai.models.edit")}
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-muted-foreground">
-                {t("admin:ai.models.priceValue", { units: model.priceUnits })}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={isPending}
-                onClick={() => {
-                  setAdding(false);
-                  setDraft(draftOf(model));
-                  setEditing(model.modelId);
-                }}
-              >
-                {t("admin:ai.models.edit")}
-              </Button>
-            </div>
+            {economicsByModel[model.modelId]}
           </div>
         ),
       )}

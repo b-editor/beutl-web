@@ -31,8 +31,8 @@ describe("AI model catalog", () => {
   it("falls back to the built-in model for an operation with no rows", async () => {
     const catalog = await loadAiModelCatalog();
 
-    // The migration can land before anything is registered, exactly as a
-    // missing AiSetting row resolves to its fallback.
+    // The migration seeds a row per operation, so this is reached only by one
+    // added in code before an administrator has registered anything.
     for (const operation of AI_OPERATIONS) {
       const entry = catalog.getDefault(operation);
       expect(entry.modelId).toBe(AI_DEFAULT_OPERATION_MODELS[operation].model);

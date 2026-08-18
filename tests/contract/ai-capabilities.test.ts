@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
-import {
-  setDbProvider,
-  upsertAiOperationModel,
-  upsertAiSetting,
-} from "@beutl/db";
+import { setDbProvider, upsertAiOperationModel } from "@beutl/db";
 import { v3 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -100,10 +96,14 @@ describe("GET /api/v3/ai/capabilities", () => {
     });
   });
 
-  it("follows the model an administrator configured", async () => {
-    await upsertAiSetting({
-      key: "model.video.generate",
-      value: "google/veo-3.1-lite",
+  it("follows the model an administrator registered", async () => {
+    await upsertAiOperationModel({
+      operation: "video.generate",
+      modelId: "google/veo-3.1-lite",
+      priceUnits: 40,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
       updatedBy: "admin-1",
     });
 

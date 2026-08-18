@@ -14,7 +14,6 @@
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
-import { loadAiSettings } from "./settings";
 
 export type AiModelCostTier = "low" | "medium" | "high";
 
@@ -87,25 +86,21 @@ function builtInDefaultsOf(
   )[operation];
 }
 
-// The single model an operation runs on until models are registered for it:
-// whatever `model.<op>` / `price.<op>` resolve to, which is the admin console's
-// value or the built-in default. Reading the settings rather than the built-in
-// table is what keeps those two controls meaningful — an operation nobody has
-// registered models for still runs on the model the admin configured, at the
-// price they set.
-function configuredEntry(
-  operation: string,
-  settings: { getModel(operation: string): string; getPrice(operation: string): number },
-): Omit<AiOperationModelEntry, "costTier"> {
-  if (!builtInDefaultsOf(operation)) {
+// What an operation runs on when nothing has been registered for it. The
+// migration seeds a row for every operation that exists today, so this is
+// reached only by one added in code before an administrator has registered
+// anything — which is why it is the built-in default rather than a stored
+// value.
+function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"> {
+  const defaults = builtInDefaultsOf(operation);
+  if (!defaults) {
     throw new Error(`Unknown AI operation: ${operation}`);
   }
-  const modelId = settings.getModel(operation);
   return {
     operation,
-    modelId,
-    priceUnits: settings.getPrice(operation),
-    displayName: modelId,
+    modelId: defaults.model,
+    priceUnits: defaults.price,
+    displayName: defaults.model,
     sortOrder: 0,
   };
 }
@@ -115,10 +110,7 @@ export async function loadAiModelCatalog({
 }: {
   prisma?: PrismaTransaction;
 } = {}): Promise<AiModelCatalog> {
-  const [rows, settings] = await Promise.all([
-    listAiOperationModels({ prisma }),
-    loadAiSettings({ prisma }),
-  ]);
+  const rows = await listAiOperationModels({ prisma });
   const byOperation = new Map<string, Omit<AiOperationModelEntry, "costTier">[]>();
   for (const row of rows) {
     if (!row.enabled) continue;
@@ -136,11 +128,7 @@ export async function loadAiModelCatalog({
 
   const resolved = new Map<string, AiOperationModelEntry[]>();
   for (const operation of AI_OPERATIONS) {
-    // An operation with no rows falls back to its configured single model, so
-    // the migration can land before anything has been registered and nothing
-    // about that operation changes.
-    const entries =
-      byOperation.get(operation) ?? [configuredEntry(operation, settings)];
+    const entries = byOperation.get(operation) ?? [builtInEntry(operation)];
     resolved.set(operation, assignCostTiers(entries));
   }
 

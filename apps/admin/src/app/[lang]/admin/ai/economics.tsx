@@ -6,11 +6,7 @@ import {
   type PriceSourceState,
 } from "./economics-panel";
 import { aiCostEstimateKey } from "@beutl/api";
-import {
-  getAiEconomics,
-  getAiModelCatalog,
-  getAiOperationModels,
-} from "./queries";
+import { getAiEconomics } from "./queries";
 
 // The server side of the economics panels: it only fetches what needs the
 // network — Stripe prices and the provider cost estimates — and hands it to the
@@ -34,49 +30,8 @@ function toSourceState(result: OfferPricingResult): PriceSourceState {
   };
 }
 
-// One panel per model the operation can run on. An operation with no registered
-// rows still gets one, for the single model the settings page holds.
+// What one model costs to run, shown under the row that configures it.
 export async function AiOperationEconomics({
-  lang,
-  operation,
-}: {
-  lang: string;
-  operation: string;
-}) {
-  const [{ pro, topUpUnitValue, costByModel }, catalog] = await Promise.all([
-    getAiEconomics(),
-    getAiModelCatalog(),
-  ]);
-  const entries = catalog.list(operation);
-  const registered = new Set(
-    (await getAiOperationModels())
-      .filter((row) => row.operation === operation)
-      .map((row) => row.modelId),
-  );
-
-  return (
-    <div className="flex flex-col gap-3">
-      {entries.map((entry) => (
-        <AiOperationEconomicsPanel
-          key={entry.modelId}
-          lang={lang}
-          operation={operation}
-          model={entry.modelId}
-          priceUnits={registered.has(entry.modelId) ? entry.priceUnits : null}
-          estimate={costByModel.get(
-            aiCostEstimateKey(operation, entry.modelId),
-          )}
-          proOffer={toOfferAmount(pro)}
-          topUpUnitValue={topUpUnitValue}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Rendered until the prices arrive. The allowance figure needs no network, so
-// the panel still computes and updates it while the rest is pending.
-export function AiOperationEconomicsFallback({
   lang,
   operation,
   model,
@@ -85,13 +40,36 @@ export function AiOperationEconomicsFallback({
   lang: string;
   operation: string;
   model: string;
-  priceUnits: number | null;
+  priceUnits: number;
+}) {
+  const { pro, topUpUnitValue, costByModel } = await getAiEconomics();
+  return (
+    <AiOperationEconomicsPanel
+      lang={lang}
+      operation={operation}
+      priceUnits={priceUnits}
+      estimate={costByModel.get(aiCostEstimateKey(operation, model))}
+      proOffer={toOfferAmount(pro)}
+      topUpUnitValue={topUpUnitValue}
+    />
+  );
+}
+
+// Rendered until the prices arrive. The allowance figure needs no network, so
+// the panel still computes and updates it while the rest is pending.
+export function AiOperationEconomicsFallback({
+  lang,
+  operation,
+  priceUnits,
+}: {
+  lang: string;
+  operation: string;
+  priceUnits: number;
 }) {
   return (
     <AiOperationEconomicsPanel
       lang={lang}
       operation={operation}
-      model={model}
       priceUnits={priceUnits}
       estimate={undefined}
       proOffer={null}

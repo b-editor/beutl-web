@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AI_OPERATIONS,
+  AI_DEFAULT_OPERATION_MODELS,
   AI_PRICING_CATALOG,
-  AI_SETTINGS,
   DEFAULT_MONTHLY_USAGE_LIMIT,
-  aiPriceSettingKey,
   derivePlanUnitValue,
   deriveTopUpUnitValue,
   describeAllowanceEquivalent,
@@ -15,12 +14,13 @@ import {
 } from "@beutl/core";
 
 const defaultPriceOf = (operation: string) =>
-  Number(AI_SETTINGS[aiPriceSettingKey(operation)].fallback);
+  (AI_DEFAULT_OPERATION_MODELS as Record<string, { price: number }>)[operation]!
+    .price;
 
 describe("AI billing catalog", () => {
-  // The catalog and the settings registry are separate objects that must list
-  // the same operations. Nothing checked that until now.
-  it("covers exactly the operations that have settings", () => {
+  // The catalog and the built-in model table are separate objects that must
+  // list the same operations. Nothing checked that until now.
+  it("covers exactly the operations that have a built-in model", () => {
     expect(Object.keys(AI_PRICING_CATALOG).sort()).toEqual(
       [...AI_OPERATIONS].sort(),
     );

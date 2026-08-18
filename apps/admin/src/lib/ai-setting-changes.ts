@@ -1,7 +1,6 @@
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
-  aiMinimumChargeOf,
   isAiSettingKey,
   validateAiSettingValue,
 } from "@beutl/core";
@@ -10,8 +9,11 @@ import {
 //
 // Server Action arguments lose their type annotations at runtime, so the shape
 // is checked here as well as the value ranges. The batch is accepted or
-// rejected as a whole: persisting the valid half of a repricing would leave
-// some operations on the new rate and some on the old one.
+// rejected as a whole.
+//
+// What the allowance has to be checked against — every model's price — is not
+// in this batch and not in this module: it is rows in a table, so that rule
+// lives with the rows, in ai-operation-model-changes.
 export type AiSettingChange = {
   key: string;
   // null resets the setting to its built-in default by removing the row.
@@ -21,14 +23,14 @@ export type AiSettingChange = {
 export const MAX_CHANGES_PER_SAVE = 64;
 
 export type AiSettingChangesResult =
-  | { ok: true; changes: AiSettingChange[] }
+  // The allowance the batch leaves in force, which the caller checks against
+  // the registered models before committing.
+  | { ok: true; changes: AiSettingChange[]; allowance: number }
   | { ok: false; message: string };
 
 export function validateAiSettingChanges(
   input: unknown,
-  // The stored value of any setting this batch does not touch. Prices and the
-  // allowance constrain each other, and only the batch knows what both will be
-  // once it lands.
+  // The stored value of any setting this batch does not touch.
   currentValueOf: (key: string) => string,
 ): AiSettingChangesResult {
   if (!Array.isArray(input) || input.length === 0) {
@@ -70,39 +72,17 @@ export function validateAiSettingChanges(
     changes.push({ key, value: validated.value });
   }
 
-  // An operation priced above the allowance can never be started by anyone on
-  // the plan. Each value passes its own range check, so nothing but a
-  // whole-batch comparison catches an allowance typed one digit short — which
-  // would take every operation offline while every field still looked valid.
   const submitted = new Map(changes.map((change) => [change.key, change.value]));
-  const effectiveValueOf = (key: string): string => {
-    if (!submitted.has(key)) return currentValueOf(key);
-    // A null resets the setting, which puts its built-in default in force.
-    return submitted.get(key) ?? AI_SETTINGS[key].fallback;
-  };
-
-  const allowance = Number(effectiveValueOf(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY));
+  // A null resets the setting, which puts its built-in default in force.
+  const allowance = Number(
+    submitted.has(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY)
+      ? submitted.get(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY) ??
+          AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]!.fallback
+      : currentValueOf(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY),
+  );
   if (!Number.isSafeInteger(allowance) || allowance <= 0) {
     return { ok: false, message: "Invalid monthly allowance" };
   }
-  for (const definition of Object.values(AI_SETTINGS)) {
-    if (definition.kind !== "price") continue;
-    const price = Number(effectiveValueOf(definition.key));
-    if (!Number.isSafeInteger(price)) continue;
-    // The smallest request the operation accepts, not one billing unit: a
-    // video is charged for at least four seconds, so a price a quarter of the
-    // allowance already takes it offline.
-    const minimumCharge =
-      definition.operation === undefined
-        ? price
-        : (aiMinimumChargeOf(definition.operation, price) ?? price);
-    if (minimumCharge > allowance) {
-      return {
-        ok: false,
-        message: `${definition.key} costs ${minimumCharge} units at its smallest request, above the ${allowance} unit monthly allowance`,
-      };
-    }
-  }
 
-  return { ok: true, changes };
+  return { ok: true, changes, allowance };
 }

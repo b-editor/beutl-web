@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_SETTINGS } from "@beutl/core";
+import { AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, AI_SETTINGS } from "@beutl/core";
 import {
   MAX_CHANGES_PER_SAVE,
   validateAiSettingChanges,
@@ -16,111 +16,92 @@ function validate(input: unknown, stored = storedDefaultOf) {
 }
 
 describe("AI setting change batches", () => {
-  it("accepts edits and resets together", () => {
+  it("normalizes what it accepts and reports the allowance in force", () => {
     const result = validate([
-      { key: "price.image.generate", value: " 25 " },
-      { key: "model.video.generate", value: "google/veo-3.1" },
-      { key: "plan.monthlyUsageLimit", value: null },
+      { key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: " 900 " },
     ]);
 
     expect(result).toEqual({
       ok: true,
-      changes: [
-        // Values are normalized on the way in, exactly as a single save did.
-        { key: "price.image.generate", value: "25" },
-        { key: "model.video.generate", value: "google/veo-3.1" },
-        { key: "plan.monthlyUsageLimit", value: null },
-      ],
+      changes: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "900" }],
+      // What the caller checks the registered models against; the prices are
+      // rows rather than settings, so this module cannot do it itself.
+      allowance: 900,
     });
   });
 
-  it("rejects the whole batch when one value is invalid", () => {
+  it("reports the built-in allowance when the batch resets it", () => {
     const result = validate([
-      { key: "price.image.generate", value: "25" },
-      { key: "price.video.generate", value: "0" },
+      { key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: null },
     ]);
 
-    // Saving the valid half would price one operation on the new rate and
-    // leave the other on the old one.
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.message).toContain("price.video.generate");
-    }
+    expect(result).toEqual({
+      ok: true,
+      changes: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: null }],
+      allowance: Number(AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]!.fallback),
+    });
+  });
+
+  it("reports the stored allowance when the batch does not touch it", () => {
+    const result = validate(
+      [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "700" }],
+      () => "1200",
+    );
+
+    expect(result.ok && result.allowance).toBe(700);
+  });
+
+  it("rejects a value that is not a whole allowance", () => {
+    const result = validate([
+      { key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "0" },
+    ]);
+
+    expect(result).toEqual({
+      ok: false,
+      message: `Invalid value for ${AI_PLAN_MONTHLY_USAGE_LIMIT_KEY}: limitOutOfRange`,
+    });
   });
 
   it("rejects a key that is not a setting", () => {
-    expect(
-      validate([{ key: "price.unknown", value: "25" }]).ok,
-    ).toBe(false);
-    expect(
-      validate([{ key: "__proto__", value: "25" }]).ok,
-    ).toBe(false);
+    // These were settings until models moved to their own table.
+    for (const key of ["price.image.generate", "model.video.generate", "nope"]) {
+      expect(validate([{ key, value: "1" }])).toEqual({
+        ok: false,
+        message: "Invalid setting key",
+      });
+    }
   });
 
   it("rejects the same key twice, which would make the outcome order-dependent", () => {
     const result = validate([
-      { key: "price.image.generate", value: "25" },
-      { key: "price.image.generate", value: "30" },
-    ]);
-    expect(result.ok).toBe(false);
-  });
-
-  it.each([
-    ["nothing", []],
-    ["a non-array", "price.image.generate=25"],
-    ["a non-object entry", ["price.image.generate"]],
-    ["a value that is not a string", [{ key: "price.image.generate", value: 25 }]],
-  ])("rejects %s", (_label, input) => {
-    expect(validate(input).ok).toBe(false);
-  });
-
-  it("rejects an allowance that would put a stored price out of reach", () => {
-    // A digit short on the allowance passes its own range check and takes every
-    // operation offline: nothing priced above 5 units can be started.
-    const result = validate([{ key: "plan.monthlyUsageLimit", value: "5" }]);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.message).toContain("price.");
-      expect(result.message).toContain("5 unit monthly allowance");
-    }
-  });
-
-  it("rejects a price raised above the allowance being saved with it", () => {
-    const result = validate([
-      { key: "plan.monthlyUsageLimit", value: "100" },
-      { key: "price.video.generate", value: "101" },
+      { key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "700" },
+      { key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "900" },
     ]);
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.message).toContain("price.video.generate");
-    }
-  });
-
-  it("accepts a price the allowance raised in the same batch makes room for", () => {
-    // The pair used to be checked against a fixed ceiling, so a costlier model
-    // needed a redeploy however large the allowance was.
-    const result = validate([
-      { key: "plan.monthlyUsageLimit", value: "5000" },
-      { key: "price.video.generate", value: "800" },
-    ]);
-
-    expect(result.ok).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      message: `Duplicate setting key: ${AI_PLAN_MONTHLY_USAGE_LIMIT_KEY}`,
+    });
   });
 
   it("caps how much one save can touch", () => {
-    const oversized = Array.from(
-      { length: MAX_CHANGES_PER_SAVE + 1 },
-      (_unused, index) => ({
-        key: `price.image.generate.${index}`,
-        value: "25",
-      }),
+    const result = validate(
+      Array.from({ length: MAX_CHANGES_PER_SAVE + 1 }, () => ({
+        key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+        value: "500",
+      })),
     );
-    const result = validate(oversized);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.message).toContain("Too many");
-    }
+
+    expect(result).toEqual({
+      ok: false,
+      message: "Too many changes were submitted",
+    });
+  });
+
+  it("refuses an empty batch", () => {
+    expect(validate([])).toEqual({
+      ok: false,
+      message: "No changes were submitted",
+    });
   });
 });

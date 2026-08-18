@@ -20,7 +20,7 @@ import { updateAiSettings } from "./actions";
 
 export type AiSettingRow = {
   key: string;
-  kind: "model" | "price" | "limit";
+  kind: "limit";
   value: string;
   source: "database" | "default";
   fallback: string;
@@ -30,6 +30,9 @@ export type AiSettingRow = {
 // the built-in default. "Reset" is not the same as typing the default value in:
 // it removes the stored row, so the setting follows the default if that default
 // ever changes.
+//
+// Only the allowance is left here. Models and their prices are rows in a table,
+// saved one at a time — see model-list.
 type Draft = {
   value: string;
   reset: boolean;
