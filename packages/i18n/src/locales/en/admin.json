@@ -132,6 +132,9 @@
       "remove": "Remove",
       "cancel": "Cancel",
       "apply": "Apply",
+      "openRouter": "Open on OpenRouter",
+      "summaryCount": "{{total}} models",
+      "summaryNone": "Nothing selectable",
       "economicsPending": "Enter a model ID to see what it costs to run."
     },
     "tab": {

@@ -12,6 +12,13 @@ import { Button } from "@beutl/ui/ui/button";
 import { Input } from "@beutl/ui/ui/input";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@beutl/ui/ui/collapsible";
+import { Separator } from "@beutl/ui/ui/separator";
+import { ChevronRight, ExternalLink } from "lucide-react";
 import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
 import { MAX_MODEL_DISPLAY_NAME_LENGTH } from "@/lib/ai-operation-model-changes";
 import { isAiModelId, type AiUnitValue } from "@beutl/core";
@@ -94,6 +101,36 @@ const EMPTY_DRAFT: Draft = {
   priceUnits: "",
   enabled: true,
 };
+
+// The provider's page for a model, which is where its capabilities and its
+// real rate card are. Safe to interpolate: isAiModelId already restricts the id
+// to characters that need no escaping in a path.
+function openRouterUrl(modelId: string): string {
+  return `https://openrouter.ai/${modelId}`;
+}
+
+function OpenRouterLink({
+  lang,
+  modelId,
+}: {
+  lang: string;
+  modelId: string;
+}) {
+  const { t } = useTranslation(lang);
+  return (
+    <Button asChild size="sm" variant="ghost">
+      <a
+        href={openRouterUrl(modelId)}
+        target="_blank"
+        rel="noreferrer noopener"
+        title={t("admin:ai.models.openRouter")}
+      >
+        <ExternalLink className="h-4 w-4" />
+        <span className="sr-only">{t("admin:ai.models.openRouter")}</span>
+      </a>
+    </Button>
+  );
+}
 
 function Field({
   label,
@@ -205,8 +242,10 @@ function ModelEditor({
             {t("admin:ai.models.remove")}
           </Button>
         )}
+        {isAiModelId(draft.modelId.trim()) && (
+          <OpenRouterLink lang={lang} modelId={draft.modelId.trim()} />
+        )}
       </div>
-      <code className="text-xs text-muted-foreground">{operation}</code>
       <ModelEditorEconomics lang={lang} operation={operation} draft={draft} />
     </div>
   );
@@ -267,10 +306,12 @@ function ModelEditorEconomics({
 export function AiOperationModels({
   lang,
   operation,
+  title,
   economicsByModel,
 }: {
   lang: string;
   operation: string;
+  title: string;
   // What each model costs to run, rendered under its own row so the figures do
   // not have to be matched back to a model by eye.
   economicsByModel: Record<string, ReactNode>;
@@ -299,18 +340,46 @@ export function AiOperationModels({
     [setModels],
   );
 
+  const defaultModel = models.find((model) => model.enabled);
+
   return (
-    <div className="flex flex-col gap-3">
+    // Collapsed to start: nine operations of rows and figures is more than any
+    // one edit needs on screen, so the header carries what the section would
+    // have shown at a glance — which model a request lands on, how many are on
+    // offer, and whether it holds an unsaved edit.
+    <Collapsible className="group/operation flex flex-col gap-3">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full flex-wrap items-center justify-between gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-accent/40"
+        >
+          <span className="flex items-center gap-2">
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/operation:rotate-90" />
+            <span className="text-lg font-semibold">{title}</span>
+            {changed && (
+              <Badge variant="secondary">{t("admin:ai.form.unsaved")}</Badge>
+            )}
+          </span>
+          {/* The model name is placed rather than interpolated: i18next
+              escapes interpolated values, and a model id is mostly slash. */}
+          <span className="text-xs text-muted-foreground">
+            {defaultModel ? (
+              <>
+                {defaultModel.displayName ?? defaultModel.modelId}
+                {" · "}
+                {t("admin:ai.models.summaryCount", { total: models.length })}
+              </>
+            ) : (
+              t("admin:ai.models.summaryNone")
+            )}
+          </span>
+        </button>
+      </CollapsibleTrigger>
+      <Separator />
+
+      <CollapsibleContent className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-medium">
-            {t("admin:ai.models.title")}
-            {changed && (
-              <Badge className="ml-2" variant="secondary">
-                {t("admin:ai.form.unsaved")}
-              </Badge>
-            )}
-          </h3>
           <p className="text-xs text-muted-foreground">
             {models.length === 0
               ? t("admin:ai.models.emptyDescription")
@@ -385,6 +454,7 @@ export function AiOperationModels({
                 <span className="text-sm text-muted-foreground">
                   {t("admin:ai.models.priceValue", { units: model.priceUnits })}
                 </span>
+                <OpenRouterLink lang={lang} modelId={model.modelId} />
                 {/* Only on a model a request could actually land on: the
                     default is the first selectable one. */}
                 {model.enabled && model.modelId !== defaultModelId && (
@@ -440,6 +510,7 @@ export function AiOperationModels({
           onCancel={() => setAdding(false)}
         />
       )}
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

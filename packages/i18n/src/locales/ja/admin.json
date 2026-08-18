@@ -132,6 +132,9 @@
       "remove": "削除",
       "cancel": "キャンセル",
       "apply": "反映",
+      "openRouter": "OpenRouter で開く",
+      "summaryCount": "{{total}} モデル",
+      "summaryNone": "選択できるモデルがありません",
       "economicsPending": "モデル ID を入力すると、実行にかかる原価を表示します。"
     },
     "tab": {

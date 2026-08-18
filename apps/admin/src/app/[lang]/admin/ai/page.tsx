@@ -141,23 +141,15 @@ export default async function Page(props: {
             />
           </section>
 
+          {/* Every model an operation offers, and nothing else: a second place
+              to type a model would be a control that silently does nothing once
+              a row exists. */}
           {AI_OPERATIONS.map((operation) => (
-            <section key={operation} className="flex flex-col gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  {t(`admin:ai.operation.${operation}`)}
-                </h2>
-                <code className="text-xs text-muted-foreground">
-                  {operation}
-                </code>
-              </div>
-              <Separator />
-              {/* Every model this operation offers, and nothing else: a second
-                  place to type a model would be a control that silently does
-                  nothing once a row exists. */}
               <AiOperationModels
+                key={operation}
                 lang={lang}
                 operation={operation}
+                title={t(`admin:ai.operation.${operation}`)}
                 // Prices and provider costs are network calls, so each figure
                 // sits behind its own boundary and the rows stay interactive
                 // while they load. They all await the same cached lookup.
@@ -185,7 +177,6 @@ export default async function Page(props: {
                   ]),
                 )}
               />
-            </section>
           ))}
 
           {/* Stated once rather than under every operation. */}
