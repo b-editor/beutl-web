@@ -375,7 +375,13 @@ export function ModelSelect({
   disabled?: boolean;
 }) {
   const { t } = useTranslation(lang);
-  if (models.length <= 1) return null;
+  // The chosen model travels with the request even when there is nothing to
+  // choose between. A screen may be offering fewer models than are registered —
+  // video drops the ones that cannot serve any request it can build — and a
+  // form that submits no model silently runs on the registered default instead.
+  if (models.length <= 1) {
+    return value ? <input type="hidden" name="model" value={value} /> : null;
+  }
 
   return (
     <div className="flex flex-col space-y-1.5">

@@ -5,7 +5,8 @@ import {
   listDueAiRemoteJobCleanups,
   rescheduleAiRemoteJobCleanup,
 } from "@beutl/db";
-import { AiProviderError, getVideoJob } from "./openrouter";
+import { AiProviderError } from "./openrouter";
+import { getVideoJob } from "./openrouter-video";
 
 const REMOTE_JOB_LEASE_MS = 30_000;
 const REMOTE_JOB_POLL_DELAY_MS = 5 * 60 * 1_000;

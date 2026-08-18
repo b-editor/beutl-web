@@ -21,22 +21,27 @@ import {
 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
+  const original = await importOriginal<
+    typeof import("../../packages/api/src/ai/openrouter-video")
+  >();
+  return { ...original, getVideoJob: vi.fn() };
+});
 vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
   const original = await importOriginal<
     typeof import("../../packages/api/src/ai/openrouter")
   >();
   return {
     ...original,
-    getVideoJob: vi.fn(),
     downloadVideoContent: vi.fn(),
   };
 });
 
 import {
   downloadVideoContent,
-  getVideoJob,
   InvalidAiProviderOutputError,
 } from "../../packages/api/src/ai/openrouter";
+import { getVideoJob } from "../../packages/api/src/ai/openrouter-video";
 
 const USER_ID = "user-1";
 const PERIOD_START = new Date("2026-08-01T00:00:00.000Z");

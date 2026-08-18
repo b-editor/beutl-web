@@ -36,6 +36,7 @@
   "aiRequestInProgress": "This AI request is still in progress. Please try again shortly.",
   "aiRequestWasDeleted": "This AI request was deleted. Start a new request to run it again.",
   "aiModelUnavailable": "The model this request used is no longer available. Start a new request to choose another one.",
+  "aiModelDoesNotSupportRequest": "The selected model does not support this combination. Change the resolution, length or aspect ratio, or pick another model.",
   "unknown": "An unknown error occurred.",
   "invalidVersionFormat": "Invalid version format."
 }

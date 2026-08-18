@@ -7,6 +7,10 @@ import {
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import {
+  loadAiVideoModelCapabilities,
+  unsupportedVideoRequestReason,
+} from "../../ai/video-model-capabilities";
 import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
@@ -118,25 +122,30 @@ const webhookStatusByType = {
 
 class OpenRouterWebhookBodyTooLargeError extends Error {}
 
+// OpenRouter only calls back over HTTPS. A server reachable only over plain
+// HTTP — a local one — gets no callback URL, and its jobs are finished by the
+// poll path instead of being refused at submission.
 function openRouterVideoCallbackUrl(
   request: Request,
   jobId: string,
   callbackNonce: string,
-): string {
+): string | undefined {
+  let callbackUrl: URL;
   try {
     const origin = process.env.PUBLIC_ORIGIN || new URL(request.url).origin;
-    const callbackUrl = new URL(
+    callbackUrl = new URL(
       `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
       origin,
     );
-    callbackUrl.searchParams.set("nonce", callbackNonce);
-    return callbackUrl.toString();
   } catch (cause) {
     throw new AiVideoSubmissionError(
       "OpenRouter video callback URL could not be constructed",
       { outcome: "definite_failure", cause },
     );
   }
+  if (callbackUrl.protocol !== "https:") return undefined;
+  callbackUrl.searchParams.set("nonce", callbackNonce);
+  return callbackUrl.toString();
 }
 
 async function readOpenRouterWebhookBody(request: Request): Promise<Uint8Array> {
@@ -238,6 +247,25 @@ const app = new Hono()
         status: 400,
       });
     }
+    // Refused here rather than by the provider after the usage is reserved:
+    // what a model accepts differs per model, and a rejection that arrives
+    // after the reservation reads as a provider outage.
+    if (
+      unsupportedVideoRequestReason(
+        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+        {
+          resolution,
+          durationSeconds,
+          aspectRatio,
+          generateAudio,
+          ...(seed === undefined ? {} : { seed }),
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
@@ -290,6 +318,12 @@ const app = new Hono()
       });
     }
 
+    const callbackUrl = openRouterVideoCallbackUrl(
+      c.req.raw,
+      job.id,
+      callbackNonce.nonce,
+    );
+
     try {
       await createAndAttachVideoJob({
         jobId: job.id,
@@ -299,11 +333,7 @@ const app = new Hono()
         aspectRatio,
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
-        callbackUrl: openRouterVideoCallbackUrl(
-          c.req.raw,
-          job.id,
-          callbackNonce.nonce,
-        ),
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         signal: c.req.raw.signal,
@@ -430,6 +460,23 @@ const app = new Hono()
         status: 400,
       });
     }
+    if (
+      unsupportedVideoRequestReason(
+        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+        {
+          resolution,
+          durationSeconds,
+          aspectRatio,
+          generateAudio,
+          ...(seed === undefined ? {} : { seed }),
+          frameImages: true,
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
@@ -522,6 +569,12 @@ const app = new Hono()
       });
     }
 
+    const callbackUrl = openRouterVideoCallbackUrl(
+      c.req.raw,
+      job.id,
+      callbackNonce.nonce,
+    );
+
     try {
       await createAndAttachVideoJob({
         jobId: job.id,
@@ -532,11 +585,7 @@ const app = new Hono()
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
         frameImages,
-        callbackUrl: openRouterVideoCallbackUrl(
-          c.req.raw,
-          job.id,
-          callbackNonce.nonce,
-        ),
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         signal: c.req.raw.signal,

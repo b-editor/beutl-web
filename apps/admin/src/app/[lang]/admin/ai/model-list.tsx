@@ -308,6 +308,7 @@ export function AiOperationModels({
   operation,
   title,
   economicsByModel,
+  warningsByModel,
 }: {
   lang: string;
   operation: string;
@@ -315,6 +316,11 @@ export function AiOperationModels({
   // What each model costs to run, rendered under its own row so the figures do
   // not have to be matched back to a model by eye.
   economicsByModel: Record<string, ReactNode>;
+  // Why a registered model cannot serve this operation, keyed by model id. A
+  // model the provider will refuse every request for looks identical to a
+  // working one here otherwise, and the failure only shows up as "the provider
+  // errored" on the user's screen.
+  warningsByModel?: Record<string, string>;
 }) {
   const { t } = useTranslation(lang);
   const { models, changed, isPending, setModels } = useAiModels(operation);
@@ -490,6 +496,11 @@ export function AiOperationModels({
                 </Button>
               </div>
             </div>
+            {warningsByModel?.[model.modelId] && (
+              <p className="text-xs text-destructive">
+                {warningsByModel[model.modelId]}
+              </p>
+            )}
             {economicsByModel[model.modelId]}
           </div>
         ),

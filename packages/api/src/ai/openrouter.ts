@@ -186,7 +186,9 @@ export async function verifyOpenRouterWebhookSignature({
   return false;
 }
 
-function getApiKey(): string {
+// Exported for the SDK-backed client, which needs the same key and the same
+// "not configured" failure as the hand-rolled requests.
+export function getOpenRouterApiKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
     throw new AiProviderError("OPENROUTER_API_KEY is not set");
@@ -305,7 +307,7 @@ async function request(
 
   let apiKey: string;
   try {
-    apiKey = getApiKey();
+    apiKey = getOpenRouterApiKey();
   } catch (cause) {
     throw new OpenRouterRequestError(
       cause instanceof Error ? cause.message : "OPENROUTER_API_KEY is not set",
@@ -931,154 +933,6 @@ export type VideoFrameImage = {
   };
   frame_type: "first_frame" | "last_frame";
 };
-
-const videoJobResponseSchema = z.object({
-  id: z.string().min(1),
-  status: z.enum([
-    "pending",
-    "in_progress",
-    "completed",
-    "failed",
-    "cancelled",
-    "expired",
-  ]),
-  unsigned_urls: z.array(z.string().url()).optional(),
-  error: z.unknown().optional(),
-});
-
-function providerErrorMessage(value: unknown): string | null {
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "message" in value &&
-    typeof value.message === "string"
-  ) {
-    return value.message;
-  }
-  return null;
-}
-
-function parseVideoJob(data: unknown): VideoJobInfo {
-  const parsed = videoJobResponseSchema.safeParse(data);
-  if (!parsed.success) {
-    throw new AiProviderError("OpenRouter returned invalid video job data", {
-      execution: "unknown",
-    });
-  }
-  return {
-    id: parsed.data.id,
-    status: parsed.data.status,
-    unsignedUrls: parsed.data.unsigned_urls,
-    error: providerErrorMessage(parsed.data.error),
-  };
-}
-
-export async function createVideoJob({
-  prompt,
-  durationSeconds,
-  resolution,
-  aspectRatio,
-  generateAudio,
-  seed,
-  frameImages,
-  callbackUrl,
-  model,
-  signal,
-}: {
-  prompt: string;
-  durationSeconds: number;
-  resolution: AiVideoResolution;
-  // Resolution says how many pixels; this says what shape they are in. Without
-  // it a vertical clip cannot be asked for at all.
-  aspectRatio?: AiVideoAspectRatio;
-  // The model generates sound, and the cost estimate has always assumed it is
-  // being paid for. Sending nothing meant taking whatever the provider defaults
-  // to and never being able to ask for a silent clip.
-  generateAudio?: boolean;
-  seed?: number;
-  frameImages?: VideoFrameImage[];
-  callbackUrl: string;
-  model: string;
-  signal?: AbortSignal;
-}): Promise<VideoJobInfo> {
-  let parsedCallbackUrl: URL;
-  try {
-    parsedCallbackUrl = new URL(callbackUrl);
-  } catch (cause) {
-    throw new AiVideoSubmissionError(
-      "OpenRouter video callback URL is invalid",
-      { outcome: "definite_failure", cause },
-    );
-  }
-  if (parsedCallbackUrl.protocol !== "https:") {
-    throw new AiVideoSubmissionError(
-      "OpenRouter video callback URL must use HTTPS",
-      { outcome: "definite_failure" },
-    );
-  }
-
-  let data: unknown;
-  try {
-    data = await requestJson("/videos", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        prompt,
-        duration: durationSeconds,
-        resolution,
-        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-        ...(generateAudio === undefined
-          ? {}
-          : { generate_audio: generateAudio }),
-        ...(seed === undefined ? {} : { seed }),
-        callback_url: parsedCallbackUrl.toString(),
-        ...(frameImages && frameImages.length > 0
-          ? { frame_images: frameImages }
-          : {}),
-      }),
-      signal,
-    });
-  } catch (cause) {
-    const definiteFailure =
-      cause instanceof OpenRouterRequestError &&
-      (cause.requestState === "not_sent" ||
-        (cause.httpStatus !== null &&
-          cause.httpStatus >= 400 &&
-          cause.httpStatus < 500));
-    throw new AiVideoSubmissionError(
-      cause instanceof Error
-        ? cause.message
-        : "OpenRouter video submission failed",
-      {
-        outcome: definiteFailure ? "definite_failure" : "unknown",
-        cause,
-        ...(cause instanceof AiProviderError && cause.httpStatus !== null
-          ? { httpStatus: cause.httpStatus }
-          : {}),
-      },
-    );
-  }
-
-  try {
-    return parseVideoJob(data);
-  } catch (cause) {
-    throw new AiVideoSubmissionError(
-      "OpenRouter accepted the video submission but returned invalid job data",
-      { outcome: "unknown", cause },
-    );
-  }
-}
-
-export async function getVideoJob(id: string): Promise<VideoJobInfo> {
-  const data = await requestJson(`/videos/${encodeURIComponent(id)}`, {});
-  return parseVideoJob(data);
-}
 
 export async function downloadVideoContent(id: string): Promise<{
   bytes: ArrayBuffer;

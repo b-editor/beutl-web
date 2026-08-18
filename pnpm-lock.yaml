@@ -289,6 +289,9 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.7.6
         version: 0.7.6(hono@4.13.0)(zod@4.3.6)
+      '@openrouter/sdk':
+        specifier: ^1.2.42
+        version: 1.2.42
       '@prisma/adapter-pg':
         specifier: ^7.9.1
         version: 7.9.1
@@ -1616,6 +1619,9 @@ packages:
     peerDependenciesMeta:
       rclone.js:
         optional: true
+
+  '@openrouter/sdk@1.2.42':
+    resolution: {integrity: sha512-KBv6ICwzPElLKVJms+mxhEpSJ/YUeY/J2otkesDnlJLNZKwZqP7B6qri0sH5sRC6v0BdPjUonjbA+2PdOB1R3Q==}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -7268,6 +7274,10 @@ snapshots:
       - aws-crt
       - encoding
       - supports-color
+
+  '@openrouter/sdk@1.2.42':
+    dependencies:
+      zod: 4.3.6
 
   '@opentelemetry/api@1.9.0':
     optional: true

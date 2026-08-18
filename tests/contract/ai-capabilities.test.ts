@@ -1,8 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { setDbProvider, upsertAiOperationModel } from "@beutl/db";
+
+// What a video model accepts comes from the provider. Mocked so the endpoint's
+// shape is tested without a network call deciding the expectations.
+const listVideoModels = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../packages/api/src/ai/openrouter-video")
+  >();
+  return { ...actual, listVideoModels };
+});
+
 import { v3 } from "@beutl/api";
+import { clearAiVideoModelCapabilitiesCache } from "../../packages/api/src/ai/video-model-capabilities";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const USER_ID = "ai-capabilities-user";
@@ -30,6 +42,9 @@ describe("GET /api/v3/ai/capabilities", () => {
     const memory = createInMemoryPrisma();
     setDbProvider(async () => memory.prisma as never);
     process.env.JWT_SECRET = JWT_SECRET;
+    listVideoModels.mockReset();
+    listVideoModels.mockResolvedValue([]);
+    clearAiVideoModelCapabilitiesCache();
   });
 
   afterEach(() => {
@@ -121,8 +136,64 @@ describe("GET /api/v3/ai/capabilities", () => {
         displayName: "google/veo-3.1-lite",
         costTier: null,
         isDefault: true,
+        // A model the provider says nothing about keeps everything the
+        // operation itself offers.
+        durationsSeconds: [4, 6, 8],
+        resolutions: ["720p", "1080p"],
+        aspectRatios: ["16:9", "9:16"],
+        audio: true,
+        seed: true,
       },
     ]);
+  });
+
+  it("reports each video model's own accepted parameters", async () => {
+    // The provider decides these per model, and a fixed list of options
+    // produces requests some models reject after the usage is reserved.
+    listVideoModels.mockResolvedValue([
+      {
+        id: "narrow/model",
+        supportedResolutions: ["720p"],
+        supportedDurations: [4, 5, 6],
+        supportedAspectRatios: ["16:9"],
+        supportedFrameImages: ["first_frame"],
+        generateAudio: false,
+        seed: false,
+      },
+    ]);
+    await upsertAiOperationModel({
+      operation: "video.generate",
+      modelId: "narrow/model",
+      priceUnits: 30,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const response = await makeApp().request("/api/v3/ai/capabilities", {
+      headers: await authHeaders(),
+    });
+    const video = (await response.json()).operations["video.generate"];
+
+    expect(video.models).toEqual([
+      {
+        id: "narrow/model",
+        displayName: "narrow/model",
+        costTier: null,
+        isDefault: true,
+        // Only what both sides offer: the model takes 5 seconds, this service
+        // does not ask for it.
+        durationsSeconds: [4, 6],
+        resolutions: ["720p"],
+        aspectRatios: ["16:9"],
+        audio: false,
+        seed: false,
+      },
+    ]);
+    // The operation-level lists stay the superset the server will take at all,
+    // so a client that ignores the per-model values still sees the full range.
+    expect(video.resolutions).toEqual(["720p", "1080p"]);
   });
 
   it("lists every registered model, ordered, with the first as the default", async () => {

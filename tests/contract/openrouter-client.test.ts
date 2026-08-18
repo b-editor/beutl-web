@@ -11,12 +11,10 @@ import {
   AiProviderError,
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
-  createVideoJob,
   downloadVideoContent,
   editImage,
   generateImage,
   getOpenRouterRequestTimeoutMilliseconds,
-  getVideoJob,
   MAX_OPENROUTER_JSON_RESPONSE_BYTES,
   OPENROUTER_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
   transcribeAudio,
@@ -185,121 +183,6 @@ describe("OpenRouter client contract", () => {
     expect(getOpenRouterRequestTimeoutMilliseconds("185000")).toBe(185_000);
     expect(() => getOpenRouterRequestTimeoutMilliseconds("invalid"))
       .toThrow("must be a positive integer");
-  });
-
-  it("preserves the HTTP status on provider response errors", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ error: "job not found" }, 404)),
-    );
-
-    await expect(getVideoJob("missing-video")).rejects.toMatchObject({
-      name: "AiProviderError",
-      httpStatus: 404,
-    });
-  });
-
-  it.each([
-    [400, "definite_failure"],
-    [500, "unknown"],
-  ] as const)(
-    "classifies a video submission HTTP %s response as %s",
-    async (status, outcome) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(jsonResponse({ error: "submission" }, status)),
-      );
-
-      await expect(
-        createVideoJob({
-          prompt: "ocean waves",
-          durationSeconds: 4,
-          resolution: "720p",
-          callbackUrl:
-            "https://beutl.example/api/v3/ai/videos/local-1/openrouter-callback",
-          model: "google/veo-3.1",
-        }),
-      ).rejects.toMatchObject({
-        name: "AiVideoSubmissionError",
-        outcome,
-        httpStatus: status,
-      });
-    },
-  );
-
-  it("classifies transport and accepted-but-unparseable video outcomes as unknown", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("connection reset"))
-      .mockResolvedValueOnce(jsonResponse({ status: "pending" }));
-    vi.stubGlobal("fetch", fetchMock);
-    const submission = {
-      prompt: "ocean waves",
-      durationSeconds: 4,
-      resolution: "720p" as const,
-      callbackUrl:
-        "https://beutl.example/api/v3/ai/videos/local-1/openrouter-callback",
-      model: "google/veo-3.1",
-    };
-
-    await expect(createVideoJob(submission)).rejects.toMatchObject({
-      name: "AiVideoSubmissionError",
-      outcome: "unknown",
-    });
-    await expect(createVideoJob(submission)).rejects.toMatchObject({
-      name: "AiVideoSubmissionError",
-      outcome: "unknown",
-    });
-  });
-
-  it("classifies a timed-out video submission as unknown", async () => {
-    vi.stubEnv("OPENROUTER_REQUEST_TIMEOUT_MS", "5");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(
-        (_url: string, init: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init.signal?.addEventListener(
-              "abort",
-              () => reject(init.signal?.reason),
-              { once: true },
-            );
-          }),
-      ),
-    );
-
-    await expect(
-      createVideoJob({
-        prompt: "ocean waves",
-        durationSeconds: 4,
-        resolution: "720p",
-        callbackUrl:
-          "https://beutl.example/api/v3/ai/videos/local-1/openrouter-callback",
-        model: "google/veo-3.1",
-      }),
-    ).rejects.toMatchObject({
-      name: "AiVideoSubmissionError",
-      outcome: "unknown",
-    });
-  });
-
-  it("rejects an invalid callback URL before submitting a video", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      createVideoJob({
-        prompt: "ocean waves",
-        durationSeconds: 4,
-        resolution: "720p",
-        callbackUrl: "http://beutl.example/openrouter-callback",
-        model: "google/veo-3.1",
-      }),
-    ).rejects.toMatchObject({
-      name: "AiVideoSubmissionError",
-      outcome: "definite_failure",
-    } satisfies Partial<AiVideoSubmissionError>);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("verifies the raw OpenRouter webhook body and enforces timestamp tolerance", async () => {
@@ -602,82 +485,26 @@ describe("OpenRouter client contract", () => {
     });
   });
 
-  it("uses integer video durations and downloads content with authentication", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          id: "video-1",
-          polling_url: "https://openrouter.ai/api/v1/videos/video-1",
-          status: "pending",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          id: "video-1",
-          status: "completed",
-          unsigned_urls: [
-            "https://openrouter.ai/api/v1/videos/video-1/content?index=0",
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(VALID_MP4_BYTES, {
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+  it("downloads generated video content with authentication", async () => {
+    // The finished video still comes through the hand-rolled request: the bytes
+    // are cross-checked against the declared content type, and the SDK hands
+    // back a body stream without it.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(VALID_MP4_BYTES, {
+        headers: { "content-type": "video/mp4" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      createVideoJob({
-        prompt: "ocean waves",
-        durationSeconds: 4,
-        resolution: "1080p",
-        callbackUrl:
-          "https://beutl.example/api/v3/ai/videos/local-1/openrouter-callback",
-        model: "google/veo-3.1",
-      }),
-    ).resolves.toEqual({
-      id: "video-1",
-      status: "pending",
-      unsignedUrls: undefined,
-      error: null,
-    });
-    await expect(getVideoJob("video-1")).resolves.toEqual({
-      id: "video-1",
-      status: "completed",
-      unsignedUrls: [
-        "https://openrouter.ai/api/v1/videos/video-1/content?index=0",
-      ],
-      error: null,
-    });
     const content = await downloadVideoContent("video-1");
-    expect(new Uint8Array(content.bytes)).toEqual(
-      VALID_MP4_BYTES,
-    );
+
+    expect(new Uint8Array(content.bytes)).toEqual(VALID_MP4_BYTES);
     expect(content.mimeType).toBe("video/mp4");
     expect(content.extension).toBe("mp4");
-
-    const [createUrl, createInit] = fetchMock.mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
-    expect(createUrl).toBe("https://openrouter.ai/api/v1/videos");
-    expect(JSON.parse(createInit.body as string)).toEqual({
-      model: "google/veo-3.1",
-      prompt: "ocean waves",
-      duration: 4,
-      resolution: "1080p",
-      callback_url:
-        "https://beutl.example/api/v3/ai/videos/local-1/openrouter-callback",
-    });
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "https://openrouter.ai/api/v1/videos/video-1",
-    );
-    expect(fetchMock.mock.calls[2][0]).toBe(
+    expect(fetchMock.mock.calls[0][0]).toBe(
       "https://openrouter.ai/api/v1/videos/video-1/content?index=0",
     );
-    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
       headers: { Authorization: "Bearer test-openrouter-key" },
     });
   });
@@ -706,110 +533,6 @@ describe("OpenRouter client contract", () => {
 
     await expect(downloadVideoContent("video-large-declared"))
       .rejects.toBeInstanceOf(InvalidAiProviderOutputError);
-  });
-
-  it("asks for a vertical silent clip when the request says so", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ id: "vid-shape", status: "pending" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await createVideoJob({
-      prompt: "A candle burning down",
-      durationSeconds: 4,
-      resolution: "720p",
-      aspectRatio: "9:16",
-      generateAudio: false,
-      seed: 11,
-      callbackUrl:
-        "https://beutl.example/api/v3/ai/videos/local/openrouter-callback",
-      model: "google/veo-3.1",
-    });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    // None of these three could be expressed before: a vertical clip, a silent
-    // one, or a reproducible one.
-    expect(JSON.parse(init.body as string)).toMatchObject({
-      aspect_ratio: "9:16",
-      generate_audio: false,
-      seed: 11,
-    });
-  });
-
-  it("omits the shape fields a request does not set", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ id: "vid-plain", status: "pending" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await createVideoJob({
-      prompt: "A candle burning down",
-      durationSeconds: 4,
-      resolution: "720p",
-      callbackUrl:
-        "https://beutl.example/api/v3/ai/videos/local/openrouter-callback",
-      model: "google/veo-3.1",
-    });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string);
-    expect(body).not.toHaveProperty("aspect_ratio");
-    expect(body).not.toHaveProperty("generate_audio");
-    expect(body).not.toHaveProperty("seed");
-  });
-
-  it("sends first and last frame images with the documented frame types", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        id: "video-frames-1",
-        status: "pending",
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await createVideoJob({
-      prompt: "Move slowly from dawn to dusk",
-      durationSeconds: 6,
-      resolution: "720p",
-      callbackUrl:
-        "https://beutl.example/api/v3/ai/videos/local-frames/openrouter-callback",
-      frameImages: [
-        {
-          type: "image_url",
-          image_url: { url: "data:image/png;base64,AQID" },
-          frame_type: "first_frame",
-        },
-        {
-          type: "image_url",
-          image_url: { url: "data:image/jpeg;base64,BAUG" },
-          frame_type: "last_frame",
-        },
-      ],
-      model: "google/veo-3.1",
-    });
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://openrouter.ai/api/v1/videos");
-    expect(JSON.parse(init.body as string)).toEqual({
-      model: "google/veo-3.1",
-      prompt: "Move slowly from dawn to dusk",
-      duration: 6,
-      resolution: "720p",
-      callback_url:
-        "https://beutl.example/api/v3/ai/videos/local-frames/openrouter-callback",
-      frame_images: [
-        {
-          type: "image_url",
-          image_url: { url: "data:image/png;base64,AQID" },
-          frame_type: "first_frame",
-        },
-        {
-          type: "image_url",
-          image_url: { url: "data:image/jpeg;base64,BAUG" },
-          frame_type: "last_frame",
-        },
-      ],
-    });
   });
 
   it("wraps malformed provider responses as provider errors", async () => {

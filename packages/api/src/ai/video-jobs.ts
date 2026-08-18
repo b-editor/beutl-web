@@ -16,13 +16,12 @@ import {
 import {
   AiProviderError,
   InvalidAiProviderOutputError,
-  createVideoJob,
   downloadVideoContent,
   getOpenRouterRequestTimeoutMilliseconds,
-  getVideoJob,
   isDefiniteVideoSubmissionFailure,
   type VideoFrameImage,
 } from "./openrouter";
+import { createVideoJob, getVideoJob } from "./openrouter-video";
 import type { AiVideoAspectRatio, AiVideoResolution } from "@beutl/core";
 import {
   AiOutputCommitConflictError,
@@ -84,7 +83,10 @@ export async function createAndAttachVideoJob({
   generateAudio?: boolean;
   seed?: number;
   frameImages?: VideoFrameImage[];
-  callbackUrl: string;
+  // Absent when the deployment has no HTTPS origin for OpenRouter to call back
+  // on, which is the case for a local server. The job is then finished by the
+  // poll path instead of the callback.
+  callbackUrl?: string;
   callbackNonceHash: string;
   model: string;
   signal?: AbortSignal;
@@ -99,7 +101,7 @@ export async function createAndAttachVideoJob({
     ...(aspectRatio ? { aspectRatio } : {}),
     ...(generateAudio === undefined ? {} : { generateAudio }),
     ...(seed === undefined ? {} : { seed }),
-    callbackUrl,
+    ...(callbackUrl === undefined ? {} : { callbackUrl }),
     ...(frameImages ? { frameImages } : {}),
     model,
     signal,

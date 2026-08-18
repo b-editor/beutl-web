@@ -63,6 +63,7 @@ export const errorCodes = [
   "aiRequestInProgress",
   "aiRequestWasDeleted",
   "aiModelUnavailable",
+  "aiModelDoesNotSupportRequest",
 ] as const;
 
 export type ApiErrorCode = (typeof errorCodes)[number];

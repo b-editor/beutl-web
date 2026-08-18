@@ -15,6 +15,7 @@ import {
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import { loadAiVideoModelCapabilities } from "../../ai/video-model-capabilities";
 import {
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
@@ -48,6 +49,19 @@ type ModelDescription = {
   isDefault: boolean;
 };
 
+// A video model states its own accepted parameters. The operation-level lists
+// remain the superset the server will take at all; a request has to satisfy the
+// model it names as well, and one that does not is refused before it is
+// charged. A model whose lists are empty accepts nothing this service can ask
+// for and is registered but unusable.
+type VideoModelDescription = ModelDescription & {
+  durationsSeconds: number[];
+  resolutions: string[];
+  aspectRatios: string[];
+  audio: boolean;
+  seed: boolean;
+};
+
 function describeModels(
   catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
   operation: string,
@@ -70,7 +84,28 @@ const app = new Hono().get("/", async (c) => {
     });
   }
 
-  const catalog = await loadAiModelCatalog();
+  const [catalog, videoCapabilities] = await Promise.all([
+    loadAiModelCatalog(),
+    loadAiVideoModelCapabilities(),
+  ]);
+  const videoModels: VideoModelDescription[] = describeModels(
+    catalog,
+    "video.generate",
+  ).map((model) => {
+    const supported = videoCapabilities.get(model.id);
+    return {
+      ...model,
+      durationsSeconds: supported
+        ? supported.durations
+        : [...AI_VIDEO_DURATIONS_SECONDS],
+      resolutions: supported ? supported.resolutions : [...AI_VIDEO_RESOLUTIONS],
+      aspectRatios: supported
+        ? supported.aspectRatios
+        : [...AI_VIDEO_ASPECT_RATIOS],
+      audio: supported ? supported.generateAudio : true,
+      seed: supported ? supported.seed : true,
+    };
+  });
   return c.json({
     // Keyed exactly like `availability` in the entitlements response, so a
     // client can line the two up without a mapping table.
@@ -116,7 +151,7 @@ const app = new Hono().get("/", async (c) => {
         languageFormat: "iso-639-1",
       },
       "video.generate": {
-        models: describeModels(catalog, "video.generate"),
+        models: videoModels,
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
         durationsSeconds: AI_VIDEO_DURATIONS_SECONDS,
         resolutions: AI_VIDEO_RESOLUTIONS,

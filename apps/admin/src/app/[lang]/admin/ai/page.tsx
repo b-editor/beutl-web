@@ -23,6 +23,7 @@ import {
   getAiModelCatalog,
   getAiOperationModels,
   getAiSettings,
+  getUnusableVideoModels,
 } from "./queries";
 
 // Show administrators the latest value immediately after a setting change.
@@ -34,11 +35,13 @@ export default async function Page(props: {
   await requireAdmin();
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog] = await Promise.all([
-    getAiSettings(),
-    getAiOperationModels(),
-    getAiModelCatalog(),
-  ]);
+  const [settings, registeredModels, catalog, unusableVideoModels] =
+    await Promise.all([
+      getAiSettings(),
+      getAiOperationModels(),
+      getAiModelCatalog(),
+      getUnusableVideoModels(),
+    ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
   // An operation with nothing registered still offers the built-in model, and
   // the catalog is where that fallback is resolved; the page shows what a
@@ -150,6 +153,14 @@ export default async function Page(props: {
                 lang={lang}
                 operation={operation}
                 title={t(`admin:ai.operation.${operation}`)}
+                warningsByModel={Object.fromEntries(
+                  modelsOf(operation)
+                    .filter((model) => unusableVideoModels.has(model.modelId))
+                    .map((model) => [
+                      model.modelId,
+                      t("admin:ai.models.unsupportedByProvider"),
+                    ]),
+                )}
                 // Prices and provider costs are network calls, so each figure
                 // sits behind its own boundary and the rows stay interactive
                 // while they load. They all await the same cached lookup.

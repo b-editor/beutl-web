@@ -36,6 +36,7 @@
   "aiRequestInProgress": "このAIリクエストは処理中です。少し待ってから再試行してください。",
   "aiRequestWasDeleted": "このAIリクエストは削除されています。再実行するには新しいリクエストを開始してください。",
   "aiModelUnavailable": "このリクエストで使ったモデルは現在利用できません。新しいリクエストで別のモデルを選んでください。",
+  "aiModelDoesNotSupportRequest": "選択したモデルはこの組み合わせに対応していません。解像度・長さ・アスペクト比を変えるか、別のモデルを選んでください。",
   "unknown": "不明なエラーが発生しました。",
   "invalidVersionFormat": "バージョンの形式が無効です。"
 }

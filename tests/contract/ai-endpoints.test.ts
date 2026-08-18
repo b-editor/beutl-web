@@ -49,9 +49,20 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
     generateImage: vi.fn(),
     editImage: vi.fn(),
     transcribeAudio: vi.fn(),
+    downloadVideoContent: vi.fn(),
+  };
+});
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../packages/api/src/ai/openrouter-video")
+  >();
+  return {
+    ...actual,
     createVideoJob: vi.fn(),
     getVideoJob: vi.fn(),
-    downloadVideoContent: vi.fn(),
+    // The capability list is a live call on the provider; the endpoint tests
+    // decide what each model accepts through this.
+    listVideoModels: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -59,10 +70,14 @@ import {
   generateImage,
   editImage,
   transcribeAudio,
-  createVideoJob,
-  getVideoJob,
   downloadVideoContent,
 } from "../../packages/api/src/ai/openrouter";
+import {
+  createVideoJob,
+  getVideoJob,
+  listVideoModels,
+} from "../../packages/api/src/ai/openrouter-video";
+import { clearAiVideoModelCapabilitiesCache } from "../../packages/api/src/ai/video-model-capabilities";
 
 const USER_ID = "user-ai-endpoints";
 const JWT_SECRET = "test-secret-for-ai-contract";
@@ -2079,6 +2094,40 @@ describe("v3 AI endpoints contract", () => {
       expect(response.status).toBe(413);
       expect(state.aiJobs.size).toBe(0);
       expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+    });
+
+    it("refuses a request the model cannot render before reserving usage", async () => {
+      await activatePro();
+      // MiniMax H3 renders only at 2K and nothing shorter than five seconds.
+      // Submitting anyway costs the user the reservation and reports a provider
+      // failure, which is indistinguishable from an outage.
+      vi.mocked(listVideoModels).mockResolvedValue([
+        {
+          id: "google/veo-3.1",
+          supportedResolutions: ["2K"],
+          supportedDurations: [5, 6],
+          supportedAspectRatios: ["16:9"],
+        } as never,
+      ]);
+      clearAiVideoModelCapabilitiesCache();
+
+      const res = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error_code).toBe("aiModelDoesNotSupportRequest");
+      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      expect(state.aiJobs.size).toBe(0);
+      expect(state.creditTransactions).toEqual([]);
+
+      vi.mocked(listVideoModels).mockResolvedValue([]);
+      clearAiVideoModelCapabilitiesCache();
     });
 
     it("creates a job and reserves 40 usage units per second", async () => {

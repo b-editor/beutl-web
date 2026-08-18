@@ -98,12 +98,52 @@ function Note({
   );
 }
 
+// What each registered model will accept, read from the provider. A model
+// missing from this map states no restriction and keeps every option.
+export type AiVideoModelOptions = {
+  resolutions: string[];
+  durations: number[];
+  aspectRatios: string[];
+  generateAudio: boolean;
+  seed: boolean;
+};
+
+// The options this screen offers, narrowed to one model. Values are derived on
+// every render rather than corrected in state: switching to a model that cannot
+// do 1080p must not leave a stale 1080p in a hidden field, which is what the
+// server would then be charged for and refuse.
+function optionsOf(
+  capabilities: Record<string, AiVideoModelOptions> | undefined,
+  modelId: string,
+) {
+  const supported = capabilities?.[modelId];
+  return {
+    durations: supported?.durations.length
+      ? supported.durations
+      : [...AI_VIDEO_DURATIONS_SECONDS],
+    resolutions: supported?.resolutions.length
+      ? supported.resolutions
+      : [...AI_VIDEO_RESOLUTIONS],
+    aspectRatios: supported?.aspectRatios.length
+      ? supported.aspectRatios
+      : [...AI_VIDEO_ASPECT_RATIOS],
+    generateAudio: supported?.generateAudio ?? true,
+    seed: supported?.seed ?? true,
+  };
+}
+
+function firstSupported<T>(current: T, supported: T[]): T {
+  return supported.includes(current) ? current : (supported[0] as T);
+}
+
 export function VideoForm({
   lang,
   access,
+  capabilities,
 }: {
   lang: string;
   access: AiAccess;
+  capabilities?: Record<string, AiVideoModelOptions>;
 }) {
   const { t } = useTranslation(lang);
   const [state, dispatch] = useActionState(createVideoAction, {
@@ -124,6 +164,15 @@ export function VideoForm({
 
   const blocked = blockedReason(access, ["video.generate"]);
   const models = access.models["video.generate"] ?? [];
+  const options = optionsOf(capabilities, model);
+  const duration = firstSupported(
+    Number(videoDuration),
+    options.durations,
+  );
+  const resolution = firstSupported(videoResolution, options.resolutions);
+  const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
+  // A model that cannot produce sound would refuse the request outright.
+  const audio = options.generateAudio && generateAudio;
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({
@@ -198,17 +247,17 @@ export function VideoForm({
           <ToggleGroup
             type="single"
             variant="outline"
-            value={videoDuration}
+            value={String(duration)}
             onValueChange={(next) => next && setVideoDuration(next)}
             className="grid grid-cols-3"
           >
-            {AI_VIDEO_DURATIONS_SECONDS.map((duration) => (
-              <ToggleGroupItem key={duration} value={String(duration)}>
-                {duration}s
+            {options.durations.map((supported) => (
+              <ToggleGroupItem key={supported} value={String(supported)}>
+                {supported}s
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          <input type="hidden" name="durationSeconds" value={videoDuration} />
+          <input type="hidden" name="durationSeconds" value={duration} />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -217,17 +266,17 @@ export function VideoForm({
             <ToggleGroup
               type="single"
               variant="outline"
-              value={videoResolution}
+              value={resolution}
               onValueChange={(next) => next && setVideoResolution(next)}
               className="grid grid-cols-2"
             >
-              {AI_VIDEO_RESOLUTIONS.map((resolution) => (
-                <ToggleGroupItem key={resolution} value={resolution}>
-                  {resolution}
+              {options.resolutions.map((supported) => (
+                <ToggleGroupItem key={supported} value={supported}>
+                  {supported}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <input type="hidden" name="resolution" value={videoResolution} />
+            <input type="hidden" name="resolution" value={resolution} />
           </div>
 
           {/* Resolution alone could not express a vertical clip. */}
@@ -236,17 +285,17 @@ export function VideoForm({
             <ToggleGroup
               type="single"
               variant="outline"
-              value={videoAspectRatio}
+              value={aspectRatio}
               onValueChange={(next) => next && setVideoAspectRatio(next)}
               className="grid grid-cols-2"
             >
-              {AI_VIDEO_ASPECT_RATIOS.map((ratio) => (
+              {options.aspectRatios.map((ratio) => (
                 <ToggleGroupItem key={ratio} value={ratio}>
                   {ratio}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <input type="hidden" name="aspectRatio" value={videoAspectRatio} />
+            <input type="hidden" name="aspectRatio" value={aspectRatio} />
           </div>
         </div>
 
@@ -255,7 +304,8 @@ export function VideoForm({
             id="videoAudio"
             type="checkbox"
             className="h-4 w-4 rounded border-input accent-primary"
-            checked={generateAudio}
+            checked={audio}
+            disabled={!options.generateAudio}
             onChange={(event) => setGenerateAudio(event.target.checked)}
           />
           <Label htmlFor="videoAudio" className="font-normal">
@@ -264,7 +314,7 @@ export function VideoForm({
           <input
             type="hidden"
             name="generateAudio"
-            value={generateAudio ? "true" : "false"}
+            value={audio ? "true" : "false"}
           />
         </div>
 
@@ -279,6 +329,7 @@ export function VideoForm({
               min={AI_MIN_SEED}
               max={AI_MAX_SEED}
               step={1}
+              disabled={!options.seed}
               className="max-w-[12rem]"
             />
             <p className="text-xs text-muted-foreground">

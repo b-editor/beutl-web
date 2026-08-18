@@ -50,6 +50,8 @@ import {
   classifyVideoSubmissionFailure,
   createAndAttachVideoJob,
   deleteAiOutputObject,
+  loadAiVideoModelCapabilities,
+  unsupportedVideoRequestReason,
 } from "@beutl/api";
 import {
   AI_IMAGE_ASPECT_RATIOS,
@@ -342,6 +344,29 @@ async function resolveOrigin(): Promise<string> {
   const url = (await headers()).get("x-url");
   if (url) return new URL(url).origin;
   return "";
+}
+
+// OpenRouter only calls back over HTTPS, so a server reachable only over plain
+// HTTP — a local one, typically — gets no callback URL at all and its jobs are
+// finished by the poll path instead. Sending the URL anyway fails the whole
+// submission, which made video generation impossible to run locally.
+async function resolveVideoCallbackUrl(
+  jobId: string,
+  nonce: string,
+): Promise<string | undefined> {
+  const origin = await resolveOrigin();
+  let callbackUrl: URL;
+  try {
+    callbackUrl = new URL(
+      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
+      origin,
+    );
+  } catch {
+    return undefined;
+  }
+  if (callbackUrl.protocol !== "https:") return undefined;
+  callbackUrl.searchParams.set("nonce", nonce);
+  return callbackUrl.toString();
 }
 
 export async function generateImageAction(
@@ -991,6 +1016,27 @@ export async function createVideoAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  // Checked before the reservation: a model that cannot render this
+  // combination is refused by the provider after the usage has been reserved,
+  // and the refund that follows tells the user only that "the provider failed".
+  const unsupported = unsupportedVideoRequestReason(
+    (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+    {
+      resolution,
+      durationSeconds,
+      aspectRatio: videoAspectRatio,
+      generateAudio,
+      ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+      frameImages: frameImages.length > 0,
+    },
+  );
+  if (unsupported) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
   const identity = await requestIdentityOf(formData, "video.generate", {
     model: selectedModel.modelId,
     prompt,
@@ -1039,12 +1085,7 @@ export async function createVideoAction(
     };
   }
 
-  const origin = await resolveOrigin();
-  const callbackUrl = new URL(
-    `/api/v3/ai/videos/${encodeURIComponent(job.id)}/openrouter-callback`,
-    origin,
-  );
-  callbackUrl.searchParams.set("nonce", callbackNonce.nonce);
+  const callbackUrl = await resolveVideoCallbackUrl(job.id, callbackNonce.nonce);
 
   try {
     await createAndAttachVideoJob({
@@ -1056,7 +1097,7 @@ export async function createVideoAction(
       generateAudio,
       ...(videoSeed === undefined ? {} : { seed: videoSeed }),
       ...(frameImages.length > 0 ? { frameImages } : {}),
-      callbackUrl: callbackUrl.toString(),
+      ...(callbackUrl === undefined ? {} : { callbackUrl }),
       callbackNonceHash: callbackNonce.hash,
       model: selectedModel.modelId,
     });
@@ -1254,6 +1295,24 @@ export async function retryJobAction(
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
+    // What the model accepts can have changed since the original run, and a
+    // rerun that the provider now refuses would be charged for first.
+    const retryUnsupported = unsupportedVideoRequestReason(
+      (await loadAiVideoModelCapabilities()).get(retryModel.modelId),
+      {
+        resolution,
+        durationSeconds,
+        aspectRatio: retryAspectRatio,
+        generateAudio: retryGenerateAudio,
+        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
+      },
+    );
+    if (retryUnsupported) {
+      return {
+        success: false,
+        message: t("api-errors:aiModelDoesNotSupportRequest"),
+      };
+    }
     const identity = await toAiRequestIdentity({
       idempotencyKey,
       operation: "video.generate",
@@ -1298,12 +1357,10 @@ export async function retryJobAction(
     if (reservation.outcome === "existing") {
       return { success: true, jobId: retried.id };
     }
-    const origin = await resolveOrigin();
-    const callbackUrl = new URL(
-      `/api/v3/ai/videos/${encodeURIComponent(retried.id)}/openrouter-callback`,
-      origin,
+    const callbackUrl = await resolveVideoCallbackUrl(
+      retried.id,
+      callbackNonce.nonce,
     );
-    callbackUrl.searchParams.set("nonce", callbackNonce.nonce);
     try {
       await createAndAttachVideoJob({
         jobId: retried.id,
@@ -1313,7 +1370,7 @@ export async function retryJobAction(
         aspectRatio: retryAspectRatio,
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
-        callbackUrl: callbackUrl.toString(),
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: retryModel.modelId,
       });

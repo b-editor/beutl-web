@@ -19,6 +19,14 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
   >();
   return { ...actual, generateImage: vi.fn() };
 });
+// Keeps the capability lookup off the network; what each video model accepts is
+// covered by the capabilities contract.
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../packages/api/src/ai/openrouter-video")
+  >();
+  return { ...actual, listVideoModels: vi.fn().mockResolvedValue([]) };
+});
 
 import { generateImage } from "../../packages/api/src/ai/openrouter";
 
@@ -236,19 +244,31 @@ describe("choosing a model per request", () => {
       { id: "dear/model", displayName: "Dear", costTier: "high", isDefault: false },
     ]);
     // 7 and 31 are what the two are registered at. A model entry carries no
-    // number at all, so there is nothing for a client to divide.
-    for (const operation of Object.values(body.operations) as {
-      models: Record<string, unknown>[];
-    }[]) {
-      for (const model of operation.models) {
-        expect(Object.keys(model).sort()).toEqual([
-          "costTier",
-          "displayName",
-          "id",
-          "isDefault",
-        ]);
-        for (const value of Object.values(model)) {
-          expect(typeof value).not.toBe("number");
+    // number a price could be read out of: video adds the parameters that
+    // model accepts, and those are lists of what may be asked for.
+    const videoKeys = [
+      "aspectRatios",
+      "audio",
+      "costTier",
+      "displayName",
+      "durationsSeconds",
+      "id",
+      "isDefault",
+      "resolutions",
+      "seed",
+    ];
+    for (const [operation, value] of Object.entries(body.operations) as [
+      string,
+      { models: Record<string, unknown>[] },
+    ][]) {
+      for (const model of value.models) {
+        expect(Object.keys(model).sort()).toEqual(
+          operation === "video.generate"
+            ? videoKeys
+            : ["costTier", "displayName", "id", "isDefault"],
+        );
+        for (const field of Object.values(model)) {
+          expect(typeof field).not.toBe("number");
         }
       }
     }

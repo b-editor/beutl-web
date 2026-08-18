@@ -7,14 +7,14 @@ import {
 } from "@beutl/db";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
-vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
   const original = await importOriginal<
-    typeof import("../../packages/api/src/ai/openrouter")
+    typeof import("../../packages/api/src/ai/openrouter-video")
   >();
   return { ...original, getVideoJob: vi.fn() };
 });
 
-import { getVideoJob } from "../../packages/api/src/ai/openrouter";
+import { getVideoJob } from "../../packages/api/src/ai/openrouter-video";
 import { reconcileDeletedAccountRemoteJobs } from "../../packages/api/src/ai/remote-job-cleanup";
 
 describe("deleted-account remote AI job outbox", () => {

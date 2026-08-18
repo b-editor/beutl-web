@@ -127,6 +127,7 @@
       "default": "Default",
       "makeDefault": "Make default",
       "priceValue": "{{units}} units",
+      "unsupportedByProvider": "This model accepts none of the resolutions, lengths or aspect ratios this feature sends. Every request that picks it will fail; replace it with another model.",
       "add": "Add a model",
       "edit": "Edit",
       "remove": "Remove",

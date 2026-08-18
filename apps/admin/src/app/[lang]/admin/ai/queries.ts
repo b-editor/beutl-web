@@ -3,9 +3,11 @@ import { cache } from "react";
 import { getDb, listAiOperationModels } from "@beutl/db";
 import {
   aiCostEstimateKey,
+  isVideoModelUsable,
   loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
+  loadAiVideoModelCapabilities,
 } from "@beutl/api";
 import { derivePlanUnitValue, deriveTopUpUnitValue } from "@beutl/core";
 import { resolveOfferPricing } from "@/lib/stripe-pricing";
@@ -18,6 +20,21 @@ export const getAiSettings = cache(async () => await loadAiSettings());
 export const getAiOperationModels = cache(
   async () => await listAiOperationModels(),
 );
+
+// The video models that cannot serve a single request this service can build.
+//
+// Which resolutions, lengths and aspect ratios a video model takes differs per
+// model, and one that shares none with this service is registered but dead: the
+// provider refuses everything it is sent. Nothing else on this page would show
+// that, and on the user's screen it reads as a provider outage.
+export const getUnusableVideoModels = cache(async () => {
+  const capabilities = await loadAiVideoModelCapabilities();
+  return new Set(
+    [...capabilities.values()]
+      .filter((entry) => !isVideoModelUsable(entry))
+      .map((entry) => entry.modelId),
+  );
+});
 
 // What each operation can actually run on, fallback included. The economics
 // panels price these, since a fallback costs the operator just as much as a

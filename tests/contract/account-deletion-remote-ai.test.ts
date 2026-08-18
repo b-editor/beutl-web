@@ -16,9 +16,9 @@ vi.mock("@beutl/db", () => ({
   listDueAiRemoteJobCleanups: mocks.listDueAiRemoteJobCleanups,
   rescheduleAiRemoteJobCleanup: mocks.rescheduleAiRemoteJobCleanup,
 }));
-vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
+vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
   const original = await importOriginal<
-    typeof import("../../packages/api/src/ai/openrouter")
+    typeof import("../../packages/api/src/ai/openrouter-video")
   >();
   return { ...original, getVideoJob: mocks.getVideoJob };
 });
