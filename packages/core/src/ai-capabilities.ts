@@ -129,3 +129,26 @@ export const MAX_AI_PROMPT_LENGTH = 4_000;
 export const MAX_TRANSLATION_SEGMENTS = 200;
 export const MAX_TRANSLATION_CHARACTERS = 20_000;
 export const SAFE_SEGMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+
+// Every language a caption request may name, and the only ones it may name.
+// Here rather than in @beutl/api so the picker offers exactly what the server
+// accepts: a list in the browser that drifts from the one being validated
+// against shows a language the request is then refused for.
+// Re-exported from ai/subtitle-validation.ts for the server side.
+export const ISO_639_1_LANGUAGE_CODES: readonly string[] = [
+  "aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs",
+  "ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff",
+  "fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id",
+  "ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku",
+  "kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my",
+  "na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu",
+  "rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv",
+  "sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo",
+  "wa wo xh yi yo za zh zu",
+].flatMap((group) => group.split(" "));
+
+const ISO_639_1_LANGUAGE_CODE_SET = new Set(ISO_639_1_LANGUAGE_CODES);
+
+export function isIso6391LanguageCode(value: unknown): value is string {
+  return typeof value === "string" && ISO_639_1_LANGUAGE_CODE_SET.has(value);
+}

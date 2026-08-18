@@ -117,6 +117,8 @@
     "glossaryHint": "One \"term = translation\" per line. {{total}} of {{max}}.",
     "targetLanguage": "Target language",
     "sourceLanguage": "Source language (optional)",
+    "sourceLanguageAuto": "Auto",
+    "targetLanguagePlaceholder": "Pick a language",
     "subtitleSource": "Subtitles",
     "subtitleSourcePlaceholder": "Paste an SRT file, or write one subtitle per line.",
     "subtitleSourceHint": "SRT, WebVTT, one subtitle per line, and JSON are all accepted.",

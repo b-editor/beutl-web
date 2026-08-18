@@ -7,8 +7,15 @@ import { Button } from "@beutl/ui/ui/button";
 import { Card } from "@beutl/ui/ui/card";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Textarea } from "@beutl/ui/ui/textarea";
-import { Languages, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Languages, Plus, Trash2 } from "lucide-react";
 import {
   useActionState,
   useEffect,
@@ -49,14 +56,17 @@ import {
   type AiAccess,
 } from "./shared";
 
-const COMMON_LANGUAGES = ["en", "ja", "zh", "ko", "es", "fr", "de", "pt"];
+export type LanguageOption = { code: string; name: string };
 
 export function TranslateForm({
   lang,
   access,
+  languages,
 }: {
   lang: string;
   access: AiAccess;
+  // Resolved on the server; see languageOptions in the page.
+  languages: LanguageOption[];
 }) {
   const { t } = useTranslation(lang);
   const [state, dispatch] = useActionState(translateAction, { success: false });
@@ -64,6 +74,8 @@ export function TranslateForm({
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
   );
+  const [sourceLanguage, setSourceLanguage] = useState("");
+  const [targetLanguage, setTargetLanguage] = useState("");
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
   const [translated, setTranslated] = useState<TranslatableSegment[]>([]);
   // The source the translation on screen belongs to. Editing the field after a
@@ -151,40 +163,64 @@ export function TranslateForm({
           onChange={setModel}
         />
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col space-y-1.5">
-            <Label htmlFor="targetLanguage">
-              {t("dashboard:ai.targetLanguage")}
-            </Label>
-            {/* ISO 639-1, matching what the endpoint accepts. */}
-            <Input
-              id="targetLanguage"
-              name="targetLanguage"
-              placeholder="en"
-              list="aiTranslateLanguages"
-              maxLength={2}
-              pattern="[A-Za-z]{2}"
-              required
-            />
-          </div>
-          <div className="flex flex-col space-y-1.5">
+        {/* Read in the direction the translation runs: source, arrow, target. */}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex min-w-[9rem] flex-1 flex-col space-y-1.5">
             <Label htmlFor="sourceLanguage">
               {t("dashboard:ai.sourceLanguage")}
             </Label>
-            <Input
-              id="sourceLanguage"
+            <Select value={sourceLanguage} onValueChange={setSourceLanguage}>
+              <SelectTrigger id="sourceLanguage">
+                {/* An unset source is not a blank field: the model detects it. */}
+                <SelectValue placeholder={t("dashboard:ai.sourceLanguageAuto")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">
+                  {t("dashboard:ai.sourceLanguageAuto")}
+                </SelectItem>
+                {languages.map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* "auto" is the picker's word for "say nothing"; the request omits
+                the field entirely, which is what the endpoint treats as detect. */}
+            <input
+              type="hidden"
               name="sourceLanguage"
-              placeholder="ja"
-              list="aiTranslateLanguages"
-              maxLength={2}
-              pattern="[A-Za-z]{2}"
+              value={sourceLanguage === "auto" ? "" : sourceLanguage}
             />
           </div>
-          <datalist id="aiTranslateLanguages">
-            {COMMON_LANGUAGES.map((code) => (
-              <option key={code} value={code} />
-            ))}
-          </datalist>
+          <ArrowRight
+            aria-hidden
+            className="mb-2.5 h-4 w-4 shrink-0 text-muted-foreground"
+          />
+          <div className="flex min-w-[9rem] flex-1 flex-col space-y-1.5">
+            <Label htmlFor="targetLanguage">
+              {t("dashboard:ai.targetLanguage")}
+            </Label>
+            <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+              <SelectTrigger id="targetLanguage">
+                <SelectValue
+                  placeholder={t("dashboard:ai.targetLanguagePlaceholder")}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {languages.map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <input
+              type="hidden"
+              name="targetLanguage"
+              value={targetLanguage}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col space-y-1.5">
@@ -285,7 +321,7 @@ export function TranslateForm({
 
         <SubmitButton
           className="w-full"
-          disabled={blocked !== null || !parsed.ok}
+          disabled={blocked !== null || !parsed.ok || targetLanguage === ""}
         >
           {t("dashboard:ai.translate")}
         </SubmitButton>
