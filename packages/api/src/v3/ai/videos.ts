@@ -6,7 +6,7 @@ import {
   createReservedAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
-import { loadAiSettings } from "../../ai/settings";
+import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
@@ -54,6 +54,7 @@ import {
   AI_VIDEO_DURATION_STRINGS,
   AI_VIDEO_RESOLUTIONS,
   isAiVideoDurationSeconds,
+  MAX_MODEL_ID_LENGTH,
 } from "@beutl/core";
 
 // generateAudio defaults to true so an existing client keeps the behaviour it
@@ -68,6 +69,7 @@ const createSchema = z.object({
   aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
   generateAudio: z.boolean().default(true),
   seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
 const createFramesSchema = z.object({
@@ -83,6 +85,7 @@ const createFramesSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   seed: z.coerce.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
 const supportedFrameImageTypes = new Set<AiInputImageMimeType>([
@@ -225,10 +228,21 @@ const app = new Hono()
 
     const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
       parsedBody.data;
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve(
+      "video.generate",
+      parsedBody.data.model,
+    );
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
       input: {
+        model: selectedModel.modelId,
         prompt,
         durationSeconds,
         resolution,
@@ -243,8 +257,7 @@ const app = new Hono()
       });
     }
     const callbackNonce = await createCallbackNonce();
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice("video.generate") * durationSeconds;
+    const cost = selectedModel.priceUnits * durationSeconds;
 
     const reservation = await createReservedAiJob({
       userId,
@@ -260,6 +273,7 @@ const app = new Hono()
         ...(seed === undefined ? {} : { seed }),
       },
       usageUnits: cost,
+      model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
@@ -291,7 +305,7 @@ const app = new Hono()
           callbackNonce.nonce,
         ),
         callbackNonceHash: callbackNonce.hash,
-        model: settings.getModel("video.generate"),
+        model: selectedModel.modelId,
         signal: c.req.raw.signal,
       });
 
@@ -374,6 +388,7 @@ const app = new Hono()
       aspectRatio: optionalField("aspectRatio"),
       generateAudio: optionalField("generateAudio"),
       seed: optionalField("seed"),
+      model: optionalField("model"),
     });
     if (
       !fields.success ||
@@ -408,10 +423,18 @@ const app = new Hono()
       sha256Hex(firstFrameImage.bytes),
       lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
     ]);
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve("video.generate", fields.data.model);
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
       input: {
+        model: selectedModel.modelId,
         prompt,
         durationSeconds,
         resolution,
@@ -455,8 +478,7 @@ const app = new Hono()
       );
     }
 
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice("video.generate") * durationSeconds;
+    const cost = selectedModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
@@ -483,6 +505,7 @@ const app = new Hono()
           : {}),
       },
       usageUnits: cost,
+      model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
@@ -515,7 +538,7 @@ const app = new Hono()
           callbackNonce.nonce,
         ),
         callbackNonceHash: callbackNonce.hash,
-        model: settings.getModel("video.generate"),
+        model: selectedModel.modelId,
         signal: c.req.raw.signal,
       });
 

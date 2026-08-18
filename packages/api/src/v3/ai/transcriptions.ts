@@ -6,7 +6,6 @@ import {
   createReservedAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
-import { loadAiSettings } from "../../ai/settings";
 import { getEntitlements } from "../../ai/entitlements";
 import { parseAudio } from "../../ai/audio-metadata";
 import {
@@ -23,6 +22,7 @@ import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity, sha256Hex } from "../../ai/request-integrity";
+import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { validateTranscriptionResult } from "../../ai/audio-validation";
 import { isIso6391LanguageCode } from "../../ai/subtitle-validation";
 
@@ -102,6 +102,20 @@ const app = new Hono().post("/", async (c) => {
   }
 
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
+  const rawModel = body["model"];
+  if (rawModel !== undefined && typeof rawModel !== "string") {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
+  const catalog = await loadAiModelCatalog();
+  const selectedModel = catalog.resolve("audio.transcribe", rawModel);
+  if (!selectedModel) {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
+
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "audio.transcribe",
@@ -110,6 +124,7 @@ const app = new Hono().post("/", async (c) => {
       contentType: file.type || "audio/mpeg",
       durationSeconds: parsedAudio.durationSeconds,
       contentSha256: await sha256Hex(parsedAudio.bytes),
+      model: selectedModel.modelId,
       ...(language ? { language } : {}),
     },
   });
@@ -118,8 +133,7 @@ const app = new Hono().post("/", async (c) => {
       status: 400,
     });
   }
-  const settings = await loadAiSettings();
-  const cost = settings.getPrice("audio.transcribe") * minutes;
+  const cost = selectedModel.priceUnits * minutes;
   if (!Number.isSafeInteger(cost) || cost <= 0 || cost > 2_147_483_647) {
     return c.json(await apiErrorResponse("invalidRequestBody"), {
       status: 400,
@@ -136,6 +150,7 @@ const app = new Hono().post("/", async (c) => {
       ...(language ? { language } : {}),
     },
     usageUnits: cost,
+    model: selectedModel.modelId,
     ...requestIdentity,
   });
   if (!reservation.ok) {
@@ -191,7 +206,7 @@ const app = new Hono().post("/", async (c) => {
       filename: file.name,
       mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
-      model: settings.getModel("audio.transcribe"),
+      model: selectedModel.modelId,
       signal: c.req.raw.signal,
     });
     await saveAiJsonResult({

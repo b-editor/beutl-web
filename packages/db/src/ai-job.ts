@@ -33,6 +33,7 @@ export async function createAiJob({
   status,
   inputParams,
   usageUnits,
+  model,
   prisma,
 }: {
   userId: string;
@@ -45,6 +46,7 @@ export async function createAiJob({
   status: string;
   inputParams?: object;
   usageUnits: number;
+  model?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -60,6 +62,7 @@ export async function createAiJob({
       status,
       inputParams: inputParams ?? undefined,
       usageUnits,
+      model,
     },
   });
 }

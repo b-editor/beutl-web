@@ -1,5 +1,6 @@
 export * from "./cost-estimate";
 export * from "./credits";
+export * from "./model-catalog";
 export * from "./model-pricing";
 export * from "./job-errors";
 export * from "./job-response";

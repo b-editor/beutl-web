@@ -11,10 +11,14 @@ import {
 } from "../ai/upload-limits";
 import { z } from "zod";
 import { MAX_AI_AUDIO_DURATION_SECONDS } from "../ai/audio-metadata";
-import { isAiVideoDurationSeconds } from "@beutl/core";
+import { isAiVideoDurationSeconds, MAX_MODEL_ID_LENGTH } from "@beutl/core";
+
+// Which model the question is about. Omitting it asks about the operation's
+// default, which is what a client that never offers a choice will send.
+const model = z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional();
 
 const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
-  z.object({ operation: z.literal("image.generate") }).strict(),
+  z.object({ operation: z.literal("image.generate"), model }).strict(),
   z.object({
     operation: z.enum([
       "image.edit.remove_background",
@@ -23,22 +27,26 @@ const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
       "image.edit.remove_object",
       "image.edit.outpaint",
     ]),
+    model,
   }).strict(),
   z.object({
     operation: z.literal("video.generate"),
     durationSeconds: z
       .number()
       .refine(isAiVideoDurationSeconds),
+    model,
   }).strict(),
   z.object({
     operation: z.literal("audio.transcribe"),
     durationSeconds: z.number().finite().positive().max(
       MAX_AI_AUDIO_DURATION_SECONDS,
     ),
+    model,
   }).strict(),
   z.object({
     operation: z.literal("subtitle.translate"),
     characterCount: z.number().int().positive().max(20_000),
+    model,
   }).strict(),
 ]);
 

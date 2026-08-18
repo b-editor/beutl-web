@@ -10,7 +10,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@beutl/ui/ui/collapsible";
+import { Label } from "@beutl/ui/ui/label";
 import { Progress } from "@beutl/ui/ui/progress";
+import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { useToast } from "@beutl/ui/use-toast";
 import {
   ChevronRight,
@@ -35,6 +37,17 @@ export const IDEMPOTENCY_KEY_FIELD = "idempotencyKey";
 export type AiAccess = {
   canUseAi: boolean;
   availability: Record<string, boolean>;
+  // The models each operation offers, in the order they should be shown. No
+  // price reaches the client: `costTier` orders them against each other and
+  // `available` is the server's answer to whether this account can pay for one.
+  models: Record<string, AiScreenModel[]>;
+};
+
+export type AiScreenModel = {
+  id: string;
+  displayName: string;
+  costTier: "low" | "medium" | "high" | null;
+  available: boolean;
 };
 
 export type AiBalance = {
@@ -340,6 +353,70 @@ export function AdvancedOptions({
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+// The model this request should run on.
+//
+// Hidden entirely when the operation offers one: there is nothing to choose,
+// and the server uses that model whether the field is sent or not. Models the
+// balance cannot cover stay visible but unselectable — hiding them would make
+// the shorter list look like the whole offering.
+export function ModelSelect({
+  lang,
+  models,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  lang: string;
+  models: AiScreenModel[];
+  value: string;
+  onChange: (modelId: string) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation(lang);
+  if (models.length <= 1) return null;
+
+  return (
+    <div className="flex flex-col space-y-1.5">
+      <Label>{t("dashboard:ai.model")}</Label>
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        value={value}
+        disabled={disabled}
+        // Radix clears the value when the active item is pressed again; a
+        // request always runs on some model, so keep the last one.
+        onValueChange={(next) => next && onChange(next)}
+        className="grid gap-2 sm:grid-cols-2"
+      >
+        {models.map((model) => (
+          <ToggleGroupItem
+            key={model.id}
+            value={model.id}
+            disabled={!model.available}
+            className="h-auto flex-col items-start gap-0.5 py-3"
+          >
+            <span className="text-sm">{model.displayName}</span>
+            <span className="text-xs text-muted-foreground">
+              {!model.available
+                ? t("dashboard:ai.modelUnaffordable")
+                : model.costTier
+                  ? t(`dashboard:ai.costTier.${model.costTier}`)
+                  : ""}
+            </span>
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+      <input type="hidden" name="model" value={value} />
+    </div>
+  );
+}
+
+// The model a screen should start on: the first one the account can actually
+// pay for, falling back to the first on offer so the field is never empty.
+export function defaultModelId(models: AiScreenModel[]): string {
+  return (models.find((model) => model.available) ?? models[0])?.id ?? "";
 }
 
 export function downloadTextFile(

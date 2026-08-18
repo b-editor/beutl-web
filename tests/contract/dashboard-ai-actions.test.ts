@@ -32,6 +32,7 @@ vi.mock("@/lib/content-url", () => ({
 import {
   generateImageAction,
   listJobsAction,
+  retryJobAction,
   translateAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import {
@@ -41,7 +42,11 @@ import {
   saveAiImage,
   translateSegments,
 } from "@beutl/api";
-import { getAiJobResultFile } from "@beutl/db";
+import {
+  createAiJob,
+  getAiJobResultFile,
+  upsertAiOperationModel,
+} from "@beutl/db";
 
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
@@ -302,6 +307,92 @@ describe("dashboard AI actions", () => {
       id: "job-1",
       kind: "image",
       status: "succeeded",
+    });
+  });
+
+  describe("rerunning a job", () => {
+    async function registerImageModels(dearIsEnabled: boolean) {
+      await upsertAiOperationModel({
+        operation: "image.generate",
+        modelId: "cheap/model",
+        priceUnits: 6,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+      await upsertAiOperationModel({
+        operation: "image.generate",
+        modelId: "dear/model",
+        priceUnits: 44,
+        displayName: null,
+        sortOrder: 1,
+        enabled: dearIsEnabled,
+        updatedBy: "admin-1",
+      });
+    }
+
+    async function seedFailedImageJob() {
+      return await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: { prompt: "a cat", aspectRatio: "1:1" },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+    }
+
+    it("repeats the model the original ran on", async () => {
+      await registerImageModels(true);
+      const job = await seedFailedImageJob();
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "reserved",
+        job: { id: "job-retry", status: "running", resultFileId: null, resultFile: null },
+      });
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        mediaType: "image/png",
+      });
+      vi.mocked(saveAiImage).mockResolvedValue({
+        id: "file-retry",
+        name: "ai-image-job-retry.png",
+        mimeType: "image/png",
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000010",
+      );
+
+      expect(result.success).toBe(true);
+      // Not the default, which is cheaper and would produce a different picture.
+      expect(createReservedAiJob).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "dear/model", usageUnits: 44 }),
+      );
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "dear/model" }),
+      );
+    });
+
+    it("refuses when that model has since been disabled", async () => {
+      await registerImageModels(false);
+      const job = await seedFailedImageJob();
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000011",
+      );
+
+      // Quietly rerunning on the default would charge the default's price for
+      // a model the user never chose.
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("aiModelUnavailable");
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
     });
   });
 });

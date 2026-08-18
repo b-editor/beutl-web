@@ -23,8 +23,9 @@ describeLive("AI cost estimates against the live price list", () => {
 
   it("estimates the built-in models from real responses", async () => {
     const { entries } = await loadAiCostEstimates({
-      modelOf: (operation) =>
+      modelsOf: (operation) => [
         AI_SETTINGS[aiModelSettingKey(operation)].fallback,
+      ],
     });
 
     expect(entries).toHaveLength(AI_OPERATIONS.length);

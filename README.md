@@ -94,12 +94,23 @@ submissions can be reconciled through signed provider callbacks. It also
 requires `OPENROUTER_API_KEY` as a Wrangler secret. Provider calls default to a
 120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`.
 
-Model IDs, per-operation usage-unit prices, and the monthly allowance granted to
-each Pro subscription are also editable at runtime from the admin console
-(`/admin/ai`), which stores them in the `AiSetting` table. Model IDs are
-configured exclusively through that console; each value resolves from the
-database or the built-in default (500 units per period for the allowance). Every
-change is written to the audit log in the same transaction.
+An operation can offer several models, each with its own usage-unit price, and
+the caller picks one per request — `model` on the v3 request bodies, a field on
+the dashboard forms. Omitting it runs the operation's default. An unknown or
+disabled model is refused rather than replaced by the default, since that would
+charge the default's price for a model nobody asked for. The models on offer are
+registered per operation from the admin console (`/admin/ai`) and stored in the
+`AiOperationModel` table; an operation with none registered runs on the single
+model and price the console holds in `AiSetting`, which is also where the
+monthly allowance granted to each Pro subscription lives. Each value resolves
+from the database or the built-in default (500 units per period for the
+allowance). Every change is written to the audit log in the same transaction.
+
+Clients learn the models from `GET /api/v3/ai/capabilities`, which names them
+and orders them by relative expense (`costTier`: `low` / `medium` / `high`)
+without stating any price; `GET /api/v3/user/entitlements` says which of them
+the account can currently afford in `modelAvailability`. Prices themselves never
+leave the server.
 API keys and other secrets are deliberately **not** configurable this way and
 stay in Wrangler secrets. A price change applies only to operations started
 afterwards: each job records the price reserved at its start and is refunded at

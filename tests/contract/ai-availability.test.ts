@@ -4,6 +4,7 @@ import { sign } from "hono/jwt";
 import {
   consumeUsage,
   setDbProvider,
+  upsertAiOperationModel,
   upsertSubscription,
 } from "@beutl/db";
 import { v3 } from "@beutl/api";
@@ -140,6 +141,75 @@ describe("POST /api/v3/user/ai-availability", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ available: false });
+  });
+
+  it("answers for the model that was named, not the default", async () => {
+    await activatePro();
+    // The allowance is 500 units; only one of these fits in what is left.
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 460,
+      monthlyUsageLimit: 500,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "model-availability-setup",
+    });
+    for (const [modelId, priceUnits, sortOrder] of [
+      ["cheap/model", 20, 0],
+      ["dear/model", 300, 1],
+    ] as const) {
+      await upsertAiOperationModel({
+        operation: "image.generate",
+        modelId,
+        priceUnits,
+        displayName: null,
+        sortOrder,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+    }
+
+    const cheap = await checkAvailability({
+      operation: "image.generate",
+      model: "cheap/model",
+    });
+    const dear = await checkAvailability({
+      operation: "image.generate",
+      model: "dear/model",
+    });
+
+    expect(await cheap.json()).toEqual({ available: true });
+    expect(await dear.json()).toEqual({ available: false });
+  });
+
+  it("answers no for a model that is unknown or disabled", async () => {
+    await activatePro();
+    await upsertAiOperationModel({
+      operation: "image.generate",
+      modelId: "retired/model",
+      priceUnits: 5,
+      displayName: null,
+      sortOrder: 0,
+      enabled: false,
+      updatedBy: "admin-1",
+    });
+
+    // Answering yes would send the user into a request the entry point refuses.
+    expect(
+      await (
+        await checkAvailability({
+          operation: "image.generate",
+          model: "retired/model",
+        })
+      ).json(),
+    ).toEqual({ available: false });
+    expect(
+      await (
+        await checkAvailability({
+          operation: "image.generate",
+          model: "never/registered",
+        })
+      ).json(),
+    ).toEqual({ available: false });
   });
 
   it("rejects unsupported quantities and extra fields", async () => {

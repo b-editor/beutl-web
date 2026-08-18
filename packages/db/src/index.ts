@@ -4,6 +4,7 @@ export * from "./account-deletion";
 export * from "./account-deletion-pro-checkout";
 export * from "./account";
 export * from "./ai-job";
+export * from "./ai-operation-model";
 export * from "./ai-setting";
 export * from "./ai-usage-stats";
 export * from "./app-release-asset";

@@ -26,10 +26,12 @@ import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AdvancedOptions,
   AiAccessNotice,
+  ModelSelect,
   AiWorkspace,
   IdempotencyKeyField,
   ResultPanel,
   blockedReason,
+  defaultModelId,
   type AiAccess,
 } from "./shared";
 
@@ -113,11 +115,15 @@ export function VideoForm({
   const [generateAudio, setGenerateAudio] = useState(true);
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoStyle, setVideoStyle] = useState("");
+  const [model, setModel] = useState(() =>
+    defaultModelId(access.models["video.generate"] ?? []),
+  );
   const [videoComposition, setVideoComposition] = useState("");
   const [videoMotion, setVideoMotion] = useState("");
   const [videoExclusions, setVideoExclusions] = useState("");
 
   const blocked = blockedReason(access, ["video.generate"]);
+  const models = access.models["video.generate"] ?? [];
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({
@@ -179,6 +185,13 @@ export function VideoForm({
             onChange={(event) => setVideoPrompt(event.target.value)}
           />
         </div>
+
+        <ModelSelect
+          lang={lang}
+          models={models}
+          value={model}
+          onChange={setModel}
+        />
 
         <div className="flex flex-col space-y-1.5">
           <Label>{t("dashboard:ai.duration")}</Label>

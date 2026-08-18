@@ -4,8 +4,11 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
 import {
+  deleteAiOperationModel,
   deleteAiSetting,
+  listAiOperationModels,
   startRetryableTransaction,
+  upsertAiOperationModel,
   upsertAiSetting,
 } from "@beutl/db";
 import { loadAiSettings } from "@beutl/api";
@@ -13,6 +16,11 @@ import {
   validateAiSettingChanges,
   type AiSettingChange,
 } from "@/lib/ai-setting-changes";
+import {
+  aiOperationWouldGoOffline,
+  validateAiOperationModelInput,
+} from "@/lib/ai-operation-model-changes";
+import { aiMinimumChargeOf } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 
 // Nothing but Server Actions may be exported from this file — not even a type.
@@ -83,6 +91,95 @@ export async function updateAiSettings({
     }
     revalidatePath("/[lang]/admin/ai", "page");
 
+    return { success: true };
+  });
+}
+
+// Registering or editing one model an operation may run on.
+//
+// Saved on its own rather than through updateAiSettings: that batch is capped
+// at 64 changes and validates every key against the allowance, neither of which
+// fits a table whose length is up to the administrator.
+export async function saveAiOperationModel(input: unknown): Promise<ActionResult> {
+  const validated = validateAiOperationModelInput(input);
+  if (!validated.ok) {
+    return { success: false, message: validated.message };
+  }
+  const model = validated.value;
+
+  return await adminAction(async (session) => {
+    const outcome = await startRetryableTransaction(async (tx) => {
+      const settings = await loadAiSettings({ prisma: tx });
+      const allowance = settings.getMonthlyUsageLimit();
+      // Read the operation's other rows inside the transaction: whether this
+      // save takes the operation offline depends on them, and reading them
+      // beforehand would let two concurrent saves each pass against a snapshot
+      // the other invalidates.
+      const rows = (await listAiOperationModels({ prisma: tx })).filter(
+        (row) => row.operation === model.operation,
+      );
+      const next = [
+        ...rows.filter((row) => row.modelId !== model.modelId),
+        model,
+      ];
+      if (
+        aiOperationWouldGoOffline({
+          minimumChargeOf: (priceUnits) =>
+            aiMinimumChargeOf(model.operation, priceUnits) ?? priceUnits,
+          models: next,
+          allowance,
+        })
+      ) {
+        return {
+          ok: false as const,
+          message: `No enabled model for ${model.operation} is startable within the ${allowance} unit monthly allowance`,
+        };
+      }
+
+      await upsertAiOperationModel({
+        ...model,
+        updatedBy: session.user.id,
+        prisma: tx,
+      });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.aiOperationModelSaved,
+        details: `operation: ${model.operation}, model: ${model.modelId}, price: ${model.priceUnits}, enabled: ${model.enabled}`,
+        prisma: tx,
+      });
+      return { ok: true as const };
+    });
+    if (!outcome.ok) {
+      return { success: false, message: outcome.message };
+    }
+    revalidatePath("/[lang]/admin/ai", "page");
+    return { success: true };
+  });
+}
+
+// Removing the last row for an operation is not an error: the operation then
+// runs on the single model and price the settings page holds, which is where it
+// started.
+export async function removeAiOperationModel(input: unknown): Promise<ActionResult> {
+  if (typeof input !== "object" || input === null) {
+    return { success: false, message: "Invalid model" };
+  }
+  const { operation, modelId } = input as Record<string, unknown>;
+  if (typeof operation !== "string" || typeof modelId !== "string") {
+    return { success: false, message: "Invalid model" };
+  }
+
+  return await adminAction(async (session) => {
+    await startRetryableTransaction(async (tx) => {
+      await deleteAiOperationModel({ operation, modelId, prisma: tx });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.aiOperationModelRemoved,
+        details: `operation: ${operation}, model: ${modelId}`,
+        prisma: tx,
+      });
+    });
+    revalidatePath("/[lang]/admin/ai", "page");
     return { success: true };
   });
 }

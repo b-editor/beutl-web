@@ -19,7 +19,7 @@ import {
   generateImage,
   inspectGeneratedImage,
   isIso6391LanguageCode,
-  loadAiSettings,
+  loadAiModelCatalog,
   parseAudio,
   readAiJsonResult,
   saveAiImage,
@@ -117,6 +117,17 @@ async function requestIdentityOf(
     operation,
     input,
   });
+}
+
+// The model the user picked, resolved against the catalog. An id that is
+// unknown or has been disabled is refused rather than quietly replaced by the
+// default: the default may cost more than the one they chose, and they would
+// be charged that price for a model they never asked for.
+async function resolveModelOf(formData: FormData, operation: string) {
+  const requested = formData.get("model");
+  if (requested !== null && typeof requested !== "string") return null;
+  const catalog = await loadAiModelCatalog();
+  return catalog.resolve(operation, requested);
 }
 
 // Submitting a video is the one AI operation whose failure is not simply a
@@ -384,7 +395,13 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  const selectedModel = await resolveModelOf(formData, "image.generate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
   const identity = await requestIdentityOf(formData, "image.generate", {
+    model: selectedModel.modelId,
     prompt,
     aspectRatio,
     ...(background !== "auto" ? { background } : {}),
@@ -403,8 +420,7 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  const settings = await loadAiSettings();
-  const cost = settings.getPrice("image.generate");
+  const cost = selectedModel.priceUnits;
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "image",
@@ -420,6 +436,7 @@ export async function generateImageAction(
         : {}),
     },
     usageUnits: cost,
+    model: selectedModel.modelId,
     ...identity,
   });
   if (!reservation.ok) {
@@ -452,7 +469,7 @@ export async function generateImageAction(
           }
         : {}),
       ...(seed === undefined ? {} : { seed }),
-      model: settings.getModel("image.generate"),
+      model: selectedModel.modelId,
     });
     const bytes = decodeGeneratedImageBase64(result.b64Json);
     await inspectGeneratedImage(bytes, result.mediaType);
@@ -511,8 +528,11 @@ export async function editImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  const settings = await loadAiSettings();
-  const cost = settings.getPrice(`image.edit.${task}`);
+  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  const cost = selectedModel.priceUnits;
   // editImage substitutes its own prompt for the tasks that do not take one, so
   // carrying the user's text for those would record and fingerprint a string
   // the provider never sees. The v3 endpoint drops it for the same reason.
@@ -522,6 +542,7 @@ export async function editImageAction(
       ? `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`
       : prompt;
   const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
+    model: selectedModel.modelId,
     task,
     ...(editPrompt ? { prompt: editPrompt } : {}),
     fileName: file.name,
@@ -546,6 +567,7 @@ export async function editImageAction(
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
     usageUnits: cost,
+    model: selectedModel.modelId,
     ...identity,
   });
   if (!reservation.ok) {
@@ -571,7 +593,7 @@ export async function editImageAction(
       image: validated.bytes,
       mimeType: validated.mimeType,
       ...(editPrompt ? { prompt: editPrompt } : {}),
-      model: settings.getModel(`image.edit.${task}`),
+      model: selectedModel.modelId,
     });
     const bytes = decodeGeneratedImageBase64(result.b64Json);
     await inspectGeneratedImage(bytes, result.mediaType);
@@ -625,7 +647,12 @@ export async function transcribeAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
+  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   const identity = await requestIdentityOf(formData, "audio.transcribe", {
+    model: selectedModel.modelId,
     fileName: file.name,
     contentType: file.type || "audio/mpeg",
     durationSeconds: parsedAudio.durationSeconds,
@@ -635,8 +662,7 @@ export async function transcribeAction(
   if (!identity) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
-  const settings = await loadAiSettings();
-  const cost = settings.getPrice("audio.transcribe") * minutes;
+  const cost = selectedModel.priceUnits * minutes;
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "stt",
@@ -648,6 +674,7 @@ export async function transcribeAction(
       ...(language ? { language } : {}),
     },
     usageUnits: cost,
+    model: selectedModel.modelId,
     ...identity,
   });
   if (!reservation.ok) {
@@ -679,7 +706,7 @@ export async function transcribeAction(
       filename: file.name,
       mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
-      model: settings.getModel("audio.transcribe"),
+      model: selectedModel.modelId,
     });
     await saveAiJsonResult({
       jobId: job.id,
@@ -773,7 +800,12 @@ export async function translateAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   const identity = await requestIdentityOf(formData, "subtitle.translate", {
+    model: selectedModel.modelId,
     ...(sourceLanguage ? { sourceLanguage } : {}),
     targetLanguage,
     segments,
@@ -784,9 +816,8 @@ export async function translateAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  const settings = await loadAiSettings();
   const usageUnits =
-    settings.getPrice("subtitle.translate") *
+    selectedModel.priceUnits *
     Math.max(1, Math.ceil(characterCount / 1_000));
   const reservation = await createReservedAiJob({
     userId: session.user.id,
@@ -800,6 +831,7 @@ export async function translateAction(
       characterCount,
     },
     usageUnits,
+    model: selectedModel.modelId,
     ...identity,
   });
   if (!reservation.ok) {
@@ -828,7 +860,7 @@ export async function translateAction(
       segments,
       ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
       ...(style ? { style } : {}),
-      model: settings.getModel("subtitle.translate"),
+      model: selectedModel.modelId,
     });
     await saveAiJsonResult({
       jobId: job.id,
@@ -954,7 +986,13 @@ export async function createVideoAction(
     }
   }
 
+  const selectedModel = await resolveModelOf(formData, "video.generate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
   const identity = await requestIdentityOf(formData, "video.generate", {
+    model: selectedModel.modelId,
     prompt,
     durationSeconds,
     resolution,
@@ -968,8 +1006,7 @@ export async function createVideoAction(
   }
 
   const callbackNonce = await createCallbackNonce();
-  const settings = await loadAiSettings();
-  const cost = settings.getPrice("video.generate") * durationSeconds;
+  const cost = selectedModel.priceUnits * durationSeconds;
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "video",
@@ -985,6 +1022,7 @@ export async function createVideoAction(
       ...frameParams,
     },
     usageUnits: cost,
+    model: selectedModel.modelId,
     activeJobLimit: 1,
     callbackNonceHash: callbackNonce.hash,
     ...identity,
@@ -1020,7 +1058,7 @@ export async function createVideoAction(
       ...(frameImages.length > 0 ? { frameImages } : {}),
       callbackUrl: callbackUrl.toString(),
       callbackNonceHash: callbackNonce.hash,
-      model: settings.getModel("video.generate"),
+      model: selectedModel.modelId,
     });
     return { success: true, jobId: job.id };
   } catch (error) {
@@ -1085,6 +1123,12 @@ export async function retryJobAction(
   if (!input || typeof input.prompt !== "string") {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
+  // A rerun repeats the request, so it repeats the model too. If that model has
+  // since been disabled the retry is refused rather than moved to the default:
+  // silently running something else and charging the default's price is not a
+  // retry. Jobs from before the column existed carry no model and resolve to
+  // the operation's default, which is what they ran on.
+  const catalog = await loadAiModelCatalog();
 
   if (job.kind === "image") {
     // The reference image was never stored, so this would generate something
@@ -1107,10 +1151,15 @@ export async function retryJobAction(
     const background =
       input.background === "transparent" ? ("transparent" as const) : undefined;
     const seed = isAiSeed(input.seed) ? input.seed : undefined;
+    const retryModel = catalog.resolve("image.generate", job.model);
+    if (!retryModel) {
+      return { success: false, message: t("api-errors:aiModelUnavailable") };
+    }
     const identity = await toAiRequestIdentity({
       idempotencyKey,
       operation: "image.generate",
       input: {
+        model: retryModel.modelId,
         prompt: input.prompt,
         aspectRatio,
         ...(background ? { background } : {}),
@@ -1120,8 +1169,7 @@ export async function retryJobAction(
     if (!identity) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice("image.generate");
+    const cost = retryModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "image",
@@ -1134,6 +1182,7 @@ export async function retryJobAction(
         ...(seed === undefined ? {} : { seed }),
       },
       usageUnits: cost,
+      model: retryModel.modelId,
       ...identity,
     });
     if (!reservation.ok) {
@@ -1149,7 +1198,7 @@ export async function retryJobAction(
         aspectRatio,
         ...(background ? { background } : {}),
         ...(seed === undefined ? {} : { seed }),
-        model: settings.getModel("image.generate"),
+        model: retryModel.modelId,
       });
       const bytes = decodeGeneratedImageBase64(result.b64Json);
       await inspectGeneratedImage(bytes, result.mediaType);
@@ -1201,10 +1250,15 @@ export async function retryJobAction(
     if (!AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
+    const retryModel = catalog.resolve("video.generate", job.model);
+    if (!retryModel) {
+      return { success: false, message: t("api-errors:aiModelUnavailable") };
+    }
     const identity = await toAiRequestIdentity({
       idempotencyKey,
       operation: "video.generate",
       input: {
+        model: retryModel.modelId,
         prompt: input.prompt,
         durationSeconds,
         resolution,
@@ -1217,8 +1271,7 @@ export async function retryJobAction(
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     const callbackNonce = await createCallbackNonce();
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice("video.generate") * durationSeconds;
+    const cost = retryModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "video",
@@ -1233,6 +1286,7 @@ export async function retryJobAction(
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
       },
       usageUnits: cost,
+      model: retryModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...identity,
@@ -1261,7 +1315,7 @@ export async function retryJobAction(
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
         callbackUrl: callbackUrl.toString(),
         callbackNonceHash: callbackNonce.hash,
-        model: settings.getModel("video.generate"),
+        model: retryModel.modelId,
       });
       return { success: true, jobId: retried.id };
     } catch (error) {

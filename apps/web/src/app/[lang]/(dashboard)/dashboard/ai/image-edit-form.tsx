@@ -34,6 +34,7 @@ import { editImageAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AiAccessNotice,
+  ModelSelect,
   AiWorkspace,
   DownloadButton,
   IdempotencyKeyField,
@@ -41,6 +42,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   downloadFromUrl,
+  defaultModelId,
   type AiAccess,
 } from "./shared";
 
@@ -80,6 +82,7 @@ export function ImageEditForm({
     success: false,
   });
   const [editTask, setEditTask] = useState<string>("");
+  const [model, setModel] = useState("");
   const [outpaintExpansion, setOutpaintExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
@@ -98,6 +101,13 @@ export function ImageEditForm({
   }, [sourcePreview]);
 
   const blocked = blockedReason(access, EDIT_OPERATIONS);
+  // Each task is its own operation with its own models, so the list changes
+  // under the picker. Rather than resetting it from an effect, a choice that no
+  // longer exists falls back to the new task's default.
+  const models = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
+  const selectedModel = models.some((entry) => entry.id === model)
+    ? model
+    : defaultModelId(models);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   const taskUnaffordable =
     blocked === null &&
@@ -236,6 +246,13 @@ export function ImageEditForm({
             </p>
           )}
         </div>
+
+        <ModelSelect
+          lang={lang}
+          models={models}
+          value={selectedModel}
+          onChange={setModel}
+        />
 
         {editTask === "outpaint" && (
           <div className="flex flex-col space-y-1.5">

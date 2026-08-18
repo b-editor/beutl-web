@@ -116,6 +116,23 @@
     "model": "Model",
     "price": "Usage units",
     "monthlyUsageLimit": "Monthly allowance (units)",
+    "models": {
+      "title": "Models on offer",
+      "description": "Users pick one of these per request and are charged that model's price. The first in display order is used when a request names none.",
+      "emptyDescription": "None registered, so this operation runs on the single model above at the price above.",
+      "modelId": "Model ID",
+      "displayName": "Display name",
+      "sortOrder": "Display order",
+      "enabled": "Selectable",
+      "disabled": "Not selectable",
+      "priceValue": "{{units}} units",
+      "add": "Add a model",
+      "edit": "Edit",
+      "remove": "Remove",
+      "cancel": "Cancel",
+      "saved": "Saved",
+      "saveFailed": "Could not be saved"
+    },
     "tab": {
       "settings": "Settings",
       "usage": "Usage"

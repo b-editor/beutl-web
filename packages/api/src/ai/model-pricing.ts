@@ -295,30 +295,41 @@ export type AiCostEstimates = {
   entries: AiCostEstimateEntry[];
 };
 
-// Never throws. Every operation gets an entry, so a single failing lookup
-// cannot take the settings page down with it.
+// Never throws. Every model on offer gets an entry, so a single failing lookup
+// cannot take the settings page down with it. Operations that share a model
+// still cost one fetch between them: the rate card is cached per URL path.
 export async function loadAiCostEstimates({
-  modelOf,
+  modelsOf,
   now = new Date(),
   force = false,
 }: {
-  modelOf: (operation: string) => string;
+  modelsOf: (operation: string) => string[];
   now?: Date;
   force?: boolean;
 }): Promise<AiCostEstimates> {
   const options = { force, now: now.getTime() };
-  const operations = Object.keys(AI_PRICING_CATALOG);
+  const pairs = Object.keys(AI_PRICING_CATALOG).flatMap((operation) => {
+    let models: string[] = [];
+    try {
+      models = modelsOf(operation);
+    } catch (error) {
+      console.warn("[ai-cost] model lookup failed", {
+        operation,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return models.map((model) => ({ operation, model }));
+  });
 
   const entries = await Promise.all(
-    operations.map(async (operation): Promise<AiCostEstimateEntry> => {
-      let model = "";
+    pairs.map(async ({ operation, model }): Promise<AiCostEstimateEntry> => {
       try {
-        model = modelOf(operation);
         const estimate = await estimateOperation(operation, model, options);
         return { operation, model, estimate };
       } catch (error) {
         console.warn("[ai-cost] estimate failed", {
           operation,
+          model,
           message: error instanceof Error ? error.message : String(error),
         });
         return {
@@ -331,6 +342,11 @@ export async function loadAiCostEstimates({
   );
 
   return { fetchedAt: now, entries };
+}
+
+// Entries are keyed by the pair, since one operation now has several.
+export function aiCostEstimateKey(operation: string, model: string): string {
+  return `${operation}\u0000${model}`;
 }
 
 async function estimateOperation(

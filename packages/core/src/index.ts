@@ -57,6 +57,7 @@ export {
 } from "./nupkg";
 export type { NupkgFile, NupkgOptions } from "./nupkg";
 export {
+  AI_DEFAULT_OPERATION_MODELS,
   AI_OPERATIONS,
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
@@ -69,6 +70,7 @@ export {
   MAX_MONTHLY_USAGE_LIMIT,
   aiModelSettingKey,
   aiPriceSettingKey,
+  isAiModelId,
   isAiSettingKey,
   validateAiSettingValue,
 } from "./ai-settings";

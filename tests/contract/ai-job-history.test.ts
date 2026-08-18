@@ -185,6 +185,9 @@ describe("v3 AI job history contract", () => {
           id: newest.id,
           kind: "video",
           status: "succeeded",
+          // Jobs created before an operation could offer more than one model
+          // report none rather than guessing at the one they ran on.
+          model: null,
           inputParams: {
             prompt: "newest",
             durationSeconds: 4,
@@ -203,6 +206,7 @@ describe("v3 AI job history contract", () => {
           id: middle.id,
           kind: "stt",
           status: "succeeded",
+          model: null,
           inputParams: {
             durationSeconds: 30,
           },
@@ -231,6 +235,7 @@ describe("v3 AI job history contract", () => {
           id: oldest.id,
           kind: "image",
           status: "succeeded",
+          model: null,
           inputParams: { prompt: "oldest", size: "1024x1024" },
           fileId: null,
           url: null,
@@ -299,6 +304,7 @@ describe("v3 AI job history contract", () => {
       kind: "image",
       status: "failed",
       inputParams: null,
+      model: null,
       fileId: null,
       url: null,
       fileName: null,

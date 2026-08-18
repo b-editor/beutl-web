@@ -25,9 +25,11 @@ import {
   AiWorkspace,
   DownloadButton,
   IdempotencyKeyField,
+  ModelSelect,
   ResultPanel,
   ResultPlaceholder,
   blockedReason,
+  defaultModelId,
   downloadFromUrl,
   type AiAccess,
 } from "./shared";
@@ -58,6 +60,8 @@ export function ImageGenerateForm({
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
   const [exclusions, setExclusions] = useState("");
+  const models = access.models["image.generate"] ?? [];
+  const [model, setModel] = useState(() => defaultModelId(models));
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [transparent, setTransparent] = useState(false);
   const [referenceName, setReferenceName] = useState<string | null>(null);
@@ -121,6 +125,13 @@ export function ImageGenerateForm({
             onChange={(event) => setPrompt(event.target.value)}
           />
         </div>
+
+        <ModelSelect
+          lang={lang}
+          models={models}
+          value={model}
+          onChange={setModel}
+        />
 
         <div className="flex flex-col space-y-1.5">
           <Label>{t("dashboard:ai.aspectRatio")}</Label>

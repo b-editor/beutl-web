@@ -69,6 +69,7 @@ type AiJob = {
   callbackNonceHash: string | null;
   status: string;
   inputParams: unknown;
+  model: string | null;
   resultFileId: string | null;
   usageUnits: number;
   error: string | null;
@@ -92,6 +93,18 @@ type AiStorageCleanup = {
 type AiSetting = {
   key: string;
   value: string;
+  updatedBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type AiOperationModel = {
+  operation: string;
+  modelId: string;
+  priceUnits: number;
+  displayName: string | null;
+  sortOrder: number;
+  enabled: boolean;
   updatedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -232,6 +245,7 @@ type BillingOffer = {
 export type InMemoryPrismaState = {
   billingOffers: Map<string, BillingOffer>;
   creditAccounts: Map<string, CreditAccount>;
+  aiOperationModels: Map<string, AiOperationModel>;
   creditTransactions: CreditTransaction[];
   stripeCreditReversals: Map<string, StripeCreditReversal>;
   aiJobs: Map<string, AiJob>;
@@ -338,6 +352,7 @@ export function createInMemoryPrisma() {
   let state: InMemoryPrismaState = {
     billingOffers: new Map(),
     creditAccounts: new Map(),
+    aiOperationModels: new Map(),
     creditTransactions: [],
     stripeCreditReversals: new Map(),
     aiJobs: new Map(),
@@ -626,6 +641,9 @@ export function createInMemoryPrisma() {
       [...state.aiStorageCleanups].map(([k, v]) => [k, { ...v }]),
     ),
     aiSettings: new Map([...state.aiSettings].map(([k, v]) => [k, { ...v }])),
+    aiOperationModels: new Map(
+      [...state.aiOperationModels].map(([k, v]) => [k, { ...v }]),
+    ),
     accountDeletionIntents: new Map(
       [...state.accountDeletionIntents].map(([k, v]) => [k, { ...v }]),
     ),
@@ -1201,6 +1219,7 @@ export function createInMemoryPrisma() {
           callbackNonceHash?: string;
           status: string;
           inputParams?: object;
+          model?: string;
           usageUnits: number;
         };
       }) => {
@@ -1241,6 +1260,7 @@ export function createInMemoryPrisma() {
           callbackNonceHash: data.callbackNonceHash ?? null,
           status: data.status,
           inputParams: data.inputParams ?? null,
+          model: data.model ?? null,
           resultFileId: null,
           usageUnits: data.usageUnits,
           error: null,
@@ -2013,6 +2033,48 @@ export function createInMemoryPrisma() {
             return right.id < left.id ? -1 : right.id > left.id ? 1 : 0;
           });
         return rows.length === 0 ? null : { ...rows[0] };
+      },
+    },
+    aiOperationModel: {
+      findMany: async () =>
+        [...state.aiOperationModels.values()]
+          .map((row) => ({ ...row }))
+          .sort(
+            (a, b) =>
+              a.operation.localeCompare(b.operation) ||
+              a.sortOrder - b.sortOrder ||
+              a.modelId.localeCompare(b.modelId),
+          ),
+      upsert: async ({
+        where,
+        create,
+        update,
+      }: {
+        where: { operation_modelId: { operation: string; modelId: string } };
+        create: Omit<AiOperationModel, "createdAt" | "updatedAt">;
+        update: Partial<Omit<AiOperationModel, "operation" | "modelId">>;
+      }) => {
+        const key = `${where.operation_modelId.operation}\u0000${where.operation_modelId.modelId}`;
+        const existing = state.aiOperationModels.get(key);
+        const record: AiOperationModel = existing
+          ? { ...existing, ...update, updatedAt: now() }
+          : { ...create, createdAt: now(), updatedAt: now() };
+        state.aiOperationModels.set(key, record);
+        return { ...record };
+      },
+      deleteMany: async ({
+        where,
+      }: {
+        where: { operation?: string; modelId?: string };
+      }) => {
+        let count = 0;
+        for (const [key, row] of [...state.aiOperationModels]) {
+          if (where.operation !== undefined && where.operation !== row.operation) continue;
+          if (where.modelId !== undefined && where.modelId !== row.modelId) continue;
+          state.aiOperationModels.delete(key);
+          count++;
+        }
+        return { count };
       },
     },
     aiSetting: {

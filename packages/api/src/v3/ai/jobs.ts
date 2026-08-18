@@ -126,6 +126,9 @@ export type AiJobSummary = {
   kind: string;
   status: PublicAiJobStatus;
   inputParams: Record<string, unknown> | null;
+  // The model the job ran on, or null for jobs created before an operation
+  // could offer more than one.
+  model: string | null;
   fileId: string | null;
   url: string | null;
   fileName: string | null;
@@ -232,6 +235,7 @@ async function toSummary(
     kind: job.kind,
     status: publicAiJobStatus(job.status),
     inputParams: sanitizedInputParams(job),
+    model: job.model,
     fileId: job.resultFileId,
     url: job.resultFileId
       ? await getContentUrl(job.resultFileId, request)

@@ -1,5 +1,5 @@
 import "server-only";
-import { getEntitlements } from "@beutl/api";
+import { getEntitlements, loadAiModelCatalog } from "@beutl/api";
 import { listAiJobsByUserId } from "@beutl/db";
 import type { AiAccess, AiBalance } from "./shared";
 
@@ -10,11 +10,31 @@ export async function getAiScreenState(userId: string): Promise<{
   access: AiAccess;
   balance: AiBalance;
 }> {
-  const entitlements = await getEntitlements(userId);
+  const [entitlements, catalog] = await Promise.all([
+    getEntitlements(userId),
+    loadAiModelCatalog(),
+  ]);
   return {
     access: {
       canUseAi: entitlements.canUseAi,
       availability: entitlements.availability,
+      // Built here rather than fetched from /ai/capabilities: these pages are
+      // server components and can read the catalog directly. Only the id, the
+      // label, the tier and the yes/no are carried over — a price on this
+      // object would ship to the browser.
+      models: Object.fromEntries(
+        catalog.operations().map((operation) => [
+          operation,
+          catalog.list(operation).map((entry) => ({
+            id: entry.modelId,
+            displayName: entry.displayName,
+            costTier: entry.costTier,
+            available:
+              entitlements.modelAvailability[operation]?.[entry.modelId] ??
+              false,
+          })),
+        ]),
+      ),
     },
     balance: {
       usedPercent: entitlements.balance.monthlyUsage.usedPercent,

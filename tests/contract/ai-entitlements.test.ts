@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { consumeUsage, setDbProvider, upsertSubscription } from "@beutl/db";
+import {
+  consumeUsage,
+  setDbProvider,
+  upsertAiOperationModel,
+  upsertSubscription,
+} from "@beutl/db";
 import { getEntitlements } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -74,5 +79,59 @@ describe("AI entitlements", () => {
 
     const exact = await getEntitlements(USER_ID);
     expect(exact.availability["video.generate"]).toBe(true);
+  });
+
+  it("says which models are affordable, and calls the operation available if any is", async () => {
+    await activatePro();
+    for (const [modelId, priceUnits, sortOrder] of [
+      ["cheap/model", 10, 0],
+      ["dear/model", 400, 1],
+    ] as const) {
+      await upsertAiOperationModel({
+        operation: "image.generate",
+        modelId,
+        priceUnits,
+        displayName: null,
+        sortOrder,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+    }
+    await consumeUsage({
+      userId: USER_ID,
+      amount: MONTHLY_LIMIT - 100,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "entitlements-model-setup",
+    });
+
+    const entitlements = await getEntitlements(USER_ID);
+
+    expect(entitlements.modelAvailability["image.generate"]).toEqual({
+      "cheap/model": true,
+      "dear/model": false,
+    });
+    // Being unable to afford the dearest model is not the same as being unable
+    // to generate an image at all.
+    expect(entitlements.availability["image.generate"]).toBe(true);
+  });
+
+  it("reports every model as unavailable without a plan", async () => {
+    await upsertAiOperationModel({
+      operation: "image.generate",
+      modelId: "cheap/model",
+      priceUnits: 1,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const entitlements = await getEntitlements(USER_ID);
+
+    expect(entitlements.modelAvailability["image.generate"]).toEqual({
+      "cheap/model": false,
+    });
+    expect(entitlements.availability["image.generate"]).toBe(false);
   });
 });

@@ -40,6 +40,7 @@ model User {
   stripeCustomerOwnerships     StripeCustomerOwnership[]
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
   AiSetting                    AiSetting[]
+  AiOperationModel             AiOperationModel[]
 }
 
 model Account {
@@ -330,6 +331,10 @@ model AiJob {
   inputParams                Json?
   resultFileId               String?             @unique
   usageUnits                 Int
+  // どのモデルで走ったか。inputParams ではなく列にしているのは、履歴の
+  // ホワイトリストに kind ごとに足さずに済み、利用状況の集計にモデル軸を
+  // 足せるため。行が無い時代のジョブは null。
+  model                      String?
   error                      String?
   providerPollLeaseExpiresAt DateTime?
   finalizationToken          String?
@@ -685,6 +690,29 @@ model AiSetting {
   createdAt DateTime @default(now())
   updatedByUser User? @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
 
+  @@index([updatedBy])
+}
+
+// 1 つの操作が選べるモデルとその単価。AiSetting のキーは
+// packages/core のレジストリに列挙された静的な集合なので、管理画面から候補を
+// 増やせるモデル一覧はそこには持てない。行が 1 つも無い操作は、AiSetting と
+// 同じ考え方で組み込みの既定にフォールバックする。
+model AiOperationModel {
+  operation   String
+  modelId     String
+  priceUnits  Int
+  displayName String?
+  // 有効な行のうち sortOrder が最小のものが既定。「既定はちょうど 1 つ」を
+  // 一意制約で表現できないため、フラグ列は置かない。
+  sortOrder   Int      @default(0)
+  enabled     Boolean  @default(true)
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedByUser User?  @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@id([operation, modelId])
+  @@index([operation, enabled, sortOrder])
   @@index([updatedBy])
 }
 

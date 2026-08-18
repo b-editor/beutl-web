@@ -6,7 +6,7 @@ import {
   createReservedAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
-import { loadAiSettings } from "../../ai/settings";
+import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
@@ -28,6 +28,7 @@ import {
   AI_LEGACY_IMAGE_SIZES,
   AI_MAX_SEED,
   AI_MIN_SEED,
+  MAX_MODEL_ID_LENGTH,
   aiImageEditTaskRequiresPrompt,
   aspectRatioOfLegacyImageSize,
   type AiImageAspectRatio,
@@ -58,6 +59,7 @@ const generateSchema = z
     aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
     background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
     seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+    model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
   })
   .strict()
   .refine(
@@ -71,6 +73,7 @@ type EditTask = AiImageEditTask;
 const editFieldsSchema = z.object({
   task: z.enum(editTasks),
   prompt: z.string().trim().max(MAX_AI_PROMPT_LENGTH).optional(),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
 // v3 endpoints live in packages/api because production routes /api/v3/* to
@@ -166,6 +169,7 @@ const app = new Hono()
       const aspectRatioField = optionalMultipartField(body, "aspectRatio");
       const background = optionalMultipartField(body, "background");
       const seedField = optionalMultipartField(body, "seed");
+      const modelField = optionalMultipartField(body, "model");
       rawBody = {
         prompt: body["prompt"],
         ...(size === undefined ? {} : { size }),
@@ -174,6 +178,7 @@ const app = new Hono()
           : { aspectRatio: aspectRatioField }),
         ...(background === undefined ? {} : { background }),
         ...(seedField === undefined ? {} : { seed: Number(seedField) }),
+        ...(modelField === undefined ? {} : { model: modelField }),
       };
     } else {
       try {
@@ -205,12 +210,24 @@ const app = new Hono()
       });
     }
 
+    // Resolved before the fingerprint: the same prompt on a different model is a
+    // different request, and the price must come from the same row the provider
+    // call will use.
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve("image.generate", parsedBody.data.model);
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "image.generate",
       input: {
         prompt,
         aspectRatio,
+        model: selectedModel.modelId,
         // "auto" is the absence of a choice, so a caller that sends it and one
         // that omits it must fingerprint alike; otherwise a retry under the
         // same key is refused as a conflict and cannot reach the job it paid
@@ -235,8 +252,7 @@ const app = new Hono()
     }
     // The admin can change the model and price. Persist the reserved price on
     // the job so later setting changes do not alter this operation or its refund.
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice("image.generate");
+    const cost = selectedModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId,
       kind: "image",
@@ -250,6 +266,7 @@ const app = new Hono()
         ...(referenceFile ? { reference: { filename: referenceFile.name } } : {}),
       },
       usageUnits: cost,
+      model: selectedModel.modelId,
       ...requestIdentity,
     });
     if (!reservation.ok) {
@@ -296,7 +313,7 @@ const app = new Hono()
             }
           : {}),
         ...(seed === undefined ? {} : { seed }),
-        model: settings.getModel("image.generate"),
+        model: selectedModel.modelId,
         signal: c.req.raw.signal,
       });
       const { bytes, mimeType } = await decodeImageResult(result);
@@ -373,6 +390,7 @@ const app = new Hono()
       ...(body["prompt"] !== undefined
         ? { prompt: body["prompt"] }
         : {}),
+      ...(body["model"] !== undefined ? { model: body["model"] } : {}),
     });
     if (
       !(file instanceof File) ||
@@ -403,11 +421,23 @@ const app = new Hono()
       });
     }
 
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve(
+      `image.edit.${editTask}`,
+      fields.data.model,
+    );
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: `image.edit.${editTask}`,
       input: {
         task: editTask,
+        model: selectedModel.modelId,
         ...(editPrompt ? { prompt: editPrompt } : {}),
         fileName: file.name,
         contentType: inputImage.mimeType,
@@ -420,8 +450,7 @@ const app = new Hono()
       });
     }
 
-    const settings = await loadAiSettings();
-    const cost = settings.getPrice(`image.edit.${editTask}`);
+    const cost = selectedModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId,
       kind: "image_edit",
@@ -433,6 +462,7 @@ const app = new Hono()
         ...(editPrompt ? { prompt: editPrompt } : {}),
       },
       usageUnits: cost,
+      model: selectedModel.modelId,
       ...requestIdentity,
     });
     if (!reservation.ok) {
@@ -472,7 +502,7 @@ const app = new Hono()
         image: inputImage.bytes,
         mimeType: inputImage.mimeType,
         ...(editPrompt ? { prompt: editPrompt } : {}),
-        model: settings.getModel(`image.edit.${editTask}`),
+        model: selectedModel.modelId,
         signal: c.req.raw.signal,
       });
       const { bytes, mimeType: outputMimeType } =

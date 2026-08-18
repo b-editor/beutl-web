@@ -36,6 +36,7 @@ import { translateAction } from "./actions";
 import {
   AdvancedOptions,
   AiAccessNotice,
+  ModelSelect,
   AiWorkspace,
   CopyButton,
   DownloadButton,
@@ -44,6 +45,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   downloadTextFile,
+  defaultModelId,
   type AiAccess,
 } from "./shared";
 
@@ -59,6 +61,9 @@ export function TranslateForm({
   const { t } = useTranslation(lang);
   const [state, dispatch] = useActionState(translateAction, { success: false });
   const [source, setSource] = useState("");
+  const [model, setModel] = useState(() =>
+    defaultModelId(access.models["subtitle.translate"] ?? []),
+  );
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
   const [translated, setTranslated] = useState<TranslatableSegment[]>([]);
   // The source the translation on screen belongs to. Editing the field after a
@@ -101,6 +106,7 @@ export function TranslateForm({
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
 
   const blocked = blockedReason(access, ["subtitle.translate"]);
+  const models = access.models["subtitle.translate"] ?? [];
   const contextsJson = useMemo(() => {
     if (!parsed.ok || !parsed.cues) return "";
     return JSON.stringify(
@@ -137,6 +143,13 @@ export function TranslateForm({
             </AlertDescription>
           </Alert>
         )}
+
+        <ModelSelect
+          lang={lang}
+          models={models}
+          value={model}
+          onChange={setModel}
+        />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col space-y-1.5">

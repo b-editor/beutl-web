@@ -35,6 +35,7 @@
   "aiJobIsActive": "An active AI job cannot be deleted.",
   "aiRequestInProgress": "This AI request is still in progress. Please try again shortly.",
   "aiRequestWasDeleted": "This AI request was deleted. Start a new request to run it again.",
+  "aiModelUnavailable": "The model this request used is no longer available. Start a new request to choose another one.",
   "unknown": "An unknown error occurred.",
   "invalidVersionFormat": "Invalid version format."
 }

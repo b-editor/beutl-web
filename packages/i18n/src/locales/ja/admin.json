@@ -116,6 +116,23 @@
     "model": "モデル",
     "price": "使用ユニット",
     "monthlyUsageLimit": "月間割当 (ユニット)",
+    "models": {
+      "title": "選べるモデル",
+      "description": "利用者はリクエストごとにこの中から 1 つ選び、そのモデルの単価が課金されます。指定がないときは表示順の先頭が使われます。",
+      "emptyDescription": "未登録のため、この操作は上のモデルを上の単価で実行します。",
+      "modelId": "モデル ID",
+      "displayName": "表示名",
+      "sortOrder": "表示順",
+      "enabled": "選択可",
+      "disabled": "選択不可",
+      "priceValue": "{{units}} ユニット",
+      "add": "モデルを追加",
+      "edit": "編集",
+      "remove": "削除",
+      "cancel": "キャンセル",
+      "saved": "保存しました",
+      "saveFailed": "保存できませんでした"
+    },
     "tab": {
       "settings": "設定",
       "usage": "利用状況"

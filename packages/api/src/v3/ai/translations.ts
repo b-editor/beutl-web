@@ -10,7 +10,7 @@ import {
   AiProviderError,
   translateSegments,
 } from "../../ai/openrouter";
-import { loadAiSettings } from "../../ai/settings";
+import { MAX_MODEL_ID_LENGTH } from "@beutl/core";
 import {
   isUploadLimitExceeded,
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
@@ -20,6 +20,7 @@ import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
+import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
   isIso6391LanguageCode,
   translationCharacterCount,
@@ -82,6 +83,7 @@ const translationRequestSchema = z
       .min(1)
       .max(MAX_TRANSLATION_SEGMENTS),
     style: translationStyleSchema.optional(),
+    model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -165,10 +167,22 @@ const app = new Hono().post("/", async (c) => {
 
   const { sourceLanguage, targetLanguage, segments, style } =
     parsedRequest.data;
+  const catalog = await loadAiModelCatalog();
+  const selectedModel = catalog.resolve(
+    "subtitle.translate",
+    parsedRequest.data.model,
+  );
+  if (!selectedModel) {
+    return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
+
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "subtitle.translate",
     input: {
+      model: selectedModel.modelId,
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments,
@@ -181,9 +195,8 @@ const app = new Hono().post("/", async (c) => {
     });
   }
   const characterCount = translationCharacterCount({ segments, style });
-  const settings = await loadAiSettings();
   const usageUnits =
-    settings.getPrice("subtitle.translate") *
+    selectedModel.priceUnits *
     Math.max(1, Math.ceil(characterCount / 1_000));
   const reservation = await createReservedAiJob({
     userId,
@@ -197,6 +210,7 @@ const app = new Hono().post("/", async (c) => {
       characterCount,
     },
     usageUnits,
+    model: selectedModel.modelId,
     ...requestIdentity,
   });
   if (!reservation.ok) {
@@ -271,7 +285,7 @@ const app = new Hono().post("/", async (c) => {
       // enough to read in the time it is on screen.
       ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
       ...(style ? { style } : {}),
-      model: settings.getModel("subtitle.translate"),
+      model: selectedModel.modelId,
       signal: c.req.raw.signal,
     });
     await saveAiJsonResult({

@@ -116,7 +116,7 @@ function stubFetch(
 
 async function estimatesByOperation(force = false) {
   const result = await loadAiCostEstimates({
-    modelOf: (operation) => DEFAULT_MODELS[operation],
+    modelsOf: (operation) => [DEFAULT_MODELS[operation]],
     force,
   });
   return new Map(result.entries.map((entry) => [entry.operation, entry]));
@@ -254,10 +254,11 @@ describe("AI provider cost estimates", () => {
         : jsonResponse(routeFor(url) ?? {}),
     );
     const byOperation = await loadAiCostEstimates({
-      modelOf: (operation) =>
+      modelsOf: (operation) => [
         operation === "audio.transcribe"
           ? "groq/some-unlisted-transcriber"
           : DEFAULT_MODELS[operation],
+      ],
     }).then(
       (result) => new Map(result.entries.map((e) => [e.operation, e])),
     );

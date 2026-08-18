@@ -9,6 +9,7 @@ import {
 import { Separator } from "@beutl/ui/ui/separator";
 import { Suspense } from "react";
 import { AiSettingField } from "./components";
+import { AiOperationModels } from "./model-list";
 import { AiSettingsForm, type AiSettingRow } from "./settings-form";
 import {
   AiOfferCards,
@@ -19,7 +20,7 @@ import {
 import { AiUnaffordableAlert } from "./unaffordable-alert";
 import { AllowanceDigest, AllowanceDigestFallback } from "./digest";
 import { AiTabs } from "./tabs";
-import { getAiSettings } from "./queries";
+import { getAiOperationModels, getAiSettings } from "./queries";
 
 // Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
@@ -30,7 +31,10 @@ export default async function Page(props: {
   await requireAdmin();
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
-  const settings = await getAiSettings();
+  const [settings, registeredModels] = await Promise.all([
+    getAiSettings(),
+    getAiOperationModels(),
+  ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
   const rows: AiSettingRow[] = settings.all().map((entry) => ({
     key: entry.key,
@@ -90,7 +94,20 @@ export default async function Page(props: {
             >
               <AiOfferCards lang={lang} />
             </Suspense>
-            <AiUnaffordableAlert lang={lang} />
+            <AiUnaffordableAlert
+              lang={lang}
+              registeredModels={Object.fromEntries(
+                AI_OPERATIONS.map((operation) => [
+                  operation,
+                  registeredModels
+                    .filter((model) => model.operation === operation)
+                    .map((model) => ({
+                      priceUnits: model.priceUnits,
+                      enabled: model.enabled,
+                    })),
+                ]),
+              )}
+            />
           </section>
 
           {AI_OPERATIONS.map((operation) => (
@@ -104,6 +121,8 @@ export default async function Page(props: {
                 </code>
               </div>
               <Separator />
+              {/* The single model the operation falls back to while it has no
+                  registered rows. */}
               <div className="grid gap-3 lg:grid-cols-2">
                 <AiSettingField
                   lang={lang}
@@ -114,6 +133,20 @@ export default async function Page(props: {
                   settingKey={aiPriceSettingKey(operation)}
                 />
               </div>
+              <AiOperationModels
+                lang={lang}
+                operation={operation}
+                models={registeredModels
+                  .filter((model) => model.operation === operation)
+                  .map((model) => ({
+                    operation: model.operation,
+                    modelId: model.modelId,
+                    priceUnits: model.priceUnits,
+                    displayName: model.displayName,
+                    sortOrder: model.sortOrder,
+                    enabled: model.enabled,
+                  }))}
+              />
               {/* Prices and provider costs are network calls. Each section
                   keeps its own boundary so the fields stay interactive, and
                   they all await the same cached lookup. */}
@@ -122,6 +155,8 @@ export default async function Page(props: {
                   <AiOperationEconomicsFallback
                     lang={lang}
                     operation={operation}
+                    model={settings.getModel(operation)}
+                    priceUnits={null}
                   />
                 }
               >

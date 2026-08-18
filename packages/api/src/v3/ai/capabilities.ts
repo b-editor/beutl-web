@@ -14,7 +14,7 @@ import {
 } from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
-import { loadAiSettings } from "../../ai/settings";
+import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
@@ -32,13 +32,35 @@ import {
 //
 // Without this every caller had to hard-code the accepted durations, sizes and
 // resolutions, and a desktop release was needed whenever the server learned a
-// new one. The model each operation runs on is administrator-configurable, so
-// it is reported here too — a client cannot choose it, but it can say what
-// produced a result.
+// new one. The models an operation offers are registered by an administrator,
+// so a client can only learn them from here; the ids are what a request puts in
+// its `model` field.
 //
 // Prices are deliberately absent. What an operation costs stays server-side;
-// whether it can be afforded right now is GET /api/v3/user/entitlements.
+// `costTier` orders the models against each other without saying by how much,
+// and whether one can be afforded right now is GET /api/v3/user/entitlements.
 const seed = { min: AI_MIN_SEED, max: AI_MAX_SEED } as const;
+
+type ModelDescription = {
+  id: string;
+  displayName: string;
+  costTier: "low" | "medium" | "high" | null;
+  isDefault: boolean;
+};
+
+function describeModels(
+  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
+  operation: string,
+): ModelDescription[] {
+  const entries = catalog.list(operation);
+  return entries.map((entry, index) => ({
+    id: entry.modelId,
+    displayName: entry.displayName,
+    costTier: entry.costTier,
+    // The one a request that names no model runs on.
+    isDefault: index === 0,
+  }));
+}
 
 const app = new Hono().get("/", async (c) => {
   const userId = await getUserId(c);
@@ -48,13 +70,13 @@ const app = new Hono().get("/", async (c) => {
     });
   }
 
-  const settings = await loadAiSettings();
+  const catalog = await loadAiModelCatalog();
   return c.json({
     // Keyed exactly like `availability` in the entitlements response, so a
     // client can line the two up without a mapping table.
     operations: {
       "image.generate": {
-        model: settings.getModel("image.generate"),
+        models: describeModels(catalog, "image.generate"),
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
         aspectRatios: AI_IMAGE_ASPECT_RATIOS,
         // Accepted for compatibility; each maps onto the ratio it always meant.
@@ -69,7 +91,7 @@ const app = new Hono().get("/", async (c) => {
         AI_IMAGE_EDIT_TASKS.map((task) => [
           `image.edit.${task}`,
           {
-            model: settings.getModel(`image.edit.${task}`),
+            models: describeModels(catalog, `image.edit.${task}`),
             maxPromptLength: MAX_AI_PROMPT_LENGTH,
             promptRequired: aiImageEditTaskRequiresPrompt(task),
             maxImageBytes: MAX_AI_IMAGE_UPLOAD_BYTES,
@@ -78,7 +100,7 @@ const app = new Hono().get("/", async (c) => {
         ]),
       ),
       "audio.transcribe": {
-        model: settings.getModel("audio.transcribe"),
+        models: describeModels(catalog, "audio.transcribe"),
         maxUploadBytes: MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
         maxDurationSeconds: MAX_AI_AUDIO_DURATION_SECONDS,
         // Optional; omitting it lets the provider detect the language.
@@ -87,14 +109,14 @@ const app = new Hono().get("/", async (c) => {
         wordTimestamps: true,
       },
       "subtitle.translate": {
-        model: settings.getModel("subtitle.translate"),
+        models: describeModels(catalog, "subtitle.translate"),
         maxSegments: MAX_TRANSLATION_SEGMENTS,
         maxCharacters: MAX_TRANSLATION_CHARACTERS,
         maxRequestBytes: MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
         languageFormat: "iso-639-1",
       },
       "video.generate": {
-        model: settings.getModel("video.generate"),
+        models: describeModels(catalog, "video.generate"),
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
         durationsSeconds: AI_VIDEO_DURATIONS_SECONDS,
         resolutions: AI_VIDEO_RESOLUTIONS,

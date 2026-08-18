@@ -211,12 +211,19 @@ function RatioFigure({
 export function AiOperationEconomicsPanel({
   lang,
   operation,
+  model,
+  priceUnits,
   estimate,
   proOffer,
   topUpUnitValue,
 }: {
   lang: string;
   operation: string;
+  model: string;
+  // The registered row's price, or null when the operation has no rows and runs
+  // on the settings page's single model — only then does the figure follow an
+  // unsaved edit of the price field.
+  priceUnits: number | null;
   // Undefined while the estimates are still loading; null-ish states inside the
   // estimate itself are distinct from that.
   estimate: AiCostEstimate | undefined;
@@ -227,9 +234,10 @@ export function AiOperationEconomicsPanel({
   const priceField = useAiSettingField(aiPriceSettingKey(operation));
   const limitField = useAiSettingField(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY);
 
-  const price = usableNumber(priceField.value);
+  const price = priceUnits ?? usableNumber(priceField.value);
   const allowance = usableNumber(limitField.value);
-  const previewing = priceField.changed || limitField.changed;
+  const previewing =
+    (priceUnits === null && priceField.changed) || limitField.changed;
 
   const equivalent =
     price !== null && allowance !== null
@@ -265,11 +273,12 @@ export function AiOperationEconomicsPanel({
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-4">
-      {previewing && (
-        <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="text-xs text-muted-foreground">{model}</code>
+        {previewing && (
           <Badge variant="secondary">{t("admin:ai.economics.preview")}</Badge>
-        </div>
-      )}
+        )}
+      </div>
       <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Figure label={t("admin:ai.economics.allowanceBuys")}>
           {!equivalent ? (

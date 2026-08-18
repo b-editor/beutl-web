@@ -5,7 +5,12 @@ import {
   type OfferAmount,
   type PriceSourceState,
 } from "./economics-panel";
-import { getAiEconomics } from "./queries";
+import { aiCostEstimateKey } from "@beutl/api";
+import {
+  getAiEconomics,
+  getAiModelCatalog,
+  getAiOperationModels,
+} from "./queries";
 
 // The server side of the economics panels: it only fetches what needs the
 // network — Stripe prices and the provider cost estimates — and hands it to the
@@ -29,6 +34,8 @@ function toSourceState(result: OfferPricingResult): PriceSourceState {
   };
 }
 
+// One panel per model the operation can run on. An operation with no registered
+// rows still gets one, for the single model the settings page holds.
 export async function AiOperationEconomics({
   lang,
   operation,
@@ -36,15 +43,34 @@ export async function AiOperationEconomics({
   lang: string;
   operation: string;
 }) {
-  const { pro, topUpUnitValue, costByOperation } = await getAiEconomics();
+  const [{ pro, topUpUnitValue, costByModel }, catalog] = await Promise.all([
+    getAiEconomics(),
+    getAiModelCatalog(),
+  ]);
+  const entries = catalog.list(operation);
+  const registered = new Set(
+    (await getAiOperationModels())
+      .filter((row) => row.operation === operation)
+      .map((row) => row.modelId),
+  );
+
   return (
-    <AiOperationEconomicsPanel
-      lang={lang}
-      operation={operation}
-      estimate={costByOperation.get(operation)}
-      proOffer={toOfferAmount(pro)}
-      topUpUnitValue={topUpUnitValue}
-    />
+    <div className="flex flex-col gap-3">
+      {entries.map((entry) => (
+        <AiOperationEconomicsPanel
+          key={entry.modelId}
+          lang={lang}
+          operation={operation}
+          model={entry.modelId}
+          priceUnits={registered.has(entry.modelId) ? entry.priceUnits : null}
+          estimate={costByModel.get(
+            aiCostEstimateKey(operation, entry.modelId),
+          )}
+          proOffer={toOfferAmount(pro)}
+          topUpUnitValue={topUpUnitValue}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -53,14 +79,20 @@ export async function AiOperationEconomics({
 export function AiOperationEconomicsFallback({
   lang,
   operation,
+  model,
+  priceUnits,
 }: {
   lang: string;
   operation: string;
+  model: string;
+  priceUnits: number | null;
 }) {
   return (
     <AiOperationEconomicsPanel
       lang={lang}
       operation={operation}
+      model={model}
+      priceUnits={priceUnits}
       estimate={undefined}
       proOffer={null}
       topUpUnitValue={null}

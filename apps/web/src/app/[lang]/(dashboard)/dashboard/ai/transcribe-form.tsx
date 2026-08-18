@@ -27,6 +27,7 @@ import { saveSubtitleHandoff } from "@/lib/subtitle-handoff";
 import { transcribeAction } from "./actions";
 import {
   AiAccessNotice,
+  ModelSelect,
   AiWorkspace,
   CopyButton,
   DownloadButton,
@@ -35,6 +36,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   downloadTextFile,
+  defaultModelId,
   type AiAccess,
 } from "./shared";
 
@@ -90,6 +92,9 @@ export function TranscribeForm({
   const [words, setWords] = useState<SubtitleWord[]>([]);
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string>("transcription");
+  const [model, setModel] = useState(() =>
+    defaultModelId(access.models["audio.transcribe"] ?? []),
+  );
   const [maxLineLength, setMaxLineLength] = useState<string>("42");
   const [maxLineCount, setMaxLineCount] = useState<string>("2");
   // What the focused timing field currently reads. A number input reports ""
@@ -113,6 +118,7 @@ export function TranscribeForm({
   }, [state.segments, state.words, state.language]);
 
   const blocked = blockedReason(access, ["audio.transcribe"]);
+  const models = access.models["audio.transcribe"] ?? [];
 
   function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -247,6 +253,12 @@ export function TranscribeForm({
             onChange={handleAudioChange}
           />
         </div>
+        <ModelSelect
+          lang={lang}
+          models={models}
+          value={model}
+          onChange={setModel}
+        />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="transcribeLanguage">
             {t("dashboard:ai.language")}

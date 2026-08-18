@@ -44,6 +44,8 @@ export const auditLogActions = {
     feedbackStatusChanged: "admin.feedbackStatusChanged",
     aiSettingChanged: "admin.aiSettingChanged",
     aiSettingReset: "admin.aiSettingReset",
+    aiOperationModelSaved: "admin.aiOperationModelSaved",
+    aiOperationModelRemoved: "admin.aiOperationModelRemoved",
     aiCreditsAdjusted: "admin.aiCreditsAdjusted",
     aiMonthlyUsageAdjusted: "admin.aiMonthlyUsageAdjusted",
   },

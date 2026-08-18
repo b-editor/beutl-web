@@ -33,6 +33,7 @@ export async function createReservedAiJob({
   status,
   inputParams,
   usageUnits,
+  model,
   activeJobLimit,
   idempotencyKeyHash,
   requestFingerprint,
@@ -44,6 +45,9 @@ export async function createReservedAiJob({
   status: "queued" | "running";
   inputParams?: object;
   usageUnits: number;
+  // The model this job was priced for and will run on. Resolved together with
+  // the price so the two can never disagree.
+  model?: string;
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
@@ -98,6 +102,7 @@ export async function createReservedAiJob({
         status,
         inputParams,
         usageUnits,
+        model,
         idempotencyKeyHash,
         requestFingerprint,
         callbackNonceHash,

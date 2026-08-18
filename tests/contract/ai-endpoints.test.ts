@@ -450,6 +450,7 @@ describe("v3 AI endpoints contract", () => {
           hasAdditionalCreditDebt: false,
         },
         availability: expect.any(Object),
+        modelAvailability: expect.any(Object),
       });
     });
 
@@ -524,6 +525,7 @@ describe("v3 AI endpoints contract", () => {
           hasAdditionalCreditDebt: false,
         },
         availability: expect.any(Object),
+        modelAvailability: expect.any(Object),
       });
     });
 
@@ -817,7 +819,13 @@ describe("v3 AI endpoints contract", () => {
         ...(await getAiRequestIdentityForTest({
           key,
           operation: "image.generate",
-          input: { prompt: "test", aspectRatio: "1:1" },
+          // The model is part of the fingerprint, so the same prompt on a
+          // different model is a different request rather than a replay.
+          input: {
+            prompt: "test",
+            aspectRatio: "1:1",
+            model: "openai/gpt-image-1",
+          },
         })),
       });
       expect(reservation.ok).toBe(true);

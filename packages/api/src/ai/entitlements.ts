@@ -6,7 +6,8 @@ import {
   usagePeriodsEqual,
 } from "@beutl/db";
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
-import { loadAiSettings, type AiSettingsSnapshot } from "./settings";
+import { loadAiSettings } from "./settings";
+import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -33,7 +34,14 @@ export type AiBalancePresentation = {
 
 // Whether each operation can be started right now. This replaces the price
 // catalog the client used to evaluate locally.
+//
+// An operation is available when at least one of its models is: with several
+// models at several prices, "cannot afford this operation" is no longer a
+// single fact. Which ones in particular is modelAvailability.
 export type AiOperationAvailability = Record<string, boolean>;
+
+// operation -> model id -> whether that model can be started right now.
+export type AiModelAvailability = Record<string, Record<string, boolean>>;
 
 // Wire contract for GET /api/v3/user/entitlements.
 export type EntitlementsResponse = {
@@ -47,6 +55,9 @@ export type EntitlementsResponse = {
   canUseAi: boolean;
   balance: AiBalancePresentation;
   availability: AiOperationAvailability;
+  // Keyed by the same model ids GET /api/v3/ai/capabilities lists, so a client
+  // can grey out the ones it cannot pay for without knowing any price.
+  modelAvailability: AiModelAvailability;
 };
 
 export function toAiBalanceSnapshot(
@@ -104,34 +115,37 @@ export function toAiBalancePresentation(
   };
 }
 
-// The smallest charge an operation can actually incur: the configured unit
-// price times the smallest request its entry point accepts. Using one unit
-// would report a four-second video as startable on a quarter of what it costs,
-// and the reservation would then reject a prompt the user had already written.
-function minimumChargeFor(
-  operation: string,
-  settings: AiSettingsSnapshot,
-): number {
+// The smallest charge a model can actually incur: its unit price times the
+// smallest request the operation's entry point accepts. Using one unit would
+// report a four-second video as startable on a quarter of what it costs, and
+// the reservation would then reject a prompt the user had already written.
+function minimumChargeFor(operation: string, priceUnits: number): number {
   const minimumQuantity = aiMinimumQuantityOf(operation);
   if (minimumQuantity === null) {
     return 0;
   }
-  return settings.getPrice(operation) * minimumQuantity;
+  return priceUnits * minimumQuantity;
 }
 
 export function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
-  settings: AiSettingsSnapshot,
-): AiOperationAvailability {
+  catalog: AiModelCatalog,
+): { availability: AiOperationAvailability; modelAvailability: AiModelAvailability } {
   const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
   const availability: AiOperationAvailability = {};
+  const modelAvailability: AiModelAvailability = {};
   for (const operation of Object.keys(AI_PRICING_CATALOG)) {
-    const minimumCharge = minimumChargeFor(operation, settings);
-    availability[operation] =
-      canUseAi && minimumCharge > 0 && available >= minimumCharge;
+    const models: Record<string, boolean> = {};
+    for (const entry of catalog.list(operation)) {
+      const minimumCharge = minimumChargeFor(operation, entry.priceUnits);
+      models[entry.modelId] =
+        canUseAi && minimumCharge > 0 && available >= minimumCharge;
+    }
+    modelAvailability[operation] = models;
+    availability[operation] = Object.values(models).some(Boolean);
   }
-  return availability;
+  return { availability, modelAvailability };
 }
 
 type SubscriptionState = {
@@ -179,7 +193,10 @@ export async function getEntitlements(
 ): Promise<EntitlementsResponse> {
   return await startRetryableTransaction(async (prisma) => {
     const subscription = await getSubscriptionByUserId({ userId, prisma });
-    const settings = await loadAiSettings({ prisma });
+    const [settings, catalog] = await Promise.all([
+      loadAiSettings({ prisma }),
+      loadAiModelCatalog({ prisma }),
+    ]);
     const isActive = isActiveProSubscription(subscription);
     const effectiveEnd = subscription
       ? getEffectiveSubscriptionEnd(subscription)
@@ -225,7 +242,7 @@ export async function getEntitlements(
       cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
       canUseAi: isActive,
       balance: toAiBalancePresentation(balance),
-      availability: toAiOperationAvailability(balance, isActive, settings),
+      ...toAiOperationAvailability(balance, isActive, catalog),
     };
   });
 }
@@ -234,6 +251,7 @@ export async function canStartAiOperation(
   userId: string,
   request: {
     operation: string;
+    model?: string;
     durationSeconds?: number;
     characterCount?: number;
   },
@@ -251,7 +269,17 @@ export async function canStartAiOperation(
       return false;
     }
 
-    const settings = await loadAiSettings({ prisma });
+    const [settings, catalog] = await Promise.all([
+      loadAiSettings({ prisma }),
+      loadAiModelCatalog({ prisma }),
+    ]);
+    // An unknown or disabled model cannot be started at any balance, and
+    // answering "yes" for it would send the user into a request the entry point
+    // refuses.
+    const selectedModel = catalog.resolve(operation, request.model);
+    if (!selectedModel) {
+      return false;
+    }
     const quantity = operation === "video.generate"
       ? request.durationSeconds
       : operation === "audio.transcribe"
@@ -270,7 +298,7 @@ export async function canStartAiOperation(
     ) {
       throw new RangeError("operation quantity must be a positive integer");
     }
-    const requiredUsage = settings.getPrice(operation) * quantity;
+    const requiredUsage = selectedModel.priceUnits * quantity;
     if (!Number.isSafeInteger(requiredUsage) || requiredUsage <= 0) {
       return false;
     }

@@ -71,6 +71,13 @@
       "classicPortrait": "Classic portrait"
     },
     "aspectRatio": "Aspect ratio",
+    "model": "Model",
+    "modelUnaffordable": "Not enough balance",
+    "costTier": {
+      "low": "Costs less",
+      "medium": "Costs about average",
+      "high": "Costs more"
+    },
     "generateAudio": "Generate audio",
     "referenceImage": "Reference image (optional)",
     "referenceImageHint": "Hand it a picture you already have and the generation follows its subject and style.",

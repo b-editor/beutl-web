@@ -55,8 +55,13 @@ export const AI_IMAGE_EDIT_TASKS = [
 
 export type AiImageEditTask = (typeof AI_IMAGE_EDIT_TASKS)[number];
 
-// The sole source of built-in model and price defaults.
-const DEFAULTS = {
+// The built-in model and price for every operation.
+//
+// This is now the fallback and the seed rather than the whole story: an
+// operation's selectable models live in the AiOperationModel table, and an
+// operation with no rows there resolves to the entry below — the same way a
+// missing AiSetting row resolves to its fallback.
+export const AI_DEFAULT_OPERATION_MODELS = {
   "image.generate": { model: "openai/gpt-image-1", price: 20 },
   "image.edit.remove_background": { model: "openai/gpt-image-1", price: 10 },
   "image.edit.upscale": { model: "bytedance-seed/seedream-4.5", price: 15 },
@@ -69,12 +74,14 @@ const DEFAULTS = {
   },
   "subtitle.translate": { model: "openai/gpt-4.1-mini", price: 5 },
   "video.generate": { model: "google/veo-3.1", price: 40 },
-} as const;
+} as const satisfies Record<string, { model: string; price: number }>;
 
-export type AiOperation = keyof typeof DEFAULTS;
+export type AiOperation = keyof typeof AI_DEFAULT_OPERATION_MODELS;
 
 
-export const AI_OPERATIONS = Object.keys(DEFAULTS) as AiOperation[];
+export const AI_OPERATIONS = Object.keys(
+  AI_DEFAULT_OPERATION_MODELS,
+) as AiOperation[];
 
 function buildSettings(): Record<string, AiSettingDefinition> {
   const settings: Record<string, AiSettingDefinition> = {
@@ -85,7 +92,7 @@ function buildSettings(): Record<string, AiSettingDefinition> {
     },
   };
   for (const operation of AI_OPERATIONS) {
-    const defaults = DEFAULTS[operation];
+    const defaults = AI_DEFAULT_OPERATION_MODELS[operation];
     settings[`model.${operation}`] = {
       key: `model.${operation}`,
       kind: "model",
@@ -106,6 +113,17 @@ export const AI_SETTINGS: Record<string, AiSettingDefinition> = buildSettings();
 
 export function isAiSettingKey(value: unknown): value is keyof typeof AI_SETTINGS {
   return typeof value === "string" && Object.hasOwn(AI_SETTINGS, value);
+}
+
+// A model ID on its own, for the AiOperationModel rows the admin console
+// registers. Those are not settings keys, so they cannot go through
+// validateAiSettingValue, but they must be held to the same shape.
+export function isAiModelId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_MODEL_ID_LENGTH &&
+    MODEL_ID_PATTERN.test(value)
+  );
 }
 
 export function aiModelSettingKey(operation: string): string {
