@@ -9,48 +9,94 @@ import { AI_OPERATIONS } from "@beutl/core";
 
 // Response bodies below mirror what the public OpenRouter endpoints actually
 // return for the built-in models.
-const GPT_IMAGE_ENDPOINTS = {
-  id: "openai/gpt-image-1",
-  endpoints: [
-    {
-      provider_slug: "openai",
-      pricing: [
-        { billable: "input_image", unit: "token", cost_usd: 0.00001 },
-        { billable: "input_text", unit: "token", cost_usd: 0.000005 },
-        { billable: "output_image", unit: "token", cost_usd: 0.00004 },
-      ],
+// The envelopes the provider sends around a price. Only the pricing matters
+// here; the rest is what a real reply carries, and the client validates it.
+function modelPayload(id: string, pricing: Record<string, string>) {
+  return {
+    data: {
+      id,
+      canonical_slug: id,
+      name: id,
+      created: 1,
+      context_length: 128000,
+      architecture: {
+        modality: "text->text",
+        input_modalities: ["text"],
+        output_modalities: ["text"],
+        tokenizer: "GPT",
+        instruct_type: null,
+      },
+      links: { details: `/api/v1/models/${id}/endpoints` },
+      per_request_limits: null,
+      default_parameters: {},
+      supported_parameters: [],
+      supported_voices: null,
+      top_provider: {
+        context_length: 128000,
+        max_completion_tokens: 32768,
+        is_moderated: false,
+      },
+      pricing,
     },
-  ],
-};
+  };
+}
 
-const SEEDREAM_ENDPOINTS = {
-  id: "bytedance-seed/seedream-4.5",
-  endpoints: [
-    {
-      provider_slug: "seed",
-      pricing: [{ billable: "output_image", unit: "image", cost_usd: 0.04 }],
-    },
-  ],
-};
+function imageEndpoints(
+  id: string,
+  pricing: { billable: string; unit: string; cost_usd: number }[],
+) {
+  const provider = id.split("/")[0];
+  return {
+    id,
+    endpoints: [
+      {
+        provider_name: provider,
+        provider_slug: provider,
+        provider_tag: provider,
+        supported_parameters: {},
+        allowed_passthrough_parameters: [],
+        supports_streaming: false,
+        pricing,
+      },
+    ],
+  };
+}
 
-const WHISPER_MODEL = {
-  data: {
-    id: "openai/whisper-large-v3-turbo",
-    pricing: { prompt: "0.00000333", completion: "0" },
-  },
-};
+const GPT_IMAGE_ENDPOINTS = imageEndpoints("openai/gpt-image-1", [
+  { billable: "input_image", unit: "token", cost_usd: 0.00001 },
+  { billable: "input_text", unit: "token", cost_usd: 0.000005 },
+  { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+]);
 
-const GPT_4_1_MINI_MODEL = {
-  data: {
-    id: "openai/gpt-4.1-mini",
-    pricing: { prompt: "0.0000004", completion: "0.0000016" },
-  },
-};
+const SEEDREAM_ENDPOINTS = imageEndpoints("bytedance-seed/seedream-4.5", [
+  { billable: "output_image", unit: "image", cost_usd: 0.04 },
+]);
+
+const WHISPER_MODEL = modelPayload("openai/whisper-large-v3-turbo", {
+  prompt: "0.00000333",
+  completion: "0",
+});
+
+const GPT_4_1_MINI_MODEL = modelPayload("openai/gpt-4.1-mini", {
+  prompt: "0.0000004",
+  completion: "0.0000016",
+});
 
 const VIDEO_MODELS = {
   data: [
     {
       id: "google/veo-3.1",
+      canonical_slug: "google/veo-3.1",
+      name: "Google: Veo 3.1",
+      created: 1,
+      supported_resolutions: ["720p", "1080p"],
+      supported_durations: [4, 6, 8],
+      supported_aspect_ratios: ["16:9", "9:16"],
+      supported_frame_images: ["first_frame"],
+      supported_sizes: null,
+      generate_audio: true,
+      seed: true,
+      allowed_passthrough_parameters: [],
       pricing_skus: {
         duration_seconds_with_audio: "0.40",
         duration_seconds_without_audio: "0.20",
@@ -103,12 +149,18 @@ function stubFetch(
   handler: (url: string) => Response | Promise<Response> = (url) => {
     const body = routeFor(url);
     return body === undefined
-      ? jsonResponse({ error: "not found" }, 404)
+      ? jsonResponse({ error: { code: 404, message: "Resource not found" } }, 404)
       : jsonResponse(body);
   },
 ) {
   const mock = vi.fn(async (input: RequestInfo | URL) =>
-    handler(typeof input === "string" ? input : String(input)),
+    handler(
+      typeof input === "string"
+        ? input
+        : input instanceof Request
+          ? input.url
+          : String(input),
+    ),
   );
   vi.stubGlobal("fetch", mock);
   return mock;
@@ -181,7 +233,7 @@ describe("AI provider cost estimates", () => {
     const mock = stubFetch();
     await estimatesByOperation();
 
-    const urls = mock.mock.calls.map((call) => String(call[0]));
+    const urls = mock.mock.calls.map((call) => (call[0] as Request).url);
     // The bulk model list is 800 KB and reports zero for video, so it is never
     // used for this.
     expect(urls.some((url) => url.includes("output_modalities"))).toBe(false);
@@ -248,9 +300,12 @@ describe("AI provider cost estimates", () => {
   it("refuses to guess the unit of a transcription price", async () => {
     stubFetch((url) =>
       url.includes("/model/")
-        ? jsonResponse({
-            data: { pricing: { prompt: "0.04", completion: "0" } },
-          })
+        ? jsonResponse(
+            modelPayload("groq/some-unlisted-transcriber", {
+              prompt: "0.04",
+              completion: "0",
+            }),
+          )
         : jsonResponse(routeFor(url) ?? {}),
     );
     const byOperation = await loadAiCostEstimates({
@@ -274,15 +329,11 @@ describe("AI provider cost estimates", () => {
   it("treats an unrecognized image unit as unknown", async () => {
     stubFetch((url) =>
       url.includes("/images/models/")
-        ? jsonResponse({
-            endpoints: [
-              {
-                pricing: [
-                  { billable: "output_image", unit: "seconds", cost_usd: 0.05 },
-                ],
-              },
-            ],
-          })
+        ? jsonResponse(
+            imageEndpoints("openai/gpt-image-1", [
+              { billable: "output_image", unit: "seconds", cost_usd: 0.05 },
+            ]),
+          )
         : jsonResponse(routeFor(url) ?? {}),
     );
     const byOperation = await estimatesByOperation();

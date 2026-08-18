@@ -54,6 +54,28 @@ function oversizedChunkedResponse(
   };
 }
 
+// The SDK hands fetch a Request rather than (url, init), so what was sent is
+// read off that.
+async function sentRequest(
+  fetchMock: ReturnType<typeof vi.fn>,
+  call = 0,
+): Promise<{
+  url: string;
+  method: string;
+  authorization: string | null;
+  contentType: string | null;
+  body: unknown;
+}> {
+  const request = fetchMock.mock.calls[call]?.[0] as Request;
+  return {
+    url: request.url,
+    method: request.method,
+    authorization: request.headers.get("authorization"),
+    contentType: request.headers.get("content-type"),
+    body: await request.json(),
+  };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -75,6 +97,7 @@ describe("OpenRouter client contract", () => {
   it("uses the dedicated image API with the requested aspect ratio", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
+        created: 1,
         data: [{ b64_json: "AQID", media_type: "image/png" }],
       }),
     );
@@ -89,14 +112,12 @@ describe("OpenRouter client contract", () => {
     ).resolves.toEqual({ b64Json: "AQID", mediaType: "image/png" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://openrouter.ai/api/v1/images");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toMatchObject({
-      Authorization: "Bearer test-openrouter-key",
-      "Content-Type": "application/json",
-    });
-    expect(JSON.parse(init.body as string)).toEqual({
+    const sent = await sentRequest(fetchMock);
+    expect(sent.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(sent.method).toBe("POST");
+    expect(sent.authorization).toBe("Bearer test-openrouter-key");
+    expect(sent.contentType).toContain("application/json");
+    expect(sent.body).toEqual({
       model: "openai/gpt-image-1",
       prompt: "a lighthouse",
       aspect_ratio: "2:3",
@@ -108,6 +129,7 @@ describe("OpenRouter client contract", () => {
   it("sends a transparent background, a seed and a reference image only when asked", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
+        created: 1,
         data: [{ b64_json: "AQID", media_type: "image/png" }],
       }),
     );
@@ -124,8 +146,7 @@ describe("OpenRouter client contract", () => {
       model: "openai/gpt-image-1",
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({
+    expect((await sentRequest(fetchMock)).body).toEqual({
       model: "openai/gpt-image-1",
       prompt: "a logo",
       aspect_ratio: "16:9",
@@ -142,6 +163,7 @@ describe("OpenRouter client contract", () => {
   it("omits an automatic background so the provider default is untouched", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
+        created: 1,
         data: [{ b64_json: "AQID", media_type: "image/png" }],
       }),
     );
@@ -154,18 +176,19 @@ describe("OpenRouter client contract", () => {
       model: "openai/gpt-image-1",
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).not.toHaveProperty("background");
+    expect((await sentRequest(fetchMock)).body).not.toHaveProperty(
+      "background",
+    );
   });
 
   it("aborts a provider request after the configured timeout", async () => {
     vi.stubEnv("OPENROUTER_REQUEST_TIMEOUT_MS", "5");
     const fetchMock = vi.fn().mockImplementation(
-      (_url: string, init: RequestInit) =>
+      (request: Request) =>
         new Promise<Response>((_resolve, reject) => {
-          init.signal?.addEventListener(
+          request.signal.addEventListener(
             "abort",
-            () => reject(init.signal?.reason),
+            () => reject(request.signal.reason),
             { once: true },
           );
         }),
@@ -173,9 +196,33 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      generateImage({ prompt: "a lighthouse", size: "1024x1024", model: "openai/gpt-image-1" }),
-    ).rejects.toThrow("OpenRouter request timed out");
+      generateImage({
+        prompt: "a lighthouse",
+        aspectRatio: "1:1",
+        model: "openai/gpt-image-1",
+      }),
+    ).rejects.toThrow("timed out");
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("never repeats a paid request the provider may already be running", async () => {
+    // The SDK retries 5XX and connection errors for up to an hour by default.
+    // Every call here is billed per accepted request, so a retry after a lost
+    // response would run and charge for the work a second time.
+    for (const outcome of [
+      vi.fn().mockResolvedValue(jsonResponse({ error: "overloaded" }, 503)),
+      vi.fn().mockRejectedValue(new TypeError("connection reset")),
+    ]) {
+      vi.stubGlobal("fetch", outcome);
+      await expect(
+        generateImage({
+          prompt: "a lighthouse",
+          aspectRatio: "1:1",
+          model: "openai/gpt-image-1",
+        }),
+      ).rejects.toBeInstanceOf(AiProviderError);
+      expect(outcome).toHaveBeenCalledOnce();
+    }
   });
 
   it("resolves the request timeout used by polling leases", () => {
@@ -237,7 +284,11 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oversized.response));
 
     await expect(
-      generateImage({ prompt: "test", size: "1024x1024", model: "openai/gpt-image-1" }),
+      generateImage({
+        prompt: "test",
+        aspectRatio: "1:1",
+        model: "openai/gpt-image-1",
+      }),
     ).rejects.toBeInstanceOf(AiProviderError);
     expect(oversized.wasCancelled()).toBe(true);
   });
@@ -252,13 +303,18 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 
     await expect(
-      generateImage({ prompt: "test", size: "1024x1024", model: "openai/gpt-image-1" }),
+      generateImage({
+        prompt: "test",
+        aspectRatio: "1:1",
+        model: "openai/gpt-image-1",
+      }),
     ).rejects.toBeInstanceOf(AiProviderError);
   });
 
   it("sends image edits as base64 input references", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
+        created: 1,
         data: [{ b64_json: "BAUG", media_type: "image/png" }],
       }),
     );
@@ -271,9 +327,9 @@ describe("OpenRouter client contract", () => {
       model: "openai/gpt-image-1",
     });
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://openrouter.ai/api/v1/images");
-    expect(JSON.parse(init.body as string)).toEqual({
+    const sentEdit = await sentRequest(fetchMock);
+    expect(sentEdit.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(sentEdit.body).toEqual({
       model: "openai/gpt-image-1",
       prompt:
         "Remove the entire background. Preserve the foreground subject exactly and return it on a fully transparent background.",
@@ -292,6 +348,7 @@ describe("OpenRouter client contract", () => {
   it("requests a 4K-capable model for upscaling", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
+        created: 1,
         data: [{ b64_json: "AQID", media_type: "image/jpeg" }],
       }),
     );
@@ -304,8 +361,7 @@ describe("OpenRouter client contract", () => {
       model: "bytedance-seed/seedream-4.5",
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    expect((await sentRequest(fetchMock)).body).toMatchObject({
       model: "bytedance-seed/seedream-4.5",
       resolution: "4K",
       output_format: "png",
@@ -321,6 +377,7 @@ describe("OpenRouter client contract", () => {
     async (task, prompt) => {
       const fetchMock = vi.fn().mockResolvedValue(
         jsonResponse({
+          created: 1,
           data: [{ b64_json: "AQID", media_type: "image/png" }],
         }),
       );
@@ -334,9 +391,9 @@ describe("OpenRouter client contract", () => {
         model: "openai/gpt-image-1",
       });
 
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("https://openrouter.ai/api/v1/images");
-      expect(JSON.parse(init.body as string)).toEqual({
+      const sent = await sentRequest(fetchMock);
+      expect(sent.url).toBe("https://openrouter.ai/api/v1/images");
+      expect(sent.body).toEqual({
         model: "openai/gpt-image-1",
         prompt,
         input_references: [
@@ -539,7 +596,11 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: [] })));
 
     await expect(
-      generateImage({ prompt: "test", size: "1024x1024", model: "openai/gpt-image-1" }),
+      generateImage({
+        prompt: "test",
+        aspectRatio: "1:1",
+        model: "openai/gpt-image-1",
+      }),
     ).rejects.toBeInstanceOf(AiProviderError);
   });
 });

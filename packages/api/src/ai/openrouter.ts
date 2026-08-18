@@ -1,4 +1,15 @@
 import { z } from "zod";
+import { HTTPClient, OpenRouter, type Fetcher } from "@openrouter/sdk";
+import type {
+  CreateImagesResponse,
+  SendChatCompletionRequestResponse,
+} from "@openrouter/sdk/models/operations";
+import {
+  InvalidRequestError,
+  OpenRouterError,
+  RequestAbortedError,
+  RequestTimeoutError,
+} from "@openrouter/sdk/models/errors";
 import {
   AI_MAX_IMAGE_REFERENCES,
   type AiImageAspectRatio,
@@ -285,6 +296,147 @@ export async function readBoundedResponseText(
   }
 }
 
+// Everything this service asks OpenRouter for goes through the official SDK:
+// the request shapes and the per-model capability lists are kept current there
+// rather than here. Two things it does not decide are set on every client.
+//
+// Retries are off. The SDK retries 5XX and connection errors for up to an hour
+// by default, and every one of these calls is billed per accepted request — a
+// retry after a lost response runs and charges for the work twice.
+//
+// Responses are bounded. The SDK buffers a whole body before parsing it, and an
+// image reply is base64: without a cap, a provider returning far more than it
+// should would exhaust the worker rather than fail one request.
+export function createOpenRouterClient(): OpenRouter {
+  return new OpenRouter({
+    apiKey: getOpenRouterApiKey(),
+    timeoutMs: getOpenRouterRequestTimeoutMilliseconds(),
+    retryConfig: { strategy: "none" },
+    httpClient: new HTTPClient({
+      fetcher: boundedFetcher(MAX_OPENROUTER_JSON_RESPONSE_BYTES),
+    }),
+  });
+}
+
+// The public price and capability endpoints take no credentials, and the admin
+// Worker holds none. A short timeout and a small cap suit a lookup that only
+// renders a figure on a page: the console must not hang on the provider.
+export function createPublicOpenRouterClient({
+  timeoutMs,
+  maximumResponseBytes,
+}: {
+  timeoutMs: number;
+  maximumResponseBytes: number;
+}): OpenRouter {
+  return new OpenRouter({
+    timeoutMs,
+    retryConfig: { strategy: "none" },
+    httpClient: new HTTPClient({ fetcher: boundedFetcher(maximumResponseBytes) }),
+  });
+}
+
+function boundedFetcher(maximumBytes: number): Fetcher {
+  return async (input, init) => {
+    const response = await fetch(input as RequestInfo, init);
+    if (!response.body) return response;
+    // A body that announces itself as too large is refused without reading it.
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isSafeInteger(declaredLength) && declaredLength > maximumBytes) {
+      await response.body.cancel().catch(() => undefined);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(
+              new AiProviderError("OpenRouter response exceeds the size limit"),
+            );
+          },
+        }),
+        {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        },
+      );
+    }
+    let total = 0;
+    const bounded = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          total += chunk.byteLength;
+          if (total > maximumBytes) {
+            controller.error(
+              new AiProviderError("OpenRouter response exceeds the size limit"),
+            );
+            return;
+          }
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+    return new Response(bounded, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+// The SDK applies its own timeout only when the caller passes no signal, so a
+// caller-supplied one is combined with the timeout rather than replacing it.
+export function openRouterRequestOptions(signal: AbortSignal | undefined) {
+  const timeoutMs = getOpenRouterRequestTimeoutMilliseconds();
+  return signal
+    ? { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) }
+    : {};
+}
+
+// Whether the provider certainly did no work, which is what decides between
+// refunding a reservation and leaving it in place. Only a request the client
+// rejected or a 4XX proves nothing ran: a dropped connection may have been a
+// response lost on the way back from work that was done and billed.
+export function openRouterExecutionOf(
+  cause: unknown,
+): "definite_failure" | "unknown" {
+  if (cause instanceof InvalidRequestError) return "definite_failure";
+  if (cause instanceof OpenRouterError) {
+    return cause.statusCode >= 400 && cause.statusCode < 500
+      ? "definite_failure"
+      : "unknown";
+  }
+  return "unknown";
+}
+
+// The provider's own words about a failure. Users are shown a generic message,
+// so without this the reason — an unsupported parameter, a model that is gone —
+// is lost entirely.
+export function openRouterFailureMessage(
+  cause: unknown,
+  fallback: string,
+): string {
+  if (cause instanceof OpenRouterError) {
+    return `${fallback}: ${cause.statusCode} ${cause.body.slice(0, 1_000)}`;
+  }
+  if (cause instanceof RequestTimeoutError) return `${fallback}: timed out`;
+  if (cause instanceof RequestAbortedError) {
+    return `${fallback}: cancelled before its outcome was known`;
+  }
+  return cause instanceof Error ? `${fallback}: ${cause.message}` : fallback;
+}
+
+export function toAiProviderError(
+  cause: unknown,
+  fallback: string,
+): AiProviderError {
+  if (cause instanceof AiProviderError) return cause;
+  return new AiProviderError(openRouterFailureMessage(cause, fallback), {
+    cause,
+    execution: openRouterExecutionOf(cause),
+    ...(cause instanceof OpenRouterError
+      ? { httpStatus: cause.statusCode }
+      : {}),
+  });
+}
+
 async function request(
   path: string,
   init: RequestInit,
@@ -430,7 +582,7 @@ export type ImageReference = {
 function toInputReference(reference: ImageReference) {
   return {
     type: "image_url" as const,
-    image_url: {
+    imageUrl: {
       url: `data:${reference.mimeType};base64,${arrayBufferToBase64(reference.bytes)}`,
     },
   };
@@ -441,27 +593,19 @@ export type GeneratedImage = {
   mediaType: string;
 };
 
-const imageResponseSchema = z.object({
-  data: z
-    .array(
-      z.object({
-        b64_json: z.string().min(1),
-        media_type: z.string().min(1).optional(),
-      }),
-    )
-    .min(1),
-});
-
-function parseGeneratedImage(data: unknown): GeneratedImage {
-  const parsed = imageResponseSchema.safeParse(data);
-  if (!parsed.success) {
+// The SDK validates the reply's shape; what it does not say is that an image
+// actually came back, and an empty or blank entry would otherwise be decoded as
+// zero bytes further down.
+function parseGeneratedImage(response: CreateImagesResponse): GeneratedImage {
+  // Streaming is never asked for, so a reply that carries no images at all is
+  // the provider answering something other than what was requested.
+  const image = "data" in response ? response.data[0] : undefined;
+  if (!image || image.b64Json.length === 0) {
     throw new AiProviderError("OpenRouter returned invalid image data");
   }
-
-  const image = parsed.data.data[0];
   return {
-    b64Json: image.b64_json,
-    mediaType: image.media_type || "image/png",
+    b64Json: image.b64Json,
+    mediaType: image.mediaType || "image/png",
   };
 }
 
@@ -495,27 +639,29 @@ export async function generateImage({
       `At most ${AI_MAX_IMAGE_REFERENCES} reference image is supported`,
     );
   }
-  const data = await requestJson("/images", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      aspect_ratio: aspectRatio,
-      n: 1,
-      output_format: "png",
-      ...(background && background !== "auto" ? { background } : {}),
-      ...(referenceImages && referenceImages.length > 0
-        ? { input_references: referenceImages.map(toInputReference) }
-        : {}),
-      ...(seed === undefined ? {} : { seed }),
-    }),
-    signal,
-  });
-
-  return parseGeneratedImage(data);
+  const client = createOpenRouterClient();
+  try {
+    const response = await client.images.generate(
+      {
+        imageGenerationRequest: {
+          model,
+          prompt,
+          aspectRatio,
+          n: 1,
+          outputFormat: "png",
+          ...(background && background !== "auto" ? { background } : {}),
+          ...(referenceImages && referenceImages.length > 0
+            ? { inputReferences: referenceImages.map(toInputReference) }
+            : {}),
+          ...(seed === undefined ? {} : { seed }),
+        },
+      },
+      openRouterRequestOptions(signal),
+    );
+    return parseGeneratedImage(response);
+  } catch (cause) {
+    throw toAiProviderError(cause, "OpenRouter image generation failed");
+  }
 }
 
 function arrayBufferToBase64(value: ArrayBuffer): string {
@@ -565,28 +711,30 @@ export async function editImage({
   }
   const taskOptions =
     task === "remove_background"
-      ? { background: "transparent" }
+      ? ({ background: "transparent" } as const)
       : task === "upscale"
-        ? { resolution: "4K" }
+        ? ({ resolution: "4K" } as const)
         : {};
 
-  const data = await requestJson("/images", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt: resolvedPrompt,
-      input_references: [toInputReference({ bytes: image, mimeType })],
-      n: 1,
-      output_format: "png",
-      ...taskOptions,
-    }),
-    signal,
-  });
-
-  return parseGeneratedImage(data);
+  const client = createOpenRouterClient();
+  try {
+    const response = await client.images.generate(
+      {
+        imageGenerationRequest: {
+          model,
+          prompt: resolvedPrompt,
+          inputReferences: [toInputReference({ bytes: image, mimeType })],
+          n: 1,
+          outputFormat: "png",
+          ...taskOptions,
+        },
+      },
+      openRouterRequestOptions(signal),
+    );
+    return parseGeneratedImage(response);
+  } catch (cause) {
+    throw toAiProviderError(cause, "OpenRouter image editing failed");
+  }
 }
 
 export type {
@@ -599,20 +747,6 @@ export type TranslationSegment = {
   id: string;
   text: string;
 };
-
-const translationChatCompletionSchema = z.object({
-  choices: z
-    .array(
-      z.object({
-        finish_reason: z.string().nullable().optional(),
-        error: z.unknown().optional(),
-        message: z.object({
-          content: z.string().min(1),
-        }),
-      }),
-    )
-    .length(1),
-});
 
 const translationOutputSchema = z
   .object({
@@ -688,19 +822,29 @@ function translationSystemPrompt({
 }
 
 function parseTranslationResponse(
-  data: unknown,
+  response: SendChatCompletionRequestResponse,
   inputSegments: TranslationSegment[],
 ): TranslationSegment[] {
-  const completion = translationChatCompletionSchema.safeParse(data);
-  if (!completion.success) {
+  // Streaming is never asked for, and a request for one completion that comes
+  // back with none or several is not an answer to it.
+  const choice =
+    "choices" in response && response.choices.length === 1
+      ? response.choices[0]
+      : undefined;
+  if (!choice) {
     throw new AiProviderError(
       "OpenRouter returned an invalid translation completion",
     );
   }
-
-  const choice = completion.data.choices[0];
-  if (choice.finish_reason === "error" || choice.error !== undefined) {
+  // The model's own report that it gave up. A refusal or a stop for any other
+  // reason still has to parse as the requested JSON, which is checked below.
+  if (choice.finishReason === "error") {
     throw new AiProviderError("OpenRouter failed to translate segments");
+  }
+  if (typeof choice.message.content !== "string" || !choice.message.content) {
+    throw new AiProviderError(
+      "OpenRouter returned an invalid translation completion",
+    );
   }
 
   let content: unknown;
@@ -779,84 +923,83 @@ export async function translateSegments({
       ? { ...segment, durationSeconds }
       : segment;
   });
-  const data = await requestJson("/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: translationSystemPrompt({
-            style,
-            hasDurations: promptSegments.some(
-              (segment) => "durationSeconds" in segment,
-            ),
-          }),
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            ...(sourceLanguage ? { sourceLanguage } : {}),
-            targetLanguage,
-            segments: promptSegments,
-          }),
-        },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "subtitle_translation",
-          strict: true,
-          schema: {
-            type: "object",
-            properties: {
-              segments: {
-                type: "array",
-                description:
-                  "One translated subtitle for every input segment.",
-                items: {
-                  type: "object",
-                  properties: {
-                    id: {
-                      type: "string",
-                      enum: segments.map((segment) => segment.id),
-                      description: "The unchanged input segment ID.",
-                    },
-                    text: {
-                      type: "string",
-                      description:
-                        "Translated subtitle text with line breaks preserved.",
+  const client = createOpenRouterClient();
+  let response: SendChatCompletionRequestResponse;
+  try {
+    response = await client.chat.send(
+      {
+        chatRequest: {
+          model,
+          messages: [
+            {
+              role: "system",
+              content: translationSystemPrompt({
+                style,
+                hasDurations: promptSegments.some(
+                  (segment) => "durationSeconds" in segment,
+                ),
+              }),
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                ...(sourceLanguage ? { sourceLanguage } : {}),
+                targetLanguage,
+                segments: promptSegments,
+              }),
+            },
+          ],
+          responseFormat: {
+            type: "json_schema",
+            jsonSchema: {
+              name: "subtitle_translation",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  segments: {
+                    type: "array",
+                    description:
+                      "One translated subtitle for every input segment.",
+                    items: {
+                      type: "object",
+                      properties: {
+                        id: {
+                          type: "string",
+                          enum: segments.map((segment) => segment.id),
+                          description: "The unchanged input segment ID.",
+                        },
+                        text: {
+                          type: "string",
+                          description:
+                            "Translated subtitle text with line breaks preserved.",
+                        },
+                      },
+                      required: ["id", "text"],
+                      additionalProperties: false,
                     },
                   },
-                  required: ["id", "text"],
-                  additionalProperties: false,
                 },
+                required: ["segments"],
+                additionalProperties: false,
               },
             },
-            required: ["segments"],
-            additionalProperties: false,
           },
+          // Routes past any provider that would ignore the schema and answer
+          // with prose.
+          provider: {
+            requireParameters: true,
+          },
+          stream: false,
         },
       },
-      provider: {
-        require_parameters: true,
-      },
-      stream: false,
-    }),
-    signal,
-  }).catch((cause: unknown) => {
-    if (cause instanceof AiProviderError) {
-      throw cause;
-    }
-    throw new AiProviderError("OpenRouter translation request failed", {
-      cause,
-    });
-  });
+      openRouterRequestOptions(signal),
+    );
+  } catch (cause) {
+    throw toAiProviderError(cause, "OpenRouter translation request failed");
+  }
 
-  return parseTranslationResponse(data, segments);
+  return parseTranslationResponse(response, segments);
 }
 
 // verbose_json is restricted to OpenAI-compatible STT providers and supplies
@@ -878,6 +1021,12 @@ export async function transcribeAudio({
   model: string;
   signal?: AbortSignal;
 }): Promise<TranscriptionResult> {
+  // The only call that does not go through the SDK. Its multipart encoder folds
+  // a repeated field into one comma-joined value, so timestamp_granularities[]
+  // arrives as "segment,word" rather than as two entries. Whether OpenRouter
+  // still reads it that way can only be settled by a paid transcription, and
+  // getting it wrong costs the word timestamps silently — the reply simply
+  // omits them, and a caller then cannot split a subtitle.
   const form = new FormData();
   form.append("model", model);
   form.append(

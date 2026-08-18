@@ -11,18 +11,21 @@ import {
   translateSegments,
 } from "../../packages/api/src/ai/openrouter";
 
-function translationResponse(
-  segments: Array<{ id: string; text: string }>,
-): Response {
+// A completion as OpenRouter actually returns one: the envelope fields are
+// what the client validates before it looks at the content.
+function chatCompletion(content: string): Response {
   return new Response(
     JSON.stringify({
+      id: "gen-1",
+      object: "chat.completion",
+      created: 1,
+      model: "openai/gpt-4.1-mini",
+      system_fingerprint: null,
       choices: [
         {
+          index: 0,
           finish_reason: "stop",
-          message: {
-            role: "assistant",
-            content: JSON.stringify({ segments }),
-          },
+          message: { role: "assistant", content },
         },
       ],
     }),
@@ -30,6 +33,12 @@ function translationResponse(
       headers: { "content-type": "application/json" },
     },
   );
+}
+
+function translationResponse(
+  segments: Array<{ id: string; text: string }>,
+): Response {
+  return chatCompletion(JSON.stringify({ segments }));
 }
 
 describe("OpenRouter subtitle translation contract", () => {
@@ -68,21 +77,15 @@ describe("OpenRouter subtitle translation contract", () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
-    expect(url).toBe(
-      "https://openrouter.ai/api/v1/chat/completions",
+    // The SDK hands fetch a Request rather than (url, init).
+    const request = fetchMock.mock.calls[0][0] as Request;
+    expect(request.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(request.method).toBe("POST");
+    expect(request.headers.get("authorization")).toBe(
+      "Bearer test-openrouter-key",
     );
-    expect(init).toMatchObject({
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test-openrouter-key",
-        "Content-Type": "application/json",
-      },
-    });
-    expect(JSON.parse(init.body as string)).toEqual({
+    expect(request.headers.get("content-type")).toContain("application/json");
+    expect(await request.json()).toEqual({
       model: "openai/gpt-4.1-mini",
       messages: [
         {
@@ -159,8 +162,9 @@ describe("OpenRouter subtitle translation contract", () => {
       model: "anthropic/claude-haiku-4.5",
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const payload = JSON.parse(init.body as string);
+    const payload = (await (
+      fetchMock.mock.calls[0][0] as Request
+    ).json()) as { model: string; messages: { content: string }[] };
     expect(payload.model).toBe("anthropic/claude-haiku-4.5");
     expect(JSON.parse(payload.messages[1].content)).toEqual({
       targetLanguage: "fr",
@@ -223,18 +227,7 @@ describe("OpenRouter subtitle translation contract", () => {
   it("rejects malformed JSON in a successful completion", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                finish_reason: "stop",
-                message: { content: "not-json" },
-              },
-            ],
-          }),
-        ),
-      ),
+      vi.fn().mockResolvedValue(chatCompletion("not-json")),
     );
 
     await expect(
