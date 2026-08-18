@@ -131,7 +131,8 @@
       "edit": "編集",
       "remove": "削除",
       "cancel": "キャンセル",
-      "apply": "反映"
+      "apply": "反映",
+      "economicsPending": "モデル ID を入力すると、実行にかかる原価を表示します。"
     },
     "tab": {
       "settings": "設定",

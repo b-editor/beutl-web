@@ -131,7 +131,8 @@
       "edit": "Edit",
       "remove": "Remove",
       "cancel": "Cancel",
-      "apply": "Apply"
+      "apply": "Apply",
+      "economicsPending": "Enter a model ID to see what it costs to run."
     },
     "tab": {
       "settings": "Settings",

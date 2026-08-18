@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useTransition,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import { Input } from "@beutl/ui/ui/input";
@@ -8,7 +14,58 @@ import { Badge } from "@beutl/ui/ui/badge";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
 import { MAX_MODEL_DISPLAY_NAME_LENGTH } from "@/lib/ai-operation-model-changes";
+import { isAiModelId, type AiUnitValue } from "@beutl/core";
+import type { AiCostEstimate } from "@beutl/api";
+import { AiOperationEconomicsPanel, type OfferAmount } from "./economics-panel";
+import { lookupAiModelEconomics } from "./actions";
 import { useAiModels, type AiModelRow } from "./settings-form";
+
+type LookedUpEconomics = {
+  estimate: AiCostEstimate | null;
+  proOffer: OfferAmount;
+  topUpUnitValue: AiUnitValue | null;
+};
+
+// What the row being typed would cost to run.
+//
+// The saved rows have these figures rendered on the server, but a model that
+// only exists in the form has none: the provider's rate card is keyed by model
+// id. Looking it up as the id settles is what makes the cost ratio available
+// while the price is being chosen rather than after it is saved.
+function useModelEconomics(operation: string, modelId: string) {
+  const [economics, setEconomics] = useState<LookedUpEconomics | null>(null);
+  const [isLoading, startLookup] = useTransition();
+  const trimmed = modelId.trim();
+
+  useEffect(() => {
+    if (!isAiModelId(trimmed)) {
+      setEconomics(null);
+      return;
+    }
+    let current = true;
+    // Half-typed ids would each cost a request; wait for the typing to stop.
+    const timer = setTimeout(() => {
+      startLookup(async () => {
+        const result = await lookupAiModelEconomics({
+          operation,
+          modelId: trimmed,
+        });
+        if (!current) return;
+        setEconomics(
+          result.success && "estimate" in result
+            ? (result as LookedUpEconomics & { success: true })
+            : null,
+        );
+      });
+    }, 400);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [operation, trimmed]);
+
+  return { economics, isLoading };
+}
 
 // Nothing here writes to the server. Every button edits the draft the page
 // holds, and the save bar commits the allowance and every operation's models
@@ -150,6 +207,59 @@ function ModelEditor({
         )}
       </div>
       <code className="text-xs text-muted-foreground">{operation}</code>
+      <ModelEditorEconomics lang={lang} operation={operation} draft={draft} />
+    </div>
+  );
+}
+
+// The same figures the saved rows carry, following the fields as they are
+// typed: what the allowance buys at this price, what the provider charges for
+// this model, and what share of the revenue that is.
+function ModelEditorEconomics({
+  lang,
+  operation,
+  draft,
+}: {
+  lang: string;
+  operation: string;
+  draft: Draft;
+}) {
+  const { t } = useTranslation(lang);
+  const { economics, isLoading } = useModelEconomics(operation, draft.modelId);
+  const price = Number(draft.priceUnits);
+  if (!Number.isSafeInteger(price) || price <= 0) {
+    return null;
+  }
+  if (!economics) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {isLoading
+          ? t("admin:ai.economics.loading")
+          : t("admin:ai.models.economicsPending")}
+      </p>
+    );
+  }
+
+  return (
+    <div className="-mx-4 -mb-4 mt-1 overflow-hidden rounded-b-lg">
+      <AiOperationEconomicsPanel
+        lang={lang}
+        operation={operation}
+        // No saved row to read a price from while one is being typed.
+        modelId=""
+        priceUnits={price}
+        livePrice={price}
+        // Undefined would read as "still loading"; a lookup that came back
+        // without a rate is a cost nobody knows.
+        estimate={
+          economics.estimate ?? {
+            status: "unknown",
+            reason: "provider_unavailable",
+          }
+        }
+        proOffer={economics.proOffer}
+        topUpUnitValue={economics.topUpUnitValue}
+      />
     </div>
   );
 }

@@ -11,7 +11,15 @@ import {
   upsertAiOperationModel,
   upsertAiSetting,
 } from "@beutl/db";
-import { loadAiModelCatalog, loadAiSettings } from "@beutl/api";
+import {
+  aiCostEstimateKey,
+  loadAiCostEstimates,
+  loadAiModelCatalog,
+  loadAiSettings,
+} from "@beutl/api";
+import { getDb } from "@beutl/db";
+import { deriveTopUpUnitValue, isAiModelId } from "@beutl/core";
+import { resolveOfferPricing } from "@/lib/stripe-pricing";
 import { validateAiConfigurationChanges } from "@/lib/ai-configuration-changes";
 import {
   AI_DEFAULT_OPERATION_MODELS,
@@ -151,5 +159,51 @@ export async function saveAiConfiguration(input: unknown): Promise<ActionResult>
     revalidatePath("/[lang]/admin/ai", "page");
 
     return { success: true };
+  });
+}
+
+// What one model would cost to run, for a row being added or edited.
+//
+// The saved rows get their figures rendered on the server, but a model that is
+// only typed into the form has none: the provider's rate card is keyed by model
+// id, so there is nothing to look up until the id exists. Without this the one
+// number worth knowing while choosing a price — what share of it goes to the
+// provider — appears only after the price is already saved.
+export async function lookupAiModelEconomics(input: unknown) {
+  if (typeof input !== "object" || input === null) {
+    return { success: false as const, message: "Invalid model" };
+  }
+  const { operation, modelId } = input as Record<string, unknown>;
+  if (typeof operation !== "string" || !isAiModelId(modelId)) {
+    return { success: false as const, message: "Invalid model" };
+  }
+
+  return await adminAction(async () => {
+    // Both go over the network. The rate card is cached per URL path and the
+    // Stripe prices per request, so retyping an id costs one fetch at most.
+    const prisma = await getDb();
+    const [costs, pro, topUp] = await Promise.all([
+      loadAiCostEstimates({ modelsOf: () => [modelId] }),
+      resolveOfferPricing({ kind: "pro", prisma }),
+      resolveOfferPricing({ kind: "top_up", prisma }),
+    ]);
+
+    return {
+      success: true as const,
+      estimate:
+        costs.entries.find(
+          (entry) =>
+            aiCostEstimateKey(entry.operation, entry.model) ===
+            aiCostEstimateKey(operation, modelId),
+        )?.estimate ?? null,
+      proOffer: pro.effective
+        ? {
+            unitAmount: pro.effective.unitAmount,
+            currency: pro.effective.currency,
+            creditAmount: pro.effective.creditAmount,
+          }
+        : null,
+      topUpUnitValue: deriveTopUpUnitValue(topUp.effective),
+    };
   });
 }

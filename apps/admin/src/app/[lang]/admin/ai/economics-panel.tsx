@@ -215,6 +215,7 @@ export function AiOperationEconomicsPanel({
   operation,
   modelId,
   priceUnits,
+  livePrice,
   estimate,
   proOffer,
   topUpUnitValue,
@@ -222,9 +223,12 @@ export function AiOperationEconomicsPanel({
   lang: string;
   operation: string;
   // Only to find this model's unsaved price; the row above already names it.
+  // Empty while a model is being typed, which has no saved price to find.
   modelId: string;
   // The saved price, used until the page holds an edit for this model.
   priceUnits: number;
+  // A price being typed right now, which is neither saved nor drafted yet.
+  livePrice?: number | null;
   // Undefined while the estimates are still loading; null-ish states inside the
   // estimate itself are distinct from that.
   estimate: AiCostEstimate | undefined;
@@ -235,9 +239,10 @@ export function AiOperationEconomicsPanel({
   const limitField = useAiSettingField(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY);
   const draftedPrice = useAiModelPrice(operation, modelId);
 
-  const price = draftedPrice.priceUnits ?? priceUnits;
+  const price = livePrice ?? draftedPrice.priceUnits ?? priceUnits;
   const allowance = usableNumber(limitField.value);
-  const previewing = limitField.changed || draftedPrice.changed;
+  const previewing =
+    limitField.changed || draftedPrice.changed || livePrice != null;
 
   const equivalent =
     allowance !== null
