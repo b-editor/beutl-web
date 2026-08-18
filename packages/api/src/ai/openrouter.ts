@@ -1023,10 +1023,17 @@ export async function transcribeAudio({
 }): Promise<TranscriptionResult> {
   // The only call that does not go through the SDK. Its multipart encoder folds
   // a repeated field into one comma-joined value, so timestamp_granularities[]
-  // arrives as "segment,word" rather than as two entries. Whether OpenRouter
-  // still reads it that way can only be settled by a paid transcription, and
-  // getting it wrong costs the word timestamps silently — the reply simply
-  // omits them, and a caller then cannot split a subtitle.
+  // arrives as "segment,word" rather than as two entries, and OpenRouter
+  // answers 400: `Invalid option: expected one of "word"|"segment"`. Sent as
+  // two fields, as below, the same audio comes back with its word timestamps.
+  //
+  // The SDK's JSON variant does serialise the array correctly, but it carries
+  // the audio as base64 in the request body. Uploads are capped at 25 MB, and
+  // encoding one of those would hold the bytes three times over inside a worker
+  // that has 128 MB — the multipart body streams the file as it is.
+  //
+  // openRouterMultipartFieldsAreRepeated in the client contract test fails once
+  // the SDK stops flattening, which is when this can move over.
   const form = new FormData();
   form.append("model", model);
   form.append(

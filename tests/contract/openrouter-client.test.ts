@@ -9,6 +9,7 @@ import {
 import { createHmac } from "node:crypto";
 import {
   AiProviderError,
+  createOpenRouterClient,
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
   downloadVideoContent,
@@ -421,6 +422,32 @@ describe("OpenRouter client contract", () => {
       }),
     ).rejects.toBeInstanceOf(AiProviderError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Named in the comment on transcribeAudio: when this fails, the SDK has
+  // learned to repeat a multipart field and transcription can move onto it.
+  it("openRouterMultipartFieldsAreRepeated", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ text: "hello" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createOpenRouterClient().stt.createTranscriptionMultipart({
+      requestBody: {
+        model: "openai/whisper-large-v3-turbo",
+        file: new File([Uint8Array.from([1, 2, 3])], "a.wav", {
+          type: "audio/wav",
+        }),
+        responseFormat: "verbose_json",
+        timestampGranularities: ["segment", "word"],
+      },
+    });
+
+    const form = await (fetchMock.mock.calls[0][0] as Request).formData();
+    // One comma-joined value rather than two fields. OpenRouter rejects this
+    // with 400 `Invalid option: expected one of "word"|"segment"`, which is why
+    // transcribeAudio builds the body itself.
+    expect(form.getAll("timestamp_granularities[]")).toEqual(["segment,word"]);
   });
 
   it("requests segment and word timestamps and parses optional metadata", async () => {
