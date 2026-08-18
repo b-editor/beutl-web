@@ -11,8 +11,14 @@ import {
   CollapsibleTrigger,
 } from "@beutl/ui/ui/collapsible";
 import { Label } from "@beutl/ui/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Progress } from "@beutl/ui/ui/progress";
-import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { useToast } from "@beutl/ui/use-toast";
 import {
   ChevronRight,
@@ -385,37 +391,32 @@ export function ModelSelect({
 
   return (
     <div className="flex flex-col space-y-1.5">
-      <Label>{t("dashboard:ai.model")}</Label>
-      <ToggleGroup
-        type="single"
-        variant="outline"
-        value={value}
-        disabled={disabled}
-        // Radix clears the value when the active item is pressed again; a
-        // request always runs on some model, so keep the last one.
-        onValueChange={(next) => next && onChange(next)}
-        // The group is a flex row by default, and its `items-center` leaves
-        // tiles of different heights unaligned once a long model id wraps.
-        className="grid items-stretch gap-2 sm:grid-cols-2"
-      >
-        {models.map((model) => (
-          <ToggleGroupItem
-            key={model.id}
-            value={model.id}
-            disabled={!model.available}
-            className="h-auto flex-col items-start gap-0.5 py-3 text-left"
-          >
-            <span className="text-sm">{model.displayName}</span>
-            <span className="text-xs text-muted-foreground">
-              {!model.available
-                ? t("dashboard:ai.modelUnaffordable")
-                : model.costTier
-                  ? t(`dashboard:ai.costTier.${model.costTier}`)
-                  : ""}
-            </span>
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
+      <Label htmlFor="aiModel">{t("dashboard:ai.model")}</Label>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger id="aiModel">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {models.map((model) => (
+            <SelectItem
+              key={model.id}
+              value={model.id}
+              disabled={!model.available}
+              // What the model costs relative to the others, or why it cannot
+              // be picked at all — the reason belongs next to the choice.
+              hint={
+                !model.available
+                  ? t("dashboard:ai.modelUnaffordable")
+                  : model.costTier
+                    ? t(`dashboard:ai.costTier.${model.costTier}`)
+                    : ""
+              }
+            >
+              {model.displayName}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <input type="hidden" name="model" value={value} />
     </div>
   );

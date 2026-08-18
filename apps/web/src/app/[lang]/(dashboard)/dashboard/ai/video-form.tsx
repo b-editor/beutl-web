@@ -8,8 +8,14 @@ import { Card } from "@beutl/ui/ui/card";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Slider } from "@beutl/ui/ui/slider";
-import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { Clapperboard, Clock, Coins, History } from "lucide-react";
 import Link from "next/link";
 import { useActionState, useEffect, useState, type ChangeEvent } from "react";
@@ -138,16 +144,6 @@ function optionsOf(
 // The length nearest the one asked for that the model actually takes. Lengths
 // are not a range: Veo 3.1 takes 4, 6 or 8 seconds and nothing between, so the
 // slider steps through what is on offer rather than over seconds.
-// A toggle row sized to what is in it, so two choices are not stretched across
-// three columns and five do not spill out of two.
-function optionColumns(total: number): string {
-  if (total >= 5) return "grid grid-cols-5";
-  if (total === 4) return "grid grid-cols-4";
-  if (total === 3) return "grid grid-cols-3";
-  if (total === 2) return "grid grid-cols-2";
-  return "grid grid-cols-1";
-}
-
 function nearestDuration(current: number, supported: number[]): number {
   let nearest = supported[0] ?? current;
   for (const candidate of supported) {
@@ -298,39 +294,43 @@ export function VideoForm({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col space-y-1.5">
-            <Label>{t("dashboard:ai.resolution")}</Label>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={resolution}
-              onValueChange={(next) => next && setVideoResolution(next)}
-              className={optionColumns(options.resolutions.length)}
-            >
-              {options.resolutions.map((supported) => (
-                <ToggleGroupItem key={supported} value={supported}>
-                  {supported}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+            <Label htmlFor="videoResolution">
+              {t("dashboard:ai.resolution")}
+            </Label>
+            {/* Left enabled with one entry: a greyed-out box reads as a
+                setting that is unavailable rather than one that is fixed. */}
+            <Select value={resolution} onValueChange={setVideoResolution}>
+              <SelectTrigger id="videoResolution">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {options.resolutions.map((supported) => (
+                  <SelectItem key={supported} value={supported}>
+                    {supported}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <input type="hidden" name="resolution" value={resolution} />
           </div>
 
           {/* Resolution alone could not express a vertical clip. */}
           <div className="flex flex-col space-y-1.5">
-            <Label>{t("dashboard:ai.aspectRatio")}</Label>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={aspectRatio}
-              onValueChange={(next) => next && setVideoAspectRatio(next)}
-              className={optionColumns(options.aspectRatios.length)}
-            >
-              {options.aspectRatios.map((ratio) => (
-                <ToggleGroupItem key={ratio} value={ratio}>
-                  {ratio}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+            <Label htmlFor="videoAspectRatio">
+              {t("dashboard:ai.aspectRatio")}
+            </Label>
+            <Select value={aspectRatio} onValueChange={setVideoAspectRatio}>
+              <SelectTrigger id="videoAspectRatio">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {options.aspectRatios.map((ratio) => (
+                  <SelectItem key={ratio} value={ratio}>
+                    {ratio}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <input type="hidden" name="aspectRatio" value={aspectRatio} />
           </div>
         </div>
