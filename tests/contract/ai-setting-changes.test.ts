@@ -98,10 +98,20 @@ describe("AI setting change batches", () => {
     });
   });
 
-  it("refuses an empty batch", () => {
+  it("accepts an empty list, which is a save that only touched models", () => {
     expect(validate([])).toEqual({
+      ok: true,
+      changes: [],
+      // The allowance still has to be reported: the models landing with it are
+      // measured against it.
+      allowance: Number(AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]!.fallback),
+    });
+  });
+
+  it("refuses something that is not a list", () => {
+    expect(validate("nope")).toEqual({
       ok: false,
-      message: "No changes were submitted",
+      message: "Invalid setting changes",
     });
   });
 });

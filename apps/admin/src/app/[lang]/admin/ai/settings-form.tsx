@@ -16,7 +16,7 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
 import { Button } from "@beutl/ui/ui/button";
 import type { AiSettingChange } from "@/lib/ai-setting-changes";
-import { updateAiSettings } from "./actions";
+import { saveAiConfiguration } from "./actions";
 
 export type AiSettingRow = {
   key: string;
@@ -24,6 +24,15 @@ export type AiSettingRow = {
   value: string;
   source: "database" | "default";
   fallback: string;
+};
+
+// One model an operation offers. The array's order is the display order, and
+// its first selectable entry is what a request that names no model runs on.
+export type AiModelRow = {
+  modelId: string;
+  priceUnits: number;
+  displayName: string | null;
+  enabled: boolean;
 };
 
 // A setting is either being edited to a new value, or marked to fall back to
@@ -41,9 +50,15 @@ type Draft = {
 type FormContextValue = {
   settings: Map<string, AiSettingRow>;
   drafts: Map<string, Draft>;
+  // Server state and the edited state, per operation. A whole list rather than
+  // a set of edits: adding, repricing, removing and reordering are then the
+  // same thing to compare and to submit.
+  models: Map<string, AiModelRow[]>;
+  modelDrafts: Map<string, AiModelRow[]>;
   isPending: boolean;
   setValue(key: string, value: string): void;
   markReset(key: string): void;
+  setModels(operation: string, models: AiModelRow[]): void;
 };
 
 const FormContext = createContext<FormContextValue | null>(null);
@@ -53,6 +68,21 @@ function draftOf(
   setting: AiSettingRow,
 ): Draft {
   return drafts.get(setting.key) ?? { value: setting.value, reset: false };
+}
+
+function sameModels(left: AiModelRow[], right: AiModelRow[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((model, index) => {
+      const other = right[index]!;
+      return (
+        model.modelId === other.modelId &&
+        model.priceUnits === other.priceUnits &&
+        model.displayName === other.displayName &&
+        model.enabled === other.enabled
+      );
+    })
+  );
 }
 
 function isChanged(setting: AiSettingRow, draft: Draft): boolean {
@@ -66,7 +96,7 @@ function isChanged(setting: AiSettingRow, draft: Draft): boolean {
 export function useAiSettingField(key: string) {
   const context = useContext(FormContext);
   if (!context) {
-    throw new Error("useAiSettingField must be used inside AiSettingsForm");
+    throw new Error("useAiSettingField must be used inside AiConfigurationForm");
   }
   const setting = context.settings.get(key);
   if (!setting) {
@@ -84,13 +114,59 @@ export function useAiSettingField(key: string) {
   };
 }
 
+// The models an operation offers, with unsaved edits applied.
+export function useAiModels(operation: string): {
+  models: AiModelRow[];
+  changed: boolean;
+  isPending: boolean;
+  setModels(models: AiModelRow[]): void;
+} {
+  const context = useContext(FormContext);
+  if (!context) {
+    throw new Error("useAiModels must be used inside AiConfigurationForm");
+  }
+  const saved = context.models.get(operation) ?? [];
+  const draft = context.modelDrafts.get(operation);
+  return {
+    models: draft ?? saved,
+    changed: draft !== undefined,
+    isPending: context.isPending,
+    setModels: (models) => context.setModels(operation, models),
+  };
+}
+
+// What a model would cost once the page is saved, which is what the figures
+// under its row are derived from. Falls back to the saved price for a row the
+// draft does not carry.
+export function useAiModelPrice(
+  operation: string,
+  modelId: string,
+): { priceUnits: number | null; changed: boolean } {
+  const context = useContext(FormContext);
+  if (!context) {
+    throw new Error("useAiModelPrice must be used inside AiConfigurationForm");
+  }
+  const saved = (context.models.get(operation) ?? []).find(
+    (model) => model.modelId === modelId,
+  );
+  const drafted = context.modelDrafts
+    .get(operation)
+    ?.find((model) => model.modelId === modelId);
+  const effective = drafted ?? saved;
+  return {
+    priceUnits: effective?.priceUnits ?? null,
+    changed:
+      drafted !== undefined && drafted.priceUnits !== saved?.priceUnits,
+  };
+}
+
 // Every setting's current value with unsaved edits applied. Used by the
 // summaries that read across the whole page instead of one field, so they
 // preview an edit rather than lagging behind it.
 export function useAiSettingValues(): Map<string, string> {
   const context = useContext(FormContext);
   if (!context) {
-    throw new Error("useAiSettingValues must be used inside AiSettingsForm");
+    throw new Error("useAiSettingValues must be used inside AiConfigurationForm");
   }
   const { settings, drafts } = context;
   return useMemo(() => {
@@ -102,13 +178,15 @@ export function useAiSettingValues(): Map<string, string> {
   }, [settings, drafts]);
 }
 
-export function AiSettingsForm({
+export function AiConfigurationForm({
   lang,
   settings,
+  models,
   children,
 }: {
   lang: string;
   settings: AiSettingRow[];
+  models: { operation: string; models: AiModelRow[] }[];
   children: ReactNode;
 }) {
   const { t } = useTranslation(lang);
@@ -116,10 +194,17 @@ export function AiSettingsForm({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
+  const [modelDrafts, setModelDrafts] = useState<Map<string, AiModelRow[]>>(
+    new Map(),
+  );
 
   const settingsByKey = useMemo(
     () => new Map(settings.map((setting) => [setting.key, setting])),
     [settings],
+  );
+  const modelsByOperation = useMemo(
+    () => new Map(models.map((entry) => [entry.operation, entry.models])),
+    [models],
   );
 
   // A refresh arriving while nothing is being edited should adopt the server's
@@ -130,7 +215,8 @@ export function AiSettingsForm({
     if (committedRef.current === 0) return;
     committedRef.current = 0;
     setDrafts(new Map());
-  }, [settings]);
+    setModelDrafts(new Map());
+  }, [settings, models]);
 
   const setValue = useCallback((key: string, value: string) => {
     setDrafts((previous) => {
@@ -155,6 +241,24 @@ export function AiSettingsForm({
     [settingsByKey],
   );
 
+  const setModels = useCallback(
+    (operation: string, next: AiModelRow[]) => {
+      setModelDrafts((previous) => {
+        const updated = new Map(previous);
+        const saved = modelsByOperation.get(operation) ?? [];
+        // Editing back to what is stored is not a change, so the save bar and
+        // the discard button both stop offering to act on it.
+        if (sameModels(saved, next)) {
+          updated.delete(operation);
+        } else {
+          updated.set(operation, next);
+        }
+        return updated;
+      });
+    },
+    [modelsByOperation],
+  );
+
   const changes = useMemo(() => {
     const pending: { setting: AiSettingRow; draft: Draft }[] = [];
     for (const setting of settings) {
@@ -167,22 +271,36 @@ export function AiSettingsForm({
     return pending;
   }, [settings, drafts]);
 
-  const discard = useCallback(() => setDrafts(new Map()), []);
+  const pendingCount = changes.length + modelDrafts.size;
+
+  const discard = useCallback(() => {
+    setDrafts(new Map());
+    setModelDrafts(new Map());
+  }, []);
 
   const save = useCallback(() => {
-    if (changes.length === 0) return;
-    const payload: AiSettingChange[] = changes.map(({ setting, draft }) => ({
-      key: setting.key,
-      value: draft.reset ? null : draft.value.trim(),
+    if (pendingCount === 0) return;
+    const settingChanges: AiSettingChange[] = changes.map(
+      ({ setting, draft }) => ({
+        key: setting.key,
+        value: draft.reset ? null : draft.value.trim(),
+      }),
+    );
+    const modelChanges = [...modelDrafts].map(([operation, rows]) => ({
+      operation,
+      models: rows,
     }));
 
     startTransition(async () => {
       try {
-        const result = await updateAiSettings({ changes: payload });
+        const result = await saveAiConfiguration({
+          settings: settingChanges,
+          models: modelChanges,
+        });
         if (result.success) {
-          committedRef.current = payload.length;
+          committedRef.current = pendingCount;
           toast({
-            title: t("admin:ai.form.saveSuccess", { total: payload.length }),
+            title: t("admin:ai.form.saveSuccess", { total: pendingCount }),
           });
           router.refresh();
         } else {
@@ -204,26 +322,38 @@ export function AiSettingsForm({
         router.refresh();
       }
     });
-  }, [changes, toast, t, router]);
+  }, [changes, modelDrafts, pendingCount, toast, t, router]);
 
   const contextValue = useMemo<FormContextValue>(
     () => ({
       settings: settingsByKey,
       drafts,
+      models: modelsByOperation,
+      modelDrafts,
       isPending,
       setValue,
       markReset,
+      setModels,
     }),
-    [settingsByKey, drafts, isPending, setValue, markReset],
+    [
+      settingsByKey,
+      drafts,
+      modelsByOperation,
+      modelDrafts,
+      isPending,
+      setValue,
+      markReset,
+      setModels,
+    ],
   );
 
   return (
     <FormContext.Provider value={contextValue}>
       {children}
-      {changes.length > 0 && (
+      {pendingCount > 0 && (
         <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <span className="text-sm">
-            {t("admin:ai.form.pendingCount", { total: changes.length })}
+            {t("admin:ai.form.pendingCount", { total: pendingCount })}
           </span>
           <div className="flex items-center gap-2">
             <Button

@@ -12,10 +12,8 @@ import {
 // batch: a batch is capped at 64 changes and one row already carries several
 // fields, so a page with several models per operation would exceed it.
 //
-// The display order is not taken from the caller. It decides which model a
-// request that names none runs on, and typing a number is an indirect way to
-// express that; the server appends a new row and a separate action moves one to
-// the front — see the note on aiOperationWouldGoOffline for the other rule.
+// The display order is not taken from the caller: the submitted list is the
+// order, and its first entry is what a request that names no model runs on.
 export type AiOperationModelInput = {
   operation: string;
   modelId: string;
@@ -120,42 +118,6 @@ export function aiOperationWouldGoOffline({
   return enabled.every(
     (model) => minimumChargeOf(model.priceUnits) > allowance,
   );
-}
-
-// Where a saved row lands in the display order.
-//
-// A new one goes last. Which model is the default is the lowest order, and a
-// row silently landing in front of the one an administrator chose would change
-// what every request that names no model runs on. An edit keeps its place.
-export function sortOrderForSavedModel({
-  rows,
-  modelId,
-}: {
-  rows: { modelId: string; sortOrder: number }[];
-  modelId: string;
-}): number {
-  const existing = rows.find((row) => row.modelId === modelId);
-  if (existing) return existing.sortOrder;
-  return rows.reduce((highest, row) => Math.max(highest, row.sortOrder + 1), 0);
-}
-
-// The order that makes one model the default: it first, everything else
-// keeping its relative position. Renumbering the whole operation is what keeps
-// "lowest wins" unambiguous — two rows sharing the lowest order would leave the
-// default to the id tie-break.
-export function orderWithDefaultFirst({
-  rows,
-  modelId,
-}: {
-  rows: { modelId: string }[];
-  modelId: string;
-}): string[] {
-  const chosen = rows.find((row) => row.modelId === modelId);
-  if (!chosen) return rows.map((row) => row.modelId);
-  return [
-    modelId,
-    ...rows.filter((row) => row.modelId !== modelId).map((row) => row.modelId),
-  ];
 }
 
 // The operations an allowance would take offline, given what each can run on.

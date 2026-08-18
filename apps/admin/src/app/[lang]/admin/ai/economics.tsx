@@ -47,6 +47,7 @@ export async function AiOperationEconomics({
     <AiOperationEconomicsPanel
       lang={lang}
       operation={operation}
+      modelId={model}
       priceUnits={priceUnits}
       estimate={costByModel.get(aiCostEstimateKey(operation, model))}
       proOffer={toOfferAmount(pro)}
@@ -60,16 +61,19 @@ export async function AiOperationEconomics({
 export function AiOperationEconomicsFallback({
   lang,
   operation,
+  model,
   priceUnits,
 }: {
   lang: string;
   operation: string;
+  model: string;
   priceUnits: number;
 }) {
   return (
     <AiOperationEconomicsPanel
       lang={lang}
       operation={operation}
+      modelId={model}
       priceUnits={priceUnits}
       estimate={undefined}
       proOffer={null}

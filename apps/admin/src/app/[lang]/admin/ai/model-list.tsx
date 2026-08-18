@@ -1,32 +1,20 @@
 "use client";
 
-import { useCallback, useState, useTransition, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "@beutl/ui/i18n-client";
-import { useToast } from "@beutl/ui/use-toast";
 import { Button } from "@beutl/ui/ui/button";
 import { Input } from "@beutl/ui/ui/input";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
 import { MAX_MODEL_DISPLAY_NAME_LENGTH } from "@/lib/ai-operation-model-changes";
-import {
-  removeAiOperationModel,
-  saveAiOperationModel,
-  setDefaultAiOperationModel,
-} from "./actions";
+import { useAiModels, type AiModelRow } from "./settings-form";
 
-export type AiOperationModelRow = {
-  operation: string;
-  modelId: string;
-  priceUnits: number;
-  displayName: string | null;
-  enabled: boolean;
-};
-
-// Each row is saved on its own rather than through the allowance's batch: a row
-// carries several fields, so a page-wide batch of them would run past the save
-// cap, and adding a model is a single decision rather than part of a repricing.
+// Nothing here writes to the server. Every button edits the draft the page
+// holds, and the save bar commits the allowance and every operation's models
+// together — an allowance saved before the model it was raised for is an
+// operation nobody can start, and the reverse refuses the model until the
+// allowance lands.
 type Draft = {
   modelId: string;
   displayName: string;
@@ -34,7 +22,7 @@ type Draft = {
   enabled: boolean;
 };
 
-function draftOf(row: AiOperationModelRow): Draft {
+function draftOf(row: AiModelRow): Draft {
   return {
     modelId: row.modelId,
     displayName: row.displayName ?? "",
@@ -169,77 +157,50 @@ function ModelEditor({
 export function AiOperationModels({
   lang,
   operation,
-  models,
   economicsByModel,
 }: {
   lang: string;
   operation: string;
-  // In display order. The first selectable one is what a request that names no
-  // model runs on.
-  models: AiOperationModelRow[];
   // What each model costs to run, rendered under its own row so the figures do
   // not have to be matched back to a model by eye.
   economicsByModel: Record<string, ReactNode>;
 }) {
   const { t } = useTranslation(lang);
-  const { toast } = useToast();
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const { models, changed, isPending, setModels } = useAiModels(operation);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [adding, setAdding] = useState(false);
   const defaultModelId = models.find((model) => model.enabled)?.modelId;
 
-  const run = useCallback(
-    (work: () => Promise<{ success: boolean; message?: string }>) => {
-      startTransition(async () => {
-        try {
-          const result = await work();
-          if (result.success) {
-            toast({ title: t("admin:ai.models.saved") });
-            setEditing(null);
-            setAdding(false);
-            router.refresh();
-          } else {
-            toast({
-              title: t("admin:ai.models.saveFailed"),
-              description: result.message,
-              variant: "destructive",
-            });
-          }
-        } catch (e) {
-          toast({
-            title: t("admin:ai.models.saveFailed"),
-            description: e instanceof Error ? e.message : String(e),
-            variant: "destructive",
-          });
-        }
-      });
-    },
-    [toast, t, router],
-  );
+  const rowOf = (current: Draft): AiModelRow => ({
+    modelId: current.modelId.trim(),
+    // An empty name is absent, and the row then shows the id.
+    displayName: current.displayName.trim() || null,
+    priceUnits: Number(current.priceUnits),
+    enabled: current.enabled,
+  });
 
-  const save = useCallback(
-    (current: Draft) => {
-      run(async () =>
-        await saveAiOperationModel({
-          operation,
-          modelId: current.modelId.trim(),
-          // The server treats an empty name as absent and shows the id.
-          displayName: current.displayName.trim() || null,
-          priceUnits: Number(current.priceUnits),
-          enabled: current.enabled,
-        }),
-      );
+  const apply = useCallback(
+    (next: AiModelRow[]) => {
+      setModels(next);
+      setEditing(null);
+      setAdding(false);
     },
-    [operation, run],
+    [setModels],
   );
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-medium">{t("admin:ai.models.title")}</h3>
+          <h3 className="text-sm font-medium">
+            {t("admin:ai.models.title")}
+            {changed && (
+              <Badge className="ml-2" variant="secondary">
+                {t("admin:ai.form.unsaved")}
+              </Badge>
+            )}
+          </h3>
           <p className="text-xs text-muted-foreground">
             {models.length === 0
               ? t("admin:ai.models.emptyDescription")
@@ -272,16 +233,17 @@ export function AiOperationModels({
             setDraft={setDraft}
             isPending={isPending}
             isNew={false}
-            saveLabel={t("admin:ai.form.save")}
-            onSave={() => save(draft)}
+            saveLabel={t("admin:ai.models.apply")}
+            onSave={() =>
+              apply(
+                models.map((row) =>
+                  row.modelId === model.modelId ? rowOf(draft) : row,
+                ),
+              )
+            }
             onCancel={() => setEditing(null)}
             onDelete={() =>
-              run(async () =>
-                await removeAiOperationModel({
-                  operation,
-                  modelId: model.modelId,
-                }),
-              )
+              apply(models.filter((row) => row.modelId !== model.modelId))
             }
           />
         ) : (
@@ -321,12 +283,14 @@ export function AiOperationModels({
                     variant="ghost"
                     disabled={isPending}
                     onClick={() =>
-                      run(async () =>
-                        await setDefaultAiOperationModel({
-                          operation,
-                          modelId: model.modelId,
-                        }),
-                      )
+                      // First in the list is the default, and the rest keep
+                      // their relative order.
+                      apply([
+                        model,
+                        ...models.filter(
+                          (row) => row.modelId !== model.modelId,
+                        ),
+                      ])
                     }
                   >
                     {t("admin:ai.models.makeDefault")}
@@ -360,7 +324,9 @@ export function AiOperationModels({
           isPending={isPending}
           isNew
           saveLabel={t("admin:ai.models.add")}
-          onSave={() => save(draft)}
+          // A new model goes last: landing in front of the default would change
+          // what every request that names no model runs on.
+          onSave={() => apply([...models, rowOf(draft)])}
           onCancel={() => setAdding(false)}
         />
       )}

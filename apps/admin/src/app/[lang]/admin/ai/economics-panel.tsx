@@ -14,7 +14,7 @@ import type { AiCostAssumption, AiCostEstimate } from "@beutl/api";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Badge } from "@beutl/ui/ui/badge";
 import { formatNumber } from "@/lib/format";
-import { useAiSettingField } from "./settings-form";
+import { useAiModelPrice, useAiSettingField } from "./settings-form";
 
 // These panels run on the client so the figures follow the fields as they are
 // typed. Everything they compute is a pure function from @beutl/core; the
@@ -213,6 +213,7 @@ function RatioFigure({
 export function AiOperationEconomicsPanel({
   lang,
   operation,
+  modelId,
   priceUnits,
   estimate,
   proOffer,
@@ -220,6 +221,9 @@ export function AiOperationEconomicsPanel({
 }: {
   lang: string;
   operation: string;
+  // Only to find this model's unsaved price; the row above already names it.
+  modelId: string;
+  // The saved price, used until the page holds an edit for this model.
   priceUnits: number;
   // Undefined while the estimates are still loading; null-ish states inside the
   // estimate itself are distinct from that.
@@ -229,16 +233,18 @@ export function AiOperationEconomicsPanel({
 }) {
   const { t } = useTranslation(lang);
   const limitField = useAiSettingField(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY);
+  const draftedPrice = useAiModelPrice(operation, modelId);
 
+  const price = draftedPrice.priceUnits ?? priceUnits;
   const allowance = usableNumber(limitField.value);
-  const previewing = limitField.changed;
+  const previewing = limitField.changed || draftedPrice.changed;
 
   const equivalent =
     allowance !== null
       ? describeAllowanceEquivalent({
           operation,
           allowanceUnits: allowance,
-          price: priceUnits,
+          price,
         })
       : null;
 
@@ -246,9 +252,9 @@ export function AiOperationEconomicsPanel({
   // rate as well as the quantity.
   const planUnitValue =
     allowance !== null ? derivePlanUnitValue(proOffer, allowance) : null;
-  const planRevenue = operationAmount(planUnitValue, priceUnits);
+  const planRevenue = operationAmount(planUnitValue, price);
   const topUpRevenue =
-    operationAmount(topUpUnitValue, priceUnits);
+    operationAmount(topUpUnitValue, price);
   const planRatio = costRatioOf(estimate, planRevenue);
   const topUpRatio = costRatioOf(estimate, topUpRevenue);
   const foreignCurrency =

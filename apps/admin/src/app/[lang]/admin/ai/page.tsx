@@ -5,7 +5,11 @@ import { Separator } from "@beutl/ui/ui/separator";
 import { Suspense } from "react";
 import { AiSettingField } from "./components";
 import { AiOperationModels } from "./model-list";
-import { AiSettingsForm, type AiSettingRow } from "./settings-form";
+import {
+  AiConfigurationForm,
+  type AiModelRow,
+  type AiSettingRow,
+} from "./settings-form";
 import {
   AiOfferCards,
   AiOfferCardsFallback,
@@ -39,11 +43,10 @@ export default async function Page(props: {
   // An operation with nothing registered still offers the built-in model, and
   // the catalog is where that fallback is resolved; the page shows what a
   // request would actually run on rather than an empty list.
-  const modelsOf = (operation: string) => {
+  const modelsOf = (operation: string): AiModelRow[] => {
     const rows = registeredModels.filter((row) => row.operation === operation);
     if (rows.length > 0) {
       return rows.map((row) => ({
-        operation: row.operation,
         modelId: row.modelId,
         priceUnits: row.priceUnits,
         displayName: row.displayName,
@@ -51,7 +54,6 @@ export default async function Page(props: {
       }));
     }
     return catalog.list(operation).map((entry) => ({
-      operation,
       modelId: entry.modelId,
       priceUnits: entry.priceUnits,
       displayName: null,
@@ -77,8 +79,17 @@ export default async function Page(props: {
 
       <AiTabs lang={lang} />
 
-      {/* Every field on this page is committed together by one save bar. */}
-      <AiSettingsForm lang={lang} settings={rows}>
+      {/* The allowance and every operation's models are committed together by
+          one save bar: saving an allowance before the model it was raised for
+          is an operation nobody can start. */}
+      <AiConfigurationForm
+        lang={lang}
+        settings={rows}
+        models={AI_OPERATIONS.map((operation) => ({
+          operation,
+          models: modelsOf(operation),
+        }))}
+      >
         <div className="flex flex-col gap-8">
           <section className="flex flex-col gap-3">
             <div>
@@ -147,7 +158,6 @@ export default async function Page(props: {
               <AiOperationModels
                 lang={lang}
                 operation={operation}
-                models={modelsOf(operation)}
                 // Prices and provider costs are network calls, so each figure
                 // sits behind its own boundary and the rows stay interactive
                 // while they load. They all await the same cached lookup.
@@ -160,6 +170,7 @@ export default async function Page(props: {
                         <AiOperationEconomicsFallback
                           lang={lang}
                           operation={operation}
+                          model={model.modelId}
                           priceUnits={model.priceUnits}
                         />
                       }
@@ -182,7 +193,7 @@ export default async function Page(props: {
             {t("admin:ai.economics.costNote")}
           </p>
         </div>
-      </AiSettingsForm>
+      </AiConfigurationForm>
     </div>
   );
 }

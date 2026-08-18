@@ -33,8 +33,10 @@ export function validateAiSettingChanges(
   // The stored value of any setting this batch does not touch.
   currentValueOf: (key: string) => string,
 ): AiSettingChangesResult {
-  if (!Array.isArray(input) || input.length === 0) {
-    return { ok: false, message: "No changes were submitted" };
+  // An empty list is not an empty save: the same submission carries the model
+  // rows, and changing only those is the ordinary case.
+  if (!Array.isArray(input)) {
+    return { ok: false, message: "Invalid setting changes" };
   }
   if (input.length > MAX_CHANGES_PER_SAVE) {
     return { ok: false, message: "Too many changes were submitted" };

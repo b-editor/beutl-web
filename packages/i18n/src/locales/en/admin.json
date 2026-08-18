@@ -118,7 +118,7 @@
     "monthlyUsageLimit": "Monthly allowance (units)",
     "models": {
       "title": "Models on offer",
-      "description": "Users pick one of these per request and are charged that model's price. A request that names none runs on the default.",
+      "description": "Users pick one of these per request and are charged that model's price. A request that names none runs on the default. Changes here are saved with the rest of the page.",
       "emptyDescription": "None registered, so this operation runs on the built-in model below. Registering one replaces it.",
       "modelId": "Model ID",
       "displayName": "Display name",
@@ -131,8 +131,7 @@
       "edit": "Edit",
       "remove": "Remove",
       "cancel": "Cancel",
-      "saved": "Saved",
-      "saveFailed": "Could not be saved"
+      "apply": "Apply"
     },
     "tab": {
       "settings": "Settings",
