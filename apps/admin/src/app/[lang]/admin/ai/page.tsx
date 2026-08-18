@@ -44,20 +44,6 @@ export default async function Page(props: {
       getUnusableVideoModels(),
     ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
-  // Per operation, because an image model that cannot take a picture is fine
-  // for generation and useless for every edit.
-  const unusableImageModels = Object.fromEntries(
-    await Promise.all(
-      AI_OPERATIONS.filter((operation) => operation.startsWith("image."))
-        .map(async (operation) => [
-          operation,
-          await getUnusableImageModels(
-            operation,
-            modelsOf(operation).map((model) => model.modelId),
-          ),
-        ] as const),
-    ),
-  );
   // An operation with nothing registered still offers the built-in model, and
   // the catalog is where that fallback is resolved; the page shows what a
   // request would actually run on rather than an empty list.
@@ -78,6 +64,21 @@ export default async function Page(props: {
       enabled: true,
     }));
   };
+
+  // Per operation, because an image model that cannot take a picture is fine
+  // for generation and useless for every edit.
+  const unusableImageModels = Object.fromEntries(
+    await Promise.all(
+      AI_OPERATIONS.filter((operation) => operation.startsWith("image."))
+        .map(async (operation) => [
+          operation,
+          await getUnusableImageModels(
+            operation,
+            modelsOf(operation).map((model) => model.modelId),
+          ),
+        ] as const),
+    ),
+  );
   const rows: AiSettingRow[] = settings.all().map((entry) => ({
     key: entry.key,
     kind: entry.kind,
