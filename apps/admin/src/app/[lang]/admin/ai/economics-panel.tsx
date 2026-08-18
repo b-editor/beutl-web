@@ -88,6 +88,12 @@ function describeAssumption(
       return t("admin:ai.economics.assumption.videoSku", {
         sku: assumption.value,
       });
+    case "videoTokens":
+      return t("admin:ai.economics.assumption.videoTokens", {
+        tokens: formatNumber(assumption.tokensPerSecond, lang),
+        resolution: assumption.resolution,
+        fps: 24,
+      });
     case "imageMegapixels":
       return t("admin:ai.economics.assumption.imageMegapixels");
     case "imageInputNotPriced":

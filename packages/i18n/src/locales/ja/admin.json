@@ -179,7 +179,8 @@
         "imageMegapixels": "画像は 1024×1024",
         "transcriptionMinute": "音声はちょうど 1 分 (切り上げ課金のため実原価はこれ以下)",
         "translationTokens": "1 文字 = {{min}}〜{{max}} トークン (英語〜日本語)",
-        "videoSku": "動画は {{sku}} を採用"
+        "videoSku": "動画は {{sku}} を採用",
+        "videoTokens": "動画 1 秒 = {{tokens}} トークン ({{resolution}}・{{fps}}fps)"
       },
       "costUnknown": {
         "provider_unavailable": "取得できませんでした",

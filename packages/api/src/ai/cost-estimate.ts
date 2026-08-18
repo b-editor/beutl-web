@@ -29,7 +29,8 @@ export type AiCostAssumption =
   | { kind: "imageInputNotPriced" }
   | { kind: "transcriptionMinute" }
   | { kind: "translationTokensPerCharacter"; min: number; max: number }
-  | { kind: "videoSku"; value: string };
+  | { kind: "videoSku"; value: string }
+  | { kind: "videoTokens"; tokensPerSecond: number; resolution: string };
 
 export type AiCostEstimate =
   | {
@@ -268,6 +269,33 @@ const VIDEO_CENTS_SKU_PREFIXES = [
 // Continuation and video-input SKUs price something this app never requests.
 const VIDEO_SKU_EXCLUSIONS = ["continuation", "with_video_input"];
 
+// A few models price a video by "video token" rather than by second, and the
+// list endpoint publishes only the per-token rate. A token is a fixed slice of
+// picture: width x height x frames / 1024.
+//
+// Confirmed rather than inferred, because a wrong factor here is believed: the
+// per-second figures OpenRouter publishes for bytedance/seedance-2.5,
+// seedance-2.0, seedance-2.0-mini and seedance-1-5-pro are reproduced to the
+// last digit at 720p, 1080p and 4K by this formula. 480p lands 0.005% under,
+// which is the 854x480 rounding and not a shape this app ever asks for.
+const VIDEO_TOKEN_SKU_PREFIXES = ["video_tokens"];
+const VIDEO_TOKEN_FPS = 24;
+const VIDEO_PIXELS_PER_TOKEN = 1024;
+const VIDEO_RESOLUTION_PIXELS: Record<string, number> = {
+  "480p": 854 * 480,
+  "720p": 1280 * 720,
+  "1080p": 1920 * 1080,
+  "4k": 3840 * 2160,
+};
+
+// Null for a resolution with no known pixel count, which leaves a token-priced
+// model reported as unknown rather than costed against a guess.
+export function videoTokensPerSecond(resolution: string): number | null {
+  const pixels = VIDEO_RESOLUTION_PIXELS[resolution.toLowerCase()];
+  if (pixels === undefined) return null;
+  return (pixels * VIDEO_TOKEN_FPS) / VIDEO_PIXELS_PER_TOKEN;
+}
+
 // Video SKU keys vary a lot between models: USD per second, cents per second,
 // and opaque token counts all appear, with optional resolution and audio
 // suffixes. Resolve to a per-second USD figure or report the shape as unknown.
@@ -291,10 +319,13 @@ export function estimateVideoCost({
   const audioSuffix = withAudio ? "_with_audio" : "_without_audio";
   const resolutionSuffix = `_${resolution.toLowerCase()}`;
 
+  const tokensPerSecond = videoTokensPerSecond(resolution);
+
   const scoreOf = (key: string): number | null => {
     const prefix = [
       ...VIDEO_SECOND_SKU_PREFIXES,
       ...VIDEO_CENTS_SKU_PREFIXES,
+      ...VIDEO_TOKEN_SKU_PREFIXES,
     ].find((candidate) => key.startsWith(candidate));
     if (!prefix) return null;
     const rest = key.slice(prefix.length);
@@ -309,7 +340,8 @@ export function estimateVideoCost({
     return 1;
   };
 
-  let best: { key: string; usd: number; score: number } | null = null;
+  let best: { key: string; usd: number; score: number; perToken: boolean } | null =
+    null;
   for (const [key, rawValue] of candidates) {
     const score = scoreOf(key);
     if (score === null) continue;
@@ -318,13 +350,24 @@ export function estimateVideoCost({
     const isCents = VIDEO_CENTS_SKU_PREFIXES.some((prefix) =>
       key.startsWith(prefix),
     );
-    const usd = isCents ? value / 100 : value;
+    const isPerToken = VIDEO_TOKEN_SKU_PREFIXES.some((prefix) =>
+      key.startsWith(prefix),
+    );
+    // A per-token rate is only a cost once it is known how much picture a
+    // second buys, so an unrecognized resolution drops the candidate instead
+    // of costing it against a guess.
+    if (isPerToken && tokensPerSecond === null) continue;
+    const usd = isCents
+      ? value / 100
+      : isPerToken
+        ? value * tokensPerSecond!
+        : value;
     // Two SKUs can match equally well — same audio variant, neither naming a
     // resolution — and then the object's key order would decide the figure.
     // Take the dearer one: this estimate exists to check that a price covers
     // its cost, and understating the cost is the direction that misleads.
     if (!best || score > best.score || (score === best.score && usd > best.usd)) {
-      best = { key, usd, score };
+      best = { key, usd, score, perToken: isPerToken };
     }
   }
 
@@ -333,5 +376,14 @@ export function estimateVideoCost({
   }
   return estimated(best.usd, best.usd, [
     { kind: "videoSku", value: best.key },
+    ...(best.perToken && tokensPerSecond !== null
+      ? [
+          {
+            kind: "videoTokens" as const,
+            tokensPerSecond,
+            resolution,
+          },
+        ]
+      : []),
   ]);
 }

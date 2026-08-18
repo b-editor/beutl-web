@@ -371,11 +371,71 @@ describe("video SKU resolution", () => {
     ).toEqual({ status: "unknown", reason: "unsupported_pricing_shape" });
   });
 
-  it("reports token-denominated video pricing as unknown", () => {
+  // A video token is a fixed slice of picture, so a per-token rate becomes a
+  // per-second cost once the resolution is known. These are the rates
+  // /videos/models publishes for the ByteDance models, and the expected figures
+  // are the per-second prices OpenRouter publishes for them: the conversion is
+  // checked against the provider rather than inferred, because a wrong factor
+  // here would be believed.
+  it.each([
+    ["bytedance/seedance-2.5", "0.0000107", "720p", 0.23112],
+    ["bytedance/seedance-2.5", "0.0000107", "1080p", 0.52002],
+    ["bytedance/seedance-2.0", "0.000007", "720p", 0.1512],
+    ["bytedance/seedance-1-5-pro", "0.0000024", "720p", 0.05184],
+    ["bytedance/seedance-1-5-pro", "0.0000024", "1080p", 0.11664],
+  ])(
+    "costs %s by the second from its per-token rate at %s",
+    (_model, rate, resolution, expected) => {
+      const estimate = estimateVideoCost({
+        pricingSkus: { video_tokens: rate, video_tokens_without_audio: rate },
+        resolution,
+        withAudio: true,
+      });
+
+      expect(estimate.status).toBe("estimated");
+      if (estimate.status !== "estimated") return;
+      expect(estimate.usdMin).toBeCloseTo(expected, 8);
+    },
+  );
+
+  it("prefers a resolution-specific token SKU", () => {
+    // seedance-2.0 prices 1080p above its base rate.
+    const estimate = estimateVideoCost({
+      pricingSkus: {
+        video_tokens: "0.000007",
+        video_tokens_1080p: "0.0000077",
+        video_tokens_4k: "0.000004",
+      },
+      resolution: "1080p",
+      withAudio: true,
+    });
+
+    expect(estimate.status).toBe("estimated");
+    if (estimate.status !== "estimated") return;
+    expect(estimate.usdMin).toBeCloseTo(0.37422, 8);
+  });
+
+  it("says what a second was taken to be", () => {
+    const estimate = estimateVideoCost({
+      pricingSkus: { video_tokens: "0.0000107" },
+      resolution: "720p",
+      withAudio: true,
+    });
+
+    // The figure only means anything alongside the frame size and rate it
+    // assumed, so the panel is given both to print.
+    expect(estimate).toMatchObject({
+      assumptions: expect.arrayContaining([
+        { kind: "videoTokens", tokensPerSecond: 21600, resolution: "720p" },
+      ]),
+    });
+  });
+
+  it("reports a token rate as unknown at a resolution it cannot size", () => {
     expect(
       estimateVideoCost({
-        pricingSkus: { video_tokens: "1500" },
-        resolution: "720p",
+        pricingSkus: { video_tokens: "0.0000107" },
+        resolution: "360p",
         withAudio: true,
       }),
     ).toEqual({ status: "unknown", reason: "unsupported_pricing_shape" });

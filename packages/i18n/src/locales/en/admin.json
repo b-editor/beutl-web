@@ -179,7 +179,8 @@
         "imageMegapixels": "images at 1024×1024",
         "transcriptionMinute": "exactly one minute of audio (billing rounds up, so real cost is at most this)",
         "translationTokens": "one character = {{min}}–{{max}} tokens (Latin to CJK)",
-        "videoSku": "video priced by {{sku}}"
+        "videoSku": "video priced by {{sku}}",
+        "videoTokens": "one second = {{tokens}} video tokens ({{resolution}}, {{fps}} fps)"
       },
       "costUnknown": {
         "provider_unavailable": "Could not be fetched",
