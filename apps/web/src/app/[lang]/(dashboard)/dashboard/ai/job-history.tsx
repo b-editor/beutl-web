@@ -1,6 +1,6 @@
 "use client";
 
-import { formatDateTime } from "@beutl/core";
+import { formatDateTime, randomUuid } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import {
@@ -534,7 +534,7 @@ export function JobHistory({
                             setConfirmAction({
                               type: "retry",
                               jobId: job.id,
-                              idempotencyKey: crypto.randomUUID(),
+                              idempotencyKey: randomUuid(),
                             })
                           }
                         >

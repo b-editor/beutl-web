@@ -1,6 +1,6 @@
 "use client";
 
-import { formatCount, formatDate } from "@beutl/core";
+import { formatCount, formatDate, randomUuid } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Button } from "@beutl/ui/ui/button";
@@ -276,7 +276,7 @@ export function IdempotencyKeyField({ state }: { state: unknown }) {
   const [key, setKey] = useState("");
 
   useEffect(() => {
-    setKey(crypto.randomUUID());
+    setKey(randomUuid());
   }, [state]);
 
   return <input type="hidden" name={IDEMPOTENCY_KEY_FIELD} value={key} />;

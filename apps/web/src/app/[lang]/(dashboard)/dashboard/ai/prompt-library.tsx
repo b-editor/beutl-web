@@ -1,5 +1,6 @@
 "use client";
 
+import { randomUuid } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import {
@@ -136,7 +137,7 @@ export function PromptLibrary({
     persist([
       {
         ...draft,
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         name: trimmed,
         pinned: false,
       },

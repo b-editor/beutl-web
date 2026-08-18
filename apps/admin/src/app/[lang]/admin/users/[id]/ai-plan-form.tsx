@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@beutl/ui/ui/alert-dialog";
-import type { ActionResult } from "@beutl/core";
+import { randomUuid, type ActionResult } from "@beutl/core";
 import { adjustAiCredits, setAiMonthlyUsage } from "./actions";
 
 function ConfirmButton({
@@ -84,7 +84,7 @@ export function AiPlanAdjustmentForm({
   // 適用されない。入力が変わるたびに発行し直すため、適用後に空になった欄へ同じ額を
   // 打ち直せば、それは新しい訂正として通る。
   const [creditAdjustmentKey, setCreditAdjustmentKey] = useState(() =>
-    crypto.randomUUID(),
+    randomUuid(),
   );
   const [usageValue, setUsageValue] = useState(String(monthlyUsageUsed));
   // router.refresh() でサーバーの値が変わっても、この入力は初期値のまま残る。
@@ -158,7 +158,7 @@ export function AiPlanAdjustmentForm({
             disabled={isPending}
             onChange={(e) => {
               setCreditDelta(e.target.value);
-              setCreditAdjustmentKey(crypto.randomUUID());
+              setCreditAdjustmentKey(randomUuid());
             }}
           />
           <ConfirmButton
