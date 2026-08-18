@@ -225,10 +225,15 @@ export function estimateTranslationCost({
   promptPriceUsd: number;
   completionPriceUsd: number;
 }): AiCostEstimate {
+  // Both rates have to be known. loadModelPricing reads a missing completion
+  // rate as zero, and translation output is the same size as its input, so
+  // accepting a zero here would report roughly half the real cost as a figure
+  // the operator sets a price against.
   if (
     !Number.isFinite(promptPriceUsd) ||
     !Number.isFinite(completionPriceUsd) ||
-    promptPriceUsd <= 0
+    promptPriceUsd <= 0 ||
+    completionPriceUsd <= 0
   ) {
     return unknown("zero_price_reported");
   }
@@ -297,8 +302,10 @@ export function estimateVideoCost({
     if (rest.includes("_audio") && !rest.includes(audioSuffix)) return null;
     // Prefer an exact resolution match, then a key with no resolution at all.
     // veo-3.1 has no 720p SKU, so falling back to the base key is required.
-    if (rest.endsWith(resolutionSuffix)) return 2;
-    if (/_\d+(k|p)$/i.test(rest)) return null;
+    // The resolution is not always the final segment — "_720p_with_audio" puts
+    // it in the middle — so the whole key is searched rather than its tail.
+    if (rest.includes(resolutionSuffix)) return 2;
+    if (/_\d+(k|p)(_|$)/i.test(rest)) return null;
     return 1;
   };
 

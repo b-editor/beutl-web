@@ -43,3 +43,15 @@ export function aiMinimumQuantityOf(operation: string): number | null {
   return AI_PRICING_CATALOG[operation as keyof typeof AI_PRICING_CATALOG]
     .minimumQuantity;
 }
+
+// The smallest charge an operation can incur. Comparing a unit price against an
+// allowance answers the wrong question for anything whose smallest request is
+// more than one unit: a four-second video priced under the allowance can still
+// be unaffordable at the shortest length the entry point accepts.
+export function aiMinimumChargeOf(
+  operation: string,
+  price: number,
+): number | null {
+  const minimumQuantity = aiMinimumQuantityOf(operation);
+  return minimumQuantity === null ? null : price * minimumQuantity;
+}

@@ -112,13 +112,8 @@ export function buildBillingHistory({
   // Credit top-ups are money-in events and belong in the payment history. The
   // usage side of the credit ledger stays out of the UI so a user cannot infer
   // what each AI operation costs.
-  const creditEntries = creditPurchases
-    .filter(
-      (purchase) =>
-        purchase.stripePaymentAmount !== null &&
-        purchase.stripeCurrency !== null,
-    )
-    .map((purchase): BillingHistoryEntry => ({
+  const creditEntries = creditPurchases.map(
+    (purchase): BillingHistoryEntry => ({
       id: purchase.id,
       kind: "credit",
       paidAt: purchase.createdAt,
@@ -128,12 +123,20 @@ export function buildBillingHistory({
       detail: t("account:billing.creditPurchaseAmount", {
         credits: formatCount(purchase.creditAmount, lang),
       }),
-      amount: {
-        value: purchase.stripePaymentAmount as number,
-        currency: purchase.stripeCurrency as string,
-      },
+      // A purchase written before the charge was captured has no amount to
+      // show, but dropping the row hides a receipt the user paid for. The
+      // package branch above renders the same state as an em dash.
+      amount:
+        purchase.stripePaymentAmount !== null &&
+        purchase.stripeCurrency !== null
+          ? {
+              value: purchase.stripePaymentAmount,
+              currency: purchase.stripeCurrency,
+            }
+          : null,
       reversalNote: creditReversalNote(purchase, t, lang),
-    }));
+    }),
+  );
 
   return [...packageEntries, ...creditEntries].sort(
     (left, right) => right.paidAt.getTime() - left.paidAt.getTime(),

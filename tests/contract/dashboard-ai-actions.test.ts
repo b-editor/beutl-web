@@ -32,12 +32,16 @@ vi.mock("@/lib/content-url", () => ({
 import {
   generateImageAction,
   listJobsAction,
+  translateAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import {
   createReservedAiJob,
   generateImage,
+  readAiJsonResult,
   saveAiImage,
+  translateSegments,
 } from "@beutl/api";
+import { getAiJobResultFile } from "@beutl/db";
 
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
@@ -47,7 +51,14 @@ vi.mock("@beutl/api", async (importOriginal) => {
     saveAiImage: vi.fn(),
     createReservedAiJob: vi.fn(),
     listAiJobsByUserId: vi.fn(),
+    translateSegments: vi.fn(),
+    readAiJsonResult: vi.fn(),
   };
+});
+
+vi.mock("@beutl/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@beutl/db")>();
+  return { ...actual, getAiJobResultFile: vi.fn() };
 });
 
 describe("dashboard AI actions", () => {
@@ -165,6 +176,99 @@ describe("dashboard AI actions", () => {
     // Same key, different content: the reservation layer answers this with a
     // conflict rather than charging for the second prompt.
     expect(third.requestFingerprint).not.toBe(first.requestFingerprint);
+  });
+
+  describe("a resubmission of a finished request", () => {
+    function translateForm(): FormData {
+      const formData = new FormData();
+      formData.set("targetLanguage", "en");
+      formData.set(
+        "segments",
+        JSON.stringify([
+          { id: "1", text: "こんにちは" },
+          { id: "2", text: "さようなら" },
+        ]),
+      );
+      formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000002");
+      return formData;
+    }
+
+    it("answers with the result the first submission paid for", async () => {
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "existing",
+        job: { id: "job-9", status: "succeeded", resultFileId: "file-9" },
+      });
+      vi.mocked(getAiJobResultFile).mockResolvedValue({
+        id: "file-9",
+        objectKey: "ai/text/job-9/result",
+      } as never);
+      vi.mocked(readAiJsonResult).mockResolvedValue({
+        version: 1,
+        kind: "translation",
+        targetLanguage: "en",
+        segments: [
+          { id: "1", text: "Hello" },
+          { id: "2", text: "Goodbye" },
+        ],
+      });
+
+      const result = await translateAction({ success: false }, translateForm());
+
+      // Returning only a URL left the screen blank: the editor renders segments.
+      expect(result.success).toBe(true);
+      expect(result.segments).toEqual([
+        { id: "1", text: "Hello" },
+        { id: "2", text: "Goodbye" },
+      ]);
+      // The provider must not be called again for work already charged for.
+      expect(translateSegments).not.toHaveBeenCalled();
+    });
+
+    it("reports a failure rather than an empty screen when the stored result does not match", async () => {
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "existing",
+        job: { id: "job-9", status: "succeeded", resultFileId: "file-9" },
+      });
+      vi.mocked(getAiJobResultFile).mockResolvedValue({
+        id: "file-9",
+        objectKey: "ai/text/job-9/result",
+      } as never);
+      vi.mocked(readAiJsonResult).mockResolvedValue({
+        version: 1,
+        kind: "translation",
+        segments: [{ id: "1", text: "Hello" }],
+      });
+
+      const result = await translateAction({ success: false }, translateForm());
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("aiProviderError");
+    });
+  });
+
+  // The provider answers one translation per ID, so a repeat can never be
+  // matched back and the request could not have succeeded. Caught after the
+  // call, the user is refunded but the operator has already paid for it.
+  it("refuses a repeated segment id before reserving or calling the provider", async () => {
+    const formData = new FormData();
+    formData.set("targetLanguage", "en");
+    formData.set(
+      "segments",
+      JSON.stringify([
+        { id: "1", text: "こんにちは" },
+        { id: "1", text: "さようなら" },
+      ]),
+    );
+    formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000003");
+
+    const result = await translateAction({ success: false }, formData);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("invalidRequestBody");
+    expect(createReservedAiJob).not.toHaveBeenCalled();
+    expect(translateSegments).not.toHaveBeenCalled();
   });
 
   it("lists jobs for the signed-in user", async () => {

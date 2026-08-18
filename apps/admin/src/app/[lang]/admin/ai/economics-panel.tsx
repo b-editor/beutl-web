@@ -7,7 +7,6 @@ import {
   describeAllowanceEquivalent,
   formatAmount,
   formatFractionalAmount,
-  isZeroDecimalCurrency,
   operationAmount,
   type AiAllowanceEquivalent,
   type AiUnitValue,
@@ -122,10 +121,8 @@ function costRatioOf(
     return { status: "foreignCurrency", currency: revenue.currency };
   }
   // Provider costs are quoted in whole dollars, so the revenue has to be read
-  // the same way. A zero-decimal currency stores no minor units to divide out.
-  const revenueUsd = isZeroDecimalCurrency(revenue.currency)
-    ? revenue.minorUnits
-    : revenue.minorUnits / 100;
+  // the same way. USD is never zero-decimal, and anything else returned above.
+  const revenueUsd = revenue.minorUnits / 100;
   if (!(revenueUsd > 0)) return { status: "unavailable" };
   return {
     status: "ratio",

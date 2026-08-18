@@ -74,7 +74,7 @@ describe("OpenRouter client contract", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the dedicated image API and normalizes a requested size", async () => {
+  it("uses the dedicated image API with the requested aspect ratio", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [{ b64_json: "AQID", media_type: "image/png" }],
@@ -83,7 +83,11 @@ describe("OpenRouter client contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      generateImage({ prompt: "a lighthouse", size: "1024x1536", model: "openai/gpt-image-1" }),
+      generateImage({
+        prompt: "a lighthouse",
+        aspectRatio: "2:3",
+        model: "openai/gpt-image-1",
+      }),
     ).resolves.toEqual({ b64Json: "AQID", mediaType: "image/png" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -101,6 +105,59 @@ describe("OpenRouter client contract", () => {
       n: 1,
       output_format: "png",
     });
+  });
+
+  it("sends a transparent background, a seed and a reference image only when asked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [{ b64_json: "AQID", media_type: "image/png" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await generateImage({
+      prompt: "a logo",
+      aspectRatio: "16:9",
+      background: "transparent",
+      seed: 7,
+      referenceImages: [
+        { bytes: Uint8Array.from([1, 2, 3]).buffer, mimeType: "image/png" },
+      ],
+      model: "openai/gpt-image-1",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      model: "openai/gpt-image-1",
+      prompt: "a logo",
+      aspect_ratio: "16:9",
+      n: 1,
+      output_format: "png",
+      background: "transparent",
+      seed: 7,
+      input_references: [
+        { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } },
+      ],
+    });
+  });
+
+  it("omits an automatic background so the provider default is untouched", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [{ b64_json: "AQID", media_type: "image/png" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await generateImage({
+      prompt: "a lighthouse",
+      aspectRatio: "1:1",
+      background: "auto",
+      model: "openai/gpt-image-1",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("background");
   });
 
   it("aborts a provider request after the configured timeout", async () => {
@@ -649,6 +706,56 @@ describe("OpenRouter client contract", () => {
 
     await expect(downloadVideoContent("video-large-declared"))
       .rejects.toBeInstanceOf(InvalidAiProviderOutputError);
+  });
+
+  it("asks for a vertical silent clip when the request says so", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: "vid-shape", status: "pending" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createVideoJob({
+      prompt: "A candle burning down",
+      durationSeconds: 4,
+      resolution: "720p",
+      aspectRatio: "9:16",
+      generateAudio: false,
+      seed: 11,
+      callbackUrl:
+        "https://beutl.example/api/v3/ai/videos/local/openrouter-callback",
+      model: "google/veo-3.1",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // None of these three could be expressed before: a vertical clip, a silent
+    // one, or a reproducible one.
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      aspect_ratio: "9:16",
+      generate_audio: false,
+      seed: 11,
+    });
+  });
+
+  it("omits the shape fields a request does not set", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: "vid-plain", status: "pending" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createVideoJob({
+      prompt: "A candle burning down",
+      durationSeconds: 4,
+      resolution: "720p",
+      callbackUrl:
+        "https://beutl.example/api/v3/ai/videos/local/openrouter-callback",
+      model: "google/veo-3.1",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body).not.toHaveProperty("aspect_ratio");
+    expect(body).not.toHaveProperty("generate_audio");
+    expect(body).not.toHaveProperty("seed");
   });
 
   it("sends first and last frame images with the documented frame types", async () => {

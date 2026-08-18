@@ -19,14 +19,11 @@ import {
   type AiAccess,
   type AiBalance,
 } from "./shared";
+import { AI_IMAGE_EDIT_TASKS } from "@beutl/core";
 
-const IMAGE_EDIT_OPERATIONS = [
-  "image.edit.remove_background",
-  "image.edit.upscale",
-  "image.edit.restyle",
-  "image.edit.remove_object",
-  "image.edit.outpaint",
-] as const;
+const IMAGE_EDIT_OPERATIONS = AI_IMAGE_EDIT_TASKS.map(
+  (task) => `image.edit.${task}`,
+);
 
 export function AiFeatureLinks({
   lang,

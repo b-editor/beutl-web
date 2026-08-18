@@ -23,6 +23,7 @@ import {
   isDefiniteVideoSubmissionFailure,
   type VideoFrameImage,
 } from "./openrouter";
+import type { AiVideoAspectRatio, AiVideoResolution } from "@beutl/core";
 import {
   AiOutputCommitConflictError,
   saveAiVideo,
@@ -66,6 +67,9 @@ export async function createAndAttachVideoJob({
   prompt,
   durationSeconds,
   resolution,
+  aspectRatio,
+  generateAudio,
+  seed,
   frameImages,
   callbackUrl,
   callbackNonceHash,
@@ -75,7 +79,10 @@ export async function createAndAttachVideoJob({
   jobId: string;
   prompt: string;
   durationSeconds: number;
-  resolution: "720p" | "1080p";
+  resolution: AiVideoResolution;
+  aspectRatio?: AiVideoAspectRatio;
+  generateAudio?: boolean;
+  seed?: number;
   frameImages?: VideoFrameImage[];
   callbackUrl: string;
   callbackNonceHash: string;
@@ -89,6 +96,9 @@ export async function createAndAttachVideoJob({
     prompt,
     durationSeconds,
     resolution,
+    ...(aspectRatio ? { aspectRatio } : {}),
+    ...(generateAudio === undefined ? {} : { generateAudio }),
+    ...(seed === undefined ? {} : { seed }),
     callbackUrl,
     ...(frameImages ? { frameImages } : {}),
     model,

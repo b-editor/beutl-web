@@ -1,0 +1,131 @@
+// What each AI operation will accept.
+//
+// GET /api/v3/ai/capabilities serves these lists, so a client outside this
+// repository follows a change here without a release of its own, and every
+// entry point validates against the same values it publishes.
+//
+// This lives in @beutl/core, next to AI_PRICING_CATALOG, because a browser
+// bundle imports it and @beutl/api pulls in @beutl/db.
+
+// Ratios rather than pixel sizes: the provider's image API is expressed in
+// ratios, and the fixed sizes the API used to take were mapped onto them
+// anyway. 16:9 and 9:16 are the ones a video editor actually needs.
+// 2:3 and 3:2 are here because the legacy sizes map onto them and have been
+// requested in production all along; removing them would change what an
+// existing client gets back.
+export const AI_IMAGE_ASPECT_RATIOS = [
+  "1:1",
+  "16:9",
+  "9:16",
+  "4:3",
+  "3:4",
+  "2:3",
+  "3:2",
+] as const;
+export type AiImageAspectRatio = (typeof AI_IMAGE_ASPECT_RATIOS)[number];
+
+// The sizes the v3 image endpoint accepted before ratios existed. Kept so a
+// client that still sends one keeps working, and mapped onto the ratio it
+// always meant.
+export const AI_LEGACY_IMAGE_SIZES = [
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+] as const;
+export type AiLegacyImageSize = (typeof AI_LEGACY_IMAGE_SIZES)[number];
+
+export const AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS: Record<
+  AiLegacyImageSize,
+  AiImageAspectRatio
+> = {
+  "1024x1024": "1:1",
+  "1024x1536": "2:3",
+  "1536x1024": "3:2",
+};
+
+// "transparent" only produces a usable result in a format with an alpha
+// channel, which is why generated output stays PNG.
+export const AI_IMAGE_BACKGROUNDS = ["auto", "transparent"] as const;
+export type AiImageBackground = (typeof AI_IMAGE_BACKGROUNDS)[number];
+
+// One reference image, because that is what an image edit already sends and
+// therefore what the per-operation price already covers. Raising this means
+// charging per reference.
+export const AI_MAX_IMAGE_REFERENCES = 1;
+
+export const AI_VIDEO_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+export type AiVideoAspectRatio = (typeof AI_VIDEO_ASPECT_RATIOS)[number];
+
+export const AI_VIDEO_RESOLUTIONS = ["720p", "1080p"] as const;
+export type AiVideoResolution = (typeof AI_VIDEO_RESOLUTIONS)[number];
+
+export const AI_VIDEO_DURATIONS_SECONDS = [4, 6, 8] as const;
+export type AiVideoDurationSeconds =
+  (typeof AI_VIDEO_DURATIONS_SECONDS)[number];
+
+// Provider-supported deterministic seed. Bounded to a signed 32-bit value so
+// the same number survives every JSON encoder between the client and the
+// provider.
+export const AI_MIN_SEED = 0;
+export const AI_MAX_SEED = 2_147_483_647;
+
+export function isAiSeed(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= AI_MIN_SEED &&
+    value <= AI_MAX_SEED
+  );
+}
+
+export function aspectRatioOfLegacyImageSize(
+  size: string,
+): AiImageAspectRatio | null {
+  return (
+    AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS[size as AiLegacyImageSize] ?? null
+  );
+}
+
+// Zod cannot take a readonly tuple of numbers directly, and every entry point
+// that accepts a duration has to accept exactly what the capabilities endpoint
+// publishes, so both forms are derived here rather than restated per schema.
+export const AI_VIDEO_DURATION_STRINGS = AI_VIDEO_DURATIONS_SECONDS.map(
+  (seconds) => String(seconds),
+) as [string, ...string[]];
+
+export function isAiVideoDurationSeconds(
+  value: unknown,
+): value is AiVideoDurationSeconds {
+  return (AI_VIDEO_DURATIONS_SECONDS as readonly number[]).includes(
+    value as number,
+  );
+}
+
+// Which edit tasks need a prompt to mean anything. Published by the
+// capabilities endpoint and enforced by every entry point, so a task that
+// changes here changes in both places at once.
+export const AI_PROMPT_REQUIRED_IMAGE_EDIT_TASKS = [
+  "restyle",
+  "remove_object",
+  "outpaint",
+] as const;
+
+export function aiImageEditTaskRequiresPrompt(task: string): boolean {
+  return (AI_PROMPT_REQUIRED_IMAGE_EDIT_TASKS as readonly string[]).includes(
+    task,
+  );
+}
+
+// Lives here rather than in @beutl/api so a browser bundle can cap a textarea
+// at the same number the server validates against; @beutl/api pulls in
+// @beutl/db. Re-exported from ai/upload-limits.ts for the server side.
+export const MAX_AI_PROMPT_LENGTH = 4_000;
+
+// The shape of a translation request, here for the same reason: the form that
+// parses a pasted subtitle file rejects what the endpoint would reject, and a
+// copy of these three in the browser drifts from the copy on the server —
+// silently, since neither side ever sees the other's answer.
+// Re-exported from ai/subtitle-validation.ts for the server side.
+export const MAX_TRANSLATION_SEGMENTS = 200;
+export const MAX_TRANSLATION_CHARACTERS = 20_000;
+export const SAFE_SEGMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;

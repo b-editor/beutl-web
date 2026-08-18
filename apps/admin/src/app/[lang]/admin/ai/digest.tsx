@@ -49,6 +49,13 @@ export async function AllowanceDigest({
             accounts: formatNumber(distribution.measuredCount, lang),
           })
         : t("admin:ai.plan.digestEmpty")}{" "}
+      {/* The scan is ordered by userId, so a truncated one is a systematically
+          chosen slice rather than a sample. Setting an allowance on it without
+          knowing that is the failure this note prevents. */}
+      {distribution.truncated &&
+        `${t("admin:ai.usage.distribution.truncatedNote", {
+          limit: formatNumber(USAGE_DISTRIBUTION_SCAN_LIMIT, lang),
+        })} `}
       <Link
         className="underline hover:text-foreground"
         href={`/${lang}/admin/ai/usage`}

@@ -26,13 +26,50 @@ export type PromptDraft = Omit<PromptTemplate, "id" | "name" | "pinned">;
 
 const PROMPT_LIBRARY_KEY = "beutl:ai:prompt-library";
 
+// Storage written by an earlier build, or by hand, is not this shape by
+// assertion. Applying a template whose prompt is missing flips the controlled
+// textarea to uncontrolled and the character counter throws on the next render.
+function readOptionalText(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readTemplate(value: unknown): PromptTemplate | null {
+  if (value === null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || record.id.length === 0) return null;
+  if (typeof record.name !== "string") return null;
+  if (typeof record.prompt !== "string") return null;
+  return {
+    id: record.id,
+    name: record.name,
+    prompt: record.prompt,
+    ...(readOptionalText(record.style) === undefined
+      ? {}
+      : { style: record.style as string }),
+    ...(readOptionalText(record.composition) === undefined
+      ? {}
+      : { composition: record.composition as string }),
+    ...(readOptionalText(record.motion) === undefined
+      ? {}
+      : { motion: record.motion as string }),
+    ...(readOptionalText(record.exclusions) === undefined
+      ? {}
+      : { exclusions: record.exclusions as string }),
+    pinned: record.pinned === true,
+  };
+}
+
 function loadPromptLibrary(): PromptTemplate[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(PROMPT_LIBRARY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as PromptTemplate[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      const template = readTemplate(entry);
+      return template ? [template] : [];
+    });
   } catch {
     return [];
   }
@@ -186,6 +223,14 @@ export function PromptLibrary({
           <Input
             value={name}
             onChange={(event) => setName(event.target.value)}
+            // This field sits inside the form that starts a paid run, so the
+            // browser's implicit submission would spend the user's allowance on
+            // the gesture that means "save this template".
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              saveTemplate();
+            }}
             placeholder={t("dashboard:ai.promptTemplateName")}
             aria-label={t("dashboard:ai.promptTemplateName")}
           />

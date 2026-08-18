@@ -24,6 +24,13 @@ describe("旧 URL から /dashboard へのリダイレクト", () => {
     ["/:lang(ja|en)/library/:path*", "/:lang/dashboard/library/:path*"],
     ["/developer/:path*", "/dashboard/developer/:path*"],
     ["/:lang(ja|en)/developer/:path*", "/:lang/dashboard/developer/:path*"],
+    // AI プランの画面が請求ページへ統合されたあとも、発行済みの Checkout
+    // success_url / ポータル return_url が戻ってこられるようにする。
+    ["/dashboard/account/ai-plan", "/dashboard/account/billing"],
+    [
+      "/:lang(ja|en)/dashboard/account/ai-plan",
+      "/:lang/dashboard/account/billing",
+    ],
     ["/account/manage/:path*", "/dashboard/account/:path*"],
     ["/:lang(ja|en)/account/manage/:path*", "/:lang/dashboard/account/:path*"],
   ];

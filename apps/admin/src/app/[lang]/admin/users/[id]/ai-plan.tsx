@@ -4,6 +4,7 @@ import {
   getSubscriptionByUserId,
   listRecentAiJobsByUserId,
   listRecentCreditTransactionsByUserId,
+  usagePeriodsEqual,
 } from "@beutl/db";
 import {
   getMonthlyUsageRemaining,
@@ -58,11 +59,30 @@ export async function AiPlanSection({
 
   const isActive = isActiveProSubscription(subscription);
   const monthlyUsageLimit = isActive ? settings.getMonthlyUsageLimit() : 0;
+  // 保存されたカウンタは請求期間が変わっても即座には戻らず、次に台帳へ書き込む
+  // 処理が 0 に直す。適用フォームは同じ期間 (subscription.currentPeriod*) で
+  // 書き込むため、期間がずれた行をそのまま出すと、前期間の消費量を新しい割当へ
+  // 書き戻してしまう。
+  const storedPeriodIsCurrent =
+    account !== null &&
+    usagePeriodsEqual(
+      { start: account.usagePeriodStart, end: account.usagePeriodEnd },
+      {
+        start: subscription?.currentPeriodStart ?? null,
+        end: subscription?.currentPeriodEnd ?? null,
+      },
+    );
+  // toAiBalanceSnapshot は利用者向けに消費量を割当まで丸める。管理画面が出すのは
+  // 実際に保存されている値: 割当を下げた後は保存値が割当を超えることがあり、
+  // 丸めた値を出すと、下の調整フォームが「見えていない差分」を書き戻してしまう。
+  const storedMonthlyUsageUsed = storedPeriodIsCurrent
+    ? (account?.monthlyUsageUsed ?? 0)
+    : 0;
   const balance = toAiBalanceSnapshot(
-    account ?? {
-      monthlyUsageUsed: 0,
-      purchasedCredits: 0,
-      purchasedCreditDebt: 0,
+    {
+      monthlyUsageUsed: storedMonthlyUsageUsed,
+      purchasedCredits: account?.purchasedCredits ?? 0,
+      purchasedCreditDebt: account?.purchasedCreditDebt ?? 0,
     },
     monthlyUsageLimit,
   );
@@ -70,10 +90,6 @@ export async function AiPlanSection({
     balance.monthlyUsage.used,
     balance.monthlyUsage.limit,
   );
-  // toAiBalanceSnapshot は利用者向けに消費量を割当まで丸める。管理画面が出すのは
-  // 実際に保存されている値: 割当を下げた後は保存値が割当を超えることがあり、
-  // 丸めた値を出すと、下の調整フォームが「見えていない差分」を書き戻してしまう。
-  const storedMonthlyUsageUsed = account?.monthlyUsageUsed ?? 0;
 
   return (
     <section className="rounded-lg border bg-card p-6">

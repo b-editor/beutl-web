@@ -189,26 +189,45 @@ export async function getAdminCreditAdjustmentTotals({
 }
 
 export async function getAiBalanceTotals({
+  now,
   prisma,
 }: {
+  now: Date;
   prisma?: PrismaTransaction;
-} = {}): Promise<AiBalanceTotals> {
+}): Promise<AiBalanceTotals> {
   const db = prisma ?? await getDb();
-  const result = await db.creditAccount.aggregate({
-    _count: {
-      _all: true,
-    },
-    _sum: {
-      monthlyUsageUsed: true,
-      purchasedCredits: true,
-      purchasedCreditDebt: true,
-    },
-  });
+  // Purchased credits and debt belong to no billing period, so they are counted
+  // over every account. The monthly counter does belong to one, and it is only
+  // cleared when the account next spends: a lapsed subscriber's row still holds
+  // the total from the period they left in, forever. Summing those reports
+  // consumption that is not happening, beside a distribution panel that
+  // excludes the same rows for the same reason.
+  const [overall, currentPeriod] = await Promise.all([
+    db.creditAccount.aggregate({
+      _count: {
+        _all: true,
+      },
+      _sum: {
+        purchasedCredits: true,
+        purchasedCreditDebt: true,
+      },
+    }),
+    db.creditAccount.aggregate({
+      _sum: {
+        monthlyUsageUsed: true,
+      },
+      where: {
+        usagePeriodEnd: {
+          gt: now,
+        },
+      },
+    }),
+  ]);
   return {
-    accountCount: result._count._all,
-    monthlyUsageUsed: sumOf(result._sum.monthlyUsageUsed),
-    purchasedCredits: sumOf(result._sum.purchasedCredits),
-    purchasedCreditDebt: sumOf(result._sum.purchasedCreditDebt),
+    accountCount: overall._count._all,
+    monthlyUsageUsed: sumOf(currentPeriod._sum.monthlyUsageUsed),
+    purchasedCredits: sumOf(overall._sum.purchasedCredits),
+    purchasedCreditDebt: sumOf(overall._sum.purchasedCreditDebt),
   };
 }
 
@@ -252,20 +271,35 @@ export async function getTopAiUsers({
   }));
 }
 
+// The plan id is a parameter because the catalog that names it lives in
+// @beutl/api, which depends on this package.
 export async function countActiveProSubscriptions({
   now,
+  planId,
   prisma,
 }: {
   now: Date;
+  planId: string;
   prisma?: PrismaTransaction;
 }): Promise<number> {
   const db = prisma ?? await getDb();
   return await db.subscription.count({
     where: {
       status: "active",
+      planId,
+      // A row with no offer was never matched to a Price and is granted
+      // nothing, the same way isActiveProSubscription reads it.
+      billingOfferId: {
+        not: null,
+      },
       currentPeriodEnd: {
         gt: now,
       },
+      // A subscription cancelled mid-period stops being entitled at cancelAt,
+      // not at the end of the period it was paid through; counting by
+      // currentPeriodEnd alone reports it as spending against the allowance
+      // for weeks after it stopped being able to.
+      OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
     },
   });
 }

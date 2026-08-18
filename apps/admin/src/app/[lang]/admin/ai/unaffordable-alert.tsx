@@ -3,6 +3,7 @@
 import {
   AI_OPERATIONS,
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  aiMinimumChargeOf,
   aiPriceSettingKey,
 } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
@@ -27,7 +28,11 @@ export function AiUnaffordableAlert({ lang }: { lang: string }) {
 
   const unaffordable = AI_OPERATIONS.filter((operation) => {
     const price = Number((values.get(aiPriceSettingKey(operation)) ?? "").trim());
-    return Number.isFinite(price) && price > allowance;
+    if (!Number.isFinite(price)) return false;
+    // The smallest request the operation accepts, not one billing unit: the
+    // shortest video is four seconds, so a quarter of the allowance is already
+    // out of reach.
+    return (aiMinimumChargeOf(operation, price) ?? price) > allowance;
   });
   if (unaffordable.length === 0) {
     return null;

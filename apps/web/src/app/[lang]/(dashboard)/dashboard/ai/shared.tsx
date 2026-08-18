@@ -352,7 +352,9 @@ export function downloadTextFile(
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
-  URL.revokeObjectURL(url);
+  // Revoking on this tick aborts the download on a browser that does not start
+  // it synchronously inside click().
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 // Generated media is served from this origin's authenticated content route, so

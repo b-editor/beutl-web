@@ -22,6 +22,7 @@ import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
 import {
   isIso6391LanguageCode,
+  translationCharacterCount,
   MAX_TRANSLATION_CHARACTERS,
   MAX_TRANSLATION_SEGMENTS,
   SAFE_SEGMENT_ID_PATTERN,
@@ -59,6 +60,19 @@ const translationSegmentSchema = z
   })
   .strict();
 
+// Subtitle-specific direction. The line budget is what makes a translation
+// usable on screen, and a glossary is how a series keeps its own names.
+const translationStyleSchema = z
+  .object({
+    glossary: z
+      .record(z.string().min(1).max(100), z.string().min(1).max(200))
+      .refine((value) => Object.keys(value).length <= 100)
+      .optional(),
+    maxCharactersPerLine: z.number().int().min(1).max(200).optional(),
+    maxLines: z.number().int().min(1).max(10).optional(),
+  })
+  .strict();
+
 const translationRequestSchema = z
   .object({
     sourceLanguage: languageSchema.optional(),
@@ -67,11 +81,11 @@ const translationRequestSchema = z
       .array(translationSegmentSchema)
       .min(1)
       .max(MAX_TRANSLATION_SEGMENTS),
+    style: translationStyleSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
     const ids = new Set<string>();
-    let characterCount = 0;
 
     for (const [index, segment] of value.segments.entries()) {
       if (ids.has(segment.id)) {
@@ -82,10 +96,16 @@ const translationRequestSchema = z
         });
       }
       ids.add(segment.id);
-      characterCount += segment.text.length;
     }
 
-    if (characterCount > MAX_TRANSLATION_CHARACTERS) {
+    // The glossary is counted here too: it is caller-supplied text that reaches
+    // the provider, so it cannot ride along outside the request's budget.
+    if (
+      translationCharacterCount({
+        segments: value.segments,
+        style: value.style,
+      }) > MAX_TRANSLATION_CHARACTERS
+    ) {
       context.addIssue({
         code: "custom",
         message: "Translation text is too long",
@@ -143,7 +163,8 @@ const app = new Hono().post("/", async (c) => {
     });
   }
 
-  const { sourceLanguage, targetLanguage, segments } = parsedRequest.data;
+  const { sourceLanguage, targetLanguage, segments, style } =
+    parsedRequest.data;
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "subtitle.translate",
@@ -151,6 +172,7 @@ const app = new Hono().post("/", async (c) => {
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments,
+      ...(style ? { style } : {}),
     },
   });
   if (!requestIdentity) {
@@ -158,10 +180,7 @@ const app = new Hono().post("/", async (c) => {
       status: 400,
     });
   }
-  const characterCount = segments.reduce(
-    (total, segment) => total + segment.text.length,
-    0,
-  );
+  const characterCount = translationCharacterCount({ segments, style });
   const settings = await loadAiSettings();
   const usageUnits =
     settings.getPrice("subtitle.translate") *
@@ -231,16 +250,30 @@ const app = new Hono().post("/", async (c) => {
   }
 
   try {
+    const contextById = new Map(
+      segments.flatMap((segment) =>
+        segment.context ? [[segment.id, segment.context] as const] : [],
+      ),
+    );
+    // The provider is told only when a cue starts and ends; the stored result
+    // keeps the whole context, because that is what re-times the translation.
+    const contexts = Object.fromEntries(
+      [...contextById].map(([id, context]) => [
+        id,
+        { start: context.start, end: context.end },
+      ]),
+    );
     const translatedSegments = await translateSegments({
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments: segments.map(({ id, text }) => ({ id, text })),
+      // The timings the caller sent are what let the model keep a line short
+      // enough to read in the time it is on screen.
+      ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
+      ...(style ? { style } : {}),
       model: settings.getModel("subtitle.translate"),
       signal: c.req.raw.signal,
     });
-    const contextById = new Map(
-      segments.map((segment) => [segment.id, segment.context] as const),
-    );
     await saveAiJsonResult({
       jobId: job.id,
       userId,

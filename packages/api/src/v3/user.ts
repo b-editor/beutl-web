@@ -11,6 +11,7 @@ import {
 } from "../ai/upload-limits";
 import { z } from "zod";
 import { MAX_AI_AUDIO_DURATION_SECONDS } from "../ai/audio-metadata";
+import { isAiVideoDurationSeconds } from "@beutl/core";
 
 const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("image.generate") }).strict(),
@@ -25,7 +26,9 @@ const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
   }).strict(),
   z.object({
     operation: z.literal("video.generate"),
-    durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
+    durationSeconds: z
+      .number()
+      .refine(isAiVideoDurationSeconds),
   }).strict(),
   z.object({
     operation: z.literal("audio.transcribe"),

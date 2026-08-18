@@ -70,7 +70,7 @@ describe("allowance equivalents", () => {
   it("floors at the boundary instead of promising an unusable fraction", () => {
     expect(
       describeAllowanceEquivalent({
-        operation: "video.generate",
+        operation: "image.generate",
         allowanceUnits: 40,
         price: 40,
       }),
@@ -82,7 +82,7 @@ describe("allowance equivalents", () => {
         allowanceUnits: 79,
         price: 40,
       }),
-    ).toMatchObject({ billingUnits: 1, affordable: true });
+    ).toMatchObject({ billingUnits: 1 });
 
     expect(
       describeAllowanceEquivalent({
@@ -91,6 +91,26 @@ describe("allowance equivalents", () => {
         price: 40,
       }),
     ).toMatchObject({ billingUnits: 0, affordable: false });
+  });
+
+  it("calls an operation affordable only at the smallest request it accepts", () => {
+    // The shortest clip the video endpoint takes is four seconds, so an
+    // allowance that buys three of them buys no video at all.
+    expect(
+      describeAllowanceEquivalent({
+        operation: "video.generate",
+        allowanceUnits: 120,
+        price: 40,
+      }),
+    ).toMatchObject({ billingUnits: 3, affordable: false });
+
+    expect(
+      describeAllowanceEquivalent({
+        operation: "video.generate",
+        allowanceUnits: 160,
+        price: 40,
+      }),
+    ).toMatchObject({ billingUnits: 4, affordable: true });
   });
 
   it.each([

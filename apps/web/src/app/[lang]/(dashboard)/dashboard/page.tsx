@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { formatBytes, STORAGE_QUOTA_BYTES } from "@beutl/core";
+import { formatBytes, formatCount, STORAGE_QUOTA_BYTES } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Progress } from "@beutl/ui/ui/progress";
 import { HardDrive, Sparkles } from "lucide-react";
@@ -86,9 +86,7 @@ export default async function Page(props: {
               {entitlements.balance.additionalCredits > 0 && (
                 <p className="text-sm text-muted-foreground">
                   {t("account:aiPlan.additionalCredits")}:{" "}
-                  {entitlements.balance.additionalCredits.toLocaleString(
-                    lang === "ja" ? "ja-JP" : "en-US",
-                  )}
+                  {formatCount(entitlements.balance.additionalCredits, lang)}
                 </p>
               )}
             </>

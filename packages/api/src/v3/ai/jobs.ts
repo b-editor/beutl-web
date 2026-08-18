@@ -9,6 +9,17 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { deleteAiOutputObject } from "../../ai/storage";
 import { MAX_AI_PROMPT_LENGTH } from "../../ai/upload-limits";
+import {
+  AI_IMAGE_ASPECT_RATIOS,
+  AI_IMAGE_BACKGROUNDS,
+  AI_IMAGE_EDIT_TASKS,
+  AI_LEGACY_IMAGE_SIZES,
+  AI_MAX_SEED,
+  AI_MIN_SEED,
+  AI_VIDEO_ASPECT_RATIOS,
+  AI_VIDEO_RESOLUTIONS,
+  isAiVideoDurationSeconds,
+} from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { getContentUrl } from "../../content-url";
@@ -51,31 +62,46 @@ const cursorPayloadSchema = z
   })
   .strict();
 
-const imageRetryInputSchema = z.object({
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  size: z.enum(["1024x1024", "1024x1536", "1536x1024"]),
-});
+// Jobs created before aspect ratios existed carry `size`; new ones carry
+// `aspectRatio`. Both have to render in the history, and both can be rerun.
+const imageRetryInputSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
+    size: z.enum(AI_LEGACY_IMAGE_SIZES).optional(),
+    aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
+    background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
+    seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+    // Only the name is kept; the image itself is not, which is what closes
+    // retry for a reference-guided generation.
+    reference: z.object({ filename: z.string().min(1) }).optional(),
+  })
+  .refine(
+    (value) => value.size !== undefined || value.aspectRatio !== undefined,
+  );
 
-const videoRetryInputSchema = z.object({
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
-  resolution: z.enum(["720p", "1080p"]).default("720p"),
-}).strict();
+// A frame-conditioned video records which images it started from. The bytes are
+// not kept, so such a job cannot be rerun — but the history has to say the
+// frames were there, or it reads as a plain text-to-video job.
+const videoFrameHistorySchema = z.object({
+  filename: z.string().min(1),
+  mimeType: z.string().min(1),
+});
 
 const videoHistoryInputSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
-  resolution: z.enum(["720p", "1080p"]).default("720p"),
+  durationSeconds: z
+    .number()
+    .refine(isAiVideoDurationSeconds),
+  resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
+  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).optional(),
+  generateAudio: z.boolean().optional(),
+  seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+  firstFrame: videoFrameHistorySchema.optional(),
+  lastFrame: videoFrameHistorySchema.optional(),
 });
 
 const imageEditHistoryInputSchema = z.object({
-  task: z.enum([
-    "remove_background",
-    "upscale",
-    "restyle",
-    "remove_object",
-    "outpaint",
-  ]),
+  task: z.enum(AI_IMAGE_EDIT_TASKS),
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH).optional(),
 });
 
@@ -161,10 +187,17 @@ function canRetry(job: AiJobRecord): boolean {
     return false;
   }
   if (job.kind === "image") {
-    return imageRetryInputSchema.safeParse(job.inputParams).success;
+    const parsed = imageRetryInputSchema.safeParse(job.inputParams);
+    // Same rule as a frame-conditioned video: the reference image was not kept,
+    // so rerunning would produce something else and charge for it.
+    return parsed.success && !parsed.data.reference;
   }
   if (job.kind === "video") {
-    return videoRetryInputSchema.safeParse(job.inputParams).success;
+    const parsed = videoHistoryInputSchema.safeParse(job.inputParams);
+    // Rerunning a frame-conditioned video would silently drop the frames it was
+    // conditioned on and produce something else at full price. Until the frames
+    // themselves are retained, only text-to-video can be repeated.
+    return parsed.success && !parsed.data.firstFrame && !parsed.data.lastFrame;
   }
   return false;
 }

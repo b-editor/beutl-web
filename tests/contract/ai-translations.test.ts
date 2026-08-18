@@ -442,6 +442,13 @@ describe("POST /api/v3/ai/translations contract", () => {
       sourceLanguage: "en",
       targetLanguage: "ja",
       segments: segments.map(({ id, text }) => ({ id, text })),
+      // The timings the caller sent now reach the model, which is what lets it
+      // keep a line readable in the time the cue is on screen. They used to be
+      // stripped here and only re-attached to the stored result.
+      contexts: {
+        "line-1": { start: 1.5, end: 3 },
+        line_2: { start: 4, end: 5.25 },
+      },
       model: "openai/gpt-4.1-mini",
       signal: expect.any(AbortSignal),
     });
@@ -650,5 +657,27 @@ describe("POST /api/v3/ai/translations contract", () => {
     ]);
     const account = await getCreditAccount({ userId: USER_ID });
     expect(account.monthlyUsageUsed).toBe(0);
+  });
+
+  it("charges for a glossary rather than sending it for free", async () => {
+    await activatePro();
+    vi.mocked(translateSegments).mockResolvedValue([{ id: "1", text: "Hello" }]);
+
+    const glossary: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      glossary[`term-${index}`.padEnd(60, "x")] = "translation".padEnd(150, "y");
+    }
+    const response = await requestTranslation({
+      targetLanguage: "en",
+      segments: [{ id: "1", text: "こんにちは" }],
+      style: { glossary },
+    });
+
+    expect(response.status).toBe(200);
+    // One short segment would be a single unit. The glossary is caller text
+    // that reaches the provider, so it is billed like the segments are;
+    // otherwise it rides along free on every repeat.
+    const job = [...state.aiJobs.values()][0];
+    expect(job.usageUnits).toBeGreaterThan(5);
   });
 });

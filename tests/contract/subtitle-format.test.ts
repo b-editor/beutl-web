@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTranslationToCues,
+  MAX_GLOSSARY_ENTRIES,
+  parseGlossary,
+  splitCueAtWord,
   formatCueClock,
   MAX_TRANSLATABLE_SEGMENTS,
   parseSubtitleSource,
@@ -194,6 +197,32 @@ describe("subtitle source parsing", () => {
     });
   });
 
+  // The provider answers one translation per ID, so a repeat can never be
+  // matched back. Caught after the request, it has already been charged for.
+  it("rejects a repeated id the endpoint would refuse", () => {
+    expect(
+      parseSubtitleSource(
+        '[{"id":"1","text":"Hello"},{"id":"1","text":"World"}]',
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "invalidSegment",
+    });
+  });
+
+  it("numbers an id-less entry around the ids the document already claims", () => {
+    const result = parseSubtitleSource(
+      '[{"id":"2","text":"Hello"},{"text":"World"}]',
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      segments: [
+        { id: "2", text: "Hello" },
+        { id: "1", text: "World" },
+      ],
+    });
+  });
+
   it("rejects malformed JSON", () => {
     expect(parseSubtitleSource("[{")).toEqual({
       ok: false,
@@ -230,10 +259,86 @@ describe("subtitle source parsing", () => {
   });
 });
 
+describe("glossary", () => {
+  it("reads one term per line and ignores the rest", () => {
+    expect(
+      parseGlossary("Beutl = Beutl\nタイムライン=timeline\n\nnot a pair\n= empty"),
+    ).toEqual({
+      Beutl: "Beutl",
+      タイムライン: "timeline",
+    });
+  });
+
+  it("stops at the cap the endpoint enforces", () => {
+    const lines = Array.from(
+      { length: MAX_GLOSSARY_ENTRIES + 10 },
+      (_unused, index) => `term${index} = value${index}`,
+    ).join("\n");
+
+    expect(Object.keys(parseGlossary(lines))).toHaveLength(
+      MAX_GLOSSARY_ENTRIES,
+    );
+  });
+});
+
+describe("splitting a cue", () => {
+  const CUE = { start: 0, end: 4, text: "hello there my old friend" };
+  const WORDS = [
+    { start: 0, end: 0.8, word: "hello" },
+    { start: 0.8, end: 1.6, word: "there" },
+    { start: 1.6, end: 2.4, word: "my" },
+    { start: 2.4, end: 3.2, word: "old" },
+    { start: 3.2, end: 4, word: "friend" },
+  ];
+
+  it("gives both halves text instead of leaving the second empty", () => {
+    const [head, tail] = splitCueAtWord(CUE, WORDS);
+
+    expect(head.text.length).toBeGreaterThan(0);
+    expect(tail.text.length).toBeGreaterThan(0);
+    // Nothing is lost and nothing is duplicated.
+    expect(`${head.text} ${tail.text}`).toBe(CUE.text);
+  });
+
+  it("cuts at a word boundary rather than the middle of the duration", () => {
+    const [head, tail] = splitCueAtWord(CUE, WORDS);
+
+    expect(WORDS.map((word) => word.start)).toContain(head.end);
+    expect(head.start).toBe(CUE.start);
+    expect(tail.end).toBe(CUE.end);
+    expect(tail.start).toBe(head.end);
+  });
+
+  it("falls back to the midpoint when no words are available", () => {
+    const [head, tail] = splitCueAtWord(CUE, []);
+
+    expect(head.end).toBe(2);
+    // Even without word timings both halves carry text, which the midpoint
+    // split never did.
+    expect(head.text.length).toBeGreaterThan(0);
+    expect(tail.text.length).toBeGreaterThan(0);
+  });
+
+  it("splits text that has no spaces at all", () => {
+    const [head, tail] = splitCueAtWord(
+      { start: 0, end: 2, text: "こんにちはさようなら" },
+      [],
+    );
+
+    expect(head.text).toBe("こんにちは");
+    expect(tail.text).toBe("さようなら");
+  });
+});
+
 describe("re-timing a translation", () => {
+  const SOURCE_SEGMENTS = [
+    { id: "1", text: "こんにちは" },
+    { id: "2", text: "はじめまして" },
+  ];
+
   it("keeps the source timings and takes the translated text", () => {
     expect(
-      applyTranslationToCues(CUES, [
+      applyTranslationToCues(CUES, SOURCE_SEGMENTS, [
         { id: "1", text: "Hello" },
         { id: "2", text: "Nice to meet you" },
       ]),
@@ -243,10 +348,23 @@ describe("re-timing a translation", () => {
     ]);
   });
 
-  it("leaves a cue untouched when the translation is short", () => {
-    expect(applyTranslationToCues(CUES, [{ id: "1", text: "Hello" }])).toEqual([
-      { start: 0, end: 1.5, text: "Hello" },
-      { start: 1.5, end: 3.25, text: "はじめまして" },
-    ]);
+  // Editing the result shortens the list; the cues that remain must keep the
+  // timings of the segments they actually came from, not of their neighbours.
+  it("re-times by segment id after a line is deleted", () => {
+    expect(
+      applyTranslationToCues(CUES, SOURCE_SEGMENTS, [
+        { id: "2", text: "Nice to meet you" },
+      ]),
+    ).toEqual([{ start: 1.5, end: 3.25, text: "Nice to meet you" }]);
   });
+
+  it("refuses to write a file for a segment with no cue to sit on", () => {
+    expect(
+      applyTranslationToCues(CUES, SOURCE_SEGMENTS, [
+        { id: "1", text: "Hello" },
+        { id: "3", text: "Appended by hand" },
+      ]),
+    ).toBeNull();
+  });
+
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAiModelPricingCache,
+  estimateTranslationCost,
   estimateVideoCost,
   loadAiCostEstimates,
 } from "@beutl/api";
@@ -137,14 +138,16 @@ describe("AI provider cost estimates", () => {
 
     expect([...byOperation.keys()].sort()).toEqual([...AI_OPERATIONS].sort());
 
-    // 1,056 output tokens at $0.00004 reproduces OpenAI's published $0.042.
+    // 1,056 output tokens at $0.00004 reproduces OpenAI's published $0.042,
+    // plus the one reference image a generation may be guided by: image.generate
+    // and image.edit.* are costed alike because they send the same input at the
+    // same price, and understating the cost is the direction that misleads.
     const generate = byOperation.get("image.generate")?.estimate;
     expect(generate?.status).toBe("estimated");
     if (generate?.status === "estimated") {
-      expect(generate.usdMin).toBeCloseTo(0.04224, 8);
-      expect(generate.usdMax).toBeCloseTo(0.04224, 8);
+      expect(generate.usdMin).toBeCloseTo(0.0528, 8);
+      expect(generate.usdMax).toBeCloseTo(0.0528, 8);
     }
-    // An edit also pays for the reference image it sends.
     const edit = byOperation.get("image.edit.remove_background")?.estimate;
     expect(edit?.status).toBe("estimated");
     if (edit?.status === "estimated") {
@@ -327,6 +330,23 @@ describe("video SKU resolution", () => {
     ).toMatchObject({ usdMin: 0.1 });
   });
 
+  it("matches a resolution that is not the final segment of the key", () => {
+    // "_720p_with_audio" names the resolution in the middle. Scoring only the
+    // tail made both keys look resolution-agnostic, and the dearer-of-equals
+    // tie-break then charged the 1080p rate against a 720p request.
+    const pricingSkus = {
+      duration_seconds_720p_with_audio: "0.15",
+      duration_seconds_1080p_with_audio: "0.40",
+    };
+
+    expect(
+      estimateVideoCost({ pricingSkus, resolution: "720p", withAudio: true }),
+    ).toMatchObject({ usdMin: 0.15 });
+    expect(
+      estimateVideoCost({ pricingSkus, resolution: "1080p", withAudio: true }),
+    ).toMatchObject({ usdMin: 0.4 });
+  });
+
   it("converts a cents-denominated SKU", () => {
     expect(
       estimateVideoCost({
@@ -358,5 +378,26 @@ describe("video SKU resolution", () => {
         withAudio: true,
       }),
     ).toEqual({ status: "unknown", reason: "unsupported_pricing_shape" });
+  });
+});
+
+describe("translation cost", () => {
+  // loadModelPricing reads a missing completion rate as zero, and a translation
+  // produces about as many tokens as it consumes. A figure built on the input
+  // side alone is roughly half the real cost, and it is what the operator sets
+  // the unit price against, so it has to read as unknown rather than as cheap.
+  it("reports an unknown cost when the model publishes no completion rate", () => {
+    expect(
+      estimateTranslationCost({ promptPriceUsd: 0.0000004, completionPriceUsd: 0 }),
+    ).toEqual({ status: "unknown", reason: "zero_price_reported" });
+  });
+
+  it("estimates once both rates are known", () => {
+    expect(
+      estimateTranslationCost({
+        promptPriceUsd: 0.0000004,
+        completionPriceUsd: 0.0000016,
+      }),
+    ).toMatchObject({ status: "estimated" });
   });
 });

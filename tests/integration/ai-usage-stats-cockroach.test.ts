@@ -44,9 +44,9 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
         getAiJobUsageByKind({ since }),
         getAiUsageTotals({ since }),
         getAdminCreditAdjustmentTotals({ since }),
-        getAiBalanceTotals(),
+        getAiBalanceTotals({ now: new Date() }),
         getTopAiUsers({ since, limit: 10 }),
-        countActiveProSubscriptions({ now }),
+        countActiveProSubscriptions({ now, planId: "pro" }),
       ]);
 
     expect(Array.isArray(statusCounts)).toBe(true);

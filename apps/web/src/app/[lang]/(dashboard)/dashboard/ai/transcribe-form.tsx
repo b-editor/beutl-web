@@ -14,10 +14,14 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, type ChangeEvent } from "react";
 import {
   formatCueClock,
+  readCues,
+  readWords,
+  splitCueAtWord,
   toPlainText,
   toSrt,
   toVtt,
   type SubtitleCue,
+  type SubtitleWord,
 } from "@/lib/subtitle-format";
 import { saveSubtitleHandoff } from "@/lib/subtitle-handoff";
 import { transcribeAction } from "./actions";
@@ -33,22 +37,6 @@ import {
   downloadTextFile,
   type AiAccess,
 } from "./shared";
-
-function readCues(value: unknown): SubtitleCue[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (entry === null || typeof entry !== "object") return [];
-    const record = entry as { start?: unknown; end?: unknown; text?: unknown };
-    if (typeof record.text !== "string") return [];
-    return [
-      {
-        start: typeof record.start === "number" ? record.start : 0,
-        end: typeof record.end === "number" ? record.end : 0,
-        text: record.text,
-      },
-    ];
-  });
-}
 
 // An empty field means "use the default"; anything else is held to at least 1.
 // `Number(value) || fallback` sent a typed 0 to the fallback instead.
@@ -96,9 +84,23 @@ export function TranscribeForm({
   const router = useRouter();
   const [state, dispatch] = useActionState(transcribeAction, { success: false });
   const [cues, setCues] = useState<SubtitleCue[]>([]);
+  // Word timings and the detected language arrive with the transcript. Neither
+  // reached this screen before, so a split could not land on a word and nobody
+  // could see what language the model decided it had heard.
+  const [words, setWords] = useState<SubtitleWord[]>([]);
+  const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string>("transcription");
   const [maxLineLength, setMaxLineLength] = useState<string>("42");
   const [maxLineCount, setMaxLineCount] = useState<string>("2");
+  // What the focused timing field currently reads. A number input reports ""
+  // for anything that is not yet a valid number — an emptied field, and every
+  // keystroke of "12." on the way to 12.5 — and Number("") is 0, so writing the
+  // field straight back moved the cue to the start of the track. Only one field
+  // can be focused, so one draft is enough.
+  const [timeDraft, setTimeDraft] = useState<{
+    key: string;
+    text: string;
+  } | null>(null);
 
   // The action result is the starting point for editing, not the thing that is
   // rendered: every correction the user makes afterwards lives in `cues`.
@@ -106,13 +108,29 @@ export function TranscribeForm({
   useEffect(() => {
     if (state.segments === undefined) return;
     setCues(readCues(state.segments));
-  }, [state.segments]);
+    setWords(readWords(state.words));
+    setDetectedLanguage(state.language ?? null);
+  }, [state.segments, state.words, state.language]);
 
   const blocked = blockedReason(access, ["audio.transcribe"]);
 
   function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     setAudioName(file ? baseNameOf(file.name) : "transcription");
+  }
+
+  // The field keeps showing what was typed; the cue only moves once that text
+  // is a time.
+  function editCueTime(index: number, field: "start" | "end", text: string) {
+    setTimeDraft({ key: `${index}:${field}`, text });
+    const parsed = Number(text);
+    if (text.trim() === "" || !Number.isFinite(parsed) || parsed < 0) return;
+    updateCue(index, { [field]: parsed });
+  }
+
+  function cueTimeValue(index: number, field: "start" | "end", value: number) {
+    const key = `${index}:${field}`;
+    return timeDraft?.key === key ? timeDraft.text : String(value);
   }
 
   function updateCue(index: number, patch: Partial<SubtitleCue>) {
@@ -141,11 +159,11 @@ export function TranscribeForm({
     setCues((current) => {
       const cue = current[index];
       if (!cue) return current;
-      const midpoint = (cue.start + cue.end) / 2;
+      const [head, tail] = splitCueAtWord(cue, words);
       return [
         ...current.slice(0, index),
-        { ...cue, end: midpoint },
-        { start: midpoint, end: cue.end, text: "" },
+        head,
+        tail,
         ...current.slice(index + 1),
       ];
     });
@@ -310,6 +328,14 @@ export function TranscribeForm({
         <div className="flex flex-wrap items-end justify-between gap-2">
           <p className="text-sm text-muted-foreground">
             {t("dashboard:ai.cueCount", { total: cues.length })}
+            {detectedLanguage && (
+              <>
+                {" · "}
+                {t("dashboard:ai.detectedLanguage", {
+                  language: detectedLanguage.toUpperCase(),
+                })}
+              </>
+            )}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1">
@@ -370,10 +396,11 @@ export function TranscribeForm({
                   type="number"
                   step="0.01"
                   min="0"
-                  value={cue.start}
+                  value={cueTimeValue(index, "start", cue.start)}
                   onChange={(event) =>
-                    updateCue(index, { start: Number(event.target.value) })
+                    editCueTime(index, "start", event.target.value)
                   }
+                  onBlur={() => setTimeDraft(null)}
                   className="w-24"
                   aria-label={t("dashboard:ai.cueStart")}
                 />
@@ -382,10 +409,11 @@ export function TranscribeForm({
                   type="number"
                   step="0.01"
                   min="0"
-                  value={cue.end}
+                  value={cueTimeValue(index, "end", cue.end)}
                   onChange={(event) =>
-                    updateCue(index, { end: Number(event.target.value) })
+                    editCueTime(index, "end", event.target.value)
                   }
+                  onBlur={() => setTimeDraft(null)}
                   className="w-24"
                   aria-label={t("dashboard:ai.cueEnd")}
                 />

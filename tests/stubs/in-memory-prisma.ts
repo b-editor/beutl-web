@@ -1,7 +1,13 @@
 // In-memory Prisma implementation for contract tests. It implements only the
 // models used by @beutl/db for monthly usage, purchased credits, AI jobs,
-// subscriptions, and files. $transaction executes the callback directly and
-// does not simulate atomicity.
+// subscriptions, and files.
+//
+// $transaction snapshots the store and restores it when the callback throws, so
+// discard-on-failure is reproduced. What it does NOT reproduce is concurrency:
+// transactions are serialized through one queue, so no test can observe an
+// interleaving or provoke a serialization retry. A rule that depends on
+// SERIALIZABLE ordering has to be checked against CockroachDB in
+// tests/integration.
 
 type CreditAccount = {
   userId: string;
@@ -311,6 +317,22 @@ function matchesCreatedAt(
   return true;
 }
 
+type DateFilter = { gt?: Date; gte?: Date; lt?: Date; lte?: Date };
+
+// NULL is outside every range, the way a SQL comparison against it is.
+function matchesDateFilter(
+  value: Date | null | undefined,
+  filter: DateFilter,
+): boolean {
+  if (value === null || value === undefined) return false;
+  const time = value.getTime();
+  if (filter.gt && time <= filter.gt.getTime()) return false;
+  if (filter.gte && time < filter.gte.getTime()) return false;
+  if (filter.lt && time >= filter.lt.getTime()) return false;
+  if (filter.lte && time > filter.lte.getTime()) return false;
+  return true;
+}
+
 export function createInMemoryPrisma() {
   let transactionTail: Promise<void> = Promise.resolve();
   let state: InMemoryPrismaState = {
@@ -586,6 +608,12 @@ export function createInMemoryPrisma() {
   // Snapshot state for $transaction rollback so contract tests reproduce the
   // discard-on-failure behavior of the real database.
   const snapshot = () => ({
+    // Every table the state carries, so a rolled-back transaction leaves none
+    // of them holding what the aborted callback wrote. An omission here is
+    // invisible until a test asserts that a failure changed nothing.
+    billingOffers: new Map(
+      [...state.billingOffers].map(([k, v]) => [k, { ...v }]),
+    ),
     creditAccounts: new Map(
       [...state.creditAccounts].map(([k, v]) => [k, { ...v }]),
     ),
@@ -716,14 +744,34 @@ export function createInMemoryPrisma() {
           ...row,
         }));
       },
-      aggregate: async (spec: AggregateSpec) =>
-        aggregateRows(
-          [...state.creditAccounts.values()] as unknown as Record<
-            string,
-            unknown
-          >[],
-          spec,
-        ),
+      aggregate: async (
+        spec: AggregateSpec & { where?: Record<string, unknown> },
+      ) => {
+        const rows = [...state.creditAccounts.values()] as unknown as Record<
+          string,
+          unknown
+        >[];
+        const where = spec.where ?? {};
+        // Dropping a filter this stub does not model would leave the aggregate
+        // quietly answering a broader question than the caller asked, and the
+        // test would pass on a total the database would never return.
+        for (const key of Object.keys(where)) {
+          if (key !== "usagePeriodEnd") {
+            throw new Error(
+              `in-memory creditAccount.aggregate does not model where.${key}`,
+            );
+          }
+        }
+        const filtered = where.usagePeriodEnd
+          ? rows.filter((row) =>
+              matchesDateFilter(
+                row.usagePeriodEnd as Date | null,
+                where.usagePeriodEnd as DateFilter,
+              ),
+            )
+          : rows;
+        return aggregateRows(filtered, spec);
+      },
     },
     creditTransaction: {
       create: async ({
@@ -754,7 +802,9 @@ export function createInMemoryPrisma() {
             (t) => t.stripePaymentId === data.stripePaymentId,
           )
         ) {
-          throw new Error("Unique constraint failed on stripePaymentId");
+          throw Object.assign(new Error("Unique constraint failed on stripePaymentId"), {
+            code: "P2002",
+          });
         }
         if (
           data.stripeReversalKind &&
@@ -768,7 +818,9 @@ export function createInMemoryPrisma() {
                 data.stripeReversalRevision,
           )
         ) {
-          throw new Error("Unique constraint failed on Stripe reversal revision");
+          throw Object.assign(new Error("Unique constraint failed on Stripe reversal revision"), {
+            code: "P2002",
+          });
         }
         if (
           data.aiJobId &&
@@ -778,7 +830,9 @@ export function createInMemoryPrisma() {
               transaction.kind === data.kind,
           )
         ) {
-          throw new Error("Unique constraint failed on aiJobId and kind");
+          throw Object.assign(new Error("Unique constraint failed on aiJobId and kind"), {
+            code: "P2002",
+          });
         }
         if (
           data.adminAdjustmentKey &&
@@ -787,7 +841,9 @@ export function createInMemoryPrisma() {
               transaction.adminAdjustmentKey === data.adminAdjustmentKey,
           )
         ) {
-          throw new Error("Unique constraint failed on adminAdjustmentKey");
+          throw Object.assign(new Error("Unique constraint failed on adminAdjustmentKey"), {
+            code: "P2002",
+          });
         }
         const transaction: CreditTransaction = {
           id: crypto.randomUUID(),
@@ -985,7 +1041,9 @@ export function createInMemoryPrisma() {
           data.stripeReversalId,
         );
         if (state.stripeCreditReversals.has(key)) {
-          throw new Error("Unique constraint failed on Stripe reversal");
+          throw Object.assign(new Error("Unique constraint failed on Stripe reversal"), {
+            code: "P2002",
+          });
         }
         const timestamp = now();
         const reversal: StripeCreditReversal = {

@@ -39,7 +39,8 @@ export type AiAllowanceEquivalent = {
     kind: AiAllowanceQuantityKind;
     value: number;
   };
-  // False when a single chargeable unit already costs more than the allowance.
+  // False when the smallest request the entry point accepts already costs more
+  // than the allowance, which for video is four seconds rather than one.
   affordable: boolean;
 };
 
@@ -76,6 +77,9 @@ export function describeAllowanceEquivalent({
   }
 
   const billingUnits = Math.floor(allowanceUnits / price);
+  const minimumQuantity =
+    AI_PRICING_CATALOG[operation as keyof typeof AI_PRICING_CATALOG]
+      .minimumQuantity;
   return {
     operation,
     unit,
@@ -85,7 +89,7 @@ export function describeAllowanceEquivalent({
       kind: quantity.kind,
       value: billingUnits * quantity.multiplier,
     },
-    affordable: billingUnits >= 1,
+    affordable: billingUnits >= minimumQuantity,
   };
 }
 

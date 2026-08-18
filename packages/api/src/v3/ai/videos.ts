@@ -47,19 +47,42 @@ import {
   isTerminalAiJobStatus,
   publicAiJobPayload,
 } from "../../ai/job-response";
+import {
+  AI_MAX_SEED,
+  AI_MIN_SEED,
+  AI_VIDEO_ASPECT_RATIOS,
+  AI_VIDEO_DURATION_STRINGS,
+  AI_VIDEO_RESOLUTIONS,
+  isAiVideoDurationSeconds,
+} from "@beutl/core";
 
+// generateAudio defaults to true so an existing client keeps the behaviour it
+// has today, and so the figure the admin console estimates — which has always
+// assumed audio — keeps matching what is actually requested.
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
-  resolution: z.enum(["720p", "1080p"]).default("720p"),
+  durationSeconds: z
+    .number()
+    .refine(isAiVideoDurationSeconds),
+  resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
+  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
+  generateAudio: z.boolean().default(true),
+  seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
 }).strict();
 
 const createFramesSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
   durationSeconds: z
-    .enum(["4", "6", "8"])
+    .enum(AI_VIDEO_DURATION_STRINGS)
     .transform((value) => Number(value)),
-  resolution: z.enum(["720p", "1080p"]).default("720p"),
+  resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
+  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
+  // Multipart carries strings, so the flag arrives as one.
+  generateAudio: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  seed: z.coerce.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
 }).strict();
 
 const supportedFrameImageTypes = new Set<AiInputImageMimeType>([
@@ -200,11 +223,19 @@ const app = new Hono()
       });
     }
 
-    const { prompt, durationSeconds, resolution } = parsedBody.data;
+    const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
+      parsedBody.data;
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
-      input: { prompt, durationSeconds, resolution },
+      input: {
+        prompt,
+        durationSeconds,
+        resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
+      },
     });
     if (!requestIdentity) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
@@ -220,7 +251,14 @@ const app = new Hono()
       kind: "video",
       provider: "openrouter",
       status: "queued",
-      inputParams: { prompt, durationSeconds, resolution },
+      inputParams: {
+        prompt,
+        durationSeconds,
+        resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
+      },
       usageUnits: cost,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
@@ -244,6 +282,9 @@ const app = new Hono()
         prompt,
         durationSeconds,
         resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
         callbackUrl: openRouterVideoCallbackUrl(
           c.req.raw,
           job.id,
@@ -320,10 +361,19 @@ const app = new Hono()
       }
     }
 
+    // An omitted multipart field and an empty one both mean "use the default";
+    // forwarding "" would fail the enum instead.
+    const optionalField = (name: string) => {
+      const value = body[name];
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    };
     const fields = createFramesSchema.safeParse({
       prompt: body["prompt"],
       durationSeconds: body["durationSeconds"],
-      resolution: body["resolution"] ?? undefined,
+      resolution: optionalField("resolution"),
+      aspectRatio: optionalField("aspectRatio"),
+      generateAudio: optionalField("generateAudio"),
+      seed: optionalField("seed"),
     });
     if (
       !fields.success ||
@@ -352,7 +402,8 @@ const app = new Hono()
       });
     }
 
-    const { prompt, durationSeconds, resolution } = fields.data;
+    const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
+      fields.data;
     const [firstFrameSha256, lastFrameSha256] = await Promise.all([
       sha256Hex(firstFrameImage.bytes),
       lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
@@ -364,6 +415,9 @@ const app = new Hono()
         prompt,
         durationSeconds,
         resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
         firstFrame: {
           contentType: firstFrameImage.mimeType,
           sha256: firstFrameSha256,
@@ -412,6 +466,9 @@ const app = new Hono()
         prompt,
         durationSeconds,
         resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
         firstFrame: {
           filename: firstFrame.name,
           mimeType: firstFrameImage.mimeType,
@@ -448,6 +505,9 @@ const app = new Hono()
         prompt,
         durationSeconds,
         resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
         frameImages,
         callbackUrl: openRouterVideoCallbackUrl(
           c.req.raw,

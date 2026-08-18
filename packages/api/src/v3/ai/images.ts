@@ -20,8 +20,19 @@ import {
   AiProviderError,
   editImage,
   generateImage,
-  type ImageGenerationSize,
 } from "../../ai/openrouter";
+import {
+  AI_IMAGE_ASPECT_RATIOS,
+  AI_IMAGE_BACKGROUNDS,
+  AI_IMAGE_EDIT_TASKS,
+  AI_LEGACY_IMAGE_SIZES,
+  AI_MAX_SEED,
+  AI_MIN_SEED,
+  aiImageEditTaskRequiresPrompt,
+  aspectRatioOfLegacyImageSize,
+  type AiImageAspectRatio,
+  type AiImageEditTask,
+} from "@beutl/core";
 import { saveAiImage } from "../../ai/storage";
 import {
   decodeGeneratedImageBase64,
@@ -36,24 +47,26 @@ import { getContentUrl } from "../../content-url";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import { getAiRequestIdentity, sha256Hex } from "../../ai/request-integrity";
 
-const generateSchema = z.object({
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  size: z.enum(["1024x1024", "1024x1536", "1536x1024"]),
-}).strict();
+// `size` is the field this endpoint shipped with; `aspectRatio` is what the
+// provider actually speaks and what a 16:9 or vertical request needs. Exactly
+// one of them is required, so an existing client keeps working unchanged and a
+// new one never has to guess which fixed size means which shape.
+const generateSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
+    size: z.enum(AI_LEGACY_IMAGE_SIZES).optional(),
+    aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
+    background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
+    seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
+  })
+  .strict()
+  .refine(
+    (value) => (value.size === undefined) !== (value.aspectRatio === undefined),
+    { message: "Exactly one of size or aspectRatio is required" },
+  );
 
-const editTasks = [
-  "remove_background",
-  "upscale",
-  "restyle",
-  "remove_object",
-  "outpaint",
-] as const;
-type EditTask = (typeof editTasks)[number];
-const promptRequiredEditTasks = new Set<EditTask>([
-  "restyle",
-  "remove_object",
-  "outpaint",
-]);
+const editTasks = AI_IMAGE_EDIT_TASKS;
+type EditTask = AiImageEditTask;
 
 const editFieldsSchema = z.object({
   task: z.enum(editTasks),
@@ -73,6 +86,26 @@ const supportedInputImageTypes = new Set<AiInputImageMimeType>([
   "image/webp",
   "image/gif",
 ]);
+
+function isMultipartRequest(request: Request): boolean {
+  return (
+    request.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .startsWith("multipart/form-data") === true
+  );
+}
+
+// An omitted multipart field and an empty one both mean "use the default".
+// Forwarding "" fails the enums, and Number("") is 0 — a valid seed, which
+// would pin every such generation to one deterministic result.
+function optionalMultipartField(
+  body: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = body[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 async function decodeImageResult(
   result: { b64Json: string; mediaType: string },
@@ -103,13 +136,53 @@ const app = new Hono()
       });
     }
 
+    // A reference image turns this into image-to-image, which needs multipart.
+    // A request without one stays exactly the JSON call it has always been.
+    const multipart = isMultipartRequest(c.req.raw);
     let rawBody: unknown;
-    try {
-      rawBody = await parseJsonWithBodyLimit<unknown>(c.req);
-    } catch (error) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
-        status: isUploadLimitExceeded(error) ? 413 : 400,
-      });
+    let referenceFile: File | null = null;
+    if (multipart) {
+      let body: Awaited<ReturnType<typeof c.req.parseBody>>;
+      try {
+        body = await parseBodyWithUploadLimit(c.req, MAX_AI_IMAGE_UPLOAD_BYTES);
+      } catch (error) {
+        if (isUploadLimitExceeded(error)) {
+          return c.json(await apiErrorResponse("fileIsTooLarge"), {
+            status: 413,
+          });
+        }
+        throw error;
+      }
+      const reference = body["reference"];
+      if (reference instanceof File && reference.size > 0) {
+        if (fileExceedsUploadLimit(reference, MAX_AI_IMAGE_UPLOAD_BYTES)) {
+          return c.json(await apiErrorResponse("fileIsTooLarge"), {
+            status: 413,
+          });
+        }
+        referenceFile = reference;
+      }
+      const size = optionalMultipartField(body, "size");
+      const aspectRatioField = optionalMultipartField(body, "aspectRatio");
+      const background = optionalMultipartField(body, "background");
+      const seedField = optionalMultipartField(body, "seed");
+      rawBody = {
+        prompt: body["prompt"],
+        ...(size === undefined ? {} : { size }),
+        ...(aspectRatioField === undefined
+          ? {}
+          : { aspectRatio: aspectRatioField }),
+        ...(background === undefined ? {} : { background }),
+        ...(seedField === undefined ? {} : { seed: Number(seedField) }),
+      };
+    } else {
+      try {
+        rawBody = await parseJsonWithBodyLimit<unknown>(c.req);
+      } catch (error) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: isUploadLimitExceeded(error) ? 413 : 400,
+        });
+      }
     }
     const parsedBody = generateSchema.safeParse(rawBody);
     if (!parsedBody.success) {
@@ -118,11 +191,42 @@ const app = new Hono()
       });
     }
 
-    const { prompt, size } = parsedBody.data;
+    const { prompt, size, background, seed } = parsedBody.data;
+    const aspectRatio: AiImageAspectRatio =
+      parsedBody.data.aspectRatio ??
+      (aspectRatioOfLegacyImageSize(size as string) as AiImageAspectRatio);
+
+    const reference = referenceFile
+      ? await validateAiInputImage(referenceFile, supportedInputImageTypes)
+      : null;
+    if (referenceFile && !reference) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "image.generate",
-      input: { prompt, size },
+      input: {
+        prompt,
+        aspectRatio,
+        // "auto" is the absence of a choice, so a caller that sends it and one
+        // that omits it must fingerprint alike; otherwise a retry under the
+        // same key is refused as a conflict and cannot reach the job it paid
+        // for. The stored inputParams and the Server Action normalize it too.
+        ...(background && background !== "auto" ? { background } : {}),
+        ...(seed === undefined ? {} : { seed }),
+        ...(reference && referenceFile
+          ? {
+              reference: {
+                fileName: referenceFile.name,
+                contentType: reference.mimeType,
+                contentSha256: await sha256Hex(reference.bytes),
+              },
+            }
+          : {}),
+      },
     });
     if (!requestIdentity) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
@@ -138,7 +242,13 @@ const app = new Hono()
       kind: "image",
       provider: "openrouter",
       status: "running",
-      inputParams: { prompt, size },
+      inputParams: {
+        prompt,
+        aspectRatio,
+        ...(background && background !== "auto" ? { background } : {}),
+        ...(seed === undefined ? {} : { seed }),
+        ...(referenceFile ? { reference: { filename: referenceFile.name } } : {}),
+      },
       usageUnits: cost,
       ...requestIdentity,
     });
@@ -176,7 +286,16 @@ const app = new Hono()
     try {
       const result = await generateImage({
         prompt,
-        size: size as ImageGenerationSize,
+        aspectRatio,
+        ...(background ? { background } : {}),
+        ...(reference
+          ? {
+              referenceImages: [
+                { bytes: reference.bytes, mimeType: reference.mimeType },
+              ],
+            }
+          : {}),
+        ...(seed === undefined ? {} : { seed }),
         model: settings.getModel("image.generate"),
         signal: c.req.raw.signal,
       });
@@ -267,7 +386,7 @@ const app = new Hono()
 
     const editTask = fields.data.task;
     const userPrompt = fields.data.prompt || undefined;
-    const requiresPrompt = promptRequiredEditTasks.has(editTask);
+    const requiresPrompt = aiImageEditTaskRequiresPrompt(editTask);
     if (requiresPrompt && !userPrompt) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,

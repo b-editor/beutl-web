@@ -6,6 +6,7 @@ import packages from "./v3/packages";
 import users from "./v3/users";
 import user from "./v3/user";
 import app_ from "./v3/app";
+import aiCapabilities from "./v3/ai/capabilities";
 import aiImages from "./v3/ai/images";
 import aiJobs from "./v3/ai/jobs";
 import aiTranscriptions from "./v3/ai/transcriptions";
@@ -22,6 +23,7 @@ export const v3 = new Hono()
   .route("/packages", packages)
   .route("/users", users)
   .route("/user", user)
+  .route("/ai/capabilities", aiCapabilities)
   .route("/ai/images", aiImages)
   .route("/ai/jobs", aiJobs)
   .route("/ai/transcriptions", aiTranscriptions)

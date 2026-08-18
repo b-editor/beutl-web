@@ -9,7 +9,14 @@ import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { ImageIcon } from "lucide-react";
-import { useActionState, useState } from "react";
+import { useActionState, useState, type ChangeEvent } from "react";
+import {
+  AI_MAX_SEED,
+  AI_MIN_SEED,
+  MAX_AI_PROMPT_LENGTH,
+  type AiImageAspectRatio,
+} from "@beutl/core";
+import { composePrompt } from "@/lib/ai-prompt";
 import { generateImageAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
@@ -25,13 +32,16 @@ import {
   type AiAccess,
 } from "./shared";
 
-const IMAGE_SIZES = [
-  { value: "1024x1024", ratio: "square" },
-  { value: "1024x1536", ratio: "portrait" },
-  { value: "1536x1024", ratio: "landscape" },
-] as const;
+// Labels for the ratios the capabilities endpoint publishes; the list itself
+// lives in @beutl/core.
+const ASPECT_RATIOS: { value: AiImageAspectRatio; labelKey: string }[] = [
+  { value: "16:9", labelKey: "landscape" },
+  { value: "1:1", labelKey: "square" },
+  { value: "9:16", labelKey: "portrait" },
+  { value: "4:3", labelKey: "classic" },
+  { value: "3:4", labelKey: "classicPortrait" },
+];
 
-const MAX_PROMPT_LENGTH = 4000;
 
 export function ImageGenerateForm({
   lang,
@@ -48,9 +58,24 @@ export function ImageGenerateForm({
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
   const [exclusions, setExclusions] = useState("");
-  const [size, setSize] = useState<string>("1024x1024");
+  const [aspectRatio, setAspectRatio] = useState<string>("16:9");
+  const [transparent, setTransparent] = useState(false);
+  const [referenceName, setReferenceName] = useState<string | null>(null);
 
   const blocked = blockedReason(access, ["image.generate"]);
+  // The same composition the action validates, so the counter measures what the
+  // server will.
+  const composedLength = composePrompt({
+    main: prompt,
+    style,
+    composition,
+    exclusions,
+  }).length;
+
+  function handleReferenceChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setReferenceName(file ? file.name : null);
+  }
 
   function applyTemplate(template: PromptTemplate) {
     setPrompt(template.prompt);
@@ -72,14 +97,23 @@ export function ImageGenerateForm({
         <div className="flex flex-col space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <Label htmlFor="generatePrompt">{t("dashboard:ai.prompt")}</Label>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {prompt.length} / {MAX_PROMPT_LENGTH}
+            {/* The advanced fields are folded into the same string the server
+                measures, so counting this box alone promises room that is not
+                there. */}
+            <span
+              className={`text-xs tabular-nums ${
+                composedLength > MAX_AI_PROMPT_LENGTH
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {composedLength} / {MAX_AI_PROMPT_LENGTH}
             </span>
           </div>
           <Textarea
             id="generatePrompt"
             name="prompt"
-            maxLength={MAX_PROMPT_LENGTH}
+            maxLength={MAX_AI_PROMPT_LENGTH}
             required
             rows={5}
             placeholder={t("dashboard:ai.promptPlaceholder")}
@@ -89,32 +123,66 @@ export function ImageGenerateForm({
         </div>
 
         <div className="flex flex-col space-y-1.5">
-          <Label>{t("dashboard:ai.size")}</Label>
+          <Label>{t("dashboard:ai.aspectRatio")}</Label>
           <ToggleGroup
             type="single"
             variant="outline"
-            value={size}
+            value={aspectRatio}
             // Radix clears the value when the active item is pressed again.
-            // A size is always required, so keep the last one.
-            onValueChange={(next) => next && setSize(next)}
-            className="grid grid-cols-3"
+            // A ratio is always required, so keep the last one.
+            onValueChange={(next) => next && setAspectRatio(next)}
+            className="grid grid-cols-3 gap-2 sm:grid-cols-5"
           >
-            {IMAGE_SIZES.map((option) => (
+            {ASPECT_RATIOS.map((option) => (
               <ToggleGroupItem
                 key={option.value}
                 value={option.value}
                 className="h-auto flex-col gap-0.5 py-3"
               >
-                <span className="text-sm">
-                  {t(`dashboard:ai.aspects.${option.ratio}`)}
-                </span>
+                <span className="text-sm tabular-nums">{option.value}</span>
                 <span className="text-xs text-muted-foreground">
-                  {option.value}
+                  {t(`dashboard:ai.aspects.${option.labelKey}`)}
                 </span>
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          <input type="hidden" name="size" value={size} />
+          <input type="hidden" name="aspectRatio" value={aspectRatio} />
+        </div>
+
+        <div className="flex flex-col space-y-1.5">
+          <Label htmlFor="generateReference">
+            {t("dashboard:ai.referenceImage")}
+          </Label>
+          <Input
+            id="generateReference"
+            name="reference"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            onChange={handleReferenceChange}
+          />
+          <p className="text-xs text-muted-foreground">
+            {referenceName
+              ? t("dashboard:ai.referenceImageSelected", { name: referenceName })
+              : t("dashboard:ai.referenceImageHint")}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            id="generateTransparent"
+            type="checkbox"
+            className="h-4 w-4 rounded border-input accent-primary"
+            checked={transparent}
+            onChange={(event) => setTransparent(event.target.checked)}
+          />
+          <Label htmlFor="generateTransparent" className="font-normal">
+            {t("dashboard:ai.transparentBackground")}
+          </Label>
+          <input
+            type="hidden"
+            name="background"
+            value={transparent ? "transparent" : "auto"}
+          />
         </div>
 
         <AdvancedOptions lang={lang}>
@@ -153,6 +221,24 @@ export function ImageGenerateForm({
               value={exclusions}
               onChange={(event) => setExclusions(event.target.value)}
             />
+          </div>
+          {/* Repeating a seed reproduces a result, which is what makes an
+              iteration on a picture possible at all. */}
+          <div className="flex flex-col space-y-1.5">
+            <Label htmlFor="generateSeed">{t("dashboard:ai.seed")}</Label>
+            <Input
+              id="generateSeed"
+              name="seed"
+              type="number"
+              inputMode="numeric"
+              min={AI_MIN_SEED}
+              max={AI_MAX_SEED}
+              step={1}
+              className="max-w-[12rem]"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("dashboard:ai.seedHint")}
+            </p>
           </div>
         </AdvancedOptions>
 

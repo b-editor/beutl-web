@@ -12,6 +12,15 @@ import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { Clapperboard, Clock, Coins, History } from "lucide-react";
 import Link from "next/link";
 import { useActionState, useEffect, useState, type ChangeEvent } from "react";
+import {
+  AI_MAX_SEED,
+  AI_MIN_SEED,
+  AI_VIDEO_ASPECT_RATIOS,
+  AI_VIDEO_DURATIONS_SECONDS,
+  AI_VIDEO_RESOLUTIONS,
+  MAX_AI_PROMPT_LENGTH,
+} from "@beutl/core";
+import { composePrompt } from "@/lib/ai-prompt";
 import { createVideoAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
@@ -24,9 +33,6 @@ import {
   type AiAccess,
 } from "./shared";
 
-const VIDEO_DURATIONS = [4, 6, 8] as const;
-const VIDEO_RESOLUTIONS = ["720p", "1080p"] as const;
-const MAX_PROMPT_LENGTH = 4000;
 
 function FramePicker({
   id,
@@ -103,6 +109,8 @@ export function VideoForm({
   });
   const [videoDuration, setVideoDuration] = useState<string>("4");
   const [videoResolution, setVideoResolution] = useState<string>("720p");
+  const [videoAspectRatio, setVideoAspectRatio] = useState<string>("16:9");
+  const [generateAudio, setGenerateAudio] = useState(true);
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoStyle, setVideoStyle] = useState("");
   const [videoComposition, setVideoComposition] = useState("");
@@ -110,6 +118,15 @@ export function VideoForm({
   const [videoExclusions, setVideoExclusions] = useState("");
 
   const blocked = blockedReason(access, ["video.generate"]);
+  // The same composition the action validates, so the counter measures what the
+  // server will.
+  const composedLength = composePrompt({
+    main: videoPrompt,
+    style: videoStyle,
+    composition: videoComposition,
+    motion: videoMotion,
+    exclusions: videoExclusions,
+  }).length;
 
   function applyTemplate(template: PromptTemplate) {
     setVideoPrompt(template.prompt);
@@ -138,14 +155,23 @@ export function VideoForm({
         <div className="flex flex-col space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <Label htmlFor="videoPrompt">{t("dashboard:ai.prompt")}</Label>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {videoPrompt.length} / {MAX_PROMPT_LENGTH}
+            {/* The advanced fields are folded into the same string the server
+                measures, so counting this box alone promises room that is not
+                there. */}
+            <span
+              className={`text-xs tabular-nums ${
+                composedLength > MAX_AI_PROMPT_LENGTH
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {composedLength} / {MAX_AI_PROMPT_LENGTH}
             </span>
           </div>
           <Textarea
             id="videoPrompt"
             name="prompt"
-            maxLength={MAX_PROMPT_LENGTH}
+            maxLength={MAX_AI_PROMPT_LENGTH}
             required
             rows={5}
             placeholder={t("dashboard:ai.videoPromptPlaceholder")}
@@ -163,7 +189,7 @@ export function VideoForm({
             onValueChange={(next) => next && setVideoDuration(next)}
             className="grid grid-cols-3"
           >
-            {VIDEO_DURATIONS.map((duration) => (
+            {AI_VIDEO_DURATIONS_SECONDS.map((duration) => (
               <ToggleGroupItem key={duration} value={String(duration)}>
                 {duration}s
               </ToggleGroupItem>
@@ -172,25 +198,80 @@ export function VideoForm({
           <input type="hidden" name="durationSeconds" value={videoDuration} />
         </div>
 
-        <div className="flex flex-col space-y-1.5">
-          <Label>{t("dashboard:ai.resolution")}</Label>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={videoResolution}
-            onValueChange={(next) => next && setVideoResolution(next)}
-            className="grid grid-cols-2"
-          >
-            {VIDEO_RESOLUTIONS.map((resolution) => (
-              <ToggleGroupItem key={resolution} value={resolution}>
-                {resolution}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <input type="hidden" name="resolution" value={videoResolution} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col space-y-1.5">
+            <Label>{t("dashboard:ai.resolution")}</Label>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={videoResolution}
+              onValueChange={(next) => next && setVideoResolution(next)}
+              className="grid grid-cols-2"
+            >
+              {AI_VIDEO_RESOLUTIONS.map((resolution) => (
+                <ToggleGroupItem key={resolution} value={resolution}>
+                  {resolution}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <input type="hidden" name="resolution" value={videoResolution} />
+          </div>
+
+          {/* Resolution alone could not express a vertical clip. */}
+          <div className="flex flex-col space-y-1.5">
+            <Label>{t("dashboard:ai.aspectRatio")}</Label>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={videoAspectRatio}
+              onValueChange={(next) => next && setVideoAspectRatio(next)}
+              className="grid grid-cols-2"
+            >
+              {AI_VIDEO_ASPECT_RATIOS.map((ratio) => (
+                <ToggleGroupItem key={ratio} value={ratio}>
+                  {ratio}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <input type="hidden" name="aspectRatio" value={videoAspectRatio} />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            id="videoAudio"
+            type="checkbox"
+            className="h-4 w-4 rounded border-input accent-primary"
+            checked={generateAudio}
+            onChange={(event) => setGenerateAudio(event.target.checked)}
+          />
+          <Label htmlFor="videoAudio" className="font-normal">
+            {t("dashboard:ai.generateAudio")}
+          </Label>
+          <input
+            type="hidden"
+            name="generateAudio"
+            value={generateAudio ? "true" : "false"}
+          />
         </div>
 
         <AdvancedOptions lang={lang}>
+          <div className="flex flex-col space-y-1.5">
+            <Label htmlFor="videoSeed">{t("dashboard:ai.seed")}</Label>
+            <Input
+              id="videoSeed"
+              name="seed"
+              type="number"
+              inputMode="numeric"
+              min={AI_MIN_SEED}
+              max={AI_MAX_SEED}
+              step={1}
+              className="max-w-[12rem]"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("dashboard:ai.seedHint")}
+            </p>
+          </div>
           <div className="flex flex-col space-y-1.5">
             <Label htmlFor="videoStyle">{t("dashboard:ai.promptStyle")}</Label>
             <Input

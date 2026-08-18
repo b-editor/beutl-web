@@ -162,14 +162,17 @@ describe("buildBillingHistory", () => {
     );
   });
 
-  it("skips a credit purchase with no recorded Stripe charge", () => {
-    expect(
-      build({
-        creditPurchases: [
-          creditPurchase({ stripePaymentAmount: null, stripeCurrency: null }),
-        ],
-      }),
-    ).toEqual([]);
+  it("keeps a credit purchase with no recorded Stripe charge, without an amount", () => {
+    // The row is still a receipt for credits the user holds. Dropping it hides
+    // the purchase entirely; the package branch renders the same state as an
+    // em dash, and this follows it.
+    const [entry] = build({
+      creditPurchases: [
+        creditPurchase({ stripePaymentAmount: null, stripeCurrency: null }),
+      ],
+    });
+
+    expect(entry).toMatchObject({ kind: "credit", amount: null });
   });
 
   it("returns an empty list when the user has never paid", () => {

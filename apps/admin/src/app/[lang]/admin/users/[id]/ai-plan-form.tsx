@@ -218,7 +218,11 @@ export function AiPlanAdjustmentForm({
             disabled={isPending || !canAdjustMonthlyUsage || !usageValid}
             onConfirm={() =>
               run(() =>
-                setAiMonthlyUsage({ userId, monthlyUsageUsed: parsedUsage }),
+                setAiMonthlyUsage({
+                  userId,
+                  monthlyUsageUsed: parsedUsage,
+                  expectedMonthlyUsageUsed: syncedUsage,
+                }),
               )
             }
           />
@@ -233,7 +237,12 @@ export function AiPlanAdjustmentForm({
             }
             onConfirm={() =>
               run(
-                () => setAiMonthlyUsage({ userId, monthlyUsageUsed: 0 }),
+                () =>
+                  setAiMonthlyUsage({
+                    userId,
+                    monthlyUsageUsed: 0,
+                    expectedMonthlyUsageUsed: syncedUsage,
+                  }),
                 () => setUsageValue("0"),
               )
             }

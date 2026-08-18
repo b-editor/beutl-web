@@ -18,6 +18,8 @@ import {
 } from "react";
 import {
   applyTranslationToCues,
+  MAX_GLOSSARY_ENTRIES,
+  parseGlossary,
   parseSubtitleSource,
   toPlainText,
   toSegmentsJson,
@@ -32,6 +34,7 @@ import {
 } from "@/lib/subtitle-handoff";
 import { translateAction } from "./actions";
 import {
+  AdvancedOptions,
   AiAccessNotice,
   AiWorkspace,
   CopyButton,
@@ -62,6 +65,7 @@ export function TranslateForm({
   // run leaves the two out of step, and re-timing then writes the old text onto
   // the new cues — a subtitle file that looks finished and is not.
   const [translatedSource, setTranslatedSource] = useState<string | null>(null);
+  const [glossary, setGlossary] = useState("");
   // Read when a result lands. Keeping the source out of that effect's
   // dependencies is the point: it must not re-run on every keystroke.
   const sourceRef = useRef(source);
@@ -97,11 +101,26 @@ export function TranslateForm({
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
 
   const blocked = blockedReason(access, ["subtitle.translate"]);
+  const contextsJson = useMemo(() => {
+    if (!parsed.ok || !parsed.cues) return "";
+    return JSON.stringify(
+      Object.fromEntries(
+        parsed.segments.map((segment, index) => {
+          const cue = parsed.cues?.[index];
+          return [segment.id, { start: cue?.start ?? 0, end: cue?.end ?? 0 }];
+        }),
+      ),
+    );
+  }, [parsed]);
+  const glossaryEntryCount = useMemo(
+    () => Object.keys(parseGlossary(glossary)).length,
+    [glossary],
+  );
   const sourceChanged =
     translatedSource !== null && translatedSource !== source;
   const translatedCues =
-    !sourceChanged && sourceCues && sourceCues.length === translated.length
-      ? applyTranslationToCues(sourceCues, translated)
+    !sourceChanged && sourceCues && parsed.ok
+      ? applyTranslationToCues(sourceCues, parsed.segments, translated)
       : null;
 
   const form = (
@@ -173,6 +192,10 @@ export function TranslateForm({
             name="segments"
             value={parsed.ok ? toSegmentsJson(parsed.segments) : ""}
           />
+          {/* The source already carries timings when it is a subtitle file.
+              Sending them lets the model keep each line readable in the time
+              its cue is on screen. */}
+          <input type="hidden" name="contexts" value={contextsJson} />
           <p
             className={
               parsed.ok || source.trim().length === 0
@@ -190,6 +213,55 @@ export function TranslateForm({
                 : t(`dashboard:ai.subtitleSourceErrors.${parsed.reason}`)}
           </p>
         </div>
+
+        <AdvancedOptions lang={lang}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col space-y-1.5">
+              <Label htmlFor="maxCharactersPerLine">
+                {t("dashboard:ai.maxCharactersPerLine")}
+              </Label>
+              <Input
+                id="maxCharactersPerLine"
+                name="maxCharactersPerLine"
+                type="number"
+                min={1}
+                max={200}
+                step={1}
+                placeholder="42"
+              />
+            </div>
+            <div className="flex flex-col space-y-1.5">
+              <Label htmlFor="maxLines">{t("dashboard:ai.maxLines")}</Label>
+              <Input
+                id="maxLines"
+                name="maxLines"
+                type="number"
+                min={1}
+                max={10}
+                step={1}
+                placeholder="2"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col space-y-1.5">
+            <Label htmlFor="glossary">{t("dashboard:ai.glossary")}</Label>
+            <Textarea
+              id="glossary"
+              name="glossary"
+              rows={4}
+              className="font-mono text-xs"
+              placeholder={"Beutl = Beutl\nタイムライン = timeline"}
+              value={glossary}
+              onChange={(event) => setGlossary(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("dashboard:ai.glossaryHint", {
+                total: glossaryEntryCount,
+                max: MAX_GLOSSARY_ENTRIES,
+              })}
+            </p>
+          </div>
+        </AdvancedOptions>
 
         {state.message && (
           <Alert variant="destructive">
@@ -276,10 +348,17 @@ export function TranslateForm({
             variant="outline"
             size="sm"
             onClick={() =>
-              setTranslated((current) => [
-                ...current,
-                { id: String(current.length + 1), text: "" },
-              ])
+              setTranslated((current) => {
+                // Derived from the highest id in use, not the length: after a
+                // deletion the length collides with an id that is still there.
+                const next =
+                  current.reduce(
+                    (highest, segment) =>
+                      Math.max(highest, Number(segment.id) || 0),
+                    0,
+                  ) + 1;
+                return [...current, { id: String(next), text: "" }];
+              })
             }
           >
             <Plus className="mr-2 h-4 w-4" />

@@ -1,9 +1,9 @@
 import {
   findAccountDeletionIntentByUserId,
   findCreditAccount,
-  getMonthlyUsageAccount,
   getSubscriptionByUserId,
   startRetryableTransaction,
+  usagePeriodsEqual,
 } from "@beutl/db";
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
 import { loadAiSettings, type AiSettingsSnapshot } from "./settings";
@@ -90,7 +90,14 @@ export function toAiBalancePresentation(
     monthlyUsage: {
       usedPercent,
       remainingPercent: 100 - usedPercent,
-      isExhausted: getMonthlyUsageRemaining(balance) <= 0,
+      // Spending an allowance to nothing and never having one are different
+      // states. Without the limit check every visitor without a plan reads as
+      // exhausted, and the AI screens tell them their allowance is used up
+      // beside the notice explaining that they do not have one. An active plan
+      // always carries a limit of at least one unit.
+      isExhausted:
+        balance.monthlyUsage.limit > 0 &&
+        getMonthlyUsageRemaining(balance) <= 0,
     },
     additionalCredits: balance.additionalCredits,
     hasAdditionalCreditDebt: balance.additionalCreditDebt > 0,
@@ -177,24 +184,30 @@ export async function getEntitlements(
     const effectiveEnd = subscription
       ? getEffectiveSubscriptionEnd(subscription)
       : null;
-    // Reading what someone is entitled to must not create a ledger row for
-    // them. A subscriber's account is opened by the operation that first spends
-    // against it; everyone else — every signed-in visitor to a page that shows
-    // an allowance — reads as an empty balance and leaves nothing behind.
-    const account = isActive && subscription
-      ? await getMonthlyUsageAccount({
-          userId,
-          usagePeriod: {
-            start: subscription.currentPeriodStart,
-            end: subscription.currentPeriodEnd,
-          },
-          prisma,
-        })
-      : (await findCreditAccount({ userId, prisma })) ?? {
-          monthlyUsageUsed: 0,
-          purchasedCredits: 0,
-          purchasedCreditDebt: 0,
-        };
+    // Reading what someone is entitled to must not touch the ledger at all —
+    // not to open a row, and not to apply the period reset. A subscriber's
+    // account is opened and rolled over by the operation that first spends
+    // against it; until then the counter is read against the period it was
+    // recorded for, which is what that operation would write anyway.
+    const stored = await findCreditAccount({ userId, prisma });
+    const account =
+      stored === null
+        ? { monthlyUsageUsed: 0, purchasedCredits: 0, purchasedCreditDebt: 0 }
+        : {
+            ...stored,
+            monthlyUsageUsed:
+              isActive &&
+              subscription &&
+              !usagePeriodsEqual(
+                { start: stored.usagePeriodStart, end: stored.usagePeriodEnd },
+                {
+                  start: subscription.currentPeriodStart,
+                  end: subscription.currentPeriodEnd,
+                },
+              )
+                ? 0
+                : stored.monthlyUsageUsed,
+          };
     const balance = toAiBalanceSnapshot(
       account,
       isActive ? settings.getMonthlyUsageLimit() : 0,
@@ -262,16 +275,25 @@ export async function canStartAiOperation(
       return false;
     }
 
-    const account = await getMonthlyUsageAccount({
-      userId,
-      usagePeriod: {
-        start: subscription.currentPeriodStart,
-        end: subscription.currentPeriodEnd,
-      },
-      prisma,
-    });
+    // "Can this be started" is a question, not a decision to start it, so it
+    // reads the counter against its recorded period rather than opening a row
+    // and rolling it over the way a reservation does.
+    const stored = await findCreditAccount({ userId, prisma });
+    const periodIsCurrent =
+      stored !== null &&
+      usagePeriodsEqual(
+        { start: stored.usagePeriodStart, end: stored.usagePeriodEnd },
+        {
+          start: subscription.currentPeriodStart,
+          end: subscription.currentPeriodEnd,
+        },
+      );
     const balance = toAiBalanceSnapshot(
-      account,
+      {
+        monthlyUsageUsed: periodIsCurrent ? stored.monthlyUsageUsed : 0,
+        purchasedCredits: stored?.purchasedCredits ?? 0,
+        purchasedCreditDebt: stored?.purchasedCreditDebt ?? 0,
+      },
       settings.getMonthlyUsageLimit(),
     );
     return (

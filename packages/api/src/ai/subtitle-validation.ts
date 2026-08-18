@@ -24,6 +24,32 @@ export function isIso6391LanguageCode(value: unknown): value is string {
   return typeof value === "string" && ISO_639_1_LANGUAGE_CODES.has(value);
 }
 
-export const MAX_TRANSLATION_SEGMENTS = 200;
-export const MAX_TRANSLATION_CHARACTERS = 20_000;
-export const SAFE_SEGMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+// What a translation request costs to send, in characters.
+//
+// A glossary is caller-supplied text that reaches the provider and is paid for
+// there, so it counts against both the request cap and the charge. Counting
+// only the segments would let one short line carry thousands of glossary
+// characters for the price of a single unit, repeatedly.
+export function translationCharacterCount({
+  segments,
+  style,
+}: {
+  segments: { text: string }[];
+  style?: { glossary?: Record<string, string> } | undefined;
+}): number {
+  const segmentCharacters = segments.reduce(
+    (total, segment) => total + segment.text.length,
+    0,
+  );
+  const glossaryCharacters = Object.entries(style?.glossary ?? {}).reduce(
+    (total, [term, translation]) => total + term.length + translation.length,
+    0,
+  );
+  return segmentCharacters + glossaryCharacters;
+}
+
+export {
+  MAX_TRANSLATION_CHARACTERS,
+  MAX_TRANSLATION_SEGMENTS,
+  SAFE_SEGMENT_ID_PATTERN,
+} from "@beutl/core";

@@ -37,9 +37,18 @@ import {
   retryJobAction,
 } from "./actions";
 import {
+  readCues,
+  readTranslatedCues,
+  toPlainText,
+  toSrt,
+  toVtt,
+} from "@/lib/subtitle-format";
+import {
   AiAccessNotice,
   AiWorkspace,
   blockedReason,
+  downloadFromUrl,
+  downloadTextFile,
   type AiAccess,
 } from "./shared";
 
@@ -54,6 +63,13 @@ type Job = {
   inputParams: unknown;
   canRetry?: boolean;
 };
+
+// Kinds whose result is a stored JSON document rather than a media file.
+const SUBTITLE_KINDS = new Set(["stt", "translation"]);
+
+function isSubtitleKind(kind: string): boolean {
+  return SUBTITLE_KINDS.has(kind);
+}
 
 const ACTIVE_STATUSES = new Set(["queued", "running", "finalizing"]);
 // Long enough that a page left open is not a load generator, short enough that
@@ -133,6 +149,7 @@ export function JobHistory({
   const [brokenThumbnails, setBrokenThumbnails] = useState<Set<string>>(
     () => new Set(),
   );
+  const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   // A retry reserves and charges again, so it carries the key that makes one
   // confirmation land on one job however many times it reaches the server. The
   // key belongs to the confirmation, not to the click.
@@ -143,16 +160,25 @@ export function JobHistory({
   >(null);
 
   const loadJobs = useCallback(async () => {
-    const result = await listJobsAction();
-    if (result.success) {
-      setJobs((result.jobs ?? []) as Job[]);
-      setNextCursor(result.nextCursor ?? null);
-      setShowingMorePages(false);
-      setJobsMessage(null);
-    } else {
-      setJobsMessage(result.message ?? null);
+    // This runs unattended — on mount and from the poll — so a rejection has
+    // nowhere to surface. Left unhandled it stops the list at its skeletons and
+    // gives the user nothing to act on.
+    try {
+      const result = await listJobsAction();
+      if (result.success) {
+        setJobs((result.jobs ?? []) as Job[]);
+        setNextCursor(result.nextCursor ?? null);
+        setShowingMorePages(false);
+        setJobsMessage(null);
+      } else {
+        setJobsMessage(result.message ?? null);
+      }
+    } catch (error) {
+      console.error("Failed to load the AI job history", error);
+      setJobs((current) => current ?? []);
+      setJobsMessage(t("dashboard:ai.jobsLoadFailed"));
     }
-  }, []);
+  }, [t]);
 
   // Reaching this screen is itself the request to see the history; making the
   // user press a button first left it looking empty.
@@ -191,10 +217,57 @@ export function JobHistory({
     });
   }
 
+  // Recovering a paid result from the history: the stored JSON is fetched and
+  // converted here rather than handed to the browser as-is. A translation only
+  // becomes a cue file when its segments kept the timings they were sent with.
+  async function exportSubtitle(job: Job, format: "srt" | "vtt" | "txt") {
+    if (!job.url) return;
+    setExportingJobId(job.id);
+    try {
+      const response = await fetch(job.url);
+      if (!response.ok) throw new Error(`Result fetch failed: ${response.status}`);
+      const stored = (await response.json()) as { segments?: unknown };
+      // Plain text is the words alone, so it is recoverable from a translation
+      // that was run on an untimed source. Only a cue file needs the timings,
+      // and only a translation can be missing them.
+      const cues =
+        job.kind === "translation" && format !== "txt"
+          ? readTranslatedCues(stored.segments)
+          : readCues(stored.segments);
+      if (!cues || cues.length === 0) {
+        setJobsMessage(t("dashboard:ai.resultExportUnavailable"));
+        return;
+      }
+      const base = `${job.kind}-${job.id}`;
+      if (format === "srt") {
+        downloadTextFile(
+          toSrt(cues),
+          `${base}.srt`,
+          "application/x-subrip;charset=utf-8",
+        );
+      } else if (format === "vtt") {
+        downloadTextFile(toVtt(cues), `${base}.vtt`, "text/vtt;charset=utf-8");
+      } else {
+        downloadTextFile(toPlainText(cues), `${base}.txt`);
+      }
+      setJobsMessage(null);
+    } catch (error) {
+      console.error("Failed to export an AI result", error);
+      setJobsMessage(t("dashboard:ai.resultExportFailed"));
+    } finally {
+      setExportingJobId(null);
+    }
+  }
+
   function syncJob(jobId: string) {
     startSync(async () => {
-      await refreshVideoJobAction(jobId);
+      const result = await refreshVideoJobAction(jobId);
       await loadJobs();
+      // After the reload, not before: loadJobs clears the banner when it
+      // succeeds, and both updates land in one transition, so a message set
+      // first is erased before it is ever painted — leaving a provider that
+      // keeps failing looking like a button that does nothing.
+      setJobsMessage(result.success ? null : (result.message ?? null));
     });
   }
 
@@ -387,12 +460,55 @@ export function JobHistory({
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
-                      {job.url && (
-                        <Button asChild variant="outline" size="sm">
-                          <a href={job.url} target="_blank" rel="noreferrer">
-                            {t("dashboard:ai.viewResult")}
-                          </a>
-                        </Button>
+                      {job.url && isSubtitleKind(job.kind) ? (
+                        // A finished transcript or translation is stored as
+                        // JSON, so "view" opened a raw object in a tab. What the
+                        // user paid for is a subtitle file.
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={exportingJobId === job.id}
+                            onClick={() => exportSubtitle(job, "srt")}
+                          >
+                            SRT
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={exportingJobId === job.id}
+                            onClick={() => exportSubtitle(job, "vtt")}
+                          >
+                            VTT
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={exportingJobId === job.id}
+                            onClick={() => exportSubtitle(job, "txt")}
+                          >
+                            {t("dashboard:ai.copyText")}
+                          </Button>
+                        </>
+                      ) : (
+                        job.url && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              downloadFromUrl(
+                                job.url as string,
+                                job.fileName ?? `ai-result-${job.id}`,
+                              )
+                            }
+                          >
+                            {t("dashboard:ai.download")}
+                          </Button>
+                        )
                       )}
                       {job.kind === "video" && isActive(job) && (
                         <Button

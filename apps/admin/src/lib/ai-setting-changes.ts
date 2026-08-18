@@ -1,6 +1,7 @@
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
   AI_SETTINGS,
+  aiMinimumChargeOf,
   isAiSettingKey,
   validateAiSettingValue,
 } from "@beutl/core";
@@ -87,10 +88,18 @@ export function validateAiSettingChanges(
   for (const definition of Object.values(AI_SETTINGS)) {
     if (definition.kind !== "price") continue;
     const price = Number(effectiveValueOf(definition.key));
-    if (Number.isSafeInteger(price) && price > allowance) {
+    if (!Number.isSafeInteger(price)) continue;
+    // The smallest request the operation accepts, not one billing unit: a
+    // video is charged for at least four seconds, so a price a quarter of the
+    // allowance already takes it offline.
+    const minimumCharge =
+      definition.operation === undefined
+        ? price
+        : (aiMinimumChargeOf(definition.operation, price) ?? price);
+    if (minimumCharge > allowance) {
       return {
         ok: false,
-        message: `${definition.key} is ${price} units, above the ${allowance} unit monthly allowance`,
+        message: `${definition.key} costs ${minimumCharge} units at its smallest request, above the ${allowance} unit monthly allowance`,
       };
     }
   }

@@ -15,7 +15,11 @@ export class AiUsageLimitExceededError extends Error {
 // rejected outright when the account cannot absorb it.
 export class CreditAdjustmentRejectedError extends Error {
   constructor(
-    readonly reason: "insufficientCredits" | "usageOutOfRange",
+    readonly reason:
+      | "insufficientCredits"
+      | "usageOutOfRange"
+      | "conflictingAdjustment"
+      | "staleUsage",
     message: string,
   ) {
     super(message);
@@ -151,7 +155,10 @@ function datesEqual(left: Date | null, right: Date | null): boolean {
   return left?.getTime() === right?.getTime();
 }
 
-function isUniqueConstraintViolation(error: unknown): boolean {
+// Exported so a caller that supplies its own transaction — where a rejected
+// insert has already aborted everything and nothing can be read back here —
+// can still recognize that the write it lost was applied by the winner.
+export function isUniqueConstraintViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -160,7 +167,10 @@ function isUniqueConstraintViolation(error: unknown): boolean {
   );
 }
 
-function periodsEqual(
+// Exported because a reader that shows a stored counter has to decide whether
+// it still belongs to the current cycle, and answering that differently from
+// the writer is how a previous period's consumption gets written back.
+export function usagePeriodsEqual(
   left: UsagePeriod,
   right: UsagePeriod,
 ): boolean {
@@ -201,7 +211,7 @@ async function getAccountForUsagePeriod({
     start: account.usagePeriodStart,
     end: account.usagePeriodEnd,
   };
-  if (!periodsEqual(storedPeriod, usagePeriod)) {
+  if (!usagePeriodsEqual(storedPeriod, usagePeriod)) {
     return await prisma.creditAccount.update({
       where: {
         userId,
@@ -844,6 +854,25 @@ export async function consumeUsage({
 // write in the ledger is bound to something that cannot repeat — a Stripe
 // payment, an AI job — but a manual adjustment has no such counterpart, and
 // read-modify-write applies twice if the confirmation arrives twice.
+// Whether this decision is already in the ledger. adjustPurchasedCreditsByAdmin
+// answers a replay by returning the account unchanged, which is indistinguishable
+// from having applied it; a caller that records the decision elsewhere has to ask
+// first or it writes that record twice for one grant.
+export async function findAdminCreditAdjustment({
+  adjustmentKey,
+  prisma,
+}: {
+  adjustmentKey: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.creditTransaction.findUnique({
+    where: {
+      adminAdjustmentKey: adjustmentKey,
+    },
+  });
+}
+
 export async function adjustPurchasedCreditsByAdmin({
   userId,
   creditDelta,
@@ -869,6 +898,15 @@ export async function adjustPurchasedCreditsByAdmin({
       },
     });
     if (applied) {
+      // The key is unique across the whole ledger, so a replay that names a
+      // different account or a different amount is not the same decision and
+      // must not be answered as though it had been applied.
+      if (applied.userId !== userId || applied.creditAmount !== creditDelta) {
+        throw new CreditAdjustmentRejectedError(
+          "conflictingAdjustment",
+          `Adjustment key ${adjustmentKey} was already applied with different terms`,
+        );
+      }
       return await getCreditAccount({ userId, prisma: tx });
     }
 
@@ -942,12 +980,17 @@ export async function setMonthlyUsageUsedByAdmin({
   monthlyUsageUsed,
   monthlyUsageLimit,
   usagePeriod,
+  expectedMonthlyUsageUsed,
   prisma,
 }: {
   userId: string;
   monthlyUsageUsed: number;
   monthlyUsageLimit: number;
   usagePeriod: UsagePeriod;
+  // The counter the operator was looking at. An absolute write has no other way
+  // to tell a deliberate correction from one that silently erases a job that
+  // ran while the confirmation was open.
+  expectedMonthlyUsageUsed?: number;
   prisma?: PrismaTransaction;
 }) {
   assertNonNegativeInteger(monthlyUsageUsed, "monthlyUsageUsed");
@@ -965,6 +1008,15 @@ export async function setMonthlyUsageUsedByAdmin({
       usagePeriod,
       prisma: tx,
     });
+    if (
+      expectedMonthlyUsageUsed !== undefined &&
+      account.monthlyUsageUsed !== expectedMonthlyUsageUsed
+    ) {
+      throw new CreditAdjustmentRejectedError(
+        "staleUsage",
+        `monthlyUsageUsed moved from ${expectedMonthlyUsageUsed} to ${account.monthlyUsageUsed} before this adjustment was applied`,
+      );
+    }
     const delta = monthlyUsageUsed - account.monthlyUsageUsed;
     if (delta === 0) {
       return account;
@@ -1044,7 +1096,7 @@ export async function refundUsage({
       start: usage.usagePeriodStart,
       end: usage.usagePeriodEnd,
     };
-    const monthlyRestored = periodsEqual(usagePeriod, transactionPeriod)
+    const monthlyRestored = usagePeriodsEqual(usagePeriod, transactionPeriod)
       ? Math.min(account.monthlyUsageUsed, Math.max(usage.usageAmount, 0))
       : 0;
     const purchasedRestored = Math.max(-usage.creditAmount, 0);

@@ -286,11 +286,46 @@ describe("AI usage aggregates", () => {
       adjustmentKey: "stats-grant-b",
     });
 
-    expect(await getAiBalanceTotals()).toEqual({
+    expect(await getAiBalanceTotals({ now: new Date() })).toEqual({
       accountCount: 2,
       monthlyUsageUsed: 120,
       purchasedCredits: 400,
       purchasedCreditDebt: 0,
+    });
+  });
+
+  it("leaves a lapsed account's counter out of the monthly total", async () => {
+    await reserve({
+      userId: "user-a",
+      jobId: "job-1",
+      kind: "image",
+      status: "succeeded",
+      units: 120,
+    });
+    const lapsedJob = await createAiJob({
+      userId: "user-lapsed",
+      kind: "image",
+      provider: "openrouter",
+      status: "succeeded",
+      usageUnits: 400,
+    });
+    await consumeUsage({
+      userId: "user-lapsed",
+      amount: 400,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: {
+        start: new Date("2026-06-01T00:00:00.000Z"),
+        end: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      aiJobId: lapsedJob.id,
+    });
+
+    // The counter is cleared only when that account next spends, so the row
+    // still holds June's total. Counting it reports consumption of an allowance
+    // nobody is drawing on now.
+    expect(await getAiBalanceTotals({ now: new Date() })).toMatchObject({
+      accountCount: 2,
+      monthlyUsageUsed: 120,
     });
   });
 
@@ -345,7 +380,7 @@ describe("AI usage aggregates", () => {
       billingOfferId: "offer-1",
     });
 
-    expect(await countActiveProSubscriptions({ now })).toBe(1);
+    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
   });
 });
 

@@ -344,14 +344,37 @@ describe("v3 AI job history contract", () => {
     });
 
     expect(response.status).toBe(200);
+    // The frames the video was conditioned on are shown, so the history does
+    // not read as a plain text-to-video job — while retry stays closed, because
+    // the images themselves were never kept.
     expect(await response.json()).toMatchObject({
       inputParams: {
         prompt: "Animate this frame",
         durationSeconds: 4,
         resolution: "720p",
+        firstFrame: { filename: "private.png", mimeType: "image/png" },
       },
       canRetry: false,
     });
+  });
+
+  it("still offers a retry for a text-only video", async () => {
+    const job = await seedJob({
+      kind: "video",
+      status: "failed",
+      inputParams: {
+        prompt: "A calm sea",
+        durationSeconds: 4,
+        resolution: "720p",
+      },
+      createdAt: new Date("2026-08-03T13:00:00.000Z"),
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      headers: await authHeaders(),
+    });
+
+    expect(await response.json()).toMatchObject({ canRetry: true });
   });
 
   it("rejects malformed pagination and job identifiers", async () => {

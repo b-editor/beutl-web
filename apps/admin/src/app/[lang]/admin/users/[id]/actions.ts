@@ -9,7 +9,9 @@ import {
   CreditAdjustmentRejectedError,
   deleteUserById,
   existsUserById,
+  findAdminCreditAdjustment,
   getSubscriptionByUserId,
+  isUniqueConstraintViolation,
   setMonthlyUsageUsedByAdmin,
   startRetryableTransaction,
 } from "@beutl/db";
@@ -102,18 +104,26 @@ export async function adjustAiCredits({
         if (!(await existsUserById({ id: userId, prisma: tx }))) {
           return { success: false as const, message: "User not found" };
         }
+        // 同じキーの再送は台帳を動かさない。監査ログは価値を動かした操作の
+        // 記録なので、再送のたびに追記すると一度の付与が複数回に見える。
+        const alreadyApplied = await findAdminCreditAdjustment({
+          adjustmentKey,
+          prisma: tx,
+        });
         const account = await adjustPurchasedCreditsByAdmin({
           userId,
           creditDelta,
           adjustmentKey,
           prisma: tx,
         });
-        await addAuditLog({
-          userId: session.user.id,
-          action: auditLogActions.admin.aiCreditsAdjusted,
-          details: `userId: ${userId}, creditDelta: ${creditDelta}, purchasedCredits: ${account.purchasedCredits}, purchasedCreditDebt: ${account.purchasedCreditDebt}`,
-          prisma: tx,
-        });
+        if (!alreadyApplied) {
+          await addAuditLog({
+            userId: session.user.id,
+            action: auditLogActions.admin.aiCreditsAdjusted,
+            details: `userId: ${userId}, creditDelta: ${creditDelta}, purchasedCredits: ${account.purchasedCredits}, purchasedCreditDebt: ${account.purchasedCreditDebt}`,
+            prisma: tx,
+          });
+        }
         return { success: true as const };
       });
       if (!result.success) {
@@ -123,7 +133,31 @@ export async function adjustAiCredits({
       if (e instanceof CreditAdjustmentRejectedError) {
         return { success: false, message: e.message };
       }
-      throw e;
+      // 同じキーの送信が二つ重なると、adminAdjustmentKey の一意インデックスが
+      // 後から挿入する側を弾く。付与自体は勝った側が適用済みなので、失敗として
+      // 返すと操作者が入力し直して二重に付与してしまう。
+      if (!isUniqueConstraintViolation(e)) {
+        throw e;
+      }
+      // ただし「弾かれた」ことは「同じ調整が適用された」ことを意味しない。
+      // 勝った側の内容を読み直して確かめる。金額や対象が違えば別の決定であり、
+      // 一意制約に当たったという理由だけで成功と答えてはいけない。
+      try {
+        await startRetryableTransaction(
+          async (tx) =>
+            await adjustPurchasedCreditsByAdmin({
+              userId,
+              creditDelta,
+              adjustmentKey,
+              prisma: tx,
+            }),
+        );
+      } catch (verification) {
+        if (verification instanceof CreditAdjustmentRejectedError) {
+          return { success: false, message: verification.message };
+        }
+        throw verification;
+      }
     }
     revalidatePath("/[lang]/admin/users/[id]", "page");
 
@@ -136,9 +170,13 @@ export async function adjustAiCredits({
 export async function setAiMonthlyUsage({
   userId,
   monthlyUsageUsed,
+  expectedMonthlyUsageUsed,
 }: {
   userId: string;
   monthlyUsageUsed: number;
+  // 画面が表示していた値。適用の直前に消費が動いていたら、絶対値の書き込みが
+  // それを黙って打ち消すため、その場合は拒否して読み直させる。
+  expectedMonthlyUsageUsed: number;
 }): Promise<ActionResult> {
   return await adminAction(async (session) => {
     if (typeof userId !== "string" || userId.length === 0) {
@@ -150,6 +188,13 @@ export async function setAiMonthlyUsage({
       monthlyUsageUsed < 0
     ) {
       return { success: false, message: "Invalid usage amount" };
+    }
+    if (
+      typeof expectedMonthlyUsageUsed !== "number" ||
+      !Number.isSafeInteger(expectedMonthlyUsageUsed) ||
+      expectedMonthlyUsageUsed < 0
+    ) {
+      return { success: false, message: "Invalid expected usage amount" };
     }
 
     try {
@@ -181,6 +226,7 @@ export async function setAiMonthlyUsage({
             start: subscription.currentPeriodStart,
             end: subscription.currentPeriodEnd,
           },
+          expectedMonthlyUsageUsed,
           prisma: tx,
         });
         await addAuditLog({

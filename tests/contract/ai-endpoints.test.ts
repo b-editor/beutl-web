@@ -518,12 +518,38 @@ describe("v3 AI endpoints contract", () => {
           monthlyUsage: {
             usedPercent: 0,
             remainingPercent: 100,
-            isExhausted: true,
+            isExhausted: false,
           },
           additionalCredits: 0,
           hasAdditionalCreditDebt: false,
         },
         availability: expect.any(Object),
+      });
+    });
+
+    it("reports an exhausted allowance only once one has been spent", async () => {
+      await activatePro();
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 500,
+        monthlyUsageLimit: 500,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "setup-job",
+      });
+
+      const res = await makeApp().request("/api/v3/user/entitlements", {
+        headers: await authHeaders(),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        canUseAi: true,
+        balance: {
+          monthlyUsage: {
+            usedPercent: 100,
+            remainingPercent: 0,
+            isExhausted: true,
+          },
+        },
       });
     });
 
@@ -598,7 +624,7 @@ describe("v3 AI endpoints contract", () => {
           monthlyUsage: {
             usedPercent: 0,
             remainingPercent: 100,
-            isExhausted: true,
+            isExhausted: false,
           },
           additionalCredits: 100,
         },
@@ -627,7 +653,7 @@ describe("v3 AI endpoints contract", () => {
           monthlyUsage: {
             usedPercent: 0,
             remainingPercent: 100,
-            isExhausted: true,
+            isExhausted: false,
           },
         },
       });
@@ -710,6 +736,37 @@ describe("v3 AI endpoints contract", () => {
       ).toHaveLength(1);
     });
 
+    // A form builder emits its optional fields whether or not the user filled
+    // them. Number("") is 0, which AI_MIN_SEED accepts, so an untouched seed box
+    // would pin every generation from that client to one deterministic picture —
+    // and an untouched aspect ratio box would be refused as an invalid enum.
+    it("reads an empty multipart field as absent rather than as a value", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const body = new FormData();
+      body.set("prompt", "a quiet street");
+      body.set("aspectRatio", "16:9");
+      body.set("size", "");
+      body.set("background", "");
+      body.set("seed", "");
+
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: await authHeaders("image-empty-multipart-key"),
+        body,
+      });
+
+      expect(res.status).toBe(200);
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      const [call] = vi.mocked(generateImage).mock.calls[0];
+      expect(call).toMatchObject({ aspectRatio: "16:9" });
+      expect(call).not.toHaveProperty("seed");
+      expect(call).not.toHaveProperty("background");
+    });
+
     it("does not invoke the provider or charge again after idempotent history is deleted", async () => {
       await activatePro();
       vi.mocked(generateImage).mockResolvedValue({
@@ -755,12 +812,12 @@ describe("v3 AI endpoints contract", () => {
         kind: "image",
         provider: "openrouter",
         status: "running",
-        inputParams: { prompt: "test", size: "1024x1024" },
+        inputParams: { prompt: "test", aspectRatio: "1:1" },
         usageUnits: 20,
         ...(await getAiRequestIdentityForTest({
           key,
           operation: "image.generate",
-          input: { prompt: "test", size: "1024x1024" },
+          input: { prompt: "test", aspectRatio: "1:1" },
         })),
       });
       expect(reservation.ok).toBe(true);
@@ -916,14 +973,16 @@ describe("v3 AI endpoints contract", () => {
       expect(job).toMatchObject({
         kind: "image",
         status: "succeeded",
-        inputParams: { prompt: "test", size: "1024x1024" },
+        // A request that still names a fixed size is recorded as the ratio it
+        // always meant, so the history speaks one vocabulary.
+        inputParams: { prompt: "test", aspectRatio: "1:1" },
         usageUnits: 20,
         resultFileId: body.fileId,
       });
       expect(state.files.size).toBe(1);
       expect(vi.mocked(generateImage)).toHaveBeenCalledWith({
         prompt: "test",
-        size: "1024x1024",
+        aspectRatio: "1:1",
         model: "openai/gpt-image-1",
         signal: expect.any(AbortSignal),
       });
@@ -1104,6 +1163,106 @@ describe("v3 AI endpoints contract", () => {
       expect(
         state.creditTransactions.filter((item) => item.kind === "refund"),
       ).toHaveLength(1);
+    });
+
+    it("generates at an aspect ratio the fixed sizes could not express", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        mediaType: "image/png",
+      });
+
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          prompt: "a title card",
+          aspectRatio: "16:9",
+          background: "transparent",
+          seed: 42,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      // The gap this closes is a request the client could not express: a video
+      // editor needs 16:9 and a compositing asset needs an alpha channel.
+      expect(vi.mocked(generateImage)).toHaveBeenCalledWith({
+        prompt: "a title card",
+        aspectRatio: "16:9",
+        background: "transparent",
+        seed: 42,
+        model: "openai/gpt-image-1",
+        signal: expect.any(AbortSignal),
+      });
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        inputParams: {
+          prompt: "a title card",
+          aspectRatio: "16:9",
+          background: "transparent",
+          seed: 42,
+        },
+      });
+    });
+
+    it("refuses a request that names both a size and an aspect ratio", async () => {
+      await activatePro();
+
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({
+          prompt: "test",
+          size: "1024x1024",
+          aspectRatio: "16:9",
+        }),
+      });
+
+      // Silently preferring one would make the other look honoured.
+      expect(res.status).toBe(400);
+      expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+    });
+
+    it("guides a generation with a reference image and closes retry for it", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        mediaType: "image/png",
+      });
+
+      const form = new FormData();
+      form.append("prompt", "in this style");
+      form.append("aspectRatio", "1:1");
+      form.append(
+        "reference",
+        new File([PNG_BYTES], "style.png", { type: "image/png" }),
+      );
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: form,
+      });
+
+      expect(res.status).toBe(200);
+      const call = vi.mocked(generateImage).mock.calls[0][0];
+      expect(call.referenceImages).toHaveLength(1);
+      expect(call.referenceImages?.[0].mimeType).toBe("image/png");
+      // The bytes are not stored, only the name — which is why the history
+      // offers no retry for this job.
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        inputParams: {
+          prompt: "in this style",
+          aspectRatio: "1:1",
+          reference: { filename: "style.png" },
+        },
+      });
     });
 
     it("rejects an oversized generated image before storage", async () => {

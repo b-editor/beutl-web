@@ -24,6 +24,12 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
+import {
+  AI_IMAGE_EDIT_TASKS,
+  MAX_AI_PROMPT_LENGTH,
+  aiImageEditTaskRequiresPrompt,
+  type AiImageEditTask,
+} from "@beutl/core";
 import { editImageAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
@@ -38,17 +44,25 @@ import {
   type AiAccess,
 } from "./shared";
 
-const EDIT_TASKS = [
-  { task: "remove_background", icon: Eraser, needsPrompt: false },
-  { task: "upscale", icon: Maximize2, needsPrompt: false },
-  { task: "restyle", icon: Palette, needsPrompt: true },
-  { task: "remove_object", icon: Scissors, needsPrompt: true },
-  { task: "outpaint", icon: Expand, needsPrompt: true },
-] as const;
+// Only the icon is a presentation choice; which tasks exist and which need a
+// prompt come from the catalog the server validates against and the
+// capabilities endpoint publishes.
+const TASK_ICONS: Record<AiImageEditTask, typeof Eraser> = {
+  remove_background: Eraser,
+  upscale: Maximize2,
+  restyle: Palette,
+  remove_object: Scissors,
+  outpaint: Expand,
+};
+
+const EDIT_TASKS = AI_IMAGE_EDIT_TASKS.map((task) => ({
+  task,
+  icon: TASK_ICONS[task],
+  needsPrompt: aiImageEditTaskRequiresPrompt(task),
+}));
 
 const EDIT_OPERATIONS = EDIT_TASKS.map(({ task }) => `image.edit.${task}`);
 const OUTPAINT_EXPANSIONS = [10, 25, 50] as const;
-const MAX_PROMPT_LENGTH = 4000;
 
 export function ImageEditForm({
   lang,
@@ -71,6 +85,9 @@ export function ImageEditForm({
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [editPrompt, setEditPrompt] = useState("");
+  // Canvas preparation happens before the action runs, so its failure has no
+  // action state to report through.
+  const [prepareError, setPrepareError] = useState<string | null>(null);
 
   // The preview is an object URL owned by this component; leaving it behind on
   // unmount keeps the decoded image alive for the rest of the session.
@@ -82,7 +99,6 @@ export function ImageEditForm({
 
   const blocked = blockedReason(access, EDIT_OPERATIONS);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
-  const promptRequired = selected?.needsPrompt ?? false;
   const taskUnaffordable =
     blocked === null &&
     editTask !== "" &&
@@ -127,6 +143,7 @@ export function ImageEditForm({
     event.preventDefault();
     // Pressing Enter in a field submits even while the button is disabled.
     if (isPending || isPreparing) return;
+    setPrepareError(null);
     const form = event.currentTarget;
     const formData = new FormData(form);
     const file = formData.get("file");
@@ -141,8 +158,9 @@ export function ImageEditForm({
           next.set("file", prepared);
           dispatch(next);
         } catch {
-          // 変換失敗時は元のファイルのまま送信する。
-          dispatch(formData);
+          // 元のファイルをそのまま送ると、拡張されていない画像を outpaint の
+          // 料金で処理することになる。送らずに失敗として伝える。
+          setPrepareError(t("dashboard:ai.outpaintPrepareFailed"));
         }
       });
       return;
@@ -243,7 +261,10 @@ export function ImageEditForm({
           </div>
         )}
 
-        {selected && (
+        {/* Only the tasks that take a prompt show one. Background removal and
+            upscaling run on a fixed instruction, so anything typed here would
+            be charged for and then discarded before the request is sent. */}
+        {selected?.needsPrompt && (
           <>
             <PromptLibrary
               lang={lang}
@@ -252,20 +273,16 @@ export function ImageEditForm({
             />
             <div className="flex flex-col space-y-1.5">
               <div className="flex items-baseline justify-between gap-2">
-                <Label htmlFor="editPrompt">
-                  {promptRequired
-                    ? t("dashboard:ai.prompt")
-                    : t("dashboard:ai.promptOptional")}
-                </Label>
+                <Label htmlFor="editPrompt">{t("dashboard:ai.prompt")}</Label>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  {editPrompt.length} / {MAX_PROMPT_LENGTH}
+                  {editPrompt.length} / {MAX_AI_PROMPT_LENGTH}
                 </span>
               </div>
               <Textarea
                 id="editPrompt"
                 name="prompt"
-                maxLength={MAX_PROMPT_LENGTH}
-                required={promptRequired}
+                maxLength={MAX_AI_PROMPT_LENGTH}
+                required
                 rows={3}
                 placeholder={t(`dashboard:ai.taskHints.${selected.task}`)}
                 value={editPrompt}
@@ -275,10 +292,10 @@ export function ImageEditForm({
           </>
         )}
 
-        {state.message && (
+        {(prepareError ?? state.message) && (
           <Alert variant="destructive">
             <AlertTitle>{t("error")}</AlertTitle>
-            <AlertDescription>{state.message}</AlertDescription>
+            <AlertDescription>{prepareError ?? state.message}</AlertDescription>
           </Alert>
         )}
 

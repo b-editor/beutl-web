@@ -382,6 +382,8 @@ model Subscription {
   billingOffer              BillingOffer? @relation(fields: [billingOfferId], references: [id])
 
   @@index([billingOfferId])
+  // 管理画面の利用状況レポートは有効な契約数を status と期間で数える。
+  @@index([status, currentPeriodEnd])
 }
 
 model ProCheckoutAttempt {

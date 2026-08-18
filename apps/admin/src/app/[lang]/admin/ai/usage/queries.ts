@@ -11,7 +11,7 @@ import {
   listCreditAccountUsageSnapshot,
   listUserLabels,
 } from "@beutl/db";
-import { loadAiSettings } from "@beutl/api";
+import { loadAiSettings, PRO_PLAN } from "@beutl/api";
 import { aiUsageRangeStart, type AiUsageRange } from "@/lib/ai-usage-range";
 import {
   summarizeAiUsageDistribution,
@@ -55,8 +55,8 @@ export async function getAiUsageReport({
     getAiJobUsageByKind({ since, prisma }),
     getAiUsageTotals({ since, prisma }),
     getAdminCreditAdjustmentTotals({ since, prisma }),
-    getAiBalanceTotals({ prisma }),
-    countActiveProSubscriptions({ now, prisma }),
+    getAiBalanceTotals({ now, prisma }),
+    countActiveProSubscriptions({ now, planId: PRO_PLAN.id, prisma }),
     getTopAiUsers({ since, limit: TOP_USER_LIMIT, prisma }),
     loadAiSettings({ prisma }),
     listCreditAccountUsageSnapshot({

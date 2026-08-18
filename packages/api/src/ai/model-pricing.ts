@@ -10,6 +10,7 @@
 // ./openrouter requires a key, allows 120 seconds, and returns a release
 // contract for large bodies, none of which suits a short anonymous GET.
 import { z } from "zod";
+import { readBoundedResponseText } from "./openrouter";
 import {
   estimateImageCost,
   estimateTranscriptionCost,
@@ -18,7 +19,11 @@ import {
   type AiCostEstimate,
   type ImagePricingEntry,
 } from "./cost-estimate";
-import { AI_PRICING_CATALOG } from "@beutl/core";
+import {
+  AI_MAX_IMAGE_REFERENCES,
+  AI_PRICING_CATALOG,
+  AI_VIDEO_RESOLUTIONS,
+} from "@beutl/core";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -27,9 +32,15 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
 const MAX_CACHE_ENTRIES = 64;
 
-// The app never requests 4K or silent video, and the request schema defaults to
-// 720p, so the estimate is built for what is actually sent.
-const VIDEO_RESOLUTION = "720p";
+// A video is charged per second at one rate whatever its resolution, so the
+// margin has to hold at the dearest resolution a caller can ask for, not the
+// one the schema happens to default to. The app never requests 4K or silent
+// video, so those shapes stay out of the estimate.
+const VIDEO_RESOLUTION = AI_VIDEO_RESOLUTIONS.reduce((highest, candidate) =>
+  Number.parseInt(candidate, 10) > Number.parseInt(highest, 10)
+    ? candidate
+    : highest,
+);
 const VIDEO_WITH_AUDIO = true;
 
 const modelPricingSchema = z.object({
@@ -148,10 +159,11 @@ async function performFetch(
     if (!response.ok) {
       throw new Error(`OpenRouter responded ${response.status}`);
     }
-    const text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) {
-      throw new Error("OpenRouter price response was too large");
-    }
+    const text = await readBoundedResponseText(
+      response,
+      MAX_RESPONSE_BYTES,
+      "OpenRouter price response",
+    );
     const value = JSON.parse(text) as unknown;
     writeCache(path, {
       expiresAt: now + CACHE_TTL_MS,
@@ -330,9 +342,11 @@ async function estimateOperation(
     return await estimateVideoOperation(model, options);
   }
   if (operation.startsWith("image.")) {
-    // An edit sends exactly one reference image; generation sends none.
-    const referenceImages = operation.startsWith("image.edit.") ? 1 : 0;
-    return await estimateImageOperation(model, referenceImages, options);
+    // An edit always sends its source, and a generation may be guided by a
+    // reference at the same price, so both are costed with one input image:
+    // this figure exists to check that a price covers its cost, and the run
+    // that sends nothing is the cheap one.
+    return await estimateImageOperation(model, AI_MAX_IMAGE_REFERENCES, options);
   }
 
   const pricing = await loadModelPricing(model, options);

@@ -24,6 +24,18 @@ function storedOffer(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// A Pro Price is monthly by contract — normalizeTerms refuses to record an
+// offer that is not — so a fixture standing in for one has to carry that shape.
+function proPrice(overrides: Record<string, unknown> = {}) {
+  return {
+    id: PRO_PRICE_ID,
+    unit_amount: 1980,
+    currency: "usd",
+    recurring: { interval: "month", interval_count: 1 },
+    ...overrides,
+  };
+}
+
 function stripeResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -52,7 +64,7 @@ describe("admin Stripe price resolution", () => {
 
   it("reads the live price from Stripe", async () => {
     const fetchMock = vi.fn(async () =>
-      stripeResponse({ id: PRO_PRICE_ID, unit_amount: 1980, currency: "USD" }),
+      stripeResponse(proPrice({ currency: "USD" })),
     );
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("STRIPE_SECRET_KEY", "rk_test_readonly");
@@ -122,7 +134,7 @@ describe("admin Stripe price resolution", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        stripeResponse({ id: PRO_PRICE_ID, unit_amount: 1980, currency: "usd" }),
+        stripeResponse(proPrice()),
       ),
     );
     vi.stubEnv("STRIPE_SECRET_KEY", "rk_test_readonly");
@@ -138,13 +150,28 @@ describe("admin Stripe price resolution", () => {
     ["a missing price", stripeResponse({ error: "no such price" }, 404), "notFound"],
     [
       "a metered price with no unit amount",
-      stripeResponse({ id: PRO_PRICE_ID, unit_amount: null, currency: "usd" }),
+      stripeResponse(proPrice({ unit_amount: null })),
       "unavailable",
     ],
     [
       "a server error",
       stripeResponse({ error: "boom" }, 500),
       "unavailable",
+    ],
+    // A yearly amount divided by the monthly allowance reports twelve times the
+    // revenue a subscriber actually produces, which is the figure the operator
+    // sets unit prices against.
+    [
+      "a Pro price that is not billed monthly",
+      stripeResponse(
+        proPrice({ recurring: { interval: "year", interval_count: 1 } }),
+      ),
+      "notFound",
+    ],
+    [
+      "a Pro price that is not recurring at all",
+      stripeResponse(proPrice({ recurring: null })),
+      "notFound",
     ],
   ])("reports %s without an offer to fall back on", async (_label, response, reason) => {
     vi.stubGlobal("fetch", vi.fn(async () => response));
