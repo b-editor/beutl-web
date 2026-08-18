@@ -58,11 +58,11 @@ import {
   AI_IMAGE_BACKGROUNDS,
   AI_IMAGE_EDIT_TASKS,
   AI_VIDEO_ASPECT_RATIOS,
-  AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
   aiImageEditTaskRequiresPrompt,
   aspectRatioOfLegacyImageSize,
   isAiSeed,
+  isAiVideoDurationSeconds,
   type AiImageAspectRatio,
   type AiImageBackground,
   type AiVideoAspectRatio,
@@ -945,7 +945,7 @@ export async function createVideoAction(
   if (!prompt || prompt.length > MAX_AI_PROMPT_LENGTH) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
-  if (!AI_VIDEO_DURATIONS_SECONDS.includes(durationSeconds as never)) {
+  if (!isAiVideoDurationSeconds(durationSeconds)) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   if (!AI_VIDEO_RESOLUTIONS.includes(resolution)) {
@@ -1282,7 +1282,7 @@ export async function retryJobAction(
     ) as AiVideoAspectRatio;
     const retryGenerateAudio = input.generateAudio !== false;
     const retrySeed = isAiSeed(input.seed) ? input.seed : undefined;
-    if (!AI_VIDEO_DURATIONS_SECONDS.includes(durationSeconds as never)) {
+    if (!isAiVideoDurationSeconds(durationSeconds)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     if (!AI_VIDEO_RESOLUTIONS.includes(resolution)) {

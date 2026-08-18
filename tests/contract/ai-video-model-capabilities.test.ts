@@ -9,6 +9,11 @@ vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => 
 });
 
 import {
+  AI_VIDEO_ASPECT_RATIOS,
+  AI_VIDEO_DURATIONS_SECONDS,
+  AI_VIDEO_RESOLUTIONS,
+} from "@beutl/core";
+import {
   clearAiVideoModelCapabilitiesCache,
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
@@ -73,8 +78,14 @@ describe("what a video model accepts", () => {
       }),
     ]);
 
+    // Everything on offer, which for the lengths is every whole second the
+    // server considers rather than the three a model happens to publish.
     expect((await loadAiVideoModelCapabilities()).get("google/veo-3.1")).toEqual(
-      capabilities(),
+      capabilities({
+        resolutions: [...AI_VIDEO_RESOLUTIONS],
+        durations: [...AI_VIDEO_DURATIONS_SECONDS],
+        aspectRatios: [...AI_VIDEO_ASPECT_RATIOS],
+      }),
     );
   });
 
@@ -182,6 +193,28 @@ describe("whether a registered model can serve anything", () => {
         capabilities({ resolutions: ["720p"], durations: [4] }),
       ),
     ).toBe(true);
+  });
+
+  it("keeps a model that renders only at 2K", () => {
+    // MiniMax H3 takes nothing but 2K and nothing shorter than five seconds.
+    // A fixed menu of 720p/1080p and 4/6/8 seconds left it registered and
+    // unusable: every request the screen could build was refused.
+    const hailuo = capabilities({
+      modelId: "minimax/hailuo-3",
+      resolutions: ["2K"],
+      durations: [5, 6, 7, 8, 9, 10],
+      seed: false,
+    });
+
+    expect(isVideoModelUsable(hailuo)).toBe(true);
+    expect(
+      unsupportedVideoRequestReason(hailuo, {
+        resolution: "2K",
+        durationSeconds: 6,
+        aspectRatio: "16:9",
+        generateAudio: true,
+      }),
+    ).toBeNull();
   });
 
   it("keeps a model the provider does not list", () => {

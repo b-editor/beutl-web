@@ -8,6 +8,7 @@ import { Card } from "@beutl/ui/ui/card";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
+import { Slider } from "@beutl/ui/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { Clapperboard, Clock, Coins, History } from "lucide-react";
 import Link from "next/link";
@@ -106,6 +107,7 @@ export type AiVideoModelOptions = {
   aspectRatios: string[];
   generateAudio: boolean;
   seed: boolean;
+  frameImages: boolean;
 };
 
 // The options this screen offers, narrowed to one model. Values are derived on
@@ -129,7 +131,31 @@ function optionsOf(
       : [...AI_VIDEO_ASPECT_RATIOS],
     generateAudio: supported?.generateAudio ?? true,
     seed: supported?.seed ?? true,
+    frameImages: supported?.frameImages ?? true,
   };
+}
+
+// The length nearest the one asked for that the model actually takes. Lengths
+// are not a range: Veo 3.1 takes 4, 6 or 8 seconds and nothing between, so the
+// slider steps through what is on offer rather than over seconds.
+// A toggle row sized to what is in it, so two choices are not stretched across
+// three columns and five do not spill out of two.
+function optionColumns(total: number): string {
+  if (total >= 5) return "grid grid-cols-5";
+  if (total === 4) return "grid grid-cols-4";
+  if (total === 3) return "grid grid-cols-3";
+  if (total === 2) return "grid grid-cols-2";
+  return "grid grid-cols-1";
+}
+
+function nearestDuration(current: number, supported: number[]): number {
+  let nearest = supported[0] ?? current;
+  for (const candidate of supported) {
+    if (Math.abs(candidate - current) < Math.abs(nearest - current)) {
+      nearest = candidate;
+    }
+  }
+  return nearest;
 }
 
 function firstSupported<T>(current: T, supported: T[]): T {
@@ -165,10 +191,7 @@ export function VideoForm({
   const blocked = blockedReason(access, ["video.generate"]);
   const models = access.models["video.generate"] ?? [];
   const options = optionsOf(capabilities, model);
-  const duration = firstSupported(
-    Number(videoDuration),
-    options.durations,
-  );
+  const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
   // A model that cannot produce sound would refuse the request outright.
@@ -243,20 +266,33 @@ export function VideoForm({
         />
 
         <div className="flex flex-col space-y-1.5">
-          <Label>{t("dashboard:ai.duration")}</Label>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={String(duration)}
-            onValueChange={(next) => next && setVideoDuration(next)}
-            className="grid grid-cols-3"
-          >
-            {options.durations.map((supported) => (
-              <ToggleGroupItem key={supported} value={String(supported)}>
-                {supported}s
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <div className="flex items-baseline justify-between gap-2">
+            <Label htmlFor="videoDuration">{t("dashboard:ai.duration")}</Label>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {t("dashboard:ai.durationSeconds", { seconds: duration })}
+            </span>
+          </div>
+          {/* Stepped over the lengths on offer rather than over seconds: a
+              model that takes 4, 6 or 8 has nothing at 5, and one that takes
+              anything from 4 to 30 should not need thirty buttons. */}
+          <Slider
+            id="videoDuration"
+            min={0}
+            max={Math.max(options.durations.length - 1, 0)}
+            step={1}
+            value={[Math.max(options.durations.indexOf(duration), 0)]}
+            disabled={options.durations.length <= 1}
+            onValueChange={([index]) => {
+              const next = options.durations[index ?? 0];
+              if (next !== undefined) setVideoDuration(String(next));
+            }}
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("dashboard:ai.durationRange", {
+              min: options.durations[0] ?? duration,
+              max: options.durations[options.durations.length - 1] ?? duration,
+            })}
+          </p>
           <input type="hidden" name="durationSeconds" value={duration} />
         </div>
 
@@ -268,7 +304,7 @@ export function VideoForm({
               variant="outline"
               value={resolution}
               onValueChange={(next) => next && setVideoResolution(next)}
-              className="grid grid-cols-2"
+              className={optionColumns(options.resolutions.length)}
             >
               {options.resolutions.map((supported) => (
                 <ToggleGroupItem key={supported} value={supported}>
@@ -287,7 +323,7 @@ export function VideoForm({
               variant="outline"
               value={aspectRatio}
               onValueChange={(next) => next && setVideoAspectRatio(next)}
-              className="grid grid-cols-2"
+              className={optionColumns(options.aspectRatios.length)}
             >
               {options.aspectRatios.map((ratio) => (
                 <ToggleGroupItem key={ratio} value={ratio}>
@@ -380,18 +416,24 @@ export function VideoForm({
               onChange={(event) => setVideoExclusions(event.target.value)}
             />
           </div>
-          <FramePicker
-            id="videoFirstFrame"
-            name="firstFrame"
-            label={t("dashboard:ai.firstFrame")}
-            hint={t("dashboard:ai.firstFrameHint")}
-          />
-          <FramePicker
-            id="videoLastFrame"
-            name="lastFrame"
-            label={t("dashboard:ai.lastFrame")}
-            hint={t("dashboard:ai.lastFrameHint")}
-          />
+          {/* Left out entirely for a model that conditions on no frames: a
+              picker that quietly does nothing is worse than none. */}
+          {options.frameImages && (
+            <>
+              <FramePicker
+                id="videoFirstFrame"
+                name="firstFrame"
+                label={t("dashboard:ai.firstFrame")}
+                hint={t("dashboard:ai.firstFrameHint")}
+              />
+              <FramePicker
+                id="videoLastFrame"
+                name="lastFrame"
+                label={t("dashboard:ai.lastFrame")}
+                hint={t("dashboard:ai.lastFrameHint")}
+              />
+            </>
+          )}
         </AdvancedOptions>
 
         {state.message && (

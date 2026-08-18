@@ -53,15 +53,39 @@ export type AiImageBackground = (typeof AI_IMAGE_BACKGROUNDS)[number];
 // charging per reference.
 export const AI_MAX_IMAGE_REFERENCES = 1;
 
-export const AI_VIDEO_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+// What a video request may ask for. Each model takes some subset of this, which
+// is what the screen offers and what the server checks a request against; these
+// are the outer bounds rather than the menu.
+//
+// A video is charged per second at one rate whatever shape it is, so the price
+// an administrator sets has to cover the dearest shape that can be asked for.
+// The cost estimate assumes the largest resolution a model offers at 16:9, and
+// nothing here may exceed that assumption: 21:9 carries a third more pixels
+// than 16:9 and 4K four times as many as 1080p, so both would be billed at a
+// price set against something cheaper. They are left out until the price can
+// follow the shape.
+export const AI_VIDEO_ASPECT_RATIOS = [
+  "16:9",
+  "9:16",
+  "4:3",
+  "3:4",
+  "1:1",
+] as const;
 export type AiVideoAspectRatio = (typeof AI_VIDEO_ASPECT_RATIOS)[number];
 
-export const AI_VIDEO_RESOLUTIONS = ["720p", "1080p"] as const;
+// Ordered from smallest to largest, which is the order the screen offers them
+// in and the order that decides which one an estimate assumes. 2K is here for
+// MiniMax H3, which renders at nothing else, and prices per second flat.
+export const AI_VIDEO_RESOLUTIONS = ["480p", "720p", "1080p", "2K"] as const;
 export type AiVideoResolution = (typeof AI_VIDEO_RESOLUTIONS)[number];
 
-export const AI_VIDEO_DURATIONS_SECONDS = [4, 6, 8] as const;
-export type AiVideoDurationSeconds =
-  (typeof AI_VIDEO_DURATIONS_SECONDS)[number];
+// A range rather than a list of three. Veo 3.1 takes 4, 6 or 8 seconds while
+// Seedance 2.5 takes any whole second from 4 to 30, and a fixed menu either
+// hides most of one model or offers lengths another refuses. Which seconds a
+// model actually takes comes from its own capability list; this is only the
+// span the server will consider at all.
+export const MIN_AI_VIDEO_DURATION_SECONDS = 1;
+export const MAX_AI_VIDEO_DURATION_SECONDS = 60;
 
 // Provider-supported deterministic seed. Bounded to a signed 32-bit value so
 // the same number survives every JSON encoder between the client and the
@@ -86,20 +110,24 @@ export function aspectRatioOfLegacyImageSize(
   );
 }
 
-// Zod cannot take a readonly tuple of numbers directly, and every entry point
-// that accepts a duration has to accept exactly what the capabilities endpoint
-// publishes, so both forms are derived here rather than restated per schema.
-export const AI_VIDEO_DURATION_STRINGS = AI_VIDEO_DURATIONS_SECONDS.map(
-  (seconds) => String(seconds),
-) as [string, ...string[]];
-
-export function isAiVideoDurationSeconds(
-  value: unknown,
-): value is AiVideoDurationSeconds {
-  return (AI_VIDEO_DURATIONS_SECONDS as readonly number[]).includes(
-    value as number,
+export function isAiVideoDurationSeconds(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_AI_VIDEO_DURATION_SECONDS &&
+    value <= MAX_AI_VIDEO_DURATION_SECONDS
   );
 }
+
+// Every whole second in range, for a caller that has to present the span as a
+// list — a model that publishes no lengths of its own is offered all of them.
+export const AI_VIDEO_DURATIONS_SECONDS: readonly number[] = Array.from(
+  {
+    length:
+      MAX_AI_VIDEO_DURATION_SECONDS - MIN_AI_VIDEO_DURATION_SECONDS + 1,
+  },
+  (_, index) => MIN_AI_VIDEO_DURATION_SECONDS + index,
+);
 
 // Which edit tasks need a prompt to mean anything. Published by the
 // capabilities endpoint and enforced by every entry point, so a task that

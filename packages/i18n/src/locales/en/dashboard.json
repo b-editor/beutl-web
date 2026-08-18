@@ -152,6 +152,8 @@
     "cueStart": "Start",
     "cueEnd": "End",
     "duration": "Duration",
+    "durationSeconds": "{{seconds}}s",
+    "durationRange": "This model supports {{min}}–{{max}} seconds.",
     "resolution": "Resolution",
     "videoDurationNotice": "Video is billed per second, so a longer clip uses more of your allowance.",
     "videoPromptPlaceholder": "Describe the scene and the motion. Example: a cat walking slowly along the shore, camera panning sideways",

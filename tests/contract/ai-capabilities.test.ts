@@ -98,9 +98,12 @@ describe("GET /api/v3/ai/capabilities", () => {
       outputFormat: "png",
     });
     expect(body.operations["video.generate"]).toMatchObject({
-      durationsSeconds: [4, 6, 8],
-      resolutions: ["720p", "1080p"],
-      aspectRatios: ["16:9", "9:16"],
+      // The span the server considers, not a menu: each model publishes the
+      // seconds it actually takes on its own entry.
+      minDurationSeconds: 1,
+      maxDurationSeconds: 60,
+      resolutions: expect.arrayContaining(["720p", "1080p", "2K"]),
+      aspectRatios: expect.arrayContaining(["16:9", "9:16"]),
       audio: true,
     });
     expect(body.operations["image.edit.restyle"]).toMatchObject({
@@ -138,9 +141,9 @@ describe("GET /api/v3/ai/capabilities", () => {
         isDefault: true,
         // A model the provider says nothing about keeps everything the
         // operation itself offers.
-        durationsSeconds: [4, 6, 8],
-        resolutions: ["720p", "1080p"],
-        aspectRatios: ["16:9", "9:16"],
+        durationsSeconds: expect.arrayContaining([4, 6, 8]),
+        resolutions: ["480p", "720p", "1080p", "2K"],
+        aspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
         audio: true,
         seed: true,
       },
@@ -182,9 +185,8 @@ describe("GET /api/v3/ai/capabilities", () => {
         displayName: "narrow/model",
         costTier: null,
         isDefault: true,
-        // Only what both sides offer: the model takes 5 seconds, this service
-        // does not ask for it.
-        durationsSeconds: [4, 6],
+        // The model's own lengths, not a fixed menu it has to fit into.
+        durationsSeconds: [4, 5, 6],
         resolutions: ["720p"],
         aspectRatios: ["16:9"],
         audio: false,
@@ -193,7 +195,7 @@ describe("GET /api/v3/ai/capabilities", () => {
     ]);
     // The operation-level lists stay the superset the server will take at all,
     // so a client that ignores the per-model values still sees the full range.
-    expect(video.resolutions).toEqual(["720p", "1080p"]);
+    expect(video.resolutions).toEqual(["480p", "720p", "1080p", "2K"]);
   });
 
   it("lists every registered model, ordered, with the first as the default", async () => {

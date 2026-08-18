@@ -43,6 +43,7 @@ export default async function Page(props: {
                 aspectRatios: supported.aspectRatios,
                 generateAudio: supported.generateAudio,
                 seed: supported.seed,
+                frameImages: supported.frameImages,
               },
             ],
           ]

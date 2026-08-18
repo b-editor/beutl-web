@@ -2039,21 +2039,26 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
     });
 
-    it("returns 400 invalidRequestBody for an unsupported duration", async () => {
-      await activatePro();
-      const res = await makeApp().request("/api/v3/ai/videos", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(await authHeaders()),
-        },
-        body: JSON.stringify({ prompt: "test", durationSeconds: 5 }),
-      });
+    it.each([61, 0, 4.5])(
+      "returns 400 invalidRequestBody for a %s second video",
+      async (durationSeconds) => {
+        // Past the span the server considers at all. Which whole seconds within
+        // it a given model takes is checked against that model's own list.
+        await activatePro();
+        const res = await makeApp().request("/api/v3/ai/videos", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authHeaders()),
+          },
+          body: JSON.stringify({ prompt: "test", durationSeconds }),
+        });
 
-      expect(res.status).toBe(400);
-      expect(state.aiJobs.size).toBe(0);
-      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
-    });
+        expect(res.status).toBe(400);
+        expect(state.aiJobs.size).toBe(0);
+        expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      },
+    );
 
     it("rejects an overlong video prompt before reserving usage", async () => {
       await activatePro();

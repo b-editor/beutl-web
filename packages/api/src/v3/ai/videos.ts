@@ -55,7 +55,6 @@ import {
   AI_MAX_SEED,
   AI_MIN_SEED,
   AI_VIDEO_ASPECT_RATIOS,
-  AI_VIDEO_DURATION_STRINGS,
   AI_VIDEO_RESOLUTIONS,
   isAiVideoDurationSeconds,
   MAX_MODEL_ID_LENGTH,
@@ -78,9 +77,8 @@ const createSchema = z.object({
 
 const createFramesSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z
-    .enum(AI_VIDEO_DURATION_STRINGS)
-    .transform((value) => Number(value)),
+  // Multipart carries strings, so the length arrives as one.
+  durationSeconds: z.coerce.number().refine(isAiVideoDurationSeconds),
   resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
   aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
   // Multipart carries strings, so the flag arrives as one.

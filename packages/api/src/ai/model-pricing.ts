@@ -41,13 +41,19 @@ const MAX_CACHE_ENTRIES = 64;
 
 // A video is charged per second at one rate whatever its resolution, so the
 // margin has to hold at the dearest resolution a caller can ask for, not the
-// one the schema happens to default to. The app never requests 4K or silent
-// video, so those shapes stay out of the estimate.
-const VIDEO_RESOLUTION = AI_VIDEO_RESOLUTIONS.reduce((highest, candidate) =>
-  Number.parseInt(candidate, 10) > Number.parseInt(highest, 10)
-    ? candidate
-    : highest,
-);
+// one the schema happens to default to. That differs per model now: one that
+// renders only at 2K is never asked for 1080p, and one that stops at 720p is
+// never asked for more. AI_VIDEO_RESOLUTIONS is ordered smallest first, so the
+// last one both sides offer is the dearest. The app never requests silent
+// video, so that shape stays out of the estimate.
+function dearestOfferedResolution(
+  supported: readonly string[] | null | undefined,
+): string {
+  const offered = AI_VIDEO_RESOLUTIONS.filter(
+    (resolution) => !supported || supported.includes(resolution),
+  );
+  return offered[offered.length - 1] ?? AI_VIDEO_RESOLUTIONS[AI_VIDEO_RESOLUTIONS.length - 1]!;
+}
 const VIDEO_WITH_AUDIO = true;
 
 type CacheEntry = {
@@ -271,7 +277,7 @@ async function estimateVideoOperation(
   }
   return estimateVideoCost({
     pricingSkus: entry.pricingSkus,
-    resolution: VIDEO_RESOLUTION,
+    resolution: dearestOfferedResolution(entry.supportedResolutions),
     withAudio: VIDEO_WITH_AUDIO,
   });
 }

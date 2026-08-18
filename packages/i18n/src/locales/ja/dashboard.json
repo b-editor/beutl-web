@@ -152,6 +152,8 @@
     "cueStart": "開始",
     "cueEnd": "終了",
     "duration": "長さ",
+    "durationSeconds": "{{seconds}} 秒",
+    "durationRange": "このモデルは {{min}}〜{{max}} 秒に対応しています。",
     "resolution": "解像度",
     "videoDurationNotice": "動画は秒単位で課金されます。長くするとその分だけ利用枠を消費します。",
     "videoPromptPlaceholder": "映したい場面と動きを書きます。例: 波打ち際をゆっくり歩く猫、カメラは横移動",

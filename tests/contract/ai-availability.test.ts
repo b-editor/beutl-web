@@ -217,7 +217,7 @@ describe("POST /api/v3/user/ai-availability", () => {
 
     const invalidDuration = await checkAvailability({
       operation: "video.generate",
-      durationSeconds: 5,
+      durationSeconds: 61,
     });
     const hiddenPriceProbe = await checkAvailability({
       operation: "image.generate",

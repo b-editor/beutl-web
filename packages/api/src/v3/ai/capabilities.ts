@@ -10,6 +10,8 @@ import {
   AI_MIN_SEED,
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
+  MAX_AI_VIDEO_DURATION_SECONDS,
+  MIN_AI_VIDEO_DURATION_SECONDS,
   AI_VIDEO_RESOLUTIONS,
 } from "@beutl/core";
 import { getUserId } from "../../api/auth";
@@ -153,7 +155,10 @@ const app = new Hono().get("/", async (c) => {
       "video.generate": {
         models: videoModels,
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
-        durationsSeconds: AI_VIDEO_DURATIONS_SECONDS,
+        // The span the server will consider; which seconds a given model takes
+        // is on that model's own entry above.
+        minDurationSeconds: MIN_AI_VIDEO_DURATION_SECONDS,
+        maxDurationSeconds: MAX_AI_VIDEO_DURATION_SECONDS,
         resolutions: AI_VIDEO_RESOLUTIONS,
         aspectRatios: AI_VIDEO_ASPECT_RATIOS,
         audio: true,
