@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { authenticated } from "@/lib/auth-guard";
-import { resolveGitUsername } from "@/lib/git-account";
+import { isOwnedBy, resolveGitUsername } from "@/lib/git-account";
 import type { ActionResult } from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { getLanguage } from "@beutl/next/language";
@@ -15,6 +15,7 @@ import {
   ForgejoError,
   createRepository,
   deleteRepository,
+  getRepository,
   issueGitCredential,
   renameRepository,
   revokeGitCredential,
@@ -40,9 +41,15 @@ type Context = {
 /**
  * セッション・言語・Forgejo ユーザー名をまとめて用意し、Forgejo の例外を
  * 画面に出せるメッセージへ畳む。
+ *
+ * owner を渡すと、それが本人のものかを先に確かめる。フォームの hidden input は
+ * 改変できるので、他人の owner を指定されても Forgejo まで行かせない。実害は
+ * Sudo 代理実行が防いでいる (他人のリポジトリは 404 になる) が、そこに寄りかかると
+ * 「存在しない」という応答自体が手がかりになる。
  */
 async function withGitAccount(
   fn: (ctx: Context) => Promise<ActionResult>,
+  owner?: string,
 ): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
@@ -50,6 +57,9 @@ async function withGitAccount(
     const username = await resolveGitUsername(session.user.id);
     if (!username) {
       return { success: false, message: t("repositories:errors.notConfigured") };
+    }
+    if (owner !== undefined && !isOwnedBy(owner, username)) {
+      return { success: false, message: t("repositories:errors.notFound") };
     }
 
     try {
@@ -134,7 +144,7 @@ export async function renameRepositoryAction(
     revalidatePath(`/${lang}/dashboard/repositories`);
     destination = `/${lang}/dashboard/repositories/${owner}/${newName}/settings`;
     return { success: true };
-  });
+  }, owner);
 
   // リネーム後は今いる URL が 404 になるので、新しい URL へ送り直す。
   // redirect() は例外で制御を移すため、try/catch の外で呼ぶ。
@@ -154,7 +164,7 @@ export async function updateDescriptionAction(
     await updateRepositoryDescription(username, owner, name, description);
     revalidatePath(`/${lang}/dashboard/repositories/${owner}/${name}`);
     return { success: true, message: t("repositories:updated") };
-  });
+  }, owner);
 }
 
 export async function deleteRepositoryAction(
@@ -167,15 +177,23 @@ export async function deleteRepositoryAction(
   let destination: string | null = null;
 
   const result = await withGitAccount(async ({ userId, username, lang, t }) => {
+    // 確認入力は hidden input の name ではなく、Forgejo から引き直した正規の名前と
+    // 突き合わせる。hidden input だけで照合すると、改変したリクエストで
+    // 「入力した名前」と「消える対象」を食い違わせられる。
+    const repository = await getRepository(username, owner, name);
+    if (!repository) {
+      return { success: false, message: t("repositories:errors.notFound") };
+    }
+
     // 名前の入力を求めるのは、Forgejo 側の削除が即時かつ不可逆なため。
-    if (confirmation !== name) {
+    if (confirmation !== repository.name) {
       return {
         success: false,
         errors: { confirmation: [t("repositories:errors.confirmMismatch")] },
       };
     }
 
-    await deleteRepository(username, owner, name);
+    await deleteRepository(username, owner, repository.name);
     await addAuditLog({
       userId,
       action: auditLogActions.git.deleteRepository,
@@ -185,7 +203,7 @@ export async function deleteRepositoryAction(
     revalidatePath(`/${lang}/dashboard/repositories`);
     destination = `/${lang}/dashboard/repositories`;
     return { success: true };
-  });
+  }, owner);
 
   if (destination) redirect(destination);
   return result;

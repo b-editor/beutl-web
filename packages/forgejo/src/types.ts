@@ -31,7 +31,10 @@ export type ForgejoRepository = {
   description: string;
   private: boolean;
   empty: boolean;
-  /** リポジトリ本体のサイズ (KiB)。LFS は含まない。 */
+  /**
+   * KiB 単位。リポジトリ本体と LFS の合計で、LFS の保存先が S3 でも変わらない
+   * (Forgejo 16.0.2 で実測)。同じ名前でも ForgejoContentsEntry.size は別物なので注意。
+   */
   size: number;
   default_branch: string;
   html_url: string;

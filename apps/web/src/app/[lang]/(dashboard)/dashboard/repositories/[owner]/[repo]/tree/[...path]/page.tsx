@@ -1,3 +1,4 @@
+import { joinRouteSegments } from "@beutl/forgejo";
 import { FileTree } from "../../file-tree";
 
 export default async function Page(props: {
@@ -9,7 +10,8 @@ export default async function Page(props: {
       lang={lang}
       owner={owner}
       repo={repo}
-      path={path.map(decodeURIComponent).join("/")}
+      // Next の dynamic params は既にデコード済み。ここで再度デコードしない。
+      path={joinRouteSegments(path)}
     />
   );
 }

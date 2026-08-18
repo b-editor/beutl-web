@@ -28,11 +28,12 @@ vi.mock("@beutl/db", () => ({
           createdAt: new Date(0),
         }
       : null,
-  createGitCredential: async (input: Record<string, unknown>) => ({
-    id: "c1",
-    createdAt: new Date(0),
-    ...input,
-  }),
+  createGitCredential: async (input: Record<string, unknown>) => {
+    if (dbInsertFails) {
+      throw Object.assign(new Error("unique constraint"), { code: "P2002" });
+    }
+    return { id: "c1", createdAt: new Date(0), ...input };
+  },
   deleteGitCredential: async () => undefined,
   createGitAccount: async () => {
     throw new Error("unused");
@@ -43,6 +44,7 @@ vi.mock("@beutl/db", () => ({
 
 let credentialCount = 0;
 let existingNames: string[] = [];
+let dbInsertFails = false;
 
 const {
   CredentialLimitReachedError,
@@ -78,6 +80,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   credentialCount = 0;
   existingNames = [];
+  dbInsertFails = false;
   process.env.FORGEJO_BASE_URL = "https://git.example.test";
   process.env.FORGEJO_ADMIN_TOKEN = "admin-token";
   process.env.FORGEJO_PROXY_SECRET = "proxy-secret";
@@ -234,6 +237,19 @@ describe("トークンの発行", () => {
     await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
       CredentialNameTakenError,
     );
+  });
+
+  it("控えを書けなかったら Forgejo 側のトークンを消す", async () => {
+    // 同じラベルで同時に発行すると、Forgejo には 2 本できて片方が DB の
+    // ユニーク制約で落ちる。控えに残らないトークンを置き去りにしない。
+    dbInsertFails = true;
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
+      CredentialNameTakenError,
+    );
+
+    const del = record(fetchMock).find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/users/someone/tokens/13");
   });
 
   it("上限に達したら弾く", async () => {

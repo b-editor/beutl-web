@@ -20,10 +20,13 @@ export function RepositoryTabs({
   const base = `/${lang}/dashboard/repositories/${owner}/${repo}`;
 
   // middleware は既定ロケールを rewrite するため、pathname にロケール接頭辞が
-  // 付かないことがある。接頭辞を除いた末尾で判定する。(dashboard-sidebar と同じ手法)
-  const segments = pathname.split("/").filter(Boolean);
-  const repoIndex = segments.indexOf(repo);
-  const section = repoIndex === -1 ? undefined : segments[repoIndex + 1];
+  // 付かないことがある。"repositories" を基準に owner/repo を読み飛ばして、
+  // その次のセグメントを見る。リポジトリ名で位置を探すと、名前が "commits" や
+  // "settings" のときに誤判定する。
+  const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const rootIndex = segments.indexOf("repositories");
+  const section =
+    rootIndex === -1 ? undefined : segments[rootIndex + 3];
 
   const tabs = [
     { key: "files", href: base, label: t("repositories:files"), icon: FileCode },

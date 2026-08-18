@@ -4,7 +4,9 @@ import {
   forgejoRequest,
   forgejoRequestOrNull,
 } from "./client";
+import { ForgejoError } from "./errors";
 import { MAX_LFS_POINTER_BYTES, parseLfsPointer } from "./lfs";
+import { encodeRepositoryPath } from "./paths";
 import { GITATTRIBUTES_TEMPLATE, GITIGNORE_TEMPLATE } from "./templates";
 import type {
   ForgejoBranch,
@@ -15,10 +17,6 @@ import type {
 
 /** Forgejo のページングの上限。 */
 const MAX_PAGE_SIZE = 50;
-
-function encodePath(path: string) {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
 
 /** UTF-8 文字列を base64 に。btoa は Latin-1 しか受け付けないため経由する。 */
 function toBase64(text: string): string {
@@ -160,7 +158,7 @@ export async function listContents(
   ref?: string,
 ) {
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents`;
-  const url = path ? `${base}/${encodePath(path)}` : base;
+  const url = path ? `${base}/${encodeRepositoryPath(path)}` : base;
   const result = await forgejoRequestOrNull<
     ForgejoContentsEntry[] | ForgejoContentsEntry
   >(url, { sudo, searchParams: { ref } });
@@ -171,7 +169,10 @@ export async function listContents(
 
 /**
  * ファイルの中身をそのまま取る。LFS 管理下ならポインタが返る
- * (実体が要るときは buildMediaUrl の方を使う)。
+ * (実体が要るときは fetchMedia の方を使う)。
+ *
+ * maxBytes を超えるものは読まずに null を返す。LFS に載せていない巨大なバイナリが
+ * あると、表示するかどうかを判断する前にメモリへ載ってしまうため。
  */
 export async function getRawFile(
   sudo: string,
@@ -179,11 +180,34 @@ export async function getRawFile(
   name: string,
   path: string,
   ref?: string,
+  { maxBytes }: { maxBytes?: number } = {},
 ) {
-  return await forgejoRequestOrNull<string>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/raw/${encodePath(path)}`,
-    { sudo, searchParams: { ref }, responseType: "text" },
+  const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  const response = await forgejoFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/raw/${encodeRepositoryPath(path)}${query}`,
+    { sudo },
   );
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new ForgejoError(
+      response.status,
+      "GET",
+      `/repos/${owner}/${name}/raw/${path}`,
+      await response.text().catch(() => ""),
+    );
+  }
+
+  if (maxBytes !== undefined) {
+    const declared = Number(response.headers.get("Content-Length"));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      // 読まずに捨てる。body を放置すると接続が滞留する。
+      await response.body?.cancel();
+      return null;
+    }
+  }
+
+  return await response.text();
 }
 
 /**
@@ -223,7 +247,9 @@ export async function resolveContentSizes(
 
   const contents = await Promise.all(
     resolvable.map((entry) =>
-      getRawFile(sudo, owner, name, entry.path, ref).catch(() => null),
+      getRawFile(sudo, owner, name, entry.path, ref, {
+        maxBytes: MAX_LFS_POINTER_BYTES,
+      }).catch(() => null),
     ),
   );
 
@@ -249,7 +275,7 @@ export async function fetchMedia(
 ) {
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   return await forgejoFetch(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/media/${encodePath(path)}${query}`,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/media/${encodeRepositoryPath(path)}${query}`,
     { sudo },
   );
 }

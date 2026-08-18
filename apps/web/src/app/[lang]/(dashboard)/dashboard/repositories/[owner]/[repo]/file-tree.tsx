@@ -2,7 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getTranslation } from "@beutl/i18n";
 import { formatBytes } from "@beutl/core";
-import { listContents, resolveContentSizes } from "@beutl/forgejo";
+import {
+  encodeRepositoryPath,
+  listContents,
+  resolveContentSizes,
+} from "@beutl/forgejo";
 import {
   File,
   FileAudio,
@@ -83,10 +87,12 @@ export async function FileTree({
       <ul className="divide-y rounded-lg border">
         {sorted.map((entry) => {
           const Icon = entry.type === "dir" ? Folder : iconFor(entry.name);
+          // 名前に空白や # % が入りうるので、href に載せる前にエンコードする。
+          const encoded = encodeRepositoryPath(entry.path);
           const href =
             entry.type === "dir"
-              ? `${base}/tree/${entry.path}`
-              : `${base}/blob/${entry.path}`;
+              ? `${base}/tree/${encoded}`
+              : `${base}/blob/${encoded}`;
           const size = sizes.get(entry.path);
           return (
             <li key={entry.path}>

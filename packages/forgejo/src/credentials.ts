@@ -157,13 +157,26 @@ export async function issueGitCredential(
     );
   }
 
-  const record = await createGitCredential({
-    userId,
-    name,
-    forgejoTokenId: issued.id,
-    // Forgejo が末尾 8 文字を返すならそれを使う。自前で切るのは返らない場合の保険。
-    lastEight: issued.token_last_eight ?? issued.sha1.slice(-8),
-  });
+  let record;
+  try {
+    record = await createGitCredential({
+      userId,
+      name,
+      forgejoTokenId: issued.id,
+      // Forgejo が末尾 8 文字を返すならそれを使う。自前で切るのは返らない場合の保険。
+      lastEight: issued.token_last_eight ?? issued.sha1.slice(-8),
+    });
+  } catch (error) {
+    // 同じラベルの発行が同時に走ると、Forgejo には 2 本できて片方がここの
+    // ユニーク制約で落ちる。控えに残らないトークンを Forgejo 側に置き去りにしない。
+    await withTemporaryPassword(username, async (basicAuth) => {
+      await forgejoRequest(
+        `/users/${encodeURIComponent(username)}/tokens/${issued.id}`,
+        { method: "DELETE", basicAuth, responseType: "none" },
+      ).catch(() => undefined);
+    }).catch(() => undefined);
+    throw new CredentialNameTakenError(name);
+  }
 
   return {
     username,

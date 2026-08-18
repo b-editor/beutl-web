@@ -1,6 +1,6 @@
 import { throwIfUnauth } from "@/lib/auth-guard";
 import { isOwnedBy, resolveGitUsername } from "@/lib/git-account";
-import { fetchMedia } from "@beutl/forgejo";
+import { fetchMedia, joinRouteSegments } from "@beutl/forgejo";
 
 /**
  * Forgejo 上のファイル実体をブラウザへ中継する。
@@ -23,7 +23,8 @@ export async function GET(
     return new Response("Not Found", { status: 404 });
   }
 
-  const filePath = path.map(decodeURIComponent).join("/");
+  // Next の dynamic params は既にデコード済み。再度デコードしない。
+  const filePath = joinRouteSegments(path);
   const upstream = await fetchMedia(username, owner, repo, filePath);
   if (!upstream.ok || !upstream.body) {
     return new Response("Not Found", { status: 404 });

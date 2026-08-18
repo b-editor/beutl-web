@@ -1,5 +1,6 @@
 import "server-only";
 import { ensureGitAccount, isForgejoConfigured } from "@beutl/forgejo";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 
 /**
  * ログイン中のユーザーに対応する Forgejo ユーザー名を返す。
@@ -13,6 +14,16 @@ export async function resolveGitUsername(
 ): Promise<string | null> {
   if (!isForgejoConfigured()) return null;
   const account = await ensureGitAccount(userId);
+
+  // Forgejo 側にアカウントが増えるのは監査対象。作られた回だけ残す。
+  if (account.created) {
+    await addAuditLog({
+      userId,
+      action: auditLogActions.git.accountProvisioned,
+      details: account.forgejoUsername,
+    });
+  }
+
   return account.forgejoUsername;
 }
 

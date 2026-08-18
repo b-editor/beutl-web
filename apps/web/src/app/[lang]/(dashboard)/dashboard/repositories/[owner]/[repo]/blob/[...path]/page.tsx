@@ -1,7 +1,12 @@
 import { notFound } from "next/navigation";
 import { formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
-import { getRawFile, parseLfsPointer } from "@beutl/forgejo";
+import {
+  encodeRepositoryPath,
+  getRawFile,
+  joinRouteSegments,
+  parseLfsPointer,
+} from "@beutl/forgejo";
 import { Button } from "@beutl/ui/ui/button";
 import { Download } from "lucide-react";
 import { Breadcrumbs } from "../../breadcrumbs";
@@ -27,19 +32,27 @@ export default async function Page(props: {
   }>;
 }) {
   const { lang, owner, repo, path: segments } = await props.params;
-  const path = segments.map(decodeURIComponent).join("/");
+  // Next の dynamic params は既にデコード済み。再度デコードすると
+  // 100%.txt のような名前で URIError になる。
+  const path = joinRouteSegments(segments);
 
   const { username } = await loadRepository(owner, repo);
   const { t } = await getTranslation(lang);
 
-  const content = await getRawFile(username, owner, repo, path);
+  // 表示上限を超えるものは読み込まずに弾く。LFS に載せていない巨大なバイナリが
+  // あっても、判断のためだけにメモリへ載せない。
+  const content = await getRawFile(username, owner, repo, path, undefined, {
+    maxBytes: MAX_RENDERED_BYTES,
+  });
   if (content === null) {
     notFound();
   }
 
   const base = `/${lang}/dashboard/repositories/${owner}/${repo}`;
   const parentPath = segments.slice(0, -1).join("/");
-  const downloadUrl = `/api/git/${owner}/${repo}/media/${path}`;
+  const downloadUrl = `/api/git/${encodeURIComponent(owner)}/${encodeURIComponent(
+    repo,
+  )}/media/${encodeRepositoryPath(path)}`;
   const pointer = parseLfsPointer(content);
 
   return (

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { encodeRepositoryPath } from "@beutl/forgejo";
 import { ChevronRight } from "lucide-react";
 
 /**
@@ -23,7 +24,9 @@ export function Breadcrumbs({
       </Link>
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;
-        const href = `${base}/tree/${segments.slice(0, index + 1).join("/")}`;
+        const href = `${base}/tree/${encodeRepositoryPath(
+          segments.slice(0, index + 1).join("/"),
+        )}`;
         return (
           <span key={href} className="flex items-center gap-1">
             <ChevronRight className="h-3 w-3 text-muted-foreground" />

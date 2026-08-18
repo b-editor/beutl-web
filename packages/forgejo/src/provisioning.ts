@@ -28,9 +28,24 @@ export function normalizeUsername(source: string): string {
   return normalized.length === 0 ? USERNAME_FALLBACK : normalized;
 }
 
+/** 連番で当たりを探す回数。これを超えたらランダムなサフィックスに切り替える。 */
+const SEQUENTIAL_ATTEMPTS = 5;
+
+/**
+ * attempt 回目に試すユーザー名。
+ *
+ * 最初は素の名前、次から `-2`, `-3`... と連番を振る。連番は読みやすいが、
+ * 表示名が未設定のユーザーは全員 `beutl-user` から始まるため、ユーザーが増えると
+ * 前の方の番号は埋まりきる。数回外したらランダムなサフィックスに切り替えて、
+ * 候補が枯渇しないようにする。
+ */
 function candidateAt(base: string, attempt: number): string {
   if (attempt === 0) return base;
-  const suffix = `-${attempt + 1}`;
+
+  const suffix =
+    attempt < SEQUENTIAL_ATTEMPTS
+      ? `-${attempt + 1}`
+      : `-${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
   return `${base.slice(0, USERNAME_MAX_LENGTH - suffix.length)}${suffix}`;
 }
 
