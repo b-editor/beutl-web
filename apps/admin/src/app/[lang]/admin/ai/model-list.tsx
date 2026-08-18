@@ -301,9 +301,13 @@ export function AiOperationModels({
               <span className="text-sm font-medium">
                 {model.displayName ?? model.modelId}
               </span>
-              <code className="text-xs text-muted-foreground">
-                {model.modelId}
-              </code>
+              {/* The id is already the label when no display name was given;
+                  printing it twice reads as two different things. */}
+              {model.displayName && (
+                <code className="text-xs text-muted-foreground">
+                  {model.modelId}
+                </code>
+              )}
               {!model.enabled && (
                 <Badge variant="outline">
                   {t("admin:ai.models.disabled")}

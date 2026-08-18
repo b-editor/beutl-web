@@ -388,14 +388,16 @@ export function ModelSelect({
         // Radix clears the value when the active item is pressed again; a
         // request always runs on some model, so keep the last one.
         onValueChange={(next) => next && onChange(next)}
-        className="grid gap-2 sm:grid-cols-2"
+        // The group is a flex row by default, and its `items-center` leaves
+        // tiles of different heights unaligned once a long model id wraps.
+        className="grid items-stretch gap-2 sm:grid-cols-2"
       >
         {models.map((model) => (
           <ToggleGroupItem
             key={model.id}
             value={model.id}
             disabled={!model.available}
-            className="h-auto flex-col items-start gap-0.5 py-3"
+            className="h-auto flex-col items-start gap-0.5 py-3 text-left"
           >
             <span className="text-sm">{model.displayName}</span>
             <span className="text-xs text-muted-foreground">
