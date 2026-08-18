@@ -3,7 +3,9 @@ import { cache } from "react";
 import { getDb, listAiOperationModels } from "@beutl/db";
 import {
   aiCostEstimateKey,
+  isImageModelUsable,
   isVideoModelUsable,
+  loadAiImageModelCapabilities,
   loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
@@ -35,6 +37,28 @@ export const getUnusableVideoModels = cache(async () => {
       .map((entry) => entry.modelId),
   );
 });
+
+// The image models that cannot serve the operation they are registered for.
+//
+// Which shapes an image model takes differs per model: GPT Image-1 renders
+// 1:1, 3:2 and 2:3 and refuses everything else, and only some take a picture to
+// work from — which every edit depends on. Nothing else on this page would show
+// that, and on the user's screen it reads as a provider outage.
+export const getUnusableImageModels = cache(
+  async (operation: string, modelIds: readonly string[]) => {
+    const capabilities = await loadAiImageModelCapabilities(modelIds);
+    const isEdit = operation.startsWith("image.edit.");
+    return new Set(
+      modelIds.filter(
+        (modelId) =>
+          !isImageModelUsable(capabilities.get(modelId), {
+            referenceImages: isEdit,
+            resolution: operation === "image.edit.upscale",
+          }),
+      ),
+    );
+  },
+);
 
 // What each operation can actually run on, fallback included. The economics
 // panels price these, since a fallback costs the operator just as much as a

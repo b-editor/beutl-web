@@ -52,6 +52,20 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
     downloadVideoContent: vi.fn(),
   };
 });
+// What an image model takes is a live lookup per model; these tests decide it
+// rather than letting the provider's current answer steer them.
+const loadAiImageModelCapabilities = vi.hoisted(() =>
+  vi.fn(async () => new Map()),
+);
+vi.mock(
+  "../../packages/api/src/ai/image-model-capabilities",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../../packages/api/src/ai/image-model-capabilities")
+    >();
+    return { ...actual, loadAiImageModelCapabilities };
+  },
+);
 vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("../../packages/api/src/ai/openrouter-video")
@@ -1186,6 +1200,43 @@ describe("v3 AI endpoints contract", () => {
       expect(
         state.creditTransactions.filter((item) => item.kind === "refund"),
       ).toHaveLength(1);
+    });
+
+    it("refuses a ratio the model cannot render before reserving usage", async () => {
+      await activatePro();
+      // GPT Image-1 takes 1:1, 3:2 and 2:3 and refuses everything else. Sending
+      // 16:9 anyway costs the user the reservation and reports a provider
+      // failure, which is indistinguishable from an outage.
+      loadAiImageModelCapabilities.mockResolvedValueOnce(
+        new Map([
+          [
+            "openai/gpt-image-1",
+            {
+              modelId: "openai/gpt-image-1",
+              aspectRatios: ["1:1", "2:3", "3:2"],
+              transparentBackground: true,
+              seed: false,
+              inputReferences: true,
+              resolution: false,
+            },
+          ],
+        ]) as never,
+      );
+
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({ prompt: "a harbor", aspectRatio: "16:9" }),
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error_code).toBe("aiModelDoesNotSupportRequest");
+      expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+      expect(state.aiJobs.size).toBe(0);
+      expect(state.creditTransactions).toEqual([]);
     });
 
     it("generates at an aspect ratio the fixed sizes could not express", async () => {

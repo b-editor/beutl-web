@@ -7,6 +7,10 @@ import {
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import {
+  loadAiImageModelCapabilities,
+  unsupportedImageRequestReason,
+} from "../../ai/image-model-capabilities";
 import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
@@ -221,6 +225,27 @@ const app = new Hono()
       });
     }
 
+    // Refused here rather than by the provider after the usage is reserved:
+    // GPT Image-1 takes only 1:1, 3:2 and 2:3, and a rejection that arrives
+    // after the reservation reads as a provider outage.
+    if (
+      unsupportedImageRequestReason(
+        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+          selectedModel.modelId,
+        ),
+        {
+          aspectRatio,
+          transparentBackground: background === "transparent",
+          ...(seed === undefined ? {} : { seed }),
+          referenceImages: reference !== null,
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "image.generate",
@@ -428,6 +453,25 @@ const app = new Hono()
     );
     if (!selectedModel) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
+    // An edit hands the model a picture, cutting out a background or asking for
+    // a size; a model that takes none of those is refused before it is paid for.
+    if (
+      unsupportedImageRequestReason(
+        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+          selectedModel.modelId,
+        ),
+        {
+          referenceImages: true,
+          transparentBackground: editTask === "remove_background",
+          resolution: editTask === "upscale",
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
       });
     }

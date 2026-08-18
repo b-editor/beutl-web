@@ -18,6 +18,7 @@ import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { loadAiVideoModelCapabilities } from "../../ai/video-model-capabilities";
+import { loadAiImageModelCapabilities } from "../../ai/image-model-capabilities";
 import {
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
@@ -56,6 +57,17 @@ type ModelDescription = {
 // model it names as well, and one that does not is refused before it is
 // charged. A model whose lists are empty accepts nothing this service can ask
 // for and is registered but unusable.
+// An image model states its own accepted shapes for the same reason a video
+// model does: GPT Image-1 takes 1:1, 3:2 and 2:3 and refuses everything else,
+// and only some models take a seed, cut out a background or accept a picture
+// to work from.
+type ImageModelDescription = ModelDescription & {
+  aspectRatios: string[];
+  transparentBackground: boolean;
+  seed: boolean;
+  referenceImages: boolean;
+};
+
 type VideoModelDescription = ModelDescription & {
   durationsSeconds: number[];
   resolutions: string[];
@@ -86,10 +98,32 @@ const app = new Hono().get("/", async (c) => {
     });
   }
 
-  const [catalog, videoCapabilities] = await Promise.all([
-    loadAiModelCatalog(),
+  const catalog = await loadAiModelCatalog();
+  const imageOperations = [
+    "image.generate",
+    ...AI_IMAGE_EDIT_TASKS.map((task) => `image.edit.${task}`),
+  ];
+  const [videoCapabilities, imageCapabilities] = await Promise.all([
     loadAiVideoModelCapabilities(),
+    loadAiImageModelCapabilities(
+      imageOperations.flatMap((operation) =>
+        catalog.list(operation).map((entry) => entry.modelId),
+      ),
+    ),
   ]);
+  const describeImageModels = (operation: string): ImageModelDescription[] =>
+    describeModels(catalog, operation).map((model) => {
+      const supported = imageCapabilities.get(model.id);
+      return {
+        ...model,
+        aspectRatios: supported
+          ? supported.aspectRatios
+          : [...AI_IMAGE_ASPECT_RATIOS],
+        transparentBackground: supported ? supported.transparentBackground : true,
+        seed: supported ? supported.seed : true,
+        referenceImages: supported ? supported.inputReferences : true,
+      };
+    });
   const videoModels: VideoModelDescription[] = describeModels(
     catalog,
     "video.generate",
@@ -113,7 +147,7 @@ const app = new Hono().get("/", async (c) => {
     // client can line the two up without a mapping table.
     operations: {
       "image.generate": {
-        models: describeModels(catalog, "image.generate"),
+        models: describeImageModels("image.generate"),
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
         aspectRatios: AI_IMAGE_ASPECT_RATIOS,
         // Accepted for compatibility; each maps onto the ratio it always meant.
@@ -128,7 +162,7 @@ const app = new Hono().get("/", async (c) => {
         AI_IMAGE_EDIT_TASKS.map((task) => [
           `image.edit.${task}`,
           {
-            models: describeModels(catalog, `image.edit.${task}`),
+            models: describeImageModels(`image.edit.${task}`),
             maxPromptLength: MAX_AI_PROMPT_LENGTH,
             promptRequired: aiImageEditTaskRequiresPrompt(task),
             maxImageBytes: MAX_AI_IMAGE_UPLOAD_BYTES,

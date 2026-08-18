@@ -68,7 +68,9 @@
       "portrait": "縦長",
       "landscape": "横長",
       "classic": "標準",
-      "classicPortrait": "標準 (縦)"
+      "classicPortrait": "標準 (縦)",
+      "photo": "写真 (横)",
+      "photoPortrait": "写真 (縦)"
     },
     "aspectRatio": "アスペクト比",
     "model": "モデル",

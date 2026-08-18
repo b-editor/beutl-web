@@ -4,6 +4,7 @@ import {
   AiProviderError,
   AiVideoSubmissionError,
   createOpenRouterClient,
+  createPublicOpenRouterClient,
   openRouterExecutionOf,
   openRouterRequestOptions,
   toAiProviderError,
@@ -21,6 +22,9 @@ import {
 // Downloading the finished video stays on the hand-rolled request: it needs the
 // declared content type to cross-check the bytes, and the SDK hands back only a
 // body stream.
+
+const CAPABILITY_TIMEOUT_MS = 5_000;
+const MAX_CAPABILITY_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 const VIDEO_STATUSES = [
   "pending",
@@ -159,8 +163,17 @@ export async function getVideoJob(id: string): Promise<VideoJobInfo> {
 
 // Every video model OpenRouter offers, with the capabilities it publishes.
 // Callers are expected to cache this; it is one request for the whole list.
+//
+// Unauthenticated, because the endpoint is public and the admin console reads
+// it too — that worker holds no provider credentials, and asking for a key here
+// would leave it unable to tell an administrator that a model it registered
+// cannot serve anything. Short-timed for the same reason a price lookup is: a
+// page must not hang on the provider.
 export async function listVideoModels(): Promise<VideoModel[]> {
-  const client = createOpenRouterClient();
+  const client = createPublicOpenRouterClient({
+    timeoutMs: CAPABILITY_TIMEOUT_MS,
+    maximumResponseBytes: MAX_CAPABILITY_RESPONSE_BYTES,
+  });
   try {
     const response = await client.videoGeneration.listVideosModels();
     return response.data;

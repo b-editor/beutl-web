@@ -42,15 +42,53 @@ const ASPECT_RATIOS: { value: AiImageAspectRatio; labelKey: string }[] = [
   { value: "9:16", labelKey: "portrait" },
   { value: "4:3", labelKey: "classic" },
   { value: "3:4", labelKey: "classicPortrait" },
+  // GPT Image-1 takes these two and none of the four above, so leaving them out
+  // left that model with nothing this screen could ask it for.
+  { value: "3:2", labelKey: "photo" },
+  { value: "2:3", labelKey: "photoPortrait" },
 ];
+
+// What each registered model will accept, read from the provider. A model
+// missing from this map states no restriction and keeps every option.
+export type AiImageModelOptions = {
+  aspectRatios: string[];
+  transparentBackground: boolean;
+  seed: boolean;
+  referenceImages: boolean;
+};
+
+// The options this screen offers, narrowed to one model. Derived on every
+// render rather than corrected in state: switching to a model that cannot do
+// 16:9 must not leave a stale 16:9 in a hidden field, which is what the server
+// would then be charged for and refuse.
+function optionsOf(
+  capabilities: Record<string, AiImageModelOptions> | undefined,
+  modelId: string,
+) {
+  const supported = capabilities?.[modelId];
+  const aspectRatios = supported?.aspectRatios.length
+    ? ASPECT_RATIOS.filter((option) =>
+        supported.aspectRatios.includes(option.value),
+      )
+    : ASPECT_RATIOS;
+  return {
+    aspectRatios: aspectRatios.length > 0 ? aspectRatios : ASPECT_RATIOS,
+    transparentBackground: supported?.transparentBackground ?? true,
+    seed: supported?.seed ?? true,
+    referenceImages: supported?.referenceImages ?? true,
+  };
+}
 
 
 export function ImageGenerateForm({
   lang,
   access,
+  capabilities,
 }: {
   lang: string;
   access: AiAccess;
+  // Resolved on the server; see imageModelOptions in the page.
+  capabilities?: Record<string, AiImageModelOptions>;
 }) {
   const { t } = useTranslation(lang);
   const [state, dispatch] = useActionState(generateImageAction, {
@@ -65,6 +103,14 @@ export function ImageGenerateForm({
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [transparent, setTransparent] = useState(false);
   const [referenceName, setReferenceName] = useState<string | null>(null);
+
+  const options = optionsOf(capabilities, model);
+  const ratio = options.aspectRatios.some((option) => option.value === aspectRatio)
+    ? aspectRatio
+    : options.aspectRatios[0]!.value;
+  // Asking a model that cannot cut one for a transparent background is a
+  // refusal; leaving it to the model is always fine.
+  const transparentBackground = options.transparentBackground && transparent;
 
   const blocked = blockedReason(access, ["image.generate"]);
   // The same composition the action validates, so the counter measures what the
@@ -138,13 +184,13 @@ export function ImageGenerateForm({
           <ToggleGroup
             type="single"
             variant="outline"
-            value={aspectRatio}
+            value={ratio}
             // Radix clears the value when the active item is pressed again.
             // A ratio is always required, so keep the last one.
             onValueChange={(next) => next && setAspectRatio(next)}
             className="grid grid-cols-3 gap-2 sm:grid-cols-5"
           >
-            {ASPECT_RATIOS.map((option) => (
+            {options.aspectRatios.map((option) => (
               <ToggleGroupItem
                 key={option.value}
                 value={option.value}
@@ -157,10 +203,14 @@ export function ImageGenerateForm({
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          <input type="hidden" name="aspectRatio" value={aspectRatio} />
+          <input type="hidden" name="aspectRatio" value={ratio} />
         </div>
 
-        <div className="flex flex-col space-y-1.5">
+        <div
+          className={`flex flex-col space-y-1.5 ${
+            options.referenceImages ? "" : "hidden"
+          }`}
+        >
           <Label htmlFor="generateReference">
             {t("dashboard:ai.referenceImage")}
           </Label>
@@ -178,23 +228,25 @@ export function ImageGenerateForm({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            id="generateTransparent"
-            type="checkbox"
-            className="h-4 w-4 rounded border-input accent-primary"
-            checked={transparent}
-            onChange={(event) => setTransparent(event.target.checked)}
-          />
-          <Label htmlFor="generateTransparent" className="font-normal">
-            {t("dashboard:ai.transparentBackground")}
-          </Label>
-          <input
-            type="hidden"
-            name="background"
-            value={transparent ? "transparent" : "auto"}
-          />
-        </div>
+        {options.transparentBackground && (
+          <div className="flex items-center gap-2">
+            <input
+              id="generateTransparent"
+              type="checkbox"
+              className="h-4 w-4 rounded border-input accent-primary"
+              checked={transparentBackground}
+              onChange={(event) => setTransparent(event.target.checked)}
+            />
+            <Label htmlFor="generateTransparent" className="font-normal">
+              {t("dashboard:ai.transparentBackground")}
+            </Label>
+          </div>
+        )}
+        <input
+          type="hidden"
+          name="background"
+          value={transparentBackground ? "transparent" : "auto"}
+        />
 
         <AdvancedOptions lang={lang}>
           <div className="flex flex-col space-y-1.5">
@@ -240,6 +292,7 @@ export function ImageGenerateForm({
             <Input
               id="generateSeed"
               name="seed"
+              disabled={!options.seed}
               type="number"
               inputMode="numeric"
               min={AI_MIN_SEED}

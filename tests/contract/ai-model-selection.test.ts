@@ -27,6 +27,18 @@ vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => 
   >();
   return { ...actual, listVideoModels: vi.fn().mockResolvedValue([]) };
 });
+vi.mock(
+  "../../packages/api/src/ai/image-model-capabilities",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../../packages/api/src/ai/image-model-capabilities")
+    >();
+    return {
+      ...actual,
+      loadAiImageModelCapabilities: vi.fn(async () => new Map()),
+    };
+  },
+);
 
 import { generateImage } from "../../packages/api/src/ai/openrouter";
 
@@ -235,13 +247,18 @@ describe("choosing a model per request", () => {
 
     const body = await response.json();
     expect(body.operations["image.generate"].models).toEqual([
-      {
+      expect.objectContaining({
         id: "cheap/model",
         displayName: "cheap/model",
         costTier: "low",
         isDefault: true,
-      },
-      { id: "dear/model", displayName: "Dear", costTier: "high", isDefault: false },
+      }),
+      expect.objectContaining({
+        id: "dear/model",
+        displayName: "Dear",
+        costTier: "high",
+        isDefault: false,
+      }),
     ]);
     // 7 and 31 are what the two are registered at. A model entry carries no
     // number a price could be read out of: video adds the parameters that
@@ -257,6 +274,16 @@ describe("choosing a model per request", () => {
       "resolutions",
       "seed",
     ];
+    const imageKeys = [
+      "aspectRatios",
+      "costTier",
+      "displayName",
+      "id",
+      "isDefault",
+      "referenceImages",
+      "seed",
+      "transparentBackground",
+    ];
     for (const [operation, value] of Object.entries(body.operations) as [
       string,
       { models: Record<string, unknown>[] },
@@ -265,7 +292,9 @@ describe("choosing a model per request", () => {
         expect(Object.keys(model).sort()).toEqual(
           operation === "video.generate"
             ? videoKeys
-            : ["costTier", "displayName", "id", "isDefault"],
+            : operation.startsWith("image.")
+              ? imageKeys
+              : ["costTier", "displayName", "id", "isDefault"],
         );
         for (const field of Object.values(model)) {
           expect(typeof field).not.toBe("number");

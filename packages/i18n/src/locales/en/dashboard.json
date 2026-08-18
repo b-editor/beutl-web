@@ -68,7 +68,9 @@
       "portrait": "Portrait",
       "landscape": "Landscape",
       "classic": "Classic",
-      "classicPortrait": "Classic portrait"
+      "classicPortrait": "Classic portrait",
+      "photo": "Photo",
+      "photoPortrait": "Photo (portrait)"
     },
     "aspectRatio": "Aspect ratio",
     "model": "Model",

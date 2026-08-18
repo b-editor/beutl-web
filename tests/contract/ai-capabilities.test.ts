@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { setDbProvider, upsertAiOperationModel } from "@beutl/db";
+import { AI_IMAGE_ASPECT_RATIOS } from "@beutl/core";
 
 // What a video model accepts comes from the provider. Mocked so the endpoint's
 // shape is tested without a network call deciding the expectations.
@@ -12,6 +13,20 @@ vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => 
   >();
   return { ...actual, listVideoModels };
 });
+// What an image model takes is one lookup per model; the endpoint's shape is
+// tested without any of them going over the wire.
+const loadAiImageModelCapabilities = vi.hoisted(() =>
+  vi.fn(async () => new Map()),
+);
+vi.mock(
+  "../../packages/api/src/ai/image-model-capabilities",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../../packages/api/src/ai/image-model-capabilities")
+    >();
+    return { ...actual, loadAiImageModelCapabilities };
+  },
+);
 
 import { v3 } from "@beutl/api";
 import { clearAiVideoModelCapabilitiesCache } from "../../packages/api/src/ai/video-model-capabilities";
@@ -35,6 +50,26 @@ async function authHeaders() {
     "HS256",
   );
   return { Authorization: `Bearer ${token}` };
+}
+
+// A model entry as the endpoint reports it when the provider says nothing about
+// the model: every shape this service knows how to ask for stays on offer.
+function imageModel(
+  id: string,
+  displayName: string,
+  costTier: string | null,
+  isDefault: boolean,
+) {
+  return {
+    id,
+    displayName,
+    costTier,
+    isDefault,
+    aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
+    transparentBackground: true,
+    seed: true,
+    referenceImages: true,
+  };
 }
 
 describe("GET /api/v3/ai/capabilities", () => {
@@ -224,19 +259,11 @@ describe("GET /api/v3/ai/capabilities", () => {
     expect(
       (await response.json()).operations["image.generate"].models,
     ).toEqual([
-      { id: "dear/model", displayName: "Dear", costTier: "high", isDefault: true },
-      {
-        id: "cheap/model",
-        displayName: "cheap/model",
-        costTier: "low",
-        isDefault: false,
-      },
-      {
-        id: "middling/model",
-        displayName: "middling/model",
-        costTier: "medium",
-        isDefault: false,
-      },
+      // Each carries what it takes as well, exactly as a video model does; a
+      // model the provider says nothing about keeps every shape on offer.
+      imageModel("dear/model", "Dear", "high", true),
+      imageModel("cheap/model", "cheap/model", "low", false),
+      imageModel("middling/model", "middling/model", "medium", false),
     ]);
   });
 

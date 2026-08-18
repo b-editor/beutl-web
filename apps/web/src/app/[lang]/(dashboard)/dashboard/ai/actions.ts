@@ -50,7 +50,9 @@ import {
   classifyVideoSubmissionFailure,
   createAndAttachVideoJob,
   deleteAiOutputObject,
+  loadAiImageModelCapabilities,
   loadAiVideoModelCapabilities,
+  unsupportedImageRequestReason,
   unsupportedVideoRequestReason,
 } from "@beutl/api";
 import {
@@ -566,6 +568,26 @@ export async function editImageAction(
     : task === "outpaint"
       ? `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`
       : prompt;
+  // An edit hands the model a picture, cuts out a background or asks for a
+  // size; a model that takes none of those is refused before it is paid for.
+  if (
+    unsupportedImageRequestReason(
+      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+        selectedModel.modelId,
+      ),
+      {
+        referenceImages: true,
+        transparentBackground: task === "remove_background",
+        resolution: task === "upscale",
+      },
+    )
+  ) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
   const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
     model: selectedModel.modelId,
     task,

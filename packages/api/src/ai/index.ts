@@ -12,6 +12,7 @@ export * from "./audio-validation";
 export * from "./audio-metadata";
 export * from "./billing-refunds";
 export * from "./entitlements";
+export * from "./image-model-capabilities";
 export * from "./openrouter";
 export * from "./openrouter-video";
 export * from "./pricing";
