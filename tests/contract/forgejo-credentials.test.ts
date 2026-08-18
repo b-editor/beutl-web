@@ -260,6 +260,31 @@ describe("トークンの発行", () => {
   });
 });
 
+describe("リポジトリの作成", () => {
+  it("テンプレートを入れられなかったら作成ごと巻き戻す", async () => {
+    // .gitattributes の無いリポジトリが残ると、その後 push された素材が LFS に
+    // 載らず、巨大な動画が普通の git オブジェクトとして入ってしまう。
+    const { createRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "boom" }, 500);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    const del = record(fetchMock).find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/repos/someone/proj");
+  });
+});
+
 describe("トークンの失効", () => {
   it("名前ではなく Forgejo のトークン id で消す", async () => {
     const revoked = await revokeGitCredential("u1", "c1");

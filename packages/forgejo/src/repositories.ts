@@ -76,29 +76,37 @@ export async function createRepository(
     },
   });
 
-  await forgejoRequest(
-    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`,
-    {
-      method: "POST",
-      sudo,
-      body: {
-        branch: repository.default_branch,
-        message: "Add Beutl project defaults",
-        files: [
-          {
-            operation: "create",
-            path: ".gitattributes",
-            content: toBase64(GITATTRIBUTES_TEMPLATE),
-          },
-          {
-            operation: "create",
-            path: ".gitignore",
-            content: toBase64(GITIGNORE_TEMPLATE),
-          },
-        ],
+  try {
+    await forgejoRequest(
+      `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`,
+      {
+        method: "POST",
+        sudo,
+        body: {
+          branch: repository.default_branch,
+          message: "Add Beutl project defaults",
+          files: [
+            {
+              operation: "create",
+              path: ".gitattributes",
+              content: toBase64(GITATTRIBUTES_TEMPLATE),
+            },
+            {
+              operation: "create",
+              path: ".gitignore",
+              content: toBase64(GITIGNORE_TEMPLATE),
+            },
+          ],
+        },
       },
-    },
-  );
+    );
+  } catch (error) {
+    // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
+    // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
+    // なかったことにして、ユーザーにやり直させる方がまだ良い。
+    await deleteRepository(sudo, sudo, name).catch(() => undefined);
+    throw error;
+  }
 
   return repository;
 }

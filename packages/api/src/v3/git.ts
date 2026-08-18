@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import {
@@ -17,6 +18,8 @@ import {
   listRepositories,
   revokeGitCredential,
 } from "@beutl/forgejo";
+import { auditLogActions } from "@beutl/db";
+import { addApiAuditLog } from "../api/audit";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 
@@ -43,6 +46,22 @@ async function requireUserId(c: Parameters<typeof getUserId>[0]) {
   return await getUserId(c);
 }
 
+/**
+ * Forgejo ユーザーを用意する。初回はここで作られるので監査ログに残す。
+ * 画面側の resolveGitUsername と同じ扱いにして、経路による差を作らない。
+ */
+async function ensureAccount(c: Context, userId: string) {
+  const account = await ensureGitAccount(userId);
+  if (account.created) {
+    await addApiAuditLog(c, {
+      userId,
+      action: auditLogActions.git.accountProvisioned,
+      details: account.forgejoUsername,
+    });
+  }
+  return account;
+}
+
 const app = new Hono()
   .get("/account", async (c) => {
     const userId = await requireUserId(c);
@@ -55,7 +74,7 @@ const app = new Hono()
       return c.json(await apiErrorResponse("unknown"), { status: 503 });
     }
 
-    const account = await ensureGitAccount(userId);
+    const account = await ensureAccount(c, userId);
     return c.json({
       username: account.forgejoUsername,
       baseUrl: getForgejoConfig().baseUrl,
@@ -95,6 +114,7 @@ const app = new Hono()
     }
 
     const { deviceName } = c.req.valid("json");
+    await ensureAccount(c, userId);
     try {
       // 端末ごとに 1 本。既存のトークンには触らないので、他の端末は使い続けられる。
       // 平文はこのレスポンスにしか現れない。
@@ -155,7 +175,7 @@ const app = new Hono()
       return c.json(await apiErrorResponse("unknown"), { status: 503 });
     }
 
-    const account = await ensureGitAccount(userId);
+    const account = await ensureAccount(c, userId);
     const repositories = await listRepositories(account.forgejoUsername);
     return c.json(
       repositories.map((repository) => ({
@@ -181,7 +201,7 @@ const app = new Hono()
     }
 
     const { name, description } = c.req.valid("json");
-    const account = await ensureGitAccount(userId);
+    const account = await ensureAccount(c, userId);
 
     try {
       const repository = await createRepository(account.forgejoUsername, {
