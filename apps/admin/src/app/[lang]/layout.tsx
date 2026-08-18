@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import "../globals.css";
 import { Toaster } from "@beutl/ui/ui/toaster";
 import ProgressBarProvider from "@beutl/ui/progress-bar-provider";
-import { getTranslation, defaultLanguage } from "@beutl/i18n";
+import { notFound } from "next/navigation";
+import { getTranslation, defaultLanguage, isAvailableLanguage } from "@beutl/i18n";
 
 type Props = {
   children: React.ReactNode;
@@ -30,6 +31,13 @@ export default async function LangLayout(props: Props) {
   // ルート直下の /_not-found では lang パラメータが解決されないため
   // デフォルト言語にフォールバックする。
   const lang = params.lang ?? defaultLanguage;
+  // middleware がロケールを付けずに通すパス (/favicon.ico, /robots.txt, /img,
+  // /api) は、実体が無いと [lang] に一致してこのツリーへ落ちる。ブラウザが
+  // 自動で投げる /favicon.ico がその代表で、言語として扱えない値のまま描画に
+  // 進むと Intl が例外を投げて 500 になる。存在しないパスなので 404 を返す。
+  if (!isAvailableLanguage(lang)) {
+    notFound();
+  }
   const { children } = props;
 
   return (
