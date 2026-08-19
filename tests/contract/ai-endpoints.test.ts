@@ -1328,13 +1328,13 @@ describe("v3 AI endpoints contract", () => {
       const call = vi.mocked(generateImage).mock.calls[0][0];
       expect(call.referenceImages).toHaveLength(1);
       expect(call.referenceImages?.[0].mimeType).toBe("image/png");
-      // The bytes are not stored, only the name — which is why the history
+      // The bytes are not stored, only the names — which is why the history
       // offers no retry for this job.
       expect([...state.aiJobs.values()][0]).toMatchObject({
         inputParams: {
           prompt: "in this style",
           aspectRatio: "1:1",
-          reference: { filename: "style.png" },
+          references: [{ filename: "style.png" }],
         },
       });
     });

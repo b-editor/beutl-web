@@ -5,6 +5,11 @@ import { Button } from "./ui/button";
 import { Loader2 } from "lucide-react";
 import { ComponentProps } from "react";
 
+// `forceSpinner` is how a form says "I am busy" when useFormStatus cannot say it
+// for us. A form whose action is a useActionState dispatch is one such case: the
+// dispatch returns as soon as it has queued the work, so the form's own status
+// goes back to idle within the same tick while the action is still running.
+// Pass the `isPending` that useActionState returns.
 export default function SubmitButton({
   showSpinner,
   forceSpinner,

@@ -30,6 +30,7 @@ import {
   AI_IMAGE_BACKGROUNDS,
   AI_IMAGE_EDIT_TASKS,
   AI_LEGACY_IMAGE_SIZES,
+  AI_MAX_IMAGE_REFERENCES,
   AI_MAX_SEED,
   AI_MIN_SEED,
   MAX_MODEL_ID_LENGTH,
@@ -147,7 +148,10 @@ const app = new Hono()
     // A request without one stays exactly the JSON call it has always been.
     const multipart = isMultipartRequest(c.req.raw);
     let rawBody: unknown;
-    let referenceFile: File | null = null;
+    // Several pictures may guide one generation; the models take between three
+    // and sixteen and the price is set for AI_MAX_IMAGE_REFERENCES. A single
+    // "reference" field still works, which is what every existing client sends.
+    let referenceFiles: File[] = [];
     if (multipart) {
       let body: Awaited<ReturnType<typeof c.req.parseBody>>;
       try {
@@ -160,14 +164,24 @@ const app = new Hono()
         }
         throw error;
       }
-      const reference = body["reference"];
-      if (reference instanceof File && reference.size > 0) {
-        if (fileExceedsUploadLimit(reference, MAX_AI_IMAGE_UPLOAD_BYTES)) {
-          return c.json(await apiErrorResponse("fileIsTooLarge"), {
-            status: 413,
-          });
-        }
-        referenceFile = reference;
+      const listed = body["reference[]"];
+      referenceFiles = [
+        body["reference"],
+        ...(Array.isArray(listed) ? listed : [listed]),
+      ].filter((value): value is File => value instanceof File && value.size > 0);
+      if (referenceFiles.length > AI_MAX_IMAGE_REFERENCES) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      if (
+        referenceFiles.some((file) =>
+          fileExceedsUploadLimit(file, MAX_AI_IMAGE_UPLOAD_BYTES),
+        )
+      ) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), {
+          status: 413,
+        });
       }
       const size = optionalMultipartField(body, "size");
       const aspectRatioField = optionalMultipartField(body, "aspectRatio");
@@ -205,10 +219,16 @@ const app = new Hono()
       parsedBody.data.aspectRatio ??
       (aspectRatioOfLegacyImageSize(size as string) as AiImageAspectRatio);
 
-    const reference = referenceFile
-      ? await validateAiInputImage(referenceFile, supportedInputImageTypes)
-      : null;
-    if (referenceFile && !reference) {
+    const validated = await Promise.all(
+      referenceFiles.map((file) =>
+        validateAiInputImage(file, supportedInputImageTypes),
+      ),
+    );
+    const references = validated.filter(
+      (reference): reference is NonNullable<typeof reference> =>
+        reference !== null,
+    );
+    if (references.length !== referenceFiles.length) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
@@ -237,7 +257,7 @@ const app = new Hono()
           aspectRatio,
           transparentBackground: background === "transparent",
           ...(seed === undefined ? {} : { seed }),
-          referenceImages: reference !== null,
+          referenceImages: references.length,
         },
       )
     ) {
@@ -259,13 +279,17 @@ const app = new Hono()
         // for. The stored inputParams and the Server Action normalize it too.
         ...(background && background !== "auto" ? { background } : {}),
         ...(seed === undefined ? {} : { seed }),
-        ...(reference && referenceFile
+        // Every picture is part of what makes this request the request it is:
+        // the same prompt guided by different pictures is a different run.
+        ...(references.length > 0
           ? {
-              reference: {
-                fileName: referenceFile.name,
-                contentType: reference.mimeType,
-                contentSha256: await sha256Hex(reference.bytes),
-              },
+              references: await Promise.all(
+                references.map(async (reference, index) => ({
+                  fileName: referenceFiles[index]!.name,
+                  contentType: reference.mimeType,
+                  contentSha256: await sha256Hex(reference.bytes),
+                })),
+              ),
             }
           : {}),
       },
@@ -288,7 +312,9 @@ const app = new Hono()
         aspectRatio,
         ...(background && background !== "auto" ? { background } : {}),
         ...(seed === undefined ? {} : { seed }),
-        ...(referenceFile ? { reference: { filename: referenceFile.name } } : {}),
+        ...(referenceFiles.length > 0
+          ? { references: referenceFiles.map((file) => ({ filename: file.name })) }
+          : {}),
       },
       usageUnits: cost,
       model: selectedModel.modelId,
@@ -330,11 +356,12 @@ const app = new Hono()
         prompt,
         aspectRatio,
         ...(background ? { background } : {}),
-        ...(reference
+        ...(references.length > 0
           ? {
-              referenceImages: [
-                { bytes: reference.bytes, mimeType: reference.mimeType },
-              ],
+              referenceImages: references.map((reference) => ({
+                bytes: reference.bytes,
+                mimeType: reference.mimeType,
+              })),
             }
           : {}),
         ...(seed === undefined ? {} : { seed }),
@@ -465,7 +492,8 @@ const app = new Hono()
           selectedModel.modelId,
         ),
         {
-          referenceImages: true,
+          // The picture being edited.
+          referenceImages: 1,
           transparentBackground: editTask === "remove_background",
           resolution: editTask === "upscale",
         },

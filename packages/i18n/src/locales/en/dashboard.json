@@ -82,7 +82,7 @@
     },
     "generateAudio": "Generate audio",
     "referenceImage": "Reference image (optional)",
-    "referenceImageHint": "Hand it a picture you already have and the generation follows its subject and style.",
+    "referenceImageHint": "Hand it pictures to work from — their style and subject guide the result (up to {{maximum}}).",
     "referenceImageSelected": "Generating from {{name}}.",
     "transparentBackground": "Transparent background",
     "seed": "Seed (optional)",
@@ -223,6 +223,7 @@
       "tooLong": "Too long: the extracted audio would exceed the limit. Trim it and try again.",
       "noAudioTrack": "This file carries no audio."
     },
-    "processing": "Working…"
+    "processing": "Working…",
+    "referenceImageTooMany": "At most {{maximum}} reference images. Pick again."
   }
 }

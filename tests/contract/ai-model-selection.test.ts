@@ -280,7 +280,7 @@ describe("choosing a model per request", () => {
       "displayName",
       "id",
       "isDefault",
-      "referenceImages",
+      "maxReferenceImages",
       "seed",
       "transparentBackground",
     ];
@@ -296,7 +296,9 @@ describe("choosing a model per request", () => {
               ? imageKeys
               : ["costTier", "displayName", "id", "isDefault"],
         );
-        for (const field of Object.values(model)) {
+        for (const [key, field] of Object.entries(model)) {
+          // A count of pictures is not a figure a price can be read out of.
+          if (key === "maxReferenceImages") continue;
           expect(typeof field).not.toBe("number");
         }
       }

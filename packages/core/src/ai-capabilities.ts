@@ -48,10 +48,15 @@ export const AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS: Record<
 export const AI_IMAGE_BACKGROUNDS = ["auto", "transparent"] as const;
 export type AiImageBackground = (typeof AI_IMAGE_BACKGROUNDS)[number];
 
-// One reference image, because that is what an image edit already sends and
-// therefore what the per-operation price already covers. Raising this means
-// charging per reference.
-export const AI_MAX_IMAGE_REFERENCES = 1;
+// How many pictures a generation may be guided by. Models take between three
+// and sixteen; this is the ceiling the price is set against, and every model's
+// own limit narrows it further.
+//
+// It is not free to raise: an image is charged at one price whatever it was
+// given, and the cost estimate an administrator prices from assumes this many
+// references. Four roughly doubles the assumed provider cost of a generation
+// against one.
+export const AI_MAX_IMAGE_REFERENCES = 4;
 
 // What a video request may ask for. Each model takes some subset of this, which
 // is what the screen offers and what the server checks a request against; these

@@ -12,6 +12,7 @@ import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { ImageIcon } from "lucide-react";
 import { useActionState, useState, type ChangeEvent } from "react";
 import {
+  AI_MAX_IMAGE_REFERENCES,
   AI_MAX_SEED,
   AI_MIN_SEED,
   MAX_AI_PROMPT_LENGTH,
@@ -57,7 +58,7 @@ export type AiImageModelOptions = {
   aspectRatios: string[];
   transparentBackground: boolean;
   seed: boolean;
-  referenceImages: boolean;
+  maxReferenceImages: number;
 };
 
 // The options this screen offers, narrowed to one model. Derived on every
@@ -78,7 +79,7 @@ function optionsOf(
     aspectRatios: aspectRatios.length > 0 ? aspectRatios : ASPECT_RATIOS,
     transparentBackground: supported?.transparentBackground ?? true,
     seed: supported?.seed ?? true,
-    referenceImages: supported?.referenceImages ?? true,
+    maxReferenceImages: supported?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES,
   };
 }
 
@@ -105,7 +106,7 @@ export function ImageGenerateForm({
   const [model, setModel] = useState(() => defaultModelId(models));
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [transparent, setTransparent] = useState(false);
-  const [referenceName, setReferenceName] = useState<string | null>(null);
+  const [referenceNames, setReferenceNames] = useState<string[]>([]);
 
   const options = optionsOf(capabilities, model);
   const ratio = options.aspectRatios.some((option) => option.value === aspectRatio)
@@ -114,6 +115,8 @@ export function ImageGenerateForm({
   // Asking a model that cannot cut one for a transparent background is a
   // refusal; leaving it to the model is always fine.
   const transparentBackground = options.transparentBackground && transparent;
+
+  const tooManyReferences = referenceNames.length > options.maxReferenceImages;
 
   const blocked = blockedReason(access, ["image.generate"]);
   // The same composition the action validates, so the counter measures what the
@@ -125,9 +128,10 @@ export function ImageGenerateForm({
     exclusions,
   }).length;
 
+  // More than the model takes is refused by the server, so the field says so
+  // here rather than after the reservation.
   function handleReferenceChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    setReferenceName(file ? file.name : null);
+    setReferenceNames([...(event.target.files ?? [])].map((file) => file.name));
   }
 
   function applyTemplate(template: PromptTemplate) {
@@ -211,7 +215,7 @@ export function ImageGenerateForm({
 
         <div
           className={`flex flex-col space-y-1.5 ${
-            options.referenceImages ? "" : "hidden"
+            options.maxReferenceImages > 0 ? "" : "hidden"
           }`}
         >
           <Label htmlFor="generateReference">
@@ -221,13 +225,28 @@ export function ImageGenerateForm({
             id="generateReference"
             name="reference"
             type="file"
+            multiple={options.maxReferenceImages > 1}
             accept="image/png,image/jpeg,image/webp,image/gif"
             onChange={handleReferenceChange}
           />
-          <p className="text-xs text-muted-foreground">
-            {referenceName
-              ? t("dashboard:ai.referenceImageSelected", { name: referenceName })
-              : t("dashboard:ai.referenceImageHint")}
+          <p
+            className={
+              tooManyReferences
+                ? "text-xs text-destructive"
+                : "text-xs text-muted-foreground"
+            }
+          >
+            {tooManyReferences
+              ? t("dashboard:ai.referenceImageTooMany", {
+                  maximum: options.maxReferenceImages,
+                })
+              : referenceNames.length > 0
+                ? t("dashboard:ai.referenceImageSelected", {
+                    name: referenceNames.join(", "),
+                  })
+                : t("dashboard:ai.referenceImageHint", {
+                    maximum: options.maxReferenceImages,
+                  })}
           </p>
         </div>
 
@@ -314,8 +333,11 @@ export function ImageGenerateForm({
           </Alert>
         )}
 
-        {/* Stays inside the form: SubmitButton reads useFormStatus. */}
-        <SubmitButton className="w-full" disabled={blocked !== null}>
+        <SubmitButton
+          className="w-full"
+          forceSpinner={isPending}
+          disabled={blocked !== null || tooManyReferences || isPending}
+        >
           {t("dashboard:ai.generate")}
         </SubmitButton>
       </form>

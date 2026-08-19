@@ -190,20 +190,22 @@ describe("AI provider cost estimates", () => {
 
     expect([...byOperation.keys()].sort()).toEqual([...AI_OPERATIONS].sort());
 
-    // 1,056 output tokens at $0.00004 reproduces OpenAI's published $0.042,
-    // plus the one reference image a generation may be guided by: image.generate
-    // and image.edit.* are costed alike because they send the same input at the
-    // same price, and understating the cost is the direction that misleads.
+    // 1,056 output tokens at $0.00004 reproduces OpenAI's published $0.042, plus
+    // the pictures a generation may be guided by — AI_MAX_IMAGE_REFERENCES of
+    // them at 1,056 input tokens each. The estimate assumes the most a caller
+    // can send, because that is what the price has to cover; understating the
+    // cost is the direction that misleads.
     const generate = byOperation.get("image.generate")?.estimate;
     expect(generate?.status).toBe("estimated");
     if (generate?.status === "estimated") {
-      expect(generate.usdMin).toBeCloseTo(0.0528, 8);
-      expect(generate.usdMax).toBeCloseTo(0.0528, 8);
+      expect(generate.usdMin).toBeCloseTo(0.08448, 8);
+      expect(generate.usdMax).toBeCloseTo(0.08448, 8);
     }
     const edit = byOperation.get("image.edit.remove_background")?.estimate;
     expect(edit?.status).toBe("estimated");
     if (edit?.status === "estimated") {
-      expect(edit.usdMin).toBeCloseTo(0.0528, 8);
+      // Costed alike: an edit sends the same input at the same price.
+      expect(edit.usdMin).toBeCloseTo(0.08448, 8);
     }
     // Priced per image rather than per token, so no assumption is needed.
     expect(byOperation.get("image.edit.upscale")?.estimate).toMatchObject({

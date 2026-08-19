@@ -71,9 +71,13 @@ const imageRetryInputSchema = z
     aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
     background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
     seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
-    // Only the name is kept; the image itself is not, which is what closes
-    // retry for a reference-guided generation.
+    // Only the names are kept; the pictures themselves are not, which is what
+    // closes retry for a reference-guided generation. "reference" is what jobs
+    // recorded while only one was allowed.
     reference: z.object({ filename: z.string().min(1) }).optional(),
+    references: z
+      .array(z.object({ filename: z.string().min(1) }))
+      .optional(),
   })
   .refine(
     (value) => value.size !== undefined || value.aspectRatio !== undefined,
@@ -193,7 +197,7 @@ function canRetry(job: AiJobRecord): boolean {
     const parsed = imageRetryInputSchema.safeParse(job.inputParams);
     // Same rule as a frame-conditioned video: the reference image was not kept,
     // so rerunning would produce something else and charge for it.
-    return parsed.success && !parsed.data.reference;
+    return parsed.success && !parsed.data.reference && !parsed.data.references;
   }
   if (job.kind === "video") {
     const parsed = videoHistoryInputSchema.safeParse(job.inputParams);

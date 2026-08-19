@@ -65,7 +65,7 @@ type ImageModelDescription = ModelDescription & {
   aspectRatios: string[];
   transparentBackground: boolean;
   seed: boolean;
-  referenceImages: boolean;
+  maxReferenceImages: number;
 };
 
 type VideoModelDescription = ModelDescription & {
@@ -121,7 +121,9 @@ const app = new Hono().get("/", async (c) => {
           : [...AI_IMAGE_ASPECT_RATIOS],
         transparentBackground: supported ? supported.transparentBackground : true,
         seed: supported ? supported.seed : true,
-        referenceImages: supported ? supported.inputReferences : true,
+        maxReferenceImages: supported
+          ? supported.maxReferenceImages
+          : AI_MAX_IMAGE_REFERENCES,
       };
     });
   const videoModels: VideoModelDescription[] = describeModels(

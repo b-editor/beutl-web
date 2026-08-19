@@ -1,5 +1,6 @@
 import {
   AI_IMAGE_ASPECT_RATIOS,
+  AI_MAX_IMAGE_REFERENCES,
   type AiImageAspectRatio,
 } from "@beutl/core";
 import {
@@ -25,6 +26,9 @@ export type AiImageModelCapabilities = {
   // Whether a picture can be handed to the model at all, which every edit and
   // every image-to-image generation depends on.
   inputReferences: boolean;
+  // How many, narrowed to what the price covers. Zero when the model takes
+  // none.
+  maxReferenceImages: number;
   // Whether a size can be asked for, which is what upscaling means here.
   resolution: boolean;
 };
@@ -39,6 +43,10 @@ export type UnsupportedImageRequestReason =
 // Unauthenticated: the endpoint is public and the admin console reads it too,
 // and that worker holds no provider credentials. Short-timed so a page never
 // hangs on the provider.
+// What an upscale asks the provider for. A model whose sizes stop short of it
+// cannot serve that operation however the rest of the request is shaped.
+const UPSCALE_RESOLUTION = "4K";
+
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -61,6 +69,20 @@ function splitModelId(model: string): { author: string; slug: string } | null {
   const index = model.indexOf("/");
   if (index <= 0 || index === model.length - 1) return null;
   return { author: model.slice(0, index), slug: model.slice(index + 1) };
+}
+
+function rangeMaximum(descriptor: unknown): number | null {
+  if (
+    typeof descriptor === "object" &&
+    descriptor !== null &&
+    "type" in descriptor &&
+    descriptor.type === "range" &&
+    "max" in descriptor &&
+    typeof descriptor.max === "number"
+  ) {
+    return descriptor.max;
+  }
+  return null;
 }
 
 function enumValues(descriptor: unknown): string[] | null {
@@ -88,16 +110,40 @@ function toCapabilities(
 ): AiImageModelCapabilities {
   const supported = new Set<string>();
   const ratios = new Set<string>();
+  let publishedReferences: number | null = null;
+  // Which values each parameter takes, unioned across the endpoints. A
+  // parameter that is not an enum has no values and is judged by its presence.
+  const values = new Map<string, Set<string>>();
   for (const endpoint of endpoints) {
     for (const [name, descriptor] of Object.entries(
       endpoint.supportedParameters ?? {},
     )) {
       supported.add(name);
+      const listed = enumValues(descriptor);
+      if (listed) {
+        const known = values.get(name) ?? new Set<string>();
+        for (const value of listed) known.add(value);
+        values.set(name, known);
+      }
       if (name === "aspect_ratio") {
-        for (const value of enumValues(descriptor) ?? []) ratios.add(value);
+        for (const value of listed ?? []) ratios.add(value);
+      }
+      if (name === "input_references") {
+        const maximum = rangeMaximum(descriptor);
+        if (maximum !== null) {
+          publishedReferences = Math.max(publishedReferences ?? 0, maximum);
+        }
       }
     }
   }
+
+  // A parameter that publishes values is judged by them; one that publishes
+  // none states no restriction and is judged by its presence. An absent
+  // parameter is a refusal either way.
+  const accepts = (name: string, value: string) => {
+    const known = values.get(name);
+    return known ? known.has(value) : supported.has(name);
+  };
 
   return {
     modelId,
@@ -106,10 +152,19 @@ function toCapabilities(
     aspectRatios: ratios.size === 0
       ? [...AI_IMAGE_ASPECT_RATIOS]
       : AI_IMAGE_ASPECT_RATIOS.filter((ratio) => ratios.has(ratio)),
-    transparentBackground: supported.has("background"),
+    // The value, not the key: GPT Image-2 publishes a background parameter and
+    // takes only "auto" and "opaque" from it, so asking it for a transparent
+    // one comes back as `background: not supported`.
+    transparentBackground: accepts("background", "transparent"),
     seed: supported.has("seed"),
     inputReferences: supported.has("input_references"),
-    resolution: supported.has("resolution"),
+    // A model that publishes no count but takes references at all is trusted
+    // for what this service is priced to send.
+    maxReferenceImages: supported.has("input_references")
+      ? Math.min(publishedReferences ?? AI_MAX_IMAGE_REFERENCES, AI_MAX_IMAGE_REFERENCES)
+      : 0,
+    // Upscaling asks for 4K; a model whose sizes stop at 2K cannot serve it.
+    resolution: accepts("resolution", UPSCALE_RESOLUTION),
   };
 }
 
@@ -182,7 +237,8 @@ export function unsupportedImageRequestReason(
     aspectRatio?: string;
     transparentBackground?: boolean;
     seed?: number;
-    referenceImages?: boolean;
+    // How many pictures the request carries.
+    referenceImages?: number;
     resolution?: boolean;
   },
 ): UnsupportedImageRequestReason | null {
@@ -199,7 +255,10 @@ export function unsupportedImageRequestReason(
     return "background";
   }
   if (request.seed !== undefined && !capabilities.seed) return "seed";
-  if (request.referenceImages === true && !capabilities.inputReferences) {
+  if (
+    request.referenceImages !== undefined &&
+    request.referenceImages > capabilities.maxReferenceImages
+  ) {
     return "referenceImages";
   }
   if (request.resolution === true && !capabilities.resolution) return "resolution";
@@ -215,7 +274,7 @@ export function isImageModelUsable(
 ): boolean {
   if (!capabilities) return true;
   if (capabilities.aspectRatios.length === 0) return false;
-  if (requires.referenceImages === true && !capabilities.inputReferences) {
+  if (requires.referenceImages === true && capabilities.maxReferenceImages < 1) {
     return false;
   }
   if (requires.resolution === true && !capabilities.resolution) return false;

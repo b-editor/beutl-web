@@ -31,7 +31,7 @@ const GPT_IMAGE_1 = [
     background: { type: "enum", values: ["auto", "transparent"] },
     quality: { type: "enum", values: ["auto", "high"] },
     n: { type: "range", min: 1, max: 4 },
-    input_references: { type: "boolean" },
+    input_references: { type: "range", min: 0, max: 16 },
   }),
 ];
 
@@ -44,6 +44,7 @@ function capabilities(
     transparentBackground: true,
     seed: false,
     inputReferences: true,
+    maxReferenceImages: 4,
     resolution: false,
     ...overrides,
   };
@@ -65,6 +66,47 @@ describe("what an image model accepts", () => {
     // "auto" is the provider's word for "you decide" rather than a shape this
     // service asks for, and 16:9 is one it asks for that the model refuses.
     expect(entry).toEqual(capabilities());
+  });
+
+  it("reads a background by its values rather than its presence", async () => {
+    // GPT Image-2 publishes a background parameter and takes only "auto" and
+    // "opaque" from it. Reading the key alone offered a transparent background
+    // that the provider then refused with `background: not supported`.
+    listModelEndpoints.mockResolvedValue({
+      endpoints: [
+        endpoint({
+          aspect_ratio: { type: "enum", values: ["1:1"] },
+          background: { type: "enum", values: ["auto", "opaque"] },
+          resolution: { type: "enum", values: ["1K", "2K"] },
+        }),
+      ],
+    });
+
+    const entry = (await loadAiImageModelCapabilities(["openai/gpt-image-2"]))
+      .get("openai/gpt-image-2");
+    expect(entry?.transparentBackground).toBe(false);
+    // Upscaling asks for 4K, which this model's sizes stop short of.
+    expect(entry?.resolution).toBe(false);
+  });
+
+  it("takes no more pictures than the model publishes", async () => {
+    // Grok takes three, and this service is priced for four; the smaller of the
+    // two is what the screen may offer.
+    listModelEndpoints.mockResolvedValue({
+      endpoints: [
+        endpoint({
+          aspect_ratio: { type: "enum", values: ["1:1"] },
+          input_references: { type: "range", min: 0, max: 3 },
+        }),
+      ],
+    });
+
+    const entry = (await loadAiImageModelCapabilities(["x-ai/grok"])).get("x-ai/grok");
+    expect(entry?.maxReferenceImages).toBe(3);
+    expect(
+      unsupportedImageRequestReason(entry, { referenceImages: 4 }),
+    ).toBe("referenceImages");
+    expect(unsupportedImageRequestReason(entry, { referenceImages: 3 })).toBeNull();
   });
 
   it("takes the union of what a model's endpoints accept", async () => {
@@ -126,9 +168,10 @@ describe("refusing an image request the model would reject", () => {
       ),
     ).toBe("background");
     expect(
-      unsupportedImageRequestReason(capabilities({ inputReferences: false }), {
-        referenceImages: true,
-      }),
+      unsupportedImageRequestReason(
+        capabilities({ inputReferences: false, maxReferenceImages: 0 }),
+        { referenceImages: 1 },
+      ),
     ).toBe("referenceImages");
   });
 
@@ -146,7 +189,10 @@ describe("refusing an image request the model would reject", () => {
 
 describe("whether a registered image model can serve its operation", () => {
   it("rules out a model an edit cannot hand a picture to", () => {
-    const noReferences = capabilities({ inputReferences: false });
+    const noReferences = capabilities({
+      inputReferences: false,
+      maxReferenceImages: 0,
+    });
     expect(isImageModelUsable(noReferences)).toBe(true);
     // Every edit sends the picture being edited.
     expect(isImageModelUsable(noReferences, { referenceImages: true })).toBe(false);

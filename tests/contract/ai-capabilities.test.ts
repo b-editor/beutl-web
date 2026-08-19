@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { setDbProvider, upsertAiOperationModel } from "@beutl/db";
-import { AI_IMAGE_ASPECT_RATIOS } from "@beutl/core";
+import {
+  AI_IMAGE_ASPECT_RATIOS,
+  AI_MAX_IMAGE_REFERENCES,
+} from "@beutl/core";
 
 // What a video model accepts comes from the provider. Mocked so the endpoint's
 // shape is tested without a network call deciding the expectations.
@@ -68,7 +71,7 @@ function imageModel(
     aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
     transparentBackground: true,
     seed: true,
-    referenceImages: true,
+    maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
   };
 }
 
@@ -129,7 +132,7 @@ describe("GET /api/v3/ai/capabilities", () => {
       // could not previously ask for at all.
       aspectRatios: expect.arrayContaining(["16:9", "9:16"]),
       backgrounds: ["auto", "transparent"],
-      maxReferenceImages: 1,
+      maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
       outputFormat: "png",
     });
     expect(body.operations["video.generate"]).toMatchObject({

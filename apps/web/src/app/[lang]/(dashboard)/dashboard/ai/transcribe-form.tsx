@@ -369,7 +369,11 @@ export function TranscribeForm({
           </Alert>
         )}
 
-        <SubmitButton className="w-full" disabled={blocked !== null}>
+        <SubmitButton
+          className="w-full"
+          forceSpinner={isPending}
+          disabled={blocked !== null || isPending}
+        >
           {t("dashboard:ai.transcribe")}
         </SubmitButton>
       </form>

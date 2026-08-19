@@ -82,7 +82,7 @@
     },
     "generateAudio": "音声を生成する",
     "referenceImage": "参照画像 (任意)",
-    "referenceImageHint": "手元の画像を渡すと、その絵柄や被写体を踏まえて生成します。",
+    "referenceImageHint": "手元の画像を渡すと、その絵柄や被写体を踏まえて生成します (最大 {{maximum}} 枚)。",
     "referenceImageSelected": "{{name}} を参照します。",
     "transparentBackground": "背景を透過にする",
     "seed": "シード値 (任意)",
@@ -223,6 +223,7 @@
       "tooLong": "長すぎます。取り出した音声が上限を超えるため、短く切ってからお試しください。",
       "noAudioTrack": "このファイルには音声が含まれていません。"
     },
-    "processing": "処理中…"
+    "processing": "処理中…",
+    "referenceImageTooMany": "参照画像は最大 {{maximum}} 枚です。選び直してください。"
   }
 }

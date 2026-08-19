@@ -166,68 +166,63 @@ export function TranslateForm({
           onChange={setModel}
         />
 
-        {/* Read in the direction the translation runs: source, arrow, target. */}
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex min-w-[9rem] flex-1 flex-col space-y-1.5">
-            <Label htmlFor="sourceLanguage">
-              {t("dashboard:ai.sourceLanguage")}
-            </Label>
-            <Select value={sourceLanguage} onValueChange={setSourceLanguage}>
-              <SelectTrigger id="sourceLanguage">
-                {/* An unset source is not a blank field: the model detects it. */}
-                <SelectValue placeholder={t("dashboard:ai.sourceLanguageAuto")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">
-                  {t("dashboard:ai.sourceLanguageAuto")}
+        {/* Read in the direction the translation runs: source, arrow, target.
+            Laid out as a grid rather than a row of columns so the labels share
+            one row and the boxes another: the arrow then lands level with the
+            boxes by construction, instead of by a margin that drifts whenever
+            the text above or below changes. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+          <Label htmlFor="sourceLanguage">
+            {t("dashboard:ai.sourceLanguage")}
+          </Label>
+          <span />
+          <Label htmlFor="targetLanguage">
+            {t("dashboard:ai.targetLanguage")}
+          </Label>
+
+          <Select value={sourceLanguage} onValueChange={setSourceLanguage}>
+            <SelectTrigger id="sourceLanguage">
+              {/* An unset source is not a blank field: the model detects it. */}
+              <SelectValue placeholder={t("dashboard:ai.sourceLanguageAuto")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">
+                {t("dashboard:ai.sourceLanguageAuto")}
+              </SelectItem>
+              {languages.map((language) => (
+                <SelectItem key={language.code} value={language.code}>
+                  {language.name}
                 </SelectItem>
-                {languages.map((language) => (
-                  <SelectItem key={language.code} value={language.code}>
-                    {language.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* "auto" is the picker's word for "say nothing"; the request omits
-                the field entirely, which is what the endpoint treats as detect. */}
-            <input
-              type="hidden"
-              name="sourceLanguage"
-              value={sourceLanguage === "auto" ? "" : sourceLanguage}
-            />
-          </div>
-          {/* Sits level with the two boxes, not with the labels above them: the
-              row is bottom-aligned, so the arrow is nudged up by half the
-              difference between a select and its own height. */}
+              ))}
+            </SelectContent>
+          </Select>
           <ArrowRight
             aria-hidden
-            className="mb-3 h-4 w-4 shrink-0 text-muted-foreground"
+            className="h-4 w-4 shrink-0 text-muted-foreground"
           />
-          <div className="flex min-w-[9rem] flex-1 flex-col space-y-1.5">
-            <Label htmlFor="targetLanguage">
-              {t("dashboard:ai.targetLanguage")}
-            </Label>
-            <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-              <SelectTrigger id="targetLanguage">
-                <SelectValue
-                  placeholder={t("dashboard:ai.targetLanguagePlaceholder")}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {languages.map((language) => (
-                  <SelectItem key={language.code} value={language.code}>
-                    {language.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <input
-              type="hidden"
-              name="targetLanguage"
-              value={targetLanguage}
-            />
-          </div>
+          <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+            <SelectTrigger id="targetLanguage">
+              <SelectValue
+                placeholder={t("dashboard:ai.targetLanguagePlaceholder")}
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {languages.map((language) => (
+                <SelectItem key={language.code} value={language.code}>
+                  {language.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
+        {/* "auto" is the picker's word for "say nothing"; the request omits the
+            field entirely, which is what the endpoint treats as detect. */}
+        <input
+          type="hidden"
+          name="sourceLanguage"
+          value={sourceLanguage === "auto" ? "" : sourceLanguage}
+        />
+        <input type="hidden" name="targetLanguage" value={targetLanguage} />
 
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="subtitleSource">
@@ -327,7 +322,10 @@ export function TranslateForm({
 
         <SubmitButton
           className="w-full"
-          disabled={blocked !== null || !parsed.ok || targetLanguage === ""}
+          forceSpinner={isPending}
+          disabled={
+            blocked !== null || !parsed.ok || targetLanguage === "" || isPending
+          }
         >
           {t("dashboard:ai.translate")}
         </SubmitButton>

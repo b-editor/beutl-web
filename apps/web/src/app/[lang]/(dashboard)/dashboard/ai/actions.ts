@@ -57,6 +57,7 @@ import {
 } from "@beutl/api";
 import {
   AI_IMAGE_ASPECT_RATIOS,
+  AI_MAX_IMAGE_REFERENCES,
   AI_IMAGE_BACKGROUNDS,
   AI_IMAGE_EDIT_TASKS,
   AI_VIDEO_ASPECT_RATIOS,
@@ -265,7 +266,7 @@ function canRetryJob(job: {
   const input = job.inputParams as Record<string, unknown>;
   if (typeof input.prompt !== "string") return false;
   if (job.kind === "image") {
-    if (input.reference) return false;
+    if (input.reference || input.references) return false;
     // retryJobAction refuses a generation that recorded no shape, so offering
     // the button for one only produces an error the user cannot act on.
     return (
@@ -405,20 +406,29 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  // An optional picture to generate from. One only: that is what an image edit
-  // already sends, so the per-operation price already covers it.
-  const referenceFile = formData.get("reference");
-  const hasReference =
-    referenceFile instanceof File && referenceFile.size > 0;
+  // The pictures a generation is guided by. How many a model takes differs, and
+  // the price is set for AI_MAX_IMAGE_REFERENCES of them.
+  const referenceFiles = formData
+    .getAll("reference")
+    .filter((value): value is File => value instanceof File && value.size > 0);
+  if (referenceFiles.length > AI_MAX_IMAGE_REFERENCES) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   // Size first: validateAiInputImage buffers the whole upload, so checking
   // afterwards lets an oversized body be materialized before it is refused.
-  if (hasReference && referenceFile.size > MAX_AI_IMAGE_UPLOAD_BYTES) {
+  if (referenceFiles.some((file) => file.size > MAX_AI_IMAGE_UPLOAD_BYTES)) {
     return { success: false, message: t("api-errors:fileIsTooLarge") };
   }
-  const reference = hasReference
-    ? await validateAiInputImage(referenceFile, supportedEditImageTypes)
-    : null;
-  if (hasReference && !reference) {
+  const validated = await Promise.all(
+    referenceFiles.map((file) =>
+      validateAiInputImage(file, supportedEditImageTypes),
+    ),
+  );
+  const references = validated.filter(
+    (reference): reference is NonNullable<typeof reference> =>
+      reference !== null,
+  );
+  if (references.length !== referenceFiles.length) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
@@ -427,19 +437,45 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  // Checked before the reservation: GPT Image-1 renders 1:1, 3:2 and 2:3 and
+  // GPT Image-2 cuts out no background, and a rejection that arrives after the
+  // usage is reserved reads as a provider outage.
+  if (
+    unsupportedImageRequestReason(
+      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+        selectedModel.modelId,
+      ),
+      {
+        aspectRatio,
+        transparentBackground: background === "transparent",
+        ...(seed === undefined ? {} : { seed }),
+        referenceImages: references.length,
+      },
+    )
+  ) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
   const identity = await requestIdentityOf(formData, "image.generate", {
     model: selectedModel.modelId,
     prompt,
     aspectRatio,
     ...(background !== "auto" ? { background } : {}),
     ...(seed === undefined ? {} : { seed }),
-    ...(reference && referenceFile instanceof File
+    // Every picture is part of what makes this request the request it is: the
+    // same prompt guided by different pictures is a different run.
+    ...(references.length > 0
       ? {
-          reference: {
-            fileName: referenceFile.name,
-            contentType: reference.mimeType,
-            contentSha256: await sha256Hex(reference.bytes),
-          },
+          references: await Promise.all(
+            references.map(async (reference, index) => ({
+              fileName: referenceFiles[index]!.name,
+              contentType: reference.mimeType,
+              contentSha256: await sha256Hex(reference.bytes),
+            })),
+          ),
         }
       : {}),
   });
@@ -458,8 +494,10 @@ export async function generateImageAction(
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
       ...(seed === undefined ? {} : { seed }),
-      ...(referenceFile instanceof File && referenceFile.size > 0
-        ? { reference: { filename: referenceFile.name } }
+      ...(referenceFiles.length > 0
+        ? {
+            references: referenceFiles.map((file) => ({ filename: file.name })),
+          }
         : {}),
     },
     usageUnits: cost,
@@ -488,11 +526,12 @@ export async function generateImageAction(
       prompt,
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
-      ...(reference
+      ...(references.length > 0
         ? {
-            referenceImages: [
-              { bytes: reference.bytes, mimeType: reference.mimeType },
-            ],
+            referenceImages: references.map((reference) => ({
+              bytes: reference.bytes,
+              mimeType: reference.mimeType,
+            })),
           }
         : {}),
       ...(seed === undefined ? {} : { seed }),
@@ -576,7 +615,8 @@ export async function editImageAction(
         selectedModel.modelId,
       ),
       {
-        referenceImages: true,
+        // The picture being edited.
+        referenceImages: 1,
         transparentBackground: task === "remove_background",
         resolution: task === "upscale",
       },
