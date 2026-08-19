@@ -3,20 +3,35 @@
 import { useTranslation } from "@beutl/ui/i18n-client";
 import SubmitButton from "@beutl/ui/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
+import { Button } from "@beutl/ui/ui/button";
 import { Card } from "@beutl/ui/ui/card";
-import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Textarea } from "@beutl/ui/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
-import { ImageIcon } from "lucide-react";
-import { useActionState, useState, type ChangeEvent } from "react";
+import { ImageIcon, X } from "lucide-react";
 import {
+  useActionState,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import {
+  AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
   AI_MAX_SEED,
   AI_MIN_SEED,
   MAX_AI_PROMPT_LENGTH,
   type AiImageAspectRatio,
+  type AiImageBackground,
 } from "@beutl/core";
 import { composePrompt } from "@/lib/ai-prompt";
 import { generateImageAction } from "./actions";
@@ -51,6 +66,13 @@ const ASPECT_RATIOS: { value: AiImageAspectRatio; labelKey: string }[] = [
   { value: "3:2", labelKey: "photo" },
   { value: "2:3", labelKey: "photoPortrait" },
 ];
+
+// Naming every background here means adding one to @beutl/core without a label
+// stops the build rather than showing the user a raw value.
+const BACKGROUND_LABEL_KEYS: Record<AiImageBackground, string> = {
+  auto: "dashboard:ai.backgroundAuto",
+  transparent: "dashboard:ai.backgroundTransparent",
+};
 
 // What each registered model will accept, read from the provider. A model
 // missing from this map states no restriction and keeps every option.
@@ -105,8 +127,9 @@ export function ImageGenerateForm({
   const models = access.models["image.generate"] ?? [];
   const [model, setModel] = useState(() => defaultModelId(models));
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
-  const [transparent, setTransparent] = useState(false);
-  const [referenceNames, setReferenceNames] = useState<string[]>([]);
+  const [background, setBackground] = useState<AiImageBackground>("auto");
+  const [references, setReferences] = useState<File[]>([]);
+  const referenceInput = useRef<HTMLInputElement>(null);
 
   const options = optionsOf(capabilities, model);
   const ratio = options.aspectRatios.some((option) => option.value === aspectRatio)
@@ -114,9 +137,9 @@ export function ImageGenerateForm({
     : options.aspectRatios[0]!.value;
   // Asking a model that cannot cut one for a transparent background is a
   // refusal; leaving it to the model is always fine.
-  const transparentBackground = options.transparentBackground && transparent;
+  const chosenBackground = options.transparentBackground ? background : "auto";
 
-  const tooManyReferences = referenceNames.length > options.maxReferenceImages;
+  const tooManyReferences = references.length > options.maxReferenceImages;
 
   const blocked = blockedReason(access, ["image.generate"]);
   // The same composition the action validates, so the counter measures what the
@@ -128,11 +151,42 @@ export function ImageGenerateForm({
     exclusions,
   }).length;
 
+  // The input is what the form submits, so the list kept here is written back
+  // into it. Without that, a second visit to the file dialog would replace the
+  // first picture instead of adding to it, and picking several would be the
+  // only way to send more than one.
+  function applyReferences(files: File[]) {
+    setReferences(files);
+    const selection = new DataTransfer();
+    for (const file of files) selection.items.add(file);
+    if (referenceInput.current) referenceInput.current.files = selection.files;
+  }
+
   // More than the model takes is refused by the server, so the field says so
   // here rather than after the reservation.
   function handleReferenceChange(event: ChangeEvent<HTMLInputElement>) {
-    setReferenceNames([...(event.target.files ?? [])].map((file) => file.name));
+    const picked = [...(event.target.files ?? [])];
+    if (options.maxReferenceImages < 2) {
+      applyReferences(picked);
+      return;
+    }
+    const added = picked.filter(
+      (file) =>
+        !references.some(
+          (existing) =>
+            existing.name === file.name && existing.size === file.size,
+        ),
+    );
+    applyReferences([...references, ...added]);
   }
+
+  // React empties the field after a form action, so the list has to follow it:
+  // otherwise it would name pictures the next run would no longer send.
+  useEffect(() => {
+    if (!state.success) return;
+    setReferences([]);
+    if (referenceInput.current) referenceInput.current.value = "";
+  }, [state]);
 
   function applyTemplate(template: PromptTemplate) {
     setPrompt(template.prompt);
@@ -222,6 +276,7 @@ export function ImageGenerateForm({
             {t("dashboard:ai.referenceImage")}
           </Label>
           <Input
+            ref={referenceInput}
             id="generateReference"
             name="reference"
             type="file"
@@ -229,6 +284,34 @@ export function ImageGenerateForm({
             accept="image/png,image/jpeg,image/webp,image/gif"
             onChange={handleReferenceChange}
           />
+          {references.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {references.map((file) => (
+                <li
+                  key={`${file.name}:${file.size}`}
+                  className="flex items-center gap-2 rounded-md border px-2 py-1"
+                >
+                  <span className="truncate text-xs">{file.name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto h-6 w-6 p-0"
+                    aria-label={t("dashboard:ai.referenceImageRemove", {
+                      name: file.name,
+                    })}
+                    onClick={() =>
+                      applyReferences(
+                        references.filter((entry) => entry !== file),
+                      )
+                    }
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
           <p
             className={
               tooManyReferences
@@ -240,33 +323,37 @@ export function ImageGenerateForm({
               ? t("dashboard:ai.referenceImageTooMany", {
                   maximum: options.maxReferenceImages,
                 })
-              : referenceNames.length > 0
-                ? t("dashboard:ai.referenceImageSelected", {
-                    name: referenceNames.join(", "),
-                  })
-                : t("dashboard:ai.referenceImageHint", {
-                    maximum: options.maxReferenceImages,
-                  })}
+              : t("dashboard:ai.referenceImageHint", {
+                  maximum: options.maxReferenceImages,
+                })}
           </p>
         </div>
 
         {options.transparentBackground && (
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="generateTransparent"
-              checked={transparentBackground}
-              onCheckedChange={(checked) => setTransparent(checked === true)}
-            />
-            <Label htmlFor="generateTransparent" className="font-normal">
-              {t("dashboard:ai.transparentBackground")}
+          <div className="flex flex-col space-y-1.5">
+            <Label htmlFor="generateBackground">
+              {t("dashboard:ai.background")}
             </Label>
+            <Select
+              value={chosenBackground}
+              onValueChange={(value) =>
+                setBackground(value as AiImageBackground)
+              }
+            >
+              <SelectTrigger id="generateBackground">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {AI_IMAGE_BACKGROUNDS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {t(BACKGROUND_LABEL_KEYS[value])}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
-        <input
-          type="hidden"
-          name="background"
-          value={transparentBackground ? "transparent" : "auto"}
-        />
+        <input type="hidden" name="background" value={chosenBackground} />
 
         <AdvancedOptions lang={lang}>
           <div className="flex flex-col space-y-1.5">
