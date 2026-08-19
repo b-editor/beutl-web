@@ -1,7 +1,9 @@
 import {
   AI_IMAGE_ASPECT_RATIOS,
+  AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
   type AiImageAspectRatio,
+  type AiImageBackground,
 } from "@beutl/core";
 import {
   createPublicOpenRouterClient,
@@ -21,7 +23,9 @@ import {
 export type AiImageModelCapabilities = {
   modelId: string;
   aspectRatios: AiImageAspectRatio[];
-  transparentBackground: boolean;
+  // The backgrounds the model publishes, narrowed to the ones this service
+  // knows how to ask for. Always holds "auto", which sends no field at all.
+  backgrounds: AiImageBackground[];
   seed: boolean;
   // Whether a picture can be handed to the model at all, which every edit and
   // every image-to-image generation depends on.
@@ -152,10 +156,12 @@ function toCapabilities(
     aspectRatios: ratios.size === 0
       ? [...AI_IMAGE_ASPECT_RATIOS]
       : AI_IMAGE_ASPECT_RATIOS.filter((ratio) => ratios.has(ratio)),
-    // The value, not the key: GPT Image-2 publishes a background parameter and
-    // takes only "auto" and "opaque" from it, so asking it for a transparent
-    // one comes back as `background: not supported`.
-    transparentBackground: accepts("background", "transparent"),
+    // The values, not the key: GPT Image-1 publishes "auto" and "transparent"
+    // while GPT Image-2 publishes "auto" and "opaque", so asking either for the
+    // other's comes back as `background: not supported`.
+    backgrounds: AI_IMAGE_BACKGROUNDS.filter(
+      (value) => value === "auto" || accepts("background", value),
+    ),
     seed: supported.has("seed"),
     inputReferences: supported.has("input_references"),
     // A model that publishes no count but takes references at all is trusted
@@ -235,7 +241,7 @@ export function unsupportedImageRequestReason(
   capabilities: AiImageModelCapabilities | undefined,
   request: {
     aspectRatio?: string;
-    transparentBackground?: boolean;
+    background?: AiImageBackground;
     seed?: number;
     // How many pictures the request carries.
     referenceImages?: number;
@@ -249,9 +255,13 @@ export function unsupportedImageRequestReason(
   ) {
     return "aspectRatio";
   }
-  // Asking for a transparent background from a model that cannot cut one is a
-  // refusal; leaving it to the model is always fine.
-  if (request.transparentBackground === true && !capabilities.transparentBackground) {
+  // Asking for a background the model does not publish is a refusal; "auto"
+  // leaves it to the model and is always fine.
+  if (
+    request.background !== undefined &&
+    request.background !== "auto" &&
+    !capabilities.backgrounds.includes(request.background)
+  ) {
     return "background";
   }
   if (request.seed !== undefined && !capabilities.seed) return "seed";

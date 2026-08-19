@@ -447,7 +447,7 @@ export async function generateImageAction(
       ),
       {
         aspectRatio,
-        transparentBackground: background === "transparent",
+        background,
         ...(seed === undefined ? {} : { seed }),
         referenceImages: references.length,
       },
@@ -617,7 +617,10 @@ export async function editImageAction(
       {
         // The picture being edited.
         referenceImages: 1,
-        transparentBackground: task === "remove_background",
+        // Removing a background is asking for a transparent one.
+        ...(task === "remove_background"
+          ? { background: "transparent" as const }
+          : {}),
         resolution: task === "upscale",
       },
     )
@@ -1251,8 +1254,14 @@ export async function retryJobAction(
     if (aspectRatio === null || !AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
+    // Whatever the run recorded, rerun with the same. A background it no longer
+    // recognizes is left off, which is what "auto" always meant.
     const background =
-      input.background === "transparent" ? ("transparent" as const) : undefined;
+      typeof input.background === "string" &&
+      AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground) &&
+      input.background !== "auto"
+        ? (input.background as AiImageBackground)
+        : undefined;
     const seed = isAiSeed(input.seed) ? input.seed : undefined;
     const retryModel = catalog.resolve("image.generate", job.model);
     if (!retryModel) {

@@ -86,6 +86,7 @@
     "referenceImageRemove": "{{name}} を外す",
     "background": "背景",
     "backgroundAuto": "モデルにまかせる",
+    "backgroundOpaque": "不透明",
     "backgroundTransparent": "透過",
     "seed": "シード値 (任意)",
     "seedHint": "同じシード値と同じプロンプトなら、同じ絵を作り直せます。",

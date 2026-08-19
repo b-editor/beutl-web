@@ -71,6 +71,7 @@ const ASPECT_RATIOS: { value: AiImageAspectRatio; labelKey: string }[] = [
 // stops the build rather than showing the user a raw value.
 const BACKGROUND_LABEL_KEYS: Record<AiImageBackground, string> = {
   auto: "dashboard:ai.backgroundAuto",
+  opaque: "dashboard:ai.backgroundOpaque",
   transparent: "dashboard:ai.backgroundTransparent",
 };
 
@@ -78,7 +79,7 @@ const BACKGROUND_LABEL_KEYS: Record<AiImageBackground, string> = {
 // missing from this map states no restriction and keeps every option.
 export type AiImageModelOptions = {
   aspectRatios: string[];
-  transparentBackground: boolean;
+  backgrounds: string[];
   seed: boolean;
   maxReferenceImages: number;
 };
@@ -97,9 +98,15 @@ function optionsOf(
         supported.aspectRatios.includes(option.value),
       )
     : ASPECT_RATIOS;
+  const backgrounds = supported?.backgrounds.length
+    ? AI_IMAGE_BACKGROUNDS.filter((value) =>
+        supported.backgrounds.includes(value),
+      )
+    : [...AI_IMAGE_BACKGROUNDS];
   return {
     aspectRatios: aspectRatios.length > 0 ? aspectRatios : ASPECT_RATIOS,
-    transparentBackground: supported?.transparentBackground ?? true,
+    // "auto" is always on offer: it is the shape that sends no field at all.
+    backgrounds: backgrounds.length > 0 ? backgrounds : ["auto" as const],
     seed: supported?.seed ?? true,
     maxReferenceImages: supported?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES,
   };
@@ -135,9 +142,11 @@ export function ImageGenerateForm({
   const ratio = options.aspectRatios.some((option) => option.value === aspectRatio)
     ? aspectRatio
     : options.aspectRatios[0]!.value;
-  // Asking a model that cannot cut one for a transparent background is a
-  // refusal; leaving it to the model is always fine.
-  const chosenBackground = options.transparentBackground ? background : "auto";
+  // Asking for a background the model does not take is a refusal; leaving it to
+  // the model is always fine.
+  const chosenBackground = options.backgrounds.includes(background)
+    ? background
+    : "auto";
 
   const tooManyReferences = references.length > options.maxReferenceImages;
 
@@ -329,7 +338,7 @@ export function ImageGenerateForm({
           </p>
         </div>
 
-        {options.transparentBackground && (
+        {options.backgrounds.length > 1 && (
           <div className="flex flex-col space-y-1.5">
             <Label htmlFor="generateBackground">
               {t("dashboard:ai.background")}
@@ -344,7 +353,7 @@ export function ImageGenerateForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {AI_IMAGE_BACKGROUNDS.map((value) => (
+                {options.backgrounds.map((value) => (
                   <SelectItem key={value} value={value}>
                     {t(BACKGROUND_LABEL_KEYS[value])}
                   </SelectItem>

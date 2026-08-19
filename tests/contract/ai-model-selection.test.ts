@@ -276,13 +276,13 @@ describe("choosing a model per request", () => {
     ];
     const imageKeys = [
       "aspectRatios",
+      "backgrounds",
       "costTier",
       "displayName",
       "id",
       "isDefault",
       "maxReferenceImages",
       "seed",
-      "transparentBackground",
     ];
     for (const [operation, value] of Object.entries(body.operations) as [
       string,

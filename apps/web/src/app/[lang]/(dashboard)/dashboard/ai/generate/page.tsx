@@ -40,7 +40,7 @@ export default async function Page(props: {
               model.id,
               {
                 aspectRatios: supported.aspectRatios,
-                transparentBackground: supported.transparentBackground,
+                backgrounds: supported.backgrounds,
                 seed: supported.seed,
                 maxReferenceImages: supported.maxReferenceImages,
               },

@@ -4,6 +4,7 @@ import { sign } from "hono/jwt";
 import { setDbProvider, upsertAiOperationModel } from "@beutl/db";
 import {
   AI_IMAGE_ASPECT_RATIOS,
+  AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
 } from "@beutl/core";
 
@@ -69,7 +70,7 @@ function imageModel(
     costTier,
     isDefault,
     aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
-    transparentBackground: true,
+    backgrounds: [...AI_IMAGE_BACKGROUNDS],
     seed: true,
     maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
   };
@@ -131,7 +132,7 @@ describe("GET /api/v3/ai/capabilities", () => {
       // The values a client used to hard-code, including the two shapes it
       // could not previously ask for at all.
       aspectRatios: expect.arrayContaining(["16:9", "9:16"]),
-      backgrounds: ["auto", "transparent"],
+      backgrounds: ["auto", "opaque", "transparent"],
       maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
       outputFormat: "png",
     });

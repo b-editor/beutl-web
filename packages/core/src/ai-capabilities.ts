@@ -43,9 +43,13 @@ export const AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS: Record<
   "1536x1024": "3:2",
 };
 
+// What the background of a generated picture may be. "auto" leaves it to the
+// model and is the one shape every model takes, because it means the field is
+// never sent; the other two are asked for by name and models differ over which
+// they publish (GPT Image-1 cuts a background out, GPT Image-2 fills one in).
 // "transparent" only produces a usable result in a format with an alpha
 // channel, which is why generated output stays PNG.
-export const AI_IMAGE_BACKGROUNDS = ["auto", "transparent"] as const;
+export const AI_IMAGE_BACKGROUNDS = ["auto", "opaque", "transparent"] as const;
 export type AiImageBackground = (typeof AI_IMAGE_BACKGROUNDS)[number];
 
 // How many pictures a generation may be guided by. Models take between three

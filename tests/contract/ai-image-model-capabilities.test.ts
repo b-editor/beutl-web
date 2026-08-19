@@ -41,7 +41,7 @@ function capabilities(
   return {
     modelId: "openai/gpt-image-1",
     aspectRatios: ["1:1", "2:3", "3:2"],
-    transparentBackground: true,
+    backgrounds: ["auto", "transparent"],
     seed: false,
     inputReferences: true,
     maxReferenceImages: 4,
@@ -68,9 +68,9 @@ describe("what an image model accepts", () => {
     expect(entry).toEqual(capabilities());
   });
 
-  it("reads a background by its values rather than its presence", async () => {
-    // GPT Image-2 publishes a background parameter and takes only "auto" and
-    // "opaque" from it. Reading the key alone offered a transparent background
+  it("offers the backgrounds a model publishes, not a fixed pair", async () => {
+    // GPT Image-2 publishes "auto" and "opaque"; GPT Image-1 publishes "auto"
+    // and "transparent". Reading the key alone offered a transparent background
     // that the provider then refused with `background: not supported`.
     listModelEndpoints.mockResolvedValue({
       endpoints: [
@@ -84,7 +84,7 @@ describe("what an image model accepts", () => {
 
     const entry = (await loadAiImageModelCapabilities(["openai/gpt-image-2"]))
       .get("openai/gpt-image-2");
-    expect(entry?.transparentBackground).toBe(false);
+    expect(entry?.backgrounds).toEqual(["auto", "opaque"]);
     // Upscaling asks for 4K, which this model's sizes stop short of.
     expect(entry?.resolution).toBe(false);
   });
@@ -107,6 +107,17 @@ describe("what an image model accepts", () => {
       unsupportedImageRequestReason(entry, { referenceImages: 4 }),
     ).toBe("referenceImages");
     expect(unsupportedImageRequestReason(entry, { referenceImages: 3 })).toBeNull();
+  });
+
+  it("keeps auto for a model that publishes no background at all", async () => {
+    listModelEndpoints.mockResolvedValue({
+      endpoints: [endpoint({ aspect_ratio: { type: "enum", values: ["1:1"] } })],
+    });
+
+    const entry = (await loadAiImageModelCapabilities(["a/model"])).get("a/model");
+    // Not sending the field is always possible, so the screen can always offer
+    // it; anything else would leave the picker with nothing in it.
+    expect(entry?.backgrounds).toEqual(["auto"]);
   });
 
   it("takes the union of what a model's endpoints accept", async () => {
@@ -162,11 +173,13 @@ describe("refusing an image request the model would reject", () => {
       unsupportedImageRequestReason(gptImage1, { resolution: true }),
     ).toBe("resolution");
     expect(
-      unsupportedImageRequestReason(
-        capabilities({ transparentBackground: false }),
-        { transparentBackground: true },
-      ),
+      unsupportedImageRequestReason(capabilities(), { background: "opaque" }),
     ).toBe("background");
+    expect(
+      unsupportedImageRequestReason(capabilities(), {
+        background: "transparent",
+      }),
+    ).toBeNull();
     expect(
       unsupportedImageRequestReason(
         capabilities({ inputReferences: false, maxReferenceImages: 0 }),
@@ -175,14 +188,12 @@ describe("refusing an image request the model would reject", () => {
     ).toBe("referenceImages");
   });
 
-  it("lets an opaque background through a model that cannot cut one", () => {
-    // The flag says the model can cut a background out; not asking it to is
-    // always fine.
+  it("lets a request that names no background through any model", () => {
+    // "auto" sends no field at all, so every model takes it.
     expect(
-      unsupportedImageRequestReason(
-        capabilities({ transparentBackground: false }),
-        { transparentBackground: false },
-      ),
+      unsupportedImageRequestReason(capabilities({ backgrounds: ["auto"] }), {
+        background: "auto",
+      }),
     ).toBeNull();
   });
 });

@@ -1214,7 +1214,7 @@ describe("v3 AI endpoints contract", () => {
             {
               modelId: "openai/gpt-image-1",
               aspectRatios: ["1:1", "2:3", "3:2"],
-              transparentBackground: true,
+              backgrounds: ["auto", "transparent"],
               seed: false,
               inputReferences: true,
               resolution: false,

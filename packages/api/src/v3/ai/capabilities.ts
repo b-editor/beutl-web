@@ -59,11 +59,11 @@ type ModelDescription = {
 // for and is registered but unusable.
 // An image model states its own accepted shapes for the same reason a video
 // model does: GPT Image-1 takes 1:1, 3:2 and 2:3 and refuses everything else,
-// and only some models take a seed, cut out a background or accept a picture
-// to work from.
+// and models differ over which backgrounds they publish, whether they take a
+// seed, and whether they accept a picture to work from.
 type ImageModelDescription = ModelDescription & {
   aspectRatios: string[];
-  transparentBackground: boolean;
+  backgrounds: string[];
   seed: boolean;
   maxReferenceImages: number;
 };
@@ -119,7 +119,7 @@ const app = new Hono().get("/", async (c) => {
         aspectRatios: supported
           ? supported.aspectRatios
           : [...AI_IMAGE_ASPECT_RATIOS],
-        transparentBackground: supported ? supported.transparentBackground : true,
+        backgrounds: supported ? supported.backgrounds : [...AI_IMAGE_BACKGROUNDS],
         seed: supported ? supported.seed : true,
         maxReferenceImages: supported
           ? supported.maxReferenceImages

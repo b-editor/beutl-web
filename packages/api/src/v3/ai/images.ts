@@ -255,7 +255,7 @@ const app = new Hono()
         ),
         {
           aspectRatio,
-          transparentBackground: background === "transparent",
+          ...(background ? { background } : {}),
           ...(seed === undefined ? {} : { seed }),
           referenceImages: references.length,
         },
@@ -494,7 +494,10 @@ const app = new Hono()
         {
           // The picture being edited.
           referenceImages: 1,
-          transparentBackground: editTask === "remove_background",
+          // Removing a background is asking for a transparent one.
+          ...(editTask === "remove_background"
+            ? { background: "transparent" as const }
+            : {}),
           resolution: editTask === "upscale",
         },
       )

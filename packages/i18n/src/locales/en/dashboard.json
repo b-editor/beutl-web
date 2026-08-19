@@ -86,6 +86,7 @@
     "referenceImageRemove": "Remove {{name}}",
     "background": "Background",
     "backgroundAuto": "Leave it to the model",
+    "backgroundOpaque": "Opaque",
     "backgroundTransparent": "Transparent",
     "seed": "Seed (optional)",
     "seedHint": "The same seed with the same prompt reproduces the same picture.",
