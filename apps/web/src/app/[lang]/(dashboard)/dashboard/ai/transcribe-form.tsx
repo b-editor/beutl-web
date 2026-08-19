@@ -7,11 +7,26 @@ import { Button } from "@beutl/ui/ui/button";
 import { Card } from "@beutl/ui/ui/card";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Textarea } from "@beutl/ui/ui/textarea";
 import { useToast } from "@beutl/ui/use-toast";
 import { AudioLines, Languages, Merge, Plus, Scissors, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, type ChangeEvent } from "react";
+import { MAX_AI_TRANSCRIPTION_UPLOAD_BYTES } from "@beutl/core";
+import {
+  AudioExtractionError,
+  extractAudioAsWav,
+  isVideoFile,
+  maximumExtractableSeconds,
+  type AudioExtractionFailure,
+} from "@/lib/audio-extract";
 import {
   formatCueClock,
   readCues,
@@ -33,12 +48,14 @@ import {
   DownloadButton,
   IdempotencyKeyField,
   ResultPanel,
+  ResultShimmer,
   ResultPlaceholder,
   blockedReason,
   downloadTextFile,
   defaultModelId,
   type AiAccess,
 } from "./shared";
+import type { LanguageOption } from "./translate-form";
 
 // An empty field means "use the default"; anything else is held to at least 1.
 // `Number(value) || fallback` sent a typed 0 to the fallback instead.
@@ -77,14 +94,20 @@ function baseNameOf(fileName: string): string {
 export function TranscribeForm({
   lang,
   access,
+  languages,
 }: {
   lang: string;
   access: AiAccess;
+  // Resolved on the server, exactly as the translation screen does it; see
+  // languageOptions in the page.
+  languages: LanguageOption[];
 }) {
   const { t } = useTranslation(lang);
   const { toast } = useToast();
   const router = useRouter();
-  const [state, dispatch] = useActionState(transcribeAction, { success: false });
+  const [state, dispatch, isPending] = useActionState(transcribeAction, {
+    success: false,
+  });
   const [cues, setCues] = useState<SubtitleCue[]>([]);
   // Word timings and the detected language arrive with the transcript. Neither
   // reached this screen before, so a split could not land on a word and nobody
@@ -92,6 +115,10 @@ export function TranscribeForm({
   const [words, setWords] = useState<SubtitleWord[]>([]);
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string>("transcription");
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] =
+    useState<AudioExtractionFailure | null>(null);
+  const [language, setLanguage] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["audio.transcribe"] ?? []),
   );
@@ -120,9 +147,38 @@ export function TranscribeForm({
   const blocked = blockedReason(access, ["audio.transcribe"]);
   const models = access.models["audio.transcribe"] ?? [];
 
-  function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    setAudioName(file ? baseNameOf(file.name) : "transcription");
+  // A video is converted here rather than uploaded: the endpoint refuses a file
+  // that carries video, and the audio alone is a fraction of the size. The
+  // converted file replaces what the field holds, so the form still submits
+  // exactly what the user picked.
+  async function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.target;
+    const file = input.files?.[0];
+    setExtractionError(null);
+    if (!file) {
+      setAudioName("transcription");
+      return;
+    }
+    setAudioName(baseNameOf(file.name));
+    if (!isVideoFile(file)) return;
+
+    setExtracting(true);
+    try {
+      const audio = await extractAudioAsWav(
+        file,
+        MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+      );
+      const transfer = new DataTransfer();
+      transfer.items.add(audio);
+      input.files = transfer.files;
+    } catch (error) {
+      input.value = "";
+      setExtractionError(
+        error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
+      );
+    } finally {
+      setExtracting(false);
+    }
   }
 
   // The field keeps showing what was typed; the cue only moves once that text
@@ -248,10 +304,25 @@ export function TranscribeForm({
             id="transcribeFile"
             name="file"
             type="file"
-            accept="audio/*"
+            accept="audio/*,video/*"
             required
             onChange={handleAudioChange}
           />
+          <p className="text-xs text-muted-foreground">
+            {extracting
+              ? t("dashboard:ai.audioExtracting")
+              : t("dashboard:ai.audioHint", {
+                  minutes: Math.floor(
+                    maximumExtractableSeconds(MAX_AI_TRANSCRIPTION_UPLOAD_BYTES)
+                      / 60,
+                  ),
+                })}
+          </p>
+          {extractionError && (
+            <p className="text-xs text-destructive">
+              {t(`dashboard:ai.audioExtractionErrors.${extractionError}`)}
+            </p>
+          )}
         </div>
         <ModelSelect
           lang={lang}
@@ -263,15 +334,28 @@ export function TranscribeForm({
           <Label htmlFor="transcribeLanguage">
             {t("dashboard:ai.language")}
           </Label>
-          {/* The endpoint takes an ISO 639-1 code, so the field reports a
-              longer entry here rather than after a round trip. */}
-          <Input
-            id="transcribeLanguage"
+          <Select value={language} onValueChange={setLanguage}>
+            <SelectTrigger id="transcribeLanguage" className="max-w-[16rem]">
+              {/* An unset language is not a blank field: the model detects it. */}
+              <SelectValue placeholder={t("dashboard:ai.sourceLanguageAuto")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">
+                {t("dashboard:ai.sourceLanguageAuto")}
+              </SelectItem>
+              {languages.map((option) => (
+                <SelectItem key={option.code} value={option.code}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* "auto" is the picker's word for "say nothing"; the request omits
+              the field, which is what the endpoint treats as detect. */}
+          <input
+            type="hidden"
             name="language"
-            placeholder="ja"
-            maxLength={2}
-            pattern="[A-Za-z]{2}"
-            className="max-w-[12rem]"
+            value={language === "auto" ? "" : language}
           />
           <p className="text-xs text-muted-foreground">
             {t("dashboard:ai.languageHint")}
@@ -292,8 +376,9 @@ export function TranscribeForm({
     </Card>
   );
 
-  const result =
-    cues.length > 0 ? (
+  const result = isPending ? (
+    <ResultShimmer label={t("dashboard:ai.processing")} />
+  ) : cues.length > 0 ? (
       <ResultPanel
         title={t("dashboard:ai.transcriptionDone")}
         actions={

@@ -5,8 +5,10 @@ export const MAX_AI_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 // JSON serialization. Keep this substantially below the ordinary image-edit
 // limit so a two-frame request stays within the Worker's memory budget.
 export const MAX_AI_VIDEO_FRAME_UPLOAD_BYTES = 5 * 1024 * 1024;
-export const MAX_AI_TRANSCRIPTION_UPLOAD_BYTES = 25 * 1024 * 1024;
-export { MAX_AI_PROMPT_LENGTH } from "@beutl/core";
+export {
+  MAX_AI_PROMPT_LENGTH,
+  MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+} from "@beutl/core";
 export const MAX_AI_JSON_REQUEST_BYTES = 32 * 1024;
 // A canonical maximum-size translation payload can contain 200 64-character
 // IDs plus 20,000 multi-byte UTF-8 text characters.

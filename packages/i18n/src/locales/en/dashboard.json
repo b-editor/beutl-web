@@ -112,7 +112,7 @@
     },
     "audio": "Audio file",
     "language": "Language (optional)",
-    "languageHint": "A language code such as ja or en improves accuracy. Leave it empty to detect automatically.",
+    "languageHint": "Naming the spoken language improves accuracy. Leaving it on Auto is fine.",
     "maxCharactersPerLine": "Max characters per line",
     "maxLines": "Max lines per subtitle",
     "glossary": "Glossary",
@@ -215,6 +215,14 @@
       "finalizing": "Saving",
       "succeeded": "Succeeded",
       "failed": "Failed"
-    }
+    },
+    "audioHint": "Audio or video — a video is converted here and only its audio is sent (up to {{minutes}} minutes).",
+    "audioExtracting": "Taking the audio out of the video…",
+    "audioExtractionErrors": {
+      "unsupportedFormat": "The browser could not read this file. Try another format.",
+      "tooLong": "Too long: the extracted audio would exceed the limit. Trim it and try again.",
+      "noAudioTrack": "This file carries no audio."
+    },
+    "processing": "Working…"
   }
 }

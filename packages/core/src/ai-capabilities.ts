@@ -180,3 +180,9 @@ const ISO_639_1_LANGUAGE_CODE_SET = new Set(ISO_639_1_LANGUAGE_CODES);
 export function isIso6391LanguageCode(value: unknown): value is string {
   return typeof value === "string" && ISO_639_1_LANGUAGE_CODE_SET.has(value);
 }
+
+// Here for the same reason the prompt cap is: the screen that converts a video
+// into audio has to know what will fit before it spends a minute decoding one,
+// and a copy in the browser would drift from the one being enforced.
+// Re-exported from ai/upload-limits.ts for the server side.
+export const MAX_AI_TRANSCRIPTION_UPLOAD_BYTES = 25 * 1024 * 1024;

@@ -1,6 +1,6 @@
 "use client";
 
-import { formatCount, formatDate, randomUuid } from "@beutl/core";
+import { cn, formatCount, formatDate, randomUuid } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Button } from "@beutl/ui/ui/button";
@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@beutl/ui/ui/select";
 import { Progress } from "@beutl/ui/ui/progress";
+import { Shimmer } from "@beutl/ui/ui/skeleton";
 import { useToast } from "@beutl/ui/use-toast";
 import {
   ChevronRight,
@@ -324,6 +325,53 @@ export function ResultPlaceholder({
     <div className="hidden min-h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center lg:flex">
       <Icon className="h-8 w-8 text-muted-foreground/60" />
       <p className="max-w-xs text-sm text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+// What the right column shows while a request is running. A placeholder that
+// stays still reads as "nothing is happening" on an operation that takes a
+// minute; the band of light says the wait is expected.
+export function ResultShimmer({ label }: { label: string }) {
+  return (
+    <Card className="flex flex-col gap-3 p-4">
+      <p className="inline-flex items-center gap-2 font-bold">
+        <Sparkles className="h-4 w-4 animate-pulse text-muted-foreground" />
+        {label}
+      </p>
+      <Shimmer className="min-h-64 w-full" />
+      <Shimmer className="h-4 w-2/3" />
+    </Card>
+  );
+}
+
+// A picture that shimmers until it has actually arrived. The URL comes back
+// before the bytes do, and an empty frame in the meantime looks like a result
+// that failed to render.
+export function ShimmerImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="relative">
+      {!loaded && <Shimmer className="absolute inset-0 min-h-48 w-full" />}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt}
+        onLoad={() => setLoaded(true)}
+        className={cn(
+          className,
+          "transition-opacity",
+          loaded ? "opacity-100" : "min-h-48 opacity-0",
+        )}
+      />
     </div>
   );
 }

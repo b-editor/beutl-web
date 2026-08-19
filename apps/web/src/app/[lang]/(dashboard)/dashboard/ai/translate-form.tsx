@@ -49,6 +49,7 @@ import {
   DownloadButton,
   IdempotencyKeyField,
   ResultPanel,
+  ResultShimmer,
   ResultPlaceholder,
   blockedReason,
   downloadTextFile,
@@ -69,7 +70,9 @@ export function TranslateForm({
   languages: LanguageOption[];
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch] = useActionState(translateAction, { success: false });
+  const [state, dispatch, isPending] = useActionState(translateAction, {
+    success: false,
+  });
   const [source, setSource] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
@@ -193,9 +196,12 @@ export function TranslateForm({
               value={sourceLanguage === "auto" ? "" : sourceLanguage}
             />
           </div>
+          {/* Sits level with the two boxes, not with the labels above them: the
+              row is bottom-aligned, so the arrow is nudged up by half the
+              difference between a select and its own height. */}
           <ArrowRight
             aria-hidden
-            className="mb-2.5 h-4 w-4 shrink-0 text-muted-foreground"
+            className="mb-3 h-4 w-4 shrink-0 text-muted-foreground"
           />
           <div className="flex min-w-[9rem] flex-1 flex-col space-y-1.5">
             <Label htmlFor="targetLanguage">
@@ -329,8 +335,9 @@ export function TranslateForm({
     </Card>
   );
 
-  const result =
-    translated.length > 0 ? (
+  const result = isPending ? (
+    <ResultShimmer label={t("dashboard:ai.processing")} />
+  ) : translated.length > 0 ? (
       <ResultPanel
         title={t("dashboard:ai.translationDone")}
         actions={

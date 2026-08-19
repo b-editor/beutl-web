@@ -4,6 +4,7 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import SubmitButton from "@beutl/ui/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Card } from "@beutl/ui/ui/card";
+import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
@@ -27,6 +28,8 @@ import {
   IdempotencyKeyField,
   ModelSelect,
   ResultPanel,
+  ResultShimmer,
+  ShimmerImage,
   ResultPlaceholder,
   blockedReason,
   defaultModelId,
@@ -91,7 +94,7 @@ export function ImageGenerateForm({
   capabilities?: Record<string, AiImageModelOptions>;
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch] = useActionState(generateImageAction, {
+  const [state, dispatch, isPending] = useActionState(generateImageAction, {
     success: false,
   });
   const [prompt, setPrompt] = useState("");
@@ -230,12 +233,10 @@ export function ImageGenerateForm({
 
         {options.transparentBackground && (
           <div className="flex items-center gap-2">
-            <input
+            <Checkbox
               id="generateTransparent"
-              type="checkbox"
-              className="h-4 w-4 rounded border-input accent-primary"
               checked={transparentBackground}
-              onChange={(event) => setTransparent(event.target.checked)}
+              onCheckedChange={(checked) => setTransparent(checked === true)}
             />
             <Label htmlFor="generateTransparent" className="font-normal">
               {t("dashboard:ai.transparentBackground")}
@@ -321,8 +322,9 @@ export function ImageGenerateForm({
     </Card>
   );
 
-  const result =
-    state.success && state.url ? (
+  const result = isPending ? (
+    <ResultShimmer label={t("dashboard:ai.processing")} />
+  ) : state.success && state.url ? (
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
@@ -334,8 +336,7 @@ export function ImageGenerateForm({
           />
         }
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <ShimmerImage
           src={state.url}
           alt={t("dashboard:ai.generated")}
           className="w-full rounded-lg border"

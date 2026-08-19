@@ -76,6 +76,17 @@
       background-position: 300% 0;
     }
   }
+
+  /* A band of light travelling across a placeholder. Used while something is
+     being generated or an image is still loading, where a pulse reads as
+     "disabled" and this reads as "working". */
+  --animate-shimmer: shimmer 1.6s linear infinite;
+
+  @keyframes shimmer {
+    to {
+      background-position: -200% 0;
+    }
+  }
 }
 
 /*

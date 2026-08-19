@@ -2,6 +2,7 @@ import { getTranslation } from "@beutl/i18n";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiPageHeader } from "../shared";
 import { TranscribeForm } from "../transcribe-form";
+import { languageOptions } from "../languages";
 import { getAiScreenState } from "../queries";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,11 @@ export default async function Page(props: {
         description={t("dashboard:ai.transcriptionDescription")}
         balance={balance}
       />
-      <TranscribeForm lang={lang} access={access} />
+      <TranscribeForm
+        lang={lang}
+        access={access}
+        languages={languageOptions(lang)}
+      />
     </div>
   );
 }

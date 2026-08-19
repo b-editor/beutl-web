@@ -112,7 +112,7 @@
     },
     "audio": "音声ファイル",
     "language": "言語 (任意)",
-    "languageHint": "ja や en のような言語コードを指定すると精度が上がります。空欄なら自動判定します。",
+    "languageHint": "話されている言語を選ぶと精度が上がります。自動のままでもかまいません。",
     "maxCharactersPerLine": "1行の最大文字数",
     "maxLines": "1字幕の最大行数",
     "glossary": "用語集",
@@ -215,6 +215,14 @@
       "finalizing": "保存中",
       "succeeded": "完了",
       "failed": "失敗"
-    }
+    },
+    "audioHint": "音声ファイルのほか、動画ファイルも選べます (音声だけを取り出して送ります。最長 {{minutes}} 分)。",
+    "audioExtracting": "動画から音声を取り出しています…",
+    "audioExtractionErrors": {
+      "unsupportedFormat": "このファイルはブラウザーで読み取れませんでした。別の形式でお試しください。",
+      "tooLong": "長すぎます。取り出した音声が上限を超えるため、短く切ってからお試しください。",
+      "noAudioTrack": "このファイルには音声が含まれていません。"
+    },
+    "processing": "処理中…"
   }
 }

@@ -39,6 +39,8 @@ import {
   DownloadButton,
   IdempotencyKeyField,
   ResultPanel,
+  ResultShimmer,
+  ShimmerImage,
   ResultPlaceholder,
   blockedReason,
   downloadFromUrl,
@@ -336,8 +338,9 @@ export function ImageEditForm({
   // Before a run the right column previews the upload, so choosing a file gives
   // immediate feedback and the comparison lands in the place already holding
   // the source image.
-  const result =
-    state.success && state.url ? (
+  const result = isPending ? (
+    <ResultShimmer label={t("dashboard:ai.processing")} />
+  ) : state.success && state.url ? (
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
@@ -371,22 +374,19 @@ export function ImageEditForm({
         )}
         {comparisonMode === "side_by_side" && sourcePreview ? (
           <div className="grid gap-2 sm:grid-cols-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <ShimmerImage
               src={sourcePreview}
               alt={t("dashboard:ai.sourcePreview")}
               className="w-full rounded-lg border"
             />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <ShimmerImage
               src={state.url}
               alt={t("dashboard:ai.generated")}
               className="w-full rounded-lg border"
             />
           </div>
         ) : (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
+          <ShimmerImage
             src={
               comparisonMode === "original" && sourcePreview
                 ? sourcePreview
@@ -403,8 +403,7 @@ export function ImageEditForm({
       </ResultPanel>
     ) : sourcePreview ? (
       <ResultPanel title={t("dashboard:ai.sourcePreview")}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <ShimmerImage
           src={sourcePreview}
           alt={t("dashboard:ai.sourcePreview")}
           className="w-full rounded-lg border"

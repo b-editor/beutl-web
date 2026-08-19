@@ -5,6 +5,7 @@ import SubmitButton from "@beutl/ui/submit-button";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Button } from "@beutl/ui/ui/button";
 import { Card } from "@beutl/ui/ui/card";
+import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
@@ -37,6 +38,7 @@ import {
   AiWorkspace,
   IdempotencyKeyField,
   ResultPanel,
+  ResultShimmer,
   blockedReason,
   defaultModelId,
   type AiAccess,
@@ -168,7 +170,7 @@ export function VideoForm({
   capabilities?: Record<string, AiVideoModelOptions>;
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch] = useActionState(createVideoAction, {
+  const [state, dispatch, isPending] = useActionState(createVideoAction, {
     success: false,
   });
   const [videoDuration, setVideoDuration] = useState<string>("4");
@@ -336,13 +338,11 @@ export function VideoForm({
         </div>
 
         <div className="flex items-center gap-2">
-          <input
+          <Checkbox
             id="videoAudio"
-            type="checkbox"
-            className="h-4 w-4 rounded border-input accent-primary"
             checked={audio}
             disabled={!options.generateAudio}
-            onChange={(event) => setGenerateAudio(event.target.checked)}
+            onCheckedChange={(checked) => setGenerateAudio(checked === true)}
           />
           <Label htmlFor="videoAudio" className="font-normal">
             {t("dashboard:ai.generateAudio")}
@@ -453,7 +453,9 @@ export function VideoForm({
   // Video outlives the request, so there is never an inline result to show.
   // The right column carries what the user needs to know before pressing
   // generate, and where the finished clip will turn up afterwards.
-  const result = state.success ? (
+  const result = isPending ? (
+    <ResultShimmer label={t("dashboard:ai.processing")} />
+  ) : state.success ? (
     <ResultPanel title={t("dashboard:ai.videoQueuedTitle")}>
       <p className="text-sm text-muted-foreground">
         {t("dashboard:ai.videoQueued")}
