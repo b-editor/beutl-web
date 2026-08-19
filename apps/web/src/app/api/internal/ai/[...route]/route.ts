@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { v3 } from "@beutl/api";
 import { auth } from "@/lib/better-auth";
+import { AI_STREAM_HEADER } from "@/lib/ai-event-stream";
 
 // The dashboard's way in to the AI endpoints, for the screens that show an
 // answer while it is still arriving.
@@ -26,11 +27,20 @@ function unauthorized(): Response {
   );
 }
 
-// A cookie is sent by the browser whatever page asked for the request, so the
-// request has to say it came from this site. A cross-site fetch cannot set this
-// header to another origin, and a form post cannot reach here at all: the
-// endpoints read JSON and multipart bodies the form encodings cannot produce.
-function sameOrigin(request: Request): boolean {
+// A cookie is sent by the browser whatever page asked for the request, so a
+// request that arrives with one has to show it was meant. Two things say so,
+// and both must hold:
+//
+//  - A header of this site's own. A form on another site can post here — the
+//    image endpoint reads multipart, which a form can produce — but it cannot
+//    set a header, and a fetch that sets one is preflighted, which this route
+//    answers to nothing.
+//  - An Origin, when the browser sends one, that is this site. Safari omits it
+//    on same-origin requests, so its absence cannot be treated as a refusal;
+//    the header above is what carries the weight.
+function trustedCaller(request: Request): boolean {
+  if (request.headers.get(AI_STREAM_HEADER) !== "1") return false;
+
   const origin = request.headers.get("origin");
   if (!origin) return true;
   try {
@@ -41,7 +51,7 @@ function sameOrigin(request: Request): boolean {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!sameOrigin(request)) return unauthorized();
+  if (!trustedCaller(request)) return unauthorized();
 
   const session = await auth.api.getSession({ headers: request.headers });
   const userId = session?.user?.id;
