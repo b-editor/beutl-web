@@ -30,6 +30,7 @@
   "aiPlanRequired": "AI機能を利用するにはBeutl AIサブスクリプションへの加入が必要です。",
   "aiUsageLimitExceeded": "今月のAI利用枠と追加クレジットが不足しています。",
   "aiProviderError": "AIプロバイダーでエラーが発生しました。しばらくしてからもう一度お試しください。",
+  "aiRequestInterrupted": "応答が届く前に接続が切れました。もう一度実行すると同じリクエストとして問い合わせるため、完了していた場合でも二重に課金されません。",
   "aiJobNotFound": "AIジョブが見つかりませんでした。",
   "aiJobLimitReached": "進行中の動画生成ジョブがあります。完了するまでお待ちください。",
   "aiJobIsActive": "実行中のAIジョブは削除できません。",

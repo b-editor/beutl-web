@@ -15,15 +15,16 @@ import {
   SelectValue,
 } from "@beutl/ui/ui/select";
 import { Textarea } from "@beutl/ui/ui/textarea";
+import { Shimmer } from "@beutl/ui/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { ImageIcon, X } from "lucide-react";
 import {
-  useActionState,
-  useEffect,
   useRef,
   useState,
   type ChangeEvent,
+  type FormEvent,
 } from "react";
+import { randomUuid } from "@beutl/core";
 import {
   AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
@@ -34,14 +35,13 @@ import {
   type AiImageBackground,
 } from "@beutl/core";
 import { composePrompt } from "@/lib/ai-prompt";
-import { generateImageAction } from "./actions";
+import { runAiStream } from "@/lib/ai-event-stream";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AdvancedOptions,
   AiAccessNotice,
   AiWorkspace,
   DownloadButton,
-  IdempotencyKeyField,
   ModelSelect,
   ResultPanel,
   ResultShimmer,
@@ -124,9 +124,17 @@ export function ImageGenerateForm({
   capabilities?: Record<string, AiImageModelOptions>;
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch, isPending] = useActionState(generateImageAction, {
-    success: false,
-  });
+  const [isPending, setIsPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [generated, setGenerated] = useState<
+    { url: string; fileName: string } | null
+  >(null);
+  // The rough version the model is working through, shown while it works. Only
+  // some providers send any; the rest simply have none to show.
+  const [preview, setPreview] = useState<string | null>(null);
+  // Names this submission to the server. Kept when a run is cut off, because
+  // asking again under the same name recovers what was already paid for.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
@@ -189,13 +197,64 @@ export function ImageGenerateForm({
     applyReferences([...references, ...added]);
   }
 
-  // React empties the field after a form action, so the list has to follow it:
-  // otherwise it would name pictures the next run would no longer send.
-  useEffect(() => {
-    if (!state.success) return;
-    setReferences([]);
-    if (referenceInput.current) referenceInput.current.value = "";
-  }, [state]);
+  // Sent to the API rather than through a server action, because this screen
+  // shows the picture as it is worked out and a server action can only answer
+  // once, at the end.
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isPending || blocked !== null || tooManyReferences) return;
+
+    const body = new FormData(event.currentTarget);
+    // What the form carries is what the endpoint reads, save for the model and
+    // the shapes this screen settled from the model's own capabilities.
+    body.set("prompt", composePrompt({ main: prompt, style, composition, exclusions }));
+    body.set("aspectRatio", ratio);
+    body.set("background", chosenBackground);
+    if (model) body.set("model", model);
+    body.delete("reference");
+    for (const reference of references) body.append("reference[]", reference);
+
+    setIsPending(true);
+    setMessage(null);
+    setPreview(null);
+    try {
+      const outcome = await runAiStream<{ url: string; fileName?: string }>(
+        "images",
+        {
+          body,
+          idempotencyKey,
+          onEvent: (name, data) => {
+            if (name !== "partial") return;
+            const image = (data as { image?: unknown }).image;
+            if (typeof image === "string") setPreview(image);
+          },
+        },
+      );
+
+      if (outcome.ok) {
+        setGenerated({
+          url: outcome.result.url,
+          fileName: outcome.result.fileName ?? "ai-image.png",
+        });
+        setReferences([]);
+        if (referenceInput.current) referenceInput.current.value = "";
+        setIdempotencyKey(randomUuid());
+        return;
+      }
+
+      setMessage(t(`api-errors:${outcome.errorCode}`));
+      // A run that was cut off may have finished on the server, so the next
+      // attempt keeps its name and asks for that same run again.
+      if (outcome.errorCode !== "aiRequestInterrupted") {
+        setIdempotencyKey(randomUuid());
+      }
+    } catch {
+      setMessage(t("api-errors:aiProviderError"));
+    } finally {
+      setIsPending(false);
+      setPreview(null);
+    }
+  }
 
   function applyTemplate(template: PromptTemplate) {
     setPrompt(template.prompt);
@@ -206,8 +265,7 @@ export function ImageGenerateForm({
 
   const form = (
     <Card>
-      <form action={dispatch} className="flex flex-col gap-4 p-6">
-        <IdempotencyKeyField state={state} />
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
         <PromptLibrary
           lang={lang}
           onApply={applyTemplate}
@@ -422,10 +480,10 @@ export function ImageGenerateForm({
           </div>
         </AdvancedOptions>
 
-        {state.message && (
+        {message && (
           <Alert variant="destructive">
             <AlertTitle>{t("error")}</AlertTitle>
-            <AlertDescription>{state.message}</AlertDescription>
+            <AlertDescription>{message}</AlertDescription>
           </Alert>
         )}
 
@@ -441,21 +499,33 @@ export function ImageGenerateForm({
   );
 
   const result = isPending ? (
-    <ResultShimmer label={t("dashboard:ai.processing")} />
-  ) : state.success && state.url ? (
+    // The picture as far as the model has taken it, if it sends anything at
+    // all; a wait with nothing to show is still a wait.
+    preview ? (
+      <ResultPanel title={t("dashboard:ai.generating")}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`data:image/png;base64,${preview}`}
+          alt={t("dashboard:ai.generating")}
+          className="w-full rounded-lg border"
+        />
+        <Shimmer className="h-8 w-full" />
+      </ResultPanel>
+    ) : (
+      <ResultShimmer label={t("dashboard:ai.processing")} />
+    )
+  ) : generated ? (
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
           <DownloadButton
             label={t("dashboard:ai.download")}
-            onDownload={() =>
-              downloadFromUrl(state.url ?? "", state.fileName ?? "ai-image.png")
-            }
+            onDownload={() => downloadFromUrl(generated.url, generated.fileName)}
           />
         }
       >
         <ShimmerImage
-          src={state.url}
+          src={generated.url}
           alt={t("dashboard:ai.generated")}
           className="w-full rounded-lg border"
         />

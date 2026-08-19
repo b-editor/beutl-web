@@ -227,6 +227,9 @@
       "noAudioTrack": "このファイルには音声が含まれていません。"
     },
     "processing": "処理中…",
+    "generating": "生成中…",
+    "translating": "翻訳中…",
+    "translatedSoFar": "{{total}} 件中 {{done}} 件",
     "referenceImageTooMany": "参照画像は最大 {{maximum}} 枚です。選び直してください。"
   }
 }

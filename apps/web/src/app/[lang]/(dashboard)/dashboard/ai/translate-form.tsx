@@ -15,14 +15,17 @@ import {
   SelectValue,
 } from "@beutl/ui/ui/select";
 import { Textarea } from "@beutl/ui/ui/textarea";
+import { Shimmer } from "@beutl/ui/ui/skeleton";
 import { ArrowRight, Languages, Plus, Trash2 } from "lucide-react";
 import {
-  useActionState,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type FormEvent,
 } from "react";
+import { randomUuid } from "@beutl/core";
+import { runAiStream } from "@/lib/ai-event-stream";
 import {
   applyTranslationToCues,
   MAX_GLOSSARY_ENTRIES,
@@ -39,7 +42,6 @@ import {
   clearSubtitleHandoff,
   loadSubtitleHandoff,
 } from "@/lib/subtitle-handoff";
-import { translateAction } from "./actions";
 import {
   AdvancedOptions,
   AiAccessNotice,
@@ -47,7 +49,6 @@ import {
   AiWorkspace,
   CopyButton,
   DownloadButton,
-  IdempotencyKeyField,
   ResultPanel,
   ResultShimmer,
   ResultPlaceholder,
@@ -70,9 +71,16 @@ export function TranslateForm({
   languages: LanguageOption[];
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch, isPending] = useActionState(translateAction, {
-    success: false,
-  });
+  const [isPending, setIsPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  // The subtitles translated so far in the run that is going on. Shown while it
+  // runs and replaced by the finished set when it ends, so a half-translated
+  // list is never mistaken for the result.
+  const [arriving, setArriving] = useState<TranslatableSegment[]>([]);
+  // Names this submission to the server. Kept when a run is cut off, because
+  // asking again under the same name recovers what was already paid for; a new
+  // one is drawn once a run has definitely ended.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
   const [source, setSource] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
@@ -103,17 +111,104 @@ export function TranslateForm({
     clearSubtitleHandoff();
   }, []);
 
-  useEffect(() => {
-    if (Array.isArray(state.segments)) {
-      setTranslated(
-        (state.segments as TranslatableSegment[]).map((segment) => ({
+  // Sent to the API rather than through a server action, because this screen
+  // shows the translation as it arrives and a server action can only answer
+  // once, at the end.
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isPending || !parsed.ok || targetLanguage === "" || blocked !== null) {
+      return;
+    }
+
+    const options = new FormData(event.currentTarget);
+    const number = (name: string) => {
+      const value = Number(options.get(name));
+      return Number.isFinite(value) && value > 0 ? value : undefined;
+    };
+    const glossaryEntries = parseGlossary(glossary);
+    const style = {
+      ...(Object.keys(glossaryEntries).length > 0
+        ? { glossary: glossaryEntries }
+        : {}),
+      ...(number("maxCharactersPerLine")
+        ? { maxCharactersPerLine: number("maxCharactersPerLine") }
+        : {}),
+      ...(number("maxLines") ? { maxLines: number("maxLines") } : {}),
+    };
+    const cues = parsed.cues;
+    const body = JSON.stringify({
+      ...(sourceLanguage ? { sourceLanguage } : {}),
+      targetLanguage,
+      segments: parsed.segments.map((segment, index) => {
+        const cue = cues?.[index];
+        return {
           id: segment.id,
           text: segment.text,
-        })),
+          // Sent only when the source carried timings: they are what lets the
+          // model keep a line readable in the time its cue is on screen.
+          ...(cue && cue.end > cue.start
+            ? {
+                context: {
+                  groupId: segment.id,
+                  partIndex: 0,
+                  start: cue.start,
+                  end: cue.end,
+                },
+              }
+            : {}),
+        };
+      }),
+      ...(Object.keys(style).length > 0 ? { style } : {}),
+      ...(model ? { model } : {}),
+    });
+
+    setIsPending(true);
+    setMessage(null);
+    setArriving([]);
+    const submittedSource = source;
+    try {
+      const outcome = await runAiStream<{ segments: TranslatableSegment[] }>(
+        "translations",
+        {
+          body,
+          idempotencyKey,
+          onEvent: (event, data) => {
+            if (event !== "segment") return;
+            const segment = data as TranslatableSegment;
+            setArriving((current) =>
+              current.some((entry) => entry.id === segment.id)
+                ? current
+                : [...current, { id: segment.id, text: segment.text }],
+            );
+          },
+        },
       );
-      setTranslatedSource(sourceRef.current);
+
+      if (outcome.ok) {
+        setTranslated(
+          outcome.result.segments.map((segment) => ({
+            id: segment.id,
+            text: segment.text,
+          })),
+        );
+        setTranslatedSource(submittedSource);
+        setIdempotencyKey(randomUuid());
+        return;
+      }
+
+      setMessage(t(`api-errors:${outcome.errorCode}`));
+      // A run that was cut off may have finished on the server, so the next
+      // attempt keeps its name and asks for that same run again.
+      if (outcome.errorCode !== "aiRequestInterrupted") {
+        setIdempotencyKey(randomUuid());
+      }
+    } catch {
+      setMessage(t("api-errors:aiProviderError"));
+    } finally {
+      setIsPending(false);
+      setArriving([]);
     }
-  }, [state.segments]);
+  }
 
   const parsed = useMemo(() => parseSubtitleSource(source), [source]);
   // The cues the source carried, so a translation can be written back out as a
@@ -146,8 +241,7 @@ export function TranslateForm({
 
   const form = (
     <Card>
-      <form action={dispatch} className="flex flex-col gap-4 p-6">
-        <IdempotencyKeyField state={state} />
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
         {importedFrom !== null && (
           <Alert>
             <AlertTitle>{t("dashboard:ai.importedTitle")}</AlertTitle>
@@ -313,10 +407,10 @@ export function TranslateForm({
           </div>
         </AdvancedOptions>
 
-        {state.message && (
+        {message && (
           <Alert variant="destructive">
             <AlertTitle>{t("error")}</AlertTitle>
-            <AlertDescription>{state.message}</AlertDescription>
+            <AlertDescription>{message}</AlertDescription>
           </Alert>
         )}
 
@@ -334,7 +428,31 @@ export function TranslateForm({
   );
 
   const result = isPending ? (
-    <ResultShimmer label={t("dashboard:ai.processing")} />
+    // What has been translated so far, as it arrives. Until the first line
+    // lands there is nothing to show but the wait itself.
+    arriving.length > 0 ? (
+      <ResultPanel title={t("dashboard:ai.translating")}>
+        <p className="text-sm text-muted-foreground">
+          {t("dashboard:ai.translatedSoFar", {
+            done: arriving.length,
+            total: parsed.ok ? parsed.segments.length : arriving.length,
+          })}
+        </p>
+        <ul className="flex flex-col gap-1">
+          {arriving.map((segment) => (
+            <li
+              key={segment.id}
+              className="whitespace-pre-wrap rounded-md border bg-background px-2 py-1 text-sm"
+            >
+              {segment.text}
+            </li>
+          ))}
+        </ul>
+        <Shimmer className="h-8 w-full" />
+      </ResultPanel>
+    ) : (
+      <ResultShimmer label={t("dashboard:ai.processing")} />
+    )
   ) : translated.length > 0 ? (
       <ResultPanel
         title={t("dashboard:ai.translationDone")}

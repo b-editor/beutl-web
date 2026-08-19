@@ -227,6 +227,9 @@
       "noAudioTrack": "This file carries no audio."
     },
     "processing": "Working…",
+    "generating": "Generating…",
+    "translating": "Translating…",
+    "translatedSoFar": "{{done}} of {{total}} subtitles",
     "referenceImageTooMany": "At most {{maximum}} reference images. Pick again."
   }
 }
