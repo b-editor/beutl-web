@@ -74,8 +74,10 @@ export function eventStreamResponse(
   return new Response(body, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-store",
-      // Nothing between here and the reader may hold the events back.
+      // Nothing between here and the reader may hold the events back or
+      // rewrite them: a proxy that buffers or compresses the body would deliver
+      // the whole answer at once, which is the one thing this is not for.
+      "cache-control": "no-store, no-transform",
       "x-accel-buffering": "no",
     },
   });

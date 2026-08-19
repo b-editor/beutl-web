@@ -30,6 +30,10 @@ yarn-error.log*
 .env*.local
 .env
 
+# Cloudflare Worker secrets for a local run. Never committed.
+.dev.vars
+.dev.vars.*
+
 # vercel
 .vercel
 
