@@ -8,7 +8,7 @@ describe("billing history presentation", () => {
   it("labels revoked package payments without hiding the money-in record", () => {
     expect(packagePaymentReversalTranslationKey({
       revokedAt: new Date("2026-08-11T00:00:00.000Z"),
-    })).toBe("account:billing.packagePurchaseReversed");
+    })).toBe("account:billing.paymentReversed");
   });
 
   it("leaves active package payments unmarked", () => {
@@ -30,6 +30,7 @@ const PACKAGE = {
 function packagePayment(overrides: Record<string, unknown> = {}) {
   return {
     id: "history-1",
+    paymentId: "pi_package_1",
     packageId: "package-1",
     stripePaymentAmount: 500,
     stripeCurrency: "jpy",
@@ -42,6 +43,7 @@ function packagePayment(overrides: Record<string, unknown> = {}) {
 function creditPurchase(overrides: Record<string, unknown> = {}) {
   return {
     id: "credit-1",
+    stripePaymentId: "pi_credit_1",
     creditAmount: 500,
     stripePaymentAmount: 1_000,
     stripeCurrency: "jpy",
@@ -52,34 +54,122 @@ function creditPurchase(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function subscriptionPayment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "in_1",
+    product: "aiPro" as const,
+    paidAt: new Date("2026-08-01T00:00:00.000Z"),
+    periodStart: new Date("2026-08-01T00:00:00.000Z"),
+    periodEnd: new Date("2026-09-01T00:00:00.000Z"),
+    amount: { value: 2_000, currency: "jpy" },
+    refundedAmount: 0,
+    disputed: false,
+    document: { url: "https://invoice.stripe.com/in_1", kind: "invoice" as const },
+    ...overrides,
+  };
+}
+
 function build({
+  subscriptionPayments = [],
   payments = [],
   creditPurchases = [],
   packages = [["package-1", PACKAGE]] as [string, typeof PACKAGE][],
+  documents = [] as [string, { url: string; kind: "invoice" | "receipt" }][],
   lang = "ja",
 }: {
+  subscriptionPayments?: ReturnType<typeof subscriptionPayment>[];
   payments?: ReturnType<typeof packagePayment>[];
   creditPurchases?: ReturnType<typeof creditPurchase>[];
   packages?: [string, typeof PACKAGE][];
+  documents?: [string, { url: string; kind: "invoice" | "receipt" }][];
   lang?: string;
 } = {}) {
   return buildBillingHistory({
+    subscriptionPayments,
     payments,
     creditPurchases,
     packagesById: new Map(packages),
+    documentByPaymentIntentId: new Map(documents),
     t,
     lang,
   });
 }
 
 describe("buildBillingHistory", () => {
-  it("merges package purchases and credit top-ups newest first", () => {
+  it("merges subscription, package, and credit payments newest first", () => {
     const entries = build({
+      subscriptionPayments: [subscriptionPayment()],
       payments: [packagePayment()],
       creditPurchases: [creditPurchase()],
     });
 
-    expect(entries.map((entry) => entry.kind)).toEqual(["credit", "package"]);
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "credit",
+      "subscription",
+      "package",
+    ]);
+  });
+
+  it("names a subscription payment by product and tier, with its period", () => {
+    const [entry] = build({ subscriptionPayments: [subscriptionPayment()] });
+
+    expect(entry.product).toBe(
+      'account:billing.productTier:{"product":"account:billing.productName","tier":"account:billing.tierPro"}',
+    );
+    expect(entry.detail).toBe(
+      'account:billing.subscriptionPeriod:{"start":"2026年8月1日","end":"2026年9月1日"}',
+    );
+    expect(entry.amount).toEqual({ value: 2_000, currency: "jpy" });
+    expect(entry.document).toEqual({
+      url: "https://invoice.stripe.com/in_1",
+      kind: "invoice",
+    });
+  });
+
+  it("marks a refunded or disputed subscription payment", () => {
+    const [refunded] = build({
+      subscriptionPayments: [subscriptionPayment({ refundedAmount: 2_000 })],
+    });
+    expect(refunded.reversalNote).toBe("account:billing.paymentReversed");
+
+    const [disputed] = build({
+      subscriptionPayments: [subscriptionPayment({ disputed: true })],
+    });
+    expect(disputed.reversalNote).toBe("account:billing.paymentReversed");
+  });
+
+  it("reports how much a partial subscription refund returned", () => {
+    const [entry] = build({
+      subscriptionPayments: [subscriptionPayment({ refundedAmount: 500 })],
+    });
+
+    expect(entry.reversalNote).toBe(
+      'account:billing.paymentPartiallyRefunded:{"amount":"￥500"}',
+    );
+  });
+
+  it("links each payment to the Stripe document recorded for its charge", () => {
+    const entries = build({
+      payments: [packagePayment()],
+      creditPurchases: [creditPurchase()],
+      documents: [
+        ["pi_package_1", { url: "https://invoice.stripe.com/pkg", kind: "invoice" }],
+        ["pi_credit_1", { url: "https://pay.stripe.com/receipts/credit", kind: "receipt" }],
+      ],
+    });
+
+    expect(
+      entries.map((entry) => [entry.kind, entry.document?.kind ?? null]),
+    ).toEqual([
+      ["credit", "receipt"],
+      ["package", "invoice"],
+    ]);
+  });
+
+  it("leaves the document empty when Stripe has none for the charge", () => {
+    const [entry] = build({ payments: [packagePayment()] });
+
+    expect(entry.document).toBeNull();
   });
 
   it("reads the package amount from the stored row instead of Stripe", () => {
@@ -129,7 +219,7 @@ describe("buildBillingHistory", () => {
       ],
     });
 
-    expect(entry.reversalNote).toBe("account:billing.packagePurchaseReversed");
+    expect(entry.reversalNote).toBe("account:billing.paymentReversed");
   });
 
   it("shows the purchased credit count alongside the charge", () => {

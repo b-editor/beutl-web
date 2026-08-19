@@ -27,7 +27,7 @@
   "virtualAssetCannotBeDownloaded": "仮想アセットはこのURLからダウンロードできません。",
   "cannotDeleteReleaseAssets": "リリースアセットは削除できません。",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "アセットがないリリースは公開できません。",
-  "aiPlanRequired": "AI機能を利用するにはProプランへの加入が必要です。",
+  "aiPlanRequired": "AI機能を利用するにはBeutl AIサブスクリプションへの加入が必要です。",
   "aiUsageLimitExceeded": "今月のAI利用枠と追加クレジットが不足しています。",
   "aiProviderError": "AIプロバイダーでエラーが発生しました。しばらくしてからもう一度お試しください。",
   "aiJobNotFound": "AIジョブが見つかりませんでした。",

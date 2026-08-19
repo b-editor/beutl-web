@@ -41,7 +41,7 @@
     "deleteSuccess": "ユーザーを削除しました",
     "deleteFailed": "ユーザーの削除に失敗しました",
     "truncatedNotice": "最新 {{count}} 件のみ表示しています",
-    "aiPlan": "AI プラン",
+    "aiPlan": "AI サブスクリプション",
     "aiPlanActive": "有効",
     "aiPlanNone": "契約なし",
     "aiMonthlyUsage": "今月の使用量",
@@ -76,8 +76,8 @@
     "aiResetMonthlyUsage": "使用量をリセット",
     "aiResetMonthlyUsageConfirmTitle": "今月の使用量をリセットしますか?",
     "aiResetMonthlyUsageConfirmDescription": "消費済みの量を 0 に戻し、月間割当を全額使える状態にします。操作は監査ログに記録されます。",
-    "aiAdjustSuccess": "AI プランを更新しました",
-    "aiAdjustFailed": "AI プランの更新に失敗しました"
+    "aiAdjustSuccess": "AI サブスクリプションを更新しました",
+    "aiAdjustFailed": "AI サブスクリプションの更新に失敗しました"
   },
   "feedback": {
     "title": "フィードバック",
@@ -143,7 +143,7 @@
       "usage": "利用状況"
     },
     "plan": {
-      "title": "プラン",
+      "title": "サブスクリプション",
       "description": "Pro 契約 1 件あたりに毎月付与される使用ユニット数です。変更は以降に開始される処理と残量表示に適用され、消費済みの量はそのまま残ります。",
       "digest": "実績: 中央値 {{median}} ユニット、90 パーセンタイル {{p90}} ユニット、割当を使い切ったのは {{exhausted}}% ({{accounts}} 件を集計)。",
       "digestEmpty": "割当の妥当性を判断できるだけの実績がまだありません。",
@@ -265,8 +265,8 @@
           "exhausted": "使い切り"
         },
         "projected": "期間終了時点の見込みは中央値 {{p50}} ユニット、90 パーセンタイル {{p90}} ユニットです ({{sampleSize}} 件から算出)。",
-        "scope": "対象 {{measured}} 件 / 全アカウント {{accounts}} 件。請求期間が終了済みの {{stale}} 件と、プランを持ったことがない {{withoutPeriod}} 件は除外しています。",
-        "noData": "集計できるアカウントがありません (請求期間が終了済みの {{stale}} 件と、プランを持ったことがない {{withoutPeriod}} 件は除外しています)。",
+        "scope": "対象 {{measured}} 件 / 全アカウント {{accounts}} 件。請求期間が終了済みの {{stale}} 件と、サブスクリプションを持ったことがない {{withoutPeriod}} 件は除外しています。",
+        "noData": "集計できるアカウントがありません (請求期間が終了済みの {{stale}} 件と、サブスクリプションを持ったことがない {{withoutPeriod}} 件は除外しています)。",
         "censoredNote": "割当を使い切るとそこで消費が止まるため、上位のパーセンタイルは実際の需要より小さく出ます。使い切った割合と併せて読んでください。",
         "midPeriodNote": "請求期間の途中にいるアカウントは必ず低く出ます。見込みの行は経過時間から換算した推定値で、経過が 10% 未満のアカウントは除いています。",
         "purchasedNote": "追加クレジットを保有しているアカウントが {{holders}} 件あります。割当を超える需要の目安になります。",

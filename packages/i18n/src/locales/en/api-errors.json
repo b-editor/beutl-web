@@ -27,7 +27,7 @@
   "virtualAssetCannotBeDownloaded": "Virtual assets cannot be downloaded from this URL.",
   "cannotDeleteReleaseAssets": "Cannot delete release assets.",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "Cannot publish a release that does not have an asset.",
-  "aiPlanRequired": "A Pro plan is required to use AI features.",
+  "aiPlanRequired": "A Beutl AI subscription is required to use AI features.",
   "aiUsageLimitExceeded": "Your monthly AI allowance and additional credits are insufficient.",
   "aiProviderError": "The AI provider returned an error. Please try again later.",
   "aiJobNotFound": "AI job not found.",

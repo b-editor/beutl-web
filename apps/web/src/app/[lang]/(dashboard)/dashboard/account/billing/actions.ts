@@ -740,6 +740,8 @@ export async function createCreditCheckout(): Promise<void> {
           topUpAttemptId: attempt.id,
         },
       },
+      // 支払いごとに Stripe の請求書を残す。支払い履歴はここから請求書のリンクを引く。
+      invoice_creation: { enabled: true },
       success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing`,
     },

@@ -182,7 +182,7 @@ export function AiAccessNotice({
         <Button asChild size="sm" variant={isPlan ? "default" : "outline"}>
           <Link href={billingHref(lang)}>
             {isPlan
-              ? t("account:aiPlan.joinPro")
+              ? t("account:aiPlan.subscribe")
               : t("account:aiPlan.buyCredits")}
           </Link>
         </Button>

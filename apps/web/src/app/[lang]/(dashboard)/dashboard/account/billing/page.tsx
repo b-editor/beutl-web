@@ -64,11 +64,16 @@ export default async function Page(props: {
     payments,
     creditPurchases,
     packagesById,
+    subscriptionPayments,
+    documentByPaymentIntentId,
+    billingDocumentsUnavailable,
   } = await retrieveBillingPage(session.user.id);
   const history = buildBillingHistory({
+    subscriptionPayments,
     payments,
     creditPurchases,
     packagesById,
+    documentByPaymentIntentId,
     t,
     lang,
   });
@@ -90,7 +95,7 @@ export default async function Page(props: {
           </AlertDescription>
         </Alert>
       )}
-      {stripeUnavailable && (
+      {(stripeUnavailable || billingDocumentsUnavailable) && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>

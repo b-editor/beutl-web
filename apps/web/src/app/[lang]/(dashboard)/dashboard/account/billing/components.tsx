@@ -16,9 +16,10 @@ import {
   TableHeader,
   TableRow,
 } from "@beutl/ui/ui/table";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/section-card";
 import type { BillingHistoryEntry } from "@/lib/billing-history";
+import { formatBillingProductLabel } from "@/lib/billing-product";
 import type { AiPlanStatusPresentation } from "@/lib/ai-plan-presentation";
 import {
   createBillingPortalLink,
@@ -28,13 +29,8 @@ import {
 } from "./actions";
 import type {
   BillingOfferEntry,
-  BillingProduct,
   BillingSubscriptionEntry,
 } from "./queries";
-
-const PRODUCT_LABEL_KEY: Record<BillingProduct, string> = {
-  aiPro: "account:billing.productAiPro",
-};
 
 const STATUS_LABEL_KEY: Record<AiPlanStatusPresentation, string> = {
   active: "account:aiPlan.statusActive",
@@ -109,7 +105,7 @@ export function PlanSection({
               <div className="min-w-0 flex-1 basis-64">
                 <div className="flex items-center gap-3">
                   <p className="text-lg font-bold">
-                    {t(PRODUCT_LABEL_KEY[subscription.product])}
+                    {formatBillingProductLabel(t, subscription.product)}
                   </p>
                   <Badge variant={statusVariant(subscription.status)}>
                     {t(STATUS_LABEL_KEY[subscription.status])}
@@ -143,9 +139,11 @@ export function PlanSection({
                 key={offer.product}
                 className="flex flex-wrap items-center justify-between gap-4"
               >
-                <p className="font-bold">{t(PRODUCT_LABEL_KEY[offer.product])}</p>
+                <p className="font-bold">
+                  {formatBillingProductLabel(t, offer.product)}
+                </p>
                 <form action={createProCheckout}>
-                  <SubmitButton>{t("account:aiPlan.joinPro")}</SubmitButton>
+                  <SubmitButton>{t("account:aiPlan.subscribe")}</SubmitButton>
                 </form>
               </div>
             ))}
@@ -217,7 +215,7 @@ export function AiUsageSection({
         </>
       )}
 
-      {/* Pro を離れた後も債務は残るので、プランによらず知らせる。 */}
+      {/* Pro を離れた後も債務は残るので、契約の有無によらず知らせる。 */}
       {usage.hasAdditionalCreditDebt && (
         <p className="mt-3 text-sm text-amber-600 dark:text-amber-500">
           {t("account:aiPlan.additionalCreditDebtNotice")}
@@ -239,16 +237,13 @@ export function PaymentMethodSection({
       title={t("account:billing.paymentMethod")}
       description={t("account:billing.paymentMethodDescription")}
       headerAction={
-        // 顧客がまだ無い人にボタンを出すと、押しただけで Stripe 顧客が作られたうえ
-        // 管理する支払い方法の無い画面に着地する。これは UX 上の出し分けであって
-        // 認可ではない (アクション側は所有権修復を通す)。
-        hasStripeCustomer ? (
-          <form action={createPaymentMethodPortalLink}>
-            <SubmitButton variant="outline">
-              {t("account:billing.changePaymentMethod")}
-            </SubmitButton>
-          </form>
-        ) : undefined
+        // 顧客がまだ無い人にも出す。ポータルの payment_method_update フローは
+        // 1 枚目のカードを登録する画面でもあるので、初回の登録もここから通る。
+        <form action={createPaymentMethodPortalLink}>
+          <SubmitButton variant="outline">
+            {t("account:billing.changePaymentMethod")}
+          </SubmitButton>
+        </form>
       }
     >
       {hasStripeCustomer ? undefined : (
@@ -287,12 +282,15 @@ export function PaymentHistorySection({
             <TableHead className={`${EDGE_CELL} text-right`}>
               {t("account:billing.historyAmount")}
             </TableHead>
+            <TableHead className={`${EDGE_CELL} text-right`}>
+              {t("account:billing.historyDocument")}
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {entries.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={3} className={EDGE_CELL}>
+              <TableCell colSpan={4} className={EDGE_CELL}>
                 <p>{t("account:billing.paymentHistoryEmpty")}</p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {t("account:billing.paymentHistoryEmptyHint")}
@@ -332,6 +330,27 @@ export function PaymentHistorySection({
                   {entry.amount
                     ? formatAmount(entry.amount.value, entry.amount.currency, lang)
                     : "—"}
+                </TableCell>
+                <TableCell
+                  className={`${EDGE_CELL} whitespace-nowrap text-right align-top`}
+                >
+                  {entry.document ? (
+                    <a
+                      className="inline-flex items-center gap-1 underline underline-offset-4"
+                      href={entry.document.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {t(
+                        entry.document.kind === "invoice"
+                          ? "account:billing.viewInvoice"
+                          : "account:billing.viewReceipt",
+                      )}
+                      <ExternalLink className="h-3 w-3" aria-hidden />
+                    </a>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
               </TableRow>
             ))

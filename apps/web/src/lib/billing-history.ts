@@ -1,16 +1,19 @@
-import { formatCount } from "@beutl/core";
+import { formatAmount, formatCount, formatDate } from "@beutl/core";
+import { formatBillingProductLabel } from "./billing-product";
+import type {
+  BillingDocumentLink,
+  SubscriptionPaymentRecord,
+} from "./stripe/billing-documents";
 
 export function packagePaymentReversalTranslationKey(payment: {
   revokedAt: Date | null;
-}): "account:billing.packagePurchaseReversed" | null {
-  return payment.revokedAt === null
-    ? null
-    : "account:billing.packagePurchaseReversed";
+}): "account:billing.paymentReversed" | null {
+  return payment.revokedAt === null ? null : "account:billing.paymentReversed";
 }
 
 export type BillingHistoryEntry = {
   id: string;
-  kind: "package" | "credit";
+  kind: "subscription" | "package" | "credit";
   paidAt: Date;
   product: string;
   detail: string | null;
@@ -18,10 +21,14 @@ export type BillingHistoryEntry = {
   // the row before its success event arrived.
   amount: { value: number; currency: string } | null;
   reversalNote: string | null;
+  // null when Stripe could not be reached, or when the payment is older than
+  // the window the document lookup covers.
+  document: BillingDocumentLink | null;
 };
 
 type PackagePaymentRow = {
   id: string;
+  paymentId: string;
   packageId: string;
   stripePaymentAmount: number | null;
   stripeCurrency: string | null;
@@ -31,6 +38,7 @@ type PackagePaymentRow = {
 
 type CreditPurchaseRow = {
   id: string;
+  stripePaymentId: string | null;
   creditAmount: number;
   stripePaymentAmount: number | null;
   stripeCurrency: string | null;
@@ -66,22 +74,63 @@ function creditReversalNote(
   return null;
 }
 
-// Merges the two money-in ledgers into one display list. Deliberately takes no
-// Stripe client: every amount it needs is already on the rows, and keeping the
-// signature free of I/O is what stops the per-row Stripe lookup from returning.
+function subscriptionReversalNote(
+  payment: SubscriptionPaymentRecord,
+  t: Translate,
+  lang: string,
+): string | null {
+  if (payment.disputed || payment.refundedAmount >= payment.amount.value) {
+    return t("account:billing.paymentReversed");
+  }
+  if (payment.refundedAmount > 0) {
+    return t("account:billing.paymentPartiallyRefunded", {
+      amount: formatAmount(
+        payment.refundedAmount,
+        payment.amount.currency,
+        lang,
+      ),
+    });
+  }
+  return null;
+}
+
+// Merges the money-in ledgers into one display list. Subscription payments come
+// from Stripe rather than a local table, so they arrive already resolved; the
+// builder itself stays free of I/O, which is what stops the per-row Stripe
+// lookup from returning.
 export function buildBillingHistory({
+  subscriptionPayments,
   payments,
   creditPurchases,
   packagesById,
+  documentByPaymentIntentId,
   t,
   lang,
 }: {
+  subscriptionPayments: readonly SubscriptionPaymentRecord[];
   payments: readonly PackagePaymentRow[];
   creditPurchases: readonly CreditPurchaseRow[];
   packagesById: ReadonlyMap<string, PackageSummary>;
+  documentByPaymentIntentId: ReadonlyMap<string, BillingDocumentLink>;
   t: Translate;
   lang: string;
 }): BillingHistoryEntry[] {
+  const subscriptionEntries = subscriptionPayments.map(
+    (payment): BillingHistoryEntry => ({
+      id: payment.id,
+      kind: "subscription",
+      paidAt: payment.paidAt,
+      product: formatBillingProductLabel(t, payment.product),
+      detail: t("account:billing.subscriptionPeriod", {
+        start: formatDate(payment.periodStart, lang),
+        end: formatDate(payment.periodEnd, lang),
+      }),
+      amount: payment.amount,
+      reversalNote: subscriptionReversalNote(payment, t, lang),
+      document: payment.document,
+    }),
+  );
+
   const packageEntries = payments.map((payment): BillingHistoryEntry => {
     const pkg = packagesById.get(payment.packageId);
     const reversalKey = packagePaymentReversalTranslationKey(payment);
@@ -106,6 +155,7 @@ export function buildBillingHistory({
             }
           : null,
       reversalNote: reversalKey ? t(reversalKey) : null,
+      document: documentByPaymentIntentId.get(payment.paymentId) ?? null,
     };
   });
 
@@ -135,10 +185,13 @@ export function buildBillingHistory({
             }
           : null,
       reversalNote: creditReversalNote(purchase, t, lang),
+      document: purchase.stripePaymentId
+        ? documentByPaymentIntentId.get(purchase.stripePaymentId) ?? null
+        : null,
     }),
   );
 
-  return [...packageEntries, ...creditEntries].sort(
+  return [...subscriptionEntries, ...packageEntries, ...creditEntries].sort(
     (left, right) => right.paidAt.getTime() - left.paidAt.getTime(),
   );
 }

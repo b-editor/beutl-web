@@ -2,11 +2,10 @@ import { authOrSignIn } from "@/lib/auth-guard";
 import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
 import { createStripe } from "@/lib/stripe/config";
 import {
-  isOwnedPackagePaymentIntent,
+  isOwnedPackageCheckoutSession,
   packagePaymentIntentMetadata,
-  packagePaymentIntentSearchQuery,
+  type PackagePurchaseExpectation,
 } from "@/lib/stripe/store-checkout";
-import { ClientPage, PackageDetails } from "./components";
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
 import { selectPricing } from "@beutl/core";
@@ -16,17 +15,18 @@ import {
   retrievePrices,
 } from "@/lib/store-utils";
 
-export default async function Page(
-  props: {
-    params: Promise<{ name: string; lang: string }>;
-  }
-) {
-  const params = await props.params;
+// Stripe が 1 ページで返す上限。1 顧客の未払いセッションがこれを超えることは
+// 現実には無く、超えた分は使い回せず新しいセッションになるだけ。
+const OPEN_SESSION_PAGE_LIMIT = 100;
 
-  const {
-    name,
-    lang
-  } = params;
+function publicOrigin(): string {
+  return process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net";
+}
+
+export default async function Page(props: {
+  params: Promise<{ name: string; lang: string }>;
+}) {
+  const { name, lang } = await props.params;
 
   const session = await authOrSignIn();
   const pkg = await retrievePackage(name);
@@ -49,63 +49,71 @@ export default async function Page(
     userId: session.user.id,
   });
   const stripe = createStripe();
-  const intents = await stripe.paymentIntents.search({
-    query: packagePaymentIntentSearchQuery({
-      customerId,
-      userId: session.user.id,
-      packageId: pkg.id,
-      amount: price.price,
-      currency: price.currency,
-    }),
-    limit: 1,
-  });
-
-  let paymentIntent = intents.data.find(
-    (intent) =>
-      isOwnedPackagePaymentIntent(intent, {
-        customerId,
-        userId: session.user.id,
-        packageId: pkg.id,
-        amount: price.price,
-        currency: price.currency,
-      }),
-  );
-
-  paymentIntent ??= await stripe.paymentIntents.create({
-    customer: customerId,
-    setup_future_usage: "off_session",
+  const expectation: PackagePurchaseExpectation = {
+    customerId,
+    userId: session.user.id,
+    packageId: pkg.id,
     amount: price.price,
     currency: price.currency,
-    metadata: packagePaymentIntentMetadata(session.user.id, pkg.id),
-    // In the latest version of the API, specifying the `automatic_payment_methods` parameter is optional because Stripe enables its functionality by default.
-    automatic_payment_methods: {
-      enabled: true,
+  };
+
+  // 戻ってきたユーザーには前回の支払い口をそのまま渡す。作り直すと、同じ買い物に
+  // 対して支払える口が並んで残る。
+  const openSessions = await stripe.checkout.sessions.list({
+    customer: customerId,
+    status: "open",
+    limit: OPEN_SESSION_PAGE_LIMIT,
+  });
+  const reusable = openSessions.data.find(
+    (candidate) =>
+      candidate.url !== null &&
+      isOwnedPackageCheckoutSession(candidate, expectation),
+  );
+  if (reusable?.url) {
+    redirect(reusable.url);
+  }
+
+  const origin = publicOrigin();
+  const metadata = packagePaymentIntentMetadata(session.user.id, pkg.id);
+  const checkoutSession = await stripe.checkout.sessions.create({
+    customer: customerId,
+    mode: "payment",
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: price.currency,
+          unit_amount: price.price,
+          product_data: {
+            name: pkg.displayName || pkg.name,
+            ...(pkg.shortDescription
+              ? { description: pkg.shortDescription }
+              : {}),
+            ...(pkg.iconFileUrl
+              ? { images: [`${origin}${pkg.iconFileUrl}`] }
+              : {}),
+          },
+        },
+      },
+    ],
+    // webhook はこのメタデータだけを見てパッケージの引き渡しを判断するので、
+    // Checkout Session ではなく PaymentIntent 側に必ず載せる。
+    payment_intent_data: {
+      setup_future_usage: "off_session",
+      metadata,
     },
+    // 支払いごとに Stripe の請求書を残す。請求ページの支払い履歴はここから
+    // 請求書のリンクを引く。
+    invoice_creation: { enabled: true },
+    metadata,
+    success_url: `${origin}/${lang}/store/${name}/checkout/complete?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/${lang}/store/${name}`,
   });
 
-  const clientSecret = paymentIntent.client_secret;
-
-  return (
-    <div className="max-w-5xl mx-auto py-10 lg:py-6 px-2 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
-      <div className="max-sm:relative flex max-md:flex-col gap-2">
-        <div className="md:flex-1 mx-3 min-w-0">
-          <PackageDetails
-            pkg={pkg}
-            price={price.price}
-            currency={price.currency}
-            lang={lang}
-          />
-        </div>
-        <div className="border max-md:h-[1px] md:w-[1px]" />
-        <div className="md:flex-1">
-          <ClientPage
-            name={name}
-            email={session.user.email as string}
-            lang={lang}
-            clientSecret={clientSecret}
-          />
-        </div>
-      </div>
-    </div>
-  );
+  if (!checkoutSession.url) {
+    throw new Error(
+      `Checkout Session ${checkoutSession.id} was created without a URL`,
+    );
+  }
+  redirect(checkoutSession.url);
 }
