@@ -4,6 +4,8 @@ import type {
   CreateImagesResponse,
   SendChatCompletionRequestResponse,
 } from "@openrouter/sdk/models/operations";
+import type { ChatRequest } from "@openrouter/sdk/models";
+import { createTranslationSegmentReader } from "./translation-stream";
 import {
   InvalidRequestError,
   OpenRouterError,
@@ -623,6 +625,7 @@ export async function generateImage({
   seed,
   model,
   signal,
+  onPartialImage,
 }: {
   prompt: string;
   aspectRatio: AiImageAspectRatio;
@@ -633,6 +636,11 @@ export async function generateImage({
   // The model ID is administrator-configurable and resolved by loadAiSettings.
   model: string;
   signal?: AbortSignal;
+  // Called with each rough version of the picture as it is worked out, for a
+  // caller that shows progress. Asking for it is what makes the reply stream;
+  // only models whose provider streams natively send any, and the rest simply
+  // answer once, at the end, as they always have.
+  onPartialImage?: (partial: PartialImage) => void;
 }): Promise<GeneratedImage> {
   if (referenceImages && referenceImages.length > AI_MAX_IMAGE_REFERENCES) {
     throw new AiProviderError(
@@ -640,28 +648,93 @@ export async function generateImage({
     );
   }
   const client = createOpenRouterClient();
+  const imageGenerationRequest = {
+    model,
+    prompt,
+    aspectRatio,
+    n: 1,
+    outputFormat: "png" as const,
+    ...(background && background !== "auto" ? { background } : {}),
+    ...(referenceImages && referenceImages.length > 0
+      ? { inputReferences: referenceImages.map(toInputReference) }
+      : {}),
+    ...(seed === undefined ? {} : { seed }),
+  };
+
   try {
+    if (onPartialImage) {
+      const stream = await client.images.generate(
+        { imageGenerationRequest: { ...imageGenerationRequest, stream: true } },
+        openRouterRequestOptions(signal),
+      );
+      return await readGeneratedImageStream(stream, onPartialImage);
+    }
+
+    // No stream flag at all when none is wanted: a request that never asked to
+    // stream should look exactly as it always has on the wire.
     const response = await client.images.generate(
-      {
-        imageGenerationRequest: {
-          model,
-          prompt,
-          aspectRatio,
-          n: 1,
-          outputFormat: "png",
-          ...(background && background !== "auto" ? { background } : {}),
-          ...(referenceImages && referenceImages.length > 0
-            ? { inputReferences: referenceImages.map(toInputReference) }
-            : {}),
-          ...(seed === undefined ? {} : { seed }),
-        },
-      },
+      { imageGenerationRequest },
       openRouterRequestOptions(signal),
     );
     return parseGeneratedImage(response);
   } catch (cause) {
     throw toAiProviderError(cause, "OpenRouter image generation failed");
   }
+}
+
+/** A rough version of the picture, sent while the final one is still coming. */
+export type PartialImage = {
+  // 0-based: the provider sends them in the order they were worked out.
+  index: number;
+  b64Json: string;
+};
+
+// A provider that does not stream ignores the flag and answers in one piece, so
+// what comes back here is either a stream or the finished picture; both end in
+// the same GeneratedImage.
+async function readGeneratedImageStream(
+  response: CreateImagesResponse,
+  onPartialImage: (partial: PartialImage) => void,
+): Promise<GeneratedImage> {
+  if (!(Symbol.asyncIterator in response)) {
+    return parseGeneratedImage(response);
+  }
+
+  let generated: GeneratedImage | null = null;
+  for await (const event of response) {
+    switch (event.type) {
+      case "image_generation.partial_image":
+        if (event.b64Json.length > 0) {
+          onPartialImage({
+            index: event.partialImageIndex,
+            b64Json: event.b64Json,
+          });
+        }
+        break;
+      case "image_generation.completed":
+        if (event.b64Json.length === 0) {
+          throw new AiProviderError("OpenRouter returned invalid image data");
+        }
+        generated = {
+          b64Json: event.b64Json,
+          mediaType: event.mediaType || "image/png",
+        };
+        break;
+      case "error":
+        throw new AiProviderError(
+          `OpenRouter image generation failed: ${event.error.message}`,
+        );
+      default:
+        break;
+    }
+  }
+
+  if (!generated) {
+    // A stream that ends without the picture is not a picture, whatever it
+    // showed on the way.
+    throw new AiProviderError("OpenRouter returned invalid image data");
+  }
+  return generated;
 }
 
 function arrayBufferToBase64(value: ArrayBuffer): string {
@@ -825,8 +898,8 @@ function parseTranslationResponse(
   response: SendChatCompletionRequestResponse,
   inputSegments: TranslationSegment[],
 ): TranslationSegment[] {
-  // Streaming is never asked for, and a request for one completion that comes
-  // back with none or several is not an answer to it.
+  // A request for one completion that comes back with none or several is not an
+  // answer to it.
   const choice =
     "choices" in response && response.choices.length === 1
       ? response.choices[0]
@@ -847,9 +920,25 @@ function parseTranslationResponse(
     );
   }
 
+  return parseTranslationContent(choice.message.content, inputSegments);
+}
+
+// What the model said, judged the same way whether it arrived in one piece or
+// in hundreds: a streamed translation is only shown early, never accepted on
+// weaker terms.
+function parseTranslationContent(
+  text: string,
+  inputSegments: TranslationSegment[],
+): TranslationSegment[] {
+  if (text.length === 0) {
+    throw new AiProviderError(
+      "OpenRouter returned an invalid translation completion",
+    );
+  }
+
   let content: unknown;
   try {
-    content = JSON.parse(choice.message.content);
+    content = JSON.parse(text);
   } catch (cause) {
     throw new AiProviderError(
       "OpenRouter returned invalid translation JSON",
@@ -902,6 +991,7 @@ export async function translateSegments({
   style,
   model,
   signal,
+  onSegment,
 }: {
   sourceLanguage?: string;
   targetLanguage: string;
@@ -911,6 +1001,10 @@ export async function translateSegments({
   style?: TranslationStyle;
   model: string;
   signal?: AbortSignal;
+  // Called with each subtitle as it finishes arriving, for a caller that shows
+  // progress. Asking for it is what makes the reply stream; what comes back at
+  // the end is the same either way, checked the same way.
+  onSegment?: (segment: TranslationSegment) => void;
 }): Promise<TranslationSegment[]> {
   const promptSegments = segments.map((segment) => {
     const context = contexts?.[segment.id];
@@ -924,11 +1018,7 @@ export async function translateSegments({
       : segment;
   });
   const client = createOpenRouterClient();
-  let response: SendChatCompletionRequestResponse;
-  try {
-    response = await client.chat.send(
-      {
-        chatRequest: {
+  const chatRequest: Omit<ChatRequest, "stream"> = {
           model,
           messages: [
             {
@@ -990,9 +1080,22 @@ export async function translateSegments({
           provider: {
             requireParameters: true,
           },
-          stream: false,
-        },
-      },
+  };
+
+  if (onSegment) {
+    return await translateStreaming({
+      client,
+      chatRequest,
+      segments,
+      signal,
+      onSegment,
+    });
+  }
+
+  let response: SendChatCompletionRequestResponse;
+  try {
+    response = await client.chat.send(
+      { chatRequest: { ...chatRequest, stream: false } },
       openRouterRequestOptions(signal),
     );
   } catch (cause) {
@@ -1000,6 +1103,62 @@ export async function translateSegments({
   }
 
   return parseTranslationResponse(response, segments);
+}
+
+// The same request, asked for a piece at a time. The pieces are handed to the
+// caller as subtitles finish; the reply they add up to is what decides the
+// result, so nothing is accepted here that would not be accepted whole.
+async function translateStreaming({
+  client,
+  chatRequest,
+  segments,
+  signal,
+  onSegment,
+}: {
+  client: ReturnType<typeof createOpenRouterClient>;
+  chatRequest: Omit<ChatRequest, "stream">;
+  segments: TranslationSegment[];
+  signal?: AbortSignal;
+  onSegment: (segment: TranslationSegment) => void;
+}): Promise<TranslationSegment[]> {
+  const wanted = new Set(segments.map((segment) => segment.id));
+  const seen = new Set<string>();
+  const reader = createTranslationSegmentReader();
+  let content = "";
+  try {
+    const stream = await client.chat.send(
+      { chatRequest: { ...chatRequest, stream: true } },
+      openRouterRequestOptions(signal),
+    );
+    if (!(Symbol.asyncIterator in stream)) {
+      throw new AiProviderError(
+        "OpenRouter answered a streamed translation without a stream",
+      );
+    }
+
+    for await (const chunk of stream) {
+      // A stream that carries an error carries it instead of an answer.
+      if (chunk.error) {
+        throw new AiProviderError(
+          `OpenRouter failed to translate segments: ${chunk.error.message}`,
+        );
+      }
+      const delta = chunk.choices[0]?.delta.content;
+      if (typeof delta !== "string" || delta.length === 0) continue;
+      content += delta;
+      for (const segment of reader.push(delta)) {
+        // Only what was asked for, and only once: a preview that invents a
+        // subtitle would be shown and then contradicted by the result.
+        if (!wanted.has(segment.id) || seen.has(segment.id)) continue;
+        seen.add(segment.id);
+        onSegment(segment);
+      }
+    }
+  } catch (cause) {
+    throw toAiProviderError(cause, "OpenRouter translation request failed");
+  }
+
+  return parseTranslationContent(content, segments);
 }
 
 // verbose_json is restricted to OpenAI-compatible STT providers and supplies
