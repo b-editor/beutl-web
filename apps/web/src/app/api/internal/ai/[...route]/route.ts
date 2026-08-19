@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { v3 } from "@beutl/api";
 import { auth } from "@/lib/better-auth";
-import { AI_STREAM_HEADER } from "@/lib/ai-event-stream";
+import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
 
 // The dashboard's way in to the AI endpoints, for the screens that show an
 // answer while it is still arriving.
@@ -20,42 +20,12 @@ const TOKEN_LIFETIME_SECONDS = 60;
 
 const app = new Hono().basePath("/api/v3").route("/", v3);
 
-function unauthorized(): Response {
-  return Response.json(
-    { error_code: "authenticationIsRequired" },
-    { status: 401 },
-  );
-}
-
-// A cookie is sent by the browser whatever page asked for the request, so a
-// request that arrives with one has to show it was meant. Two things say so,
-// and both must hold:
-//
-//  - A header of this site's own. A form on another site can post here — the
-//    image endpoint reads multipart, which a form can produce — but it cannot
-//    set a header, and a fetch that sets one is preflighted, which this route
-//    answers to nothing.
-//  - An Origin, when the browser sends one, that is this site. Safari omits it
-//    on same-origin requests, so its absence cannot be treated as a refusal;
-//    the header above is what carries the weight.
-function trustedCaller(request: Request): boolean {
-  if (request.headers.get(AI_STREAM_HEADER) !== "1") return false;
-
-  const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
-
 export async function POST(request: Request): Promise<Response> {
-  if (!trustedCaller(request)) return unauthorized();
+  if (!fromThisSite(request)) return unauthorizedResponse();
 
   const session = await auth.api.getSession({ headers: request.headers });
   const userId = session?.user?.id;
-  if (!userId) return unauthorized();
+  if (!userId) return unauthorizedResponse();
 
   const secret = process.env.JWT_SECRET;
   if (!secret) {

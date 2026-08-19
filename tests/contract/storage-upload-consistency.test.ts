@@ -1,143 +1,151 @@
-import { createRequire } from "node:module";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setDbProvider } from "@beutl/db";
+import { setR2BucketProvider } from "@beutl/api";
+import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
-const mocks = vi.hoisted(() => ({
-  authenticated: vi.fn(),
-  bucketDelete: vi.fn(),
-  bucketPut: vi.fn(),
-  createFile: vi.fn(),
-  getLanguage: vi.fn(),
-  getTranslation: vi.fn(),
-  revalidatePath: vi.fn(),
-  retrieveFileNamesAndSizesByUserId: vi.fn(),
-  throwIfUnauth: vi.fn(),
-}));
-
-vi.mock("@/lib/auth-guard", () => ({
-  authenticated: mocks.authenticated,
-  throwIfUnauth: mocks.throwIfUnauth,
-}));
-vi.mock("@beutl/next/language", () => ({
-  getLanguage: mocks.getLanguage,
-}));
-vi.mock("@beutl/i18n", () => ({
-  getTranslation: mocks.getTranslation,
-}));
-vi.mock("@beutl/db", () => ({
-  createFile: mocks.createFile,
-  deleteFile: vi.fn(),
-  retrieveFileNamesAndSizesByUserId:
-    mocks.retrieveFileNamesAndSizesByUserId,
-  retrieveFilesByIdsAndUserId: vi.fn(),
-  retrieveStorageFilesByUserId: vi.fn(),
-  updateFileVisibility: vi.fn(),
-}));
-type UploadFile =
-  typeof import("../../apps/web/src/app/[lang]/(dashboard)/dashboard/storage/actions").uploadFile;
-
-let uploadFile: UploadFile;
-
-beforeAll(async () => {
-  const requireFromWeb = createRequire(
-    new URL("../../apps/web/package.json", import.meta.url),
-  );
-  vi.doMock(requireFromWeb.resolve("@opennextjs/cloudflare"), () => ({
-    getCloudflareContext: () => ({
-      env: {
-        BEUTL_R2_BUCKET: {
-          delete: mocks.bucketDelete,
-          put: mocks.bucketPut,
-        },
-      },
+// What the bucket does with an upload that arrives in parts. The tests below
+// are about the order the two halves of a stored file are written in — the
+// object and the row that points at it — and what happens when one of them
+// fails.
+const bucket = vi.hoisted(() => {
+  const state = {
+    completed: [] as string[],
+    deleted: [] as string[],
+    deleteFails: false,
+  };
+  return {
+    state,
+    createMultipartUpload: vi.fn(async () => ({ uploadId: "upload-1" })),
+    resumeMultipartUpload: vi.fn((key: string) => ({
+      uploadPart: vi.fn(async (partNumber: number) => ({
+        partNumber,
+        etag: `etag-${partNumber}`,
+      })),
+      complete: vi.fn(async () => {
+        state.completed.push(key);
+        return { size: 10 };
+      }),
+      abort: vi.fn(async () => undefined),
+    })),
+    delete: vi.fn(async (key: string) => {
+      if (state.deleteFails) throw new Error("the object could not be deleted");
+      state.deleted.push(key);
     }),
-  }));
-  vi.doMock(requireFromWeb.resolve("next/cache"), () => ({
-    revalidatePath: mocks.revalidatePath,
-  }));
-  ({ uploadFile } = await import(
-    "../../apps/web/src/app/[lang]/(dashboard)/dashboard/storage/actions"
-  ));
+  };
 });
 
-function uploadForm() {
-  const formData = new FormData();
-  formData.set(
-    "file",
-    new File([new Uint8Array([1, 2, 3])], "image.png", {
-      type: "image/png",
-    }),
-  );
-  return formData;
+const createFile = vi.hoisted(() => vi.fn());
+vi.mock("@beutl/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@beutl/db")>();
+  return { ...actual, createFile };
+});
+
+import { finishUpload, startUpload } from "../../apps/web/src/lib/storage-upload-server";
+
+const USER_ID = "user-consistency";
+
+async function begin() {
+  const started = await startUpload({
+    userId: USER_ID,
+    name: "clip.mp4",
+    mimeType: "video/mp4",
+    size: BigInt(10),
+  });
+  if (!started.ok) throw new Error(started.reason);
+  return started.upload.id;
 }
 
 describe("storage upload consistency", () => {
+  let state: ReturnType<typeof createInMemoryPrisma>["state"];
+
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.authenticated.mockImplementation(
-      async (callback: (session: { user: { id: string } }) => Promise<unknown>) =>
-        await callback({ user: { id: "user-1" } }),
-    );
-    mocks.getLanguage.mockResolvedValue("en");
-    mocks.getTranslation.mockResolvedValue({ t: (key: string) => key });
-    mocks.retrieveFileNamesAndSizesByUserId.mockResolvedValue([]);
-    mocks.bucketPut.mockResolvedValue({});
-    mocks.bucketDelete.mockResolvedValue(undefined);
-    mocks.createFile.mockResolvedValue({ id: "file-1" });
+    bucket.state.completed.length = 0;
+    bucket.state.deleted.length = 0;
+    bucket.state.deleteFails = false;
+    const memory = createInMemoryPrisma();
+    state = memory.state;
+    setDbProvider(async () => memory.prisma as never);
+    setR2BucketProvider(() => bucket as never);
+    createFile.mockImplementation(async () => ({
+      id: "file-1",
+      name: "clip.mp4",
+    }));
   });
 
-  it("waits for R2 before creating the database record", async () => {
-    let finishPut: (() => void) | undefined;
-    mocks.bucketPut.mockImplementationOnce(
-      async () =>
-        await new Promise<void>((resolve) => {
-          finishPut = resolve;
-        }),
-    );
+  it("waits for the bucket to join the parts before recording the file", async () => {
+    const uploadId = await begin();
 
-    const upload = uploadFile(uploadForm());
-    await vi.waitFor(() => expect(mocks.bucketPut).toHaveBeenCalledOnce());
+    await finishUpload({
+      userId: USER_ID,
+      uploadId,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
 
-    expect(mocks.createFile).not.toHaveBeenCalled();
-    finishPut?.();
-    await expect(upload).resolves.toEqual({ success: true });
-    expect(mocks.createFile).toHaveBeenCalledOnce();
-    expect(mocks.bucketPut.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.createFile.mock.invocationCallOrder[0],
-    );
+    // A row written first would point at a file the bucket may never finish.
+    expect(bucket.state.completed).toHaveLength(1);
+    expect(createFile).toHaveBeenCalledOnce();
+    const completedAt = bucket.resumeMultipartUpload.mock.invocationCallOrder[0];
+    expect(createFile.mock.invocationCallOrder[0]).toBeGreaterThan(completedAt);
   });
 
-  it("does not create a database record when the R2 put fails", async () => {
-    const putError = new Error("R2 unavailable");
-    mocks.bucketPut.mockRejectedValueOnce(putError);
+  it("records nothing when the parts cannot be joined", async () => {
+    const uploadId = await begin();
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: vi.fn(),
+      complete: vi.fn(async () => {
+        throw new Error("a part is missing");
+      }),
+      abort: vi.fn(async () => undefined),
+    }));
 
-    await expect(uploadFile(uploadForm())).rejects.toBe(putError);
+    const outcome = await finishUpload({
+      userId: USER_ID,
+      uploadId,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
 
-    expect(mocks.createFile).not.toHaveBeenCalled();
-    expect(mocks.bucketDelete).toHaveBeenCalledWith(
-      mocks.bucketPut.mock.calls[0][0],
-    );
+    expect(outcome).toEqual({ ok: false, reason: "uploadFailed" });
+    expect(createFile).not.toHaveBeenCalled();
+    // Nothing is left holding storage.
+    expect(state.storageUploads.size).toBe(0);
   });
 
-  it("deletes the R2 object when database creation fails", async () => {
-    const databaseError = new Error("database unavailable");
-    mocks.createFile.mockRejectedValueOnce(databaseError);
+  it("throws away the object when the file cannot be recorded", async () => {
+    const uploadId = await begin();
+    createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
 
-    await expect(uploadFile(uploadForm())).rejects.toBe(databaseError);
+    await expect(
+      finishUpload({
+        userId: USER_ID,
+        uploadId,
+        parts: [{ partNumber: 1, etag: "etag-1" }],
+      }),
+    ).rejects.toThrow("the database is unavailable");
 
-    expect(mocks.bucketDelete).toHaveBeenCalledWith(
-      mocks.bucketPut.mock.calls[0][0],
-    );
+    // An object nothing points at is stored, and paid for, for nothing.
+    expect(bucket.state.deleted).toHaveLength(1);
+    expect(state.storageUploads.size).toBe(0);
   });
 
-  it("reports both failures when compensating deletion also fails", async () => {
-    const databaseError = new Error("database unavailable");
-    const cleanupError = new Error("R2 delete unavailable");
-    mocks.createFile.mockRejectedValueOnce(databaseError);
-    mocks.bucketDelete.mockRejectedValueOnce(cleanupError);
+  it("reports both failures when the object cannot be thrown away either", async () => {
+    const uploadId = await begin();
+    createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
+    bucket.state.deleteFails = true;
 
-    const error = await uploadFile(uploadForm()).catch((reason) => reason);
+    const error = await finishUpload({
+      userId: USER_ID,
+      uploadId,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    }).catch((reason: unknown) => reason);
 
+    // The object is still there and the caller is told why, rather than the
+    // cleanup failure hiding what actually went wrong.
     expect(error).toBeInstanceOf(AggregateError);
-    expect(error.errors).toEqual([databaseError, cleanupError]);
+    expect((error as AggregateError).errors.map((item) => (item as Error).message))
+      .toEqual([
+        "the database is unavailable",
+        "the object could not be deleted",
+      ]);
   });
 });

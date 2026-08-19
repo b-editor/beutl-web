@@ -258,6 +258,20 @@ export type InMemoryPrismaState = {
   topUpCheckoutAttempts: Map<string, TopUpCheckoutAttempt>;
   billingRefundAttempts: Map<string, BillingRefundAttempt>;
   files: Map<string, FileRecord>;
+  storageUploads: Map<string, StorageUploadRecord>;
+};
+
+// An upload that is still arriving, held while its parts are put in the bucket.
+type StorageUploadRecord = {
+  id: string;
+  userId: string;
+  objectKey: string;
+  uploadId: string;
+  name: string;
+  mimeType: string;
+  size: bigint;
+  partSize: number;
+  createdAt: Date;
 };
 
 type AggregateSpec = {
@@ -365,6 +379,7 @@ export function createInMemoryPrisma() {
     topUpCheckoutAttempts: new Map(),
     billingRefundAttempts: new Map(),
     files: new Map(),
+    storageUploads: new Map(),
   };
 
   const now = () => new Date();
@@ -663,6 +678,9 @@ export function createInMemoryPrisma() {
       [...state.billingRefundAttempts].map(([k, v]) => [k, { ...v }]),
     ),
     files: new Map([...state.files].map(([k, v]) => [k, { ...v }])),
+    storageUploads: new Map(
+      [...state.storageUploads].map(([k, v]) => [k, { ...v }]),
+    ),
   });
 
   const restore = (s: ReturnType<typeof snapshot>) => {
@@ -2406,7 +2424,80 @@ export function createInMemoryPrisma() {
         return { count: 1 };
       },
     },
+    storageUpload: {
+      create: async ({
+        data,
+      }: {
+        data: Omit<StorageUploadRecord, "id" | "createdAt"> & {
+          id?: string;
+          createdAt?: Date;
+        };
+      }) => {
+        const record: StorageUploadRecord = {
+          ...data,
+          id: data.id ?? crypto.randomUUID(),
+          createdAt: data.createdAt ?? now(),
+        };
+        state.storageUploads.set(record.id, record);
+        return { ...record };
+      },
+      findFirst: async ({
+        where,
+      }: {
+        where: { id?: string; userId?: string };
+      }) => {
+        const found = [...state.storageUploads.values()].find(
+          (item) =>
+            (!where.id || item.id === where.id) &&
+            (!where.userId || item.userId === where.userId),
+        );
+        return found ? { ...found } : null;
+      },
+      findMany: async ({
+        where,
+        take,
+      }: {
+        where?: { createdAt?: { lt?: Date } };
+        orderBy?: unknown;
+        take?: number;
+      } = {}) => {
+        const rows = [...state.storageUploads.values()]
+          .filter((item) =>
+            where?.createdAt?.lt ? item.createdAt < where.createdAt.lt : true,
+          )
+          .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+        return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
+      },
+      deleteMany: async ({ where }: { where: { id?: string } }) => {
+        const removed = [...state.storageUploads.values()].filter(
+          (item) => !where.id || item.id === where.id,
+        );
+        for (const item of removed) state.storageUploads.delete(item.id);
+        return { count: removed.length };
+      },
+      aggregate: async ({ where }: { where?: { userId?: string } } = {}) => {
+        let total = BigInt(0);
+        for (const item of state.storageUploads.values()) {
+          if (where?.userId && item.userId !== where.userId) continue;
+          total += item.size;
+        }
+        return { _sum: { size: total } };
+      },
+    },
     file: {
+      aggregate: async ({
+        where,
+      }: {
+        where?: { userId?: string };
+        _sum?: { size?: boolean };
+      } = {}) => {
+        let total = BigInt(0);
+        for (const file of state.files.values()) {
+          if (where?.userId && file.userId !== where.userId) continue;
+          total += BigInt(file.size);
+        }
+        return { _sum: { size: total } };
+      },
       create: async ({
         data,
       }: {

@@ -1,14 +1,11 @@
+import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
+
 // Reading an AI answer as it arrives.
 //
 // The screens post to the dashboard's own path, which hands the request to the
 // AI API with the session's user attached. What comes back is either an
 // ordinary JSON refusal — a request the API will not serve, decided before any
 // work starts — or a stream that ends in the answer.
-
-// The header the dashboard's own requests carry, and the reason the route they
-// go to cannot be driven from another site: a cross-site form cannot set a
-// header, and a cross-site fetch that sets one is preflighted.
-export const AI_STREAM_HEADER = "x-beutl-ai-stream";
 
 export type AiStreamOutcome<TResult> =
   | { ok: true; result: TResult }
@@ -37,7 +34,7 @@ export async function runAiStream<TResult>(
   const headers = new Headers({
     accept: "text/event-stream",
     "Idempotency-Key": idempotencyKey,
-    [AI_STREAM_HEADER]: "1",
+    ...INTERNAL_REQUEST_HEADERS,
   });
   // A form's own encoding is set by the browser, boundary and all; anything
   // else here is JSON.

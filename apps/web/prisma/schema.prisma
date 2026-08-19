@@ -41,6 +41,7 @@ model User {
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
   AiSetting                    AiSetting[]
   AiOperationModel             AiOperationModel[]
+  StorageUpload                StorageUpload[]
 }
 
 model Account {
@@ -187,6 +188,31 @@ model File {
   aiJobResult       AiJob?              @relation("AiJobResultFile")
 
   @@index([userId])
+}
+
+/// An upload in progress, split into parts because one request cannot carry a
+/// file of any size: the platform stops a request body at 100 MB, so a larger
+/// file arrives as several requests and is assembled in the bucket itself.
+///
+/// The row is what says an upload is the user's: the key and the bucket's own
+/// upload id are never taken from the client, or anyone holding a pair of them
+/// could add parts to someone else's file. It is removed when the upload is
+/// finished or abandoned, and a sweep abandons what was left behind, because an
+/// unfinished upload keeps its parts — and their storage — until it is.
+model StorageUpload {
+  id        String   @id @default(uuid())
+  userId    String
+  objectKey String
+  uploadId  String
+  name      String
+  mimeType  String
+  size      BigInt
+  partSize  Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model Package {
@@ -683,12 +709,12 @@ enum FeedbackCategory {
 // レジストリ (packages/core/src/ai-settings.ts) で検証する。DB 側で enum に
 // しないのは、モデル追加のたびにマイグレーションを要求しないため。
 model AiSetting {
-  key       String   @id
-  value     String
-  updatedBy String?
-  updatedAt DateTime @updatedAt
-  createdAt DateTime @default(now())
-  updatedByUser User? @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
+  key           String   @id
+  value         String
+  updatedBy     String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedByUser User?    @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
 
   @@index([updatedBy])
 }
@@ -698,18 +724,18 @@ model AiSetting {
 // 増やせるモデル一覧はそこには持てない。行が 1 つも無い操作は、AiSetting と
 // 同じ考え方で組み込みの既定にフォールバックする。
 model AiOperationModel {
-  operation   String
-  modelId     String
-  priceUnits  Int
-  displayName String?
+  operation     String
+  modelId       String
+  priceUnits    Int
+  displayName   String?
   // 有効な行のうち sortOrder が最小のものが既定。「既定はちょうど 1 つ」を
   // 一意制約で表現できないため、フラグ列は置かない。
-  sortOrder   Int      @default(0)
-  enabled     Boolean  @default(true)
-  updatedBy   String?
-  updatedAt   DateTime @updatedAt
-  createdAt   DateTime @default(now())
-  updatedByUser User?  @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
+  sortOrder     Int      @default(0)
+  enabled       Boolean  @default(true)
+  updatedBy     String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedByUser User?    @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
 
   @@id([operation, modelId])
   @@index([operation, enabled, sortOrder])

@@ -26,6 +26,26 @@ export type R2BucketLike = {
     size?: number;
   } | null>;
   delete?(key: string): Promise<unknown>;
+  // A file too large for one request arrives in parts and is joined in the
+  // bucket, so an upload outlives the request that started it: it is named by
+  // an upload id, added to part by part, and either joined or given up.
+  createMultipartUpload?(
+    key: string,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<{ uploadId: string }>;
+  resumeMultipartUpload?(
+    key: string,
+    uploadId: string,
+  ): {
+    uploadPart(
+      partNumber: number,
+      value: ReadableStream<Uint8Array>,
+    ): Promise<{ partNumber: number; etag: string }>;
+    complete(
+      parts: { partNumber: number; etag: string }[],
+    ): Promise<{ size: number }>;
+    abort(): Promise<void>;
+  };
 };
 
 type R2BucketProvider = () => R2BucketLike;

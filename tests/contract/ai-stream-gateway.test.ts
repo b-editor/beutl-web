@@ -21,7 +21,7 @@ vi.mock("@beutl/api", async () => {
 });
 
 import { POST } from "../../apps/web/src/app/api/internal/ai/[...route]/route";
-import { AI_STREAM_HEADER } from "../../apps/web/src/lib/ai-event-stream";
+import { INTERNAL_REQUEST_HEADER } from "../../apps/web/src/lib/internal-request";
 
 const SITE = "http://localhost:3000";
 
@@ -42,7 +42,7 @@ describe("the dashboard's way in to the AI API", () => {
   });
 
   it("passes a signed-in request on with a token of its own", async () => {
-    const response = await POST(post({ [AI_STREAM_HEADER]: "1" }));
+    const response = await POST(post({ [INTERNAL_REQUEST_HEADER]: "1" }));
 
     expect(response.status).toBe(200);
     const request = forwarded[0]!;
@@ -63,7 +63,7 @@ describe("the dashboard's way in to the AI API", () => {
 
   it("refuses a request that says it came from somewhere else", async () => {
     const response = await POST(
-      post({ [AI_STREAM_HEADER]: "1", origin: "https://evil.example" }),
+      post({ [INTERNAL_REQUEST_HEADER]: "1", origin: "https://evil.example" }),
     );
 
     expect(response.status).toBe(401);
@@ -73,14 +73,14 @@ describe("the dashboard's way in to the AI API", () => {
   it("refuses a request with no session behind it", async () => {
     getSession.mockResolvedValue(null);
 
-    const response = await POST(post({ [AI_STREAM_HEADER]: "1" }));
+    const response = await POST(post({ [INTERNAL_REQUEST_HEADER]: "1" }));
 
     expect(response.status).toBe(401);
     expect(forwarded).toHaveLength(0);
   });
 
   it("names the user the session names, and only for a minute", async () => {
-    await POST(post({ [AI_STREAM_HEADER]: "1", origin: SITE }));
+    await POST(post({ [INTERNAL_REQUEST_HEADER]: "1", origin: SITE }));
 
     const token = forwarded[0]!.headers.get("authorization")!.slice("Bearer ".length);
     const claims = JSON.parse(

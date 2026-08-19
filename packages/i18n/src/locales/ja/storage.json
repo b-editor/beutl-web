@@ -13,5 +13,12 @@
   "setToPublic": "公開にする",
   "searchByFileName": "ファイル名で検索",
   "storage": "ストレージ",
-  "storageUsage": "1.00GB 中 {{totalSize}}使用"
+  "storageUsage": "1.00GB 中 {{totalSize}}使用",
+  "uploadErrors": {
+    "insufficientStorageSpace": "このファイルを保存できる空き容量がありません。",
+    "uploadNotFound": "このアップロードは進行中ではありません。もう一度お試しください。",
+    "uploadFailed": "アップロードを完了できませんでした。もう一度お試しください。",
+    "invalidRequestBody": "このファイルはアップロードできません。",
+    "authenticationIsRequired": "アップロードするにはサインインし直してください。"
+  }
 }

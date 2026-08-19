@@ -1,6 +1,6 @@
 "use client";
 
-import { deleteFile, uploadFile } from "./actions";
+import { deleteFile } from "./actions";
 import {
   type ColumnFiltersState,
   type SortingState,
@@ -28,6 +28,8 @@ import { cn } from "@beutl/core";
 import { useCallback, useMemo, useState, useTransition } from "react";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
+import { uploadStorageFile } from "@/lib/storage-upload";
+import { useRouter } from "next/navigation";
 import type { File } from "./types";
 import { getColumns } from "./columns";
 import { useTranslation } from "@beutl/ui/i18n-client";
@@ -38,7 +40,11 @@ export function List({ data, lang }: { data: File[]; lang: string }) {
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState({});
-  const [uploading, startUpload] = useTransition();
+  const [uploading, setUploading] = useState(false);
+  // How far the file has got, so a large one does not look stuck. Null when
+  // nothing is being sent.
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const router = useRouter();
   const [deleting, startDelete] = useTransition();
   const pending = useMemo(() => uploading || deleting, [uploading, deleting]);
   const { toast } = useToast();
@@ -69,19 +75,29 @@ export function List({ data, lang }: { data: File[]; lang: string }) {
     if (!file) {
       return;
     }
-    startUpload(async () => {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await uploadFile(formData);
-      if (!res.success) {
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      // Sent in parts: one request cannot carry more than 100 MB, and a file
+      // here may be as large as the whole quota.
+      const outcome = await uploadStorageFile(file, {
+        onProgress: (sentBytes) =>
+          setUploadProgress(file.size === 0 ? 1 : sentBytes / file.size),
+      });
+      if (!outcome.ok) {
         toast({
           title: t("error"),
-          description: res.message,
+          description: t(`storage:uploadErrors.${outcome.errorCode}`),
           variant: "destructive",
         });
+        return;
       }
-    });
-  }, [toast, t]);
+      router.refresh();
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
+    }
+  }, [toast, t, router]);
 
   const handleDeleteClick = useCallback(() => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
@@ -145,6 +161,22 @@ export function List({ data, lang }: { data: File[]; lang: string }) {
           </Button>
         </div>
       </div>
+      {/* A large file is sent in parts over a long minute or two, so how far it
+          has got is worth showing rather than only that something is going on. */}
+      {uploadProgress !== null && (
+        <div
+          className="h-1 w-full overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(uploadProgress * 100)}
+        >
+          <div
+            className="h-full bg-primary transition-[width]"
+            style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+          />
+        </div>
+      )}
       <div className="rounded-md border">
         <Table>
           <TableHeader>

@@ -12,6 +12,7 @@ import {
 import { reconcileDeletedAccountRemoteJobs } from "./ai/remote-job-cleanup";
 import { reconcileBillingRefunds } from "./ai/billing-refunds";
 import { reconcileTopUpRefunds } from "./ai/top-up-refunds";
+import { abandonStaleStorageUploads } from "./storage-uploads";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -89,12 +90,20 @@ export default {
     const scheduledAt = new Date(controller.scheduledTime);
     context.waitUntil(
       Promise.all([
+        abandonStaleStorageUploads(scheduledAt),
         reconcileAiJobs(scheduledAt),
         reconcileDeletedAccountRemoteJobs(scheduledAt),
         reconcileTopUpRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
         reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
-      ]).then(([jobs, deletedAccountJobs, topUpRefunds, billingRefunds]) => {
+      ]).then(([
+        storageUploads,
+        jobs,
+        deletedAccountJobs,
+        topUpRefunds,
+        billingRefunds,
+      ]) => {
         console.log("Scheduled reconciliation completed", {
+          storageUploads,
           jobs,
           deletedAccountJobs,
           topUpRefunds,
