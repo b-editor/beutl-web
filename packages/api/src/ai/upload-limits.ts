@@ -82,8 +82,17 @@ function boundedRequestBody(request: Request, maximumBytes: number): Request {
     },
   });
 
-  return new Request(request, {
+  // Built from the URL rather than by copying the request that came in. Copying
+  // it works on workerd and under the test runner, but on Node the incoming
+  // request belongs to the server's own Request class, and the copy then reads
+  // as an object of a different class: `Cannot read private member #state`,
+  // raised only when the body is finally read. That surfaced as every AI
+  // request from the editor being refused as an invalid body.
+  return new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
     body,
+    signal: request.signal,
     // Required by Node's Request implementation and ignored by workerd.
     duplex: "half",
   } as RequestInit & { duplex: "half" });
