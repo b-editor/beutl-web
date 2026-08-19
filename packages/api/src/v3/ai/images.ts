@@ -50,6 +50,7 @@ import {
   type AiInputImageMimeType,
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
+import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import { getAiRequestIdentity, sha256Hex } from "../../ai/request-integrity";
 
@@ -351,6 +352,15 @@ const app = new Hono()
       return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
     }
 
+    // Everything that could refuse this request has now run, so from here the
+    // answer is either the picture or a failure of the work itself — which is
+    // the only point at which it is safe to start streaming.
+    const generate = async (
+      onPartialImage?: (partial: { index: number; b64Json: string }) => void,
+    ): Promise<
+      | { ok: true; payload: unknown }
+      | { ok: false; errorCode: "aiProviderError"; status: 500 }
+    > => {
     try {
       const result = await generateImage({
         prompt,
@@ -367,6 +377,7 @@ const app = new Hono()
         ...(seed === undefined ? {} : { seed }),
         model: selectedModel.modelId,
         signal: c.req.raw.signal,
+        ...(onPartialImage ? { onPartialImage } : {}),
       });
       const { bytes, mimeType } = await decodeImageResult(result);
       const file = await saveAiImage({
@@ -376,13 +387,16 @@ const app = new Hono()
         mimeType,
         filename: `ai-image-${job.id}.png`,
       });
-      return c.json({
-        jobId: job.id,
-        fileId: file.id,
-        url: await getContentUrl(file.id, c.req.raw),
-        fileName: file.name,
-        contentType: file.mimeType,
-      });
+      return {
+        ok: true as const,
+        payload: {
+          jobId: job.id,
+          fileId: file.id,
+          url: await getContentUrl(file.id, c.req.raw),
+          fileName: file.name,
+          contentType: file.mimeType,
+        },
+      };
     } catch (err) {
       // Synchronous provider calls have no durable handle that can recover an
       // ambiguous result. Customer usage is therefore refunded on every
@@ -392,13 +406,39 @@ const app = new Hono()
         aiJobId: job.id,
         error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
       });
-      if (err instanceof AiProviderError) {
-        return c.json(await apiErrorResponse("aiProviderError"), {
-          status: 500,
-        });
+      if (!(err instanceof AiProviderError)) {
+        console.error("Failed to generate an AI image", err);
       }
-      throw err;
+      return {
+        ok: false as const,
+        errorCode: "aiProviderError" as const,
+        status: 500 as const,
+      };
     }
+    };
+
+    if (!eventStreamRequested(c.req.raw)) {
+      const outcome = await generate();
+      return outcome.ok
+        ? c.json(outcome.payload)
+        : c.json(await apiErrorResponse(outcome.errorCode), {
+            status: outcome.status,
+          });
+    }
+
+    // The rough versions the model works through, then the same answer the
+    // caller would have waited for. Only models whose provider streams send
+    // any; the rest simply end in the one result event.
+    return eventStreamResponse(async (emit) => {
+      const outcome = await generate((partial) =>
+        emit("partial", { index: partial.index, image: partial.b64Json }),
+      );
+      if (outcome.ok) {
+        emit("result", outcome.payload);
+        return;
+      }
+      emit("error", await apiErrorResponse(outcome.errorCode));
+    });
   })
   .post("/edit", async (c) => {
     const userId = await getUserId(c);

@@ -20,6 +20,7 @@ import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
+import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
   isIso6391LanguageCode,
@@ -263,6 +264,15 @@ const app = new Hono().post("/", async (c) => {
     return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
   }
 
+  // Everything that could refuse this request has now run, so from here the
+  // answer is either the translation or a failure of the work itself — which is
+  // the only point at which it is safe to start streaming.
+  const translate = async (
+    onSegment?: (segment: { id: string; text: string }) => void,
+  ): Promise<
+    | { ok: true; payload: unknown }
+    | { ok: false; errorCode: "aiProviderError"; status: 500 }
+  > => {
   try {
     const contextById = new Map(
       segments.flatMap((segment) =>
@@ -287,6 +297,7 @@ const app = new Hono().post("/", async (c) => {
       ...(style ? { style } : {}),
       model: selectedModel.modelId,
       signal: c.req.raw.signal,
+      ...(onSegment ? { onSegment } : {}),
     });
     await saveAiJsonResult({
       jobId: job.id,
@@ -304,26 +315,46 @@ const app = new Hono().post("/", async (c) => {
       },
     });
 
-    return c.json({
-      jobId: job.id,
-      segments: translatedSegments,
-    });
+    return {
+      ok: true as const,
+      payload: {
+        jobId: job.id,
+        segments: translatedSegments,
+      },
+    };
   } catch (error) {
     await failAiJobAndRefundUsage({
       userId,
       aiJobId: job.id,
       error: AI_JOB_FAILURE_MESSAGES.translation,
     });
-    if (error instanceof AiProviderError) {
-      return c.json(await apiErrorResponse("aiProviderError"), {
-        status: 500,
-      });
+    if (!(error instanceof AiProviderError)) {
+      console.error("Failed to persist AI translation result", error);
     }
-    console.error("Failed to persist AI translation result", error);
-    return c.json(await apiErrorResponse("aiProviderError"), {
-      status: 500,
-    });
+    return { ok: false as const, errorCode: "aiProviderError" as const, status: 500 as const };
   }
+  };
+
+  if (!eventStreamRequested(c.req.raw)) {
+    const outcome = await translate();
+    return outcome.ok
+      ? c.json(outcome.payload)
+      : c.json(await apiErrorResponse(outcome.errorCode), {
+          status: outcome.status,
+        });
+  }
+
+  // Subtitles as they are translated, then the same answer the caller would
+  // have waited for. What was shown on the way is a preview of it and never a
+  // substitute: a run that fails ends in an error event with nothing kept.
+  return eventStreamResponse(async (emit) => {
+    const outcome = await translate((segment) => emit("segment", segment));
+    if (outcome.ok) {
+      emit("result", outcome.payload);
+      return;
+    }
+    emit("error", await apiErrorResponse(outcome.errorCode));
+  });
 });
 
 export default app;
