@@ -1,7 +1,8 @@
 import "server-only";
-import { beginGitAccountDeletion, finishGitAccountDeletion, retryPendingGitDeletions } from "@beutl/forgejo";
+import { beginGitAccountDeletion, finishGitAccountDeletion } from "@beutl/forgejo";
 import {
   deleteUserById,
+  markGitAccountDeletionReady,
   drainUserStorageFiles,
   enqueueUserStorageCleanups,
   findAccountDeletionIntent,
@@ -80,16 +81,14 @@ export async function deleteUser(token: string, identifier: string) {
       prisma,
     });
     await deleteUserById({ userId: intent.userId, prisma });
+    await markGitAccountDeletionReady({ userId: intent.userId, prisma });
     return true;
   });
   if (!deleted) {
     return;
   }
-  if (forgejoUsername) {
-    const finished = await finishGitAccountDeletion(
-      intent.userId,
-      forgejoUsername,
-    );
+  {
+    const finished = await finishGitAccountDeletion(intent.userId);
     await addAuditLog({
       userId: null,
       action: finished
@@ -97,15 +96,11 @@ export async function deleteUser(token: string, identifier: string) {
         : auditLogActions.git.accountPurgeFailed,
       details: finished
         ? `User ${intent.userId} deleted their Forgejo account`
-        : `Forgejo user ${forgejoUsername} is queued for retry in GitAccountDeletion`,
+        : `Forgejo user ${forgejoUsername ?? "(unresolved)"} is queued for retry in GitAccountDeletion`,
     }).catch((auditError) => {
       // 監査が書けなくても GitAccountDeletion の行が残るので、片付けは続けられる。
       console.error("failed to record the Git account deletion", auditError);
     });
   }
 
-  // 前回落ちた分をここで拾う。定期実行が無くても、退会が起きるたびに前進する。
-  await retryPendingGitDeletions().catch((error) => {
-    console.error("failed to retry pending Git deletions", error);
-  });
 }

@@ -26,6 +26,7 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
+import { isForgejoConfigured, retryPendingGitDeletions } from "@beutl/forgejo";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -143,6 +144,29 @@ function withBoundedBody(
 }
 
 export default {
+  /**
+   * 退会の後始末をやり残していたら片付ける。
+   *
+   * Forgejo が落ちている間に退会があると purge が失敗し、GitAccountDeletion に
+   * 残る。利用者のリクエストの中で拾うと、その人の応答が遅くなるうえ、退会が
+   * 起きるまで永久に残る。定期実行でだけ消化する。
+   */
+  async reconcileGitDeletions(): Promise<void> {
+
+    if (!isForgejoConfigured()) return;
+
+    try {
+      const { finished, pending } = await retryPendingGitDeletions();
+      if (finished > 0 || pending > 0) {
+        console.log(
+          `git deletions: finished ${finished}, still pending ${pending}`,
+        );
+      }
+    } catch (error) {
+      console.error("failed to retry pending Git deletions", error);
+    }
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     // Bound the body before routing. Some v1 handlers parse JSON before auth,
     // so declared and streamed sizes must be rejected at the Worker boundary.
@@ -178,6 +202,7 @@ export default {
     context: ExecutionContextLike,
   ): Promise<void> {
     configureRuntime(env);
+    context.waitUntil(this.reconcileGitDeletions());
     const scheduledAt = new Date(controller.scheduledTime);
     // Duplicate top-up and package-payment refunds may be created by checkout
     // recovery. Let both refund workers finish before cleanup consumes their

@@ -6,10 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@beutl/db", () => ({
   // 退会処理の墓標。既定では「退会していない」。
   findGitAccountDeletion: async () => pendingDeletion,
-  createGitAccountDeletion: async () => undefined,
-  deleteGitAccountDeletion: async () => undefined,
+  startGitAccountDeletion: async () => undefined,
+  setGitAccountDeletionTarget: async () => undefined,
+  markGitAccountDeletionReady: async () => undefined,
+  deleteGitAccountDeletion: async () => {
+    pendingDeletion = null;
+  },
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
+  GitAccountDeletionPhase: { BLOCKING: "BLOCKING", READY_TO_PURGE: "READY_TO_PURGE" },
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
     await fn(undefined),
@@ -25,7 +30,8 @@ vi.mock("@beutl/db", () => ({
   deleteGitCredential: async () => undefined,
 }));
 
-let pendingDeletion: { userId: string } | null = null;
+let pendingDeletion: { userId: string; phase: string; forgejoUserId: number | null } | null =
+  null;
 let profileUserName = "someone";
 let existingAccount: {
   userId: string;

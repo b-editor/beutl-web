@@ -169,25 +169,43 @@ model GitAccount {
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+enum GitAccountDeletionPhase {
+  // 退会の意思表示。資格情報の発行を止めるだけで、Forgejo は消さない。
+  BLOCKING
+  // Beutl 側のユーザーが実際に消えた。ここで初めて purge してよい。
+  READY_TO_PURGE
+}
+
 // 退会処理の途中経過。Forgejo 側を消し切るまで残す。
 //
-// 退会は「トークンを失効 → Beutl 側を削除 → Forgejo を purge」の順で進む。途中で
-// 落ちると、Forgejo にユーザーとリポジトリが残ったまま対応表だけ消え、誰も気づけない。
-// また、失効から purge までの間に新しいトークンを発行されると、それが生き残る。
+// 退会は「意思表示 → トークン失効 → Beutl 側を削除 → Forgejo を purge」の順で進む。
+// 途中で落ちると、Forgejo にユーザーとリポジトリが残ったまま対応表だけ消え、誰も
+// 気づけない。また、失効から purge までの間に新しいトークンを発行されると生き残る。
 //
 // そこで削除を始める前にこの行を書き、最後まで通ったときだけ消す。
 //   - 残っている = まだ Forgejo 側が片付いていない (再試行の対象)
 //   - 存在する userId は資格情報の発行を拒む (失効のすり抜けを塞ぐ)
 //
+// phase を分けるのは、**ローカルのユーザー削除が失敗しうる**ため。BLOCKING のまま
+// purge すると、まだ生きている利用者の Forgejo アカウントとリポジトリを消してしまう。
+// READY_TO_PURGE への遷移はユーザー削除と同じトランザクションで確定させる。
+//
+// forgejoUsername / forgejoUserId は null を許す。「Forgejo 側の対象がまだ分からない
+// 削除中」を表現する必要があるため (対象を確かめている最中に、並行するリクエストが
+// 初めての Forgejo ユーザーを作ることがある)。
+//
 // User への外部キーは張らない。User が消えた後も残る必要がある。
 model GitAccountDeletion {
   userId          String   @id
-  forgejoUsername String
-  forgejoUserId   Int
+  phase           GitAccountDeletionPhase @default(BLOCKING)
+  forgejoUsername String?
+  forgejoUserId   Int?
   createdAt       DateTime @default(now())
   attempts        Int      @default(0)
   lastAttemptAt   DateTime?
   lastError       String?
+
+  @@index([phase])
 }
 
 // 発行済み git アクセストークンの控え。平文は保持しない (発行時のレスポンスにしか現れない)。

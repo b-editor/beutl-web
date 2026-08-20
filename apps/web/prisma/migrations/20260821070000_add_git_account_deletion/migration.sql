@@ -1,8 +1,12 @@
+-- CreateEnum
+CREATE TYPE "GitAccountDeletionPhase" AS ENUM ('BLOCKING', 'READY_TO_PURGE');
+
 -- CreateTable
 CREATE TABLE "GitAccountDeletion" (
     "userId" STRING NOT NULL,
-    "forgejoUsername" STRING NOT NULL,
-    "forgejoUserId" INT4 NOT NULL,
+    "phase" "GitAccountDeletionPhase" NOT NULL DEFAULT 'BLOCKING',
+    "forgejoUsername" STRING,
+    "forgejoUserId" INT4,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "attempts" INT4 NOT NULL DEFAULT 0,
     "lastAttemptAt" TIMESTAMP(3),
@@ -10,3 +14,6 @@ CREATE TABLE "GitAccountDeletion" (
 
     CONSTRAINT "GitAccountDeletion_pkey" PRIMARY KEY ("userId")
 );
+
+-- CreateIndex
+CREATE INDEX "GitAccountDeletion_phase_idx" ON "GitAccountDeletion"("phase");

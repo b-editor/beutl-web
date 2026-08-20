@@ -161,6 +161,24 @@ export async function issueGitCredential(
     );
   }
 
+  // 発行の前に見た時点では退会していなくても、その後に始まっていることがある。
+  // 見逃すと、この 1 本は失効の走査に間に合わず退会後も生き残る。作った直後に
+  // もう一度確かめ、始まっていたら畳んでから断る。
+  try {
+    await assertGitAccountNotBeingDeleted(userId);
+  } catch (error) {
+    await forgejoRequest(tokensPath(username, issued.id), {
+      method: "DELETE",
+      responseType: "none",
+    }).catch((deleteError) => {
+      console.error(
+        `failed to drop the token ${issued.id} issued while ${userId} was being deleted`,
+        deleteError,
+      );
+    });
+    throw error;
+  }
+
   // クロージャの中では上の絞り込みが効かないので、ここで確定させておく。
   const lastEight = issued.token_last_eight ?? issued.sha1.slice(-8);
 

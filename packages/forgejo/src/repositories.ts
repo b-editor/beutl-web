@@ -103,6 +103,8 @@ async function commitTemplates(
       forgejoRequestOrNull(`${base}/${file.path}`, { sudo }),
     ),
   );
+  // 中身がずれている場合はここでは直さない。既にあるファイルを勝手に上書きすると、
+  // 利用者が意図して編集した .gitattributes を壊す。
   const missing = TEMPLATE_FILES.filter((_, index) => !present[index]);
   if (missing.length === 0) return;
 
@@ -137,6 +139,7 @@ async function commitTemplates(
 async function rollbackPartialRepository(
   sudo: string,
   repository: ForgejoRepository,
+  createdSha: string | null,
 ) {
   const name = repository.name;
   try {
@@ -157,7 +160,7 @@ async function rollbackPartialRepository(
       return;
     }
 
-    if (!(await isPristine(sudo, name, current.default_branch))) {
+    if (!(await isPristine(sudo, name, current.default_branch, createdSha))) {
       // 既に push されている。消すとその中身ごと失う。テンプレートだけ足す。
       await commitTemplates(sudo, name, current.default_branch).catch(
         (error) => {
@@ -181,28 +184,91 @@ async function rollbackPartialRepository(
   }
 }
 
-/** auto_init の 1 コミットしかない = 誰も push していない。 */
+/**
+ * 作成直後のまま、誰も何も足していないか。
+ *
+ * 「既定ブランチのコミットが 1 つ」だけでは足りない。別ブランチやタグへの push も、
+ * 既定ブランチを別の 1 コミットへ force-push した場合も、それでは見分けられない。
+ * 消してよいのは次を全部満たすときだけ。
+ *
+ *   - 既定ブランチの先頭が、作成直後に控えた SHA のまま
+ *   - ブランチがその 1 本しかない
+ *   - タグが 1 つも無い
+ *
+ * どれか 1 つでも確かめられなければ false を返す (消さない側に倒す)。
+ */
 async function isPristine(
   sudo: string,
   name: string,
   branch: string,
+  createdSha: string | null,
 ): Promise<boolean> {
-  const commits = await forgejoRequestOrNull<ForgejoCommit[]>(
-    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/commits`,
-    { sudo, searchParams: { sha: branch, limit: 2 } },
-  );
-  return (commits?.length ?? 0) <= 1;
+  if (!createdSha) return false;
+
+  const base = `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}`;
+  const [head, branches, tags] = await Promise.all([
+    forgejoRequestOrNull<ForgejoBranch>(
+      `${base}/branches/${encodeURIComponent(branch)}`,
+      { sudo },
+    ),
+    forgejoRequestOrNull<ForgejoBranch[]>(`${base}/branches`, {
+      sudo,
+      searchParams: { page: 1, limit: 2 },
+    }),
+    forgejoRequestOrNull<unknown[]>(`${base}/tags`, {
+      sudo,
+      searchParams: { page: 1, limit: 1 },
+    }),
+  ]);
+
+  if (!head || head.commit?.id !== createdSha) return false;
+  if (!branches || branches.length !== 1) return false;
+  if (!tags || tags.length !== 0) return false;
+  return true;
 }
 
-/** Beutl の既定ファイルが両方入っているか。 */
+/** 作成直後の既定ブランチの先頭。取れなければ null (巻き戻しは諦める)。 */
+async function headShaOf(
+  sudo: string,
+  name: string,
+  branch: string,
+): Promise<string | null> {
+  const head = await forgejoRequestOrNull<ForgejoBranch>(
+    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}`,
+    { sudo },
+  );
+  return head?.commit?.id ?? null;
+}
+
+/**
+ * Beutl の既定ファイルが両方、**中身も含めて**入っているか。
+ *
+ * 有無だけを見ると、空だったり途中で壊れたりした .gitattributes を「完成」と
+ * みなしてしまう。それでは素材が LFS に載らず、この関数を使う意味が無い。
+ */
 async function hasTemplates(sudo: string, name: string): Promise<boolean> {
   const base = `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`;
-  const present = await Promise.all(
+  const entries = await Promise.all(
     TEMPLATE_FILES.map((file) =>
-      forgejoRequestOrNull(`${base}/${file.path}`, { sudo }),
+      forgejoRequestOrNull<{ content?: string; encoding?: string }>(
+        `${base}/${file.path}`,
+        { sudo },
+      ),
     ),
   );
-  return present.every(Boolean);
+
+  return entries.every((entry, index) => {
+    if (!entry?.content || entry.encoding !== "base64") return false;
+    return fromBase64(entry.content) === TEMPLATE_FILES[index].content;
+  });
+}
+
+/** base64 の UTF-8 文字列を戻す。atob は Latin-1 しか返さないため経由する。 */
+function fromBase64(encoded: string): string {
+  // Forgejo は長い内容を改行入りで返すことがある。
+  const binary = atob(encoded.replace(/\s+/g, ""));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 /**
@@ -296,13 +362,16 @@ export async function createRepository(
     throw error;
   }
 
+  // 巻き戻すかどうかの判断に使う。テンプレートを入れる前の先頭がこれ。
+  const createdSha = await headShaOf(sudo, name, repository.default_branch);
+
   try {
     await commitTemplates(sudo, name, repository.default_branch);
   } catch (error) {
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
     // なかったことにして、ユーザーにやり直させる方がまだ良い。
-    await rollbackPartialRepository(sudo, repository);
+    await rollbackPartialRepository(sudo, repository, createdSha);
     throw error;
   }
 

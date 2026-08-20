@@ -188,6 +188,8 @@ export async function ensureGitAccount(userId: string): Promise<{
           // 対応表に書いていない瞬間もあるので少し待って読み直す。
           const concurrent = await waitForConcurrentMapping(userId);
           if (concurrent) {
+            // 相手が書いた対応表も、素通しはしない。通常経路と同じ 3 点で確かめる。
+            await assertMappingMatches(userId, concurrent);
             return {
               forgejoUserId: concurrent.forgejoUserId,
               forgejoUsername: concurrent.forgejoUsername,
@@ -237,4 +239,3 @@ export async function ensureGitAccount(userId: string): Promise<{
     `Could not find an available Forgejo username for user ${userId}`,
   );
 }
-

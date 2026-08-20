@@ -1,14 +1,40 @@
+import { GitAccountDeletionPhase } from "@prisma/client";
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
 /**
  * 退会処理の途中経過。Forgejo 側を消し切るまで残る。
  *
- * 「残っている = まだ片付いていない」という 1 つの意味しか持たせない。再試行の
- * 対象を選ぶのも、資格情報の発行を拒むのも、この行の有無だけで決める。
+ * phase の意味は 1 つずつしかない。
+ *   BLOCKING       退会を始めた。資格情報の発行を止める。**まだ purge しない**
+ *   READY_TO_PURGE Beutl 側のユーザーが実際に消えた。purge してよい
+ *
+ * BLOCKING のまま purge すると、ローカルの削除が失敗して生き残った利用者の
+ * Forgejo アカウントとリポジトリを消すことになる。
  */
 
-export async function createGitAccountDeletion({
+export { GitAccountDeletionPhase };
+
+/** 退会の意思表示。対象がまだ分からない段階でも書ける。 */
+export async function startGitAccountDeletion({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.upsert({
+    where: { userId },
+    create: { userId },
+    // やり直しでも phase は戻さない。READY_TO_PURGE を BLOCKING に落とすと、
+    // 既に消えた利用者の後始末が二度と進まなくなる。
+    update: {},
+  });
+}
+
+/** Forgejo 側の対象が分かったら記録する。 */
+export async function setGitAccountDeletionTarget({
   userId,
   forgejoUsername,
   forgejoUserId,
@@ -20,11 +46,30 @@ export async function createGitAccountDeletion({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  // やり直しでも同じ行を使う。attempts は recordGitAccountDeletionAttempt で数える。
-  return await db.gitAccountDeletion.upsert({
+  await db.gitAccountDeletion.updateMany({
     where: { userId },
-    create: { userId, forgejoUsername, forgejoUserId },
-    update: { forgejoUsername, forgejoUserId },
+    data: { forgejoUsername, forgejoUserId },
+  });
+}
+
+/**
+ * purge してよい状態にする。
+ *
+ * **ユーザー削除と同じトランザクションで呼ぶこと。** 別々にすると、ユーザーが
+ * 残っているのに purge 可能な行だけができる瞬間があり、そこで再試行が走ると
+ * 生きている利用者の Git データを消す。
+ */
+export async function markGitAccountDeletionReady({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitAccountDeletion.updateMany({
+    where: { userId },
+    data: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
   });
 }
 
@@ -50,7 +95,10 @@ export async function deleteGitAccountDeletion({
   await db.gitAccountDeletion.deleteMany({ where: { userId } });
 }
 
-/** 古いものから順に。何度も失敗しているものが先頭に居座らないよう試行回数も見る。 */
+/**
+ * 片付け待ちを古い順に返す。**READY_TO_PURGE だけ**。
+ * BLOCKING はまだ利用者が生きている可能性があるので、決して混ぜない。
+ */
 export async function listPendingGitAccountDeletions({
   limit = 20,
   prisma,
@@ -60,6 +108,7 @@ export async function listPendingGitAccountDeletions({
 } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitAccountDeletion.findMany({
+    where: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
     orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
     take: limit,
   });

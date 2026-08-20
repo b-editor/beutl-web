@@ -11,11 +11,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@beutl/db", () => ({
   // 退会処理の墓標。既定では「退会していない」。
-  findGitAccountDeletion: async () => pendingDeletion,
-  createGitAccountDeletion: async () => undefined,
-  deleteGitAccountDeletion: async () => undefined,
+  findGitAccountDeletion: async () => {
+    const value = pendingDeletion;
+    // 発行の途中で退会が始まる状況を作るための仕掛け。
+    if (deletionStartsAfterFirstCheck) {
+      pendingDeletion = {
+        userId: "u1",
+        phase: "BLOCKING",
+        forgejoUserId: 2,
+      };
+      deletionStartsAfterFirstCheck = false;
+    }
+    return value;
+  },
+  startGitAccountDeletion: async () => undefined,
+  setGitAccountDeletionTarget: async () => undefined,
+  markGitAccountDeletionReady: async () => undefined,
+  deleteGitAccountDeletion: async () => {
+    pendingDeletion = null;
+  },
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
+  GitAccountDeletionPhase: { BLOCKING: "BLOCKING", READY_TO_PURGE: "READY_TO_PURGE" },
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
     await fn(undefined),
@@ -62,7 +79,9 @@ vi.mock("@beutl/db", () => ({
   findProfileForApi: async () => null,
 }));
 
-let pendingDeletion: { userId: string } | null = null;
+let pendingDeletion: { userId: string; phase: string; forgejoUserId: number | null } | null =
+  null;
+let deletionStartsAfterFirstCheck = false;
 let credentialCount = 0;
 let credentialCountAfterIssue: number | null = null;
 let existingNames: string[] = [];
@@ -106,6 +125,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   pendingDeletion = null;
+  deletionStartsAfterFirstCheck = false;
   credentialCount = 0;
   credentialCountAfterIssue = null;
   existingNames = [];
@@ -265,13 +285,27 @@ describe("トークンの発行", () => {
 
   it("退会処理が始まっていたら発行しない", async () => {
     // 失効の後・purge の前に 1 本作られると、それだけが退会後も生き残る。
-    pendingDeletion = { userId: "u1" };
+    pendingDeletion = { userId: "u1", phase: "BLOCKING", forgejoUserId: 2 };
 
     await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
       GitAccountBeingDeletedError,
     );
     // Forgejo には一切触らない。
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("発行の途中で退会が始まったら、作ったトークンを畳んで断る", async () => {
+    // 発行の前だけ見ていると、検査から発行までの間に始まった退会をすり抜ける。
+    // その 1 本は失効の走査に間に合わず、退会後も生き残る。
+    deletionStartsAfterFirstCheck = true;
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
+      GitAccountBeingDeletedError,
+    );
+
+    // 作ったものは置き去りにしない。
+    const del = record(fetchMock).find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/admin/users/someone/tokens/13");
   });
 
   it("上限に達したら弾く", async () => {
@@ -317,6 +351,17 @@ describe("リポジトリの作成", () => {
         if (repoLookups === 1) return json({ message: "not found" }, 404);
         return json({ id: 1, name: "proj", default_branch: "main" });
       }
+      // 作成直後のまま: 先頭は変わらず、ブランチ 1 本、タグ無し。
+      if (path.endsWith("/branches/main")) {
+        return json({ name: "main", commit: { id: "abc123" } });
+      }
+      if (path.endsWith("/branches")) {
+        return json([{ name: "main", commit: { id: "abc123" } }]);
+      }
+      if (path.endsWith("/tags")) return json([]);
+      if (path.includes("/contents/.git")) {
+        return json({ message: "not found" }, 404);
+      }
       return new Response(null, { status: 204 });
     });
 
@@ -326,6 +371,51 @@ describe("リポジトリの作成", () => {
 
     const del = record(fetchMock).find((c) => c.method === "DELETE");
     expect(del?.url).toContain("/repos/someone/proj");
+  });
+
+  it("巻き戻す前に push されていたら消さない", async () => {
+    // 作成直後の先頭から動いていれば、誰かが push している。消すとその中身を失う。
+    const { createRepository } = await import("@beutl/forgejo");
+    let repoLookups = 0;
+    let headReads = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "boom" }, 500);
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        repoLookups += 1;
+        if (repoLookups === 1) return json({ message: "not found" }, 404);
+        return json({ id: 1, name: "proj", default_branch: "main" });
+      }
+      if (path.endsWith("/branches/main")) {
+        headReads += 1;
+        // 1 回目は作成直後の控え、2 回目は push 後。
+        return json({
+          name: "main",
+          commit: { id: headReads === 1 ? "abc123" : "def456" },
+        });
+      }
+      if (path.endsWith("/branches")) {
+        return json([{ name: "main", commit: { id: "def456" } }]);
+      }
+      if (path.endsWith("/tags")) return json([]);
+      if (path.includes("/contents/.git")) {
+        return json({ message: "not found" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
   });
 
   it("作成の成否が分からないときは、消さずにテンプレートを足す", async () => {
@@ -536,7 +626,30 @@ describe("退会時の後始末", () => {
     await expect(beginGitAccountDeletion("u1")).rejects.toBeTruthy();
   });
 
+  it("Beutl 側がまだ消えていなければ purge しない", async () => {
+    // ローカルのユーザー削除が失敗すると、利用者は生きたまま墓標だけが残る。
+    // ここで消すと、その人の Forgejo アカウントとリポジトリを落とすことになる。
+    pendingDeletion = { userId: "u1", phase: "BLOCKING", forgejoUserId: 2 };
+
+    await expect(finishGitAccountDeletion("u1")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("待っている間に別人へ渡っていたら purge しない", async () => {
+    // 復元で id が振り直されると、同じ名前が別のアカウントになる。
+    pendingDeletion = { userId: "u1", phase: "READY_TO_PURGE", forgejoUserId: 2 };
+    fetchMock.mockImplementation(async () =>
+      json({ id: 999, login: "someone", email: EMAIL }),
+    );
+
+    await expect(finishGitAccountDeletion("u1")).resolves.toBe(true);
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+  });
+
   it("purge の直前にもう一度トークンを掃く", async () => {
+    pendingDeletion = { userId: "u1", phase: "READY_TO_PURGE", forgejoUserId: 2 };
     // 失効から Beutl 側の削除までの間に発行された分がありうる。purge が失敗した
     // ときに生き残るのはまさにそれ。
     let listed = 0;
@@ -549,10 +662,13 @@ describe("退会時の後始末", () => {
         listed += 1;
         return listed === 1 ? json([{ id: 77 }]) : json([]);
       }
+      if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
       return new Response(null, { status: 204 });
     });
 
-    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(true);
+    await expect(finishGitAccountDeletion("u1")).resolves.toBe(true);
 
     const deletes = record(fetchMock).filter((c) => c.method === "DELETE");
     expect(deletes[0].url).toContain("/tokens/77");
@@ -562,26 +678,36 @@ describe("退会時の後始末", () => {
   });
 
   it("purge が成功したら墓標を消す", async () => {
+    pendingDeletion = { userId: "u1", phase: "READY_TO_PURGE", forgejoUserId: 2 };
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
       if ((init?.method ?? "GET") === "GET") return json([]);
       return new Response(null, { status: 204 });
     });
 
-    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(true);
+    await expect(finishGitAccountDeletion("u1")).resolves.toBe(true);
 
     const purge = record(fetchMock).find((c) => c.method === "DELETE")!;
     expect(purge.url).toContain("purge=true");
   });
 
   it("purge が失敗したら false を返す (投げない)", async () => {
+    pendingDeletion = { userId: "u1", phase: "READY_TO_PURGE", forgejoUserId: 2 };
     // アクセスは既に断ってある。ここで投げても Beutl 側の削除は戻せない。
     // 呼び出し元が消し残りを監査に記録できるよう、成否だけ返す。
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
       if ((init?.method ?? "GET") === "GET") return json([]);
       return json({ message: "boom" }, 500);
     });
 
-    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(false);
+    await expect(finishGitAccountDeletion("u1")).resolves.toBe(false);
   });
 });
 

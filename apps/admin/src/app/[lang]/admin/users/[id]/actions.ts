@@ -8,6 +8,7 @@ import {
   adjustPurchasedCreditsByAdmin,
   CreditAdjustmentRejectedError,
   deleteUserById,
+  markGitAccountDeletionReady,
   drainUserStorageFiles,
   enqueueUserStorageCleanups,
   existsUserById,
@@ -39,7 +40,6 @@ function subscriptionPlanLabel(planId: string): string {
 import {
   beginGitAccountDeletion,
   finishGitAccountDeletion,
-  retryPendingGitDeletions,
 } from "@beutl/forgejo";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
@@ -251,6 +251,9 @@ export async function deleteUser({
       }
       await enqueueUserStorageCleanups({ userId, prisma: tx });
       await deleteUserById({ userId, prisma: tx });
+      // 「purge してよい」印は削除と同時に確定させる。別々にすると、削除が失敗
+      // したのに purge 待ちの行だけが残り、生きている利用者のデータを消す。
+      await markGitAccountDeletionReady({ userId, prisma: tx });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.admin.userDeleted,
@@ -284,24 +287,17 @@ export async function deleteUser({
     // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
     // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
     // 残ってリポジトリが戻せなくなる。
-    if (
-      forgejoUsername &&
-      !(await finishGitAccountDeletion(userId, forgejoUsername))
-    ) {
+    if (!(await finishGitAccountDeletion(userId))) {
       // GitAccountDeletion の行が残るので再試行はされる。監査は経緯を追うため。
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.git.accountPurgeFailed,
-        details: `Forgejo user ${forgejoUsername} is queued for retry in GitAccountDeletion`,
+        details: `Forgejo user ${forgejoUsername ?? "(unresolved)"} is queued for retry in GitAccountDeletion`,
       }).catch((auditError) => {
         console.error("failed to record the purge failure", auditError);
       });
     }
 
-    // 前回落ちた分をここで拾う。
-    await retryPendingGitDeletions().catch((error) => {
-      console.error("failed to retry pending Git deletions", error);
-    });
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。
     revalidatePath("/[lang]/admin/users", "page");

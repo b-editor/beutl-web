@@ -77,4 +77,3 @@ export const GITIGNORE_TEMPLATE = `# Beutl プロジェクト用の既定 .gitig
 Thumbs.db
 desktop.ini
 `;
-
