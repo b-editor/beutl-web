@@ -185,8 +185,12 @@ const app = new Hono().post("/", async (c) => {
           console.error("Failed to recover AI transcription result", error);
         }
       }
-      return c.json(await apiErrorResponse("aiProviderError"), {
-        status: 500,
+      // 支払い済みの成功ジョブを読み出せなかっただけで、ジョブが失敗した
+      // わけではない。aiProviderError（＝返金済みの失敗）として返すと、
+      // クライアントはこのキーを使い切ったものとして捨て、次の実行が新規
+      // 課金になってしまう。同じキーでもう一度取りに来られる形で返す。
+      return c.json(await apiErrorResponse("aiResultUnavailable"), {
+        status: 503,
       });
     }
     if (job.status === "queued" ||

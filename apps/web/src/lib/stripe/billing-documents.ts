@@ -1,5 +1,6 @@
 import { PRO_PLAN } from "@beutl/api";
 import type { BillingProduct } from "@/lib/billing-product";
+import { invoiceServicePeriodSeconds } from "./invoice-period";
 import { getExpandableId, hasStripeOwnerMetadata } from "./ownership";
 import type Stripe from "stripe";
 
@@ -75,16 +76,8 @@ function paidPaymentIntentIds(invoice: Stripe.Invoice): string[] {
   return ids;
 }
 
-// 定期請求の初回請求書は period_start と period_end が同じ瞬間になり、実際に
-// 利用できる期間は明細行だけが持っている。
 function servicePeriod(invoice: Stripe.Invoice): { start: Date; end: Date } {
-  let start = invoice.period_start;
-  let end = invoice.period_end;
-  for (const line of invoice.lines.data) {
-    if (!line.period) continue;
-    start = Math.min(start, line.period.start);
-    end = Math.max(end, line.period.end);
-  }
+  const { start, end } = invoiceServicePeriodSeconds(invoice);
   return { start: fromUnixSeconds(start), end: fromUnixSeconds(end) };
 }
 

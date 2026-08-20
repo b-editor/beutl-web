@@ -112,9 +112,13 @@ export async function loadAiModelCatalog({
 } = {}): Promise<AiModelCatalog> {
   const rows = await listAiOperationModels({ prisma });
   const byOperation = new Map<string, Omit<AiOperationModelEntry, "costTier">[]>();
+  // 行が 1 つでもある操作は「管理画面で設定済み」。全部無効にしたのは、その操作を
+  // 止めるという明示的な指示なので、組み込みの既定で埋めてはならない。
+  const configured = new Set<string>();
   for (const row of rows) {
-    if (!row.enabled) continue;
     if (builtInDefaultsOf(row.operation) === undefined) continue;
+    configured.add(row.operation);
+    if (!row.enabled) continue;
     const entries = byOperation.get(row.operation) ?? [];
     entries.push({
       operation: row.operation,
@@ -128,7 +132,10 @@ export async function loadAiModelCatalog({
 
   const resolved = new Map<string, AiOperationModelEntry[]>();
   for (const operation of AI_OPERATIONS) {
-    const entries = byOperation.get(operation) ?? [builtInEntry(operation)];
+    // まだ 1 行も無い操作だけが組み込みの既定で動く。これは行を作る前の初期状態
+    // であって、止められた状態ではない。
+    const entries = byOperation.get(operation) ??
+      (configured.has(operation) ? [] : [builtInEntry(operation)]);
     resolved.set(operation, assignCostTiers(entries));
   }
 

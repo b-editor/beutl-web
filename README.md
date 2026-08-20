@@ -94,6 +94,11 @@ submissions can be reconciled through signed provider callbacks. It also
 requires `OPENROUTER_API_KEY` as a Wrangler secret. Provider calls default to a
 120-second deadline, configurable with `OPENROUTER_REQUEST_TIMEOUT_MS`.
 
+The API Worker also requires `STRIPE_SECRET_KEY`. Its scheduled run reconciles
+the refunds owed for top-ups and for Pro billing, and both reconcilers need a
+Stripe client; without the secret the cron fails and compensating refunds stop
+being issued. It is the same secret the Web Worker uses.
+
 An operation can offer several models, each with its own usage-unit price, and
 the caller picks one per request — `model` on the v3 request bodies, a field on
 the dashboard forms. Omitting it runs the operation's default. An unknown or

@@ -1435,6 +1435,56 @@ describe("Stripe AI billing webhook", () => {
     );
   });
 
+  it("holds Pro access for a refunded first invoice, whose period is on its lines", async () => {
+    mockProInvoicePaymentContext();
+    // 定期請求の初回請求書。Stripe はトップレベルの period を同じ瞬間にし、実際に
+    // 買われた期間は明細行だけが持つ。ここを読み落とすと、初回の全額返金が
+    // 「期間の取れない請求」として黙って捨てられ、利用権が残ってしまう。
+    mocks.retrieveInvoice.mockResolvedValue({
+      id: "in_pro_1",
+      amount_paid: 2_000,
+      currency: "usd",
+      customer: "cus_1",
+      status: "paid",
+      parent: {
+        subscription_details: { subscription: "sub_pro_1" },
+      },
+      period_start: 1_786_060_800,
+      period_end: 1_786_060_800,
+      lines: {
+        data: [
+          {
+            period: { start: 1_786_060_800, end: 1_788_739_200 },
+          },
+        ],
+      },
+    });
+    mocks.constructEvent.mockReturnValue(
+      stripeEvent("refund.created", { id: "re_pro_first" }),
+    );
+    const refund = {
+      id: "re_pro_first",
+      payment_intent: "pi_pro_invoice",
+      amount: 2_000,
+      currency: "usd",
+      status: "succeeded",
+    };
+    mocks.retrieveRefund.mockResolvedValue(refund);
+    mocks.listRefunds.mockResolvedValue({ data: [refund], has_more: false });
+
+    expect((await POST(webhookRequest() as never)).status).toBe(200);
+    expect(mocks.reconcileSubscriptionEntitlementHold).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        stripeSubscriptionId: "sub_pro_1",
+        stripeReversalKind: "refund",
+        stripeReversalId: "re_pro_first",
+        billingPeriodStart: new Date(1_786_060_800 * 1_000),
+        billingPeriodEnd: new Date(1_788_739_200 * 1_000),
+        active: true,
+      }),
+    );
+  });
+
   it("holds Pro access for a refund and restores it when the refund fails", async () => {
     mockProInvoicePaymentContext();
     mocks.constructEvent.mockReturnValue(

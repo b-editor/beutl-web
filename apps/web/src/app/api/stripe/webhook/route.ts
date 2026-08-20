@@ -12,6 +12,7 @@ import {
 } from "@/lib/stripe/ai-billing";
 import { createStripe } from "@/lib/stripe/config";
 import { isStripeResourceMissingError } from "@/lib/stripe/errors";
+import { resolveInvoiceServicePeriod } from "@/lib/stripe/invoice-period";
 import {
   getStripeCustomerOwnershipProof,
   type StripeCustomerOwnershipRecord,
@@ -806,21 +807,13 @@ async function resolveProSubscriptionPayment(
     return null;
   }
 
-  const invoicePeriodStart = Number.isSafeInteger(invoice.period_start) &&
-      invoice.period_start >= 0
-    ? new Date(invoice.period_start * 1_000)
-    : null;
-  const invoicePeriodEnd = Number.isSafeInteger(invoice.period_end) &&
-      invoice.period_end >= 0
-    ? new Date(invoice.period_end * 1_000)
-    : null;
-  if (
-    invoicePeriodStart === null ||
-    invoicePeriodEnd === null ||
-    invoicePeriodStart.getTime() >= invoicePeriodEnd.getTime()
-  ) {
-    return null;
-  }
+  // 明細行まで読む。初回請求書はトップレベルの period が同値になるため、ここで
+  // トップレベルだけを見ていると初回の全額返金・チャージバックが「期間の取れない
+  // 請求」として黙って捨てられ、利用権が残ってしまう。
+  const servicePeriod = resolveInvoiceServicePeriod(invoice);
+  if (!servicePeriod) return null;
+  const invoicePeriodStart = servicePeriod.start;
+  const invoicePeriodEnd = servicePeriod.end;
   const totals = await resolveCanonicalInvoiceReversalTotals({
     stripe,
     invoice,

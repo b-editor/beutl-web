@@ -28,6 +28,18 @@ describe("AI model catalog", () => {
     setDbProvider(async () => memory.prisma as never);
   });
 
+  it("offers nothing for an operation whose models an administrator turned off", async () => {
+    await register("only/model", 12, { enabled: false });
+
+    const catalog = await loadAiModelCatalog();
+
+    // 行があって全部無効なのは「この操作を止める」という指示。組み込みモデルで
+    // 埋めてしまうと、止めたはずの操作が既定のモデルで動いて課金される。
+    expect(catalog.list(OPERATION)).toEqual([]);
+    expect(catalog.resolve(OPERATION)).toBeNull();
+    expect(catalog.resolve(OPERATION, "only/model")).toBeNull();
+  });
+
   it("falls back to the built-in model for an operation with no rows", async () => {
     const catalog = await loadAiModelCatalog();
 
