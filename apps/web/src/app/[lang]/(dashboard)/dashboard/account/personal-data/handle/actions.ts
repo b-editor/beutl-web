@@ -1,5 +1,5 @@
 import "server-only";
-import { purgeGitAccount, revokeGitAccess } from "@beutl/forgejo";
+import { beginGitAccountDeletion, finishGitAccountDeletion, retryPendingGitDeletions } from "@beutl/forgejo";
 import {
   deleteUserById,
   drainUserStorageFiles,
@@ -36,7 +36,7 @@ export async function deleteUser(token: string, identifier: string) {
   // stays small however many files the plan allowed. A resumed intent that
   // was already completed drains nothing and falls through to the same
   // "already done" answer as before.
-  const forgejoUsername = await revokeGitAccess(intent.userId);
+  const forgejoUsername = await beginGitAccountDeletion(intent.userId);
   await drainUserStorageFiles({ userId: intent.userId });
   const deleted = await startRetryableTransaction(async (prisma) => {
     const currentIntent = await findAccountDeletionIntent({
@@ -86,15 +86,26 @@ export async function deleteUser(token: string, identifier: string) {
     return;
   }
   if (forgejoUsername) {
-    const purged = await purgeGitAccount(forgejoUsername);
+    const finished = await finishGitAccountDeletion(
+      intent.userId,
+      forgejoUsername,
+    );
     await addAuditLog({
       userId: null,
-      action: purged
+      action: finished
         ? auditLogActions.git.accountDeleted
         : auditLogActions.git.accountPurgeFailed,
-      details: purged
+      details: finished
         ? `User ${intent.userId} deleted their Forgejo account`
-        : `Forgejo user ${forgejoUsername} survived the purge and must be removed by hand`,
+        : `Forgejo user ${forgejoUsername} is queued for retry in GitAccountDeletion`,
+    }).catch((auditError) => {
+      // 監査が書けなくても GitAccountDeletion の行が残るので、片付けは続けられる。
+      console.error("failed to record the Git account deletion", auditError);
     });
   }
+
+  // 前回落ちた分をここで拾う。定期実行が無くても、退会が起きるたびに前進する。
+  await retryPendingGitDeletions().catch((error) => {
+    console.error("failed to retry pending Git deletions", error);
+  });
 }

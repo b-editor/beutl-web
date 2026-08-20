@@ -9,6 +9,7 @@ import {
 } from "@beutl/db";
 import { forgejoRequest } from "./client";
 import { ForgejoError } from "./errors";
+import { assertGitAccountNotBeingDeleted } from "./deletion";
 import { ensureGitAccount } from "./provisioning";
 import type { ForgejoAccessToken } from "./types";
 
@@ -110,6 +111,10 @@ export async function issueGitCredential(
   if (name.length === 0) {
     throw new CredentialNameInvalidError();
   }
+
+  // 退会処理が始まっていたら発行しない。失効の後・purge の前に 1 本作られると、
+  // それだけが退会後も生き残る。
+  await assertGitAccountNotBeingDeleted(userId);
 
   const account = await ensureGitAccount(userId);
   const username = account.forgejoUsername;

@@ -104,6 +104,10 @@ export async function createRepositoryAction(
       userId,
       action: auditLogActions.git.createRepository,
       details: repository.full_name,
+    }).catch((auditError) => {
+      // 外部への変更は済んでいる。記録できないことを理由に失敗を返すと、
+      // 呼び出し元は成功した操作をやり直そうとする。
+      console.error("failed to record the audit log", auditError);
     });
 
     revalidatePath(`/${lang}/dashboard/repositories`);
@@ -139,6 +143,10 @@ export async function renameRepositoryAction(
       userId,
       action: auditLogActions.git.renameRepository,
       details: `${owner}/${name} -> ${newName}`,
+    }).catch((auditError) => {
+      // 外部への変更は済んでいる。記録できないことを理由に失敗を返すと、
+      // 呼び出し元は成功した操作をやり直そうとする。
+      console.error("failed to record the audit log", auditError);
     });
 
     revalidatePath(`/${lang}/dashboard/repositories`);
@@ -198,6 +206,10 @@ export async function deleteRepositoryAction(
       userId,
       action: auditLogActions.git.deleteRepository,
       details: `${owner}/${name}`,
+    }).catch((auditError) => {
+      // 外部への変更は済んでいる。記録できないことを理由に失敗を返すと、
+      // 呼び出し元は成功した操作をやり直そうとする。
+      console.error("failed to record the audit log", auditError);
     });
 
     revalidatePath(`/${lang}/dashboard/repositories`);
@@ -290,6 +302,10 @@ export async function revokeCredentialAction(
         userId: session.user.id,
         action: auditLogActions.git.revokeCredential,
         details: revoked.name,
+      }).catch((auditError) => {
+        // 外部への変更は済んでいる。記録できないことを理由に失敗を返すと、
+        // 呼び出し元は成功した操作をやり直そうとする。
+        console.error("failed to record the audit log", auditError);
       });
       revalidatePath(`/${lang}/dashboard/repositories`);
       return { success: true };

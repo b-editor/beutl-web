@@ -169,6 +169,27 @@ model GitAccount {
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+// 退会処理の途中経過。Forgejo 側を消し切るまで残す。
+//
+// 退会は「トークンを失効 → Beutl 側を削除 → Forgejo を purge」の順で進む。途中で
+// 落ちると、Forgejo にユーザーとリポジトリが残ったまま対応表だけ消え、誰も気づけない。
+// また、失効から purge までの間に新しいトークンを発行されると、それが生き残る。
+//
+// そこで削除を始める前にこの行を書き、最後まで通ったときだけ消す。
+//   - 残っている = まだ Forgejo 側が片付いていない (再試行の対象)
+//   - 存在する userId は資格情報の発行を拒む (失効のすり抜けを塞ぐ)
+//
+// User への外部キーは張らない。User が消えた後も残る必要がある。
+model GitAccountDeletion {
+  userId          String   @id
+  forgejoUsername String
+  forgejoUserId   Int
+  createdAt       DateTime @default(now())
+  attempts        Int      @default(0)
+  lastAttemptAt   DateTime?
+  lastError       String?
+}
+
 // 発行済み git アクセストークンの控え。平文は保持しない (発行時のレスポンスにしか現れない)。
 //
 // Forgejo のトークン一覧は対象ユーザーの Basic 認証を要求し、そのために毎回パスワードを

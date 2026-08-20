@@ -81,48 +81,96 @@ export async function getRepository(
   );
 }
 
-/** Beutl 用の既定ファイルを 1 コミットで置く。 */
+const TEMPLATE_FILES = [
+  { path: ".gitattributes", content: GITATTRIBUTES_TEMPLATE },
+  { path: ".gitignore", content: GITIGNORE_TEMPLATE },
+] as const;
+
+/**
+ * Beutl 用の既定ファイルのうち、まだ無いものを 1 コミットで置く。
+ *
+ * `create` は既にあるファイルに対して失敗する。作成直後は必ず両方無いが、
+ * 辻褄合わせで呼ぶときは片方だけ入っていることがある。
+ */
 async function commitTemplates(
   sudo: string,
   name: string,
   branch: string,
 ): Promise<void> {
-  await forgejoRequest(
-    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`,
-    {
-      method: "POST",
-      sudo,
-      body: {
-        branch,
-        message: "Add Beutl project defaults",
-        files: [
-          {
-            operation: "create",
-            path: ".gitattributes",
-            content: toBase64(GITATTRIBUTES_TEMPLATE),
-          },
-          {
-            operation: "create",
-            path: ".gitignore",
-            content: toBase64(GITIGNORE_TEMPLATE),
-          },
-        ],
-      },
-    },
+  const base = `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`;
+  const present = await Promise.all(
+    TEMPLATE_FILES.map((file) =>
+      forgejoRequestOrNull(`${base}/${file.path}`, { sudo }),
+    ),
   );
+  const missing = TEMPLATE_FILES.filter((_, index) => !present[index]);
+  if (missing.length === 0) return;
+
+  await forgejoRequest(base, {
+    method: "POST",
+    sudo,
+    body: {
+      branch,
+      message: "Add Beutl project defaults",
+      files: missing.map((file) => ({
+        operation: "create",
+        path: file.path,
+        content: toBase64(file.content),
+      })),
+    },
+  });
 }
 
 /**
- * テンプレートの入っていないリポジトリを消す。
+ * テンプレートのコミットに失敗した後始末。
  *
- * 使うのは**この呼び出しが作ったと確定している**場合だけ。作成 API が 201 を返した
- * 後にテンプレートのコミットが失敗した経路がそれにあたる。
+ * 名前だけで消さない。201 を受けた後でも、次のいずれかが起きていると、消す相手が
+ * 「さっき自分が作った空のリポジトリ」ではなくなる。
  *
- * 消せなかったら投げずに記録だけ残す。呼び出し元は既に別の例外を投げようとしていて、
- * それを握り潰すと本来の失敗理由が消えるため。
+ *   - コミットは成功していて応答だけ落ちた (もうテンプレートは入っている)
+ *   - その隙に利用者が push した (中身がある)
+ *   - リネームされ、空いた名前に別のリポジトリが作られた (id が違う)
+ *
+ * そこで作成時に受け取った id と現在の状態を確かめ、**自分が作ったままの空の
+ * リポジトリ**であるときだけ消す。そうでなければ足りないものを足して辻褄を合わせる。
  */
-async function rollbackPartialRepository(sudo: string, name: string) {
+async function rollbackPartialRepository(
+  sudo: string,
+  repository: ForgejoRepository,
+) {
+  const name = repository.name;
   try {
+    const current = await getRepository(sudo, sudo, name);
+    if (!current) return;
+
+    if (current.id !== repository.id) {
+      // 同じ名前の別物。触らない。
+      console.error(
+        `not rolling back ${sudo}/${name}: it is now a different repository ` +
+          `(id ${current.id}, expected ${repository.id})`,
+      );
+      return;
+    }
+
+    if (await hasTemplates(sudo, name)) {
+      // 応答を落としただけで、中身は揃っている。消す理由が無い。
+      return;
+    }
+
+    if (!(await isPristine(sudo, name, current.default_branch))) {
+      // 既に push されている。消すとその中身ごと失う。テンプレートだけ足す。
+      await commitTemplates(sudo, name, current.default_branch).catch(
+        (error) => {
+          console.error(
+            `${sudo}/${name} has content but no .gitattributes, and the ` +
+              "templates could not be added; media pushed to it will not use LFS",
+            error,
+          );
+        },
+      );
+      return;
+    }
+
     await deleteRepository(sudo, sudo, name);
   } catch (error) {
     console.error(
@@ -131,6 +179,30 @@ async function rollbackPartialRepository(sudo: string, name: string) {
       error,
     );
   }
+}
+
+/** auto_init の 1 コミットしかない = 誰も push していない。 */
+async function isPristine(
+  sudo: string,
+  name: string,
+  branch: string,
+): Promise<boolean> {
+  const commits = await forgejoRequestOrNull<ForgejoCommit[]>(
+    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/commits`,
+    { sudo, searchParams: { sha: branch, limit: 2 } },
+  );
+  return (commits?.length ?? 0) <= 1;
+}
+
+/** Beutl の既定ファイルが両方入っているか。 */
+async function hasTemplates(sudo: string, name: string): Promise<boolean> {
+  const base = `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`;
+  const present = await Promise.all(
+    TEMPLATE_FILES.map((file) =>
+      forgejoRequestOrNull(`${base}/${file.path}`, { sudo }),
+    ),
+  );
+  return present.every(Boolean);
 }
 
 /**
@@ -153,11 +225,7 @@ async function reconcileAfterAmbiguousCreate(
     const existing = await getRepository(sudo, sudo, name);
     if (!existing) return null;
 
-    const attributes = await forgejoRequestOrNull(
-      `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents/.gitattributes`,
-      { sudo },
-    );
-    if (attributes) {
+    if (await hasTemplates(sudo, name)) {
       // 誰かが最後まで作り切っている。触らない。
       return existing;
     }
@@ -234,7 +302,7 @@ export async function createRepository(
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
     // なかったことにして、ユーザーにやり直させる方がまだ良い。
-    await rollbackPartialRepository(sudo, name);
+    await rollbackPartialRepository(sudo, repository);
     throw error;
   }
 

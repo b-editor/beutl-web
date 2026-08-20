@@ -36,7 +36,11 @@ import { isActiveSubscription, isSubscriptionPlanId } from "@beutl/core";
 function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
-import { purgeGitAccount, revokeGitAccess } from "@beutl/forgejo";
+import {
+  beginGitAccountDeletion,
+  finishGitAccountDeletion,
+  retryPendingGitDeletions,
+} from "@beutl/forgejo";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
@@ -185,7 +189,7 @@ export async function deleteUser({
     // 外部への呼び出しなのでトランザクションの外で行う (再試行で二重に走らせない)。
     let forgejoUsername: string | null = null;
     try {
-      forgejoUsername = await revokeGitAccess(userId);
+      forgejoUsername = await beginGitAccountDeletion(userId);
     } catch (error) {
       // ここで進むと、対応表を失ったまま Forgejo に生きたトークンが残る。
       console.error("failed to revoke the user's Git access", error);
@@ -280,14 +284,24 @@ export async function deleteUser({
     // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
     // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
     // 残ってリポジトリが戻せなくなる。
-    if (forgejoUsername && !(await purgeGitAccount(forgejoUsername))) {
-      // 自動では再試行されない。手で消すための手がかりを監査に残す。
+    if (
+      forgejoUsername &&
+      !(await finishGitAccountDeletion(userId, forgejoUsername))
+    ) {
+      // GitAccountDeletion の行が残るので再試行はされる。監査は経緯を追うため。
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.git.accountPurgeFailed,
-        details: `Forgejo user ${forgejoUsername} survived the purge and must be removed by hand`,
+        details: `Forgejo user ${forgejoUsername} is queued for retry in GitAccountDeletion`,
+      }).catch((auditError) => {
+        console.error("failed to record the purge failure", auditError);
       });
     }
+
+    // 前回落ちた分をここで拾う。
+    await retryPendingGitDeletions().catch((error) => {
+      console.error("failed to retry pending Git deletions", error);
+    });
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。
     revalidatePath("/[lang]/admin/users", "page");

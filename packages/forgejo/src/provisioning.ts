@@ -78,10 +78,58 @@ export function noreplyEmailFor(userId: string): string {
   return `${userId}@users.noreply.${host}`;
 }
 
+/**
+ * 対応表が指す Forgejo ユーザーが本人のものであることを確かめる。
+ *
+ * Sudo もリポジトリ操作も削除も、効くのはユーザー名だけ。対応表 (CockroachDB) と
+ * Forgejo (Postgres) は別々にバックアップされるので、別の時点に復元すると同じ名前が
+ * 別人を指しうる。確かめずに進むと、他人の非公開リポジトリを開き、その人向けの
+ * トークンを配り、退会時にはその人ごと消してしまう。
+ *
+ * 名前・id・メールの 3 点で見る。id だけでは足りない。連番の id は復元の仕方に
+ * よっては別のアカウントに再利用されうるので、userId から決まる合成メールまで
+ * 一致して初めて本人と言える。
+ */
+export async function assertMappingMatches(
+  userId: string,
+  mapping: { forgejoUsername: string; forgejoUserId: number },
+): Promise<ForgejoUser> {
+  const actual = await forgejoRequestOrNull<ForgejoUser>(
+    `/users/${encodeURIComponent(mapping.forgejoUsername)}`,
+  );
+  if (
+    !actual ||
+    actual.id !== mapping.forgejoUserId ||
+    actual.email !== noreplyEmailFor(userId)
+  ) {
+    throw new ForgejoAccountMismatchError(
+      mapping.forgejoUsername,
+      mapping.forgejoUserId,
+      actual?.id ?? null,
+    );
+  }
+  return actual;
+}
+
 /** 保存しない使い捨ての秘密値 (Forgejo ユーザーの初期パスワードなど)。 */
 export function randomSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** 同時に走った初回リクエストが対応表を書き終えるのを待つ回数と間隔。 */
+const CONCURRENT_MAPPING_ATTEMPTS = 5;
+const CONCURRENT_MAPPING_INTERVAL_MS = 200;
+
+async function waitForConcurrentMapping(userId: string) {
+  for (let attempt = 0; attempt < CONCURRENT_MAPPING_ATTEMPTS; attempt++) {
+    const found = await findGitAccountByUserId({ userId });
+    if (found) return found;
+    await new Promise((resolve) =>
+      setTimeout(resolve, CONCURRENT_MAPPING_INTERVAL_MS),
+    );
+  }
+  return null;
 }
 
 /**
@@ -95,19 +143,7 @@ export async function ensureGitAccount(userId: string): Promise<{
 }> {
   const existing = await findGitAccountByUserId({ userId });
   if (existing) {
-    // Sudo も削除もユーザー名だけで効く。対応表と Forgejo が別の時点に復元されると
-    // 同じ名前が別人を指しうるので、id まで一致することを確かめてから使う。
-    // 確かめずに進むと、他人の非公開リポジトリを開いてしまう。
-    const actual = await forgejoRequestOrNull<ForgejoUser>(
-      `/users/${encodeURIComponent(existing.forgejoUsername)}`,
-    );
-    if (!actual || actual.id !== existing.forgejoUserId) {
-      throw new ForgejoAccountMismatchError(
-        existing.forgejoUsername,
-        existing.forgejoUserId,
-        actual?.id ?? null,
-      );
-    }
+    await assertMappingMatches(userId, existing);
 
     return {
       forgejoUserId: existing.forgejoUserId,
@@ -148,8 +184,9 @@ export async function ensureGitAccount(userId: string): Promise<{
         if (error.body.includes("e-mail already in use")) {
           // 同じ利用者の初回リクエストが 2 本同時に走ると、先に通った方が作った
           // ユーザーとぶつかってここに来る。復旧ずれではないので、対応表を
-          // 引き直して相手の結果に乗る。
-          const concurrent = await findGitAccountByUserId({ userId });
+          // 引き直して相手の結果に乗る。相手が Forgejo に作った直後で、まだ
+          // 対応表に書いていない瞬間もあるので少し待って読み直す。
+          const concurrent = await waitForConcurrentMapping(userId);
           if (concurrent) {
             return {
               forgejoUserId: concurrent.forgejoUserId,

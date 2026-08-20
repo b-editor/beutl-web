@@ -10,6 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // 要求するため (管理トークンでも Sudo でも 401 auth method not allowed)。
 
 vi.mock("@beutl/db", () => ({
+  // 退会処理の墓標。既定では「退会していない」。
+  findGitAccountDeletion: async () => pendingDeletion,
+  createGitAccountDeletion: async () => undefined,
+  deleteGitAccountDeletion: async () => undefined,
+  listPendingGitAccountDeletions: async () => [],
+  recordGitAccountDeletionAttempt: async () => undefined,
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
     await fn(undefined),
@@ -56,6 +62,7 @@ vi.mock("@beutl/db", () => ({
   findProfileForApi: async () => null,
 }));
 
+let pendingDeletion: { userId: string } | null = null;
 let credentialCount = 0;
 let credentialCountAfterIssue: number | null = null;
 let existingNames: string[] = [];
@@ -67,8 +74,9 @@ const {
   CredentialNameTakenError,
   MAX_CREDENTIALS_PER_USER,
   issueGitCredential,
-  purgeGitAccount,
-  revokeGitAccess,
+  GitAccountBeingDeletedError,
+  beginGitAccountDeletion,
+  finishGitAccountDeletion,
   revokeGitCredential,
 } = await import("@beutl/forgejo");
 
@@ -97,6 +105,7 @@ function record(fetchMock: ReturnType<typeof vi.fn>): Call[] {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  pendingDeletion = null;
   credentialCount = 0;
   credentialCountAfterIssue = null;
   existingNames = [];
@@ -153,7 +162,7 @@ describe("トークンの発行", () => {
       if (init?.method === "POST") {
         return json({ id: 13, name: "desktop", scopes: [] }, 201);
       }
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     });
 
     await expect(issueGitCredential("u1", "desktop")).rejects.toThrow(
@@ -208,7 +217,7 @@ describe("トークンの発行", () => {
   it("Forgejo 側の名前衝突も同じ扱いにする", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "POST") return json({ message: "token name has been used" }, 422);
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     });
 
     await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
@@ -221,7 +230,7 @@ describe("トークンの発行", () => {
     // 見落とすと画面は unknown error、API は 500 になる。
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "POST") return json({ message: "access token name has been used already" }, 400);
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     });
 
     await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
@@ -252,6 +261,17 @@ describe("トークンの発行", () => {
 
     const del = record(fetchMock).find((c) => c.method === "DELETE");
     expect(del?.url).toContain("/users/someone/tokens/13");
+  });
+
+  it("退会処理が始まっていたら発行しない", async () => {
+    // 失効の後・purge の前に 1 本作られると、それだけが退会後も生き残る。
+    pendingDeletion = { userId: "u1" };
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
+      GitAccountBeingDeletedError,
+    );
+    // Forgejo には一切触らない。
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("上限に達したら弾く", async () => {
@@ -324,8 +344,8 @@ describe("リポジトリの作成", () => {
         if (repoLookups === 1) return json({ message: "not found" }, 404);
         return json({ id: 1, name: "proj", default_branch: "main" });
       }
-      // .gitattributes はまだ無い。
-      if (path.endsWith("/contents/.gitattributes")) {
+      // テンプレートはまだ無い。
+      if (path.includes("/contents/.git")) {
         return json({ message: "not found" }, 404);
       }
       return new Response(null, { status: 204 });
@@ -359,8 +379,8 @@ describe("リポジトリの作成", () => {
         if (repoLookups === 1) return json({ message: "not found" }, 404);
         return json({ id: 1, name: "proj", default_branch: "main" });
       }
-      if (path.endsWith("/contents/.gitattributes")) {
-        return json({ path: ".gitattributes", type: "file", size: 100 });
+      if (path.includes("/contents/.git")) {
+        return json({ path: path.split("/").at(-1), type: "file", size: 100 });
       }
       return new Response(null, { status: 204 });
     });
@@ -446,7 +466,7 @@ describe("退会時の後始末", () => {
       return json({ id: 2, login: "someone", email: EMAIL });
     });
 
-    await expect(revokeGitAccess("u1")).resolves.toBe("someone");
+    await expect(beginGitAccountDeletion("u1")).resolves.toBe("someone");
 
     const deletes = record(fetchMock).filter((c) => c.method === "DELETE");
     expect(deletes.map((c) => c.url.split("/").at(-1))).toEqual(["11", "12"]);
@@ -467,7 +487,7 @@ describe("退会時の後始末", () => {
       return json({ id: 2, login: "someone", email: EMAIL });
     });
 
-    await revokeGitAccess("u1");
+    await beginGitAccountDeletion("u1");
 
     const list = record(fetchMock).find(
       (c) => c.method === "GET" && c.url.includes("/tokens?"),
@@ -482,7 +502,7 @@ describe("退会時の後始末", () => {
       json({ id: 99, login: "someone", email: EMAIL }),
     );
 
-    await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
+    await expect(beginGitAccountDeletion("u1")).rejects.toBeTruthy();
     expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
       0,
     );
@@ -493,7 +513,7 @@ describe("退会時の後始末", () => {
       json({ id: 2, login: "someone", email: "someone-else@example.test" }),
     );
 
-    await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
+    await expect(beginGitAccountDeletion("u1")).rejects.toBeTruthy();
     expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
       0,
     );
@@ -513,7 +533,7 @@ describe("退会時の後始末", () => {
       return json({ id: 2, login: "someone", email: EMAIL });
     });
 
-    await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
+    await expect(beginGitAccountDeletion("u1")).rejects.toBeTruthy();
   });
 
   it("purge の直前にもう一度トークンを掃く", async () => {
@@ -532,12 +552,24 @@ describe("退会時の後始末", () => {
       return new Response(null, { status: 204 });
     });
 
-    await expect(purgeGitAccount("someone")).resolves.toBe(true);
+    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(true);
 
     const deletes = record(fetchMock).filter((c) => c.method === "DELETE");
     expect(deletes[0].url).toContain("/tokens/77");
     const purge = deletes.at(-1)!;
     // 付けないとリポジトリ所有者は 422 で拒まれる。
+    expect(purge.url).toContain("purge=true");
+  });
+
+  it("purge が成功したら墓標を消す", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return json([]);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(true);
+
+    const purge = record(fetchMock).find((c) => c.method === "DELETE")!;
     expect(purge.url).toContain("purge=true");
   });
 
@@ -549,7 +581,7 @@ describe("退会時の後始末", () => {
       return json({ message: "boom" }, 500);
     });
 
-    await expect(purgeGitAccount("someone")).resolves.toBe(false);
+    await expect(finishGitAccountDeletion("u1", "someone")).resolves.toBe(false);
   });
 });
 
@@ -567,7 +599,7 @@ describe("トークンの失効", () => {
     fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
       init?.method === "DELETE"
         ? new Response("not found", { status: 404 })
-        : json({ id: 2, login: "someone" }),
+        : json({ id: 2, login: "someone", email: EMAIL }),
     );
 
     await expect(revokeGitCredential("u1", "c1")).resolves.toMatchObject({
