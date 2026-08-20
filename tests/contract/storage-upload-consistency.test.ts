@@ -125,7 +125,10 @@ describe("storage upload consistency", () => {
 
     // An object nothing points at is stored, and paid for, for nothing.
     expect(bucket.state.deleted).toHaveLength(1);
-    expect(state.storageUploads.size).toBe(0);
+    // The row stays. The transaction rolled back, so it wrote no receipt, and
+    // the row is what lets the sweep find this upload at all.
+    const [remaining] = [...state.storageUploads.values()];
+    expect(remaining?.completedFileId ?? null).toBeNull();
   });
 
   it("reports both failures when the object cannot be thrown away either", async () => {

@@ -19,7 +19,7 @@
     "uploadNotFound": "This upload is no longer in progress. Try again.",
     "uploadFailed": "The upload could not be completed. Try again.",
     "invalidRequestBody": "This file could not be uploaded.",
-    "authenticationIsRequired": "Sign in again to upload."
-  },
-  "aiResultUsage": "AI results account for {{size}} of this. They are managed from the AI page."
+    "authenticationIsRequired": "Sign in again to upload.",
+    "fileNotFound": "That file is no longer there."
+  }
 }

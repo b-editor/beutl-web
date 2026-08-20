@@ -4,6 +4,7 @@ import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
   createReservedAiJob,
+  findReplayableAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
@@ -15,6 +16,7 @@ import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
   isUploadLimitExceeded,
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   parseBodyWithUploadLimit,
@@ -156,13 +158,12 @@ const app = new Hono()
     if (multipart) {
       let body: Awaited<ReturnType<typeof c.req.parseBody>>;
       try {
-        // capabilities は 1 枚あたり MAX_AI_IMAGE_UPLOAD_BYTES の絵を
-        // AI_MAX_IMAGE_REFERENCES 枚まで受けると公開している。ここで本文全体を
-        // 1 枚分に抑えると、公開した枚数を送っただけで 413 になる。1 枚ごとの
-        // 上限はパース後に別途確かめる。
+        // 何枚送っても合計はここまで。1 枚ごとの上限を枚数分許すと、全部を
+        // base64 にした時点で Worker のメモリ予算を超える。公開している値も
+        // この総量なので、クライアントは送る前に同じ判断ができる。
         body = await parseBodyWithUploadLimit(
           c.req,
-          MAX_AI_IMAGE_UPLOAD_BYTES * AI_MAX_IMAGE_REFERENCES,
+          MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
         );
       } catch (error) {
         if (isUploadLimitExceeded(error)) {
@@ -185,7 +186,9 @@ const app = new Hono()
       if (
         referenceFiles.some((file) =>
           fileExceedsUploadLimit(file, MAX_AI_IMAGE_UPLOAD_BYTES),
-        )
+        ) ||
+        referenceFiles.reduce((total, file) => total + file.size, 0) >
+          MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES
       ) {
         return c.json(await apiErrorResponse("fileIsTooLarge"), {
           status: 413,
@@ -242,34 +245,16 @@ const app = new Hono()
       });
     }
 
-    // Resolved before the fingerprint: the same prompt on a different model is a
-    // different request, and the price must come from the same row the provider
-    // call will use.
+    // The same prompt on a different model is a different request, so the
+    // fingerprint carries the model. A model the request names is used as
+    // named even when the catalog no longer offers it: a job already paid for
+    // under this name has to be recoverable, and whether the model may be
+    // asked for something new is a separate question, answered below.
     const catalog = await loadAiModelCatalog();
     const selectedModel = catalog.resolve("image.generate", parsedBody.data.model);
-    if (!selectedModel) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
-        status: 400,
-      });
-    }
-
-    // Refused here rather than by the provider after the usage is reserved:
-    // GPT Image-1 takes only 1:1, 3:2 and 2:3, and a rejection that arrives
-    // after the reservation reads as a provider outage.
-    if (
-      unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
-          selectedModel.modelId,
-        ),
-        {
-          aspectRatio,
-          ...(background ? { background } : {}),
-          ...(seed === undefined ? {} : { seed }),
-          referenceImages: references.length,
-        },
-      )
-    ) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+    const fingerprintModelId = parsedBody.data.model ?? selectedModel?.modelId;
+    if (!fingerprintModelId) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
         status: 400,
       });
     }
@@ -280,7 +265,7 @@ const app = new Hono()
       input: {
         prompt,
         aspectRatio,
-        model: selectedModel.modelId,
+        model: fingerprintModelId,
         // "auto" is the absence of a choice, so a caller that sends it and one
         // that omits it must fingerprint alike; otherwise a retry under the
         // same key is refused as a conflict and cannot reach the job it paid
@@ -307,6 +292,77 @@ const app = new Hono()
         status: 400,
       });
     }
+
+    // What a name already used is answered with. Read before the model is
+    // checked, so a job already paid for is recoverable even after the model it
+    // ran on was disabled or reshaped.
+    const answerFromExisting = async (existingJob: {
+      id: string;
+      status: string;
+      resultFileId: string | null;
+      resultFile?: { name: string; mimeType: string } | null;
+    }) => {
+      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
+        return c.json({
+          jobId: existingJob.id,
+          fileId: existingJob.resultFileId,
+          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
+          ...(existingJob.resultFile
+            ? {
+              fileName: existingJob.resultFile.name,
+              contentType: existingJob.resultFile.mimeType,
+            }
+            : {}),
+        });
+      }
+      if (existingJob.status === "queued" ||
+        existingJob.status === "running" ||
+        existingJob.status === "finalizing") {
+        return c.json(await apiErrorResponse("aiRequestInProgress"), {
+          status: 409,
+        });
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    };
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      return await answerFromExisting(replay.job);
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // Nothing to recover, so this is a new request and has to be one the model
+    // will take. Refused here rather than by the provider after the usage is
+    // reserved: GPT Image-1 takes only 1:1, 3:2 and 2:3, and a rejection that
+    // arrives after the reservation reads as a provider outage.
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    if (
+      unsupportedImageRequestReason(
+        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+          selectedModel.modelId,
+        ),
+        {
+          aspectRatio,
+          ...(background ? { background } : {}),
+          ...(seed === undefined ? {} : { seed }),
+          referenceImages: references.length,
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+
     // The admin can change the model and price. Persist the reserved price on
     // the job so later setting changes do not alter this operation or its refund.
     const cost = selectedModel.priceUnits;
@@ -335,28 +391,8 @@ const app = new Hono()
     }
     const { job } = reservation;
     if (reservation.outcome === "existing") {
-      const existingJob = reservation.job;
-      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
-        return c.json({
-          jobId: existingJob.id,
-          fileId: existingJob.resultFileId,
-          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
-          ...(existingJob.resultFile
-            ? {
-              fileName: existingJob.resultFile.name,
-              contentType: existingJob.resultFile.mimeType,
-            }
-            : {}),
-        });
-      }
-      if (existingJob.status === "queued" ||
-        existingJob.status === "running" ||
-        existingJob.status === "finalizing") {
-        return c.json(await apiErrorResponse("aiRequestInProgress"), {
-          status: 409,
-        });
-      }
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      // Two attempts arriving together; the reservation is what settles it.
+      return await answerFromExisting(reservation.job);
     }
 
     // Everything that could refuse this request has now run, so from here the
@@ -525,14 +561,82 @@ const app = new Hono()
       `image.edit.${editTask}`,
       fields.data.model,
     );
-    if (!selectedModel) {
+    const fingerprintModelId = fields.data.model ?? selectedModel?.modelId;
+    if (!fingerprintModelId) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: `image.edit.${editTask}`,
+      input: {
+        task: editTask,
+        model: fingerprintModelId,
+        ...(editPrompt ? { prompt: editPrompt } : {}),
+        fileName: file.name,
+        contentType: inputImage.mimeType,
+        contentSha256: await sha256Hex(inputImage.bytes),
+      },
+    });
+    if (!requestIdentity) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
 
-    // An edit hands the model a picture, cutting out a background or asking for
-    // a size; a model that takes none of those is refused before it is paid for.
+    // What a name already used is answered with. Read before the model is
+    // checked, so a job already paid for is recoverable even after the model it
+    // ran on was disabled or reshaped.
+    const answerFromExisting = async (existingJob: {
+      id: string;
+      status: string;
+      resultFileId: string | null;
+      resultFile?: { name: string; mimeType: string } | null;
+    }) => {
+      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
+        return c.json({
+          jobId: existingJob.id,
+          fileId: existingJob.resultFileId,
+          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
+          ...(existingJob.resultFile
+            ? {
+              fileName: existingJob.resultFile.name,
+              contentType: existingJob.resultFile.mimeType,
+            }
+            : {}),
+        });
+      }
+      if (existingJob.status === "queued" ||
+        existingJob.status === "running" ||
+        existingJob.status === "finalizing") {
+        return c.json(await apiErrorResponse("aiRequestInProgress"), {
+          status: 409,
+        });
+      }
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    };
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      return await answerFromExisting(replay.job);
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // Nothing to recover, so this is a new request. An edit hands the model a
+    // picture, cutting out a background or asking for a size; a model that takes
+    // none of those is refused before it is paid for.
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
     if (
       unsupportedImageRequestReason(
         (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
@@ -550,24 +654,6 @@ const app = new Hono()
       )
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
-        status: 400,
-      });
-    }
-
-    const requestIdentity = await getAiRequestIdentity({
-      request: c.req.raw,
-      operation: `image.edit.${editTask}`,
-      input: {
-        task: editTask,
-        model: selectedModel.modelId,
-        ...(editPrompt ? { prompt: editPrompt } : {}),
-        fileName: file.name,
-        contentType: inputImage.mimeType,
-        contentSha256: await sha256Hex(inputImage.bytes),
-      },
-    });
-    if (!requestIdentity) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
@@ -594,28 +680,8 @@ const app = new Hono()
     }
     const { job } = reservation;
     if (reservation.outcome === "existing") {
-      const existingJob = reservation.job;
-      if (existingJob.status === "succeeded" && existingJob.resultFileId) {
-        return c.json({
-          jobId: existingJob.id,
-          fileId: existingJob.resultFileId,
-          url: await getContentUrl(existingJob.resultFileId, c.req.raw),
-          ...(existingJob.resultFile
-            ? {
-              fileName: existingJob.resultFile.name,
-              contentType: existingJob.resultFile.mimeType,
-            }
-            : {}),
-        });
-      }
-      if (existingJob.status === "queued" ||
-        existingJob.status === "running" ||
-        existingJob.status === "finalizing") {
-        return c.json(await apiErrorResponse("aiRequestInProgress"), {
-          status: 409,
-        });
-      }
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      // Two attempts arriving together; the reservation is what settles it.
+      return await answerFromExisting(reservation.job);
     }
 
     try {

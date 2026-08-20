@@ -25,17 +25,29 @@ export async function uploadStorageFile(
   file: File,
   { onProgress }: { onProgress?: (sentBytes: number) => void } = {},
 ): Promise<UploadOutcome> {
-  const started = await fetch("/api/internal/storage/uploads", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...INTERNAL_REQUEST_HEADERS },
-    body: JSON.stringify({
-      name: file.name,
-      mimeType: file.type || "application/octet-stream",
-      size: file.size,
-    }),
-  });
-  if (!started.ok) return { ok: false, errorCode: await errorCodeOf(started) };
-  const upload = (await started.json()) as StartedUpload;
+  // A start whose answer is lost leaves the browser without the id every later
+  // request names, and the upload it made holding parts for a day. Reported as
+  // a refusal rather than thrown, so the screen says so instead of failing
+  // somewhere nothing is listening.
+  let upload: StartedUpload;
+  try {
+    const started = await fetch("/api/internal/storage/uploads", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...INTERNAL_REQUEST_HEADERS,
+      },
+      body: JSON.stringify({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+      }),
+    });
+    if (!started.ok) return { ok: false, errorCode: await errorCodeOf(started) };
+    upload = (await started.json()) as StartedUpload;
+  } catch {
+    return { ok: false, errorCode: "uploadFailed" };
+  }
 
   let sent = 0;
   const parts: UploadedPart[] = [];

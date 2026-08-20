@@ -78,6 +78,11 @@ import { getContentUrl } from "@/lib/content-url";
 export type AiActionResult = {
   success: boolean;
   message?: string;
+  // この失敗は「同じ名前で問い合わせ直せば結果が戻る」ものか。true のあいだ
+  // フォームは idempotency key を持ち続け、次の送信は同じリクエストとして
+  // 扱われる。false（既定）なら決着がついたということなので、次は新しい
+  // リクエストになる。
+  keepIdempotencyKey?: boolean;
   jobId?: string;
   status?: string;
   url?: string | null;
@@ -92,6 +97,11 @@ export type AiActionResult = {
   jobs?: unknown[];
   nextCursor?: { createdAt: string; id: string } | null;
 };
+
+// まだ結果が出ていない、というだけの状態。失敗・取り消しは決着がついている。
+function stillRunning(status: string): boolean {
+  return status === "queued" || status === "running" || status === "finalizing";
+}
 
 const supportedEditImageTypes = new Set<AiInputImageMimeType>([
   "image/png",
@@ -518,7 +528,13 @@ export async function generateImageAction(
         contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
       };
     }
-    return { success: false, message: t("api-errors:aiRequestInProgress") };
+    return stillRunning(job.status)
+      ? {
+        success: false,
+        message: t("api-errors:aiRequestInProgress"),
+        keepIdempotencyKey: true,
+      }
+      : { success: false, message: t("api-errors:aiProviderError") };
   }
 
   try {
@@ -674,7 +690,13 @@ export async function editImageAction(
         contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
       };
     }
-    return { success: false, message: t("api-errors:aiRequestInProgress") };
+    return stillRunning(job.status)
+      ? {
+        success: false,
+        message: t("api-errors:aiRequestInProgress"),
+        keepIdempotencyKey: true,
+      }
+      : { success: false, message: t("api-errors:aiProviderError") };
   }
 
   try {
@@ -784,9 +806,20 @@ export async function transcribeAction(
       if (recovered) {
         return { success: true, jobId: job.id, ...recovered };
       }
-      return { success: false, message: t("api-errors:aiProviderError") };
+      // 支払い済みの結果を読めなかっただけ。名前を捨てると次は新規課金になる。
+      return {
+        success: false,
+        message: t("api-errors:aiResultUnavailable"),
+        keepIdempotencyKey: true,
+      };
     }
-    return { success: false, message: t("api-errors:aiRequestInProgress") };
+    return stillRunning(job.status)
+      ? {
+        success: false,
+        message: t("api-errors:aiRequestInProgress"),
+        keepIdempotencyKey: true,
+      }
+      : { success: false, message: t("api-errors:aiProviderError") };
   }
 
   try {
@@ -938,9 +971,19 @@ export async function translateAction(
       if (recovered) {
         return { success: true, jobId: job.id, segments: recovered };
       }
-      return { success: false, message: t("api-errors:aiProviderError") };
+      return {
+        success: false,
+        message: t("api-errors:aiResultUnavailable"),
+        keepIdempotencyKey: true,
+      };
     }
-    return { success: false, message: t("api-errors:aiRequestInProgress") };
+    return stillRunning(job.status)
+      ? {
+        success: false,
+        message: t("api-errors:aiRequestInProgress"),
+        keepIdempotencyKey: true,
+      }
+      : { success: false, message: t("api-errors:aiProviderError") };
   }
 
   try {
@@ -1303,7 +1346,13 @@ export async function retryJobAction(
     }
     const { job: retried } = reservation;
     if (reservation.outcome === "existing") {
-      return { success: false, message: t("api-errors:aiRequestInProgress") };
+      return stillRunning(retried.status)
+        ? {
+          success: false,
+          message: t("api-errors:aiRequestInProgress"),
+          keepIdempotencyKey: true,
+        }
+        : { success: false, message: t("api-errors:aiProviderError") };
     }
     try {
       const result = await generateImage({

@@ -249,7 +249,10 @@ describe("dashboard AI actions", () => {
       const result = await translateAction({ success: false }, translateForm());
 
       expect(result.success).toBe(false);
-      expect(result.message).toContain("aiProviderError");
+      // 支払い済みの結果を読み出せなかっただけ。返金済みの失敗として返すと、
+      // フォームは名前を捨て、次の送信が新規課金になる。
+      expect(result.message).toContain("aiResultUnavailable");
+      expect(result.keepIdempotencyKey).toBe(true);
     });
   });
 

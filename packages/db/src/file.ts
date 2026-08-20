@@ -334,10 +334,16 @@ export async function sumFileSizeByUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  // 一覧を必要としない使用量表示用。行を引かずに合計サイズだけを 1 クエリで取る。
+  // 一覧を必要としない使用量表示・アップロード可否判定用。行を引かずに合計
+  // サイズだけを 1 クエリで取る。
+  //
+  // AI の生成結果は除く。支払い済みのジョブが作った結果を保存時に断ることは
+  // できないので、これを枠に数えると、断れないものが枠を食い、断れる通常の
+  // アップロードだけが拒否される。一覧と名前の重複判定も同じ理由で除いている。
   const result = await db.file.aggregate({
     where: {
       userId,
+      aiJobResult: null,
     },
     _sum: {
       size: true,

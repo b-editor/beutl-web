@@ -19,7 +19,7 @@
     "uploadNotFound": "このアップロードは進行中ではありません。もう一度お試しください。",
     "uploadFailed": "アップロードを完了できませんでした。もう一度お試しください。",
     "invalidRequestBody": "このファイルはアップロードできません。",
-    "authenticationIsRequired": "アップロードするにはサインインし直してください。"
-  },
-  "aiResultUsage": "うち {{size}} は AI の生成結果です。AI ページから管理できます。"
+    "authenticationIsRequired": "アップロードするにはサインインし直してください。",
+    "fileNotFound": "そのファイルはもうありません。"
+  }
 }

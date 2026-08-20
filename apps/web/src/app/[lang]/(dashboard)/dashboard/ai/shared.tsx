@@ -277,14 +277,22 @@ export function AiUsageCard({
 //
 // It is generated after mount rather than during render: a value produced on the
 // server would either differ from the hydrated one or, if derived from the tree,
-// repeat across page loads and collide with an unrelated attempt. It rotates when
-// the action settles, so the next deliberate run is a new attempt.
+// repeat across page loads and collide with an unrelated attempt.
+//
+// It rotates when the action settles, so the next deliberate run is a new
+// attempt — but only then. A run that is still going, or one whose paid result
+// could not be read, is not settled: the name it was sent under is the way back
+// to what it already bought, and a new one would buy it again.
 export function IdempotencyKeyField({ state }: { state: unknown }) {
   const [key, setKey] = useState("");
+  const keep =
+    (state as { keepIdempotencyKey?: boolean } | null | undefined)
+      ?.keepIdempotencyKey === true;
 
   useEffect(() => {
+    if (keep) return;
     setKey(randomUuid());
-  }, [state]);
+  }, [state, keep]);
 
   return <input type="hidden" name={IDEMPOTENCY_KEY_FIELD} value={key} />;
 }

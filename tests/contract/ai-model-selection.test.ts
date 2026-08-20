@@ -176,6 +176,34 @@ describe("choosing a model per request", () => {
       .toBe(0);
   });
 
+  it("hands back a paid job under a model that has since been disabled", async () => {
+    const key = "paid-before-the-model-went-away";
+    const first = await generateWith({ model: "dear/model" }, key);
+    expect(first.status).toBe(200);
+    const paid = await first.json();
+
+    // 応答が消えたあとに管理者がそのモデルを止めた、という筋。回収を設定判定
+    // より後に置くと、支払い済みの結果に二度と手が届かない。
+    await upsertAiOperationModel({
+      operation: "image.generate",
+      modelId: "dear/model",
+      priceUnits: 31,
+      displayName: "Dear",
+      sortOrder: 1,
+      enabled: false,
+      updatedBy: "admin-1",
+    });
+    vi.mocked(generateImage).mockClear();
+
+    const again = await generateWith({ model: "dear/model" }, key);
+
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual(paid);
+    // 二度目は作り直していない＝二重課金していない。
+    expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+    expect(state.aiJobs.size).toBe(1);
+  });
+
   it("refuses a model the administrator has disabled", async () => {
     await upsertAiOperationModel({
       operation: "image.generate",

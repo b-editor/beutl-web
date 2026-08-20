@@ -1,6 +1,10 @@
 export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
 
 export const MAX_AI_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+// 参照画像は全部そろえて base64 データ URL にし、JSON でもう一度複製される。
+// 1 枚あたりの上限を枚数分そのまま許すと、生バイトだけで 80MiB、base64 で
+// 107MiB になり Worker のメモリ予算を超える。1 枚のときと同じ総量までに抑える。
+export const MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES = MAX_AI_IMAGE_UPLOAD_BYTES;
 // Two frame images are embedded as base64 data URLs and then copied again by
 // JSON serialization. Keep this substantially below the ordinary image-edit
 // limit so a two-frame request stays within the Worker's memory budget.

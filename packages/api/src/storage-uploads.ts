@@ -14,6 +14,11 @@ import { getR2Bucket } from "./ai/storage";
 // Long enough that a slow upload of the largest file this service takes is
 // never mistaken for an abandoned one.
 const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
+// An abort that fails is worth trying again on the next run, so the row stays.
+// It cannot stay for ever, though, or one upload the bucket will never abandon
+// would be retried until the end of time; after this long the row is dropped
+// and the bucket's own lifecycle rules are what is left.
+const GIVE_UP_AFTER_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
 export async function abandonStaleStorageUploads(
@@ -45,10 +50,13 @@ export async function abandonStaleStorageUploads(
       await deleteStorageUpload({ id: upload.id });
       abandoned++;
     } catch (error) {
-      // Already gone is the usual reason, and the row still has to go: what
-      // must not happen is one unabortable upload holding up every other.
       console.error("Failed to abandon a stale storage upload", upload.id, error);
-      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+      if (
+        upload.createdAt.getTime() <=
+          now.getTime() - GIVE_UP_AFTER_MILLISECONDS
+      ) {
+        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+      }
       failed++;
     }
   }

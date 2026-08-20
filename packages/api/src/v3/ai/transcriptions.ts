@@ -1,9 +1,10 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
   createReservedAiJob,
+  findReplayableAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { getEntitlements } from "../../ai/entitlements";
@@ -38,6 +39,51 @@ const languageSchema = z
 // exact per-operation credit deltas stay server-side.
 // Duration is parsed from the uploaded media on the server and never trusted
 // from a client-provided value.
+// 既に使われた名前に対する答え。モデルの設定を見る前にも、予約が競合したあとにも
+// 同じ形で返す。
+async function answerFromExistingTranscription(
+  c: Context,
+  job: { id: string; status: string; resultFileId: string | null },
+  { userId, durationSeconds }: { userId: string; durationSeconds: number },
+) {
+  if (job.status === "succeeded" && job.resultFileId) {
+    const fileRecord = await getAiJobResultFile({ jobId: job.id, userId });
+    if (fileRecord) {
+      try {
+        const stored = validateTranscriptionResult(
+          (await readAiJsonResult({ objectKey: fileRecord.objectKey }) as {
+            segments?: unknown;
+            language?: unknown;
+            words?: unknown;
+          }),
+          durationSeconds,
+        );
+        return c.json({
+          jobId: job.id,
+          segments: stored.segments,
+          ...(stored.language ? { language: stored.language } : {}),
+          ...(stored.words ? { words: stored.words } : {}),
+        });
+      } catch (error) {
+        console.error("Failed to recover AI transcription result", error);
+      }
+    }
+    // 支払い済みの成功ジョブを読み出せなかっただけで、ジョブが失敗したわけでは
+    // ない。aiProviderError（＝返金済みの失敗）として返すと、クライアントはこの
+    // キーを使い切ったものとして捨て、次の実行が新規課金になってしまう。同じ
+    // キーでもう一度取りに来られる形で返す。
+    return c.json(await apiErrorResponse("aiResultUnavailable"), { status: 503 });
+  }
+  if (
+    job.status === "queued" ||
+    job.status === "running" ||
+    job.status === "finalizing"
+  ) {
+    return c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
+  }
+  return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+}
+
 const app = new Hono().post("/", async (c) => {
   const userId = await getUserId(c);
   if (!userId) {
@@ -110,8 +156,12 @@ const app = new Hono().post("/", async (c) => {
   }
   const catalog = await loadAiModelCatalog();
   const selectedModel = catalog.resolve("audio.transcribe", rawModel);
-  if (!selectedModel) {
-    return c.json(await apiErrorResponse("invalidRequestBody"), {
+  // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。同じ名前で
+  // 支払い済みの job は、モデルが無効化されたあとでも取り戻せなければならない。
+  // 「今そのモデルで新しく受けられるか」は回収を試みたあとで見る。
+  const fingerprintModelId = rawModel ?? selectedModel?.modelId;
+  if (!fingerprintModelId) {
+    return c.json(await apiErrorResponse("aiModelUnavailable"), {
       status: 400,
     });
   }
@@ -124,12 +174,34 @@ const app = new Hono().post("/", async (c) => {
       contentType: file.type || "audio/mpeg",
       durationSeconds: parsedAudio.durationSeconds,
       contentSha256: await sha256Hex(parsedAudio.bytes),
-      model: selectedModel.modelId,
+      model: fingerprintModelId,
       ...(language ? { language } : {}),
     },
   });
   if (!requestIdentity) {
     return c.json(await apiErrorResponse("invalidRequestBody"), {
+      status: 400,
+    });
+  }
+
+  const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingTranscription(c, replay.job, {
+      userId,
+      durationSeconds: parsedAudio.durationSeconds,
+    });
+  }
+  if (replay?.outcome === "idempotencyConflict") {
+    return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+  }
+  if (replay?.outcome === "deleted") {
+    return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+  }
+
+  // 回収するものが無かったので、これは新しい依頼。ここで初めて「今そのモデルが
+  // 提供されているか」を問う。
+  if (!selectedModel) {
+    return c.json(await apiErrorResponse("aiModelUnavailable"), {
       status: 400,
     });
   }
@@ -160,47 +232,11 @@ const app = new Hono().post("/", async (c) => {
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    if (job.status === "succeeded" && job.resultFileId) {
-      const fileRecord = await getAiJobResultFile({
-        jobId: job.id,
-        userId,
-      });
-      if (fileRecord) {
-        try {
-          const stored = validateTranscriptionResult(
-            (await readAiJsonResult({ objectKey: fileRecord.objectKey }) as {
-              segments?: unknown;
-              language?: unknown;
-              words?: unknown;
-            }),
-            parsedAudio.durationSeconds,
-          );
-          return c.json({
-            jobId: job.id,
-            segments: stored.segments,
-            ...(stored.language ? { language: stored.language } : {}),
-            ...(stored.words ? { words: stored.words } : {}),
-          });
-        } catch (error) {
-          console.error("Failed to recover AI transcription result", error);
-        }
-      }
-      // 支払い済みの成功ジョブを読み出せなかっただけで、ジョブが失敗した
-      // わけではない。aiProviderError（＝返金済みの失敗）として返すと、
-      // クライアントはこのキーを使い切ったものとして捨て、次の実行が新規
-      // 課金になってしまう。同じキーでもう一度取りに来られる形で返す。
-      return c.json(await apiErrorResponse("aiResultUnavailable"), {
-        status: 503,
-      });
-    }
-    if (job.status === "queued" ||
-      job.status === "running" ||
-      job.status === "finalizing") {
-      return c.json(await apiErrorResponse("aiRequestInProgress"), {
-        status: 409,
-      });
-    }
-    return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    // 同時に届いた 2 本のうち、予約が決着をつけたほう。
+    return await answerFromExistingTranscription(c, job, {
+      userId,
+      durationSeconds: parsedAudio.durationSeconds,
+    });
   }
 
   try {

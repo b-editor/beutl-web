@@ -20,6 +20,7 @@ import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { loadAiVideoModelCapabilities } from "../../ai/video-model-capabilities";
 import { loadAiImageModelCapabilities } from "../../ai/image-model-capabilities";
 import {
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
@@ -166,6 +167,9 @@ const app = new Hono().get("/", async (c) => {
         backgrounds: AI_IMAGE_BACKGROUNDS,
         maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
         maxReferenceImageBytes: MAX_AI_IMAGE_UPLOAD_BYTES,
+        // 1 枚ごとの上限とは別に、全部あわせてこの大きさまで。枚数分を掛けた
+        // 総量は Worker が保持しきれないので、掛け算では読めない値として出す。
+        maxReferenceImagesTotalBytes: MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
         outputFormat: "png",
         seed,
       },

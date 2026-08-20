@@ -248,20 +248,37 @@ export async function finishUpload({
   }
 
   // The size the browser declared is what the quota was checked against; this
-  // is what actually arrived, and it is what the quota is held to. Checked and
-  // stored in one transaction for the same reason the start is: two uploads
-  // finishing together must not both be measured against the total from before
-  // either of them landed.
+  // is what actually arrived, and it is what the quota is held to. The check,
+  // the file and the receipt naming it are one transaction: written apart, a
+  // failure between them leaves a stored file nothing can hand back, and two
+  // completions arriving together each store the same bytes.
   const actual = BigInt(object.size);
-  let file;
+  let outcome:
+    | { kind: "created"; id: string; name: string }
+    | { kind: "alreadyCompleted"; fileId: string }
+    | { kind: "overQuota" }
+    | { kind: "gone" };
   try {
-    file = await startRetryableTransaction(async (prisma) => {
-      const stored = await sumFileSizeByUserId({ userId, prisma });
-      if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
-        return null;
+    outcome = await startRetryableTransaction(async (prisma) => {
+      const current = await findStorageUploadByIdAndUserId({
+        id: upload.id,
+        userId,
+        prisma,
+      });
+      if (!current) return { kind: "gone" as const };
+      if (current.completedFileId) {
+        return {
+          kind: "alreadyCompleted" as const,
+          fileId: current.completedFileId,
+        };
       }
 
-      return await createFile({
+      const stored = await sumFileSizeByUserId({ userId, prisma });
+      if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
+        return { kind: "overQuota" as const };
+      }
+
+      const created = await createFile({
         objectKey: upload.objectKey,
         name: upload.name,
         size: Number(actual),
@@ -270,10 +287,20 @@ export async function finishUpload({
         visibility: "PRIVATE",
         prisma,
       });
+      // The row stays as the receipt of a finished upload. Its size is no
+      // longer counted as under way, and the sweep clears the receipt later.
+      await markStorageUploadCompleted({
+        id: upload.id,
+        fileId: created.id,
+        prisma,
+      });
+      return { kind: "created" as const, id: created.id, name: created.name };
     });
   } catch (error) {
     // The object is in the bucket and nothing points at it: it would be stored,
-    // and paid for, without ever being seen again.
+    // and paid for, without ever being seen again. The tracking row is left
+    // alone — a transaction that rolled back wrote no receipt, so the sweep can
+    // still find the upload and clear it.
     try {
       await bucket().delete?.(upload.objectKey);
     } catch (cleanupError) {
@@ -281,22 +308,33 @@ export async function finishUpload({
         [error, cleanupError],
         "The upload failed and its object could not be cleaned up",
       );
-    } finally {
-      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
     }
     throw error;
   }
 
-  if (!file) {
+  if (outcome.kind === "gone") return { ok: false, reason: "uploadNotFound" };
+
+  if (outcome.kind === "overQuota") {
     await bucket().delete?.(upload.objectKey);
     await deleteStorageUpload({ id: upload.id });
     return { ok: false, reason: "insufficientStorageSpace" };
   }
 
-  // The row stays as the receipt of a finished upload. Its size is no longer
-  // counted as under way, and the sweep clears the receipt later.
-  await markStorageUploadCompleted({ id: upload.id, fileId: file.id });
-  return { ok: true, file: { id: file.id, name: file.name, size: actual } };
+  if (outcome.kind === "alreadyCompleted") {
+    // Another completion of the same upload got there first. Its file is the
+    // answer; the object it points at is not this call's to remove.
+    const file = await findStorageFileByIdAndUserId({
+      id: outcome.fileId,
+      userId,
+    });
+    if (!file) return { ok: false, reason: "fileNotFound" };
+    return {
+      ok: true,
+      file: { id: file.id, name: file.name, size: BigInt(file.size) },
+    };
+  }
+
+  return { ok: true, file: { id: outcome.id, name: outcome.name, size: actual } };
 }
 
 export async function cancelUpload({
@@ -311,20 +349,32 @@ export async function cancelUpload({
 
   // A finished upload has no parts left to throw away, and its file is not
   // this call's to delete.
-  if (!upload.completedFileId) {
-    await abandon(upload.objectKey, upload.uploadId);
+  if (upload.completedFileId) {
+    await deleteStorageUpload({ id: upload.id });
+    return true;
   }
 
-  await deleteStorageUpload({ id: upload.id });
+  // The row is only dropped once the parts are known to be gone. Dropping it
+  // after a failed abort leaves parts nothing knows about, which the sweep can
+  // then never find. The caller is told the upload is cancelled either way —
+  // it is, as far as this account is concerned — and the sweep finishes the job.
+  if (await abandon(upload.objectKey, upload.uploadId)) {
+    await deleteStorageUpload({ id: upload.id });
+  }
+
   return true;
 }
 
-async function abandon(objectKey: string, uploadId: string): Promise<void> {
+// Whether the parts are gone. A failure here is usually "already gone", but it
+// can be the bucket being briefly unreachable, and the two are told apart by
+// the caller: the tracking row is what lets a later sweep try again, so it is
+// kept while an abort has not been seen to work.
+async function abandon(objectKey: string, uploadId: string): Promise<boolean> {
   try {
     await bucket().resumeMultipartUpload(objectKey, uploadId).abort();
+    return true;
   } catch (error) {
-    // Already gone, or never there. The row goes either way; what must not
-    // happen is a failed abort keeping the row and the parts alive forever.
     console.error("Failed to abandon a storage upload", error);
+    return false;
   }
 }

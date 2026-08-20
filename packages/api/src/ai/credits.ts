@@ -26,6 +26,34 @@ function toUsagePeriod(subscription: {
   };
 }
 
+// その名前で既に作られた job を、今のモデル設定を見る前に引き当てる。
+//
+// 応答が消えたあとに管理者がモデルを無効化したり、モデルの受け付ける形が変わっ
+// たりすると、「今そのリクエストを新しく受けられるか」の判定に引っかかって、
+// 支払い済みの結果を取り戻せなくなる。回収は設定より先に試みる。
+export async function findReplayableAiJob({
+  userId,
+  idempotencyKeyHash,
+  requestFingerprint,
+}: {
+  userId: string;
+  idempotencyKeyHash: string;
+  requestFingerprint: string;
+}): Promise<
+  | { outcome: "existing"; job: NonNullable<Awaited<ReturnType<typeof getAiJobByIdempotency>>> }
+  | { outcome: "idempotencyConflict" }
+  | { outcome: "deleted" }
+  | null
+> {
+  const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
+  if (!existing) return null;
+  if (existing.requestFingerprint !== requestFingerprint) {
+    return { outcome: "idempotencyConflict" };
+  }
+  if (existing.deletedAt) return { outcome: "deleted" };
+  return { outcome: "existing", job: existing };
+}
+
 export async function createReservedAiJob({
   userId,
   kind,

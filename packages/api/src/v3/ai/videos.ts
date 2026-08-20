@@ -4,6 +4,7 @@ import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
   createReservedAiJob,
+  findReplayableAiJob,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
@@ -240,14 +241,55 @@ const app = new Hono()
       "video.generate",
       parsedBody.data.model,
     );
-    if (!selectedModel) {
+    // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。
+    const fingerprintModelId = parsedBody.data.model ?? selectedModel?.modelId;
+    if (!fingerprintModelId) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "video.generate",
+      input: {
+        model: fingerprintModelId,
+        prompt,
+        durationSeconds,
+        resolution,
+        aspectRatio,
+        generateAudio,
+        ...(seed === undefined ? {} : { seed }),
+      },
+    });
+    if (!requestIdentity) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
-    // Refused here rather than by the provider after the usage is reserved:
-    // what a model accepts differs per model, and a rejection that arrives
-    // after the reservation reads as a provider outage.
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      // 動画は非同期なので、job そのものが答え。支払い済みのものはモデル設定を
+      // 見る前に返す。
+      return c.json(await publicAiJobPayload(replay.job, c.req.raw), {
+        status: isTerminalAiJobStatus(replay.job.status) ? 200 : 202,
+      });
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // 回収するものが無かったので新しい依頼。ここで初めて、今のモデルがこの形を
+    // 取れるかを問う。予約のあとに拒否されると、返金されたプロバイダー障害と
+    // 見分けがつかなくなる。
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
     if (
       unsupportedVideoRequestReason(
         (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
@@ -264,24 +306,7 @@ const app = new Hono()
         status: 400,
       });
     }
-    const requestIdentity = await getAiRequestIdentity({
-      request: c.req.raw,
-      operation: "video.generate",
-      input: {
-        model: selectedModel.modelId,
-        prompt,
-        durationSeconds,
-        resolution,
-        aspectRatio,
-        generateAudio,
-        ...(seed === undefined ? {} : { seed }),
-      },
-    });
-    if (!requestIdentity) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
-        status: 400,
-      });
-    }
+
     const callbackNonce = await createCallbackNonce();
     const cost = selectedModel.priceUnits * durationSeconds;
 
@@ -453,26 +478,10 @@ const app = new Hono()
     ]);
     const catalog = await loadAiModelCatalog();
     const selectedModel = catalog.resolve("video.generate", fields.data.model);
-    if (!selectedModel) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
-        status: 400,
-      });
-    }
-    if (
-      unsupportedVideoRequestReason(
-        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
-        {
-          resolution,
-          durationSeconds,
-          aspectRatio,
-          generateAudio,
-          ...(seed === undefined ? {} : { seed }),
-          firstFrame: true,
-          lastFrame: lastFrame instanceof File,
-        },
-      )
-    ) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+    // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。
+    const fingerprintModelId = fields.data.model ?? selectedModel?.modelId;
+    if (!fingerprintModelId) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
         status: 400,
       });
     }
@@ -480,7 +489,7 @@ const app = new Hono()
       request: c.req.raw,
       operation: "video.generate.frames",
       input: {
-        model: selectedModel.modelId,
+        model: fingerprintModelId,
         prompt,
         durationSeconds,
         resolution,
@@ -506,6 +515,47 @@ const app = new Hono()
         status: 400,
       });
     }
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      // 動画は非同期なので、job そのものが答え。支払い済みのものはモデル設定を
+      // 見る前に返す。
+      return c.json(await publicAiJobPayload(replay.job, c.req.raw), {
+        status: isTerminalAiJobStatus(replay.job.status) ? 200 : 202,
+      });
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // 回収するものが無かったので新しい依頼。
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    if (
+      unsupportedVideoRequestReason(
+        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+        {
+          resolution,
+          durationSeconds,
+          aspectRatio,
+          generateAudio,
+          ...(seed === undefined ? {} : { seed }),
+          firstFrame: true,
+          lastFrame: lastFrame instanceof File,
+        },
+      )
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+
     const callbackNonce = await createCallbackNonce();
     const frameImages = [
       toVideoFrameImage(

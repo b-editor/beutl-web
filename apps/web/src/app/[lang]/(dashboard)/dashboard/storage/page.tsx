@@ -1,7 +1,7 @@
 import { Progress } from "@beutl/ui/ui/progress";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { formatBytes, STORAGE_QUOTA_BYTES } from "@beutl/core";
-import { retrieveFiles, retrieveStorageUsage } from "./actions";
+import { retrieveFiles } from "./actions";
 import { List } from "./list";
 import { getTranslation } from "@beutl/i18n";
 
@@ -14,13 +14,11 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
 
   await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const [files, usage] = await Promise.all([
-    retrieveFiles(),
-    retrieveStorageUsage(),
-  ]);
-  const totalSize = Number(usage.total);
-  // 一覧に出ないぶん。AI の生成結果はこの画面では管理しないが、容量は使っている。
-  const hiddenSize = Number(usage.total - usage.listed);
+  const files = await retrieveFiles();
+  let totalSize = 0;
+  for (const file of files) {
+    totalSize += Number(file.size);
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -29,11 +27,6 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
         <p className="text-sm text-muted-foreground">
           {t("storage:storageUsage", { totalSize: formatBytes(totalSize) })}
         </p>
-        {hiddenSize > 0 && (
-          <p className="text-sm text-muted-foreground">
-            {t("storage:aiResultUsage", { size: formatBytes(hiddenSize) })}
-          </p>
-        )}
         <Progress
           value={(totalSize / STORAGE_QUOTA_BYTES) * 100}
           max={100}
