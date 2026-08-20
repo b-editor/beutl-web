@@ -3,6 +3,7 @@ import { formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import {
   encodeRepositoryPath,
+  FILE_TOO_LARGE,
   getRawFile,
   joinRouteSegments,
   parseLfsPointer,
@@ -47,13 +48,17 @@ export default async function Page(props: {
   if (content === null) {
     notFound();
   }
+  // 大きすぎて読まなかった場合。存在しないのとは違うので 404 にはせず、
+  // ダウンロードの導線を出す。
+  const tooLarge = content === FILE_TOO_LARGE;
+  const text = content === FILE_TOO_LARGE ? "" : content;
 
   const base = `/${lang}/dashboard/repositories/${owner}/${repo}`;
   const parentPath = segments.slice(0, -1).join("/");
   const downloadUrl = `/api/git/${encodeURIComponent(owner)}/${encodeURIComponent(
     repo,
   )}/media/${encodeRepositoryPath(path)}`;
-  const pointer = parseLfsPointer(content);
+  const pointer = tooLarge ? null : parseLfsPointer(text);
 
   return (
     <div className="flex flex-col gap-3">
@@ -82,10 +87,10 @@ export default async function Page(props: {
             </Button>
           </div>
         </div>
-      ) : isProbablyBinary(content) ? (
+      ) : tooLarge || text.length > MAX_RENDERED_BYTES ? (
         <div className="flex flex-col gap-3 rounded-lg border p-6">
           <p className="text-sm text-muted-foreground">
-            {t("repositories:binaryFile")}
+            {t("repositories:fileTooLarge")}
           </p>
           <div>
             <Button asChild variant="outline">
@@ -96,10 +101,10 @@ export default async function Page(props: {
             </Button>
           </div>
         </div>
-      ) : content.length > MAX_RENDERED_BYTES ? (
+      ) : isProbablyBinary(text) ? (
         <div className="flex flex-col gap-3 rounded-lg border p-6">
           <p className="text-sm text-muted-foreground">
-            {t("repositories:fileTooLarge")}
+            {t("repositories:binaryFile")}
           </p>
           <div>
             <Button asChild variant="outline">
@@ -114,7 +119,7 @@ export default async function Page(props: {
         // .bep / .scene / .belm は整形済み JSON なので、そのまま等幅で読める。
         <div className="overflow-x-auto rounded-lg border">
           <pre className="p-4 text-xs leading-relaxed">
-            <code>{content}</code>
+            <code>{text}</code>
           </pre>
         </div>
       )}

@@ -19,9 +19,15 @@ const SOURCE = readFileSync(
   "utf8",
 );
 
+// テンプレートは大文字小文字を問わず拾うため *.[mM][pP]4 と書いてある。
+// 比較しやすいよう小文字の拡張子に戻す。
+function toPlainExtension(pattern: string): string {
+  return pattern.replace(/\[(\w)\w\]/g, (_, lower: string) => lower);
+}
+
 function lfsExtensions(): string[] {
   return [...GITATTRIBUTES_TEMPLATE.matchAll(/^\*\.(\S+)\s+filter=lfs/gm)].map(
-    (match) => match[1],
+    (match) => toPlainExtension(match[1]),
   );
 }
 

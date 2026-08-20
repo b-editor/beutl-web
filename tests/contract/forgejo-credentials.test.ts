@@ -7,13 +7,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // sha1 は発行直後のレスポンスにしか入らず、末尾 8 文字は token_last_eight と一致する。
 
 vi.mock("@beutl/db", () => ({
+  // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
+  startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
+    await fn(undefined),
   findGitAccountByUserId: async () => ({
     userId: "u1",
     forgejoUserId: 2,
     forgejoUsername: "someone",
     createdAt: new Date(0),
   }),
-  countGitCredentials: async () => credentialCount,
+  countGitCredentials: async () => {
+    const value = credentialCount;
+    // 2 回目以降 (トランザクションの中) は別の値を返せるようにして、
+    // 検査から書き込みまでの間に他の発行が入った状況を作る。
+    if (credentialCountAfterIssue !== null) {
+      credentialCount = credentialCountAfterIssue;
+    }
+    return value;
+  },
   listGitCredentialsByUserId: async () => [],
   findGitCredentialByName: async ({ name }: { name: string }) =>
     existingNames.includes(name) ? { id: "c0", name } : null,
@@ -43,6 +54,7 @@ vi.mock("@beutl/db", () => ({
 }));
 
 let credentialCount = 0;
+let credentialCountAfterIssue: number | null = null;
 let existingNames: string[] = [];
 let dbInsertFails = false;
 
@@ -51,6 +63,7 @@ const {
   CredentialNameInvalidError,
   CredentialNameTakenError,
   MAX_CREDENTIALS_PER_USER,
+  deleteGitAccount,
   issueGitCredential,
   revokeGitCredential,
 } = await import("@beutl/forgejo");
@@ -79,6 +92,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   credentialCount = 0;
+  credentialCountAfterIssue = null;
   existingNames = [];
   dbInsertFails = false;
   process.env.FORGEJO_BASE_URL = "https://git.example.test";
@@ -239,6 +253,32 @@ describe("トークンの発行", () => {
     );
   });
 
+  it("名前衝突の 400 も衝突として扱う", async () => {
+    // Forgejo 16.0.2 が実際に返すのはこれ。409 でも 422 でもない。
+    // 見落とすと画面は unknown error、API は 500 になる。
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
+      init?.method === "POST"
+        ? json({ message: "access token name has been used already" }, 400)
+        : json({}),
+    );
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
+      CredentialNameTakenError,
+    );
+  });
+
+  it("名前と関係ない 400 は衝突にしない", async () => {
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
+      init?.method === "POST"
+        ? json({ message: "invalid scope" }, 400)
+        : json({}),
+    );
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.not.toBeInstanceOf(
+      CredentialNameTakenError,
+    );
+  });
+
   it("控えを書けなかったら Forgejo 側のトークンを消す", async () => {
     // 同じラベルで同時に発行すると、Forgejo には 2 本できて片方が DB の
     // ユニーク制約で落ちる。控えに残らないトークンを置き去りにしない。
@@ -258,6 +298,21 @@ describe("トークンの発行", () => {
       CredentialLimitReachedError,
     );
   });
+
+  it("検査を通った後で埋まっていたら、控えを書かずに Forgejo 側も畳む", async () => {
+    // 19 本の状態で違う名前の発行が同時に走ると、両方が最初の検査を通って
+    // 21 本になりうる。控えを書くところで数え直して弾く。
+    credentialCount = MAX_CREDENTIALS_PER_USER - 1;
+    credentialCountAfterIssue = MAX_CREDENTIALS_PER_USER;
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeInstanceOf(
+      CredentialLimitReachedError,
+    );
+
+    // 名前の重複と取り違えない。かつ発行済みトークンを置き去りにしない。
+    const del = record(fetchMock).find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/users/someone/tokens/13");
+  });
 });
 
 describe("リポジトリの作成", () => {
@@ -273,6 +328,10 @@ describe("リポジトリの作成", () => {
       if (init?.method === "POST" && path.endsWith("/contents")) {
         return json({ message: "boom" }, 500);
       }
+      // 巻き戻しは実在を確かめてから消す (応答だけ失った場合に備えるため)。
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main" });
+      }
       return new Response(null, { status: 204 });
     });
 
@@ -282,6 +341,72 @@ describe("リポジトリの作成", () => {
 
     const del = record(fetchMock).find((c) => c.method === "DELETE");
     expect(del?.url).toContain("/repos/someone/proj");
+  });
+
+  it("作成そのものが失敗しても、出来ていたら畳む", async () => {
+    // 作成は成功していて応答だけ失われる場合がある。そのまま放置すると
+    // .gitattributes の無いリポジトリが残る。
+    const { createRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return new Response("gateway timeout", { status: 504 });
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    const del = record(fetchMock).find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/repos/someone/proj");
+  });
+
+  it("名前が衝突しただけなら畳みにいかない", async () => {
+    // 既に他人 (あるいは自分) が使っている名前。作られていないので消すものもなく、
+    // ここで DELETE を投げると同名の既存リポジトリを壊しかねない。
+    const { createRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return json({ message: "repository already exists" }, 409);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+  });
+});
+
+describe("Forgejo アカウントの削除", () => {
+  it("リポジトリごと消す (purge を付けないと 422 で拒まれる)", async () => {
+    await expect(deleteGitAccount("u1")).resolves.toBe(true);
+
+    const del = record(fetchMock).find((c) => c.method === "DELETE")!;
+    expect(del.url).toContain("/admin/users/someone");
+    expect(del.url).toContain("purge=true");
+  });
+
+  it("既に消えていれば成功にする (やり直しが通るように)", async () => {
+    fetchMock.mockImplementation(async () => json({ message: "not found" }, 404));
+
+    await expect(deleteGitAccount("u1")).resolves.toBe(true);
+  });
+
+  it("消せなかったら投げる (Beutl 側だけ消させない)", async () => {
+    // ここを握り潰すと、対応表が失われた状態で生きたトークンが残る。
+    fetchMock.mockImplementation(async () => json({ message: "boom" }, 500));
+
+    await expect(deleteGitAccount("u1")).rejects.toBeTruthy();
   });
 });
 

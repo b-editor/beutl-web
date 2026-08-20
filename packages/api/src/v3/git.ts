@@ -119,6 +119,13 @@ const app = new Hono()
       // 端末ごとに 1 本。既存のトークンには触らないので、他の端末は使い続けられる。
       // 平文はこのレスポンスにしか現れない。
       const issued = await issueGitCredential(userId, deviceName);
+      // 画面から発行したときと同じ粒度で残す。どの端末に資格情報を渡したかは、
+      // 経路によらず追える必要がある。
+      await addApiAuditLog(c, {
+        userId,
+        action: auditLogActions.git.issueCredential,
+        details: issued.credential.name,
+      });
       return c.json(
         {
           id: issued.credential.id,
@@ -162,6 +169,11 @@ const app = new Hono()
     if (!revoked) {
       return c.json(await apiErrorResponse("unknown"), { status: 404 });
     }
+    await addApiAuditLog(c, {
+      userId,
+      action: auditLogActions.git.revokeCredential,
+      details: revoked.name,
+    });
     return c.body(null, 204);
   })
   .get("/repositories", async (c) => {
@@ -207,6 +219,11 @@ const app = new Hono()
       const repository = await createRepository(account.forgejoUsername, {
         name,
         description,
+      });
+      await addApiAuditLog(c, {
+        userId,
+        action: auditLogActions.git.createRepository,
+        details: `${account.forgejoUsername}/${repository.name}`,
       });
       return c.json(
         {

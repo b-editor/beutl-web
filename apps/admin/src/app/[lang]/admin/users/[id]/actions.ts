@@ -36,6 +36,7 @@ import { isActiveSubscription, isSubscriptionPlanId } from "@beutl/core";
 function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
+import { deleteGitAccount } from "@beutl/forgejo";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
@@ -179,6 +180,22 @@ export async function deleteUser({
     // 普通のファイルは先にページ単位で片付ける。Stripe 側はもう閉じているので、
     // ここから先はアカウントが消える一方で、次に消えるのがファイル。下の
     // カスケードには上限に依らない数のものだけが残る。
+    // Forgejo 側を先に消す。git トークンは Forgejo が直接認証し、Caddy は git の
+    // 経路を素通しするので、こちらのレコードだけ消しても push は通り続ける。
+    // 外部への呼び出しなのでトランザクションの外で行う (再試行で二重に走らせない)。
+    let hadGitAccount = false;
+    try {
+      hadGitAccount = await deleteGitAccount(userId);
+    } catch (error) {
+      // ここで進むと、対応表を失ったまま Forgejo に生きたトークンが残る。
+      console.error("failed to delete the Forgejo account", error);
+      return {
+        success: false,
+        message:
+          "Failed to delete the user's Git account. Nothing was deleted; try again.",
+      };
+    }
+
     await drainUserStorageFiles({ userId });
     const result = await startRetryableTransaction(async (tx) => {
       const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
@@ -236,6 +253,14 @@ export async function deleteUser({
         details: `userId: ${userId}`,
         prisma: tx,
       });
+      if (hadGitAccount) {
+        await addAuditLog({
+          userId: session.user.id,
+          action: auditLogActions.git.accountDeleted,
+          details: `userId: ${userId}`,
+          prisma: tx,
+        });
+      }
       return { status: "deleted" as const };
     });
     if (result.status === "blocked") {

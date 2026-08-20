@@ -154,7 +154,16 @@ export async function forgejoRequestOrNull<T>(
  */
 export async function forgejoFetch(
   path: string,
-  { sudo, config }: { sudo?: string; config?: ForgejoConfig } = {},
+  {
+    sudo,
+    config,
+    forwardHeaders,
+  }: {
+    sudo?: string;
+    config?: ForgejoConfig;
+    /** ブラウザから受け取ったまま Forgejo へ渡すヘッダ (Range など)。 */
+    forwardHeaders?: Record<string, string | null>;
+  } = {},
 ): Promise<Response> {
   const resolved = config ?? getForgejoConfig();
   const headers = new Headers({
@@ -163,6 +172,11 @@ export async function forgejoFetch(
   });
   if (sudo) {
     headers.set("Sudo", sudo);
+  }
+  for (const [name, value] of Object.entries(forwardHeaders ?? {})) {
+    if (value) {
+      headers.set(name, value);
+    }
   }
   return await fetch(`${resolved.baseUrl}/api/v1${path}`, { headers });
 }

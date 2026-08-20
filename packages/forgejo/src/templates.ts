@@ -19,41 +19,45 @@ export const GITATTRIBUTES_TEMPLATE = `# Beutl プロジェクト用の既定 .g
 *.svg   text eol=lf
 
 # --- 素材は Git LFS ---------------------------------------------------------
+# 拡張子を [mM][oO][vV] のように書いているのは、大文字小文字を問わず拾うため。
+# gitattributes の照合は core.ignoreCase が false の環境 (Linux の通常の
+# チェックアウト) では大文字小文字を区別する。カメラが吐く .MOV や .JPG が
+# LFS を素通りし、数 GiB の動画が通常の git オブジェクトとして入ってしまう。
 # 動画
-*.mp4  filter=lfs diff=lfs merge=lfs -text
-*.mov  filter=lfs diff=lfs merge=lfs -text
-*.mkv  filter=lfs diff=lfs merge=lfs -text
-*.webm filter=lfs diff=lfs merge=lfs -text
-*.avi  filter=lfs diff=lfs merge=lfs -text
-*.m4v  filter=lfs diff=lfs merge=lfs -text
+*.[mM][pP]4 filter=lfs diff=lfs merge=lfs -text
+*.[mM][oO][vV] filter=lfs diff=lfs merge=lfs -text
+*.[mM][kK][vV] filter=lfs diff=lfs merge=lfs -text
+*.[wW][eE][bB][mM] filter=lfs diff=lfs merge=lfs -text
+*.[aA][vV][iI] filter=lfs diff=lfs merge=lfs -text
+*.[mM]4[vV] filter=lfs diff=lfs merge=lfs -text
 
 # 音声
-*.wav  filter=lfs diff=lfs merge=lfs -text
-*.mp3  filter=lfs diff=lfs merge=lfs -text
-*.flac filter=lfs diff=lfs merge=lfs -text
-*.aac  filter=lfs diff=lfs merge=lfs -text
-*.m4a  filter=lfs diff=lfs merge=lfs -text
-*.ogg  filter=lfs diff=lfs merge=lfs -text
+*.[wW][aA][vV] filter=lfs diff=lfs merge=lfs -text
+*.[mM][pP]3 filter=lfs diff=lfs merge=lfs -text
+*.[fF][lL][aA][cC] filter=lfs diff=lfs merge=lfs -text
+*.[aA][aA][cC] filter=lfs diff=lfs merge=lfs -text
+*.[mM]4[aA] filter=lfs diff=lfs merge=lfs -text
+*.[oO][gG][gG] filter=lfs diff=lfs merge=lfs -text
 
 # 画像
-*.png  filter=lfs diff=lfs merge=lfs -text
-*.jpg  filter=lfs diff=lfs merge=lfs -text
-*.jpeg filter=lfs diff=lfs merge=lfs -text
-*.gif  filter=lfs diff=lfs merge=lfs -text
-*.webp filter=lfs diff=lfs merge=lfs -text
-*.bmp  filter=lfs diff=lfs merge=lfs -text
-*.tif  filter=lfs diff=lfs merge=lfs -text
-*.tiff filter=lfs diff=lfs merge=lfs -text
-*.psd  filter=lfs diff=lfs merge=lfs -text
-*.exr  filter=lfs diff=lfs merge=lfs -text
+*.[pP][nN][gG] filter=lfs diff=lfs merge=lfs -text
+*.[jJ][pP][gG] filter=lfs diff=lfs merge=lfs -text
+*.[jJ][pP][eE][gG] filter=lfs diff=lfs merge=lfs -text
+*.[gG][iI][fF] filter=lfs diff=lfs merge=lfs -text
+*.[wW][eE][bB][pP] filter=lfs diff=lfs merge=lfs -text
+*.[bB][mM][pP] filter=lfs diff=lfs merge=lfs -text
+*.[tT][iI][fF] filter=lfs diff=lfs merge=lfs -text
+*.[tT][iI][fF][fF] filter=lfs diff=lfs merge=lfs -text
+*.[pP][sS][dD] filter=lfs diff=lfs merge=lfs -text
+*.[eE][xX][rR] filter=lfs diff=lfs merge=lfs -text
 
 # フォント・LUT
-*.ttf  filter=lfs diff=lfs merge=lfs -text
-*.otf  filter=lfs diff=lfs merge=lfs -text
-*.ttc  filter=lfs diff=lfs merge=lfs -text
-*.woff filter=lfs diff=lfs merge=lfs -text
-*.woff2 filter=lfs diff=lfs merge=lfs -text
-*.cube filter=lfs diff=lfs merge=lfs -text
+*.[tT][tT][fF] filter=lfs diff=lfs merge=lfs -text
+*.[oO][tT][fF] filter=lfs diff=lfs merge=lfs -text
+*.[tT][tT][cC] filter=lfs diff=lfs merge=lfs -text
+*.[wW][oO][fF][fF] filter=lfs diff=lfs merge=lfs -text
+*.[wW][oO][fF][fF]2 filter=lfs diff=lfs merge=lfs -text
+*.[cC][uU][bB][eE] filter=lfs diff=lfs merge=lfs -text
 `;
 
 export const GITIGNORE_TEMPLATE = `# Beutl プロジェクト用の既定 .gitignore。

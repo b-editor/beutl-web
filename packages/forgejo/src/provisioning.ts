@@ -5,7 +5,7 @@ import {
   findProfileForApi,
 } from "@beutl/db";
 import { forgejoRequest, getForgejoConfig } from "./client";
-import { ForgejoError } from "./errors";
+import { ForgejoEmailInUseError, ForgejoError } from "./errors";
 import type { ForgejoUser } from "./types";
 
 const USERNAME_MAX_LENGTH = 30;
@@ -20,7 +20,11 @@ export function normalizeUsername(source: string): string {
   const normalized = source
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-{2,}/g, "-")
+    // 記号が 2 つ以上続く名前は Forgejo が 422 で拒む。`-` `_` `.` のどの組み合わせ
+    // でも同じなので、連続をまとめて 1 つの `-` に畳む。Beutl のユーザー名は `_` を
+    // 許すため、a__b のような名前は畳まないと全候補が拒否され、そのユーザーは
+    // Git を一切使えなくなる。
+    .replace(/[-._]{2,}/g, "-")
     .replace(/^[-._]+|[-._]+$/g, "")
     .slice(0, USERNAME_MAX_LENGTH)
     .replace(/[-._]+$/g, "");
@@ -46,7 +50,12 @@ function candidateAt(base: string, attempt: number): string {
     attempt < SEQUENTIAL_ATTEMPTS
       ? `-${attempt + 1}`
       : `-${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
-  return `${base.slice(0, USERNAME_MAX_LENGTH - suffix.length)}${suffix}`;
+  // 切り詰めた末尾が記号だと、サフィックスの `-` と並んで `_-` のような連続になり、
+  // Forgejo に拒まれる。
+  const head = base
+    .slice(0, USERNAME_MAX_LENGTH - suffix.length)
+    .replace(/[-._]+$/g, "");
+  return `${head}${suffix}`;
 }
 
 /** 保存しない使い捨ての秘密値 (Forgejo ユーザーの初期パスワードなど)。 */
@@ -77,6 +86,9 @@ export async function ensureGitAccount(userId: string): Promise<{
   const base = normalizeUsername(profile?.userName ?? USERNAME_FALLBACK);
   const config = getForgejoConfig();
   const noreplyDomain = `users.noreply.${new URL(config.baseUrl).hostname}`;
+  // Forgejo はメールアドレスの一意性を要求する。Beutl 側の実アドレスは渡さず、
+  // 到達しない専用ドメインで合成する。userId から決まるので候補ごとには変わらない。
+  const email = `${userId}@${noreplyDomain}`;
 
   for (let attempt = 0; attempt < MAX_USERNAME_ATTEMPTS; attempt++) {
     const username = candidateAt(base, attempt);
@@ -92,9 +104,7 @@ export async function ensureGitAccount(userId: string): Promise<{
         method: "POST",
         body: {
           username,
-          // Forgejo はメールアドレスの一意性を要求する。Beutl 側の実アドレスは
-          // 渡さず、到達しない専用ドメインで合成する。
-          email: `${userId}@${noreplyDomain}`,
+          email,
           password: randomSecret(),
           must_change_password: false,
           visibility: "private",
@@ -102,8 +112,13 @@ export async function ensureGitAccount(userId: string): Promise<{
         },
       });
     } catch (error) {
-      // ユーザー名が埋まっている / 予約語だった場合は次の候補へ。
       if (error instanceof ForgejoError && error.isConflict) {
+        // メールは全候補で同じなので、これが埋まっていると 20 回とも同じ理由で
+        // 失敗する。回しても意味が無いうえ、原因がユーザー名の枯渇に見えてしまう。
+        if (error.body.includes("e-mail already in use")) {
+          throw new ForgejoEmailInUseError(email);
+        }
+        // ユーザー名が埋まっている / 予約語だった場合は次の候補へ。
         continue;
       }
       throw error;
@@ -119,8 +134,17 @@ export async function ensureGitAccount(userId: string): Promise<{
       // 対応表に書けないと Forgejo 側が孤児になる。作ったものは畳んでから投げ直す。
       await forgejoRequest(`/admin/users/${created.login}`, {
         method: "DELETE",
+        // 作った直後なので通常は何も持っていないが、同時実行で push が入ると
+        // purge 無しでは 422 で拒まれ、孤児が残る。
+        searchParams: { purge: true },
         responseType: "none",
-      }).catch(() => undefined);
+      }).catch((deleteError) => {
+        // 畳めなかった場合は孤児が残る。元の例外は投げ直すので、こちらは記録だけ。
+        console.error(
+          `failed to roll back the Forgejo user ${created.login}`,
+          deleteError,
+        );
+      });
       throw error;
     }
 

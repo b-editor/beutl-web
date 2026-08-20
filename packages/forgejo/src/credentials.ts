@@ -5,6 +5,7 @@ import {
   findGitCredential,
   findGitCredentialByName,
   listGitCredentialsByUserId,
+  startRetryableTransaction,
 } from "@beutl/db";
 import { forgejoRequest } from "./client";
 import { ForgejoError } from "./errors";
@@ -51,6 +52,20 @@ export function normalizeCredentialName(source: string): string {
     .trim()
     .slice(0, CREDENTIAL_NAME_MAX_LENGTH)
     .trim();
+}
+
+/**
+ * トークン名の重複かどうか。
+ *
+ * Forgejo 16.0.2 はこれを **400** で返す (実測: `access token name has been used
+ * already`)。400 は他の入力エラーとも共通なので、状態だけでは判別できず本文を見る。
+ * 409 と 422 も見るのは、他のエンドポイントに合わせた保険。
+ */
+function isTokenNameTaken(error: ForgejoError): boolean {
+  if (error.isConflict) return true;
+  return (
+    error.status === 400 && error.body.includes("name has been used already")
+  );
 }
 
 export type IssuedCredential = {
@@ -123,6 +138,8 @@ export async function issueGitCredential(
   const account = await ensureGitAccount(userId);
   const username = account.forgejoUsername;
 
+  // 早めに弾いて、捨てるだけのトークンを Forgejo に作らない。上限そのものは
+  // 控えを書くトランザクションの中で見る (ここだけでは同時実行をすり抜ける)。
   if ((await countGitCredentials({ userId })) >= MAX_CREDENTIALS_PER_USER) {
     throw new CredentialLimitReachedError(MAX_CREDENTIALS_PER_USER);
   }
@@ -142,7 +159,7 @@ export async function issueGitCredential(
       );
     } catch (error) {
       // 控えと Forgejo がずれていた場合もここに来る。名前の重複として同じ扱いにする。
-      if (error instanceof ForgejoError && error.isConflict) {
+      if (error instanceof ForgejoError && isTokenNameTaken(error)) {
         throw new CredentialNameTakenError(name);
       }
       throw error;
@@ -157,24 +174,45 @@ export async function issueGitCredential(
     );
   }
 
+  // クロージャの中では上の絞り込みが効かないので、ここで確定させておく。
+  const lastEight = issued.token_last_eight ?? issued.sha1.slice(-8);
+
   let record;
   try {
-    record = await createGitCredential({
-      userId,
-      name,
-      forgejoTokenId: issued.id,
-      // Forgejo が末尾 8 文字を返すならそれを使う。自前で切るのは返らない場合の保険。
-      lastEight: issued.token_last_eight ?? issued.sha1.slice(-8),
+    // 数えてから書くまでを 1 つのトランザクションに入れる。別々に行うと、19 本の
+    // 状態で違う名前の発行が同時に走ったとき、両方が上限の検査を通って 21 本になる。
+    record = await startRetryableTransaction(async (tx) => {
+      if (
+        (await countGitCredentials({ userId, prisma: tx })) >=
+        MAX_CREDENTIALS_PER_USER
+      ) {
+        throw new CredentialLimitReachedError(MAX_CREDENTIALS_PER_USER);
+      }
+      return await createGitCredential({
+        userId,
+        name,
+        forgejoTokenId: issued.id,
+        // Forgejo が末尾 8 文字を返すならそれを使う。自前で切るのは返らない場合の保険。
+        lastEight,
+        prisma: tx,
+      });
     });
   } catch (error) {
-    // 同じラベルの発行が同時に走ると、Forgejo には 2 本できて片方がここの
-    // ユニーク制約で落ちる。控えに残らないトークンを Forgejo 側に置き去りにしない。
+    // 控えを残せなかったので、Forgejo 側のトークンも消す。ここで諦めると、
+    // 一覧にも出ず失効もできないトークンが生き続ける。
     await withTemporaryPassword(username, async (basicAuth) => {
       await forgejoRequest(
         `/users/${encodeURIComponent(username)}/tokens/${issued.id}`,
         { method: "DELETE", basicAuth, responseType: "none" },
       ).catch(() => undefined);
     }).catch(() => undefined);
+
+    // 上限に達していた場合は、名前の重複と取り違えさせない。
+    if (error instanceof CredentialLimitReachedError) {
+      throw error;
+    }
+    // 残るのは同じラベルの同時発行。Forgejo には 2 本できて、片方がここの
+    // ユニーク制約で落ちる。
     throw new CredentialNameTakenError(name);
   }
 

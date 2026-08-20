@@ -159,6 +159,10 @@ model Profile {
 // (git 用トークンが要るたびに管理 API で振り直す)。
 model GitAccount {
   userId          String   @id
+  // Forgejo 側は int64 だが、こちらは Int (INT4) で受ける。ID は 1 から連番で振られ、
+  // このデプロイでは 2^31 に届かない。BigInt にすると TS 側が bigint になり、
+  // JSON にそのまま載らなくなる方の costs が大きい。既存の Forgejo インスタンスを
+  // 引き継ぐ場合はここを見直すこと。
   forgejoUserId   Int      @unique
   forgejoUsername String   @unique
   createdAt       DateTime @default(now())
@@ -176,6 +180,7 @@ model GitCredential {
   // ユーザーに見せるラベル。Forgejo 上のトークン名と同じ値にする。
   name           String
   // 失効は名前ではなくこの id で行う (名前に / や空白が入りうるため)。
+  // 幅の扱いは GitAccount.forgejoUserId と同じ。
   forgejoTokenId Int
   // どのトークンかを見分けるための末尾 8 文字。
   lastEight      String

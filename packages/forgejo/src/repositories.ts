@@ -28,14 +28,35 @@ function toBase64(text: string): string {
   return btoa(binary);
 }
 
-export async function listRepositories(
-  sudo: string,
-  { page = 1, limit = MAX_PAGE_SIZE }: { page?: number; limit?: number } = {},
-) {
-  return await forgejoRequest<ForgejoRepository[]>("/user/repos", {
-    sudo,
-    searchParams: { page, limit },
-  });
+/**
+ * 1 ユーザーが持てるリポジトリ数の上限。クォータ (既定 10 GiB) の方が先に効くので
+ * 実際には届かないが、Forgejo が壊れた応答を返したときに無限に回らないための箍。
+ */
+const MAX_REPOSITORY_PAGES = 40;
+
+/**
+ * リポジトリを全件返す。
+ *
+ * Forgejo は 1 ページ 50 件までしか返さない。1 ページだけ読むと 51 件目から先が
+ * 黙って消え、画面の件数と合計容量も、デスクトップに返す一覧も、正しそうな顔で
+ * 足りない値になる。
+ */
+export async function listRepositories(sudo: string) {
+  const all: ForgejoRepository[] = [];
+
+  for (let page = 1; page <= MAX_REPOSITORY_PAGES; page++) {
+    const batch = await forgejoRequest<ForgejoRepository[]>("/user/repos", {
+      sudo,
+      searchParams: { page, limit: MAX_PAGE_SIZE },
+    });
+    all.push(...batch);
+    if (batch.length < MAX_PAGE_SIZE) return all;
+  }
+
+  console.error(
+    `listRepositories stopped at ${MAX_REPOSITORY_PAGES} pages for ${sudo}; the list may be incomplete`,
+  );
+  return all;
 }
 
 export async function getRepository(
@@ -47,6 +68,27 @@ export async function getRepository(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
     { sudo },
   );
+}
+
+/**
+ * テンプレートの入っていないリポジトリを消す。
+ *
+ * 作成そのものは成功していて応答だけ失われた場合もここに来るので、実在を
+ * 確かめてから消す。消せなかったら投げずに記録だけ残す。呼び出し元は既に別の
+ * 例外を投げようとしていて、それを握り潰すと本来の失敗理由が消えるため。
+ */
+async function rollbackPartialRepository(sudo: string, name: string) {
+  try {
+    const existing = await getRepository(sudo, sudo, name);
+    if (!existing) return;
+    await deleteRepository(sudo, sudo, name);
+  } catch (error) {
+    console.error(
+      `failed to roll back the half-created repository ${sudo}/${name}; ` +
+        "it has no .gitattributes, so media pushed to it will not use LFS",
+      error,
+    );
+  }
 }
 
 /**
@@ -63,18 +105,30 @@ export async function createRepository(
     description?: string;
   },
 ) {
-  const repository = await forgejoRequest<ForgejoRepository>("/user/repos", {
-    method: "POST",
-    sudo,
-    body: {
-      name,
-      description,
-      // プライベート専用で運用する。Forgejo 側も FORCE_PRIVATE で固定している。
-      private: true,
-      auto_init: true,
-      default_branch: "main",
-    },
-  });
+  let repository: ForgejoRepository;
+  try {
+    repository = await forgejoRequest<ForgejoRepository>("/user/repos", {
+      method: "POST",
+      sudo,
+      body: {
+        name,
+        description,
+        // プライベート専用で運用する。Forgejo 側も FORCE_PRIVATE で固定している。
+        private: true,
+        auto_init: true,
+        default_branch: "main",
+      },
+    });
+  } catch (error) {
+    // 名前の衝突はそのまま返す。作られていないので畳むものもない。
+    if (error instanceof ForgejoError && error.isConflict) {
+      throw error;
+    }
+    // 応答だけを取りこぼした場合、サーバー側には .gitattributes の無いリポジトリが
+    // 出来ている。作成が成功していたかを確かめてから畳む。
+    await rollbackPartialRepository(sudo, name);
+    throw error;
+  }
 
   try {
     await forgejoRequest(
@@ -104,7 +158,7 @@ export async function createRepository(
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
     // なかったことにして、ユーザーにやり直させる方がまだ良い。
-    await deleteRepository(sudo, sudo, name).catch(() => undefined);
+    await rollbackPartialRepository(sudo, name);
     throw error;
   }
 
@@ -182,6 +236,46 @@ export async function listContents(
  * maxBytes を超えるものは読まずに null を返す。LFS に載せていない巨大なバイナリが
  * あると、表示するかどうかを判断する前にメモリへ載ってしまうため。
  */
+/**
+ * `maxBytes` を超えていたときの戻り値。
+ * 「存在しない」を表す null と区別できないと、呼び出し側は 404 を返すしかなくなる。
+ */
+export const FILE_TOO_LARGE = Symbol("FILE_TOO_LARGE");
+
+/** 上限を超えない範囲だけ読む。超えたら残りを捨てて打ち切る。 */
+async function readUpTo(
+  response: Response,
+  maxBytes: number,
+): Promise<string | typeof FILE_TOO_LARGE> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return FILE_TOO_LARGE;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 export async function getRawFile(
   sudo: string,
   owner: string,
@@ -189,7 +283,7 @@ export async function getRawFile(
   path: string,
   ref?: string,
   { maxBytes }: { maxBytes?: number } = {},
-) {
+): Promise<string | null | typeof FILE_TOO_LARGE> {
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   const response = await forgejoFetch(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/raw/${encodeRepositoryPath(path)}${query}`,
@@ -206,16 +300,19 @@ export async function getRawFile(
     );
   }
 
-  if (maxBytes !== undefined) {
-    const declared = Number(response.headers.get("Content-Length"));
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      // 読まずに捨てる。body を放置すると接続が滞留する。
-      await response.body?.cancel();
-      return null;
-    }
+  if (maxBytes === undefined) {
+    return await response.text();
   }
 
-  return await response.text();
+  const declared = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    // 読まずに捨てる。body を放置すると接続が滞留する。
+    await response.body?.cancel();
+    return FILE_TOO_LARGE;
+  }
+  // Content-Length が無いと上の判定は素通りする。ヘッダを信じきらず、読みながら
+  // 打ち切る (無ければ 0 と評価され、どんな大きさでも通ってしまう)。
+  return await readUpTo(response, maxBytes);
 }
 
 /**
@@ -263,7 +360,10 @@ export async function resolveContentSizes(
 
   resolvable.forEach((entry, index) => {
     const content = contents[index];
-    const pointer = content === null ? null : parseLfsPointer(content);
+    // ここに来る候補はポインタの上限以下なので FILE_TOO_LARGE は出ないが、
+    // 出たとしてもポインタではないので実体の大きさをそのまま使う。
+    const pointer =
+      typeof content === "string" ? parseLfsPointer(content) : null;
     sizes.set(entry.path, pointer ? pointer.size : entry.size);
   });
 
@@ -280,11 +380,12 @@ export async function fetchMedia(
   name: string,
   path: string,
   ref?: string,
+  { forwardHeaders }: { forwardHeaders?: Record<string, string | null> } = {},
 ) {
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   return await forgejoFetch(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/media/${encodeRepositoryPath(path)}${query}`,
-    { sudo },
+    { sudo, forwardHeaders },
   );
 }
 

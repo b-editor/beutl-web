@@ -30,6 +30,26 @@ export class ForgejoError extends Error {
   }
 }
 
+/**
+ * Beutl ユーザー用に合成したメールアドレスが、既に別の Forgejo ユーザーのものに
+ * なっている。beutl-web の DB と Forgejo が別々の時点に復元されると起きる
+ * (対応表だけが失われ、Forgejo 側のユーザーが残る)。
+ *
+ * ここで新しいユーザーを作ると、元のユーザーのリポジトリと発行済みトークンが
+ * 宙に浮いたまま残るので、自動では畳まず運用者に判断させる。
+ */
+export class ForgejoEmailInUseError extends Error {
+  constructor(readonly email: string) {
+    super(
+      `Forgejo already has a user with the address ${email}. ` +
+        "The beutl-web database and Forgejo are probably restored to different " +
+        "points in time; restore the GitAccount mapping or remove the stale " +
+        "Forgejo user before retrying.",
+    );
+    this.name = "ForgejoEmailInUseError";
+  }
+}
+
 export class ForgejoConfigurationError extends Error {
   constructor(message: string) {
     super(message);

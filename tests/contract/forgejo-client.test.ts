@@ -11,6 +11,7 @@ import {
   MAX_LFS_POINTER_BYTES,
   forgejoRequest,
   getForgejoConfig,
+  listRepositories,
   isForgejoConfigured,
   normalizeCredentialName,
   normalizeUsername,
@@ -131,7 +132,14 @@ describe("ユーザー名の正規化", () => {
   it("Forgejo が受け付けない文字を落とす", () => {
     expect(normalizeUsername("Yuto Terada")).toBe("yuto-terada");
     expect(normalizeUsername("ユーザー")).toBe("beutl-user");
-    expect(normalizeUsername("a..b")).toBe("a..b");
+    // 記号が 2 つ以上続く名前は Forgejo が 422 で拒む (16.0.2 で実測)。
+    // 畳まないと全候補が拒否され、そのユーザーは Git を一切使えない。
+    expect(normalizeUsername("a..b")).toBe("a-b");
+    expect(normalizeUsername("a__b")).toBe("a-b");
+    expect(normalizeUsername("a-_b")).toBe("a-b");
+    // 1 つだけなら通るので残す。
+    expect(normalizeUsername("a.b")).toBe("a.b");
+    expect(normalizeUsername("a_b")).toBe("a_b");
     expect(normalizeUsername("--lead--")).toBe("lead");
   });
 
@@ -191,12 +199,69 @@ describe("テンプレートの LFS 対象", () => {
     }
   });
 
-  it("素材は LFS に載せる", () => {
-    for (const extension of ["mp4", "wav", "png", "ttf", "cube"]) {
+  it("素材は LFS に載せる (大文字の拡張子も)", () => {
+    // gitattributes の照合は core.ignoreCase が false の環境では大文字小文字を
+    // 区別する。カメラが吐く .MOV や .JPG を取りこぼさないよう、英字は
+    // [mM] のような文字クラスで書く。
+    for (const extension of ["mp4", "mov", "wav", "png", "jpg", "ttf", "cube"]) {
+      const pattern = [...extension]
+        .map((ch) =>
+          /[a-z]/.test(ch) ? `\\[${ch}${ch.toUpperCase()}\\]` : ch,
+        )
+        .join("");
       expect(GITATTRIBUTES_TEMPLATE).toMatch(
-        new RegExp(`\\*\\.${extension}\\s+filter=lfs diff=lfs merge=lfs -text`),
+        new RegExp(`\\*\\.${pattern}\\s+filter=lfs diff=lfs merge=lfs -text`),
       );
     }
+  });
+});
+
+describe("リポジトリ一覧のページング", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env.FORGEJO_BASE_URL = BASE_URL;
+    process.env.FORGEJO_ADMIN_TOKEN = ADMIN_TOKEN;
+    process.env.FORGEJO_PROXY_SECRET = PROXY_SECRET;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FORGEJO_BASE_URL;
+    delete process.env.FORGEJO_ADMIN_TOKEN;
+    delete process.env.FORGEJO_PROXY_SECRET;
+  });
+
+  function repositories(count: number, offset = 0) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: offset + index,
+      name: `repo-${offset + index}`,
+    }));
+  }
+
+  it("50 件で止まらず全ページ取る", async () => {
+    // 1 ページ 50 件が Forgejo の上限。1 ページしか読まないと 51 件目から先が
+    // 黙って消え、件数も合計容量も正しそうな顔で足りない値になる。
+    fetchMock = vi.fn(async (url: string | URL) => {
+      const page = new URL(String(url)).searchParams.get("page");
+      if (page === "1") return jsonResponse(repositories(50));
+      if (page === "2") return jsonResponse(repositories(50, 50));
+      return jsonResponse(repositories(7, 100));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const all = await listRepositories("someone");
+
+    expect(all).toHaveLength(107);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("1 ページで収まるなら追加で取りにいかない", async () => {
+    fetchMock = vi.fn(async () => jsonResponse(repositories(3)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listRepositories("someone")).resolves.toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

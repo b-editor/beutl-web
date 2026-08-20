@@ -1,5 +1,6 @@
 export * from "./client";
 export * from "./credentials";
+export * from "./deletion";
 export * from "./errors";
 export * from "./lfs";
 export * from "./paths";

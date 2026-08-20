@@ -10,7 +10,7 @@ import { fetchMedia, joinRouteSegments } from "@beutl/forgejo";
  * レスポンスをそのまま流す (LFS の実体は数 GiB になりうるため読み切らない)。
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   context: {
     params: Promise<{ owner: string; repo: string; path: string[] }>;
   },
@@ -25,16 +25,31 @@ export async function GET(
 
   // Next の dynamic params は既にデコード済み。再度デコードしない。
   const filePath = joinRouteSegments(path);
-  const upstream = await fetchMedia(username, owner, repo, filePath);
+  // 素材は数 GiB になる。Range を渡さないと、回線が切れるたびに先頭から取り直しに
+  // なり、途中から再生することもできない。Forgejo の media は 206 を返せる。
+  const upstream = await fetchMedia(username, owner, repo, filePath, undefined, {
+    forwardHeaders: {
+      Range: request.headers.get("Range"),
+      "If-Range": request.headers.get("If-Range"),
+    },
+  });
   if (!upstream.ok || !upstream.body) {
     return new Response("Not Found", { status: 404 });
   }
 
   const headers = new Headers();
-  const contentType = upstream.headers.get("Content-Type");
-  const contentLength = upstream.headers.get("Content-Length");
-  if (contentType) headers.set("Content-Type", contentType);
-  if (contentLength) headers.set("Content-Length", contentLength);
+  // 部分応答の解釈に必要なものは、そのまま渡さないとブラウザが繋ぎ直せない。
+  for (const name of [
+    "Content-Type",
+    "Content-Length",
+    "Content-Range",
+    "Accept-Ranges",
+    "Last-Modified",
+    "ETag",
+  ]) {
+    const value = upstream.headers.get(name);
+    if (value) headers.set(name, value);
+  }
   headers.set(
     "Content-Disposition",
     `attachment; filename*=UTF-8''${encodeURIComponent(path.at(-1) ?? "download")}`,
@@ -42,5 +57,6 @@ export async function GET(
   // 非公開リポジトリの中身なので、共有キャッシュには載せない。
   headers.set("Cache-Control", "private, no-store");
 
-  return new Response(upstream.body, { status: 200, headers });
+  // 206 をそのまま返す。200 に潰すと、ブラウザは部分データを全体だと思い込む。
+  return new Response(upstream.body, { status: upstream.status, headers });
 }

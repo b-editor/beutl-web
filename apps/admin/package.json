@@ -24,6 +24,7 @@
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/email": "workspace:*",
+    "@beutl/forgejo": "workspace:*",
     "@beutl/i18n": "workspace:*",
     "@beutl/next": "workspace:*",
     "@opennextjs/cloudflare": "^1.20.2",
