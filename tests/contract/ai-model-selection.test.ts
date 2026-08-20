@@ -176,6 +176,34 @@ describe("choosing a model per request", () => {
       .toBe(0);
   });
 
+  it("hands back a paid job asked for without naming a model after the default moved", async () => {
+    const key = "paid-before-the-default-moved";
+    const first = await generateWith({}, key);
+    expect(first.status).toBe(200);
+    const paid = await first.json();
+
+    // 管理者が既定を入れ替えた。モデルを名指ししていない依頼の指紋に既定を
+    // 載せていると、同じ名前で問い合わせ直しても別のリクエストに見えて、
+    // 支払い済みの結果に届かなくなる。
+    await upsertAiOperationModel({
+      operation: "image.generate",
+      modelId: "dear/model",
+      priceUnits: 31,
+      displayName: "Dear",
+      sortOrder: -1,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+    vi.mocked(generateImage).mockClear();
+
+    const again = await generateWith({}, key);
+
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual(paid);
+    expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+    expect(state.aiJobs.size).toBe(1);
+  });
+
   it("hands back a paid job under a model that has since been disabled", async () => {
     const key = "paid-before-the-model-went-away";
     const first = await generateWith({ model: "dear/model" }, key);

@@ -12,6 +12,10 @@ import { STORAGE_QUOTA_BYTES } from "@beutl/core";
 
 const MAX_NAME_LENGTH = 255;
 const MAX_CONTROL_BODY_BYTES = 4 * 1024;
+// 開始要求の名前。ブラウザが作った UUID で、応答が失われたときの問い合わせ直しに
+// 使う。形を絞るのは、他人の行を引き当てる推測をさせないため。
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(request: Request): Promise<Response> {
   if (!fromThisSite(request)) return unauthorizedResponse();
@@ -26,8 +30,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }
 
-  const { name, mimeType, size } = (parsed.value ?? {}) as Record<string, unknown>;
+  const { id, name, mimeType, size } = (parsed.value ?? {}) as Record<
+    string,
+    unknown
+  >;
   if (
+    typeof id !== "string" ||
+    !UUID.test(id) ||
     typeof name !== "string" ||
     name.length === 0 ||
     name.length > MAX_NAME_LENGTH ||
@@ -42,6 +51,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const outcome = await startUpload({
     userId,
+    id,
     name,
     mimeType: typeof mimeType === "string" ? mimeType : "application/octet-stream",
     size: BigInt(size),

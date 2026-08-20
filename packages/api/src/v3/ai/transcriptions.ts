@@ -156,15 +156,6 @@ const app = new Hono().post("/", async (c) => {
   }
   const catalog = await loadAiModelCatalog();
   const selectedModel = catalog.resolve("audio.transcribe", rawModel);
-  // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。同じ名前で
-  // 支払い済みの job は、モデルが無効化されたあとでも取り戻せなければならない。
-  // 「今そのモデルで新しく受けられるか」は回収を試みたあとで見る。
-  const fingerprintModelId = rawModel ?? selectedModel?.modelId;
-  if (!fingerprintModelId) {
-    return c.json(await apiErrorResponse("aiModelUnavailable"), {
-      status: 400,
-    });
-  }
 
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
@@ -174,7 +165,8 @@ const app = new Hono().post("/", async (c) => {
       contentType: file.type || "audio/mpeg",
       durationSeconds: parsedAudio.durationSeconds,
       contentSha256: await sha256Hex(parsedAudio.bytes),
-      model: fingerprintModelId,
+      // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
+      ...(rawModel ? { model: rawModel } : {}),
       ...(language ? { language } : {}),
     },
   });

@@ -53,6 +53,7 @@ import {
   ResultShimmer,
   ResultPlaceholder,
   blockedReason,
+  keepsIdempotencyKey,
   downloadTextFile,
   defaultModelId,
   type AiAccess,
@@ -197,9 +198,10 @@ export function TranslateForm({
       }
 
       setMessage(t(`api-errors:${outcome.errorCode}`));
-      // A run that was cut off may have finished on the server, so the next
-      // attempt keeps its name and asks for that same run again.
-      if (outcome.errorCode !== "aiRequestInterrupted") {
+      // A run that was cut off, one still going, or one whose paid result could
+      // not be read may all be answered by asking again under the same name.
+      // None of them is a settlement, so the name stays.
+      if (!keepsIdempotencyKey(outcome.errorCode)) {
         setIdempotencyKey(randomUuid());
       }
     } catch {

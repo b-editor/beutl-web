@@ -252,12 +252,6 @@ const app = new Hono()
     // asked for something new is a separate question, answered below.
     const catalog = await loadAiModelCatalog();
     const selectedModel = catalog.resolve("image.generate", parsedBody.data.model);
-    const fingerprintModelId = parsedBody.data.model ?? selectedModel?.modelId;
-    if (!fingerprintModelId) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
 
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
@@ -265,7 +259,10 @@ const app = new Hono()
       input: {
         prompt,
         aspectRatio,
-        model: fingerprintModelId,
+        // 名指しされたときだけ。既定モデルを載せると、既定が入れ替わったあとに
+        // 同じ名前で問い合わせ直しても別のリクエストに見え、支払い済みの job に
+        // 届かなくなる。
+        ...(parsedBody.data.model ? { model: parsedBody.data.model } : {}),
         // "auto" is the absence of a choice, so a caller that sends it and one
         // that omits it must fingerprint alike; otherwise a retry under the
         // same key is refused as a conflict and cannot reach the job it paid
@@ -561,19 +558,13 @@ const app = new Hono()
       `image.edit.${editTask}`,
       fields.data.model,
     );
-    const fingerprintModelId = fields.data.model ?? selectedModel?.modelId;
-    if (!fingerprintModelId) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
 
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: `image.edit.${editTask}`,
       input: {
         task: editTask,
-        model: fingerprintModelId,
+        ...(fields.data.model ? { model: fields.data.model } : {}),
         ...(editPrompt ? { prompt: editPrompt } : {}),
         fileName: file.name,
         contentType: inputImage.mimeType,

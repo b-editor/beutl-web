@@ -7,6 +7,7 @@ import { headers } from "next/headers";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
@@ -29,6 +30,8 @@ import {
   MAX_TRANSLATION_SEGMENTS,
   SAFE_SEGMENT_ID_PATTERN,
   synchronizeAiVideoJob,
+  type AiRequestIdentity,
+  findReplayableAiJob,
   toAiRequestIdentity,
   transcribeAudio,
   translateSegments,
@@ -139,10 +142,132 @@ async function requestIdentityOf(
 // default: the default may cost more than the one they chose, and they would
 // be charged that price for a model they never asked for.
 async function resolveModelOf(formData: FormData, operation: string) {
-  const requested = formData.get("model");
-  if (requested !== null && typeof requested !== "string") return null;
+  const requested = namedModelOf(formData);
+  if (requested === undefined) return null;
   const catalog = await loadAiModelCatalog();
   return catalog.resolve(operation, requested);
+}
+
+// 名指しされたモデル。undefined は「形が不正」、null は「指定なし」。
+function namedModelOf(formData: FormData): string | null | undefined {
+  const requested = formData.get("model");
+  if (requested === null) return null;
+  return typeof requested === "string" ? requested : undefined;
+}
+
+// 指紋に載せるモデル。名指しされていないときは載せない。既定モデルを載せると、
+// 既定が入れ替わったあとに同じ名前で問い合わせ直しても別のリクエストに見え、
+// 支払い済みの job に届かなくなる。
+function fingerprintModelOf(formData: FormData): { model?: string } {
+  const named = namedModelOf(formData);
+  return named ? { model: named } : {};
+}
+
+// 既に使われた名前に対する答え。今のモデル設定を見る前に読むので、支払い済みの
+// job は、そのモデルが止められたあとでも取り戻せる。
+async function replayOf(userId: string, identity: AiRequestIdentity) {
+  return await findReplayableAiJob({ userId, ...identity });
+}
+
+type ReplayOutcome = Awaited<ReturnType<typeof replayOf>>;
+
+function settledReplay(
+  replay: ReplayOutcome,
+  t: (key: string) => string,
+): AiActionResult | null {
+  if (replay?.outcome === "idempotencyConflict") {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (replay?.outcome === "deleted") {
+    return { success: false, message: t("api-errors:aiRequestWasDeleted") };
+  }
+  return null;
+}
+
+// 文字起こしと翻訳は保存した JSON を読み直して返す。
+async function answerFromExistingTranscriptionJob(
+  job: { id: string; status: string; resultFileId: string | null },
+  { userId, durationSeconds }: { userId: string; durationSeconds: number },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  // The same submission arriving twice must show the result the first one paid
+  // for. Returning only a URL left the screen blank, because the editor renders
+  // segments and never reads a URL.
+  if (job.status === "succeeded" && job.resultFileId) {
+    const recovered = await recoverTranscription({
+      jobId: job.id,
+      userId,
+      durationSeconds,
+    });
+    if (recovered) return { success: true, jobId: job.id, ...recovered };
+    // 支払い済みの結果を読めなかっただけ。名前を捨てると次は新規課金になる。
+    return {
+      success: false,
+      message: t("api-errors:aiResultUnavailable"),
+      keepIdempotencyKey: true,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
+}
+
+async function answerFromExistingTranslationJob(
+  job: { id: string; status: string; resultFileId: string | null },
+  {
+    userId,
+    segments,
+  }: { userId: string; segments: { id: string; text: string }[] },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded" && job.resultFileId) {
+    const recovered = await recoverTranslation({ jobId: job.id, userId, segments });
+    if (recovered) return { success: true, jobId: job.id, segments: recovered };
+    return {
+      success: false,
+      message: t("api-errors:aiResultUnavailable"),
+      keepIdempotencyKey: true,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
+}
+
+// 画像と画像編集はどちらもファイルひとつを返す。
+async function answerFromExistingFileJob(
+  job: {
+    id: string;
+    status: string;
+    resultFileId: string | null;
+    resultFile?: { name: string; mimeType: string } | null;
+  },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded" && job.resultFileId) {
+    return {
+      success: true,
+      jobId: job.id,
+      url: await getContentUrl(job.resultFileId),
+      fileName: "resultFile" in job ? job.resultFile?.name ?? null : null,
+      contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
 }
 
 // Submitting a video is the one AI operation whose failure is not simply a
@@ -426,7 +551,14 @@ export async function generateImageAction(
   }
   // Size first: validateAiInputImage buffers the whole upload, so checking
   // afterwards lets an oversized body be materialized before it is refused.
-  if (referenceFiles.some((file) => file.size > MAX_AI_IMAGE_UPLOAD_BYTES)) {
+  // The total matters as much as each one: every picture is held raw, again as
+  // base64 and again through JSON, so the per-picture limit taken four times
+  // over is past what this Worker has.
+  if (
+    referenceFiles.some((file) => file.size > MAX_AI_IMAGE_UPLOAD_BYTES) ||
+    referenceFiles.reduce((total, file) => total + file.size, 0) >
+      MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES
+  ) {
     return { success: false, message: t("api-errors:fileIsTooLarge") };
   }
   const validated = await Promise.all(
@@ -442,9 +574,40 @@ export async function generateImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
+  const identity = await requestIdentityOf(formData, "image.generate", {
+    ...fingerprintModelOf(formData),
+    prompt,
+    aspectRatio,
+    ...(background !== "auto" ? { background } : {}),
+    ...(seed === undefined ? {} : { seed }),
+    // Every picture is part of what makes this request the request it is: the
+    // same prompt guided by different pictures is a different run.
+    ...(references.length > 0
+      ? {
+          references: await Promise.all(
+            references.map(async (reference, index) => ({
+              fileName: referenceFiles[index]!.name,
+              contentType: reference.mimeType,
+              contentSha256: await sha256Hex(reference.bytes),
+            })),
+          ),
+        }
+      : {}),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingFileJob(replay.job, t);
+  }
+
   const selectedModel = await resolveModelOf(formData, "image.generate");
   if (!selectedModel) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
 
   // Checked before the reservation: GPT Image-1 renders 1:1, 3:2 and 2:3 and
@@ -467,30 +630,6 @@ export async function generateImageAction(
       success: false,
       message: t("api-errors:aiModelDoesNotSupportRequest"),
     };
-  }
-
-  const identity = await requestIdentityOf(formData, "image.generate", {
-    model: selectedModel.modelId,
-    prompt,
-    aspectRatio,
-    ...(background !== "auto" ? { background } : {}),
-    ...(seed === undefined ? {} : { seed }),
-    // Every picture is part of what makes this request the request it is: the
-    // same prompt guided by different pictures is a different run.
-    ...(references.length > 0
-      ? {
-          references: await Promise.all(
-            references.map(async (reference, index) => ({
-              fileName: referenceFiles[index]!.name,
-              contentType: reference.mimeType,
-              contentSha256: await sha256Hex(reference.bytes),
-            })),
-          ),
-        }
-      : {}),
-  });
-  if (!identity) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
   const cost = selectedModel.priceUnits;
@@ -519,22 +658,8 @@ export async function generateImageAction(
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    if (job.status === "succeeded" && job.resultFileId) {
-      return {
-        success: true,
-        jobId: job.id,
-        url: await getContentUrl(job.resultFileId),
-        fileName: "resultFile" in job ? job.resultFile?.name ?? null : null,
-        contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
-      };
-    }
-    return stillRunning(job.status)
-      ? {
-        success: false,
-        message: t("api-errors:aiRequestInProgress"),
-        keepIdempotencyKey: true,
-      }
-      : { success: false, message: t("api-errors:aiProviderError") };
+    // 同時に届いた 2 本のうち、予約が決着をつけたほう。
+    return await answerFromExistingFileJob(job, t);
   }
 
   try {
@@ -610,11 +735,6 @@ export async function editImageAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
-  }
-  const cost = selectedModel.priceUnits;
   // editImage substitutes its own prompt for the tasks that do not take one, so
   // carrying the user's text for those would record and fingerprint a string
   // the provider never sees. The v3 endpoint drops it for the same reason.
@@ -623,6 +743,31 @@ export async function editImageAction(
     : task === "outpaint"
       ? `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`
       : prompt;
+
+  const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
+    ...fingerprintModelOf(formData),
+    task,
+    ...(editPrompt ? { prompt: editPrompt } : {}),
+    fileName: file.name,
+    contentType: validated.mimeType,
+    contentSha256: await sha256Hex(validated.bytes),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingFileJob(replay.job, t);
+  }
+
+  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+  const cost = selectedModel.priceUnits;
   // An edit hands the model a picture, cuts out a background or asks for a
   // size; a model that takes none of those is refused before it is paid for.
   if (
@@ -647,17 +792,6 @@ export async function editImageAction(
     };
   }
 
-  const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
-    model: selectedModel.modelId,
-    task,
-    ...(editPrompt ? { prompt: editPrompt } : {}),
-    fileName: file.name,
-    contentType: validated.mimeType,
-    contentSha256: await sha256Hex(validated.bytes),
-  });
-  if (!identity) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
-  }
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     // The same kind the v3 edit endpoint writes. Tagging an edit as "image"
@@ -681,22 +815,8 @@ export async function editImageAction(
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    if (job.status === "succeeded" && job.resultFileId) {
-      return {
-        success: true,
-        jobId: job.id,
-        url: await getContentUrl(job.resultFileId),
-        fileName: "resultFile" in job ? job.resultFile?.name ?? null : null,
-        contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
-      };
-    }
-    return stillRunning(job.status)
-      ? {
-        success: false,
-        message: t("api-errors:aiRequestInProgress"),
-        keepIdempotencyKey: true,
-      }
-      : { success: false, message: t("api-errors:aiProviderError") };
+    // 同時に届いた 2 本のうち、予約が決着をつけたほう。
+    return await answerFromExistingFileJob(job, t);
   }
 
   try {
@@ -759,12 +879,8 @@ export async function transcribeAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
-  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
-  }
   const identity = await requestIdentityOf(formData, "audio.transcribe", {
-    model: selectedModel.modelId,
+    ...fingerprintModelOf(formData),
     fileName: file.name,
     contentType: file.type || "audio/mpeg",
     durationSeconds: parsedAudio.durationSeconds,
@@ -773,6 +889,22 @@ export async function transcribeAction(
   });
   if (!identity) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingTranscriptionJob(
+      replay.job,
+      { userId: session.user.id, durationSeconds: parsedAudio.durationSeconds },
+      t,
+    );
+  }
+
+  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
   const cost = selectedModel.priceUnits * minutes;
   const reservation = await createReservedAiJob({
@@ -794,32 +926,11 @@ export async function transcribeAction(
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    // The same submission arriving twice must show the result the first one
-    // paid for. Returning only a URL left the screen blank, because the editor
-    // renders segments and never reads a URL.
-    if (job.status === "succeeded" && job.resultFileId) {
-      const recovered = await recoverTranscription({
-        jobId: job.id,
-        userId: session.user.id,
-        durationSeconds: parsedAudio.durationSeconds,
-      });
-      if (recovered) {
-        return { success: true, jobId: job.id, ...recovered };
-      }
-      // 支払い済みの結果を読めなかっただけ。名前を捨てると次は新規課金になる。
-      return {
-        success: false,
-        message: t("api-errors:aiResultUnavailable"),
-        keepIdempotencyKey: true,
-      };
-    }
-    return stillRunning(job.status)
-      ? {
-        success: false,
-        message: t("api-errors:aiRequestInProgress"),
-        keepIdempotencyKey: true,
-      }
-      : { success: false, message: t("api-errors:aiProviderError") };
+    return await answerFromExistingTranscriptionJob(
+      job,
+      { userId: session.user.id, durationSeconds: parsedAudio.durationSeconds },
+      t,
+    );
   }
 
   try {
@@ -923,12 +1034,8 @@ export async function translateAction(
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
-  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
-  }
   const identity = await requestIdentityOf(formData, "subtitle.translate", {
-    model: selectedModel.modelId,
+    ...fingerprintModelOf(formData),
     ...(sourceLanguage ? { sourceLanguage } : {}),
     targetLanguage,
     segments,
@@ -937,6 +1044,22 @@ export async function translateAction(
   });
   if (!identity) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingTranslationJob(
+      replay.job,
+      { userId: session.user.id, segments },
+      t,
+    );
+  }
+
+  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
 
   const usageUnits =
@@ -962,28 +1085,11 @@ export async function translateAction(
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    if (job.status === "succeeded" && job.resultFileId) {
-      const recovered = await recoverTranslation({
-        jobId: job.id,
-        userId: session.user.id,
-        segments,
-      });
-      if (recovered) {
-        return { success: true, jobId: job.id, segments: recovered };
-      }
-      return {
-        success: false,
-        message: t("api-errors:aiResultUnavailable"),
-        keepIdempotencyKey: true,
-      };
-    }
-    return stillRunning(job.status)
-      ? {
-        success: false,
-        message: t("api-errors:aiRequestInProgress"),
-        keepIdempotencyKey: true,
-      }
-      : { success: false, message: t("api-errors:aiProviderError") };
+    return await answerFromExistingTranslationJob(
+      job,
+      { userId: session.user.id, segments },
+      t,
+    );
   }
 
   try {
@@ -1119,9 +1225,37 @@ export async function createVideoAction(
     }
   }
 
+  const identity = await requestIdentityOf(formData, "video.generate", {
+    ...fingerprintModelOf(formData),
+    prompt,
+    durationSeconds,
+    resolution,
+    aspectRatio: videoAspectRatio,
+    generateAudio,
+    ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+    ...frameDigests,
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    // 動画は非同期なので job そのものが答え。
+    return {
+      success: true,
+      jobId: replay.job.id,
+      url: replay.job.resultFileId
+        ? await getContentUrl(replay.job.resultFileId)
+        : null,
+    };
+  }
+
   const selectedModel = await resolveModelOf(formData, "video.generate");
   if (!selectedModel) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
 
   // Checked before the reservation: a model that cannot render this
@@ -1144,20 +1278,6 @@ export async function createVideoAction(
       success: false,
       message: t("api-errors:aiModelDoesNotSupportRequest"),
     };
-  }
-
-  const identity = await requestIdentityOf(formData, "video.generate", {
-    model: selectedModel.modelId,
-    prompt,
-    durationSeconds,
-    resolution,
-    aspectRatio: videoAspectRatio,
-    generateAudio,
-    ...(videoSeed === undefined ? {} : { seed: videoSeed }),
-    ...frameDigests,
-  });
-  if (!identity) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
   }
 
   const callbackNonce = await createCallbackNonce();

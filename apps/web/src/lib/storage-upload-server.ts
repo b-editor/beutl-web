@@ -99,15 +99,34 @@ export function partCountOf(size: bigint): number {
 
 export async function startUpload({
   userId,
+  id,
   name,
   mimeType,
   size,
 }: {
   userId: string;
+  // 開始要求の名前。応答だけが失われても、同じ名前で問い合わせ直せば同じ
+  // アップロードが返る。これが無いと、ブラウザは 24 時間ぶんの枠を握ったまま
+  // 二度と手の届かないアップロードを残すことになる。
+  id: string;
   name: string;
   mimeType: string;
   size: bigint;
 }): Promise<{ ok: true; upload: StartedUpload } | { ok: false; reason: UploadFailure }> {
+  const existing = await findStorageUploadByIdAndUserId({ id, userId });
+  if (existing) {
+    return existing.completedFileId
+      ? { ok: false, reason: "uploadFailed" }
+      : {
+        ok: true,
+        upload: {
+          id: existing.id,
+          partSize: existing.partSize,
+          partCount: partCountOf(existing.size),
+        },
+      };
+  }
+
   const objectKey = newObjectKey();
   const multipart = await bucket().createMultipartUpload(objectKey, {
     httpMetadata: mimeType ? { contentType: mimeType } : undefined,
@@ -129,8 +148,13 @@ export async function startUpload({
         return null;
       }
 
+      // 名前が先に取られていたら（同時に届いた 2 本目）、作らずにそれを返す。
+      const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
+      if (raced) return raced;
+
       return await createStorageUpload({
         userId,
+        id,
         objectKey,
         uploadId: multipart.uploadId,
         name: await availableName({ userId, name, prisma }),
@@ -240,10 +264,20 @@ export async function finishUpload({
   try {
     object = await multipart.complete(parts);
   } catch {
+    // Another completion of the same upload may have joined the parts already,
+    // in which case the bucket no longer knows this upload id. Its file is the
+    // answer, and neither the object nor the row is this call's to remove.
+    const settled = await completedFileOf(upload.id, userId);
+    if (settled) return settled;
+
     // A part that never arrived, or one the bucket does not recognise. The
-    // upload keeps its parts until it is abandoned, so it is abandoned here.
-    await abandon(upload.objectKey, upload.uploadId);
-    await deleteStorageUpload({ id: upload.id });
+    // upload keeps its parts until it is abandoned, so it is abandoned here —
+    // and the row is kept when that did not work, so a later sweep can try
+    // again rather than losing the parts for good.
+    if (await abandon(upload.objectKey, upload.uploadId)) {
+      await deleteStorageUpload({ id: upload.id });
+    }
+
     return { ok: false, reason: "uploadFailed" };
   }
 
@@ -297,10 +331,16 @@ export async function finishUpload({
       return { kind: "created" as const, id: created.id, name: created.name };
     });
   } catch (error) {
-    // The object is in the bucket and nothing points at it: it would be stored,
-    // and paid for, without ever being seen again. The tracking row is left
-    // alone — a transaction that rolled back wrote no receipt, so the sweep can
-    // still find the upload and clear it.
+    // A failure reported after the commit landed is indistinguishable from one
+    // reported before it, so the receipt is what decides: if it is there, a
+    // file points at this object and removing it would destroy a stored file.
+    const settled = await completedFileOf(upload.id, userId);
+    if (settled) return settled;
+
+    // Nothing points at the object: it would be stored, and paid for, without
+    // ever being seen again. The tracking row is left alone — a transaction
+    // that rolled back wrote no receipt, so the sweep can still find the upload
+    // and clear it.
     try {
       await bucket().delete?.(upload.objectKey);
     } catch (cleanupError) {
@@ -369,6 +409,28 @@ export async function cancelUpload({
 // can be the bucket being briefly unreachable, and the two are told apart by
 // the caller: the tracking row is what lets a later sweep try again, so it is
 // kept while an abort has not been seen to work.
+// The file a completed upload made, when its receipt has been written. Read
+// wherever a failure could be either "it did not happen" or "it happened and
+// the answer went missing".
+async function completedFileOf(
+  uploadId: string,
+  userId: string,
+): Promise<{ ok: true; file: { id: string; name: string; size: bigint } } | null> {
+  const current = await findStorageUploadByIdAndUserId({ id: uploadId, userId })
+    .catch(() => null);
+  if (!current?.completedFileId) return null;
+
+  const file = await findStorageFileByIdAndUserId({
+    id: current.completedFileId,
+    userId,
+  }).catch(() => null);
+  if (!file) return null;
+  return {
+    ok: true,
+    file: { id: file.id, name: file.name, size: BigInt(file.size) },
+  };
+}
+
 async function abandon(objectKey: string, uploadId: string): Promise<boolean> {
   try {
     await bucket().resumeMultipartUpload(objectKey, uploadId).abort();

@@ -225,20 +225,13 @@ const app = new Hono().post("/", async (c) => {
     "subtitle.translate",
     parsedRequest.data.model,
   );
-  // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。同じ名前で
-  // 支払い済みの job を、モデル設定を見る前に取り戻せるようにするため。
-  const fingerprintModelId = parsedRequest.data.model ?? selectedModel?.modelId;
-  if (!fingerprintModelId) {
-    return c.json(await apiErrorResponse("aiModelUnavailable"), {
-      status: 400,
-    });
-  }
 
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "subtitle.translate",
     input: {
-      model: fingerprintModelId,
+      // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
+      ...(parsedRequest.data.model ? { model: parsedRequest.data.model } : {}),
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments,

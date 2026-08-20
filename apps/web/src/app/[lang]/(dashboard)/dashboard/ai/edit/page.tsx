@@ -34,6 +34,12 @@ export default async function Page(props: {
         isImageModelUsable(capabilities.get(model.id), {
           referenceImages: true,
           resolution: operation === "image.edit.upscale",
+          // 背景を抜くのは透過背景を頼むこと。auto/opaque しか出さないモデルは
+          // 必ず拒否される。
+          background:
+            operation === "image.edit.remove_background"
+              ? "transparent"
+              : undefined,
         }),
       );
       // 使えるモデルがひとつも無いのは、能力が読めなかったからではない（読め

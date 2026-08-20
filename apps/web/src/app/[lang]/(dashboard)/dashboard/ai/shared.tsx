@@ -69,6 +69,21 @@ export type AiBalance = {
   endsAtPeriodEnd: boolean;
 };
 
+// その名前で問い合わせ直せば結果が戻る失敗。どれも決着ではないので、次の送信は
+// 同じリクエストとして扱う——名前を捨てると新規課金になる。
+const RECOVERABLE_AI_ERROR_CODES: ReadonlySet<string> = new Set([
+  // 応答が途中で切れた。走り切って課金されている可能性がある。
+  "aiRequestInterrupted",
+  // 最初の実行がまだ走っている。
+  "aiRequestInProgress",
+  // 支払い済みの結果を今は読み出せなかった。
+  "aiResultUnavailable",
+]);
+
+export function keepsIdempotencyKey(errorCode: string): boolean {
+  return RECOVERABLE_AI_ERROR_CODES.has(errorCode);
+}
+
 export type AiBlockReason = "plan" | "balance" | "unavailable";
 
 // A screen is usable when at least one of the operations it offers can be

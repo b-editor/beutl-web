@@ -1,3 +1,4 @@
+import { randomUuid } from "@beutl/core";
 import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
 
 // Sending a file that one request cannot carry.
@@ -25,29 +26,28 @@ export async function uploadStorageFile(
   file: File,
   { onProgress }: { onProgress?: (sentBytes: number) => void } = {},
 ): Promise<UploadOutcome> {
-  // A start whose answer is lost leaves the browser without the id every later
-  // request names, and the upload it made holding parts for a day. Reported as
-  // a refusal rather than thrown, so the screen says so instead of failing
-  // somewhere nothing is listening.
-  let upload: StartedUpload;
+  // The upload is named before it is asked for, so an answer lost on the way
+  // back can be asked for again and comes back as the same upload. Without
+  // that, the browser loses the id every later request names and the upload it
+  // made holds a day's worth of quota nothing can reach.
+  const startBody = JSON.stringify({
+    id: randomUuid(),
+    name: file.name,
+    mimeType: file.type || "application/octet-stream",
+    size: file.size,
+  });
+  let started: Response;
   try {
-    const started = await fetch("/api/internal/storage/uploads", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...INTERNAL_REQUEST_HEADERS,
-      },
-      body: JSON.stringify({
-        name: file.name,
-        mimeType: file.type || "application/octet-stream",
-        size: file.size,
-      }),
-    });
-    if (!started.ok) return { ok: false, errorCode: await errorCodeOf(started) };
-    upload = (await started.json()) as StartedUpload;
+    started = await postStart(startBody);
   } catch {
-    return { ok: false, errorCode: "uploadFailed" };
+    try {
+      started = await postStart(startBody);
+    } catch {
+      return { ok: false, errorCode: "uploadFailed" };
+    }
   }
+  if (!started.ok) return { ok: false, errorCode: await errorCodeOf(started) };
+  const upload = (await started.json()) as StartedUpload;
 
   let sent = 0;
   const parts: UploadedPart[] = [];
@@ -109,6 +109,14 @@ export async function uploadStorageFile(
     ok: true,
     file: (await finished.json()) as { id: string; name: string; size: number },
   };
+}
+
+function postStart(body: string): Promise<Response> {
+  return fetch("/api/internal/storage/uploads", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...INTERNAL_REQUEST_HEADERS },
+    body,
+  });
 }
 
 function postCompletion(uploadId: string, body: string): Promise<Response> {

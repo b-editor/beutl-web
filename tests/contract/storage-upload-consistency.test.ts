@@ -47,6 +47,7 @@ const USER_ID = "user-consistency";
 async function begin() {
   const started = await startUpload({
     userId: USER_ID,
+    id: crypto.randomUUID(),
     name: "clip.mp4",
     mimeType: "video/mp4",
     size: BigInt(10),

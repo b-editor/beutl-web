@@ -280,7 +280,14 @@ export function unsupportedImageRequestReason(
 // however the request is shaped.
 export function isImageModelUsable(
   capabilities: AiImageModelCapabilities | undefined,
-  requires: { referenceImages?: boolean; resolution?: boolean } = {},
+  requires: {
+    referenceImages?: boolean;
+    resolution?: boolean;
+    // The background the operation always asks for. Removing one is asking for
+    // a transparent background, and a model offering only auto and opaque would
+    // refuse every such request.
+    background?: AiImageBackground | undefined;
+  } = {},
 ): boolean {
   if (!capabilities) return true;
   if (capabilities.aspectRatios.length === 0) return false;
@@ -288,5 +295,12 @@ export function isImageModelUsable(
     return false;
   }
   if (requires.resolution === true && !capabilities.resolution) return false;
+  if (
+    requires.background !== undefined &&
+    requires.background !== "auto" &&
+    !capabilities.backgrounds.includes(requires.background)
+  ) {
+    return false;
+  }
   return true;
 }

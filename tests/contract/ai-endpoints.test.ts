@@ -848,12 +848,14 @@ describe("v3 AI endpoints contract", () => {
         ...(await getAiRequestIdentityForTest({
           key,
           operation: "image.generate",
-          // The model is part of the fingerprint, so the same prompt on a
-          // different model is a different request rather than a replay.
+          // A named model is part of the fingerprint, so the same prompt on a
+          // different model is a different request rather than a replay. This
+          // request names none, and the default is deliberately left out: a
+          // default that changes between the first attempt and the retry would
+          // otherwise put the paid job out of reach.
           input: {
             prompt: "test",
             aspectRatio: "1:1",
-            model: "openai/gpt-image-1",
           },
         })),
       });

@@ -232,6 +232,7 @@
     "translatedSoFar": "{{total}} 件中 {{done}} 件",
     "referenceImageTooMany": "参照画像は最大 {{maximum}} 枚です。選び直してください。",
     "operationUnavailableTitle": "現在利用できません",
-    "operationUnavailableDescription": "この操作に使えるモデルが現在提供されていません。プランや残高では解決しないため、しばらくしてからお試しください。"
+    "operationUnavailableDescription": "この操作に使えるモデルが現在提供されていません。プランや残高では解決しないため、しばらくしてからお試しください。",
+    "referenceImagesTooLarge": "選んだ画像の合計が {{maximum}} を超えています。枚数を減らすか、小さいファイルを使ってください。"
   }
 }

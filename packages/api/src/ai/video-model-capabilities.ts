@@ -75,6 +75,8 @@ function toCapabilities(model: {
   generateAudio: boolean | null;
   seed: boolean | null;
 }): AiVideoModelCapabilities {
+  const firstFrame = !model.supportedFrameImages ||
+    model.supportedFrameImages.includes("first_frame");
   return {
     modelId: model.id,
     resolutions: intersect(AI_VIDEO_RESOLUTIONS, model.supportedResolutions),
@@ -87,10 +89,13 @@ function toCapabilities(model: {
     seed: model.seed ?? true,
     // 何も公開していないモデルは制限なしとして扱う（null は「制限なし」であって
     // 「何も取らない」ではない）。
-    firstFrame: !model.supportedFrameImages ||
-      model.supportedFrameImages.includes("first_frame"),
-    lastFrame: !model.supportedFrameImages ||
-      model.supportedFrameImages.includes("last_frame"),
+    firstFrame,
+    // 終了フレームだけを取るモデルは、この API では動かせない。フレーム付きの
+    // 経路は開始フレームを必須にしているので、開始フレームを取らないモデルは
+    // 終了フレームも受け取りようがない。使えない組み合わせを公開しない。
+    lastFrame: firstFrame &&
+      (!model.supportedFrameImages ||
+        model.supportedFrameImages.includes("last_frame")),
   };
 }
 

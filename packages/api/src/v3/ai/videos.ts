@@ -241,18 +241,12 @@ const app = new Hono()
       "video.generate",
       parsedBody.data.model,
     );
-    // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。
-    const fingerprintModelId = parsedBody.data.model ?? selectedModel?.modelId;
-    if (!fingerprintModelId) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
       input: {
-        model: fingerprintModelId,
+        // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
+        ...(parsedBody.data.model ? { model: parsedBody.data.model } : {}),
         prompt,
         durationSeconds,
         resolution,
@@ -478,18 +472,11 @@ const app = new Hono()
     ]);
     const catalog = await loadAiModelCatalog();
     const selectedModel = catalog.resolve("video.generate", fields.data.model);
-    // 名指しされたモデルは、今のカタログに無くてもそのまま指紋に使う。
-    const fingerprintModelId = fields.data.model ?? selectedModel?.modelId;
-    if (!fingerprintModelId) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
       input: {
-        model: fingerprintModelId,
+        ...(fields.data.model ? { model: fields.data.model } : {}),
         prompt,
         durationSeconds,
         resolution,

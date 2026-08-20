@@ -25,9 +25,11 @@ import {
   type FormEvent,
 } from "react";
 import { randomUuid } from "@beutl/core";
+import { MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES } from "@beutl/api";
 import {
   AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
+  formatBytes,
   AI_MAX_SEED,
   AI_MIN_SEED,
   MAX_AI_PROMPT_LENGTH,
@@ -48,6 +50,7 @@ import {
   ShimmerImage,
   ResultPlaceholder,
   blockedReason,
+  keepsIdempotencyKey,
   defaultModelId,
   downloadFromUrl,
   type AiAccess,
@@ -109,6 +112,8 @@ function optionsOf(
     backgrounds: backgrounds.length > 0 ? backgrounds : ["auto" as const],
     seed: supported?.seed ?? true,
     maxReferenceImages: supported?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES,
+    // 枚数とは別の上限。全部あわせてこの大きさまで。
+    maxReferenceImagesTotalBytes: MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   };
 }
 
@@ -157,6 +162,11 @@ export function ImageGenerateForm({
     : "auto";
 
   const tooManyReferences = references.length > options.maxReferenceImages;
+  // 1 枚ごとの上限とは別に、合計にも上限がある。送ってから 413 になるより先に
+  // 画面で言う。
+  const referencesTooLarge =
+    references.reduce((total, file) => total + file.size, 0) >
+      options.maxReferenceImagesTotalBytes;
 
   const blocked = blockedReason(
     access,
@@ -206,7 +216,9 @@ export function ImageGenerateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || blocked !== null || tooManyReferences) return;
+    if (isPending || blocked !== null || tooManyReferences || referencesTooLarge) {
+      return;
+    }
 
     const body = new FormData(event.currentTarget);
     // What the form carries is what the endpoint reads, save for the model and
@@ -247,9 +259,10 @@ export function ImageGenerateForm({
       }
 
       setMessage(t(`api-errors:${outcome.errorCode}`));
-      // A run that was cut off may have finished on the server, so the next
-      // attempt keeps its name and asks for that same run again.
-      if (outcome.errorCode !== "aiRequestInterrupted") {
+      // A run that was cut off, one still going, or one whose paid result could
+      // not be read may all be answered by asking again under the same name.
+      // None of them is a settlement, so the name stays.
+      if (!keepsIdempotencyKey(outcome.errorCode)) {
         setIdempotencyKey(randomUuid());
       }
     } catch {
@@ -385,7 +398,7 @@ export function ImageGenerateForm({
           )}
           <p
             className={
-              tooManyReferences
+              tooManyReferences || referencesTooLarge
                 ? "text-xs text-destructive"
                 : "text-xs text-muted-foreground"
             }
@@ -394,9 +407,13 @@ export function ImageGenerateForm({
               ? t("dashboard:ai.referenceImageTooMany", {
                   maximum: options.maxReferenceImages,
                 })
-              : t("dashboard:ai.referenceImageHint", {
-                  maximum: options.maxReferenceImages,
-                })}
+              : referencesTooLarge
+                ? t("dashboard:ai.referenceImagesTooLarge", {
+                    maximum: formatBytes(options.maxReferenceImagesTotalBytes),
+                  })
+                : t("dashboard:ai.referenceImageHint", {
+                    maximum: options.maxReferenceImages,
+                  })}
           </p>
         </div>
 
@@ -494,7 +511,12 @@ export function ImageGenerateForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPending}
-          disabled={blocked !== null || tooManyReferences || isPending}
+          disabled={
+            blocked !== null ||
+            tooManyReferences ||
+            referencesTooLarge ||
+            isPending
+          }
         >
           {t("dashboard:ai.generate")}
         </SubmitButton>

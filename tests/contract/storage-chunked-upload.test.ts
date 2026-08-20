@@ -110,6 +110,7 @@ describe("uploading a file too large for one request", () => {
     // the bucket for a day, and none of it was counted against the quota.
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "empty.bin",
       mimeType: "application/octet-stream",
       size: BigInt(0),
@@ -134,6 +135,7 @@ describe("uploading a file too large for one request", () => {
     const size = STORAGE_UPLOAD_PART_BYTES + 1_000;
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(size),
@@ -195,6 +197,7 @@ describe("uploading a file too large for one request", () => {
   it("refuses a part for an upload that is not the caller's", async () => {
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(1_000),
@@ -218,6 +221,7 @@ describe("uploading a file too large for one request", () => {
     const half = BigInt(STORAGE_QUOTA_BYTES) / BigInt(2);
     const first = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "one.bin",
       mimeType: "application/octet-stream",
       size: half + BigInt(1),
@@ -228,6 +232,7 @@ describe("uploading a file too large for one request", () => {
     // together they would pass the quota.
     const second = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "two.bin",
       mimeType: "application/octet-stream",
       size: half + BigInt(1),
@@ -239,6 +244,7 @@ describe("uploading a file too large for one request", () => {
   it("throws away what it cannot join", async () => {
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(STORAGE_UPLOAD_PART_BYTES + 10),
@@ -272,6 +278,7 @@ describe("uploading a file too large for one request", () => {
   it("gives up an upload the browser abandoned", async () => {
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(1_000),
@@ -286,6 +293,7 @@ describe("uploading a file too large for one request", () => {
   it("sweeps up what was left behind a day later", async () => {
     const started = await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(1_000),
@@ -305,6 +313,7 @@ describe("uploading a file too large for one request", () => {
   it("leaves an upload that has only just started alone", async () => {
     await startUpload({
       userId: USER_ID,
+      id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
       size: BigInt(1_000),

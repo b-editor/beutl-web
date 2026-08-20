@@ -30,7 +30,9 @@ export default async function Page(props: {
   const usable = registered.filter((model) =>
     isImageModelUsable(capabilities.get(model.id)),
   );
-  const models = usable.length > 0 ? usable : registered;
+  // 使えるモデルがひとつも無いのは、能力が読めなかったからではない（読めなければ
+  // 制限なしとして全部残る）。登録済みを戻すと、必ず拒否される送信を許すことになる。
+  const models = usable;
   const modelOptions: Record<string, AiImageModelOptions> = Object.fromEntries(
     models.flatMap((model) => {
       const supported = capabilities.get(model.id);

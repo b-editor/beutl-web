@@ -3,6 +3,7 @@ import type { PrismaTransaction } from "./transaction";
 
 export async function createStorageUpload({
   userId,
+  id,
   objectKey,
   uploadId,
   name,
@@ -12,6 +13,7 @@ export async function createStorageUpload({
   prisma,
 }: {
   userId: string;
+  id: string;
   objectKey: string;
   uploadId: string;
   name: string;
@@ -22,7 +24,7 @@ export async function createStorageUpload({
 }) {
   const db = prisma ?? (await getDb());
   return await db.storageUpload.create({
-    data: { userId, objectKey, uploadId, name, mimeType, size, partSize },
+    data: { id, userId, objectKey, uploadId, name, mimeType, size, partSize },
   });
 }
 
