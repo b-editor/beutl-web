@@ -50,6 +50,31 @@ export class ForgejoEmailInUseError extends Error {
   }
 }
 
+/**
+ * 対応表が指す Forgejo ユーザーが、実際のものと食い違っている。
+ *
+ * 対応表 (CockroachDB) と Forgejo (Postgres) は別々にバックアップされる。別の時点に
+ * 復元すると、同じユーザー名が別人を指しうる。名前だけを信じて Sudo すると、
+ * その別人の非公開リポジトリを開き、その人向けのトークンを配り、退会時にはその人ごと
+ * 消してしまう。名前が一致しても id が違えば止める。
+ */
+export class ForgejoAccountMismatchError extends Error {
+  constructor(
+    readonly forgejoUsername: string,
+    readonly expectedId: number,
+    readonly actualId: number | null,
+  ) {
+    super(
+      actualId === null
+        ? `Forgejo has no user named ${forgejoUsername}, but the mapping expects id ${expectedId}. ` +
+            "The beutl-web database and Forgejo are probably restored to different points in time."
+        : `Forgejo user ${forgejoUsername} has id ${actualId}, but the mapping expects ${expectedId}. ` +
+            "The name now belongs to a different account; refusing to act on it.",
+    );
+    this.name = "ForgejoAccountMismatchError";
+  }
+}
+
 export class ForgejoConfigurationError extends Error {
   constructor(message: string) {
     super(message);

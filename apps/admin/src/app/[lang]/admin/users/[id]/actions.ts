@@ -36,7 +36,7 @@ import { isActiveSubscription, isSubscriptionPlanId } from "@beutl/core";
 function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
-import { deleteGitAccount } from "@beutl/forgejo";
+import { purgeGitAccount, revokeGitAccess } from "@beutl/forgejo";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
@@ -183,16 +183,16 @@ export async function deleteUser({
     // Forgejo 側を先に消す。git トークンは Forgejo が直接認証し、Caddy は git の
     // 経路を素通しするので、こちらのレコードだけ消しても push は通り続ける。
     // 外部への呼び出しなのでトランザクションの外で行う (再試行で二重に走らせない)。
-    let hadGitAccount = false;
+    let forgejoUsername: string | null = null;
     try {
-      hadGitAccount = await deleteGitAccount(userId);
+      forgejoUsername = await revokeGitAccess(userId);
     } catch (error) {
       // ここで進むと、対応表を失ったまま Forgejo に生きたトークンが残る。
-      console.error("failed to delete the Forgejo account", error);
+      console.error("failed to revoke the user's Git access", error);
       return {
         success: false,
         message:
-          "Failed to delete the user's Git account. Nothing was deleted; try again.",
+          "Failed to revoke the user's Git access. Nothing was deleted; try again.",
       };
     }
 
@@ -253,7 +253,7 @@ export async function deleteUser({
         details: `userId: ${userId}`,
         prisma: tx,
       });
-      if (hadGitAccount) {
+      if (forgejoUsername) {
         await addAuditLog({
           userId: session.user.id,
           action: auditLogActions.git.accountDeleted,
@@ -276,6 +276,13 @@ export async function deleteUser({
       return { success: false, message };
     }
     if (result.status === "already-completed") return { success: true };
+
+    // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
+    // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
+    // 残ってリポジトリが戻せなくなる。
+    if (forgejoUsername) {
+      await purgeGitAccount(forgejoUsername);
+    }
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。
     revalidatePath("/[lang]/admin/users", "page");

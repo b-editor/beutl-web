@@ -53,10 +53,12 @@ export async function listRepositories(sudo: string) {
     if (batch.length < MAX_PAGE_SIZE) return all;
   }
 
-  console.error(
-    `listRepositories stopped at ${MAX_REPOSITORY_PAGES} pages for ${sudo}; the list may be incomplete`,
+  // 打ち切った配列をそのまま返すと、呼び出し側は完全な一覧だと思って件数と
+  // 合計容量を出す。足りないことに気づけないので、成功として返さない。
+  throw new Error(
+    `listRepositories for ${sudo} exceeded ${MAX_REPOSITORY_PAGES} pages ` +
+      `(${all.length} repositories so far); refusing to return a partial list`,
   );
-  return all;
 }
 
 export async function getRepository(
@@ -71,11 +73,16 @@ export async function getRepository(
 }
 
 /**
- * テンプレートの入っていないリポジトリを消す。
+ * 作りかけのリポジトリを消す。
  *
- * 作成そのものは成功していて応答だけ失われた場合もここに来るので、実在を
- * 確かめてから消す。消せなかったら投げずに記録だけ残す。呼び出し元は既に別の
- * 例外を投げようとしていて、それを握り潰すと本来の失敗理由が消えるため。
+ * **この操作で作ったものだけ**を対象にする。作成 API が 502 や 504 で失敗したとき、
+ * それが「衝突なので作られていない」のか「作られたが応答を落とした」のかは
+ * 区別できない。実在するというだけで消すと、同名の既存リポジトリを巻き添えにする。
+ * 呼び出し元は作成前に不在を確かめているので、ここに来る時点で実在すれば
+ * それはこの操作の産物と見なせる。
+ *
+ * 消せなかったら投げずに記録だけ残す。呼び出し元は既に別の例外を投げようとしていて、
+ * それを握り潰すと本来の失敗理由が消えるため。
  */
 async function rollbackPartialRepository(sudo: string, name: string) {
   try {
@@ -105,6 +112,19 @@ export async function createRepository(
     description?: string;
   },
 ) {
+  // 先に不在を確かめる。作成 API が 502 や 504 で落ちたとき、衝突だったのか
+  // 応答を落としただけなのかは区別できない。ここで見ておけば、巻き戻しの対象を
+  // 「この操作で作ったもの」に限定できる。
+  const conflicting = await getRepository(sudo, sudo, name);
+  if (conflicting) {
+    throw new ForgejoError(
+      409,
+      "POST",
+      "/user/repos",
+      `repository ${sudo}/${name} already exists`,
+    );
+  }
+
   let repository: ForgejoRepository;
   try {
     repository = await forgejoRequest<ForgejoRepository>("/user/repos", {

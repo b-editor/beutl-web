@@ -33,6 +33,14 @@ export async function GET(
       "If-Range": request.headers.get("If-Range"),
     },
   });
+  // 416 は「その範囲は無い」という正しい答えで、ブラウザはこれを見て要求を
+  // やり直す。404 に潰すとファイルごと消えたように見える。
+  if (upstream.status === 416) {
+    const headers = new Headers({ "Cache-Control": "private, no-store" });
+    const contentRange = upstream.headers.get("Content-Range");
+    if (contentRange) headers.set("Content-Range", contentRange);
+    return new Response(null, { status: 416, headers });
+  }
   if (!upstream.ok || !upstream.body) {
     return new Response("Not Found", { status: 404 });
   }

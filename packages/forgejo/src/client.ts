@@ -173,12 +173,32 @@ export async function forgejoFetch(
   if (sudo) {
     headers.set("Sudo", sudo);
   }
+  const safeHeaders = new Headers();
   for (const [name, value] of Object.entries(forwardHeaders ?? {})) {
     if (value) {
       headers.set(name, value);
+      safeHeaders.set(name, value);
     }
   }
-  return await fetch(`${resolved.baseUrl}/api/v1${path}`, { headers });
+
+  // 自動追跡させない。fetch は cross-origin のリダイレクトでも Authorization 以外の
+  // ヘッダを引き継ぐので (実測: X-Beutl-Proxy-Secret と Sudo が転送された)、
+  // LFS_SERVE_DIRECT=true のとき共有シークレットがストレージ事業者に届く。
+  const response = await fetch(`${resolved.baseUrl}/api/v1${path}`, {
+    headers,
+    redirect: "manual",
+  });
+
+  const location = response.headers.get("Location");
+  if (response.status >= 300 && response.status < 400 && location) {
+    // 署名付き URL。認証はクエリに載っているので、こちらの資格情報は付けない。
+    await response.body?.cancel();
+    return await fetch(new URL(location, resolved.baseUrl), {
+      headers: safeHeaders,
+    });
+  }
+
+  return response;
 }
 
 /**

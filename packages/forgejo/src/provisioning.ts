@@ -4,8 +4,16 @@ import {
   findGitAccountByUserId,
   findProfileForApi,
 } from "@beutl/db";
-import { forgejoRequest, getForgejoConfig } from "./client";
-import { ForgejoEmailInUseError, ForgejoError } from "./errors";
+import {
+  forgejoRequest,
+  forgejoRequestOrNull,
+  getForgejoConfig,
+} from "./client";
+import {
+  ForgejoAccountMismatchError,
+  ForgejoEmailInUseError,
+  ForgejoError,
+} from "./errors";
 import type { ForgejoUser } from "./types";
 
 const USERNAME_MAX_LENGTH = 30;
@@ -58,6 +66,18 @@ function candidateAt(base: string, attempt: number): string {
   return `${head}${suffix}`;
 }
 
+/**
+ * Beutl ユーザーに割り当てる Forgejo 側のメールアドレス。
+ *
+ * Forgejo はメールの一意性を要求するが、Beutl 側の実アドレスは渡したくない。
+ * userId から決まる到達しない住所を合成する。対応表を失っても、この値から
+ * Forgejo 上のユーザーを引き当てられる。
+ */
+export function noreplyEmailFor(userId: string): string {
+  const host = new URL(getForgejoConfig().baseUrl).hostname;
+  return `${userId}@users.noreply.${host}`;
+}
+
 /** 保存しない使い捨ての秘密値 (Forgejo ユーザーの初期パスワードなど)。 */
 export function randomSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -75,6 +95,20 @@ export async function ensureGitAccount(userId: string): Promise<{
 }> {
   const existing = await findGitAccountByUserId({ userId });
   if (existing) {
+    // Sudo も削除もユーザー名だけで効く。対応表と Forgejo が別の時点に復元されると
+    // 同じ名前が別人を指しうるので、id まで一致することを確かめてから使う。
+    // 確かめずに進むと、他人の非公開リポジトリを開いてしまう。
+    const actual = await forgejoRequestOrNull<ForgejoUser>(
+      `/users/${encodeURIComponent(existing.forgejoUsername)}`,
+    );
+    if (!actual || actual.id !== existing.forgejoUserId) {
+      throw new ForgejoAccountMismatchError(
+        existing.forgejoUsername,
+        existing.forgejoUserId,
+        actual?.id ?? null,
+      );
+    }
+
     return {
       forgejoUserId: existing.forgejoUserId,
       forgejoUsername: existing.forgejoUsername,
@@ -84,11 +118,7 @@ export async function ensureGitAccount(userId: string): Promise<{
 
   const profile = await findProfileForApi({ where: { userId } });
   const base = normalizeUsername(profile?.userName ?? USERNAME_FALLBACK);
-  const config = getForgejoConfig();
-  const noreplyDomain = `users.noreply.${new URL(config.baseUrl).hostname}`;
-  // Forgejo はメールアドレスの一意性を要求する。Beutl 側の実アドレスは渡さず、
-  // 到達しない専用ドメインで合成する。userId から決まるので候補ごとには変わらない。
-  const email = `${userId}@${noreplyDomain}`;
+  const email = noreplyEmailFor(userId);
 
   for (let attempt = 0; attempt < MAX_USERNAME_ATTEMPTS; attempt++) {
     const username = candidateAt(base, attempt);

@@ -9,7 +9,7 @@ import {
 } from "@beutl/db";
 import { forgejoRequest } from "./client";
 import { ForgejoError } from "./errors";
-import { ensureGitAccount, randomSecret } from "./provisioning";
+import { ensureGitAccount } from "./provisioning";
 import type { ForgejoAccessToken } from "./types";
 
 /**
@@ -75,45 +75,21 @@ export type IssuedCredential = {
   createdAt: Date;
 };
 
-/** 同じユーザーの発行/失効がぶつかったときの再試行回数。 */
-const PASSWORD_RACE_ATTEMPTS = 3;
-
 /**
- * トークン管理エンドポイント越しの操作をまとめる。
+ * 管理トークンで対象ユーザーのトークンを操作するエンドポイント。
  *
- * Forgejo のトークン管理 (`/users/{username}/tokens`) は Sudo 代理もトークン認証も
- * 受け付けず、対象ユーザー自身の Basic 認証だけを許す。ユーザーは Forgejo に対話
- * ログインしないので、必要になるたび管理 API で使い捨てのパスワードを設定し、
- * それで Basic 認証してから捨てる。パスワードを変えても発行済みのトークンは失効しない。
+ * `/users/{username}/tokens` の方は書き込みに対象ユーザー自身の Basic 認証を要求し、
+ * 管理トークンでも Sudo 代理でも 401 (`auth method not allowed`) になる。
+ * こちらの `/admin/users/{username}/tokens` は管理トークンで発行も失効もでき、
+ * 発行時の応答に `sha1` も入る (Forgejo 16.0.2 で実測)。
  *
- * 同じユーザーが 2 つの操作を同時に走らせると、後から設定されたパスワードによって
- * 先の操作の Basic 認証が 401 になる。稀だが起こりうるので、その場合はパスワードを
- * 引き直してやり直す。
+ * 以前はユーザーのパスワードを毎回振り直して Basic 認証していたが、それは
+ * このエンドポイントを見落としていたため。パスワードを触らないので、同じユーザーの
+ * 操作が同時に走っても互いの認証を壊さない。
  */
-async function withTemporaryPassword<T>(
-  username: string,
-  fn: (basicAuth: { username: string; password: string }) => Promise<T>,
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    const password = randomSecret();
-
-    // source_id と login_name を省くと 422 になる。
-    await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
-      method: "PATCH",
-      body: { source_id: 0, login_name: username, password },
-      responseType: "none",
-    });
-
-    try {
-      return await fn({ username, password });
-    } catch (error) {
-      const raced =
-        error instanceof ForgejoError &&
-        error.status === 401 &&
-        attempt < PASSWORD_RACE_ATTEMPTS;
-      if (!raced) throw error;
-    }
-  }
+export function tokensPath(username: string, tokenId?: number): string {
+  const base = `/admin/users/${encodeURIComponent(username)}/tokens`;
+  return tokenId === undefined ? base : `${base}/${tokenId}`;
 }
 
 /**
@@ -147,24 +123,19 @@ export async function issueGitCredential(
     throw new CredentialNameTakenError(name);
   }
 
-  const issued = await withTemporaryPassword(username, async (basicAuth) => {
-    try {
-      return await forgejoRequest<ForgejoAccessToken>(
-        `/users/${encodeURIComponent(username)}/tokens`,
-        {
-          method: "POST",
-          basicAuth,
-          body: { name, scopes: ["write:repository"] },
-        },
-      );
-    } catch (error) {
-      // 控えと Forgejo がずれていた場合もここに来る。名前の重複として同じ扱いにする。
-      if (error instanceof ForgejoError && isTokenNameTaken(error)) {
-        throw new CredentialNameTakenError(name);
-      }
-      throw error;
+  let issued: ForgejoAccessToken;
+  try {
+    issued = await forgejoRequest<ForgejoAccessToken>(tokensPath(username), {
+      method: "POST",
+      body: { name, scopes: ["write:repository"] },
+    });
+  } catch (error) {
+    // 控えと Forgejo がずれていた場合もここに来る。名前の重複として同じ扱いにする。
+    if (error instanceof ForgejoError && isTokenNameTaken(error)) {
+      throw new CredentialNameTakenError(name);
     }
-  });
+    throw error;
+  }
 
   // 平文は発行直後のこのレスポンスにしか入らない。取れなかったら黙って進めず落とす
   // (中途半端な控えを作ると、使えないトークンが一覧に残る)。
@@ -199,13 +170,18 @@ export async function issueGitCredential(
     });
   } catch (error) {
     // 控えを残せなかったので、Forgejo 側のトークンも消す。ここで諦めると、
-    // 一覧にも出ず失効もできないトークンが生き続ける。
-    await withTemporaryPassword(username, async (basicAuth) => {
-      await forgejoRequest(
-        `/users/${encodeURIComponent(username)}/tokens/${issued.id}`,
-        { method: "DELETE", basicAuth, responseType: "none" },
-      ).catch(() => undefined);
-    }).catch(() => undefined);
+    // 一覧にも出ず失効もできないトークンが生き続ける。消せなかった場合は、
+    // 握り潰さずに記録を残す (元の例外は投げ直すので、ここでは投げない)。
+    await forgejoRequest(tokensPath(username, issued.id), {
+      method: "DELETE",
+      responseType: "none",
+    }).catch((deleteError) => {
+      console.error(
+        `failed to roll back the Forgejo token ${issued.id} for ${username}; ` +
+          "it is not in our records, so nobody can revoke it from the UI",
+        deleteError,
+      );
+    });
 
     // 上限に達していた場合は、名前の重複と取り違えさせない。
     if (error instanceof CredentialLimitReachedError) {
@@ -231,8 +207,7 @@ export async function issueGitCredential(
 /**
  * 発行済みトークンの一覧。平文は含まない。
  *
- * Forgejo に問い合わせるとそのたびにパスワードの振り直しが要るので、表示用の
- * メタ情報はこちら側の控えから返す。Forgejo を触るのは発行と失効のときだけ。
+ * 表示に必要なメタ情報はこちら側の控えに持っているので、Forgejo には問い合わせない。
  */
 export async function listGitCredentials(
   userId: string,
@@ -260,17 +235,16 @@ export async function revokeGitCredential(
   if (!record) return null;
 
   const account = await ensureGitAccount(userId);
-  await withTemporaryPassword(account.forgejoUsername, async (basicAuth) => {
-    try {
-      await forgejoRequest(
-        `/users/${encodeURIComponent(account.forgejoUsername)}/tokens/${record.forgejoTokenId}`,
-        { method: "DELETE", basicAuth, responseType: "none" },
-      );
-    } catch (error) {
-      if (error instanceof ForgejoError && error.isNotFound) return;
-      throw error;
-    }
-  });
+  try {
+    await forgejoRequest(
+      tokensPath(account.forgejoUsername, record.forgejoTokenId),
+      { method: "DELETE", responseType: "none" },
+    );
+  } catch (error) {
+    // 既に無いなら目的は達している。それ以外は投げる (控えだけ消すと、生きた
+    // トークンが誰にも失効できなくなる)。
+    if (!(error instanceof ForgejoError && error.isNotFound)) throw error;
+  }
 
   await deleteGitCredential({ id: record.id });
   return {

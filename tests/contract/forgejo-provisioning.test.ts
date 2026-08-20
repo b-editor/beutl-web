@@ -7,7 +7,7 @@ vi.mock("@beutl/db", () => ({
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
     await fn(undefined),
-  findGitAccountByUserId: async () => null,
+  findGitAccountByUserId: async () => existingAccount,
   findProfileForApi: async () => ({ userName: profileUserName }),
   existsGitAccountUsername: async () => false,
   createGitAccount: async (input: Record<string, unknown>) => input,
@@ -20,10 +20,14 @@ vi.mock("@beutl/db", () => ({
 }));
 
 let profileUserName = "someone";
+let existingAccount: {
+  userId: string;
+  forgejoUserId: number;
+  forgejoUsername: string;
+} | null = null;
 
-const { ForgejoEmailInUseError, ensureGitAccount } = await import(
-  "@beutl/forgejo"
-);
+const { ForgejoAccountMismatchError, ForgejoEmailInUseError, ensureGitAccount } =
+  await import("@beutl/forgejo");
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -36,6 +40,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   profileUserName = "someone";
+  existingAccount = null;
   process.env.FORGEJO_BASE_URL = "https://git.example.test";
   process.env.FORGEJO_ADMIN_TOKEN = "admin-token";
   process.env.FORGEJO_PROXY_SECRET = "proxy-secret";
@@ -95,5 +100,90 @@ describe("Forgejo ユーザーの採番", () => {
     await expect(ensureGitAccount("u1")).resolves.toMatchObject({
       forgejoUsername: "a-b",
     });
+  });
+});
+
+describe("対応表と Forgejo の照合", () => {
+  beforeEach(() => {
+    existingAccount = {
+      userId: "u1",
+      forgejoUserId: 7,
+      forgejoUsername: "alex",
+    };
+  });
+
+  it("id まで一致すればそのまま使う", async () => {
+    fetchMock = vi.fn(async () => json({ id: 7, login: "alex" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(ensureGitAccount("u1")).resolves.toMatchObject({
+      forgejoUsername: "alex",
+      created: false,
+    });
+  });
+
+  it("同じ名前が別人になっていたら止める", async () => {
+    // 2 つの DB を別の時点に復元すると起きる。名前だけ信じて Sudo すると、
+    // その別人の非公開リポジトリを開き、退会時にはその人ごと消してしまう。
+    fetchMock = vi.fn(async () => json({ id: 99, login: "alex" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(ensureGitAccount("u1")).rejects.toBeInstanceOf(
+      ForgejoAccountMismatchError,
+    );
+  });
+
+  it("Forgejo 側に居なくなっていたら止める", async () => {
+    fetchMock = vi.fn(async () => json({ message: "not found" }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(ensureGitAccount("u1")).rejects.toBeInstanceOf(
+      ForgejoAccountMismatchError,
+    );
+  });
+});
+
+describe("対応表が失われた状態での退会", () => {
+  it("合成メールで Forgejo 上のユーザーを引き当てる", async () => {
+    // beutl-web の DB だけ古い時点に戻ると、対応表は無いが Forgejo には
+    // ユーザーが残る。ここで諦めると、退会したのに端末のトークンが生き続ける。
+    const { revokeGitAccess } = await import("@beutl/forgejo");
+    existingAccount = null;
+
+    fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname.endsWith("/users/search")) {
+        return json({
+          data: [
+            {
+              id: 3,
+              login: "orphan",
+              email: "u1@users.noreply.git.example.test",
+            },
+          ],
+        });
+      }
+      if (parsed.pathname.endsWith("/admin/users/orphan/tokens")) {
+        return json([{ id: 21 }]);
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(revokeGitAccess("u1")).resolves.toBe("orphan");
+    const deletes = fetchMock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+    );
+    expect(String(deletes[0][0])).toContain("/admin/users/orphan/tokens/21");
+  });
+
+  it("メールが一致するユーザーが居なければ何もしない", async () => {
+    const { revokeGitAccess } = await import("@beutl/forgejo");
+    existingAccount = null;
+
+    fetchMock = vi.fn(async () => json({ data: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(revokeGitAccess("u1")).resolves.toBeNull();
   });
 });
