@@ -66,6 +66,9 @@ type ImageModelDescription = ModelDescription & {
   backgrounds: string[];
   seed: boolean;
   maxReferenceImages: number;
+  // 拡大（upscale）が頼めるか。これが分からないと、クライアントは対応しない
+  // モデルを選ばせて拒否されるまで気づけない。
+  resolution: boolean;
 };
 
 type VideoModelDescription = ModelDescription & {
@@ -74,6 +77,9 @@ type VideoModelDescription = ModelDescription & {
   aspectRatios: string[];
   audio: boolean;
   seed: boolean;
+  // 開始フレームと終了フレームは別々に扱う。片方しか取らないモデルがある。
+  firstFrame: boolean;
+  lastFrame: boolean;
 };
 
 function describeModels(
@@ -124,6 +130,7 @@ const app = new Hono().get("/", async (c) => {
         maxReferenceImages: supported
           ? supported.maxReferenceImages
           : AI_MAX_IMAGE_REFERENCES,
+        resolution: supported ? supported.resolution : true,
       };
     });
   const videoModels: VideoModelDescription[] = describeModels(
@@ -142,6 +149,8 @@ const app = new Hono().get("/", async (c) => {
         : [...AI_VIDEO_ASPECT_RATIOS],
       audio: supported ? supported.generateAudio : true,
       seed: supported ? supported.seed : true,
+      firstFrame: supported ? supported.firstFrame : true,
+      lastFrame: supported ? supported.lastFrame : true,
     };
   });
   return c.json({

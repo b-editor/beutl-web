@@ -156,7 +156,14 @@ const app = new Hono()
     if (multipart) {
       let body: Awaited<ReturnType<typeof c.req.parseBody>>;
       try {
-        body = await parseBodyWithUploadLimit(c.req, MAX_AI_IMAGE_UPLOAD_BYTES);
+        // capabilities は 1 枚あたり MAX_AI_IMAGE_UPLOAD_BYTES の絵を
+        // AI_MAX_IMAGE_REFERENCES 枚まで受けると公開している。ここで本文全体を
+        // 1 枚分に抑えると、公開した枚数を送っただけで 413 になる。1 枚ごとの
+        // 上限はパース後に別途確かめる。
+        body = await parseBodyWithUploadLimit(
+          c.req,
+          MAX_AI_IMAGE_UPLOAD_BYTES * AI_MAX_IMAGE_REFERENCES,
+        );
       } catch (error) {
         if (isUploadLimitExceeded(error)) {
           return c.json(await apiErrorResponse("fileIsTooLarge"), {

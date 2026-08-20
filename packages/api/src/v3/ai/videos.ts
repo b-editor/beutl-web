@@ -467,7 +467,8 @@ const app = new Hono()
           aspectRatio,
           generateAudio,
           ...(seed === undefined ? {} : { seed }),
-          frameImages: true,
+          firstFrame: true,
+          lastFrame: lastFrame instanceof File,
         },
       )
     ) {

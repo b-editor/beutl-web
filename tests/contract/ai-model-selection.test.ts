@@ -269,8 +269,10 @@ describe("choosing a model per request", () => {
       "costTier",
       "displayName",
       "durationsSeconds",
+      "firstFrame",
       "id",
       "isDefault",
+      "lastFrame",
       "resolutions",
       "seed",
     ];
@@ -282,6 +284,7 @@ describe("choosing a model per request", () => {
       "id",
       "isDefault",
       "maxReferenceImages",
+      "resolution",
       "seed",
     ];
     for (const [operation, value] of Object.entries(body.operations) as [

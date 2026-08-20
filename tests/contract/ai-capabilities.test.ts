@@ -73,6 +73,7 @@ function imageModel(
     backgrounds: [...AI_IMAGE_BACKGROUNDS],
     seed: true,
     maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
+    resolution: true,
   };
 }
 
@@ -185,6 +186,8 @@ describe("GET /api/v3/ai/capabilities", () => {
         aspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
         audio: true,
         seed: true,
+        firstFrame: true,
+        lastFrame: true,
       },
     ]);
   });
@@ -230,6 +233,10 @@ describe("GET /api/v3/ai/capabilities", () => {
         aspectRatios: ["16:9"],
         audio: false,
         seed: false,
+        // 開始フレームだけを取るモデル。ひとまとめのフラグでは、終了フレームも
+        // 受け付けるように見えてしまっていた。
+        firstFrame: true,
+        lastFrame: false,
       },
     ]);
     // The operation-level lists stay the superset the server will take at all,

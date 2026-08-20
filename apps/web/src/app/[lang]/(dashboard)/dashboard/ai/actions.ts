@@ -1092,7 +1092,8 @@ export async function createVideoAction(
       aspectRatio: videoAspectRatio,
       generateAudio,
       ...(videoSeed === undefined ? {} : { seed: videoSeed }),
-      frameImages: frameImages.length > 0,
+      firstFrame: frameImages.some((frame) => frame.frame_type === "first_frame"),
+      lastFrame: frameImages.some((frame) => frame.frame_type === "last_frame"),
     },
   );
   if (unsupported) {

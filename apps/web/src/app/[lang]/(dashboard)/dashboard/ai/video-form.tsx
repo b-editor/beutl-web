@@ -115,7 +115,8 @@ export type AiVideoModelOptions = {
   aspectRatios: string[];
   generateAudio: boolean;
   seed: boolean;
-  frameImages: boolean;
+  firstFrame: boolean;
+  lastFrame: boolean;
 };
 
 // The options this screen offers, narrowed to one model. Values are derived on
@@ -139,7 +140,8 @@ function optionsOf(
       : [...AI_VIDEO_ASPECT_RATIOS],
     generateAudio: supported?.generateAudio ?? true,
     seed: supported?.seed ?? true,
-    frameImages: supported?.frameImages ?? true,
+    firstFrame: supported?.firstFrame ?? true,
+    lastFrame: supported?.lastFrame ?? true,
   };
 }
 
@@ -418,21 +420,21 @@ export function VideoForm({
           </div>
           {/* Left out entirely for a model that conditions on no frames: a
               picker that quietly does nothing is worse than none. */}
-          {options.frameImages && (
-            <>
-              <FramePicker
-                id="videoFirstFrame"
-                name="firstFrame"
-                label={t("dashboard:ai.firstFrame")}
-                hint={t("dashboard:ai.firstFrameHint")}
-              />
-              <FramePicker
-                id="videoLastFrame"
-                name="lastFrame"
-                label={t("dashboard:ai.lastFrame")}
-                hint={t("dashboard:ai.lastFrameHint")}
-              />
-            </>
+          {options.firstFrame && (
+            <FramePicker
+              id="videoFirstFrame"
+              name="firstFrame"
+              label={t("dashboard:ai.firstFrame")}
+              hint={t("dashboard:ai.firstFrameHint")}
+            />
+          )}
+          {options.lastFrame && (
+            <FramePicker
+              id="videoLastFrame"
+              name="lastFrame"
+              label={t("dashboard:ai.lastFrame")}
+              hint={t("dashboard:ai.lastFrameHint")}
+            />
           )}
         </AdvancedOptions>
 

@@ -44,7 +44,8 @@ function capabilities(
     aspectRatios: ["16:9", "9:16"],
     generateAudio: true,
     seed: true,
-    frameImages: true,
+    firstFrame: true,
+    lastFrame: true,
     ...overrides,
   };
 }
@@ -155,11 +156,26 @@ describe("refusing a request the model would reject", () => {
       }),
     ).toBe("seed");
     expect(
-      unsupportedVideoRequestReason(capabilities({ frameImages: false }), {
+      unsupportedVideoRequestReason(capabilities({ firstFrame: false }), {
         ...request,
-        frameImages: true,
+        firstFrame: true,
       }),
-    ).toBe("frameImages");
+    ).toBe("firstFrame");
+    // 開始フレームだけを取るモデルに終了フレームを渡したときに気づけること。
+    // ひとまとめのフラグではここが見分けられなかった。
+    expect(
+      unsupportedVideoRequestReason(capabilities({ lastFrame: false }), {
+        ...request,
+        firstFrame: true,
+        lastFrame: true,
+      }),
+    ).toBe("lastFrame");
+    expect(
+      unsupportedVideoRequestReason(capabilities({ lastFrame: false }), {
+        ...request,
+        firstFrame: true,
+      }),
+    ).toBeNull();
   });
 
   it("lets a silent clip through a model that cannot speak", () => {

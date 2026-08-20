@@ -26,7 +26,11 @@ export type AiVideoModelCapabilities = {
   aspectRatios: AiVideoAspectRatio[];
   generateAudio: boolean;
   seed: boolean;
-  frameImages: boolean;
+  // 開始フレームと終了フレームは別の能力。片方しか取らないモデルを「フレーム
+  // 対応」とひとまとめにすると、終了フレーム付きの依頼が受け付けられるように
+  // 見えたまま拒否される。
+  firstFrame: boolean;
+  lastFrame: boolean;
 };
 
 export type UnsupportedVideoRequestReason =
@@ -35,7 +39,8 @@ export type UnsupportedVideoRequestReason =
   | "aspectRatio"
   | "generateAudio"
   | "seed"
-  | "frameImages";
+  | "firstFrame"
+  | "lastFrame";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
@@ -80,7 +85,12 @@ function toCapabilities(model: {
     ),
     generateAudio: model.generateAudio ?? true,
     seed: model.seed ?? true,
-    frameImages: (model.supportedFrameImages?.length ?? 1) > 0,
+    // 何も公開していないモデルは制限なしとして扱う（null は「制限なし」であって
+    // 「何も取らない」ではない）。
+    firstFrame: !model.supportedFrameImages ||
+      model.supportedFrameImages.includes("first_frame"),
+    lastFrame: !model.supportedFrameImages ||
+      model.supportedFrameImages.includes("last_frame"),
   };
 }
 
@@ -124,7 +134,8 @@ export function unsupportedVideoRequestReason(
     aspectRatio?: string;
     generateAudio?: boolean;
     seed?: number;
-    frameImages?: boolean;
+    firstFrame?: boolean;
+    lastFrame?: boolean;
   },
 ): UnsupportedVideoRequestReason | null {
   if (!capabilities) return null;
@@ -148,8 +159,11 @@ export function unsupportedVideoRequestReason(
   if (request.seed !== undefined && !capabilities.seed) {
     return "seed";
   }
-  if (request.frameImages === true && !capabilities.frameImages) {
-    return "frameImages";
+  if (request.firstFrame === true && !capabilities.firstFrame) {
+    return "firstFrame";
+  }
+  if (request.lastFrame === true && !capabilities.lastFrame) {
+    return "lastFrame";
   }
   return null;
 }
