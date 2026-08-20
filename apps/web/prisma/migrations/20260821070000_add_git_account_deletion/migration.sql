@@ -4,6 +4,7 @@ CREATE TYPE "GitAccountDeletionPhase" AS ENUM ('BLOCKING', 'READY_TO_PURGE', 'NE
 -- CreateTable
 CREATE TABLE "GitAccountDeletion" (
     "userId" STRING NOT NULL,
+    "intentId" STRING NOT NULL,
     "phase" "GitAccountDeletionPhase" NOT NULL DEFAULT 'BLOCKING',
     "forgejoUsername" STRING,
     "forgejoUserId" INT4,

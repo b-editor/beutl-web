@@ -1,5 +1,5 @@
 import "server-only";
-import { beginGitAccountDeletion, finishGitAccountDeletion } from "@beutl/forgejo";
+import { abortGitAccountDeletion, beginGitAccountDeletion, finishGitAccountDeletion } from "@beutl/forgejo";
 import {
   deleteUserById,
   markGitAccountDeletionReady,
@@ -37,7 +37,8 @@ export async function deleteUser(token: string, identifier: string) {
   // stays small however many files the plan allowed. A resumed intent that
   // was already completed drains nothing and falls through to the same
   // "already done" answer as before.
-  const forgejoUsername = await beginGitAccountDeletion(intent.userId);
+  const { forgejoUsername, intentId } = await beginGitAccountDeletion(intent.userId);
+  try {
   await drainUserStorageFiles({ userId: intent.userId });
   const deleted = await startRetryableTransaction(async (prisma) => {
     const currentIntent = await findAccountDeletionIntent({
@@ -86,6 +87,10 @@ export async function deleteUser(token: string, identifier: string) {
   });
   if (!deleted) {
     return;
+  }
+  } catch (error) {
+    await abortGitAccountDeletion(intent.userId, intentId);
+    throw error;
   }
   {
     const finished = await finishGitAccountDeletion(intent.userId);

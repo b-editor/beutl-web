@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@beutl/db", () => ({
   // 退会処理の墓標。既定では「退会していない」。
   findGitAccountDeletion: async () => pendingDeletion,
-  startGitAccountDeletion: async () => undefined,
+  startGitAccountDeletion: async ({ intentId }: { intentId: string }) =>
+    intentId,
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
   deleteGitAccountDeletion: async () => {
@@ -206,7 +207,9 @@ describe("対応表が失われた状態での退会", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(beginGitAccountDeletion("u1")).resolves.toBe("orphan");
+    await expect(beginGitAccountDeletion("u1")).resolves.toMatchObject({
+      forgejoUsername: "orphan",
+    });
     const deletes = fetchMock.mock.calls.filter(
       ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
     );
@@ -220,6 +223,8 @@ describe("対応表が失われた状態での退会", () => {
     fetchMock = vi.fn(async () => json({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(beginGitAccountDeletion("u1")).resolves.toBeNull();
+    await expect(beginGitAccountDeletion("u1")).resolves.toMatchObject({
+      forgejoUsername: null,
+    });
   });
 });

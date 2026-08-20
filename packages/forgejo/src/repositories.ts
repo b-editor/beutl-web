@@ -176,6 +176,22 @@ async function hasTemplates(sudo: string, name: string): Promise<boolean> {
   });
 }
 
+/**
+ * 既定ファイルが揃っていなければ投げる。
+ *
+ * `commitTemplates` は既にあるファイルを上書きしない (利用者が意図して編集した
+ * ものを壊さないため)。だから「入れ直したのに違う」ことは起こりうる。黙って
+ * 成功にすると、LFS の効かないリポジトリを「作成できました」と返してしまい、
+ * その後 push された数 GiB の動画が普通の git オブジェクトとして入る。
+ */
+async function assertTemplatesAreCanonical(sudo: string, name: string) {
+  if (await hasTemplates(sudo, name)) return;
+  throw new Error(
+    `${sudo}/${name} does not have the expected Beutl defaults; media pushed ` +
+      "to it will not use LFS. Check .gitattributes and .gitignore by hand.",
+  );
+}
+
 /** base64 の UTF-8 文字列を戻す。atob は Latin-1 しか返さないため経由する。 */
 function fromBase64(encoded: string): string {
   // Forgejo は長い内容を改行入りで返すことがある。
@@ -205,16 +221,7 @@ async function reconcileAfterAmbiguousCreate(
     if (!existing) return null;
 
     await commitTemplates(sudo, name, existing.default_branch);
-
-    // 入れ直した後でも中身が既定と違うなら、誰かが編集したか壊れている。
-    // commitTemplates は既にあるファイルを上書きしないので、ここでは直せない。
-    // 黙って成功にすると、LFS の効かないリポジトリを「作成できました」と返す。
-    if (!(await hasTemplates(sudo, name))) {
-      throw new Error(
-        `${sudo}/${name} exists but its Beutl defaults are not the expected ` +
-          "ones; media pushed to it may not use LFS. Check .gitattributes by hand.",
-      );
-    }
+    await assertTemplatesAreCanonical(sudo, name);
     return existing;
   } catch (error) {
     console.error(
@@ -241,16 +248,25 @@ export async function createRepository(
   },
 ) {
   // 先に不在を確かめる。作成 API が 502 や 504 で落ちたとき、衝突だったのか
-  // 応答を落としただけなのかは区別できない。ここで見ておけば、巻き戻しの対象を
-  // 「この操作で作ったもの」に限定できる。
+  // 応答を落としただけなのかは区別できない。
   const conflicting = await getRepository(sudo, sudo, name);
   if (conflicting) {
-    throw new ForgejoError(
-      409,
-      "POST",
-      "/user/repos",
-      `repository ${sudo}/${name} already exists`,
-    );
+    // テンプレートが揃っていれば普通の名前衝突。
+    if (await hasTemplates(sudo, name)) {
+      throw new ForgejoError(
+        409,
+        "POST",
+        "/user/repos",
+        `repository ${sudo}/${name} already exists`,
+      );
+    }
+
+    // 揃っていないなら、前回の作成が途中で終わったもの。ここで 409 にすると
+    // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
+    // やり直しをそのまま修復として扱う。
+    await commitTemplates(sudo, name, conflicting.default_branch);
+    await assertTemplatesAreCanonical(sudo, name);
+    return conflicting;
   }
 
   let repository: ForgejoRepository;
@@ -282,6 +298,9 @@ export async function createRepository(
 
   try {
     await commitTemplates(sudo, name, repository.default_branch);
+    // 201 の後、こちらが書く前に利用者が別の .gitattributes を push している
+    // ことがある。その場合 commitTemplates は「ある」と見て何もしない。
+    await assertTemplatesAreCanonical(sudo, name);
   } catch (error) {
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を

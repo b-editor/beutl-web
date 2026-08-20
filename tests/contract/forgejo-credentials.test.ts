@@ -25,7 +25,8 @@ vi.mock("@beutl/db", () => ({
     }
     return value;
   },
-  startGitAccountDeletion: async () => undefined,
+  startGitAccountDeletion: async ({ intentId }: { intentId: string }) =>
+    intentId,
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
   markGitAccountDeletionNeedsReview: async () => {
@@ -481,6 +482,13 @@ describe("リポジトリの作成", () => {
       if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
         return json({ id: 1, name: "proj", default_branch: "main" });
       }
+      // 既定ファイルが揃っている = 本当の名前衝突。
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
       return new Response("gateway timeout", { status: 504 });
     });
 
@@ -495,6 +503,39 @@ describe("リポジトリの作成", () => {
     expect(
       record(fetchMock).filter((c) => c.method === "POST"),
     ).toHaveLength(0);
+  });
+
+  it("途中で終わった同名リポジトリは、やり直しで修復する", async () => {
+    // 409 のままだと二度と直せる経路が無くなり、LFS の効かないリポジトリに
+    // push され続ける。
+    const { createRepository } = await import("@beutl/forgejo");
+    let committed = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main" });
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        committed = true;
+        return json({}, 201);
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return committed
+          ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
+          : json({ message: "not found" }, 404);
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return committed
+          ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
+          : json({ message: "not found" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).resolves.toMatchObject({ name: "proj" });
+    expect(committed).toBe(true);
   });
 
   it("名前が衝突しただけなら畳みにいかない", async () => {
@@ -539,7 +580,9 @@ describe("退会時の後始末", () => {
       return json({ id: 2, login: "someone", email: EMAIL });
     });
 
-    await expect(beginGitAccountDeletion("u1")).resolves.toBe("someone");
+    await expect(beginGitAccountDeletion("u1")).resolves.toMatchObject({
+      forgejoUsername: "someone",
+    });
 
     const deletes = record(fetchMock).filter((c) => c.method === "DELETE");
     expect(deletes.map((c) => c.url.split("/").at(-1))).toEqual(["11", "12"]);

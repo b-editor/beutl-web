@@ -15,22 +15,30 @@ import type { PrismaTransaction } from "./transaction";
 
 export { GitAccountDeletionPhase };
 
-/** 退会の意思表示。対象がまだ分からない段階でも書ける。 */
+/**
+ * 退会の意思表示。対象がまだ分からない段階でも書ける。
+ *
+ * @returns この行を持っている intentId。同じ利用者の退会が同時に走ったとき、
+ *   先に立てた方の id が返る。取り消してよいのは自分の id のときだけ。
+ */
 export async function startGitAccountDeletion({
   userId,
+  intentId,
   prisma,
 }: {
   userId: string;
+  intentId: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<string> {
   const db = prisma ?? (await getDb());
-  return await db.gitAccountDeletion.upsert({
+  const row = await db.gitAccountDeletion.upsert({
     where: { userId },
-    create: { userId },
+    create: { userId, intentId },
     // やり直しでも phase は戻さない。READY_TO_PURGE を BLOCKING に落とすと、
-    // 既に消えた利用者の後始末が二度と進まなくなる。
+    // 既に消えた利用者の後始末が二度と進まなくなる。intentId も先勝ちのまま。
     update: {},
   });
+  return row.intentId;
 }
 
 /** Forgejo 側の対象が分かったら記録する。 */
@@ -67,10 +75,19 @@ export async function markGitAccountDeletionReady({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  await db.gitAccountDeletion.updateMany({
+  const { count } = await db.gitAccountDeletion.updateMany({
     where: { userId },
     data: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
   });
+
+  // 印が消えていたらユーザーを消してはいけない。誰も後始末できなくなり、
+  // その間に発行されたトークンが Forgejo に残ったままになる。
+  // 呼び出し元は同じトランザクションなので、投げれば削除ごと巻き戻る。
+  if (count !== 1) {
+    throw new Error(
+      `expected exactly one GitAccountDeletion for ${userId}, updated ${count}`,
+    );
+  }
 }
 
 /**
@@ -105,14 +122,18 @@ export async function markGitAccountDeletionNeedsReview({
  */
 export async function cancelPendingGitAccountDeletion({
   userId,
+  intentId,
   prisma,
 }: {
   userId: string;
+  intentId: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   await db.gitAccountDeletion.deleteMany({
-    where: { userId, phase: GitAccountDeletionPhase.BLOCKING },
+    // **自分が立てた印だけ**。同じ利用者の退会が 2 本走ると 1 つの行を共有するので、
+    // 片方の失敗で消すと、進行中のもう片方が印を失ったまま利用者を削除してしまう。
+    where: { userId, intentId, phase: GitAccountDeletionPhase.BLOCKING },
   });
 }
 
@@ -144,14 +165,27 @@ export async function deleteGitAccountDeletion({
  */
 export async function listPendingGitAccountDeletions({
   limit = 20,
+  /** これより後に試したものは飛ばす。重なった定期実行が同じ行を掴まないため。 */
+  skipAttemptedSince,
   prisma,
 }: {
   limit?: number;
+  skipAttemptedSince?: Date;
   prisma?: PrismaTransaction;
 } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitAccountDeletion.findMany({
-    where: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
+    where: {
+      phase: GitAccountDeletionPhase.READY_TO_PURGE,
+      ...(skipAttemptedSince
+        ? {
+            OR: [
+              { lastAttemptAt: null },
+              { lastAttemptAt: { lt: skipAttemptedSince } },
+            ],
+          }
+        : {}),
+    },
     orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
     take: limit,
   });

@@ -89,10 +89,21 @@ async function resolveForgejoUser(
   return { username: matches[0].login, id: matches[0].id };
 }
 
-/** 控えに名前が無い場合だけ、合成メールから探す。 */
-async function findUnmappedTarget(userId: string): Promise<string | null> {
-  const target = await resolveForgejoUser(userId).catch(() => null);
-  return target?.username ?? null;
+/**
+ * 控えに名前が無い場合だけ、合成メールから探す。
+ *
+ * 「探した結果いなかった」と「探せなかった」を混ぜない。混ぜると、Forgejo が
+ * 一時的に落ちているだけで人の確認待ちに落ちてしまい、自動では二度と進まない。
+ */
+async function findUnmappedTarget(
+  userId: string,
+): Promise<{ found: string | null } | { failed: unknown }> {
+  try {
+    const target = await resolveForgejoUser(userId);
+    return { found: target?.username ?? null };
+  } catch (error) {
+    return { failed: error };
+  }
 }
 
 /** 端末に配ったトークンを全て失効させる。@returns 消した本数。 */
@@ -136,14 +147,20 @@ async function revokeAllTokens(username: string): Promise<number> {
  */
 export async function beginGitAccountDeletion(
   userId: string,
-): Promise<string | null> {
+): Promise<{ forgejoUsername: string | null; intentId: string }> {
   // 対象を探す前に書く。探している間に初めての Forgejo ユーザーを作られると、
   // 誰も片付けないまま端末のトークンだけが残る。
-  await startGitAccountDeletion({ userId });
+  //
+  // 返るのは「この行を持っている」id。同じ利用者の退会が同時に走ったら先勝ちで、
+  // 後から来た方はここで相手の id を受け取る。取り消してよいのは自分の id のときだけ。
+  const ownedIntentId = await startGitAccountDeletion({
+    userId,
+    intentId: crypto.randomUUID(),
+  });
 
   try {
     const target = await resolveForgejoUser(userId);
-    if (!target) return null;
+    if (!target) return { forgejoUsername: null, intentId: ownedIntentId };
 
     await setGitAccountDeletionTarget({
       userId,
@@ -151,11 +168,14 @@ export async function beginGitAccountDeletion(
       forgejoUserId: target.id,
     });
     await revokeAllTokens(target.username);
-    return target.username;
+    return { forgejoUsername: target.username, intentId: ownedIntentId };
   } catch (error) {
     // 準備の段階で失敗した = 利用者はまだ生きている。印を残すと、その人は
     // 二度と資格情報を発行できなくなる。BLOCKING のうちだけ取り消す。
-    await cancelPendingGitAccountDeletion({ userId }).catch((cancelError) => {
+    await cancelPendingGitAccountDeletion({
+      userId,
+      intentId: ownedIntentId,
+    }).catch((cancelError) => {
       console.error(
         `failed to cancel the deletion marker of ${userId}; ` +
           "they cannot issue git credentials until it is removed",
@@ -164,6 +184,25 @@ export async function beginGitAccountDeletion(
     });
     throw error;
   }
+}
+
+/**
+ * 退会を取りやめる。Beutl 側の削除が失敗したときに呼ぶ。
+ *
+ * 自分が立てた BLOCKING の印だけを消す。呼ばないと、生き残った利用者が二度と
+ * 資格情報を発行できなくなる。
+ */
+export async function abortGitAccountDeletion(
+  userId: string,
+  intentId: string,
+): Promise<void> {
+  await cancelPendingGitAccountDeletion({ userId, intentId }).catch((error) => {
+    console.error(
+      `failed to cancel the deletion marker of ${userId}; ` +
+        "they cannot issue git credentials until it is removed",
+      error,
+    );
+  });
 }
 
 /**
@@ -191,15 +230,27 @@ export async function finishGitAccountDeletion(
   // 控えた名前を直接見る。合成メールで探し直すと、Forgejo のホスト名が変わった
   // 場合などに「見つからない = 片付いた」と誤って結論してしまい、実在するユーザーと
   // 生きたトークンを残したまま outbox を閉じる。
-  const username = pending.forgejoUsername ?? (await findUnmappedTarget(userId));
+  let username = pending.forgejoUsername;
   if (!username) {
-    // 控えにも無く、合成メールでも見つからない。**消したとは言い切れない**ので、
-    // 完了にはせず人の確認に回す。
-    await markGitAccountDeletionNeedsReview({
-      userId,
-      reason: "no Forgejo user could be resolved for this deletion",
-    });
-    return false;
+    const lookup = await findUnmappedTarget(userId);
+    if ("failed" in lookup) {
+      // 探せなかっただけ。次の定期実行でやり直す。
+      await recordGitAccountDeletionAttempt({
+        userId,
+        error:
+          lookup.failed instanceof Error
+            ? lookup.failed.message
+            : String(lookup.failed),
+      }).catch(() => undefined);
+      return false;
+    }
+    if (!lookup.found) {
+      // 控えにも無く、Forgejo にも居ない。Git を一度も使わなかった利用者。
+      // 片付けるものが無いので完了。
+      await deleteGitAccountDeletion({ userId });
+      return true;
+    }
+    username = lookup.found;
   }
 
   try {
@@ -261,10 +312,19 @@ export async function finishGitAccountDeletion(
  *
  * @returns 片付いた件数と、まだ残っている件数。
  */
+/**
+ * 直前に試したものを飛ばす幅。重なった定期実行が同じ行を掴むのを防ぐ。
+ * 排他ではないので二重に走っても壊れないが、無駄な往復と重複した記録が減る。
+ */
+const RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+
 export async function retryPendingGitDeletions({
   limit = 20,
 }: { limit?: number } = {}): Promise<{ finished: number; pending: number }> {
-  const pending = await listPendingGitAccountDeletions({ limit });
+  const pending = await listPendingGitAccountDeletions({
+    limit,
+    skipAttemptedSince: new Date(Date.now() - RETRY_COOLDOWN_MS),
+  });
   let finished = 0;
 
   for (const entry of pending) {

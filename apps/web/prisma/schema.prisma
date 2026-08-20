@@ -200,6 +200,9 @@ enum GitAccountDeletionPhase {
 // User への外部キーは張らない。User が消えた後も残る必要がある。
 model GitAccountDeletion {
   userId          String   @id
+  // この行を立てた 1 回の退会処理を指す。同じ利用者の退会要求が同時に走ったとき、
+  // 片方の失敗がもう片方の印を消さないようにするためだけに使う。
+  intentId        String
   phase           GitAccountDeletionPhase @default(BLOCKING)
   forgejoUsername String?
   forgejoUserId   Int?

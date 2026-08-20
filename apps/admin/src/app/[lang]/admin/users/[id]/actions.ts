@@ -38,6 +38,7 @@ function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
 import {
+  abortGitAccountDeletion,
   beginGitAccountDeletion,
   finishGitAccountDeletion,
 } from "@beutl/forgejo";
@@ -188,8 +189,9 @@ export async function deleteUser({
     // 経路を素通しするので、こちらのレコードだけ消しても push は通り続ける。
     // 外部への呼び出しなのでトランザクションの外で行う (再試行で二重に走らせない)。
     let forgejoUsername: string | null = null;
+    let intentId = "";
     try {
-      forgejoUsername = await beginGitAccountDeletion(userId);
+      ({ forgejoUsername, intentId } = await beginGitAccountDeletion(userId));
     } catch (error) {
       // ここで進むと、対応表を失ったまま Forgejo に生きたトークンが残る。
       console.error("failed to revoke the user's Git access", error);
@@ -200,6 +202,7 @@ export async function deleteUser({
       };
     }
 
+    try {
     await drainUserStorageFiles({ userId });
     const result = await startRetryableTransaction(async (tx) => {
       const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
@@ -263,7 +266,7 @@ export async function deleteUser({
       if (forgejoUsername) {
         await addAuditLog({
           userId: session.user.id,
-          action: auditLogActions.git.accountDeleted,
+          action: auditLogActions.admin.userDeleted,
           details: `userId: ${userId}`,
           prisma: tx,
         });
@@ -271,6 +274,7 @@ export async function deleteUser({
       return { status: "deleted" as const };
     });
     if (result.status === "blocked") {
+      await abortGitAccountDeletion(userId, intentId);
       const message =
         result.reason === "subscription"
           ? `Cancel this user's ${subscriptionPlanLabel(result.planId)} subscription before deleting the account`
@@ -283,6 +287,10 @@ export async function deleteUser({
       return { success: false, message };
     }
     if (result.status === "already-completed") return { success: true };
+    } catch (error) {
+      await abortGitAccountDeletion(userId, intentId);
+      throw error;
+    }
 
     // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
     // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
