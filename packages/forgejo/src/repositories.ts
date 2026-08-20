@@ -126,118 +126,31 @@ async function commitTemplates(
 /**
  * テンプレートのコミットに失敗した後始末。
  *
- * 名前だけで消さない。201 を受けた後でも、次のいずれかが起きていると、消す相手が
- * 「さっき自分が作った空のリポジトリ」ではなくなる。
+ * **削除はしない。** 外部で作られたリポジトリを消す判断は、こちらからは安全に
+ * 下せない。作成の 201 と「作成直後の状態」を原子的に得る手段が無いので、控えた
+ * SHA は既に誰かの push 後のものかもしれず、確かめてから DELETE するまでの間にも
+ * 同じ隙間がある。空に見えるだけの誰かのリポジトリを消す危険を、テンプレートを
+ * 入れ直す手間と引き換えにはできない。
  *
- *   - コミットは成功していて応答だけ落ちた (もうテンプレートは入っている)
- *   - その隙に利用者が push した (中身がある)
- *   - リネームされ、空いた名前に別のリポジトリが作られた (id が違う)
- *
- * そこで作成時に受け取った id と現在の状態を確かめ、**自分が作ったままの空の
- * リポジトリ**であるときだけ消す。そうでなければ足りないものを足して辻褄を合わせる。
+ * 代わりに足りないものを入れ直す。入れられなければ記録だけ残す。呼び出し元は
+ * 既に別の例外を投げようとしていて、それを握り潰すと本来の失敗理由が消える。
  */
-async function rollbackPartialRepository(
+async function repairAfterTemplateFailure(
   sudo: string,
   repository: ForgejoRepository,
-  createdSha: string | null,
-) {
+): Promise<void> {
   const name = repository.name;
   try {
     const current = await getRepository(sudo, sudo, name);
-    if (!current) return;
-
-    if (current.id !== repository.id) {
-      // 同じ名前の別物。触らない。
-      console.error(
-        `not rolling back ${sudo}/${name}: it is now a different repository ` +
-          `(id ${current.id}, expected ${repository.id})`,
-      );
-      return;
-    }
-
-    if (await hasTemplates(sudo, name)) {
-      // 応答を落としただけで、中身は揃っている。消す理由が無い。
-      return;
-    }
-
-    if (!(await isPristine(sudo, name, current.default_branch, createdSha))) {
-      // 既に push されている。消すとその中身ごと失う。テンプレートだけ足す。
-      await commitTemplates(sudo, name, current.default_branch).catch(
-        (error) => {
-          console.error(
-            `${sudo}/${name} has content but no .gitattributes, and the ` +
-              "templates could not be added; media pushed to it will not use LFS",
-            error,
-          );
-        },
-      );
-      return;
-    }
-
-    await deleteRepository(sudo, sudo, name);
+    if (!current || current.id !== repository.id) return;
+    await commitTemplates(sudo, name, current.default_branch);
   } catch (error) {
     console.error(
-      `failed to roll back the half-created repository ${sudo}/${name}; ` +
-        "it has no .gitattributes, so media pushed to it will not use LFS",
+      `${sudo}/${name} was created without .gitattributes and could not be ` +
+        "repaired; media pushed to it will not use LFS",
       error,
     );
   }
-}
-
-/**
- * 作成直後のまま、誰も何も足していないか。
- *
- * 「既定ブランチのコミットが 1 つ」だけでは足りない。別ブランチやタグへの push も、
- * 既定ブランチを別の 1 コミットへ force-push した場合も、それでは見分けられない。
- * 消してよいのは次を全部満たすときだけ。
- *
- *   - 既定ブランチの先頭が、作成直後に控えた SHA のまま
- *   - ブランチがその 1 本しかない
- *   - タグが 1 つも無い
- *
- * どれか 1 つでも確かめられなければ false を返す (消さない側に倒す)。
- */
-async function isPristine(
-  sudo: string,
-  name: string,
-  branch: string,
-  createdSha: string | null,
-): Promise<boolean> {
-  if (!createdSha) return false;
-
-  const base = `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}`;
-  const [head, branches, tags] = await Promise.all([
-    forgejoRequestOrNull<ForgejoBranch>(
-      `${base}/branches/${encodeURIComponent(branch)}`,
-      { sudo },
-    ),
-    forgejoRequestOrNull<ForgejoBranch[]>(`${base}/branches`, {
-      sudo,
-      searchParams: { page: 1, limit: 2 },
-    }),
-    forgejoRequestOrNull<unknown[]>(`${base}/tags`, {
-      sudo,
-      searchParams: { page: 1, limit: 1 },
-    }),
-  ]);
-
-  if (!head || head.commit?.id !== createdSha) return false;
-  if (!branches || branches.length !== 1) return false;
-  if (!tags || tags.length !== 0) return false;
-  return true;
-}
-
-/** 作成直後の既定ブランチの先頭。取れなければ null (巻き戻しは諦める)。 */
-async function headShaOf(
-  sudo: string,
-  name: string,
-  branch: string,
-): Promise<string | null> {
-  const head = await forgejoRequestOrNull<ForgejoBranch>(
-    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}`,
-    { sudo },
-  );
-  return head?.commit?.id ?? null;
 }
 
 /**
@@ -291,12 +204,17 @@ async function reconcileAfterAmbiguousCreate(
     const existing = await getRepository(sudo, sudo, name);
     if (!existing) return null;
 
-    if (await hasTemplates(sudo, name)) {
-      // 誰かが最後まで作り切っている。触らない。
-      return existing;
-    }
-
     await commitTemplates(sudo, name, existing.default_branch);
+
+    // 入れ直した後でも中身が既定と違うなら、誰かが編集したか壊れている。
+    // commitTemplates は既にあるファイルを上書きしないので、ここでは直せない。
+    // 黙って成功にすると、LFS の効かないリポジトリを「作成できました」と返す。
+    if (!(await hasTemplates(sudo, name))) {
+      throw new Error(
+        `${sudo}/${name} exists but its Beutl defaults are not the expected ` +
+          "ones; media pushed to it may not use LFS. Check .gitattributes by hand.",
+      );
+    }
     return existing;
   } catch (error) {
     console.error(
@@ -362,16 +280,13 @@ export async function createRepository(
     throw error;
   }
 
-  // 巻き戻すかどうかの判断に使う。テンプレートを入れる前の先頭がこれ。
-  const createdSha = await headShaOf(sudo, name, repository.default_branch);
-
   try {
     await commitTemplates(sudo, name, repository.default_branch);
   } catch (error) {
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
     // なかったことにして、ユーザーにやり直させる方がまだ良い。
-    await rollbackPartialRepository(sudo, repository, createdSha);
+    await repairAfterTemplateFailure(sudo, repository);
     throw error;
   }
 

@@ -1,9 +1,11 @@
 import {
   GitAccountDeletionPhase,
+  cancelPendingGitAccountDeletion,
   deleteGitAccountDeletion,
   findGitAccountByUserId,
   findGitAccountDeletion,
   listPendingGitAccountDeletions,
+  markGitAccountDeletionNeedsReview,
   recordGitAccountDeletionAttempt,
   setGitAccountDeletionTarget,
   startGitAccountDeletion,
@@ -87,6 +89,12 @@ async function resolveForgejoUser(
   return { username: matches[0].login, id: matches[0].id };
 }
 
+/** 控えに名前が無い場合だけ、合成メールから探す。 */
+async function findUnmappedTarget(userId: string): Promise<string | null> {
+  const target = await resolveForgejoUser(userId).catch(() => null);
+  return target?.username ?? null;
+}
+
 /** 端末に配ったトークンを全て失効させる。@returns 消した本数。 */
 async function revokeAllTokens(username: string): Promise<number> {
   let revoked = 0;
@@ -133,16 +141,29 @@ export async function beginGitAccountDeletion(
   // 誰も片付けないまま端末のトークンだけが残る。
   await startGitAccountDeletion({ userId });
 
-  const target = await resolveForgejoUser(userId);
-  if (!target) return null;
+  try {
+    const target = await resolveForgejoUser(userId);
+    if (!target) return null;
 
-  await setGitAccountDeletionTarget({
-    userId,
-    forgejoUsername: target.username,
-    forgejoUserId: target.id,
-  });
-  await revokeAllTokens(target.username);
-  return target.username;
+    await setGitAccountDeletionTarget({
+      userId,
+      forgejoUsername: target.username,
+      forgejoUserId: target.id,
+    });
+    await revokeAllTokens(target.username);
+    return target.username;
+  } catch (error) {
+    // 準備の段階で失敗した = 利用者はまだ生きている。印を残すと、その人は
+    // 二度と資格情報を発行できなくなる。BLOCKING のうちだけ取り消す。
+    await cancelPendingGitAccountDeletion({ userId }).catch((cancelError) => {
+      console.error(
+        `failed to cancel the deletion marker of ${userId}; ` +
+          "they cannot issue git credentials until it is removed",
+        cancelError,
+      );
+    });
+    throw error;
+  }
 }
 
 /**
@@ -167,56 +188,55 @@ export async function finishGitAccountDeletion(
     return false;
   }
 
+  // 控えた名前を直接見る。合成メールで探し直すと、Forgejo のホスト名が変わった
+  // 場合などに「見つからない = 片付いた」と誤って結論してしまい、実在するユーザーと
+  // 生きたトークンを残したまま outbox を閉じる。
+  const username = pending.forgejoUsername ?? (await findUnmappedTarget(userId));
+  if (!username) {
+    // 控えにも無く、合成メールでも見つからない。**消したとは言い切れない**ので、
+    // 完了にはせず人の確認に回す。
+    await markGitAccountDeletionNeedsReview({
+      userId,
+      reason: "no Forgejo user could be resolved for this deletion",
+    });
+    return false;
+  }
+
   try {
-    let target: { username: string; id: number } | null;
-    try {
-      target = await resolveForgejoUser(userId);
-    } catch (error) {
-      if (error instanceof ForgejoAccountMismatchError) {
-        // 名前は残っているが別人のもの。元のユーザーはもう居ないので、
-        // 片付けとしては完了。**決して消しにいかない**。
-        console.error(
-          `not purging for ${userId}: the mapped name now belongs to someone else`,
-          error,
-        );
-        await deleteGitAccountDeletion({ userId });
-        return true;
-      }
-      throw error;
-    }
+    const actual = await forgejoRequestOrNull<ForgejoUser>(
+      `/users/${encodeURIComponent(username)}`,
+    );
 
-    if (!target) {
-      // 本当に何も無い。印を消して終わる。
+    if (!actual) {
+      // 404 だけが完了。元のユーザーはもう存在しない。
       await deleteGitAccountDeletion({ userId });
       return true;
     }
 
-    if (
-      pending.forgejoUserId !== null &&
-      pending.forgejoUserId !== target.id
-    ) {
-      // 名前は同じだが別人。Forgejo が復元されて id が振り直された場合など。
-      // 元のユーザーはもう居ないので、片付けとしては完了。
-      console.error(
-        `not purging ${target.username}: it is now id ${target.id}, ` +
-          `but the deletion queued id ${pending.forgejoUserId}`,
-      );
-      await deleteGitAccountDeletion({ userId });
-      return true;
+    const expectedEmail = noreplyEmailFor(userId);
+    const idMatches =
+      pending.forgejoUserId === null || pending.forgejoUserId === actual.id;
+    if (!idMatches || actual.email !== expectedEmail) {
+      // 名前は残っているが別人のもの。**決して消しにいかない**。かといって
+      // 元のユーザーを消せた証拠も無いので、完了にもしない。
+      await markGitAccountDeletionNeedsReview({
+        userId,
+        reason:
+          `Forgejo user ${username} is now id ${actual.id} <${actual.email}>, ` +
+          `expected id ${pending.forgejoUserId} <${expectedEmail}>`,
+      });
+      return false;
     }
 
     // 掃き直す。意思表示の前に始まっていた発行が着地していることがある。
-    await revokeAllTokens(target.username);
+    await revokeAllTokens(username);
 
-    await forgejoRequest(
-      `/admin/users/${encodeURIComponent(target.username)}`,
-      {
-        method: "DELETE",
-        // リポジトリを持っているユーザーは purge を付けないと 422 で拒まれる。
-        searchParams: { purge: true },
-        responseType: "none",
-      },
-    );
+    await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
+      method: "DELETE",
+      // リポジトリを持っているユーザーは purge を付けないと 422 で拒まれる。
+      searchParams: { purge: true },
+      responseType: "none",
+    });
   } catch (error) {
     if (!(error instanceof ForgejoError && error.isNotFound)) {
       await recordGitAccountDeletionAttempt({

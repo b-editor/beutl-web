@@ -73,6 +73,49 @@ export async function markGitAccountDeletionReady({
   });
 }
 
+/**
+ * 自動では決着できない状態にする。
+ * 控えの相手が見つからない、あるいは別人になっている場合。人が確認するまで放置する。
+ */
+export async function markGitAccountDeletionNeedsReview({
+  userId,
+  reason,
+  prisma,
+}: {
+  userId: string;
+  reason: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitAccountDeletion.updateMany({
+    where: { userId },
+    data: {
+      phase: GitAccountDeletionPhase.NEEDS_REVIEW,
+      lastAttemptAt: new Date(),
+      lastError: reason.slice(0, 500),
+    },
+  });
+}
+
+/**
+ * まだ BLOCKING の印を取り消す。
+ *
+ * 退会の準備段階で失敗すると利用者は残るので、印だけ残ると資格情報を二度と
+ * 発行できなくなる。READY_TO_PURGE 以降は消さない (Beutl 側は既に消えている)。
+ */
+export async function cancelPendingGitAccountDeletion({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitAccountDeletion.deleteMany({
+    where: { userId, phase: GitAccountDeletionPhase.BLOCKING },
+  });
+}
+
 export async function findGitAccountDeletion({
   userId,
   prisma,

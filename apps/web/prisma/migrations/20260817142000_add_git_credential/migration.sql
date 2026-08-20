@@ -18,4 +18,3 @@ CREATE UNIQUE INDEX "GitCredential_userId_name_key" ON "GitCredential"("userId",
 
 -- AddForeignKey
 ALTER TABLE "GitCredential" ADD CONSTRAINT "GitCredential_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-

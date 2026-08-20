@@ -1,5 +1,5 @@
 -- CreateEnum
-CREATE TYPE "GitAccountDeletionPhase" AS ENUM ('BLOCKING', 'READY_TO_PURGE');
+CREATE TYPE "GitAccountDeletionPhase" AS ENUM ('BLOCKING', 'READY_TO_PURGE', 'NEEDS_REVIEW');
 
 -- CreateTable
 CREATE TABLE "GitAccountDeletion" (
