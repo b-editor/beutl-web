@@ -280,8 +280,13 @@ export async function deleteUser({
     // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
     // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
     // 残ってリポジトリが戻せなくなる。
-    if (forgejoUsername) {
-      await purgeGitAccount(forgejoUsername);
+    if (forgejoUsername && !(await purgeGitAccount(forgejoUsername))) {
+      // 自動では再試行されない。手で消すための手がかりを監査に残す。
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.git.accountPurgeFailed,
+        details: `Forgejo user ${forgejoUsername} survived the purge and must be removed by hand`,
+      });
     }
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。

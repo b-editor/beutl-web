@@ -73,6 +73,8 @@ const {
 } = await import("@beutl/forgejo");
 
 const TOKEN = "7cc1c470aaaaaaaaaaaaaaaaaaaaaaaaaa536dad7c".slice(0, 40);
+// 対応表の照合に使う合成メール (userId + FORGEJO_BASE_URL のホスト)。
+const EMAIL = "u1@users.noreply.git.example.test";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -107,7 +109,7 @@ beforeEach(() => {
     const path = new URL(String(url)).pathname;
     // ensureGitAccount は対応表の id が Forgejo と一致するかを確かめる。
     if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     }
     if (init?.method === "POST" && path.endsWith("/tokens")) {
       return json(
@@ -306,9 +308,10 @@ describe("リポジトリの作成", () => {
     expect(del?.url).toContain("/repos/someone/proj");
   });
 
-  it("作成そのものが失敗しても、出来ていたら畳む", async () => {
-    // 作成は成功していて応答だけ失われる場合がある。そのまま放置すると
-    // .gitattributes の無いリポジトリが残る。
+  it("作成の成否が分からないときは、消さずにテンプレートを足す", async () => {
+    // 502 や 504 は「作られていない」とも「作られたが応答を落とした」とも取れる。
+    // 同時に走った別のリクエストが正しく作っている場合もあるので、消して決着させると
+    // 他人の (あるいは自分の正しい) リポジトリを巻き添えにする。
     const { createRepository } = await import("@beutl/forgejo");
     let repoLookups = 0;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -316,21 +319,64 @@ describe("リポジトリの作成", () => {
       if (init?.method === "POST" && path.endsWith("/user/repos")) {
         return new Response("gateway timeout", { status: 504 });
       }
-      // 作成前は不在。504 の後に見ると出来ている = 応答だけ落とした。
       if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
         repoLookups += 1;
         if (repoLookups === 1) return json({ message: "not found" }, 404);
         return json({ id: 1, name: "proj", default_branch: "main" });
+      }
+      // .gitattributes はまだ無い。
+      if (path.endsWith("/contents/.gitattributes")) {
+        return json({ message: "not found" }, 404);
       }
       return new Response(null, { status: 204 });
     });
 
     await expect(
       createRepository("someone", { name: "proj" }),
-    ).rejects.toBeTruthy();
+    ).resolves.toMatchObject({ name: "proj" });
 
-    const del = record(fetchMock).find((c) => c.method === "DELETE");
-    expect(del?.url).toContain("/repos/someone/proj");
+    // 消さない。足りないテンプレートを入れて辻褄を合わせる。
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+    const commit = record(fetchMock).find(
+      (c) => c.method === "POST" && c.url.endsWith("/contents"),
+    )!;
+    expect(JSON.stringify(commit.body)).toContain(".gitattributes");
+  });
+
+  it("既にテンプレートが入っていれば触らない", async () => {
+    // 相手が最後まで作り切っている場合。二重にコミットしない。
+    const { createRepository } = await import("@beutl/forgejo");
+    let repoLookups = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return new Response("gateway timeout", { status: 504 });
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        repoLookups += 1;
+        if (repoLookups === 1) return json({ message: "not found" }, 404);
+        return json({ id: 1, name: "proj", default_branch: "main" });
+      }
+      if (path.endsWith("/contents/.gitattributes")) {
+        return json({ path: ".gitattributes", type: "file", size: 100 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).resolves.toMatchObject({ name: "proj" });
+
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+    expect(
+      record(fetchMock).filter(
+        (c) => c.method === "POST" && c.url.endsWith("/contents"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("既にあるリポジトリには手を付けない", async () => {
@@ -385,13 +431,19 @@ describe("リポジトリの作成", () => {
 
 describe("退会時の後始末", () => {
   it("端末に配ったトークンを全部失効させる", async () => {
+    // 消しながら読み直すので、2 巡目は空を返す。
+    let listed = 0;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (path.endsWith("/admin/users/someone/tokens")) {
-        return json([{ id: 11 }, { id: 12 }]);
+      if (
+        path.endsWith("/admin/users/someone/tokens") &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        listed += 1;
+        return listed === 1 ? json([{ id: 11 }, { id: 12 }]) : json([]);
       }
       if (init?.method === "DELETE") return new Response(null, { status: 204 });
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     });
 
     await expect(revokeGitAccess("u1")).resolves.toBe("someone");
@@ -400,31 +452,104 @@ describe("退会時の後始末", () => {
     expect(deletes.map((c) => c.url.split("/").at(-1))).toEqual(["11", "12"]);
   });
 
+  it("一覧をページ指定で読む (無指定の全件返しに頼らない)", async () => {
+    let listed = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (
+        path.endsWith("/admin/users/someone/tokens") &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        listed += 1;
+        return listed === 1 ? json([{ id: 11 }]) : json([]);
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return json({ id: 2, login: "someone", email: EMAIL });
+    });
+
+    await revokeGitAccess("u1");
+
+    const list = record(fetchMock).find(
+      (c) => c.method === "GET" && c.url.includes("/tokens?"),
+    )!;
+    expect(list.url).toContain("limit=50");
+  });
+
+  it("対応表が別人を指していたら消しに行かない", async () => {
+    // 削除は取り返しがつかない。id が食い違ったまま進むと、別人のトークンを
+    // 全部失効させてリポジトリごと消してしまう。
+    fetchMock.mockImplementation(async () =>
+      json({ id: 99, login: "someone", email: EMAIL }),
+    );
+
+    await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+  });
+
+  it("メールが別人のものなら消しに行かない", async () => {
+    fetchMock.mockImplementation(async () =>
+      json({ id: 2, login: "someone", email: "someone-else@example.test" }),
+    );
+
+    await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
+    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
+      0,
+    );
+  });
+
   it("失効に失敗したら投げる (退会自体を止めるため)", async () => {
     // ここを握り潰すと、Beutl 側だけ消えて生きたトークンが残る。
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (path.endsWith("/admin/users/someone/tokens")) return json([{ id: 11 }]);
+      if (
+        path.endsWith("/admin/users/someone/tokens") &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        return json([{ id: 11 }]);
+      }
       if (init?.method === "DELETE") return json({ message: "boom" }, 500);
-      return json({ id: 2, login: "someone" });
+      return json({ id: 2, login: "someone", email: EMAIL });
     });
 
     await expect(revokeGitAccess("u1")).rejects.toBeTruthy();
   });
 
-  it("purge でリポジトリごと消す", async () => {
-    await purgeGitAccount("someone");
+  it("purge の直前にもう一度トークンを掃く", async () => {
+    // 失効から Beutl 側の削除までの間に発行された分がありうる。purge が失敗した
+    // ときに生き残るのはまさにそれ。
+    let listed = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (
+        path.endsWith("/admin/users/someone/tokens") &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        listed += 1;
+        return listed === 1 ? json([{ id: 77 }]) : json([]);
+      }
+      return new Response(null, { status: 204 });
+    });
 
-    const del = record(fetchMock).find((c) => c.method === "DELETE")!;
-    expect(del.url).toContain("/admin/users/someone");
+    await expect(purgeGitAccount("someone")).resolves.toBe(true);
+
+    const deletes = record(fetchMock).filter((c) => c.method === "DELETE");
+    expect(deletes[0].url).toContain("/tokens/77");
+    const purge = deletes.at(-1)!;
     // 付けないとリポジトリ所有者は 422 で拒まれる。
-    expect(del.url).toContain("purge=true");
+    expect(purge.url).toContain("purge=true");
   });
 
-  it("purge が失敗しても投げない (アクセスは既に断ってある)", async () => {
-    fetchMock.mockImplementation(async () => json({ message: "boom" }, 500));
+  it("purge が失敗したら false を返す (投げない)", async () => {
+    // アクセスは既に断ってある。ここで投げても Beutl 側の削除は戻せない。
+    // 呼び出し元が消し残りを監査に記録できるよう、成否だけ返す。
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return json([]);
+      return json({ message: "boom" }, 500);
+    });
 
-    await expect(purgeGitAccount("someone")).resolves.toBeUndefined();
+    await expect(purgeGitAccount("someone")).resolves.toBe(false);
   });
 });
 

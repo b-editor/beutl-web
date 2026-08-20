@@ -71,6 +71,9 @@ export const auditLogActions = {
     issueCredential: "git.issueCredential",
     revokeCredential: "git.revokeCredential",
     accountDeleted: "git.accountDeleted",
+    // purge に失敗して Forgejo 側にユーザーが残った。自動では再試行されないので、
+    // 手で消すための手がかりをここに残す。
+    accountPurgeFailed: "git.accountPurgeFailed",
   },
 } as const;
 

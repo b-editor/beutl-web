@@ -50,7 +50,16 @@ export async function listRepositories(sudo: string) {
       searchParams: { page, limit: MAX_PAGE_SIZE },
     });
     all.push(...batch);
+    // 最後のページがちょうど埋まっている場合、次が空かどうかは読むまで分からない。
+    // 上限に達したときだけ 1 ページ余分に確かめる。
     if (batch.length < MAX_PAGE_SIZE) return all;
+    if (page === MAX_REPOSITORY_PAGES) {
+      const extra = await forgejoRequest<ForgejoRepository[]>("/user/repos", {
+        sudo,
+        searchParams: { page: page + 1, limit: MAX_PAGE_SIZE },
+      });
+      if (extra.length === 0) return all;
+    }
   }
 
   // 打ち切った配列をそのまま返すと、呼び出し側は完全な一覧だと思って件数と
@@ -72,22 +81,48 @@ export async function getRepository(
   );
 }
 
+/** Beutl 用の既定ファイルを 1 コミットで置く。 */
+async function commitTemplates(
+  sudo: string,
+  name: string,
+  branch: string,
+): Promise<void> {
+  await forgejoRequest(
+    `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`,
+    {
+      method: "POST",
+      sudo,
+      body: {
+        branch,
+        message: "Add Beutl project defaults",
+        files: [
+          {
+            operation: "create",
+            path: ".gitattributes",
+            content: toBase64(GITATTRIBUTES_TEMPLATE),
+          },
+          {
+            operation: "create",
+            path: ".gitignore",
+            content: toBase64(GITIGNORE_TEMPLATE),
+          },
+        ],
+      },
+    },
+  );
+}
+
 /**
- * 作りかけのリポジトリを消す。
+ * テンプレートの入っていないリポジトリを消す。
  *
- * **この操作で作ったものだけ**を対象にする。作成 API が 502 や 504 で失敗したとき、
- * それが「衝突なので作られていない」のか「作られたが応答を落とした」のかは
- * 区別できない。実在するというだけで消すと、同名の既存リポジトリを巻き添えにする。
- * 呼び出し元は作成前に不在を確かめているので、ここに来る時点で実在すれば
- * それはこの操作の産物と見なせる。
+ * 使うのは**この呼び出しが作ったと確定している**場合だけ。作成 API が 201 を返した
+ * 後にテンプレートのコミットが失敗した経路がそれにあたる。
  *
  * 消せなかったら投げずに記録だけ残す。呼び出し元は既に別の例外を投げようとしていて、
  * それを握り潰すと本来の失敗理由が消えるため。
  */
 async function rollbackPartialRepository(sudo: string, name: string) {
   try {
-    const existing = await getRepository(sudo, sudo, name);
-    if (!existing) return;
     await deleteRepository(sudo, sudo, name);
   } catch (error) {
     console.error(
@@ -95,6 +130,47 @@ async function rollbackPartialRepository(sudo: string, name: string) {
         "it has no .gitattributes, so media pushed to it will not use LFS",
       error,
     );
+  }
+}
+
+/**
+ * 作成 API の成否が分からないときの後始末。
+ *
+ * 502 や 504 は「作られていない」とも「作られたが応答を落とした」とも取れる。
+ * 同じ利用者が二重に押した場合や、再送が重なった場合も同じ見え方になる。
+ * 削除で決着させると、他方が正しく作ったリポジトリを消してしまう。
+ *
+ * 代わりに、実在していてテンプレートが入っていなければ入れる。作ったのが自分でも
+ * 他方でも、目的の状態 (.gitattributes のあるリポジトリ) に寄せられる。
+ *
+ * @returns 辻褄が合わせられたらそのリポジトリ、判断できなければ null。
+ */
+async function reconcileAfterAmbiguousCreate(
+  sudo: string,
+  name: string,
+): Promise<ForgejoRepository | null> {
+  try {
+    const existing = await getRepository(sudo, sudo, name);
+    if (!existing) return null;
+
+    const attributes = await forgejoRequestOrNull(
+      `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents/.gitattributes`,
+      { sudo },
+    );
+    if (attributes) {
+      // 誰かが最後まで作り切っている。触らない。
+      return existing;
+    }
+
+    await commitTemplates(sudo, name, existing.default_branch);
+    return existing;
+  } catch (error) {
+    console.error(
+      `could not reconcile ${sudo}/${name} after an ambiguous create; if it ` +
+        "exists without .gitattributes, media pushed to it will not use LFS",
+      error,
+    );
+    return null;
   }
 }
 
@@ -144,36 +220,16 @@ export async function createRepository(
     if (error instanceof ForgejoError && error.isConflict) {
       throw error;
     }
-    // 応答だけを取りこぼした場合、サーバー側には .gitattributes の無いリポジトリが
-    // 出来ている。作成が成功していたかを確かめてから畳む。
-    await rollbackPartialRepository(sudo, name);
+    // それ以外 (502/504 など) は、作られたのか作られていないのかが分からない。
+    // ここで「在るから消す」をやると、同時に走った別のリクエストが正しく作った
+    // リポジトリを巻き添えにする。消さずに、足りないものを足して辻褄を合わせる。
+    const reconciled = await reconcileAfterAmbiguousCreate(sudo, name);
+    if (reconciled) return reconciled;
     throw error;
   }
 
   try {
-    await forgejoRequest(
-      `/repos/${encodeURIComponent(sudo)}/${encodeURIComponent(name)}/contents`,
-      {
-        method: "POST",
-        sudo,
-        body: {
-          branch: repository.default_branch,
-          message: "Add Beutl project defaults",
-          files: [
-            {
-              operation: "create",
-              path: ".gitattributes",
-              content: toBase64(GITATTRIBUTES_TEMPLATE),
-            },
-            {
-              operation: "create",
-              path: ".gitignore",
-              content: toBase64(GITIGNORE_TEMPLATE),
-            },
-          ],
-        },
-      },
-    );
+    await commitTemplates(sudo, name, repository.default_branch);
   } catch (error) {
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を

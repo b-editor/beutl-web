@@ -1,7 +1,7 @@
 import { findGitAccountByUserId } from "@beutl/db";
 import { forgejoRequest, forgejoRequestOrNull } from "./client";
 import { tokensPath } from "./credentials";
-import { ForgejoError } from "./errors";
+import { ForgejoAccountMismatchError, ForgejoError } from "./errors";
 import { noreplyEmailFor } from "./provisioning";
 import type { ForgejoAccessToken, ForgejoUser } from "./types";
 
@@ -16,13 +16,19 @@ import type { ForgejoAccessToken, ForgejoUser } from "./types";
  * そこで 2 段階に分ける。
  *
  *   1. revokeGitAccess  — トークンを全て失効させる。ここが成否の分かれ目
- *   2. purgeGitAccount  — ユーザーとリポジトリを消す。後片付け
+ *   2. purgeGitAccount  — 消し漏れを掃き直してから、ユーザーとリポジトリを消す
  *
  * 1 が成功して 2 の前に落ちても、アクセスは既に断たれている。Beutl 側の削除を
  * 1 と 2 の間に置くのはそのため。先に purge してしまうと、後段の DB 更新が失敗した
  * ときに「アカウントは残っているのにリポジトリだけ消えた」という取り返しのつかない
  * 状態になる。
  */
+
+/** トークン一覧の 1 ページあたりの件数。Forgejo の上限は 50。 */
+const TOKEN_PAGE_SIZE = 50;
+
+/** 一覧を読む上限ページ数。壊れた応答で無限に回らないための箍。 */
+const MAX_TOKEN_PAGES = 40;
 
 /**
  * 対応表が無くても Forgejo 上のユーザーを引き当てる。
@@ -31,12 +37,38 @@ import type { ForgejoAccessToken, ForgejoUser } from "./types";
  * 戻ると「対応表は無いが Forgejo にはユーザーが居る」状態になる。ここで諦めると、
  * 退会したのに端末のトークンが生き続ける。合成メールは userId から決まるので、
  * それで引く。
+ *
+ * 対応表がある場合も名前だけを信じない。**削除は取り返しがつかない**ので、
+ * 通常操作と同じく id を照合し、さらにメールが本人のものであることまで確かめる。
+ * 2 つの DB を別の時点に復元すると同じ名前が別人を指しうる。そのまま進めると、
+ * 別人のトークンを全部失効させ、リポジトリごと消してしまう。
  */
-async function resolveForgejoUsername(userId: string): Promise<string | null> {
-  const account = await findGitAccountByUserId({ userId });
-  if (account) return account.forgejoUsername;
-
+async function resolveForgejoUser(userId: string): Promise<string | null> {
   const email = noreplyEmailFor(userId);
+  const account = await findGitAccountByUserId({ userId });
+
+  if (account) {
+    const actual = await forgejoRequestOrNull<ForgejoUser>(
+      `/users/${encodeURIComponent(account.forgejoUsername)}`,
+    );
+    if (!actual || actual.id !== account.forgejoUserId) {
+      throw new ForgejoAccountMismatchError(
+        account.forgejoUsername,
+        account.forgejoUserId,
+        actual?.id ?? null,
+      );
+    }
+    // id が合っていてもメールが別人なら、対応表そのものが壊れている。
+    if (actual.email !== email) {
+      throw new ForgejoAccountMismatchError(
+        account.forgejoUsername,
+        account.forgejoUserId,
+        actual.id,
+      );
+    }
+    return account.forgejoUsername;
+  }
+
   const found = await forgejoRequestOrNull<{ data?: ForgejoUser[] }>(
     "/users/search",
     { searchParams: { q: email, limit: 2 } },
@@ -46,43 +78,76 @@ async function resolveForgejoUsername(userId: string): Promise<string | null> {
   return matches[0].login;
 }
 
+/** 端末に配ったトークンを全て失効させる。@returns 消した本数。 */
+async function revokeAllTokens(username: string): Promise<number> {
+  let revoked = 0;
+
+  for (let page = 1; page <= MAX_TOKEN_PAGES; page++) {
+    // page を指定しないと Forgejo は全件返すが、それは文書化された挙動ではない。
+    // 明示的に読む。消しながら読むのでページ番号は進めない。
+    const tokens = await forgejoRequest<ForgejoAccessToken[]>(
+      tokensPath(username),
+      { searchParams: { page: 1, limit: TOKEN_PAGE_SIZE } },
+    );
+    if (tokens.length === 0) return revoked;
+
+    for (const token of tokens) {
+      try {
+        await forgejoRequest(tokensPath(username, token.id), {
+          method: "DELETE",
+          responseType: "none",
+        });
+        revoked += 1;
+      } catch (error) {
+        // 既に無いなら目的は達している。それ以外は投げて、退会自体を中止させる。
+        if (!(error instanceof ForgejoError && error.isNotFound)) throw error;
+      }
+    }
+  }
+
+  throw new Error(
+    `could not drain the access tokens of ${username} within ${MAX_TOKEN_PAGES} rounds`,
+  );
+}
+
 /**
  * 端末に配ったトークンを全て失効させる。
  *
  * @returns 対象が居れば Forgejo 上のユーザー名、居なければ null。
  */
 export async function revokeGitAccess(userId: string): Promise<string | null> {
-  const username = await resolveForgejoUsername(userId);
+  const username = await resolveForgejoUser(userId);
   if (!username) {
     // Git を一度も使っていないユーザー。Forgejo には何も無い。
     return null;
   }
 
-  const tokens = await forgejoRequest<ForgejoAccessToken[]>(
-    tokensPath(username),
-  );
-  for (const token of tokens) {
-    try {
-      await forgejoRequest(tokensPath(username, token.id), {
-        method: "DELETE",
-        responseType: "none",
-      });
-    } catch (error) {
-      // 既に無いなら目的は達している。それ以外は投げて、退会自体を中止させる。
-      if (!(error instanceof ForgejoError && error.isNotFound)) throw error;
-    }
-  }
-
+  await revokeAllTokens(username);
   return username;
 }
 
 /**
  * ユーザーとそのリポジトリを消す。
  *
- * アクセスは revokeGitAccess で既に断たれているので、ここが失敗しても穴は開かない。
- * 残るのは持ち主の居ないリポジトリだけなので、投げずに記録して次へ進む。
+ * 消す前にトークンをもう一度掃く。失効から Beutl 側の削除までの間に発行された分が
+ * ありうるためで、purge が失敗したときに生き残るのはまさにそれになる。
+ *
+ * purge 自体が失敗しても投げない。アクセスは断ててあるので穴は開かず、残るのは
+ * 持ち主の居ないリポジトリだけ。呼び出し元は Beutl 側の削除を既に確定させていて、
+ * ここで投げても戻せるものが無い。
+ *
+ * @returns 消し切れたかどうか。false なら Forgejo に手つかずのユーザーが残る。
  */
-export async function purgeGitAccount(username: string): Promise<void> {
+export async function purgeGitAccount(username: string): Promise<boolean> {
+  try {
+    await revokeAllTokens(username);
+  } catch (error) {
+    console.error(
+      `failed to re-drain tokens for ${username} before purging`,
+      error,
+    );
+  }
+
   try {
     await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
       method: "DELETE",
@@ -90,12 +155,16 @@ export async function purgeGitAccount(username: string): Promise<void> {
       searchParams: { purge: true },
       responseType: "none",
     });
+    return true;
   } catch (error) {
-    if (error instanceof ForgejoError && error.isNotFound) return;
+    if (error instanceof ForgejoError && error.isNotFound) return true;
     console.error(
-      `failed to purge the Forgejo user ${username}; its repositories are ` +
-        "orphaned but no token can reach them any more",
+      `failed to purge the Forgejo user ${username}; its repositories and LFS ` +
+        "objects remain. No token can reach them, but nothing will retry this: " +
+        "remove the user by hand (DELETE /api/v1/admin/users/" +
+        `${username}?purge=true)`,
       error,
     );
+    return false;
   }
 }

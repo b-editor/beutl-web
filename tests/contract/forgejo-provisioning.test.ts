@@ -149,6 +149,7 @@ describe("対応表が失われた状態での退会", () => {
     // ユーザーが残る。ここで諦めると、退会したのに端末のトークンが生き続ける。
     const { revokeGitAccess } = await import("@beutl/forgejo");
     existingAccount = null;
+    let listed = 0;
 
     fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const parsed = new URL(String(url));
@@ -163,8 +164,12 @@ describe("対応表が失われた状態での退会", () => {
           ],
         });
       }
-      if (parsed.pathname.endsWith("/admin/users/orphan/tokens")) {
-        return json([{ id: 21 }]);
+      if (
+        parsed.pathname.endsWith("/admin/users/orphan/tokens") &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        listed += 1;
+        return listed === 1 ? json([{ id: 21 }]) : json([]);
       }
       return new Response(null, { status: 204 });
     });

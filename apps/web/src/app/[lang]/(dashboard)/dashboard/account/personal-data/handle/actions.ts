@@ -79,14 +79,6 @@ export async function deleteUser(token: string, identifier: string) {
       details: `User ${intent.userId} deleted their account`,
       prisma,
     });
-    if (forgejoUsername) {
-      await addAuditLog({
-        userId: null,
-        action: auditLogActions.git.accountDeleted,
-        details: `User ${intent.userId} deleted their Forgejo account`,
-        prisma,
-      });
-    }
     await deleteUserById({ userId: intent.userId, prisma });
     return true;
   });
@@ -94,6 +86,15 @@ export async function deleteUser(token: string, identifier: string) {
     return;
   }
   if (forgejoUsername) {
-    await purgeGitAccount(forgejoUsername);
+    const purged = await purgeGitAccount(forgejoUsername);
+    await addAuditLog({
+      userId: null,
+      action: purged
+        ? auditLogActions.git.accountDeleted
+        : auditLogActions.git.accountPurgeFailed,
+      details: purged
+        ? `User ${intent.userId} deleted their Forgejo account`
+        : `Forgejo user ${forgejoUsername} survived the purge and must be removed by hand`,
+    });
   }
 }

@@ -146,6 +146,17 @@ export async function ensureGitAccount(userId: string): Promise<{
         // メールは全候補で同じなので、これが埋まっていると 20 回とも同じ理由で
         // 失敗する。回しても意味が無いうえ、原因がユーザー名の枯渇に見えてしまう。
         if (error.body.includes("e-mail already in use")) {
+          // 同じ利用者の初回リクエストが 2 本同時に走ると、先に通った方が作った
+          // ユーザーとぶつかってここに来る。復旧ずれではないので、対応表を
+          // 引き直して相手の結果に乗る。
+          const concurrent = await findGitAccountByUserId({ userId });
+          if (concurrent) {
+            return {
+              forgejoUserId: concurrent.forgejoUserId,
+              forgejoUsername: concurrent.forgejoUsername,
+              created: false,
+            };
+          }
           throw new ForgejoEmailInUseError(email);
         }
         // ユーザー名が埋まっている / 予約語だった場合は次の候補へ。

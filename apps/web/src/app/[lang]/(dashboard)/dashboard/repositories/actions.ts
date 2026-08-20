@@ -225,10 +225,14 @@ export async function issueCredentialAction(
 
     try {
       const issued = await issueGitCredential(session.user.id, label);
+      // 監査の失敗でここを抜けると、有効なトークンを作った後で平文を渡せなくなる。
+      // 利用者はそれを一覧で見ることも失効させることもできない。記録の欠落より悪い。
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.git.issueCredential,
         details: `${issued.username}: ${issued.credential.name}`,
+      }).catch((auditError) => {
+        console.error("failed to record the credential issuance", auditError);
       });
       revalidatePath(`/${lang}/dashboard/repositories`);
       return {

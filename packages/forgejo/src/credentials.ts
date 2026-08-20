@@ -138,8 +138,19 @@ export async function issueGitCredential(
   }
 
   // 平文は発行直後のこのレスポンスにしか入らない。取れなかったら黙って進めず落とす
-  // (中途半端な控えを作ると、使えないトークンが一覧に残る)。
+  // (中途半端な控えを作ると、使えないトークンが一覧に残る)。発行自体は成功して
+  // いるので、投げる前に Forgejo 側を畳む。放っておくと、誰にも使えず誰にも
+  // 失効させられないトークンが残る。
   if (!issued.sha1) {
+    await forgejoRequest(tokensPath(username, issued.id), {
+      method: "DELETE",
+      responseType: "none",
+    }).catch((deleteError) => {
+      console.error(
+        `failed to drop the unusable token ${issued.id} for ${username}`,
+        deleteError,
+      );
+    });
     throw new Error(
       `Forgejo returned no token for "${name}" (fields: ${Object.keys(issued).join(", ")})`,
     );
