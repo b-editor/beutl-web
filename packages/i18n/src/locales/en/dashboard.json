@@ -230,6 +230,8 @@
     "generating": "Generating…",
     "translating": "Translating…",
     "translatedSoFar": "{{done}} of {{total}} subtitles",
-    "referenceImageTooMany": "At most {{maximum}} reference images. Pick again."
+    "referenceImageTooMany": "At most {{maximum}} reference images. Pick again.",
+    "operationUnavailableTitle": "Not available right now",
+    "operationUnavailableDescription": "No model is offered for this operation at the moment. Neither a plan nor credits change that; please try again later."
   }
 }

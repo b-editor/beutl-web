@@ -158,7 +158,11 @@ export function ImageGenerateForm({
 
   const tooManyReferences = references.length > options.maxReferenceImages;
 
-  const blocked = blockedReason(access, ["image.generate"]);
+  const blocked = blockedReason(
+    access,
+    ["image.generate"],
+    (access.models["image.generate"] ?? []).length === 0,
+  );
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({

@@ -215,7 +215,11 @@ export function TranslateForm({
   // subtitle file instead of a bare list of strings.
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
 
-  const blocked = blockedReason(access, ["subtitle.translate"]);
+  const blocked = blockedReason(
+    access,
+    ["subtitle.translate"],
+    (access.models["subtitle.translate"] ?? []).length === 0,
+  );
   const models = access.models["subtitle.translate"] ?? [];
   const contextsJson = useMemo(() => {
     if (!parsed.ok || !parsed.cues) return "";

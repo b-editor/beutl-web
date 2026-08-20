@@ -36,7 +36,10 @@ export default async function Page(props: {
           resolution: operation === "image.edit.upscale",
         }),
       );
-      return [operation, usable.length > 0 ? usable : registered];
+      // 使えるモデルがひとつも無いのは、能力が読めなかったからではない（読め
+      // なければ制限なしとして全部残る）。登録済みを戻すと、必ず拒否される
+      // 送信を許すことになる。
+      return [operation, usable];
     }),
   );
 

@@ -26,10 +26,12 @@ export default async function Page(props: {
   const usable = registered.filter((model) =>
     isVideoModelUsable(capabilities.get(model.id)),
   );
-  // Nothing usable means the capability list is unusable, not that the whole
-  // operation is off; leave the registered models in place and let the server
-  // explain the refusal.
-  const models = usable.length > 0 ? usable : registered;
+  // A model the provider says nothing about is treated as unrestricted, so an
+  // outage at the provider leaves every registered model in place. Reaching
+  // none therefore means the models really cannot serve this, and putting the
+  // registered ones back would only offer a submit that is certain to be
+  // refused.
+  const models = usable;
   const modelOptions: Record<string, AiVideoModelOptions> = Object.fromEntries(
     models.flatMap((model) => {
       const supported = capabilities.get(model.id);

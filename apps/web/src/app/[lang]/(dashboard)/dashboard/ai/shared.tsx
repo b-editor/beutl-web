@@ -69,7 +69,7 @@ export type AiBalance = {
   endsAtPeriodEnd: boolean;
 };
 
-export type AiBlockReason = "plan" | "balance";
+export type AiBlockReason = "plan" | "balance" | "unavailable";
 
 // A screen is usable when at least one of the operations it offers can be
 // started. The image editor offers five, and running out of balance for the
@@ -78,6 +78,9 @@ export type AiBlockReason = "plan" | "balance";
 export function blockedReason(
   access: AiAccess,
   operations: readonly string[],
+  // どの操作にも動かせるモデルが 1 つも無いか。無いなら残高の問題ではないので、
+  // 購入を勧めても何も始まらない。
+  offersNoModel?: boolean,
 ): AiBlockReason | null {
   if (!access.canUseAi) return "plan";
   if (
@@ -86,7 +89,7 @@ export function blockedReason(
   ) {
     return null;
   }
-  return "balance";
+  return offersNoModel ? "unavailable" : "balance";
 }
 
 export function billingHref(lang: string): string {
@@ -161,6 +164,19 @@ export function AiAccessNotice({
 }) {
   const { t } = useTranslation(lang);
   const isPlan = reason === "plan";
+  // 提供が止まっている操作は、契約も残高も足しようがない。買い物へ誘導するのは
+  // 誤りなので、何が起きているかだけを伝える。
+  if (reason === "unavailable") {
+    return (
+      <Alert>
+        <TriangleAlert className="h-4 w-4" />
+        <AlertTitle>{t("dashboard:ai.operationUnavailableTitle")}</AlertTitle>
+        <AlertDescription>
+          {t("dashboard:ai.operationUnavailableDescription")}
+        </AlertDescription>
+      </Alert>
+    );
+  }
   return (
     <Alert variant={isPlan ? "default" : "destructive"}>
       {isPlan ? (

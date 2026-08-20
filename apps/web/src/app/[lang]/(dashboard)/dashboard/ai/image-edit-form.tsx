@@ -102,7 +102,13 @@ export function ImageEditForm({
     };
   }, [sourcePreview]);
 
-  const blocked = blockedReason(access, EDIT_OPERATIONS);
+  const blocked = blockedReason(
+    access,
+    EDIT_OPERATIONS,
+    EDIT_OPERATIONS.every(
+      (operation) => (access.models[operation] ?? []).length === 0,
+    ),
+  );
   // Each task is its own operation with its own models, so the list changes
   // under the picker. Rather than resetting it from an effect, a choice that no
   // longer exists falls back to the new task's default.

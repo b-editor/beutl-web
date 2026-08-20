@@ -188,8 +188,8 @@ export function VideoForm({
   const [videoMotion, setVideoMotion] = useState("");
   const [videoExclusions, setVideoExclusions] = useState("");
 
-  const blocked = blockedReason(access, ["video.generate"]);
   const models = access.models["video.generate"] ?? [];
+  const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   const options = optionsOf(capabilities, model);
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);

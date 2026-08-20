@@ -144,7 +144,11 @@ export function TranscribeForm({
     setDetectedLanguage(state.language ?? null);
   }, [state.segments, state.words, state.language]);
 
-  const blocked = blockedReason(access, ["audio.transcribe"]);
+  const blocked = blockedReason(
+    access,
+    ["audio.transcribe"],
+    (access.models["audio.transcribe"] ?? []).length === 0,
+  );
   const models = access.models["audio.transcribe"] ?? [];
 
   // A video is converted here rather than uploaded: the endpoint refuses a file
