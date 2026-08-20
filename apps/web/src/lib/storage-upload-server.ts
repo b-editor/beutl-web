@@ -140,6 +140,11 @@ export async function startUpload({
     // retried and sees the other's row. Read, check and write apart, they
     // would each see room for themselves and together pass the quota.
     upload = await startRetryableTransaction(async (prisma) => {
+      // 名前が先に取られていたら（同時に届いた 2 本目）、それを返す。枠の計算を
+      // 先にすると、同じ 1 本のアップロードを二重に数えて自分自身を弾いてしまう。
+      const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
+      if (raced) return raced;
+
       const [stored, underway] = await Promise.all([
         sumFileSizeByUserId({ userId, prisma }),
         sumStorageUploadSizeByUserId({ userId, prisma }),
@@ -147,10 +152,6 @@ export async function startUpload({
       if (stored + underway + size > BigInt(STORAGE_QUOTA_BYTES)) {
         return null;
       }
-
-      // 名前が先に取られていたら（同時に届いた 2 本目）、作らずにそれを返す。
-      const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
-      if (raced) return raced;
 
       return await createStorageUpload({
         userId,
@@ -268,7 +269,8 @@ export async function finishUpload({
     // in which case the bucket no longer knows this upload id. Its file is the
     // answer, and neither the object nor the row is this call's to remove.
     const settled = await completedFileOf(upload.id, userId);
-    if (settled) return settled;
+    if (settled.kind === "completed") return { ok: true, file: settled.file };
+    if (settled.kind === "unknown") return { ok: false, reason: "uploadFailed" };
 
     // A part that never arrived, or one the bucket does not recognise. The
     // upload keeps its parts until it is abandoned, so it is abandoned here —
@@ -335,7 +337,10 @@ export async function finishUpload({
     // reported before it, so the receipt is what decides: if it is there, a
     // file points at this object and removing it would destroy a stored file.
     const settled = await completedFileOf(upload.id, userId);
-    if (settled) return settled;
+    if (settled.kind === "completed") return { ok: true, file: settled.file };
+    // 読めなかったときは消さない。File が指しているかもしれないオブジェクトを
+    // 消すのは取り返しがつかない。掃除は sweeper に任せる。
+    if (settled.kind === "unknown") throw error;
 
     // Nothing points at the object: it would be stored, and paid for, without
     // ever being seen again. The tracking row is left alone — a transaction
@@ -363,15 +368,10 @@ export async function finishUpload({
   if (outcome.kind === "alreadyCompleted") {
     // Another completion of the same upload got there first. Its file is the
     // answer; the object it points at is not this call's to remove.
-    const file = await findStorageFileByIdAndUserId({
-      id: outcome.fileId,
-      userId,
-    });
-    if (!file) return { ok: false, reason: "fileNotFound" };
-    return {
-      ok: true,
-      file: { id: file.id, name: file.name, size: BigInt(file.size) },
-    };
+    const settled = await completedFileOf(upload.id, userId);
+    return settled.kind === "completed"
+      ? { ok: true, file: settled.file }
+      : { ok: false, reason: "fileNotFound" };
   }
 
   return { ok: true, file: { id: outcome.id, name: outcome.name, size: actual } };
@@ -412,21 +412,42 @@ export async function cancelUpload({
 // The file a completed upload made, when its receipt has been written. Read
 // wherever a failure could be either "it did not happen" or "it happened and
 // the answer went missing".
+type CompletionReceipt =
+  | { kind: "completed"; file: { id: string; name: string; size: bigint } }
+  | { kind: "none" }
+  // 読めなかった。「レシートが無い」とは違う——ここで取り違えると、実際には
+  // File が指しているオブジェクトを消してしまう。
+  | { kind: "unknown" };
+
 async function completedFileOf(
   uploadId: string,
   userId: string,
-): Promise<{ ok: true; file: { id: string; name: string; size: bigint } } | null> {
-  const current = await findStorageUploadByIdAndUserId({ id: uploadId, userId })
-    .catch(() => null);
-  if (!current?.completedFileId) return null;
+): Promise<CompletionReceipt> {
+  let current;
+  try {
+    current = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+  } catch (error) {
+    console.error("Failed to read a storage upload receipt", uploadId, error);
+    return { kind: "unknown" };
+  }
 
-  const file = await findStorageFileByIdAndUserId({
-    id: current.completedFileId,
-    userId,
-  }).catch(() => null);
-  if (!file) return null;
+  if (!current) return { kind: "none" };
+  if (!current.completedFileId) return { kind: "none" };
+
+  let file;
+  try {
+    file = await findStorageFileByIdAndUserId({
+      id: current.completedFileId,
+      userId,
+    });
+  } catch (error) {
+    console.error("Failed to read a completed upload's file", uploadId, error);
+    return { kind: "unknown" };
+  }
+
+  if (!file) return { kind: "none" };
   return {
-    ok: true,
+    kind: "completed",
     file: { id: file.id, name: file.name, size: BigInt(file.size) },
   };
 }

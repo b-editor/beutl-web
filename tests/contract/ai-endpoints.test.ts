@@ -209,6 +209,20 @@ async function activatePro() {
   });
 }
 
+// 契約が終わった状態。既に課金された job はそのまま残る。
+async function deactivatePro() {
+  await upsertSubscription({
+    userId: USER_ID,
+    stripeSubscriptionId: "sub_1",
+    status: "canceled",
+    planId: "pro",
+    billingOfferId: "offer_pro_test",
+    currentPeriodStart: PERIOD_START,
+    currentPeriodEnd: PERIOD_END,
+    cancelAt: null,
+  });
+}
+
 function createPcmWav(durationSeconds: number): Uint8Array {
   const sampleRate = 8_000;
   const dataLength = Math.ceil(durationSeconds * sampleRate);
@@ -1511,6 +1525,44 @@ describe("v3 AI endpoints contract", () => {
 
       expect(res.status).toBe(402);
       expect(await res.json()).toMatchObject({ error_code: "aiPlanRequired" });
+    });
+
+    it("reads the body without Pro when the key already names a job", async () => {
+      // 契約中に課金され、応答だけが失われた依頼。契約が終わったあとでも、同じ
+      // 名前で結果を取りに来られなければならない。本文を読む前に断ってしまうと
+      // 回収の入口そのものが閉じる。
+      await activatePro();
+      const key = "paid-before-the-plan-ended";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image_edit",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { task: "remove_background" },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.edit.remove_background",
+          input: { task: "remove_background" },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+      await deactivatePro();
+
+      const form = new FormData();
+      form.append("task", "remove_background");
+      form.append("file", new File([new Uint8Array(8)], "invalid.bin"));
+      const res = await makeApp().request("/api/v3/ai/images/edit", {
+        method: "POST",
+        headers: await authHeaders(key),
+        body: form,
+      });
+
+      // 402 で止まらず本文まで進み、そこで初めてこの中身が画像でないと言う。
+      expect(res.status).not.toBe(402);
+      expect(await res.json()).toMatchObject({
+        error_code: "invalidRequestBody",
+      });
     });
 
     it("returns 413 when Content-Length exceeds the image upload limit", async () => {

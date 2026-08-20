@@ -53,6 +53,7 @@ import {
   ResultShimmer,
   ResultPlaceholder,
   blockedReason,
+  blocksSubmit,
   keepsIdempotencyKey,
   downloadTextFile,
   defaultModelId,
@@ -82,6 +83,8 @@ export function TranslateForm({
   // asking again under the same name recovers what was already paid for; a new
   // one is drawn once a run has definitely ended.
   const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
+  // 名前を残したまま失敗したか。残していれば、支払い済みの結果を取りに行ける。
+  const [holdsName, setHoldsName] = useState(false);
   const [source, setSource] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
@@ -117,7 +120,7 @@ export function TranslateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || !parsed.ok || targetLanguage === "" || blocked !== null) {
+    if (isPending || !parsed.ok || targetLanguage === "" || submitBlocked) {
       return;
     }
 
@@ -194,6 +197,7 @@ export function TranslateForm({
         );
         setTranslatedSource(submittedSource);
         setIdempotencyKey(randomUuid());
+        setHoldsName(false);
         return;
       }
 
@@ -201,7 +205,9 @@ export function TranslateForm({
       // A run that was cut off, one still going, or one whose paid result could
       // not be read may all be answered by asking again under the same name.
       // None of them is a settlement, so the name stays.
-      if (!keepsIdempotencyKey(outcome.errorCode)) {
+      const keeps = keepsIdempotencyKey(outcome.errorCode);
+      setHoldsName(keeps);
+      if (!keeps) {
         setIdempotencyKey(randomUuid());
       }
     } catch {
@@ -222,6 +228,7 @@ export function TranslateForm({
     ["subtitle.translate"],
     (access.models["subtitle.translate"] ?? []).length === 0,
   );
+  const submitBlocked = blocksSubmit(blocked, holdsName);
   const models = access.models["subtitle.translate"] ?? [];
   const contextsJson = useMemo(() => {
     if (!parsed.ok || !parsed.cues) return "";
@@ -424,7 +431,7 @@ export function TranslateForm({
           className="w-full"
           forceSpinner={isPending}
           disabled={
-            blocked !== null || !parsed.ok || targetLanguage === "" || isPending
+            submitBlocked || !parsed.ok || targetLanguage === "" || isPending
           }
         >
           {t("dashboard:ai.translate")}

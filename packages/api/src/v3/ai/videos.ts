@@ -5,6 +5,7 @@ import { apiErrorResponse } from "../../api/error";
 import {
   createReservedAiJob,
   findReplayableAiJob,
+  hasAiJobForIdempotencyKey,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
@@ -45,6 +46,7 @@ import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import {
   callbackNonceMatches,
   createCallbackNonce,
+  getAiIdempotencyKeyHash,
   getAiRequestIdentity,
   sha256Hex,
 } from "../../ai/request-integrity";
@@ -389,8 +391,18 @@ const app = new Hono()
       });
     }
 
+    // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前の job が
+    // 既にあるなら別——契約中に課金された結果は、契約が終わったあとでも取りに
+    // 来られなければならない。名前は自分の job しか指せないので、これで誰かが
+    // 契約なしに新しく走らせられるようになるわけではない。
     const entitlements = await getEntitlements(userId);
-    if (!entitlements.canUseAi) {
+    if (
+      !entitlements.canUseAi &&
+      !(await hasAiJobForIdempotencyKey({
+        userId,
+        idempotencyKeyHash: await getAiIdempotencyKeyHash(c.req.raw),
+      }))
+    ) {
       return c.json(await apiErrorResponse("aiPlanRequired"), {
         status: 402,
       });

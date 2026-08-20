@@ -43,6 +43,7 @@ import {
   ShimmerImage,
   ResultPlaceholder,
   blockedReason,
+  blocksSubmit,
   downloadFromUrl,
   defaultModelId,
   type AiAccess,
@@ -108,6 +109,12 @@ export function ImageEditForm({
     EDIT_OPERATIONS.every(
       (operation) => (access.models[operation] ?? []).length === 0,
     ),
+  );
+  // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
+  // 行く道を閉じることになる。
+  const submitBlocked = blocksSubmit(
+    blocked,
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
   );
   // Each task is its own operation with its own models, so the list changes
   // under the picker. Rather than resetting it from an effect, a choice that no
@@ -328,7 +335,7 @@ export function ImageEditForm({
           className="w-full"
           forceSpinner={isPreparing || isPending}
           disabled={
-            blocked !== null ||
+            submitBlocked ||
             editTask === "" ||
             taskUnaffordable ||
             isPreparing ||

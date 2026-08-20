@@ -89,6 +89,17 @@ export async function getAiRequestIdentity({
   });
 }
 
+// リクエストが名乗った名前のハッシュ。指紋は要らない——「その名前の job が
+// 既にあるか」を、本文を読む前に確かめるためだけのもの。
+export async function getAiIdempotencyKeyHash(
+  request: Request,
+): Promise<string | null> {
+  const key = idempotencyKeySchema.safeParse(
+    request.headers.get(IDEMPOTENCY_KEY_HEADER),
+  );
+  return key.success ? await sha256Hex(key.data) : null;
+}
+
 export async function createCallbackNonce(): Promise<{
   nonce: string;
   hash: string;

@@ -84,6 +84,23 @@ export function keepsIdempotencyKey(errorCode: string): boolean {
   return RECOVERABLE_AI_ERROR_CODES.has(errorCode);
 }
 
+/**
+ * Whether the screen should refuse to send.
+ *
+ * A run holding its name may be answered by the job that name already made,
+ * and the server looks that job up before it looks at the balance — so an empty
+ * balance must not close the way to it. The request that emptied the balance is
+ * exactly the one waiting to be collected. Nothing else is negotiable: without
+ * a plan, or with no model to run on, there is nothing to collect either.
+ */
+export function blocksSubmit(
+  blocked: AiBlockReason | null,
+  keepsKey: boolean,
+): boolean {
+  if (blocked === null) return false;
+  return !(blocked === "balance" && keepsKey);
+}
+
 export type AiBlockReason = "plan" | "balance" | "unavailable";
 
 // A screen is usable when at least one of the operations it offers can be
@@ -98,13 +115,16 @@ export function blockedReason(
   offersNoModel?: boolean,
 ): AiBlockReason | null {
   if (!access.canUseAi) return "plan";
+  // モデルが無いかどうかが先。残高が足りていても、動かせるモデルが無ければ
+  // 送信は必ず拒否されるので、通してはいけない。
+  if (offersNoModel) return "unavailable";
   if (
     operations.length === 0 ||
     operations.some((operation) => access.availability[operation])
   ) {
     return null;
   }
-  return offersNoModel ? "unavailable" : "balance";
+  return "balance";
 }
 
 export function billingHref(lang: string): string {

@@ -51,6 +51,7 @@ import {
   ResultShimmer,
   ResultPlaceholder,
   blockedReason,
+  blocksSubmit,
   downloadTextFile,
   defaultModelId,
   type AiAccess,
@@ -148,6 +149,12 @@ export function TranscribeForm({
     access,
     ["audio.transcribe"],
     (access.models["audio.transcribe"] ?? []).length === 0,
+  );
+  // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
+  // 行く道を閉じることになる。
+  const submitBlocked = blocksSubmit(
+    blocked,
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
   );
   const models = access.models["audio.transcribe"] ?? [];
 
@@ -376,7 +383,7 @@ export function TranscribeForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPending}
-          disabled={blocked !== null || isPending}
+          disabled={submitBlocked || isPending}
         >
           {t("dashboard:ai.transcribe")}
         </SubmitButton>

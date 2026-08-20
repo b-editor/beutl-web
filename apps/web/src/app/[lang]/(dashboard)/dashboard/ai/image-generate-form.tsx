@@ -50,6 +50,7 @@ import {
   ShimmerImage,
   ResultPlaceholder,
   blockedReason,
+  blocksSubmit,
   keepsIdempotencyKey,
   defaultModelId,
   downloadFromUrl,
@@ -140,6 +141,8 @@ export function ImageGenerateForm({
   // Names this submission to the server. Kept when a run is cut off, because
   // asking again under the same name recovers what was already paid for.
   const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
+  // 名前を残したまま失敗したか。残していれば、支払い済みの結果を取りに行ける。
+  const [holdsName, setHoldsName] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
@@ -173,6 +176,7 @@ export function ImageGenerateForm({
     ["image.generate"],
     (access.models["image.generate"] ?? []).length === 0,
   );
+  const submitBlocked = blocksSubmit(blocked, holdsName);
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({
@@ -216,7 +220,7 @@ export function ImageGenerateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || blocked !== null || tooManyReferences || referencesTooLarge) {
+    if (isPending || submitBlocked || tooManyReferences || referencesTooLarge) {
       return;
     }
 
@@ -255,6 +259,7 @@ export function ImageGenerateForm({
         setReferences([]);
         if (referenceInput.current) referenceInput.current.value = "";
         setIdempotencyKey(randomUuid());
+        setHoldsName(false);
         return;
       }
 
@@ -262,7 +267,9 @@ export function ImageGenerateForm({
       // A run that was cut off, one still going, or one whose paid result could
       // not be read may all be answered by asking again under the same name.
       // None of them is a settlement, so the name stays.
-      if (!keepsIdempotencyKey(outcome.errorCode)) {
+      const keeps = keepsIdempotencyKey(outcome.errorCode);
+      setHoldsName(keeps);
+      if (!keeps) {
         setIdempotencyKey(randomUuid());
       }
     } catch {
@@ -512,7 +519,7 @@ export function ImageGenerateForm({
           className="w-full"
           forceSpinner={isPending}
           disabled={
-            blocked !== null ||
+            submitBlocked ||
             tooManyReferences ||
             referencesTooLarge ||
             isPending

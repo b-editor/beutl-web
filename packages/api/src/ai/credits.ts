@@ -54,6 +54,21 @@ export async function findReplayableAiJob({
   return { outcome: "existing", job: existing };
 }
 
+// その名前の job がこのユーザーに既にあるか。本文を読む前に、契約が切れている
+// ことを理由に断ってよいかどうかを決めるために使う。支払い済みの結果は、契約が
+// 終わったあとでも取りに来られなければならない。
+export async function hasAiJobForIdempotencyKey({
+  userId,
+  idempotencyKeyHash,
+}: {
+  userId: string;
+  idempotencyKeyHash: string | null;
+}): Promise<boolean> {
+  if (!idempotencyKeyHash) return false;
+  const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
+  return existing !== null && !existing.deletedAt;
+}
+
 export async function createReservedAiJob({
   userId,
   kind,

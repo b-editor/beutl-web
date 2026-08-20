@@ -21,6 +21,22 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 const GIVE_UP_AFTER_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
+// 追跡行だけがあってレシートの無いキーに、完成したオブジェクトが残っていないか。
+// あれば誰も指していないので消す。消せたときだけ true。
+async function deleteOrphanedObject(objectKey: string): Promise<boolean> {
+  try {
+    const bucket = getR2Bucket();
+    if (!bucket.head || !bucket.delete) return false;
+    const object = await bucket.head(objectKey);
+    if (!object) return false;
+    await bucket.delete(objectKey);
+    return true;
+  } catch (error) {
+    console.error("Failed to clear an orphaned storage object", objectKey, error);
+    return false;
+  }
+}
+
 export async function abandonStaleStorageUploads(
   now: Date = new Date(),
 ): Promise<{ abandoned: number; failed: number }> {
@@ -47,10 +63,22 @@ export async function abandonStaleStorageUploads(
         throw new Error("The configured R2 bucket cannot abandon an upload.");
       }
       await bucket.resumeMultipartUpload(upload.objectKey, upload.uploadId).abort();
+      // 中止できたということは、まだパートのままだった。オブジェクトは無い。
       await deleteStorageUpload({ id: upload.id });
       abandoned++;
     } catch (error) {
       console.error("Failed to abandon a stale storage upload", upload.id, error);
+      // 中止できない理由のひとつは「もう組み上がっている」こと。R2 の結合が
+      // 終わったあと、控えを書く前に Worker が落ちるとこうなる。控えが無い＝
+      // File は誰も指していないので、残っているオブジェクトはここで消す。
+      // これをしないと、追跡できない完成オブジェクトが保管され続ける。
+      const orphaned = await deleteOrphanedObject(upload.objectKey);
+      if (orphaned) {
+        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+        abandoned++;
+        continue;
+      }
+
       if (
         upload.createdAt.getTime() <=
           now.getTime() - GIVE_UP_AFTER_MILLISECONDS

@@ -42,7 +42,9 @@ export async function POST(request: Request): Promise<Response> {
     name.length > MAX_NAME_LENGTH ||
     typeof size !== "number" ||
     !Number.isSafeInteger(size) ||
-    size < 0 ||
+    // ゼロは枠を 1 バイトも使わないまま R2 のマルチパートと追跡行を作れてしまう。
+    // 中身のないファイルを送る用はないので、始めさせない。
+    size <= 0 ||
     // Nothing may be started that could not be stored even in an empty account.
     size > STORAGE_QUOTA_BYTES
   ) {

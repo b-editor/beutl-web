@@ -26,6 +26,9 @@ export type R2BucketLike = {
     size?: number;
   } | null>;
   delete?(key: string): Promise<unknown>;
+  // Whether an object is there, without reading it. Used to tell an upload that
+  // was joined but never recorded from one that is still in parts.
+  head?(key: string): Promise<{ size?: number } | null>;
   // A file too large for one request arrives in parts and is joined in the
   // bucket, so an upload outlives the request that started it: it is named by
   // an upload id, added to part by part, and either joined or given up.

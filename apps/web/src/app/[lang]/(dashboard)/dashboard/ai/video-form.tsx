@@ -40,6 +40,7 @@ import {
   ResultPanel,
   ResultShimmer,
   blockedReason,
+  blocksSubmit,
   defaultModelId,
   type AiAccess,
 } from "./shared";
@@ -190,6 +191,12 @@ export function VideoForm({
 
   const models = access.models["video.generate"] ?? [];
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
+  // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
+  // 行く道を閉じることになる。
+  const submitBlocked = blocksSubmit(
+    blocked,
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
+  );
   const options = optionsOf(capabilities, model);
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
@@ -448,7 +455,7 @@ export function VideoForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPending}
-          disabled={blocked !== null || isPending}
+          disabled={submitBlocked || isPending}
         >
           {t("dashboard:ai.generate")}
         </SubmitButton>
