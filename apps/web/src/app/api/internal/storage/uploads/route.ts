@@ -1,5 +1,9 @@
 import { auth } from "@/lib/better-auth";
-import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
+import {
+  fromThisSite,
+  readJsonWithLimit,
+  unauthorizedResponse,
+} from "@/lib/internal-request";
 import { startUpload } from "@/lib/storage-upload-server";
 import { STORAGE_QUOTA_BYTES } from "@beutl/core";
 
@@ -7,6 +11,7 @@ import { STORAGE_QUOTA_BYTES } from "@beutl/core";
 // later request names, and how the file is to be cut up.
 
 const MAX_NAME_LENGTH = 255;
+const MAX_CONTROL_BODY_BYTES = 4 * 1024;
 
 export async function POST(request: Request): Promise<Response> {
   if (!fromThisSite(request)) return unauthorizedResponse();
@@ -15,14 +20,13 @@ export async function POST(request: Request): Promise<Response> {
   const userId = session?.user?.id;
   if (!userId) return unauthorizedResponse();
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
+  // A name, a type and a size. Nothing here is large.
+  const parsed = await readJsonWithLimit(request, MAX_CONTROL_BODY_BYTES);
+  if (!parsed.ok) {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }
 
-  const { name, mimeType, size } = (body ?? {}) as Record<string, unknown>;
+  const { name, mimeType, size } = (parsed.value ?? {}) as Record<string, unknown>;
   if (
     typeof name !== "string" ||
     name.length === 0 ||

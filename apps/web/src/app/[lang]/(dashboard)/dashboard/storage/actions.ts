@@ -10,6 +10,7 @@ import {
   deleteFile as deleteFileRecord,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
+  sumFileSizeByUserId,
   updateFileVisibility,
 } from "@beutl/db";
 
@@ -102,4 +103,23 @@ export async function retrieveFiles() {
   return await retrieveStorageFilesByUserId({
     userId: session?.user?.id,
   });
+}
+
+// アップロードの可否はユーザーが持つ全ファイルの合計で決まる。一覧は AI の出力を
+// 含まないので、一覧を足し上げた数字を使用量として見せると、画面上は空きがあるのに
+// アップロードだけが拒否される。判定に使われている合計をそのまま返す。
+export async function retrieveStorageUsage(): Promise<
+  { total: bigint; listed: bigint }
+> {
+  const session = await throwIfUnauth();
+  const userId = session?.user?.id;
+  if (!userId) return { total: BigInt(0), listed: BigInt(0) };
+
+  const [total, files] = await Promise.all([
+    sumFileSizeByUserId({ userId }),
+    retrieveStorageFilesByUserId({ userId }),
+  ]);
+  let listed = BigInt(0);
+  for (const file of files) listed += BigInt(file.size);
+  return { total, listed };
 }

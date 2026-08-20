@@ -200,16 +200,18 @@ model File {
 /// finished or abandoned, and a sweep abandons what was left behind, because an
 /// unfinished upload keeps its parts — and their storage — until it is.
 model StorageUpload {
-  id        String   @id @default(uuid())
-  userId    String
-  objectKey String
-  uploadId  String
-  name      String
-  mimeType  String
-  size      BigInt
-  partSize  Int
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String   @id @default(uuid())
+  userId          String
+  objectKey       String
+  uploadId        String
+  name            String
+  mimeType        String
+  size            BigInt
+  partSize        Int
+  createdAt       DateTime @default(now())
+  // 完了済みの控え。設定されている行はもう進行中ではなく、合計にも数えない。
+  completedFileId String?
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])

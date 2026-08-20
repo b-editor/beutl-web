@@ -272,6 +272,7 @@ type StorageUploadRecord = {
   size: bigint;
   partSize: number;
   createdAt: Date;
+  completedFileId: string | null;
 };
 
 type AggregateSpec = {
@@ -2434,6 +2435,7 @@ export function createInMemoryPrisma() {
         };
       }) => {
         const record: StorageUploadRecord = {
+          completedFileId: null,
           ...data,
           id: data.id ?? crypto.randomUUID(),
           createdAt: data.createdAt ?? now(),
@@ -2468,6 +2470,21 @@ export function createInMemoryPrisma() {
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { id?: string };
+        data: Partial<StorageUploadRecord>;
+      }) => {
+        const matched = [...state.storageUploads.values()].filter(
+          (item) => !where.id || item.id === where.id,
+        );
+        for (const item of matched) {
+          state.storageUploads.set(item.id, { ...item, ...data });
+        }
+        return { count: matched.length };
+      },
       deleteMany: async ({ where }: { where: { id?: string } }) => {
         const removed = [...state.storageUploads.values()].filter(
           (item) => !where.id || item.id === where.id,
@@ -2475,10 +2492,19 @@ export function createInMemoryPrisma() {
         for (const item of removed) state.storageUploads.delete(item.id);
         return { count: removed.length };
       },
-      aggregate: async ({ where }: { where?: { userId?: string } } = {}) => {
+      aggregate: async (
+        { where }: {
+          where?: { userId?: string; completedFileId?: string | null };
+        } = {},
+      ) => {
         let total = BigInt(0);
         for (const item of state.storageUploads.values()) {
           if (where?.userId && item.userId !== where.userId) continue;
+          if (
+            where?.completedFileId === null && item.completedFileId !== null
+          ) {
+            continue;
+          }
           total += item.size;
         }
         return { _sum: { size: total } };

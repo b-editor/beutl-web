@@ -1,6 +1,15 @@
 import { auth } from "@/lib/better-auth";
-import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
+import {
+  fromThisSite,
+  readJsonWithLimit,
+  unauthorizedResponse,
+} from "@/lib/internal-request";
 import { cancelUpload, finishUpload } from "@/lib/storage-upload-server";
+import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
+
+const MAX_PART_COUNT = Math.ceil(STORAGE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES);
+const MAX_ETAG_LENGTH = 256;
+const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 
 // Finishing an upload, or giving it up.
 //
@@ -18,23 +27,25 @@ export async function POST(
   const userId = session?.user?.id;
   if (!userId) return unauthorizedResponse();
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
+  const parsed = await readJsonWithLimit(request, MAX_CONTROL_BODY_BYTES);
+  if (!parsed.ok) {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }
 
-  const parts = (body as { parts?: unknown })?.parts;
+  const parts = (parsed.value as { parts?: unknown })?.parts;
   if (
     !Array.isArray(parts) ||
     parts.length === 0 ||
+    // The whole quota cut into parts is what an upload can ever have; a longer
+    // list describes an upload that could not exist.
+    parts.length > MAX_PART_COUNT ||
     !parts.every(
       (part) =>
         typeof part === "object" &&
         part !== null &&
         Number.isSafeInteger((part as { partNumber?: unknown }).partNumber) &&
-        typeof (part as { etag?: unknown }).etag === "string",
+        typeof (part as { etag?: unknown }).etag === "string" &&
+        (part as { etag: string }).etag.length <= MAX_ETAG_LENGTH,
     )
   ) {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });

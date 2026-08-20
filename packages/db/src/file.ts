@@ -309,6 +309,23 @@ export async function retrieveStorageFilesByUserId({
   });
 }
 
+// 完了済みアップロードの控えから結果を返すための引き当て。名前とサイズまで要る。
+export async function findStorageFileByIdAndUserId({
+  id,
+  userId,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.file.findFirst({
+    where: { id, userId },
+    select: { id: true, name: true, size: true },
+  });
+}
+
 export async function sumFileSizeByUserId({
   userId,
   prisma,

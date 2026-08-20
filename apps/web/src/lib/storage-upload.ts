@@ -73,20 +73,38 @@ export async function uploadStorageFile(
     };
   }
 
-  const finished = await fetch(`/api/internal/storage/uploads/${upload.id}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...INTERNAL_REQUEST_HEADERS },
-    body: JSON.stringify({
-      // R2 joins them in the order it is given, not the order they arrived.
-      parts: parts.sort((left, right) => left.partNumber - right.partNumber),
-    }),
+  // R2 joins them in the order it is given, not the order they arrived.
+  const body = JSON.stringify({
+    parts: parts.sort((left, right) => left.partNumber - right.partNumber),
   });
+  // Asking twice is safe: the server keeps a receipt of a finished upload and
+  // answers a repeat with the file it already made. Without the retry, an
+  // answer lost on the way back leaves the browser unable to tell whether the
+  // file exists, and starting over stores the same bytes a second time.
+  let finished: Response;
+  try {
+    finished = await postCompletion(upload.id, body);
+  } catch {
+    try {
+      finished = await postCompletion(upload.id, body);
+    } catch {
+      return { ok: false, errorCode: "uploadFailed" };
+    }
+  }
   if (!finished.ok) return { ok: false, errorCode: await errorCodeOf(finished) };
 
   return {
     ok: true,
     file: (await finished.json()) as { id: string; name: string; size: number },
   };
+}
+
+function postCompletion(uploadId: string, body: string): Promise<Response> {
+  return fetch(`/api/internal/storage/uploads/${uploadId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...INTERNAL_REQUEST_HEADERS },
+    body,
+  });
 }
 
 class UploadPartError extends Error {

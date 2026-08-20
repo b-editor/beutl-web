@@ -37,3 +37,61 @@ export function unauthorizedResponse(): Response {
     { status: 401 },
   );
 }
+
+/**
+ * Reads a small control body, refusing one that is larger than it should be.
+ *
+ * These routes take a name and a list of part numbers, nothing more. Reading
+ * them with `request.json()` puts no bound on what arrives, and a declared
+ * length is not one either: a chunked body carries none. The length is checked
+ * where it is known and the read is stopped where it is not.
+ */
+export async function readJsonWithLimit(
+  request: Request,
+  maximumBytes: number,
+): Promise<{ ok: true; value: unknown } | { ok: false }> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (!Number.isSafeInteger(length) || length < 0 || length > maximumBytes) {
+      return { ok: false };
+    }
+  }
+
+  const body = request.body;
+  if (!body) return { ok: false };
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel();
+        return { ok: false };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(joined)) };
+  } catch {
+    return { ok: false };
+  }
+}

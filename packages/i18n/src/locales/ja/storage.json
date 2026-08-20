@@ -20,5 +20,6 @@
     "uploadFailed": "アップロードを完了できませんでした。もう一度お試しください。",
     "invalidRequestBody": "このファイルはアップロードできません。",
     "authenticationIsRequired": "アップロードするにはサインインし直してください。"
-  }
+  },
+  "aiResultUsage": "うち {{size}} は AI の生成結果です。AI ページから管理できます。"
 }

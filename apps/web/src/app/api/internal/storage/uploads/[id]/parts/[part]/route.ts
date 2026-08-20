@@ -20,11 +20,15 @@ export async function PUT(
   const partNumber = Number(part);
   // The bucket will not take a part whose length it cannot know, and a body
   // sent without a length is exactly that. Said here, where it can be answered
-  // with a status, rather than as a failure from the bucket further in.
+  // with a status, rather than as a failure from the bucket further in. The
+  // length itself is checked against what the upload declared.
+  const contentLength = Number(request.headers.get("content-length"));
   if (
     !Number.isSafeInteger(partNumber) ||
     !request.body ||
-    request.headers.get("content-length") === null
+    request.headers.get("content-length") === null ||
+    !Number.isSafeInteger(contentLength) ||
+    contentLength < 0
   ) {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }
@@ -33,6 +37,7 @@ export async function PUT(
     userId,
     uploadId: id,
     partNumber,
+    contentLength,
     body: request.body,
   });
   if (!outcome.ok) {

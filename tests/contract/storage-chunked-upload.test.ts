@@ -105,6 +105,31 @@ describe("uploading a file too large for one request", () => {
     );
   });
 
+  it("refuses a part longer than the size the upload was admitted for", async () => {
+    // Otherwise an upload declaring nothing still holds parts of any length in
+    // the bucket for a day, and none of it was counted against the quota.
+    const started = await startUpload({
+      userId: USER_ID,
+      name: "empty.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(0),
+    });
+    if (!started.ok) throw new Error(started.reason);
+
+    const outcome = await uploadPart({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      partNumber: 1,
+      contentLength: 8 * 1024 * 1024,
+      body: streamOf(8 * 1024 * 1024),
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "insufficientStorageSpace",
+    });
+  });
+
   it("takes a file in parts and stores it as one", async () => {
     const size = STORAGE_UPLOAD_PART_BYTES + 1_000;
     const started = await startUpload({
@@ -120,12 +145,14 @@ describe("uploading a file too large for one request", () => {
       userId: USER_ID,
       uploadId: started.upload.id,
       partNumber: 1,
+      contentLength: STORAGE_UPLOAD_PART_BYTES,
       body: streamOf(STORAGE_UPLOAD_PART_BYTES),
     });
     const second = await uploadPart({
       userId: USER_ID,
       uploadId: started.upload.id,
       partNumber: 2,
+      contentLength: 1_000,
       body: streamOf(1_000),
     });
     if (!first.ok || !second.ok) throw new Error("a part was refused");
@@ -144,8 +171,25 @@ describe("uploading a file too large for one request", () => {
     // The file is one object, sized by what actually arrived.
     expect(finished.file.size).toBe(BigInt(size));
     expect(state.files.size).toBe(1);
-    // Nothing is left to sweep up.
-    expect(state.storageUploads.size).toBe(0);
+    // The row stays as the receipt of a finished upload, pointing at what it
+    // made. Nothing is under way any more, and the sweep clears the receipt.
+    const receipt = [...state.storageUploads.values()][0];
+    expect(receipt?.completedFileId).toBe(finished.file.id);
+
+    // Only the answer went missing: asking again gives the same file rather
+    // than storing the same bytes a second time.
+    const again = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [
+        { partNumber: 1, etag: first.etag },
+        { partNumber: 2, etag: second.etag },
+      ],
+    });
+    expect(again).toMatchObject({ ok: true });
+    if (!again.ok) return;
+    expect(again.file.id).toBe(finished.file.id);
+    expect(state.files.size).toBe(1);
   });
 
   it("refuses a part for an upload that is not the caller's", async () => {
@@ -163,6 +207,7 @@ describe("uploading a file too large for one request", () => {
       userId: "someone-else",
       uploadId: started.upload.id,
       partNumber: 1,
+      contentLength: 10,
       body: streamOf(10),
     });
 
@@ -203,6 +248,7 @@ describe("uploading a file too large for one request", () => {
       userId: USER_ID,
       uploadId: started.upload.id,
       partNumber: 1,
+      contentLength: STORAGE_UPLOAD_PART_BYTES,
       body: streamOf(STORAGE_UPLOAD_PART_BYTES),
     });
 

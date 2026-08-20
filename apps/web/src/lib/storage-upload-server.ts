@@ -4,8 +4,12 @@ import {
   createFile,
   createStorageUpload,
   deleteStorageUpload,
+  findStorageFileByIdAndUserId,
   findStorageUploadByIdAndUserId,
+  markStorageUploadCompleted,
+  type PrismaTransaction,
   retrieveFileNamesAndSizesByUserId,
+  startRetryableTransaction,
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
 } from "@beutl/db";
@@ -56,12 +60,14 @@ function newObjectKey(): string {
 async function availableName({
   userId,
   name,
+  prisma,
 }: {
   userId: string;
   name: string;
+  prisma?: PrismaTransaction;
 }): Promise<string> {
   const taken = new Set(
-    (await retrieveFileNamesAndSizesByUserId({ userId })).map(
+    (await retrieveFileNamesAndSizesByUserId({ userId, prisma })).map(
       (file) => file.name,
     ),
   );
@@ -73,6 +79,15 @@ async function availableName({
     const candidate = `${stem} (${index})${extension}`;
     if (!taken.has(candidate)) return candidate;
   }
+}
+
+// What the part at this position may carry: a whole part, except the last one,
+// which carries only what is left of the declared size.
+function allowedPartSize(size: bigint, partSize: number, partNumber: number): bigint {
+  const before = BigInt(partSize) * BigInt(partNumber - 1);
+  const remaining = size - before;
+  if (remaining <= BigInt(0)) return BigInt(0);
+  return remaining < BigInt(partSize) ? remaining : BigInt(partSize);
 }
 
 export function partCountOf(size: bigint): number {
@@ -93,29 +108,49 @@ export async function startUpload({
   mimeType: string;
   size: bigint;
 }): Promise<{ ok: true; upload: StartedUpload } | { ok: false; reason: UploadFailure }> {
-  // What is stored plus what is already on its way. Two uploads started at once
-  // would otherwise each see only the stored total and together pass the quota.
-  const [stored, underway] = await Promise.all([
-    sumFileSizeByUserId({ userId }),
-    sumStorageUploadSizeByUserId({ userId }),
-  ]);
-  if (stored + underway + size > BigInt(STORAGE_QUOTA_BYTES)) {
-    return { ok: false, reason: "insufficientStorageSpace" };
-  }
-
   const objectKey = newObjectKey();
   const multipart = await bucket().createMultipartUpload(objectKey, {
     httpMetadata: mimeType ? { contentType: mimeType } : undefined,
   });
-  const upload = await createStorageUpload({
-    userId,
-    objectKey,
-    uploadId: multipart.uploadId,
-    name: await availableName({ userId, name }),
-    mimeType,
-    size,
-    partSize: STORAGE_UPLOAD_PART_BYTES,
-  });
+
+  let upload: Awaited<ReturnType<typeof createStorageUpload>> | null;
+  try {
+    // Reading the totals and writing the row that changes them is one
+    // transaction. CockroachDB runs it serializably, so two uploads started at
+    // the same moment cannot both read the total from before the other: one is
+    // retried and sees the other's row. Read, check and write apart, they
+    // would each see room for themselves and together pass the quota.
+    upload = await startRetryableTransaction(async (prisma) => {
+      const [stored, underway] = await Promise.all([
+        sumFileSizeByUserId({ userId, prisma }),
+        sumStorageUploadSizeByUserId({ userId, prisma }),
+      ]);
+      if (stored + underway + size > BigInt(STORAGE_QUOTA_BYTES)) {
+        return null;
+      }
+
+      return await createStorageUpload({
+        userId,
+        objectKey,
+        uploadId: multipart.uploadId,
+        name: await availableName({ userId, name, prisma }),
+        mimeType,
+        size,
+        partSize: STORAGE_UPLOAD_PART_BYTES,
+        prisma,
+      });
+    });
+  } catch (error) {
+    // The bucket is already holding an upload that nothing now points at. It
+    // would keep its parts, and be paid for, until something threw them away.
+    await abandon(objectKey, multipart.uploadId);
+    throw error;
+  }
+
+  if (!upload) {
+    await abandon(objectKey, multipart.uploadId);
+    return { ok: false, reason: "insufficientStorageSpace" };
+  }
 
   return {
     ok: true,
@@ -131,17 +166,28 @@ export async function uploadPart({
   userId,
   uploadId,
   partNumber,
+  contentLength,
   body,
 }: {
   userId: string;
   uploadId: string;
   partNumber: number;
+  contentLength: number;
   body: ReadableStream<Uint8Array>;
 }): Promise<{ ok: true; etag: string } | { ok: false; reason: UploadFailure }> {
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   if (!upload) return { ok: false, reason: "uploadNotFound" };
   if (partNumber < 1 || partNumber > partCountOf(upload.size)) {
     return { ok: false, reason: "uploadNotFound" };
+  }
+  // The quota was reserved against the size the upload declared. Without this,
+  // an upload declaring nothing could still send parts of any length: the parts
+  // are held for a day and paid for, and none of it was ever counted.
+  if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+    return { ok: false, reason: "uploadFailed" };
+  }
+  if (BigInt(contentLength) > allowedPartSize(upload.size, upload.partSize, partNumber)) {
+    return { ok: false, reason: "insufficientStorageSpace" };
   }
 
   const multipart = bucket().resumeMultipartUpload(
@@ -171,6 +217,21 @@ export async function finishUpload({
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   if (!upload) return { ok: false, reason: "uploadNotFound" };
 
+  // Finished already. Only the answer went missing, so it is given again rather
+  // than the whole file being asked for a second time — which would store the
+  // same bytes twice and spend the quota twice.
+  if (upload.completedFileId) {
+    const file = await findStorageFileByIdAndUserId({
+      id: upload.completedFileId,
+      userId,
+    });
+    if (!file) return { ok: false, reason: "fileNotFound" };
+    return {
+      ok: true,
+      file: { id: file.id, name: file.name, size: BigInt(file.size) },
+    };
+  }
+
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
     upload.uploadId,
@@ -187,24 +248,28 @@ export async function finishUpload({
   }
 
   // The size the browser declared is what the quota was checked against; this
-  // is what actually arrived, and it is what the quota is held to.
+  // is what actually arrived, and it is what the quota is held to. Checked and
+  // stored in one transaction for the same reason the start is: two uploads
+  // finishing together must not both be measured against the total from before
+  // either of them landed.
   const actual = BigInt(object.size);
-  const stored = await sumFileSizeByUserId({ userId });
-  if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
-    await bucket().delete?.(upload.objectKey);
-    await deleteStorageUpload({ id: upload.id });
-    return { ok: false, reason: "insufficientStorageSpace" };
-  }
-
   let file;
   try {
-    file = await createFile({
-      objectKey: upload.objectKey,
-      name: upload.name,
-      size: Number(actual),
-      mimeType: upload.mimeType,
-      userId,
-      visibility: "PRIVATE",
+    file = await startRetryableTransaction(async (prisma) => {
+      const stored = await sumFileSizeByUserId({ userId, prisma });
+      if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
+        return null;
+      }
+
+      return await createFile({
+        objectKey: upload.objectKey,
+        name: upload.name,
+        size: Number(actual),
+        mimeType: upload.mimeType,
+        userId,
+        visibility: "PRIVATE",
+        prisma,
+      });
     });
   } catch (error) {
     // The object is in the bucket and nothing points at it: it would be stored,
@@ -222,7 +287,15 @@ export async function finishUpload({
     throw error;
   }
 
-  await deleteStorageUpload({ id: upload.id });
+  if (!file) {
+    await bucket().delete?.(upload.objectKey);
+    await deleteStorageUpload({ id: upload.id });
+    return { ok: false, reason: "insufficientStorageSpace" };
+  }
+
+  // The row stays as the receipt of a finished upload. Its size is no longer
+  // counted as under way, and the sweep clears the receipt later.
+  await markStorageUploadCompleted({ id: upload.id, fileId: file.id });
   return { ok: true, file: { id: file.id, name: file.name, size: actual } };
 }
 
@@ -236,7 +309,12 @@ export async function cancelUpload({
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   if (!upload) return false;
 
-  await abandon(upload.objectKey, upload.uploadId);
+  // A finished upload has no parts left to throw away, and its file is not
+  // this call's to delete.
+  if (!upload.completedFileId) {
+    await abandon(upload.objectKey, upload.uploadId);
+  }
+
   await deleteStorageUpload({ id: upload.id });
   return true;
 }

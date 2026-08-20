@@ -53,6 +53,24 @@ export async function deleteStorageUpload({
   await db.storageUpload.deleteMany({ where: { id } });
 }
 
+// 完了したアップロードの控えを残す。行ごと消すと、完了応答だけが失われたときに
+// 同じ id で結果を取り直せず、やり直しが二重ファイルになる。
+export async function markStorageUploadCompleted({
+  id,
+  fileId,
+  prisma,
+}: {
+  id: string;
+  fileId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.storageUpload.updateMany({
+    where: { id },
+    data: { completedFileId: fileId },
+  });
+}
+
 // What a browser started and never finished. An unfinished upload holds its
 // parts, and their storage, until it is abandoned.
 export async function listStorageUploadsStartedBefore({
@@ -84,7 +102,8 @@ export async function sumStorageUploadSizeByUserId({
 }) {
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.aggregate({
-    where: { userId },
+    // 完了済みの控えの分は File 側に移っているので、ここで数えると二重になる。
+    where: { userId, completedFileId: null },
     _sum: { size: true },
   });
   return result._sum.size ?? BigInt(0);

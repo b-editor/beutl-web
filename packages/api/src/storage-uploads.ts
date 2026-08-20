@@ -27,6 +27,13 @@ export async function abandonStaleStorageUploads(
   let abandoned = 0;
   let failed = 0;
   for (const upload of stale) {
+    // 完了済みの控え。パートはもう無いので中止しに行く相手がいない。
+    if (upload.completedFileId) {
+      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+      abandoned++;
+      continue;
+    }
+
     try {
       const bucket = getR2Bucket();
       // A bucket that cannot abandon an upload would leave the row behind for
