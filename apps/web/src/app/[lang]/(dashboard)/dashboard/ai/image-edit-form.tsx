@@ -44,6 +44,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  canSubmitAiRequest,
   downloadFromUrl,
   defaultModelId,
   type AiAccess,
@@ -84,8 +85,14 @@ export function ImageEditForm({
   const [state, dispatch, isPending] = useActionState(editImageAction, {
     success: false,
   });
-  const [editTask, setEditTask] = useState<string>("");
+  const [chosenTask, setChosenTask] = useState<string>("");
   const [model, setModel] = useState("");
+  // 直前の送信が名乗った task と model。名前を持ったまま送り直すときは、その
+  // 名前を作った依頼をそのまま送る——どちらも指紋の一部なので、片方でも変えると
+  // 同じ名前が別の依頼に見え、支払い済みの job に届かなくなる。
+  const [sentRequest, setSentRequest] = useState<
+    { task: string; model: string } | null
+  >(null);
   const [outpaintExpansion, setOutpaintExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
@@ -105,6 +112,10 @@ export function ImageEditForm({
 
   const holdsName =
     (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
+  // 名前が残っているあいだ、画面はその依頼のまま動かない。task を切り替えたり
+  // モデルが差し替わったりしたら、同じ名前で別の依頼を送ることになる。
+  const held = holdsName ? sentRequest : null;
+  const editTask = held?.task ?? chosenTask;
   const blocked = blockedReason(
     access,
     EDIT_OPERATIONS,
@@ -119,9 +130,11 @@ export function ImageEditForm({
   // under the picker. Rather than resetting it from an effect, a choice that no
   // longer exists falls back to the new task's default.
   const models = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
-  const selectedModel = models.some((entry) => entry.id === model)
-    ? model
-    : defaultModelId(models);
+  const selectedModel = held
+    ? held.model
+    : models.some((entry) => entry.id === model)
+      ? model
+      : defaultModelId(models);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   const taskUnaffordable =
     blocked === null &&
@@ -134,6 +147,15 @@ export function ImageEditForm({
     editTask !== "" &&
     !holdsName &&
     (access.models[`image.edit.${editTask}`] ?? []).length === 0;
+  // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
+  // Enter を押したときにボタンが断っているはずの依頼が出ていく。
+  const canSubmit = canSubmitAiRequest({
+    submitBlocked,
+    hasTask: editTask !== "",
+    taskUnaffordable,
+    taskHasNoModel,
+    busy: isPending || isPreparing,
+  });
 
   async function prepareOutpaintFile(
     file: File,
@@ -172,8 +194,12 @@ export function ImageEditForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    // Pressing Enter in a field submits even while the button is disabled.
-    if (isPending || isPreparing) return;
+    // Pressing Enter in a field submits even while the button is disabled, so
+    // everything the button refuses on is refused here too. Without this the
+    // keyboard could start a run with no task, no plan, no balance for this
+    // task, or no model that can serve it.
+    if (!canSubmit) return;
+    setSentRequest({ task: editTask, model: selectedModel });
     setPrepareError(null);
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -233,7 +259,7 @@ export function ImageEditForm({
             type="single"
             variant="outline"
             value={editTask}
-            onValueChange={setEditTask}
+            onValueChange={setChosenTask}
             // One per row on a phone: at two columns the longest label
             // ("オブジェクト除去") is wider than the cell and truncates.
             className="grid grid-cols-1 gap-2 sm:grid-cols-2"
@@ -243,8 +269,11 @@ export function ImageEditForm({
                 key={entry.task}
                 value={entry.task}
                 disabled={
-                  blocked === null &&
-                  !access.availability[`image.edit.${entry.task}`]
+                  // 名前を持っているあいだは動かせない。task を変えると、その
+                  // 名前が指す支払い済みの job に届かなくなる。
+                  held !== null ||
+                  (blocked === null &&
+                    !access.availability[`image.edit.${entry.task}`])
                 }
                 className="justify-start gap-2"
               >
@@ -278,6 +307,7 @@ export function ImageEditForm({
           models={models}
           value={selectedModel}
           onChange={setModel}
+          disabled={held !== null}
         />
 
         {editTask === "outpaint" && (
@@ -345,14 +375,7 @@ export function ImageEditForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPreparing || isPending}
-          disabled={
-            submitBlocked ||
-            editTask === "" ||
-            taskUnaffordable ||
-            taskHasNoModel ||
-            isPreparing ||
-            isPending
-          }
+          disabled={!canSubmit}
         >
           {t("dashboard:ai.edit")}
         </SubmitButton>

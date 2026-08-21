@@ -273,7 +273,29 @@ type StorageUploadRecord = {
   partSize: number;
   createdAt: Date;
   completedFileId: string | null;
+  abandonedAt: Date | null;
 };
+
+type StorageUploadWhere = {
+  id?: string;
+  userId?: string;
+  completedFileId?: string | null;
+  abandonedAt?: Date | null;
+};
+
+function matchesStorageUploadWhere(
+  item: StorageUploadRecord,
+  where: StorageUploadWhere | undefined,
+): boolean {
+  if (!where) return true;
+  if (where.id !== undefined && item.id !== where.id) return false;
+  if (where.userId !== undefined && item.userId !== where.userId) return false;
+  if (where.completedFileId === null && item.completedFileId !== null) {
+    return false;
+  }
+  if (where.abandonedAt === null && item.abandonedAt !== null) return false;
+  return true;
+}
 
 type AggregateSpec = {
   _count?: { _all?: boolean };
@@ -2436,6 +2458,7 @@ export function createInMemoryPrisma() {
       }) => {
         const record: StorageUploadRecord = {
           completedFileId: null,
+          abandonedAt: null,
           ...data,
           id: data.id ?? crypto.randomUUID(),
           createdAt: data.createdAt ?? now(),
@@ -2471,19 +2494,11 @@ export function createInMemoryPrisma() {
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },
       count: async (
-        { where }: {
-          where?: { userId?: string; completedFileId?: string | null };
-        } = {},
+        { where }: { where?: StorageUploadWhere } = {},
       ) => {
         let total = 0;
         for (const item of state.storageUploads.values()) {
-          if (where?.userId && item.userId !== where.userId) continue;
-          if (
-            where?.completedFileId === null && item.completedFileId !== null
-          ) {
-            continue;
-          }
-          total++;
+          if (matchesStorageUploadWhere(item, where)) total++;
         }
         return total;
       },
@@ -2491,11 +2506,11 @@ export function createInMemoryPrisma() {
         where,
         data,
       }: {
-        where: { id?: string };
+        where: StorageUploadWhere;
         data: Partial<StorageUploadRecord>;
       }) => {
-        const matched = [...state.storageUploads.values()].filter(
-          (item) => !where.id || item.id === where.id,
+        const matched = [...state.storageUploads.values()].filter((item) =>
+          matchesStorageUploadWhere(item, where),
         );
         for (const item of matched) {
           state.storageUploads.set(item.id, { ...item, ...data });
@@ -2510,18 +2525,11 @@ export function createInMemoryPrisma() {
         return { count: removed.length };
       },
       aggregate: async (
-        { where }: {
-          where?: { userId?: string; completedFileId?: string | null };
-        } = {},
+        { where }: { where?: StorageUploadWhere } = {},
       ) => {
         let total = BigInt(0);
         for (const item of state.storageUploads.values()) {
-          if (where?.userId && item.userId !== where.userId) continue;
-          if (
-            where?.completedFileId === null && item.completedFileId !== null
-          ) {
-            continue;
-          }
+          if (!matchesStorageUploadWhere(item, where)) continue;
           total += item.size;
         }
         return { _sum: { size: total } };
@@ -2569,6 +2577,16 @@ export function createInMemoryPrisma() {
         };
         state.files.set(record.id, record);
         return { ...record };
+      },
+      count: async (
+        { where }: { where?: { userId?: string } } = {},
+      ) => {
+        let total = 0;
+        for (const item of state.files.values()) {
+          if (where?.userId && item.userId !== where.userId) continue;
+          total++;
+        }
+        return total;
       },
       upsert: async ({
         where,

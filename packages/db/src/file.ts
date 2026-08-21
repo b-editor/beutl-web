@@ -326,6 +326,18 @@ export async function findStorageFileByIdAndUserId({
   });
 }
 
+// 何本持っているか。容量とは別に本数にも上限があるので、その判定に使う。
+export async function countFilesByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  return await db.file.count({ where: { userId } });
+}
+
 export async function sumFileSizeByUserId({
   userId,
   prisma,

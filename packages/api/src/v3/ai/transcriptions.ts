@@ -179,7 +179,6 @@ const app = new Hono().post("/", async (c) => {
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "audio.transcribe",
-    legacyModelId: selectedModel?.modelId,
     input: {
       fileName: file.name,
       contentType: file.type || "audio/mpeg",

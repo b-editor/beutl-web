@@ -9,3 +9,8 @@ export const STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
 // 16MiB なら上限いっぱいの 1GiB でも 64 リクエストで済み、1 つ失敗しても
 // やり直しは 16MiB で済む。
 export const STORAGE_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
+
+// 1 ユーザーあたりのファイル数の上限。容量だけでは本数を縛れない——1 バイトの
+// ファイルを順に完成させれば、1GiB の枠の内側で R2 のオブジェクトと DB の行を
+// 際限なく増やせる。増えて困るのは容量ではなくその数のほうなので、別に限る。
+export const STORAGE_FILE_COUNT_LIMIT = 10_000;

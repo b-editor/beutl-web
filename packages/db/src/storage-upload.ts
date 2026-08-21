@@ -57,6 +57,11 @@ export async function deleteStorageUpload({
 
 // 完了したアップロードの控えを残す。行ごと消すと、完了応答だけが失われたときに
 // 同じ id で結果を取り直せず、やり直しが二重ファイルになる。
+//
+// 掃除に取られた行には書けない。取られたということは、そのオブジェクトはもう
+// 捨てられる——控えを書いてしまうと、File が消えたオブジェクトを指す。書けたか
+// どうかを返すので、呼び出し側はその場合に自分が組み上げたオブジェクトを片付け
+// られる。
 export async function markStorageUploadCompleted({
   id,
   fileId,
@@ -65,12 +70,33 @@ export async function markStorageUploadCompleted({
   id: string;
   fileId: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.storageUpload.updateMany({
-    where: { id },
+  const result = await db.storageUpload.updateMany({
+    where: { id, abandonedAt: null },
     data: { completedFileId: fileId },
   });
+  return result.count > 0;
+}
+
+// 「この行のパートは自分が捨てる」と宣言する。完了済みでも、既に誰かが宣言して
+// いても取れない。取れた行にはもう控えを書けないので、そのあとで中止しても
+// オブジェクトを消しても、File がそれを指すことはない。
+export async function claimStorageUploadForAbandon({
+  id,
+  now,
+  prisma,
+}: {
+  id: string;
+  now: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: { id, completedFileId: null, abandonedAt: null },
+    data: { abandonedAt: now },
+  });
+  return result.count > 0;
 }
 
 // まだ終わっていないアップロードの本数。完了済みの控えは数えない——パートは
@@ -84,7 +110,7 @@ export async function countStorageUploadsByUserId({
 }) {
   const db = prisma ?? (await getDb());
   return await db.storageUpload.count({
-    where: { userId, completedFileId: null },
+    where: { userId, completedFileId: null, abandonedAt: null },
   });
 }
 
@@ -120,7 +146,8 @@ export async function sumStorageUploadSizeByUserId({
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.aggregate({
     // 完了済みの控えの分は File 側に移っているので、ここで数えると二重になる。
-    where: { userId, completedFileId: null },
+    // 掃除に取られた行も同じ——パートはもう誰のものでもない。
+    where: { userId, completedFileId: null, abandonedAt: null },
     _sum: { size: true },
   });
   return result._sum.size ?? BigInt(0);

@@ -35,12 +35,12 @@ export async function findReplayableAiJob({
   userId,
   idempotencyKeyHash,
   requestFingerprint,
-  legacyRequestFingerprint,
+  legacyRequestFingerprintFor,
 }: {
   userId: string;
   idempotencyKeyHash: string;
   requestFingerprint: string;
-  legacyRequestFingerprint?: string | undefined;
+  legacyRequestFingerprintFor?: ((modelId: string) => Promise<string>) | undefined;
 }): Promise<
   | { outcome: "existing"; job: NonNullable<Awaited<ReturnType<typeof getAiJobByIdempotency>>> }
   | { outcome: "idempotencyConflict" }
@@ -50,10 +50,10 @@ export async function findReplayableAiJob({
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
   if (!existing) return null;
   if (
-    !fingerprintMatches(
-      existing.requestFingerprint,
+    !await fingerprintMatches(
+      existing,
       requestFingerprint,
-      legacyRequestFingerprint,
+      legacyRequestFingerprintFor,
     )
   ) {
     return { outcome: "idempotencyConflict" };
@@ -76,33 +76,52 @@ export type AiIdempotencyKeyState =
   | "settled"
   | "deleted";
 
+// 済んだ job を「まだ取りに来る価値がある」と見なす期間。契約が切れたあとでも
+// 結果は取り戻せるべきだが、いつまでもではない——済んだ名前がひとつあれば、
+// それを言い続けるだけで大きな本文を何度でも読ませられることになる。走っている
+// job には期限を置かない。取りに来る先は結果であって、期限ではないので。
+const COLLECTABLE_AFTER_SUCCESS_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+
 export async function aiJobStateForIdempotencyKey({
   userId,
   idempotencyKeyHash,
+  now = new Date(),
 }: {
   userId: string;
   idempotencyKeyHash: string | null;
+  now?: Date;
 }): Promise<AiIdempotencyKeyState> {
   if (!idempotencyKeyHash) return "none";
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
   if (!existing) return "none";
   if (existing.deletedAt) return "deleted";
-  return existing.status === "succeeded" ||
-      existing.status === "queued" ||
-      existing.status === "running" ||
-      existing.status === "finalizing"
+  if (
+    existing.status === "queued" ||
+    existing.status === "running" ||
+    existing.status === "finalizing"
+  ) {
+    return "collectable";
+  }
+  if (existing.status !== "succeeded") return "settled";
+  return existing.updatedAt.getTime() >
+      now.getTime() - COLLECTABLE_AFTER_SUCCESS_MILLISECONDS
     ? "collectable"
     : "settled";
 }
 
 // 記録されている指紋が、この依頼のものか。入れ替え配備の最中に古い形で作られた
-// job も、同じ依頼として認める。
-function fingerprintMatches(
-  stored: string | null,
+// job も、同じ依頼として認める——古い形は「そのとき解決された既定モデル入り」
+// なので、今の既定ではなく、その job が実際に走ったモデルで作り直して比べる。
+// そうしないと、既定が入れ替わったあとやそのモデルが止められたあとに、支払い
+// 済みの job へ届かなくなる。
+async function fingerprintMatches(
+  stored: { requestFingerprint: string | null; model: string | null },
   current: string,
-  legacy: string | undefined,
-): boolean {
-  return stored === current || (legacy !== undefined && stored === legacy);
+  legacyFor: ((modelId: string) => Promise<string>) | undefined,
+): Promise<boolean> {
+  if (stored.requestFingerprint === current) return true;
+  if (!legacyFor || !stored.model) return false;
+  return stored.requestFingerprint === await legacyFor(stored.model);
 }
 
 export async function createReservedAiJob({
@@ -116,7 +135,7 @@ export async function createReservedAiJob({
   activeJobLimit,
   idempotencyKeyHash,
   requestFingerprint,
-  legacyRequestFingerprint,
+  legacyRequestFingerprintFor,
   callbackNonceHash,
 }: {
   userId: string;
@@ -131,7 +150,7 @@ export async function createReservedAiJob({
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
-  legacyRequestFingerprint?: string | undefined;
+  legacyRequestFingerprintFor?: ((modelId: string) => Promise<string>) | undefined;
   callbackNonceHash?: string;
 }) {
   if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
@@ -149,10 +168,10 @@ export async function createReservedAiJob({
         });
         if (existing) {
           if (
-            !fingerprintMatches(
-              existing.requestFingerprint,
+            !await fingerprintMatches(
+              existing,
               requestFingerprint,
-              legacyRequestFingerprint,
+              legacyRequestFingerprintFor,
             )
           ) {
             return { outcome: "idempotencyConflict" as const };

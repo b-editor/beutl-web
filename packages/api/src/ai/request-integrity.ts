@@ -10,10 +10,13 @@ const idempotencyKeySchema = z
 export type AiRequestIdentity = {
   idempotencyKeyHash: string;
   requestFingerprint: string;
-  // モデルを名指ししていない依頼を、以前は「解決済みの既定モデル入り」で指紋化
-  // していた。入れ替え配備の最中は両方の形の job が並ぶので、その形も受け取れる
-  // ようにしておく。新しく作る job は必ず上の形で記録される。
-  legacyRequestFingerprint?: string;
+  // モデルを名指ししていない依頼を、以前は「そのとき解決された既定モデル入り」で
+  // 指紋化していた。入れ替え配備の最中は両方の形の job が並ぶので、古い形も同じ
+  // 依頼として認める。突き合わせる相手は、記録されている job のモデル——今の
+  // 既定ではない。既定が入れ替わったあとや、そのモデルが止められたあとでも、
+  // 支払い済みの job に届かなくなってはならない。新しく作る job は必ず上の形で
+  // 記録される。
+  legacyRequestFingerprintFor?: (modelId: string) => Promise<string>;
 };
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -62,36 +65,32 @@ export async function toAiRequestIdentity({
   idempotencyKey,
   operation,
   input,
-  legacyModelId,
 }: {
   idempotencyKey: unknown;
   operation: string;
   input: unknown;
-  // 依頼がモデルを名指ししていないときの、そのとき解決された既定モデル。
-  legacyModelId?: string | undefined;
 }): Promise<AiRequestIdentity | null> {
   const key = idempotencyKeySchema.safeParse(idempotencyKey);
   if (!key.success) return null;
 
   const named = typeof input === "object" && input !== null &&
     (input as Record<string, unknown>).model !== undefined;
-  const [idempotencyKeyHash, requestFingerprint, legacyRequestFingerprint] =
-    await Promise.all([
-      sha256Hex(key.data),
-      sha256Hex(canonicalJson({ operation, input })),
-      legacyModelId && !named
-        ? sha256Hex(
-          canonicalJson({
-            operation,
-            input: { ...(input as Record<string, unknown>), model: legacyModelId },
-          }),
-        )
-        : Promise.resolve(undefined),
-    ]);
+  const [idempotencyKeyHash, requestFingerprint] = await Promise.all([
+    sha256Hex(key.data),
+    sha256Hex(canonicalJson({ operation, input })),
+  ]);
   return {
     idempotencyKeyHash,
     requestFingerprint,
-    ...(legacyRequestFingerprint ? { legacyRequestFingerprint } : {}),
+    ...(named ? {} : {
+      legacyRequestFingerprintFor: (modelId: string) =>
+        sha256Hex(
+          canonicalJson({
+            operation,
+            input: { ...(input as Record<string, unknown>), model: modelId },
+          }),
+        ),
+    }),
   };
 }
 
@@ -99,18 +98,15 @@ export async function getAiRequestIdentity({
   request,
   operation,
   input,
-  legacyModelId,
 }: {
   request: Request;
   operation: string;
   input: unknown;
-  legacyModelId?: string | undefined;
 }): Promise<AiRequestIdentity | null> {
   return await toAiRequestIdentity({
     idempotencyKey: request.headers.get(IDEMPOTENCY_KEY_HEADER),
     operation,
     input,
-    legacyModelId,
   });
 }
 

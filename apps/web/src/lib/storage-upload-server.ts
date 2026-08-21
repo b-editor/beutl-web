@@ -1,6 +1,11 @@
 import "server-only";
-import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
 import {
+  STORAGE_FILE_COUNT_LIMIT,
+  STORAGE_QUOTA_BYTES,
+  STORAGE_UPLOAD_PART_BYTES,
+} from "@beutl/core";
+import {
+  countFilesByUserId,
   createFile,
   countStorageUploadsByUserId,
   createStorageUpload,
@@ -31,6 +36,7 @@ const MAX_ACTIVE_UPLOADS = 16;
 
 export type UploadFailure =
   | "fileNotFound"
+  | "tooManyFiles"
   | "tooManyUploads"
   | "insufficientStorageSpace"
   | "uploadNotFound"
@@ -121,7 +127,9 @@ export async function startUpload({
 }): Promise<{ ok: true; upload: StartedUpload } | { ok: false; reason: UploadFailure }> {
   const existing = await findStorageUploadByIdAndUserId({ id, userId });
   if (existing) {
-    return existing.completedFileId
+    // 完了しているか、掃除に取られているか。どちらもこの名前ではもう続けられ
+    // ない——取られた行のパートはもう捨てられている。
+    return existing.completedFileId || existing.abandonedAt
       ? { ok: false, reason: "uploadFailed" }
       : {
         ok: true,
@@ -138,7 +146,11 @@ export async function startUpload({
     httpMetadata: mimeType ? { contentType: mimeType } : undefined,
   });
 
-  let upload: Awaited<ReturnType<typeof createStorageUpload>> | null | "tooMany";
+  let upload:
+    | Awaited<ReturnType<typeof createStorageUpload>>
+    | null
+    | "tooMany"
+    | "tooManyFiles";
   try {
     // Reading the totals and writing the row that changes them is one
     // transaction. CockroachDB runs it serializably, so two uploads started at
@@ -155,6 +167,12 @@ export async function startUpload({
       // ならない。同時に抱えられる本数そのものを限る。
       const active = await countStorageUploadsByUserId({ userId, prisma });
       if (active >= MAX_ACTIVE_UPLOADS) return "tooMany";
+
+      // 本数の上限。容量の枠内でも、小さなファイルを積み上げれば R2 の
+      // オブジェクトと行はいくらでも増える。完成した本数と、いま進行中の本数を
+      // 合わせて数える。
+      const files = await countFilesByUserId({ userId, prisma });
+      if (files + active >= STORAGE_FILE_COUNT_LIMIT) return "tooManyFiles";
 
       const [stored, underway] = await Promise.all([
         sumFileSizeByUserId({ userId, prisma }),
@@ -186,6 +204,11 @@ export async function startUpload({
   if (upload === "tooMany") {
     await abandon(objectKey, multipart.uploadId);
     return { ok: false, reason: "tooManyUploads" };
+  }
+
+  if (upload === "tooManyFiles") {
+    await abandon(objectKey, multipart.uploadId);
+    return { ok: false, reason: "tooManyFiles" };
   }
 
   if (!upload) {
@@ -224,6 +247,8 @@ export async function uploadPart({
 }): Promise<{ ok: true; etag: string } | { ok: false; reason: UploadFailure }> {
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   if (!upload) return { ok: false, reason: "uploadNotFound" };
+  // 掃除に取られた行のパートはもう捨てられている。送っても行き先がない。
+  if (upload.abandonedAt) return { ok: false, reason: "uploadNotFound" };
   if (partNumber < 1 || partNumber > partCountOf(upload.size)) {
     return { ok: false, reason: "uploadNotFound" };
   }
@@ -248,6 +273,10 @@ export async function uploadPart({
   const part = await multipart.uploadPart(partNumber, body);
   return { ok: true, etag: part.etag };
 }
+
+type TrackedUpload = NonNullable<
+  Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
+>;
 
 export async function finishUpload({
   userId,
@@ -279,6 +308,10 @@ export async function finishUpload({
     };
   }
 
+  // 掃除がこの行を取っている。パートも、組み上がっていたオブジェクトも、もう
+  // 掃除のもの。ここで仕上げると、消される予定のオブジェクトを File が指す。
+  if (upload.abandonedAt) return { ok: false, reason: "uploadFailed" };
+
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
     upload.uploadId,
@@ -294,6 +327,15 @@ export async function finishUpload({
     if (settled.kind === "completed") return { ok: true, file: settled.file };
     if (settled.kind === "unknown") return { ok: false, reason: "uploadFailed" };
 
+    // 控えは無いのに、アップロード id は知られていない。組み上げは終わったのに
+    // その直後に落ちた、という形がこれになる。R2 は結合済みのアップロードを
+    // 忘れるので、中止も組み直しもできない——オブジェクトが在るかどうかだけが
+    // 見分けになる。在るならこの呼び出しが仕上げる。やり直すたびに同じところで
+    // 落ちて、24 時間後に掃除がそのオブジェクトを消すのでは、送った側は何度
+    // 送っても届かない。
+    const joined = await joinedObjectSize(upload.objectKey);
+    if (joined !== null) return await finalizeUpload(upload, userId, BigInt(joined));
+
     // A part that never arrived, or one the bucket does not recognise. The
     // upload keeps its parts until it is abandoned, so it is abandoned here —
     // and the row is kept when that did not work, so a later sweep can try
@@ -305,16 +347,28 @@ export async function finishUpload({
     return { ok: false, reason: "uploadFailed" };
   }
 
-  // The size the browser declared is what the quota was checked against; this
-  // is what actually arrived, and it is what the quota is held to. The check,
-  // the file and the receipt naming it are one transaction: written apart, a
-  // failure between them leaves a stored file nothing can hand back, and two
-  // completions arriving together each store the same bytes.
-  const actual = BigInt(object.size);
+  return await finalizeUpload(upload, userId, BigInt(object.size));
+}
+
+// The size the browser declared is what the quota was checked against; `actual`
+// is what the bucket ended up holding, and it is what the quota is held to. The
+// check, the file and the receipt naming it are one transaction: written apart,
+// a failure between them leaves a stored file nothing can hand back, and two
+// completions arriving together each store the same bytes.
+async function finalizeUpload(
+  upload: TrackedUpload,
+  userId: string,
+  actual: bigint,
+): Promise<
+  | { ok: true; file: { id: string; name: string; size: bigint } }
+  | { ok: false; reason: UploadFailure }
+> {
   let outcome:
     | { kind: "created"; id: string; name: string }
     | { kind: "alreadyCompleted"; fileId: string }
     | { kind: "overQuota" }
+    | { kind: "tooManyFiles" }
+    | { kind: "abandoned" }
     | { kind: "gone" };
   try {
     outcome = await startRetryableTransaction(async (prisma) => {
@@ -330,10 +384,18 @@ export async function finishUpload({
           fileId: current.completedFileId,
         };
       }
+      // 掃除が取っていった行。控えは書けないし、書いてはいけない。
+      if (current.abandonedAt) return { kind: "abandoned" as const };
 
-      const stored = await sumFileSizeByUserId({ userId, prisma });
+      const [stored, files] = await Promise.all([
+        sumFileSizeByUserId({ userId, prisma }),
+        countFilesByUserId({ userId, prisma }),
+      ]);
       if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
         return { kind: "overQuota" as const };
+      }
+      if (files >= STORAGE_FILE_COUNT_LIMIT) {
+        return { kind: "tooManyFiles" as const };
       }
 
       const created = await createFile({
@@ -347,14 +409,26 @@ export async function finishUpload({
       });
       // The row stays as the receipt of a finished upload. Its size is no
       // longer counted as under way, and the sweep clears the receipt later.
-      await markStorageUploadCompleted({
-        id: upload.id,
-        fileId: created.id,
-        prisma,
-      });
+      // 取られていれば書けない——その場合はこの取引ごと巻き戻す。
+      if (
+        !await markStorageUploadCompleted({
+          id: upload.id,
+          fileId: created.id,
+          prisma,
+        })
+      ) {
+        throw new UploadWasAbandoned();
+      }
       return { kind: "created" as const, id: created.id, name: created.name };
     });
   } catch (error) {
+    if (error instanceof UploadWasAbandoned) {
+      // 掃除のものになったオブジェクトを、こちらでも片付けておく。残していても
+      // 次の掃除が拾うが、そのぶん保管され続ける。
+      await bucket().delete?.(upload.objectKey).catch(() => undefined);
+      return { ok: false, reason: "uploadFailed" };
+    }
+
     // A failure reported after the commit landed is indistinguishable from one
     // reported before it, so the receipt is what decides: if it is there, a
     // file points at this object and removing it would destroy a stored file.
@@ -385,11 +459,20 @@ export async function finishUpload({
   }
 
   if (outcome.kind === "gone") return { ok: false, reason: "uploadNotFound" };
+  if (outcome.kind === "abandoned") {
+    await bucket().delete?.(upload.objectKey).catch(() => undefined);
+    return { ok: false, reason: "uploadFailed" };
+  }
 
-  if (outcome.kind === "overQuota") {
+  if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
     await bucket().delete?.(upload.objectKey);
     await deleteStorageUpload({ id: upload.id });
-    return { ok: false, reason: "insufficientStorageSpace" };
+    return {
+      ok: false,
+      reason: outcome.kind === "overQuota"
+        ? "insufficientStorageSpace"
+        : "tooManyFiles",
+    };
   }
 
   if (outcome.kind === "alreadyCompleted") {
@@ -402,6 +485,24 @@ export async function finishUpload({
   }
 
   return { ok: true, file: { id: outcome.id, name: outcome.name, size: actual } };
+}
+
+// 取引を巻き戻すためだけの合図。掃除に行を取られたので、File を作らずに戻る。
+class UploadWasAbandoned extends Error {}
+
+// 結合済みのオブジェクトの大きさ。無いとき、および確かめられないときは null。
+// 確かめられないまま「在る」と読むと、届いていないものを File にしてしまう。
+async function joinedObjectSize(objectKey: string): Promise<number | null> {
+  try {
+    const head = bucket().head;
+    if (!head) return null;
+    const object = await head(objectKey);
+    // 大きさを言わない head もある。大きさが分からないままでは File を作れない。
+    return typeof object?.size === "number" ? object.size : null;
+  } catch (error) {
+    console.error("Failed to look for a joined upload object", objectKey, error);
+    return null;
+  }
 }
 
 export async function cancelUpload({

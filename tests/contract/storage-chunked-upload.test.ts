@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
-import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
+import {
+  STORAGE_FILE_COUNT_LIMIT,
+  STORAGE_QUOTA_BYTES,
+  STORAGE_UPLOAD_PART_BYTES,
+} from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // The bucket a file is assembled in. R2 keeps the parts under an upload id and
@@ -308,6 +312,97 @@ describe("uploading a file too large for one request", () => {
     expect(swept).toEqual({ abandoned: 1, failed: 0 });
     expect(state.storageUploads.size).toBe(0);
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
+  });
+
+  it("leaves the object of an upload that finished while the sweep ran", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    // 一覧を引いたあと、順番が回ってくるまでに完了した。行はもう控えなので、
+    // そのオブジェクトは File のもの——捨てるものは何も残っていない。
+    state.storageUploads.set(tracked!.id, {
+      ...tracked!,
+      completedFileId: "file-1",
+    });
+    const tomorrow = new Date(Date.now() + 25 * 60 * 60 * 1000);
+
+    const swept = await abandonStaleStorageUploads(tomorrow);
+
+    expect(swept).toEqual({ abandoned: 1, failed: 0 });
+    expect(state.storageUploads.size).toBe(0);
+    expect(bucketDeleted).toHaveLength(0);
+    expect([...bucket.uploads.values()].every((upload) => !upload.aborted))
+      .toBe(true);
+  });
+
+  it("cannot be finished once the sweep has claimed it", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    await uploadPart({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      partNumber: 1,
+      contentLength: 4,
+      body: streamOf(4),
+    });
+    const tomorrow = new Date(Date.now() + 25 * 60 * 60 * 1000);
+    await abandonStaleStorageUploads(tomorrow);
+
+    // 掃除が終えたあとに完了要求が届いても、そのパートはもう無い。ここで File を
+    // 作ると、消えたオブジェクトを指すことになる。
+    const outcome = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "uploadNotFound" });
+    expect(state.files.size).toBe(0);
+  });
+
+  it("refuses to start once the account holds as many files as it may", async () => {
+    // 容量だけでは本数を縛れない。1 バイトのファイルを順に完成させれば、枠の
+    // 内側で R2 のオブジェクトと行をいくらでも増やせる。
+    for (let index = 0; index < STORAGE_FILE_COUNT_LIMIT; index++) {
+      state.files.set(`file-${index}`, {
+        id: `file-${index}`,
+        objectKey: `key-${index}`,
+        name: `file-${index}.bin`,
+        size: 1,
+        mimeType: "application/octet-stream",
+        userId: USER_ID,
+        visibility: "PRIVATE",
+        sha256: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as never);
+    }
+
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(4),
+    });
+
+    expect(started).toEqual({ ok: false, reason: "tooManyFiles" });
+    // 誰も知らないマルチパートを残さない。
+    expect([...bucket.uploads.values()].every((upload) => upload.aborted))
+      .toBe(true);
+    expect(state.storageUploads.size).toBe(0);
   });
 
   it("leaves an upload that has only just started alone", async () => {

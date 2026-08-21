@@ -850,11 +850,15 @@ describe("v3 AI endpoints contract", () => {
     });
 
     it("still recognises a job fingerprinted the way the previous release did", async () => {
-      // 入れ替え配備の最中は、モデル省略の依頼を「解決済みの既定モデル入り」で
-      // 指紋化した job と、そうでない job が並ぶ。同じ名前で問い合わせ直したとき、
-      // 前の形で作られていたというだけで別の依頼に見えてはいけない。
+      // 入れ替え配備の最中は、モデル省略の依頼を「そのとき解決された既定モデル
+      // 入り」で指紋化した job と、そうでない job が並ぶ。同じ名前で問い合わせ
+      // 直したとき、前の形で作られていたというだけで別の依頼に見えてはいけない。
+      // 突き合わせる相手は、今の既定ではなく、その job が実際に走ったモデル
+      // ——ここでは既に取り下げられたモデル。今の既定から作った指紋と比べる
+      // やり方では、既定が入れ替わった時点で届かなくなる。
       await activatePro();
       const key = "made-by-the-previous-release";
+      const retiredDefault = "openai/the-previous-default";
       const reservation = await createReservedAiJob({
         userId: USER_ID,
         kind: "image",
@@ -862,13 +866,14 @@ describe("v3 AI endpoints contract", () => {
         status: "running",
         inputParams: { prompt: "test", aspectRatio: "1:1" },
         usageUnits: 20,
+        model: retiredDefault,
         ...(await getAiRequestIdentityForTest({
           key,
           operation: "image.generate",
           input: {
             prompt: "test",
             aspectRatio: "1:1",
-            model: "openai/gpt-image-1",
+            model: retiredDefault,
           },
         })),
       });
@@ -1609,6 +1614,47 @@ describe("v3 AI endpoints contract", () => {
       expect(await res.json()).toMatchObject({
         error_code: "invalidRequestBody",
       });
+    });
+
+    it("stops reading the body for a job that finished long ago", async () => {
+      // 済んだ名前がひとつあれば、それを言い続けるだけで大きな本文を何度でも
+      // 読ませられる——契約が切れたあとでも。回収に必要な期間だけ開けておき、
+      // それを過ぎたら本文を読む前に断る。結果そのものは履歴から取れる。
+      await activatePro();
+      const key = "collected-long-ago";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image_edit",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { task: "remove_background" },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.edit.remove_background",
+          input: { task: "remove_background" },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+      const [job] = [...state.aiJobs.values()];
+      state.aiJobs.set(job!.id, {
+        ...job!,
+        status: "succeeded",
+        updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+      });
+      await deactivatePro();
+
+      const form = new FormData();
+      form.append("task", "remove_background");
+      form.append("file", new File([new Uint8Array(8)], "invalid.bin"));
+      const res = await makeApp().request("/api/v3/ai/images/edit", {
+        method: "POST",
+        headers: await authHeaders(key),
+        body: form,
+      });
+
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ error_code: "aiPlanRequired" });
     });
 
     it("returns 413 when Content-Length exceeds the image upload limit", async () => {

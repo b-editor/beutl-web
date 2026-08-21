@@ -229,7 +229,6 @@ const app = new Hono().post("/", async (c) => {
   const requestIdentity = await getAiRequestIdentity({
     request: c.req.raw,
     operation: "subtitle.translate",
-    legacyModelId: selectedModel?.modelId,
     input: {
       // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
       ...(parsedRequest.data.model ? { model: parsedRequest.data.model } : {}),

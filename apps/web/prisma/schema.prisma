@@ -211,7 +211,10 @@ model StorageUpload {
   createdAt       DateTime @default(now())
   // 完了済みの控え。設定されている行はもう進行中ではなく、合計にも数えない。
   completedFileId String?
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 掃除が「この行のパートは自分が捨てる」と宣言した時刻。設定された行にはもう
+  // 控えを書けない——書けてしまうと、掃除が消したオブジェクトを File が指す。
+  abandonedAt     DateTime?
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])

@@ -246,7 +246,6 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
-      legacyModelId: selectedModel?.modelId,
       input: {
         // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
         ...(parsedBody.data.model ? { model: parsedBody.data.model } : {}),
@@ -492,7 +491,6 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
-      legacyModelId: selectedModel?.modelId,
       input: {
         ...(fields.data.model ? { model: fields.data.model } : {}),
         prompt,

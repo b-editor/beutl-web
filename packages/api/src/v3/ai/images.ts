@@ -261,7 +261,6 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "image.generate",
-      legacyModelId: selectedModel?.modelId,
       input: {
         prompt,
         aspectRatio,
@@ -582,7 +581,6 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: `image.edit.${editTask}`,
-      legacyModelId: selectedModel?.modelId,
       input: {
         task: editTask,
         ...(fields.data.model ? { model: fields.data.model } : {}),

@@ -1,4 +1,5 @@
 import {
+  claimStorageUploadForAbandon,
   deleteStorageUpload,
   findStorageUploadByIdAndUserId,
   listStorageUploadsStartedBefore,
@@ -11,6 +12,13 @@ import { getR2Bucket } from "./ai/storage";
 // parts under an upload id until they are either joined into the file or thrown
 // away. A browser that is closed midway does neither, and what it left behind
 // is stored — and paid for — until something abandons it.
+//
+// Nothing here destroys anything it has not first claimed. Reading the row and
+// then acting on what it said is not enough: a completion landing in between
+// would write a receipt for an object this sweep is about to delete, and the
+// file would point at nothing. Claiming the row shuts that door — a claimed row
+// can no longer take a receipt — so whatever is left in the bucket is this
+// sweep's to throw away.
 //
 // Long enough that a slow upload of the largest file this service takes is
 // never mistaken for an abandoned one.
@@ -50,17 +58,26 @@ export async function abandonStaleStorageUploads(
   let failed = 0;
   for (const upload of stale) {
     // 一覧を引いてから順番が回ってくるまでの間に、そのアップロードが完了して
-    // いることがある。古い姿のまま進むと、File が指しているオブジェクトを消して
-    // しまうので、必ず読み直す。
-    const current = await findStorageUploadByIdAndUserId({
+    // いることがある。行を取れなければ、それは完了したか、既に誰かが取ったか。
+    const claimed = await claimStorageUploadForAbandon({
       id: upload.id,
-      userId: upload.userId,
-    }).catch(() => upload);
-    if (!current) continue;
-    if (current.completedFileId) {
-      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-      abandoned++;
-      continue;
+      now,
+    }).catch(() => false);
+    if (!claimed) {
+      // 取れなかった理由を確かめる。完了していたなら控えを片付けるだけ。前の回で
+      // 自分が取ったまま中止に失敗した行なら、そのまま捨てにかかってよい——
+      // 取られた行にはもう控えが書けないので、消して困るものは残っていない。
+      const current = await findStorageUploadByIdAndUserId({
+        id: upload.id,
+        userId: upload.userId,
+      }).catch(() => null);
+      if (!current) continue;
+      if (current.completedFileId) {
+        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+        abandoned++;
+        continue;
+      }
+      if (!current.abandonedAt) continue;
     }
 
     try {
@@ -70,31 +87,18 @@ export async function abandonStaleStorageUploads(
       if (!bucket.resumeMultipartUpload) {
         throw new Error("The configured R2 bucket cannot abandon an upload.");
       }
-      await bucket.resumeMultipartUpload(current.objectKey, current.uploadId).abort();
+      await bucket.resumeMultipartUpload(upload.objectKey, upload.uploadId).abort();
       // 中止できたということは、まだパートのままだった。オブジェクトは無い。
       await deleteStorageUpload({ id: upload.id });
       abandoned++;
     } catch (error) {
       console.error("Failed to abandon a stale storage upload", upload.id, error);
       // 中止できない理由のひとつは「もう組み上がっている」こと。R2 の結合が
-      // 終わったあと、控えを書く前に Worker が落ちるとこうなる。控えが無い＝
-      // File は誰も指していないので、残っているオブジェクトはここで消す。
-      // これをしないと、追跡できない完成オブジェクトが保管され続ける。
-      // ここでもう一度読む。abort を試している間に完了したのなら、そのオブジェクト
-      // はもう File のもの。
-      const settled = await findStorageUploadByIdAndUserId({
-        id: upload.id,
-        userId: upload.userId,
-      }).catch(() => null);
-      if (settled?.completedFileId) {
-        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-        abandoned++;
-        continue;
-      }
-
-      const orphaned = settled !== null
-        && await deleteOrphanedObject(current.objectKey);
-      if (orphaned) {
+      // 終わったあと、控えを書く前に Worker が落ちるとこうなる。行はこちらの
+      // ものなので控えはもう書けない＝ File は誰も指していない。残っている
+      // オブジェクトはここで消す。これをしないと、追跡できない完成オブジェクト
+      // が保管され続ける。
+      if (await deleteOrphanedObject(upload.objectKey)) {
         await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
         abandoned++;
         continue;

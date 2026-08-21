@@ -12,6 +12,8 @@ const bucket = vi.hoisted(() => {
     completed: [] as string[],
     deleted: [] as string[],
     deleteFails: false,
+    // 結合済みのオブジェクト。head で在ることが分かる。
+    objects: new Map<string, number>(),
   };
   return {
     state,
@@ -27,9 +29,14 @@ const bucket = vi.hoisted(() => {
       }),
       abort: vi.fn(async () => undefined),
     })),
+    head: vi.fn(async (key: string) => {
+      const size = state.objects.get(key);
+      return size === undefined ? null : { key, size };
+    }),
     delete: vi.fn(async (key: string) => {
       if (state.deleteFails) throw new Error("the object could not be deleted");
       state.deleted.push(key);
+      state.objects.delete(key);
     }),
   };
 });
@@ -64,6 +71,7 @@ describe("storage upload consistency", () => {
     bucket.state.completed.length = 0;
     bucket.state.deleted.length = 0;
     bucket.state.deleteFails = false;
+    bucket.state.objects.clear();
     const memory = createInMemoryPrisma();
     state = memory.state;
     setDbProvider(async () => memory.prisma as never);
@@ -130,6 +138,56 @@ describe("storage upload consistency", () => {
     // the row is what lets the sweep find this upload at all.
     const [remaining] = [...state.storageUploads.values()];
     expect(remaining?.completedFileId ?? null).toBeNull();
+  });
+
+  it("finishes an upload the bucket had already joined", async () => {
+    const uploadId = await begin();
+    const [tracked] = [...state.storageUploads.values()];
+    // 結合は済んだのに、控えを書く前に落ちた。R2 は結合済みのアップロード id を
+    // 忘れるので、やり直すと complete が失敗する——それを「届かなかった」と
+    // 読むと、送った側は何度送っても同じところで止まり、24 時間後に掃除が
+    // そのオブジェクトを消す。
+    bucket.state.objects.set(tracked!.objectKey, 10);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: vi.fn(),
+      complete: vi.fn(async () => {
+        throw new Error("no such upload");
+      }),
+      abort: vi.fn(async () => undefined),
+    }));
+
+    const outcome = await finishUpload({
+      userId: USER_ID,
+      uploadId,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+
+    expect(outcome).toEqual({
+      ok: true,
+      file: { id: "file-1", name: "clip.mp4", size: BigInt(10) },
+    });
+    expect(createFile).toHaveBeenCalledOnce();
+    expect(bucket.state.deleted).toHaveLength(0);
+  });
+
+  it("refuses to record a file for an upload the sweep has claimed", async () => {
+    const uploadId = await begin();
+    const [tracked] = [...state.storageUploads.values()];
+    // 掃除が「このパートは自分が捨てる」と宣言済み。ここで控えを書くと、消される
+    // 予定のオブジェクトを File が指すことになる。
+    state.storageUploads.set(tracked!.id, {
+      ...tracked!,
+      abandonedAt: new Date(),
+    });
+
+    const outcome = await finishUpload({
+      userId: USER_ID,
+      uploadId,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "uploadFailed" });
+    expect(createFile).not.toHaveBeenCalled();
   });
 
   it("reports both failures when the object cannot be thrown away either", async () => {
