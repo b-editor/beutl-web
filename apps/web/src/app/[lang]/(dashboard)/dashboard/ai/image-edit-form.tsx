@@ -38,6 +38,8 @@ import {
   AiWorkspace,
   DownloadButton,
   IdempotencyKeyField,
+  requestSignature,
+  useAiRequestNames,
   ResultPanel,
   ResultShimmer,
   ShimmerImage,
@@ -87,11 +89,12 @@ export function ImageEditForm({
   });
   const [chosenTask, setChosenTask] = useState<string>("");
   const [model, setModel] = useState("");
-  // 直前の送信が名乗った task と model。名前を持ったまま送り直すときは、その
-  // 名前を作った依頼をそのまま送る——どちらも指紋の一部なので、片方でも変えると
-  // 同じ名前が別の依頼に見え、支払い済みの job に届かなくなる。
+  // 送信ごとの名前。依頼ごとに持つので、A を回収している最中に B を送っても
+  // どちらの名前も残る。
+  const names = useAiRequestNames();
+  // 直前の送信が名乗った task。カタログが動いてもモデルを動かさないために使う。
   const [sentRequest, setSentRequest] = useState<
-    { task: string; model: string; prompt: string; expansion: string } | null
+    { task: string; model: string } | null
   >(null);
   const [chosenExpansion, setChosenExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
@@ -112,6 +115,11 @@ export function ImageEditForm({
 
   const keepsName =
     (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
+  // 応答が届いたら、決着したかどうかでその名前を残すか手放すかを決める。
+  useEffect(() => {
+    names.settle(keepsName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
   const editTask = chosenTask;
   const outpaintExpansion = chosenExpansion;
   const editPrompt = typedPrompt;
@@ -133,16 +141,16 @@ export function ImageEditForm({
     : null;
   const selectedModel = heldModel ??
     (models.some((entry) => entry.id === model) ? model : defaultModelId(models));
-  // 中身が同じときだけ、その名前をそのまま使う。利用者が書き換えたのなら、それは
-  // 新しい依頼——新しい名前で送る。同じ名前で別の依頼を送ると断られ、そこで
-  // 名前が失われる。ファイルだけはここでは見られないので、差し替えられたときは
-  // サーバーの拒否で分かる（名前はそのまま残る）。
-  const holdsName = keepsName &&
-    sentRequest !== null &&
-    sentRequest.task === editTask &&
-    sentRequest.model === selectedModel &&
-    sentRequest.prompt === typedPrompt &&
-    sentRequest.expansion === chosenExpansion;
+  // その依頼の署名。中身が同じなら同じ名前で送り、書き換えたのなら別の名前で
+  // 送る——同じ名前で別の依頼を送ると断られる。ファイルだけはここでは見られない
+  // ので、差し替えられたときはサーバーの拒否で分かる（名前はそのまま残る）。
+  const signature = requestSignature([
+    editTask,
+    selectedModel,
+    typedPrompt,
+    chosenExpansion,
+  ]);
+  const holdsName = names.holds(signature);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
   const submitBlocked = blocksSubmit(blocked, holdsName);
@@ -210,12 +218,8 @@ export function ImageEditForm({
     // keyboard could start a run with no task, no plan, no balance for this
     // task, or no model that can serve it.
     if (!canSubmit) return;
-    setSentRequest({
-      task: editTask,
-      model: selectedModel,
-      prompt: editPrompt,
-      expansion: outpaintExpansion,
-    });
+    setSentRequest({ task: editTask, model: selectedModel });
+    names.commit(signature);
     setPrepareError(null);
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -253,9 +257,7 @@ export function ImageEditForm({
   const form = (
     <Card>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
-        {/* 中身が変わっていれば、それは新しい依頼。同じ名前で送ると断られる
-            ので、名前も新しくする。*/}
-        <IdempotencyKeyField state={state} holds={holdsName} />
+        <IdempotencyKeyField name={names.nameFor(signature)} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="editFile">{t("dashboard:ai.image")}</Label>
           <Input

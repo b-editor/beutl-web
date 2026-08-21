@@ -36,12 +36,10 @@ export async function findReplayableAiJob({
   userId,
   idempotencyKeyHash,
   requestFingerprint,
-  legacyRequestFingerprintFor,
 }: {
   userId: string;
   idempotencyKeyHash: string;
   requestFingerprint: string;
-  legacyRequestFingerprintFor?: ((modelId: string) => Promise<string>) | undefined;
 }): Promise<
   | { outcome: "existing"; job: NonNullable<Awaited<ReturnType<typeof getAiJobByIdempotency>>> }
   | { outcome: "idempotencyConflict" }
@@ -50,14 +48,7 @@ export async function findReplayableAiJob({
 > {
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
   if (!existing) return null;
-  if (
-    !await fingerprintMatches(
-      existing,
-      requestFingerprint,
-      legacyRequestFingerprintFor,
-      new Date(),
-    )
-  ) {
+  if (existing.requestFingerprint !== requestFingerprint) {
     return { outcome: "idempotencyConflict" };
   }
   if (existing.deletedAt) return { outcome: "deleted" };
@@ -116,49 +107,6 @@ export async function aiJobStateForIdempotencyKey({
     : "settled";
 }
 
-// 記録されている指紋が、この依頼のものか。入れ替え配備の最中に古い形で作られた
-// job も、同じ依頼として認める——古い形は「そのとき解決された既定モデル入り」
-// なので、今の既定ではなく、その job が実際に走ったモデルで作り直して比べる。
-// そうしないと、既定が入れ替わったあとやそのモデルが止められたあとに、支払い
-// 済みの job へ届かなくなる。
-async function fingerprintMatches(
-  stored: {
-    requestFingerprint: string | null;
-    requestFingerprintVersion: number | null;
-    model: string | null;
-    createdAt: Date;
-  },
-  current: string,
-  legacyFor: ((modelId: string) => Promise<string>) | undefined,
-  now: Date,
-): Promise<boolean> {
-  if (stored.requestFingerprint === current) return true;
-  // 作り直しを許すのは旧版が書いたジョブだけ。現行の形で「モデル A を名指し
-  // した」と記録されたジョブは、A で作り直した指紋がモデルを名乗らない依頼と
-  // 一致してしまう——別の依頼に A の結果を返すことになる。
-  if (stored.requestFingerprintVersion !== null) return false;
-  if (!legacyFor || !stored.model) return false;
-  // 版の列を足す前からあるジョブは、どちらの形で書かれたか分からない。分から
-  // ないまま作り直しを許し続けると、上の取り違えが期限なく残る——回収に意味の
-  // ある期間だけ許して、あとは形どおりに突き合わせる。列がある以上、新しい
-  // ジョブがここに来ることはない。
-  if (
-    stored.createdAt.getTime() <=
-      now.getTime() - LEGACY_FINGERPRINT_WINDOW_MILLISECONDS
-  ) {
-    return false;
-  }
-  return stored.requestFingerprint === await legacyFor(stored.model);
-}
-
-// 版の列を足す前からあるジョブに、作り直した指紋との突き合わせを許す期間。
-// 結果が残っているあいだと同じ——それを過ぎれば回収するものが無い。
-const LEGACY_FINGERPRINT_WINDOW_MILLISECONDS =
-  AI_TEXT_RESULT_RETENTION_MILLISECONDS;
-
-// いま記録する指紋の作り方。モデルを名指ししたかどうかが、そのまま指紋に出る。
-export const AI_REQUEST_FINGERPRINT_VERSION = 2;
-
 export async function createReservedAiJob({
   userId,
   kind,
@@ -170,7 +118,6 @@ export async function createReservedAiJob({
   activeJobLimit,
   idempotencyKeyHash,
   requestFingerprint,
-  legacyRequestFingerprintFor,
   callbackNonceHash,
 }: {
   userId: string;
@@ -185,7 +132,6 @@ export async function createReservedAiJob({
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
-  legacyRequestFingerprintFor?: ((modelId: string) => Promise<string>) | undefined;
   callbackNonceHash?: string;
 }) {
   if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
@@ -202,14 +148,7 @@ export async function createReservedAiJob({
           prisma,
         });
         if (existing) {
-          if (
-            !await fingerprintMatches(
-              existing,
-              requestFingerprint,
-              legacyRequestFingerprintFor,
-              new Date(),
-            )
-          ) {
+          if (existing.requestFingerprint !== requestFingerprint) {
             return { outcome: "idempotencyConflict" as const };
           }
           return existing.deletedAt
@@ -247,9 +186,6 @@ export async function createReservedAiJob({
         model,
         idempotencyKeyHash,
         requestFingerprint,
-        ...(requestFingerprint
-          ? { requestFingerprintVersion: AI_REQUEST_FINGERPRINT_VERSION }
-          : {}),
         callbackNonceHash,
         prisma,
       });

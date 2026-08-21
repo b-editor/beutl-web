@@ -357,9 +357,6 @@ model AiJob {
   providerJobId              String?
   idempotencyKeyHash         String?
   requestFingerprint         String?
-  // 指紋の作り方の版。NULL は旧版が書いたジョブで、そちらだけが「記録された
-  // モデルで作り直した指紋」との突き合わせを許される。
-  requestFingerprintVersion  Int?
   callbackNonceHash          String?
   status                     String
   inputParams                Json?

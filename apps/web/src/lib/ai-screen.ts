@@ -47,6 +47,9 @@ const RECOVERABLE_AI_ERROR_CODES: ReadonlySet<string> = new Set([
   "aiRequestInProgress",
   // 支払い済みの結果を今は読み出せなかった。
   "aiResultUnavailable",
+  // その名前は別の依頼のもの。中身を元に戻せば、その名前で結果を取り戻せる
+  // ——ここで名前を捨てると、戻しても届かなくなる。
+  "aiRequestChanged",
 ]);
 
 export function keepsIdempotencyKey(errorCode: string): boolean {
@@ -152,4 +155,61 @@ export function requestSignature(
       return String(part);
     })
     .join("\u001f");
+}
+
+/**
+ * 送信ごとの名前の持ち方。
+ *
+ * 名前は 1 つでは足りない。A を回収している途中で中身を変えた B を送ると、名前は
+ * 2 つ同時に未決着になり得る——B の応答で A の名前まで捨てると、支払い済みの A に
+ * 戻れなくなる。決着した名前だけを手放し、残りは持ち続ける。
+ */
+export type AiRequestNames = {
+  // 送った依頼ごとの名前。まだ決着していないものだけが入っている。
+  held: Readonly<Record<string, string>>;
+  // 次に送るものに使う名前。作るのは送るときだけ——書き換えるたびに作っていては、
+  // 打鍵のたびに使われない名前が積み上がる。
+  next: string;
+  // 直前に送った依頼。応答が届いたとき、どの名前の話なのかがこれで分かる。
+  sent: string | null;
+};
+
+export function newAiRequestNames(mint: () => string): AiRequestNames {
+  return { held: {}, next: mint(), sent: null };
+}
+
+export function aiRequestNameOf(names: AiRequestNames, request: string): string {
+  return names.held[request] ?? names.next;
+}
+
+export function holdsAiRequestName(
+  names: AiRequestNames,
+  request: string,
+): boolean {
+  return request in names.held;
+}
+
+/** 送る直前に。この依頼にはこの名前、と決める。 */
+export function commitAiRequestName(
+  names: AiRequestNames,
+  request: string,
+  mint: () => string,
+): AiRequestNames {
+  if (request in names.held) return { ...names, sent: request };
+  return {
+    held: { ...names.held, [request]: names.next },
+    next: mint(),
+    sent: request,
+  };
+}
+
+/** 応答が届いた。決着したのなら、その名前ではもう何も頼めない。 */
+export function settleAiRequestName(
+  names: AiRequestNames,
+  keeps: boolean,
+): AiRequestNames {
+  if (keeps || names.sent === null || !(names.sent in names.held)) return names;
+  const held = { ...names.held };
+  delete held[names.sent];
+  return { ...names, held };
 }

@@ -10,13 +10,6 @@ const idempotencyKeySchema = z
 export type AiRequestIdentity = {
   idempotencyKeyHash: string;
   requestFingerprint: string;
-  // モデルを名指ししていない依頼を、以前は「そのとき解決された既定モデル入り」で
-  // 指紋化していた。入れ替え配備の最中は両方の形の job が並ぶので、古い形も同じ
-  // 依頼として認める。突き合わせる相手は、記録されている job のモデル——今の
-  // 既定ではない。既定が入れ替わったあとや、そのモデルが止められたあとでも、
-  // 支払い済みの job に届かなくなってはならない。新しく作る job は必ず上の形で
-  // 記録される。
-  legacyRequestFingerprintFor?: (modelId: string) => Promise<string>;
 };
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -73,25 +66,11 @@ export async function toAiRequestIdentity({
   const key = idempotencyKeySchema.safeParse(idempotencyKey);
   if (!key.success) return null;
 
-  const named = typeof input === "object" && input !== null &&
-    (input as Record<string, unknown>).model !== undefined;
   const [idempotencyKeyHash, requestFingerprint] = await Promise.all([
     sha256Hex(key.data),
     sha256Hex(canonicalJson({ operation, input })),
   ]);
-  return {
-    idempotencyKeyHash,
-    requestFingerprint,
-    ...(named ? {} : {
-      legacyRequestFingerprintFor: (modelId: string) =>
-        sha256Hex(
-          canonicalJson({
-            operation,
-            input: { ...(input as Record<string, unknown>), model: modelId },
-          }),
-        ),
-    }),
-  };
+  return { idempotencyKeyHash, requestFingerprint };
 }
 
 export async function getAiRequestIdentity({

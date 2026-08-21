@@ -29,7 +29,6 @@ export async function createAiJob({
   providerJobId,
   idempotencyKeyHash,
   requestFingerprint,
-  requestFingerprintVersion,
   callbackNonceHash,
   status,
   inputParams,
@@ -43,9 +42,6 @@ export async function createAiJob({
   providerJobId?: string;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
-  // どの作り方で取った指紋か。旧版が書いたジョブだけが NULL のままで、
-  // 記録されたモデルで作り直した指紋との突き合わせを許される。
-  requestFingerprintVersion?: number;
   callbackNonceHash?: string;
   status: string;
   inputParams?: object;
@@ -62,7 +58,6 @@ export async function createAiJob({
       providerJobId,
       idempotencyKeyHash,
       requestFingerprint,
-      requestFingerprintVersion,
       callbackNonceHash,
       status,
       inputParams: inputParams ?? undefined,

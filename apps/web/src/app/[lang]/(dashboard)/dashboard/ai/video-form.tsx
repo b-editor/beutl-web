@@ -41,6 +41,7 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
+  useAiRequestNames,
   defaultModelId,
   type AiAccess,
 } from "./shared";
@@ -190,13 +191,19 @@ export function VideoForm({
   const [videoExclusions, setVideoExclusions] = useState("");
 
   const models = access.models["video.generate"] ?? [];
+  const names = useAiRequestNames();
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
-  // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(
-    blocked,
-    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
-  );
+  // 行く道を閉じることになる。この画面は送るものをここでは見分けられない
+  // ——ファイルは入力欄の中にあり、描画のたびに読めるものではない——ので、
+  // 名前は一度に 1 つだけ持つ。
+  const keepsName =
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
+  useEffect(() => {
+    names.settle(keepsName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  const submitBlocked = blocksSubmit(blocked, keepsName);
   const options = optionsOf(capabilities, model);
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
@@ -223,8 +230,12 @@ export function VideoForm({
 
   const form = (
     <Card>
-      <form action={dispatch} className="flex flex-col gap-4 p-6">
-        <IdempotencyKeyField state={state} />
+      <form
+        action={dispatch}
+        onSubmit={() => names.commit("")}
+        className="flex flex-col gap-4 p-6"
+      >
+        <IdempotencyKeyField name={names.nameFor("")} />
         <PromptLibrary
           lang={lang}
           onApply={applyTemplate}

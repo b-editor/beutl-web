@@ -22,6 +22,24 @@ const PARTS_IN_FLIGHT = 3;
 // connection is the thing this is for.
 const ATTEMPTS_PER_PART = 3;
 
+// 取り消しは一度きりでは足りない。答えが返らなかっただけかもしれず、そのときは
+// この名前の枠が一日残る。何度も粘るものではない——掃除がいずれ拾う——ので、
+// もう一度だけ試す。
+async function cancelUpload(id: string): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`/api/internal/storage/uploads/${id}`, {
+        method: "DELETE",
+        headers: { ...INTERNAL_REQUEST_HEADERS },
+        keepalive: true,
+      });
+      if (response.ok) return;
+    } catch {
+      // 次で試す。
+    }
+  }
+}
+
 export async function uploadStorageFile(
   file: File,
   { onProgress }: { onProgress?: (sentBytes: number) => void } = {},
@@ -30,8 +48,9 @@ export async function uploadStorageFile(
   // back can be asked for again and comes back as the same upload. Without
   // that, the browser loses the id every later request names and the upload it
   // made holds a day's worth of quota nothing can reach.
+  const id = randomUuid();
   const startBody = JSON.stringify({
-    id: randomUuid(),
+    id,
     name: file.name,
     mimeType: file.type || "application/octet-stream",
     size: file.size,
@@ -43,6 +62,10 @@ export async function uploadStorageFile(
     try {
       started = await postStart(startBody);
     } catch {
+      // 二度とも答えが返らなかった。始まっていないとは限らない——この名前で
+      // 始まっているなら、宣言した大きさぶんの枠を一日抱えたまま誰も手が
+      // 届かなくなる。手放す前に、その名前で取り消しておく。
+      await cancelUpload(id);
       return { ok: false, errorCode: "uploadFailed" };
     }
   }
@@ -74,11 +97,7 @@ export async function uploadStorageFile(
   } catch (error) {
     // The parts already in the bucket are of no use without the rest, and they
     // would be paid for until something threw them away.
-    await fetch(`/api/internal/storage/uploads/${upload.id}`, {
-      method: "DELETE",
-      headers: { ...INTERNAL_REQUEST_HEADERS },
-      keepalive: true,
-    }).catch(() => undefined);
+    await cancelUpload(upload.id);
     return {
       ok: false,
       errorCode: error instanceof UploadPartError ? error.errorCode : "uploadFailed",

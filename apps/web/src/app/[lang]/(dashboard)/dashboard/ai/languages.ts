@@ -39,4 +39,3 @@ export function languageOptions(lang: string): LanguageOption[] {
     }))
     .sort((left, right) => left.name.localeCompare(right.name, lang));
 }
-

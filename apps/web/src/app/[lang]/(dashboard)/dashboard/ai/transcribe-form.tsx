@@ -52,6 +52,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  useAiRequestNames,
   downloadTextFile,
   defaultModelId,
   type AiAccess,
@@ -145,17 +146,23 @@ export function TranscribeForm({
     setDetectedLanguage(state.language ?? null);
   }, [state.segments, state.words, state.language]);
 
+  const names = useAiRequestNames();
   const blocked = blockedReason(
     access,
     ["audio.transcribe"],
     (access.models["audio.transcribe"] ?? []).length === 0,
   );
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
-  // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(
-    blocked,
-    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
-  );
+  // 行く道を閉じることになる。この画面は送るものをここでは見分けられない
+  // ——ファイルは入力欄の中にあり、描画のたびに読めるものではない——ので、
+  // 名前は一度に 1 つだけ持つ。
+  const keepsName =
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
+  useEffect(() => {
+    names.settle(keepsName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  const submitBlocked = blocksSubmit(blocked, keepsName);
   const models = access.models["audio.transcribe"] ?? [];
 
   // A video is converted here rather than uploaded: the endpoint refuses a file
@@ -307,8 +314,12 @@ export function TranscribeForm({
 
   const form = (
     <Card>
-      <form action={dispatch} className="flex flex-col gap-4 p-6">
-        <IdempotencyKeyField state={state} />
+      <form
+        action={dispatch}
+        onSubmit={() => names.commit("")}
+        className="flex flex-col gap-4 p-6"
+      >
+        <IdempotencyKeyField name={names.nameFor("")} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="transcribeFile">{t("dashboard:ai.audio")}</Label>
           <Input

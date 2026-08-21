@@ -849,65 +849,9 @@ describe("v3 AI endpoints contract", () => {
       ).toHaveLength(1);
     });
 
-    it("still recognises a job fingerprinted the way the previous release did", async () => {
-      // 入れ替え配備の最中は、モデル省略の依頼を「そのとき解決された既定モデル
-      // 入り」で指紋化した job と、そうでない job が並ぶ。同じ名前で問い合わせ
-      // 直したとき、前の形で作られていたというだけで別の依頼に見えてはいけない。
-      // 突き合わせる相手は、今の既定ではなく、その job が実際に走ったモデル
-      // ——ここでは既に取り下げられたモデル。今の既定から作った指紋と比べる
-      // やり方では、既定が入れ替わった時点で届かなくなる。
-      await activatePro();
-      const key = "made-by-the-previous-release";
-      const retiredDefault = "openai/the-previous-default";
-      const reservation = await createReservedAiJob({
-        userId: USER_ID,
-        kind: "image",
-        provider: "openrouter",
-        status: "running",
-        inputParams: { prompt: "test", aspectRatio: "1:1" },
-        usageUnits: 20,
-        model: retiredDefault,
-        ...(await getAiRequestIdentityForTest({
-          key,
-          operation: "image.generate",
-          input: {
-            prompt: "test",
-            aspectRatio: "1:1",
-            model: retiredDefault,
-          },
-        })),
-      });
-      expect(reservation.ok).toBe(true);
-      // 旧版が書いた job には版が入っていない。作り直した指紋と突き合わせて
-      // よいのは、その形の job だけ。
-      const [legacyJob] = [...state.aiJobs.values()];
-      state.aiJobs.set(legacyJob!.id, {
-        ...legacyJob!,
-        requestFingerprintVersion: null,
-      });
-
-      const response = await makeApp().request("/api/v3/ai/images", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(await authHeaders(key)),
-        },
-        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
-      });
-
-      // 走っている最中だと分かる＝同じ依頼として引き当てられた。別物と見なされた
-      // なら、ここで新しい job が作られて 200 が返る。
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({
-        error_code: "aiRequestInProgress",
-      });
-      expect(state.aiJobs.size).toBe(1);
-    });
-
     it("does not answer a request that names no model from one that named one", async () => {
-      // 作り直しを無条件に許すと、現行の形で「モデル A を名指しした」と記録
-      // された job が、モデルを名乗らない別の依頼に A の結果を返してしまう。
-      // 作り直してよいのは旧版が書いた job だけ。
+      // モデルを名指しした依頼と、名指ししない依頼は別の依頼。名前が同じでも、
+      // 一方の結果をもう一方に返してはいけない。
       await activatePro();
       const key = "named-a-model-on-purpose";
       const reservation = await createReservedAiJob({

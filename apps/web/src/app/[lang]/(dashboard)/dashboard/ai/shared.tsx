@@ -30,7 +30,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 export {
   canSubmitAiRequest,
@@ -38,13 +38,19 @@ export {
   blocksSubmit,
   IDEMPOTENCY_KEY_FIELD,
   keepsIdempotencyKey,
+  requestSignature,
   type AiAccess,
   type AiBalance,
   type AiBlockReason,
   type AiScreenModel,
 } from "@/lib/ai-screen";
 import {
+  aiRequestNameOf,
+  commitAiRequestName,
+  holdsAiRequestName,
   IDEMPOTENCY_KEY_FIELD,
+  newAiRequestNames,
+  settleAiRequestName,
   type AiBalance,
   type AiBlockReason,
   type AiScreenModel,
@@ -257,47 +263,34 @@ export function AiUsageCard({
 // attempt — but only then. A run that is still going, or one whose paid result
 // could not be read, is not settled: the name it was sent under is the way back
 // to what it already bought, and a new one would buy it again.
-export function IdempotencyKeyField({
-  state,
-  holds,
-}: {
-  state: unknown;
-  // その名前を、いま画面にある依頼にそのまま使ってよいか。省略すると、失敗の
-  // 種類だけで決める。中身が変わったのなら新しい依頼なので、新しい名前で送る
-  // ——同じ名前で別の依頼を送ると、サーバーは断る。
-  holds?: boolean;
-}) {
-  const [key, setKey] = useState("");
-  const [changedKey, setChangedKey] = useState("");
-  const keeps =
-    (state as { keepIdempotencyKey?: boolean } | null | undefined)
-      ?.keepIdempotencyKey === true;
+/**
+ * 送信ごとの名前を、依頼ごとに持っておく。どれを残しどれを手放すかは
+ * {@link commitAiRequestName} と {@link settleAiRequestName} が決める。
+ */
+export function useAiRequestNames(): {
+  nameFor: (request: string) => string;
+  holds: (request: string) => boolean;
+  commit: (request: string) => void;
+  settle: (keeps: boolean) => void;
+} {
+  const [names, setNames] = useState(() => newAiRequestNames(randomUuid));
 
-  // 名前が変わるのは応答が届いたときだけ。書き換えている最中に差し替えると、
-  // 手を止めて元に戻した利用者から、支払い済みの結果へ戻る道を奪うことになる。
-  useEffect(() => {
-    // 応答が届いたら、書き換えのために用意していた名前は用済み。次の書き換えは
-    // その次の名前で送る。
-    setChangedKey("");
-    if (keeps) return;
-    setKey(randomUuid());
-  }, [state, keeps]);
+  return {
+    nameFor: (request: string) => aiRequestNameOf(names, request),
+    holds: (request: string) => holdsAiRequestName(names, request),
+    commit: (request: string) =>
+      setNames((current) => commitAiRequestName(current, request, randomUuid)),
+    settle: (keeps: boolean) =>
+      setNames((current) => settleAiRequestName(current, keeps)),
+  };
+}
 
-  // 中身が変わっているあいだは、その依頼のための別の名前を用意しておく。戻せば
-  // 元の名前に戻り、そのまま送れば新しい依頼として送られる。
-  const changed = keeps && holds === false;
-  useEffect(() => {
-    if (!changed) return;
-    setChangedKey((current) => current || randomUuid());
-  }, [changed]);
-
-  return (
-    <input
-      type="hidden"
-      name={IDEMPOTENCY_KEY_FIELD}
-      value={changed ? changedKey : key}
-    />
-  );
+// The idempotency key travels as a form field. Screens that can tell one
+// request from another pass a signature of it, so a name is kept for as long as
+// the request it belongs to is unsettled; the rest pass nothing and hold one
+// name at a time, which is how they behaved before.
+export function IdempotencyKeyField({ name }: { name: string }) {
+  return <input type="hidden" name={IDEMPOTENCY_KEY_FIELD} value={name} />;
 }
 
 // Input on the left, what the run produced on the right. Splitting them fills

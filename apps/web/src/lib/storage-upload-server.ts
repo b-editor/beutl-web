@@ -458,8 +458,15 @@ async function finalizeUpload(
     }
 
     // 消せたなら片付けるものはもう無い。行を残しても、宣言された大きさで枠を
-    // 押さえ続けるだけになる。
-    await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+    // 押さえ続けるだけになる。行を消せなかったときは、掃除が同じところに来て
+    // 片付ける——取ってある行なので、控えが書かれることはもう無い。
+    await deleteStorageUpload({ id: upload.id }).catch((cleanupError: unknown) => {
+      console.error(
+        "Failed to drop the row of an upload whose object was cleared",
+        upload.id,
+        cleanupError,
+      );
+    });
     throw error;
   }
 
