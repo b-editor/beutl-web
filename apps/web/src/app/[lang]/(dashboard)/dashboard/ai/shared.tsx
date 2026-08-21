@@ -264,20 +264,40 @@ export function IdempotencyKeyField({
   state: unknown;
   // その名前を、いま画面にある依頼にそのまま使ってよいか。省略すると、失敗の
   // 種類だけで決める。中身が変わったのなら新しい依頼なので、新しい名前で送る
-  // ——同じ名前で別の依頼を送ると、サーバーは断り、そこで名前が失われる。
+  // ——同じ名前で別の依頼を送ると、サーバーは断る。
   holds?: boolean;
 }) {
   const [key, setKey] = useState("");
-  const keep = holds ??
+  const [changedKey, setChangedKey] = useState("");
+  const keeps =
     (state as { keepIdempotencyKey?: boolean } | null | undefined)
       ?.keepIdempotencyKey === true;
 
+  // 名前が変わるのは応答が届いたときだけ。書き換えている最中に差し替えると、
+  // 手を止めて元に戻した利用者から、支払い済みの結果へ戻る道を奪うことになる。
   useEffect(() => {
-    if (keep) return;
+    // 応答が届いたら、書き換えのために用意していた名前は用済み。次の書き換えは
+    // その次の名前で送る。
+    setChangedKey("");
+    if (keeps) return;
     setKey(randomUuid());
-  }, [state, keep]);
+  }, [state, keeps]);
 
-  return <input type="hidden" name={IDEMPOTENCY_KEY_FIELD} value={key} />;
+  // 中身が変わっているあいだは、その依頼のための別の名前を用意しておく。戻せば
+  // 元の名前に戻り、そのまま送れば新しい依頼として送られる。
+  const changed = keeps && holds === false;
+  useEffect(() => {
+    if (!changed) return;
+    setChangedKey((current) => current || randomUuid());
+  }, [changed]);
+
+  return (
+    <input
+      type="hidden"
+      name={IDEMPOTENCY_KEY_FIELD}
+      value={changed ? changedKey : key}
+    />
+  );
 }
 
 // Input on the left, what the run produced on the right. Splitting them fills

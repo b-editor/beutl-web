@@ -272,7 +272,7 @@ const app = new Hono()
       });
     }
     if (replay?.outcome === "idempotencyConflict") {
-      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+      return c.json(await apiErrorResponse("aiRequestChanged"), { status: 409 });
     }
     if (replay?.outcome === "deleted") {
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
@@ -528,7 +528,7 @@ const app = new Hono()
       });
     }
     if (replay?.outcome === "idempotencyConflict") {
-      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 409 });
+      return c.json(await apiErrorResponse("aiRequestChanged"), { status: 409 });
     }
     if (replay?.outcome === "deleted") {
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });

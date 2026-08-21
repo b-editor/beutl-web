@@ -15,6 +15,7 @@ import {
 } from "@beutl/db";
 import { isActiveProSubscription } from "./entitlements";
 import { loadAiSettings } from "./settings";
+import { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "./storage";
 
 function toUsagePeriod(subscription: {
   currentPeriodStart: Date | null;
@@ -54,6 +55,7 @@ export async function findReplayableAiJob({
       existing,
       requestFingerprint,
       legacyRequestFingerprintFor,
+      new Date(),
     )
   ) {
     return { outcome: "idempotencyConflict" };
@@ -76,11 +78,16 @@ export type AiIdempotencyKeyState =
   | "settled"
   | "deleted";
 
-// 済んだ job を「まだ取りに来る価値がある」と見なす期間。契約が切れたあとでも
-// 結果は取り戻せるべきだが、いつまでもではない——済んだ名前がひとつあれば、
-// それを言い続けるだけで大きな本文を何度でも読ませられることになる。走っている
-// job には期限を置かない。取りに来る先は結果であって、期限ではないので。
-const COLLECTABLE_AFTER_SUCCESS_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+// 済んだ job を「まだ取りに来る価値がある」と見なす期間。結果そのものが残って
+// いるあいだと同じにしてある——結果が消えたあとの名前で本文を読ませる理由は
+// 無いし、結果が残っているのに読ませない理由も無い。ここを短くすると、本文を
+// 送らない操作だけが期限なく回収できて、送る操作だけが先に閉じることになる。
+//
+// 期限を置くのは、済んだ名前がひとつあれば、それを言い続けるだけで大きな本文を
+// 何度でも読ませられるから。走っている job には置かない——取りに来る先は結果で
+// あって、期限ではない。
+const COLLECTABLE_AFTER_SUCCESS_MILLISECONDS =
+  AI_TEXT_RESULT_RETENTION_MILLISECONDS;
 
 export async function aiJobStateForIdempotencyKey({
   userId,
@@ -119,9 +126,11 @@ async function fingerprintMatches(
     requestFingerprint: string | null;
     requestFingerprintVersion: number | null;
     model: string | null;
+    createdAt: Date;
   },
   current: string,
   legacyFor: ((modelId: string) => Promise<string>) | undefined,
+  now: Date,
 ): Promise<boolean> {
   if (stored.requestFingerprint === current) return true;
   // 作り直しを許すのは旧版が書いたジョブだけ。現行の形で「モデル A を名指し
@@ -129,8 +138,23 @@ async function fingerprintMatches(
   // 一致してしまう——別の依頼に A の結果を返すことになる。
   if (stored.requestFingerprintVersion !== null) return false;
   if (!legacyFor || !stored.model) return false;
+  // 版の列を足す前からあるジョブは、どちらの形で書かれたか分からない。分から
+  // ないまま作り直しを許し続けると、上の取り違えが期限なく残る——回収に意味の
+  // ある期間だけ許して、あとは形どおりに突き合わせる。列がある以上、新しい
+  // ジョブがここに来ることはない。
+  if (
+    stored.createdAt.getTime() <=
+      now.getTime() - LEGACY_FINGERPRINT_WINDOW_MILLISECONDS
+  ) {
+    return false;
+  }
   return stored.requestFingerprint === await legacyFor(stored.model);
 }
+
+// 版の列を足す前からあるジョブに、作り直した指紋との突き合わせを許す期間。
+// 結果が残っているあいだと同じ——それを過ぎれば回収するものが無い。
+const LEGACY_FINGERPRINT_WINDOW_MILLISECONDS =
+  AI_TEXT_RESULT_RETENTION_MILLISECONDS;
 
 // いま記録する指紋の作り方。モデルを名指ししたかどうかが、そのまま指紋に出る。
 export const AI_REQUEST_FINGERPRINT_VERSION = 2;
@@ -183,6 +207,7 @@ export async function createReservedAiJob({
               existing,
               requestFingerprint,
               legacyRequestFingerprintFor,
+              new Date(),
             )
           ) {
             return { outcome: "idempotencyConflict" as const };

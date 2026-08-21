@@ -940,8 +940,10 @@ describe("v3 AI endpoints contract", () => {
       });
 
       expect(response.status).toBe(409);
+      // 「本文が壊れている」ではなく「その名前は別の依頼のもの」。呼び出し側は
+      // 中身を戻せば取り戻せるし、戻さないなら新しい名前で出し直せばよい。
       expect(await response.json()).toMatchObject({
-        error_code: "invalidRequestBody",
+        error_code: "aiRequestChanged",
       });
     });
 
@@ -1666,8 +1668,8 @@ describe("v3 AI endpoints contract", () => {
 
     it("stops reading the body for a job that finished long ago", async () => {
       // 済んだ名前がひとつあれば、それを言い続けるだけで大きな本文を何度でも
-      // 読ませられる——契約が切れたあとでも。回収に必要な期間だけ開けておき、
-      // それを過ぎたら本文を読む前に断る。結果そのものは履歴から取れる。
+      // 読ませられる——契約が切れたあとでも。結果が残っているあいだは開けて
+      // おき、それを過ぎたら本文を読む前に断る。
       await activatePro();
       const key = "collected-long-ago";
       const reservation = await createReservedAiJob({
@@ -1688,7 +1690,7 @@ describe("v3 AI endpoints contract", () => {
       state.aiJobs.set(job!.id, {
         ...job!,
         status: "succeeded",
-        updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+        updatedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000),
       });
       await deactivatePro();
 

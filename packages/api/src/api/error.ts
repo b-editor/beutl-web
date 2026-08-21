@@ -65,6 +65,11 @@ export const errorCodes = [
   "aiModelUnavailable",
   "aiModelDoesNotSupportRequest",
   "aiResultUnavailable",
+  // 同じ名前で、前とは違う依頼が届いた。「本文が壊れている」とは別のことで、
+  // 呼び出し側の出方も違う——中身を戻せばその名前で結果を取り戻せるし、戻さない
+  // なら新しい名前で出し直せばよい。ひとまとめに invalidRequestBody で返すと、
+  // どちらなのか分からないまま名前を捨てることになる。
+  "aiRequestChanged",
 ] as const;
 
 export type ApiErrorCode = (typeof errorCodes)[number];
