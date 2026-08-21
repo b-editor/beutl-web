@@ -5,6 +5,7 @@ import {
   claimGitAccountDeletion,
   countGitAccountDeletions,
   countGitAccountDeletionsNeedingReview,
+  countPurgedGitAccountDeletionsToCheck,
   createAuditLog,
   deleteGitAccountDeletion,
   listPurgedGitAccountDeletions,
@@ -233,7 +234,9 @@ async function sendToReview(
   reason: string,
 ): Promise<boolean> {
   // 動かせなかったなら引き取られている。起きていないことを監査に書かない。
-  if (!(await markGitAccountDeletionNeedsReview({ userId, intentId, reason }))) {
+  if (
+    !(await markGitAccountDeletionNeedsReview({ userId, intentId, reason }))
+  ) {
     return false;
   }
   await audit(
@@ -416,57 +419,84 @@ export async function finishGitAccountDeletion(
     }
   }
 
-  // 控えた名前を直接見る。合成メールで探し直すと、Forgejo のホスト名が変わった
-  // 場合などに「見つからない = 片付いた」と誤って結論してしまい、実在するユーザーと
-  // 生きたトークンを残したまま outbox を閉じる。
+  const expectedEmail = noreplyEmailFor(userId);
   let username = pending.forgejoUsername;
-  if (!username) {
-    const lookup = await findUnmappedTarget(userId);
-    if ("failed" in lookup) {
-      // 探せなかっただけ。次の定期実行でやり直す。
-      await recordGitAccountDeletionAttempt({
-        userId,
-        intentId: epoch,
-        error:
-          lookup.failed instanceof Error
-            ? lookup.failed.message
-            : String(lookup.failed),
-      }).catch(() => undefined);
-      return false;
-    }
-    if (!lookup.found) {
-      // 控えにも無く、Forgejo にも居ない。Git を一度も使わなかった利用者。
-      // 片付けるものが無いので完了。消せなければ引き取られているので、
-      // 片付いたことにはしない。
-      return await deleteGitAccountDeletion({ userId, intentId: epoch });
-    }
-    username = lookup.found;
-  }
 
   try {
-    const actual = await forgejoRequestOrNull<ForgejoUser>(
-      `/users/${encodeURIComponent(username)}`,
-    );
+    // 控えた名前をまず見る。合成メールだけで探すと、Forgejo のホスト名が変わった
+    // 場合などに「見つからない = 片付いた」と誤って結論してしまう。
+    let actual = username
+      ? await forgejoRequestOrNull<ForgejoUser>(
+          `/users/${encodeURIComponent(username)}`,
+        )
+      : null;
+
+    // 名前で見つからない、あるいは見つかったのが別人。どちらでも合成メールで
+    // 引き直す。**名前だけで諦めない。** 改名された本人が、生きたトークンごと
+    // 残っていることがある。合成メールは userId から決まるので名前に依らない。
+    const wrongPerson =
+      actual !== null &&
+      ((pending.forgejoUserId !== null &&
+        pending.forgejoUserId !== actual.id) ||
+        actual.email !== expectedEmail);
+    if (!actual || wrongPerson) {
+      const byEmail = await findByNoreplyEmail(userId);
+      if (byEmail) {
+        username = byEmail.username;
+        actual = await forgejoRequestOrNull<ForgejoUser>(
+          `/users/${encodeURIComponent(username)}`,
+        );
+        // 引き当てた相手を控える。控えないと、この後の墓標が誰を指すのか
+        // 分からなくなり、復活の照合から外れる。
+        if (actual) {
+          await setGitAccountDeletionTarget({
+            userId,
+            intentId: epoch,
+            forgejoUsername: actual.login,
+            forgejoUserId: actual.id,
+          });
+        }
+      } else if (wrongPerson) {
+        // 名前は別人のもので、本人はメールでも見つからない。**消しにいかない**。
+        // かといって消せた証拠も無いので、完了にもしない。
+        await sendToReview(
+          userId,
+          epoch,
+          `Forgejo user ${pending.forgejoUsername} is now a different account ` +
+            `and no account matches <${expectedEmail}>`,
+        );
+        return false;
+      } else {
+        actual = null;
+      }
+    }
 
     if (!actual) {
-      // 404 だけが完了。元のユーザーはもう存在しない。
+      if (!pending.forgejoUsername) {
+        // 控えにも無く、Forgejo にも居ない。Git を一度も使わなかった利用者。
+        // 片付けるものが無いので完了。墓標を残す相手もいない。
+        return await deleteGitAccountDeletion({ userId, intentId: epoch });
+      }
+      // 控えた相手は居ない。名前でもメールでも見つからないので、消えている。
       return await markGitAccountDeletionPurged({ userId, intentId: epoch });
     }
 
-    const expectedEmail = noreplyEmailFor(userId);
-    const idMatches =
-      pending.forgejoUserId === null || pending.forgejoUserId === actual.id;
-    if (!idMatches || actual.email !== expectedEmail) {
-      // 名前は残っているが別人のもの。**決して消しにいかない**。かといって
-      // 元のユーザーを消せた証拠も無いので、完了にもしない。
+    // ここまで来たら、id とメールが本人のものであることを確かめ直す。
+    if (
+      (pending.forgejoUserId !== null &&
+        pending.forgejoUserId !== actual.id &&
+        actual.email !== expectedEmail) ||
+      actual.email !== expectedEmail
+    ) {
       await sendToReview(
         userId,
         epoch,
-        `Forgejo user ${username} is now id ${actual.id} <${actual.email}>, ` +
-          `expected id ${pending.forgejoUserId} <${expectedEmail}>`,
+        `Forgejo user ${username} is id ${actual.id} <${actual.email}>, ` +
+          `expected <${expectedEmail}>`,
       );
       return false;
     }
+    username = actual.login;
 
     // 掃き直す。意思表示の前に始まっていた発行が着地していることがある。
     await revokeAllTokens(username, () =>
@@ -593,112 +623,168 @@ const TOMBSTONE_RECHECK_MS = 6 * 60 * 60 * 1000;
  */
 export async function reconcileGitAccountDeletionTombstones({
   limit = 20,
-}: { limit?: number } = {}): Promise<{ repurged: number; review: number }> {
-  const tombstones = await listPurgedGitAccountDeletions({
-    checkedBefore: new Date(Date.now() - TOMBSTONE_RECHECK_MS),
-    limit,
-  });
+  /** 見るものが無くなるまで繰り返す。復元の直後に一巡させるため。 */
+  drain = false,
+}: { limit?: number; drain?: boolean } = {}): Promise<{
+  checked: number;
+  repurged: number;
+  review: number;
+  failed: number;
+  remaining: number;
+}> {
+  const checkedBefore = new Date(Date.now() - TOMBSTONE_RECHECK_MS);
+  let checked = 0;
   let repurged = 0;
   let review = 0;
+  let failed = 0;
 
-  for (const tombstone of tombstones) {
-    let username = tombstone.forgejoUsername;
-    if (!username) continue;
+  // 1 周ぶんを処理する。drain なら、対象が無くなるまで繰り返す。
+  // 上限は暴走よけ。1 周で 1 件も進まなければ抜ける。
+  for (let round = 1; round <= (drain ? 200 : 1); round++) {
+    const tombstones = await listPurgedGitAccountDeletions({
+      checkedBefore,
+      limit,
+    });
+    if (tombstones.length === 0) break;
+    let progressed = 0;
 
-    // 掴んでから進める。照合の途中で別の実行が同じ相手を消しにいかないように。
-    const epoch = crypto.randomUUID();
-    if (
-      !(await claimGitAccountDeletion({
-        userId: tombstone.userId,
-        intentId: epoch,
-        phase: GitAccountDeletionPhase.PURGED,
-        leaseUntil: leaseDeadline(),
-      }))
-    ) {
-      continue;
-    }
+    for (const tombstone of tombstones) {
+      let username = tombstone.forgejoUsername;
+      if (!username) continue;
 
-    try {
-      let actual = await forgejoRequestOrNull<ForgejoUser>(
-        `/users/${encodeURIComponent(username)}`,
-      );
-      if (!actual) {
-        // 控えた名前では見つからない。ただし復元先で名前が違うことがあるので、
-        // 合成メールでも引く。ここを飛ばすと、同じ人が別名で生き返っていても
-        // 「消えたまま」と結論してしまう。
-        const byEmail = await findByNoreplyEmail(tombstone.userId);
-        if (!byEmail) {
-          await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
-          continue;
-        }
-        username = byEmail.username;
-        actual = await forgejoRequestOrNull<ForgejoUser>(
+      // 掴んでから進める。照合の途中で別の実行が同じ相手を消しにいかないように。
+      const epoch = crypto.randomUUID();
+      if (
+        !(await claimGitAccountDeletion({
+          userId: tombstone.userId,
+          intentId: epoch,
+          phase: GitAccountDeletionPhase.PURGED,
+          leaseUntil: leaseDeadline(),
+        }))
+      ) {
+        continue;
+      }
+
+      try {
+        let actual = await forgejoRequestOrNull<ForgejoUser>(
           `/users/${encodeURIComponent(username)}`,
         );
         if (!actual) {
-          await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+          // 控えた名前では見つからない。ただし復元先で名前が違うことがあるので、
+          // 合成メールでも引く。ここを飛ばすと、同じ人が別名で生き返っていても
+          // 「消えたまま」と結論してしまう。
+          const byEmail = await findByNoreplyEmail(tombstone.userId);
+          if (!byEmail) {
+            await touchGitAccountDeletion({
+              userId: tombstone.userId,
+              intentId: epoch,
+            });
+            checked += 1;
+            progressed += 1;
+            continue;
+          }
+          username = byEmail.username;
+          actual = await forgejoRequestOrNull<ForgejoUser>(
+            `/users/${encodeURIComponent(username)}`,
+          );
+          if (!actual) {
+            await touchGitAccountDeletion({
+              userId: tombstone.userId,
+              intentId: epoch,
+            });
+            checked += 1;
+            progressed += 1;
+            continue;
+          }
+        }
+
+        // Beutl 側の利用者が戻っているなら、復元されたのは beutl-web の方。
+        // その人は生きているので消してはいけない。墓標の方が古い。
+        if (await existsUserById({ id: tombstone.userId })) {
+          if (
+            await sendToReview(
+              tombstone.userId,
+              epoch,
+              `the Beutl user exists again while ${username} was recorded as purged; ` +
+                "beutl-web was probably restored to a point before the deletion",
+            )
+          ) {
+            review += 1;
+          }
+          checked += 1;
+          progressed += 1;
           continue;
         }
-      }
 
-      // Beutl 側の利用者が戻っているなら、復元されたのは beutl-web の方。
-      // その人は生きているので消してはいけない。墓標の方が古い。
-      if (await existsUserById({ id: tombstone.userId })) {
-        if (
-          await sendToReview(
-            tombstone.userId,
-            epoch,
-            `the Beutl user exists again while ${username} was recorded as purged; ` +
-              "beutl-web was probably restored to a point before the deletion",
-          )
-        ) {
-          review += 1;
+        // 名前が別人に渡っていることがある。控えた id と合成メールの両方を見る。
+        const expectedEmail = noreplyEmailFor(tombstone.userId);
+        const idMatches =
+          tombstone.forgejoUserId === null ||
+          tombstone.forgejoUserId === actual.id;
+        if (!idMatches || actual.email !== expectedEmail) {
+          // 別人。消しにいかない。墓標としては目的を果たしている。
+          await touchGitAccountDeletion({
+            userId: tombstone.userId,
+            intentId: epoch,
+          });
+          checked += 1;
+          progressed += 1;
+          continue;
         }
-        continue;
-      }
 
-      // 名前が別人に渡っていることがある。控えた id と合成メールの両方を見る。
-      const expectedEmail = noreplyEmailFor(tombstone.userId);
-      const idMatches =
-        tombstone.forgejoUserId === null ||
-        tombstone.forgejoUserId === actual.id;
-      if (!idMatches || actual.email !== expectedEmail) {
-        // 別人。消しにいかない。墓標としては目的を果たしている。
-        await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
-        continue;
+        // 復活している。端末のトークンも一緒に戻っているので、消し直す。
+        await revokeAllTokens(username, () =>
+          renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED),
+        );
+        await renewLease(
+          tombstone.userId,
+          epoch,
+          GitAccountDeletionPhase.PURGED,
+        );
+        await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
+          method: "DELETE",
+          searchParams: { purge: true },
+          responseType: "none",
+        });
+        await markGitAccountDeletionPurged({
+          userId: tombstone.userId,
+          intentId: epoch,
+        });
+        await audit(
+          auditLogActions.git.accountResurrected,
+          `userId: ${tombstone.userId}; Forgejo user ${username} (id ${actual.id}) ` +
+            "came back after being purged and was removed again",
+        );
+        repurged += 1;
+        checked += 1;
+        progressed += 1;
+      } catch (error) {
+        failed += 1;
+        // 見終わっていないので lastAttemptAt は進めない (進めるとやり残しが
+        // 見終わったように見える)。試行回数と理由だけ残す。
+        await recordGitAccountDeletionAttempt({
+          userId: tombstone.userId,
+          intentId: epoch,
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+        console.error(
+          `failed to reconcile the purge tombstone of ${tombstone.userId}`,
+          error,
+        );
       }
-
-      // 復活している。端末のトークンも一緒に戻っているので、消し直す。
-      await revokeAllTokens(username, () =>
-        renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED),
-      );
-      await renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED);
-      await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
-        method: "DELETE",
-        searchParams: { purge: true },
-        responseType: "none",
-      });
-      await markGitAccountDeletionPurged({ userId: tombstone.userId, intentId: epoch });
-      await audit(
-        auditLogActions.git.accountResurrected,
-        `userId: ${tombstone.userId}; Forgejo user ${username} (id ${actual.id}) ` +
-          "came back after being purged and was removed again",
-      );
-      repurged += 1;
-    } catch (error) {
-      await recordGitAccountDeletionAttempt({
-        userId: tombstone.userId,
-        intentId: epoch,
-        error: error instanceof Error ? error.message : String(error),
-      }).catch(() => undefined);
-      console.error(
-        `failed to reconcile the purge tombstone of ${tombstone.userId}`,
-        error,
-      );
     }
+
+    // 1 件も進まなかった (全部失敗か、全部他の実行が握っている)。回し続けない。
+    if (progressed === 0) break;
   }
 
-  return { repurged, review };
+  return {
+    checked,
+    repurged,
+    review,
+    failed,
+    remaining: await countPurgedGitAccountDeletionsToCheck({ checkedBefore }),
+  };
 }
 
 /**

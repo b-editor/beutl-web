@@ -231,6 +231,9 @@ async function repairTemplates(
   repository: ForgejoRepository,
 ): Promise<void> {
   const name = repository.name;
+  // **外す前に控える。** 読み取り専用を外した直後に Worker ごと消えると、例外は
+  // 捕まらず、書き込み可能で非 canonical なリポジトリが記録も無いまま残る。
+  await queueRepair(sudo, repository, "repair in progress");
   try {
     // archived のままだと contents API は 423 を返す。直すには先に外す。
     if (repository.archived) await setRepositoryArchived(sudo, name, false);
@@ -247,56 +250,6 @@ async function repairTemplates(
       error instanceof Error ? error.message : String(error),
     );
     throw error;
-  }
-}
-
-/**
- * テンプレートのコミットに失敗した後始末。
- *
- * **削除はしない。** 外部で作られたリポジトリを消す判断は、こちらからは安全に
- * 下せない。作成の 201 と「作成直後の状態」を原子的に得る手段が無いので、控えた
- * SHA は既に誰かの push 後のものかもしれず、確かめてから DELETE するまでの間にも
- * 同じ隙間がある。空に見えるだけの誰かのリポジトリを消す危険を、テンプレートを
- * 入れ直す手間と引き換えにはできない。
- *
- * 代わりに足りないものを入れ直す。それも駄目なら読み取り専用にする。
- * .gitattributes の無いリポジトリを push できる状態で残すと、数 GiB の動画が
- * LFS を通らず普通の git オブジェクトとして入り、後から剥がせなくなる。
- * archived なら clone はできるので、既に入っているものは取り出せる。
- */
-async function repairAfterTemplateFailure(
-  sudo: string,
-  repository: ForgejoRepository,
-): Promise<void> {
-  const name = repository.name;
-  let current: ForgejoRepository | null;
-  try {
-    current = await getRepository(sudo, sudo, name);
-  } catch (error) {
-    // 状態を読めなかった。ここで名前だけを見て読み取り専用にすると、改名で
-    // 空いた名前を別のリポジトリが取っていた場合にそちらを止めてしまう。
-    // id で控えて、次の定期実行が id で引き直してから決める。
-    console.error(
-      `${sudo}/${name} was created without .gitattributes and its state could ` +
-        "not be read; queued for repair",
-      error,
-    );
-    await queueRepair(sudo, repository, "could not read the repository state");
-    return;
-  }
-
-  // 自分が作ったものでなければ触らない。
-  if (!current || current.id !== repository.id) return;
-
-  try {
-    await repairTemplates(sudo, current);
-  } catch (error) {
-    // repairTemplates が読み取り専用にしてある。ここでは記録だけ。
-    console.error(
-      `${sudo}/${name} was created without .gitattributes and could not be ` +
-        "repaired; it is locked so media cannot be pushed without LFS",
-      error,
-    );
   }
 }
 
@@ -347,38 +300,6 @@ function fromBase64(encoded: string): string {
   const binary = atob(encoded.replace(/\s+/g, ""));
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
-}
-
-/**
- * 作成 API の成否が分からないときの後始末。
- *
- * 502 や 504 は「作られていない」とも「作られたが応答を落とした」とも取れる。
- * 同じ利用者が二重に押した場合や、再送が重なった場合も同じ見え方になる。
- * 削除で決着させると、他方が正しく作ったリポジトリを消してしまう。
- *
- * 代わりに、実在していてテンプレートが入っていなければ入れる。作ったのが自分でも
- * 他方でも、目的の状態 (.gitattributes のあるリポジトリ) に寄せられる。
- *
- * @returns 辻褄が合わせられたらそのリポジトリ、判断できなければ null。
- */
-async function reconcileAfterAmbiguousCreate(
-  sudo: string,
-  name: string,
-): Promise<ForgejoRepository | null> {
-  try {
-    const existing = await getRepository(sudo, sudo, name);
-    if (!existing) return null;
-
-    await repairTemplates(sudo, existing);
-    return existing;
-  } catch (error) {
-    console.error(
-      `could not reconcile ${sudo}/${name} after an ambiguous create; if it ` +
-        "exists without .gitattributes, media pushed to it will not use LFS",
-      error,
-    );
-    return null;
-  }
 }
 
 /**
@@ -456,6 +377,51 @@ export async function retryGitRepositoryRepairs({
  * リポジトリを作り、Beutl 用の .gitattributes / .gitignore を最初のコミットに入れる。
  * .gitattributes が無いと素材が LFS に載らないので、作成と同時に置くのが要点。
  */
+/** 管理者自身のログイン名。作成中のリポジトリを預かる所有者。 */
+let adminUsername: string | null = null;
+
+async function getAdminUsername(): Promise<string> {
+  if (adminUsername) return adminUsername;
+  const me = await forgejoRequest<{ login: string }>("/user");
+  adminUsername = me.login;
+  return me.login;
+}
+
+/**
+ * 預かったままのリポジトリを畳む。
+ *
+ * 直前に自分の名前空間へ作ったもので、利用者はまだ見ることも触ることもできない。
+ * ここで消すのは、他人のリポジトリを消す危険とは別の話。
+ */
+async function discardHolding(
+  admin: string,
+  repository: ForgejoRepository,
+): Promise<void> {
+  await forgejoRequest(
+    `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(repository.name)}`,
+    { method: "DELETE", responseType: "none" },
+  ).catch((error) => {
+    console.error(
+      `could not discard the holding repository ${admin}/${repository.name}`,
+      error,
+    );
+  });
+  await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+    () => undefined,
+  );
+}
+
+/**
+ * リポジトリを作り、Beutl 用の .gitattributes / .gitignore を最初のコミットに入れる。
+ *
+ * **利用者の名前空間には作らない。** 管理者の名前空間で作り、既定値を入れ切って
+ * から譲渡する。利用者は譲渡の瞬間まで見ることも触ることもできないので、
+ * .gitattributes が入る前に push される隙間が無い。
+ *
+ * 隙間を残すと、そこへ入った数 GiB の動画は普通の git オブジェクトとして履歴に
+ * 残る。後から .gitattributes を足しても、既に入った履歴は LFS に移らない。
+ * 作成後に読み取り専用へ倒す仕掛けも、既に入ってしまったものは戻せない。
+ */
 export async function createRepository(
   sudo: string,
   {
@@ -480,18 +446,22 @@ export async function createRepository(
       );
     }
 
-    // 揃っていないなら、前回の作成が途中で終わったもの。ここで 409 にすると
+    // 揃っていないなら、以前の作成が途中で終わったもの。ここで 409 にすると
     // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
     // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
     await repairTemplates(sudo, conflicting);
     return conflicting;
   }
 
-  let repository: ForgejoRepository;
+  const admin = await getAdminUsername();
+  let holding: ForgejoRepository;
+  // 自分で作ったと言い切れるかどうか。曖昧な応答から拾った場合は畳まない。
+  let owned = true;
+
   try {
-    repository = await forgejoRequest<ForgejoRepository>("/user/repos", {
+    // Sudo を付けない = 管理者自身の名前空間に作る。
+    holding = await forgejoRequest<ForgejoRepository>("/user/repos", {
       method: "POST",
-      sudo,
       body: {
         name,
         description,
@@ -502,41 +472,52 @@ export async function createRepository(
       },
     });
   } catch (error) {
-    // 名前の衝突はそのまま返す。作られていないので畳むものもない。
     if (error instanceof ForgejoError && error.isConflict) {
-      throw error;
+      // 管理者の名前空間で衝突した = 同じ名前の作成が今まさに走っている。
+      // 利用者の名前空間は上で空だと確かめてあるので、待って直せばよい。
+      throw new ForgejoError(
+        409,
+        "POST",
+        "/user/repos",
+        `a repository named ${name} is being created; try again`,
+      );
     }
-    // それ以外 (502/504 など) は、作られたのか作られていないのかが分からない。
-    // ここで「在るから消す」をやると、同時に走った別のリクエストが正しく作った
-    // リポジトリを巻き添えにする。消さずに、足りないものを足して辻褄を合わせる。
-    const reconciled = await reconcileAfterAmbiguousCreate(sudo, name);
-    if (reconciled) return reconciled;
-    throw error;
+    // 502/504 など。作られたのか作られていないのかが分からない。管理者の
+    // 名前空間を見て、在れば引き継ぐ。無ければそのまま投げる。
+    const existing = await getRepository(admin, admin, name).catch(() => null);
+    if (!existing) throw error;
+    holding = existing;
+    owned = false;
   }
 
-  // **テンプレートを入れる前に控える。** ここから下のどこで落ちても — 例外では
-  // なく Worker ごと消える場合を含めて — .gitattributes の無いリポジトリが
-  // push を受けられる状態で残る。控えがあれば定期実行が拾って直すか止める。
-  // 201 が返ってからこの書き込みまでの隙間だけは埋められない。
-  await queueRepair(sudo, repository, "created; defaults not written yet");
+  // 落ちても追えるように控える。この時点では利用者は触れないので push はされない
+  // が、預かったまま残るのを見えなくしない。
+  await queueRepair(admin, holding, "held for setup; not transferred yet");
 
   try {
-    await commitTemplates(sudo, name, repository.default_branch);
-    // 201 の後、こちらが書く前に利用者が別の .gitattributes を push している
-    // ことがある。その場合 commitTemplates は「ある」と見て何もしない。
-    await assertTemplatesAreCanonical(sudo, name);
-    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-      () => undefined,
-    );
+    await commitTemplates(admin, name, holding.default_branch);
+    await assertTemplatesAreCanonical(admin, name);
   } catch (error) {
-    // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
-    // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を
-    // なかったことにして、ユーザーにやり直させる方がまだ良い。
-    await repairAfterTemplateFailure(sudo, repository);
+    // 利用者はまだ触れない。自分で作ったものなら畳んでやり直させる方が良い。
+    if (owned) await discardHolding(admin, holding);
     throw error;
   }
 
-  return repository;
+  try {
+    // ここで初めて利用者のものになる。既定値は入り終わっている。
+    // id は変わらない (実測)。
+    const transferred = await forgejoRequest<ForgejoRepository>(
+      `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(name)}/transfer`,
+      { method: "POST", body: { new_owner: sudo } },
+    );
+    await deleteGitRepositoryRepair({ forgejoRepoId: holding.id }).catch(
+      () => undefined,
+    );
+    return transferred;
+  } catch (error) {
+    if (owned) await discardHolding(admin, holding);
+    throw error;
+  }
 }
 
 export async function renameRepository(

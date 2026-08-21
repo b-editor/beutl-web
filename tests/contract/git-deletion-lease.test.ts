@@ -183,6 +183,9 @@ vi.mock("@beutl/db", async (importOriginal) => {
       actual.countGitAccountDeletionsNeedingReview,
     ),
     listPurgedGitAccountDeletions: withFake(actual.listPurgedGitAccountDeletions),
+    countPurgedGitAccountDeletionsToCheck: withFake(
+      actual.countPurgedGitAccountDeletionsToCheck,
+    ),
     markGitAccountDeletionPurged: withFake(actual.markGitAccountDeletionPurged),
     touchGitAccountDeletion: withFake(actual.touchGitAccountDeletion),
     claimGitAccountDeletion: withFake(actual.claimGitAccountDeletion),
@@ -593,10 +596,9 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     liveUsers.delete("u1");
     respondWith(purgedUser, [{ id: 7, name: "desktop" }]);
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 1,
-      review: 0,
-    });
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 1, failed: 0, remaining: 0 });
 
     const calls = fetchMock.mock.calls.map(([url, init]) => ({
       url: String(url),
@@ -624,10 +626,9 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     tombstone();
     respondWith(purgedUser);
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 0,
-      review: 1,
-    });
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 0, review: 1 });
     expect(
       fetchMock.mock.calls.filter(
         ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
@@ -641,10 +642,9 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     liveUsers.delete("u1");
     respondWith({ id: 99, login: "someone", email: "someone-else@example.test" });
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 0,
-      review: 0,
-    });
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 0, review: 0 });
     expect(
       fetchMock.mock.calls.filter(
         ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
@@ -666,10 +666,9 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     searchResult = [renamedUser];
     respondWith(null, [{ id: 7, name: "desktop" }]);
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 1,
-      review: 0,
-    });
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 1 });
     expect(
       fetchMock.mock.calls.map(([url]) => String(url)),
     ).toContainEqual(expect.stringContaining("/admin/users/someone-2"));
@@ -680,10 +679,10 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     liveUsers.delete("u1");
     respondWith(null);
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 0,
-      review: 0,
-    });
+    // 見終わったので lastAttemptAt が進み、残りは 0 になる。
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 0, remaining: 0 });
     expect(rows.get("u1")?.lastAttemptAt).not.toBeNull();
   });
 
@@ -692,10 +691,9 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     liveUsers.delete("u1");
     respondWith(purgedUser);
 
-    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
-      repurged: 0,
-      review: 0,
-    });
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 0, remaining: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

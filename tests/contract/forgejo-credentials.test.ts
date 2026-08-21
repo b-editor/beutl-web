@@ -473,71 +473,116 @@ describe("トークンの発行", () => {
 });
 
 describe("リポジトリの作成", () => {
-  it("テンプレートを入れられなかったら、消さずに入れ直す", async () => {
-    // 外から作られたリポジトリを消す判断は安全に下せない。作成の 201 と
-    // 「作成直後の状態」を原子的に得る手段が無く、空に見えるだけの誰かの
-    // リポジトリを消しかねない。足りないものを入れ直す方に倒す。
-    const { createRepository } = await import("@beutl/forgejo");
-    let commitAttempts = 0;
-    let repoLookups = 0;
+  // 利用者の名前空間には作らない。管理者の名前空間で作り、既定値を入れ切ってから
+  // 譲渡する。入る前に push される隙間を残すと、そこへ入った動画は普通の git
+  // オブジェクトとして履歴に残り、後から .gitattributes を足しても移らない。
+
+  /** 管理者側で作る → コミット → 譲渡、という流れを組み立てる。 */
+  function creationMock({
+    commitFails = false,
+    transferFails = false,
+  }: { commitFails?: boolean; transferFails?: boolean } = {}) {
+    const state = { committed: false, deleted: false, transferred: false };
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (init?.method === "POST" && path.endsWith("/user/repos")) {
-        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
       }
-      if (init?.method === "POST" && path.endsWith("/contents")) {
-        commitAttempts += 1;
-        return json({ message: "boom" }, 500);
-      }
-      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
-        repoLookups += 1;
-        if (repoLookups === 1) return json({ message: "not found" }, 404);
-        return json({ id: 1, name: "proj", default_branch: "main" });
-      }
-      if (path.includes("/contents/.git")) {
+      // 利用者の名前空間は空。
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
         return json({ message: "not found" }, 404);
       }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 7, name: "proj", default_branch: "main" }, 201);
+      }
+      if (method === "POST" && path.endsWith("/contents")) {
+        if (commitFails) return json({ message: "boom" }, 500);
+        state.committed = true;
+        return json({}, 201);
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return state.committed
+          ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
+          : json({ message: "nope" }, 404);
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return state.committed
+          ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
+          : json({ message: "nope" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        if (transferFails) return json({ message: "boom" }, 500);
+        state.transferred = true;
+        return json({ id: 7, name: "proj", owner: { id: 2, login: "someone" } });
+      }
+      if (method === "DELETE" && path.endsWith("/repos/beutl-admin/proj")) {
+        state.deleted = true;
+        return new Response(null, { status: 204 });
+      }
       return new Response(null, { status: 204 });
     });
+    return state;
+  }
+
+  it("管理者の名前空間で作り、既定値を入れてから譲渡する", async () => {
+    const { createRepository } = await import("@beutl/forgejo");
+    const state = creationMock();
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).resolves.toMatchObject({ id: 7 });
+
+    const calls = record(fetchMock);
+    const create = calls.find(
+      (c) => c.method === "POST" && c.url.endsWith("/user/repos"),
+    )!;
+    // Sudo を付けない = 管理者自身のものとして作る。利用者からは見えない。
+    expect(create.headers.get?.("Sudo") ?? null).toBeNull();
+
+    // コミットは譲渡より前。
+    const order = calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
+    const committedAt = order.findIndex((c) => c.endsWith("/contents"));
+    const transferredAt = order.findIndex((c) => c.endsWith("/transfer"));
+    expect(committedAt).toBeGreaterThanOrEqual(0);
+    expect(transferredAt).toBeGreaterThan(committedAt);
+    expect(state.transferred).toBe(true);
+  });
+
+  it("既定値を入れられなければ譲渡せず、預かったまま畳む", async () => {
+    // 利用者はまだ触れないので、ここで消すのは他人のものを消すのとは違う。
+    const { createRepository } = await import("@beutl/forgejo");
+    const state = creationMock({ commitFails: true });
 
     await expect(
       createRepository("someone", { name: "proj" }),
     ).rejects.toBeTruthy();
 
-    // 消さない。入れ直しを試みる。
-    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
-      0,
-    );
-    expect(commitAttempts).toBeGreaterThan(1);
-
-    // 直せなかったので読み取り専用にする。ここを外すと、.gitattributes の無い
-    // リポジトリに数 GiB の動画が LFS を通らず入る。
-    const lock = record(fetchMock).find((c) => c.method === "PATCH");
-    expect(lock?.url).toContain("/repos/someone/proj");
-    expect(lock?.body).toEqual({ archived: true });
+    expect(state.transferred).toBe(false);
+    expect(state.deleted).toBe(true);
   });
 
-  it("中身の違う .gitattributes が既にあったら、直せていないので読み取り専用にする", async () => {
-    // commitTemplates は既にあるファイルに触らない (利用者が編集したものを
-    // 壊さないため)。だから「コミットが成功した」だけでは直っていない。
-    // ここで書き込み可能なまま返すと、LFS の効かないリポジトリに push され続ける。
+  it("譲渡に失敗しても、利用者の手には渡さない", async () => {
     const { createRepository } = await import("@beutl/forgejo");
-    let archived = false;
+    const state = creationMock({ transferFails: true });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(state.transferred).toBe(false);
+    expect(state.deleted).toBe(true);
+  });
+
+  it("利用者の側に同じ名前があれば衝突として返す", async () => {
+    const { createRepository } = await import("@beutl/forgejo");
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (init?.method === "POST" && path.endsWith("/user/repos")) {
-        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
-      }
       if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
-        return json({ id: 1, name: "proj", default_branch: "main", archived });
+        return json({ id: 3, name: "proj", default_branch: "main" });
       }
-      if (init?.method === "PATCH" && path.endsWith("/repos/someone/proj")) {
-        archived = JSON.parse(String(init.body)).archived;
-        return json({ id: 1, name: "proj", default_branch: "main", archived });
-      }
-      // 中身が違う。コミットの対象にはならず、canonical 検証だけが落ちる。
       if (path.includes("/contents/.gitattributes")) {
-        return json({ encoding: "base64", content: utf8Base64("*.mp4 -text\n") });
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
       }
       if (path.includes("/contents/.gitignore")) {
         return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
@@ -547,49 +592,7 @@ describe("リポジトリの作成", () => {
 
     await expect(
       createRepository("someone", { name: "proj" }),
-    ).rejects.toBeTruthy();
-
-    // 何もコミットしていないのに成功扱いしない。
-    expect(
-      record(fetchMock).filter(
-        (c) => c.method === "POST" && c.url.endsWith("/contents"),
-      ),
-    ).toHaveLength(0);
-    expect(archived).toBe(true);
-  });
-
-  it("読み取り専用を外して直せなかったら、掛け直す", async () => {
-    // 外したまま抜けると、一度守った状態がやり直しのたびに緩む。
-    const { createRepository } = await import("@beutl/forgejo");
-    let archived = true;
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      const path = new URL(String(url)).pathname;
-      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
-        return json({ id: 1, name: "proj", default_branch: "main", archived });
-      }
-      if (init?.method === "PATCH" && path.endsWith("/repos/someone/proj")) {
-        archived = JSON.parse(String(init.body)).archived;
-        return json({ id: 1, name: "proj", default_branch: "main", archived });
-      }
-      if (path.includes("/contents/.gitattributes")) {
-        return json({ encoding: "base64", content: utf8Base64("*.mp4 -text\n") });
-      }
-      if (path.includes("/contents/.gitignore")) {
-        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
-      }
-      return new Response(null, { status: 204 });
-    });
-
-    await expect(
-      createRepository("someone", { name: "proj" }),
-    ).rejects.toBeTruthy();
-
-    expect(
-      record(fetchMock)
-        .filter((c) => c.method === "PATCH")
-        .map((c) => c.body),
-    ).toEqual([{ archived: false }, { archived: true }]);
-    expect(archived).toBe(true);
+    ).rejects.toMatchObject({ status: 409 });
   });
 
   it("同名で作り直すと、読み取り専用を外してから直す", async () => {
@@ -633,52 +636,26 @@ describe("リポジトリの作成", () => {
     expect(archived).toBe(false);
   });
 
-  it("入れ直す相手が別のリポジトリになっていたら触らない", async () => {
+  it("作成の応答を落とした場合、管理者側に出来ていれば引き継ぐ", async () => {
+    // 502/504 では、作られたのか作られていないのかが分からない。管理者の
+    // 名前空間を見て、在れば続きから進める。
     const { createRepository } = await import("@beutl/forgejo");
-    let commitAttempts = 0;
-    let repoLookups = 0;
+    let transferred = false;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (init?.method === "POST" && path.endsWith("/user/repos")) {
-        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
       }
-      if (init?.method === "POST" && path.endsWith("/contents")) {
-        commitAttempts += 1;
-        return json({ message: "boom" }, 500);
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
       }
-      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
-        repoLookups += 1;
-        if (repoLookups === 1) return json({ message: "not found" }, 404);
-        // リネームされて空いた名前に別のものが入った。
-        return json({ id: 99, name: "proj", default_branch: "main" });
-      }
-      return new Response(null, { status: 204 });
-    });
-
-    await expect(
-      createRepository("someone", { name: "proj" }),
-    ).rejects.toBeTruthy();
-
-    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
-      0,
-    );
-    // 最初の 1 回だけ。別物には書きにいかない。
-    expect(commitAttempts).toBe(1);
-  });
-
-  it("既にテンプレートが入っていれば触らない", async () => {
-    // 相手が最後まで作り切っている場合。二重にコミットしない。
-    const { createRepository } = await import("@beutl/forgejo");
-    let repoLookups = 0;
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      const path = new URL(String(url)).pathname;
-      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+      if (method === "POST" && path.endsWith("/user/repos")) {
         return new Response("gateway timeout", { status: 504 });
       }
-      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
-        repoLookups += 1;
-        if (repoLookups === 1) return json({ message: "not found" }, 404);
-        return json({ id: 1, name: "proj", default_branch: "main" });
+      // 管理者側には出来ている。
+      if (method === "GET" && path.endsWith("/repos/beutl-admin/proj")) {
+        return json({ id: 7, name: "proj", default_branch: "main" });
       }
       if (path.includes("/contents/.gitattributes")) {
         return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
@@ -686,22 +663,30 @@ describe("リポジトリの作成", () => {
       if (path.includes("/contents/.gitignore")) {
         return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
       }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        transferred = true;
+        return json({ id: 7, name: "proj", owner: { id: 2, login: "someone" } });
+      }
       return new Response(null, { status: 204 });
     });
 
     await expect(
       createRepository("someone", { name: "proj" }),
-    ).resolves.toMatchObject({ name: "proj" });
+    ).resolves.toMatchObject({ id: 7 });
 
-    expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
-      0,
-    );
+    expect(transferred).toBe(true);
+    // 既に揃っているので二重にコミットしない。
     expect(
       record(fetchMock).filter(
         (c) => c.method === "POST" && c.url.endsWith("/contents"),
       ),
     ).toHaveLength(0);
+    // 自分で作ったと言い切れないので畳まない。
+    expect(
+      record(fetchMock).filter((c) => c.method === "DELETE"),
+    ).toHaveLength(0);
   });
+
 
   it("既にあるリポジトリには手を付けない", async () => {
     // 作成 API が 502 や 504 で落ちたとき、衝突だったのか応答を落としただけなのかは
@@ -1107,32 +1092,41 @@ describe("直せなかったリポジトリの片付け", () => {
     expect([...repairQueue.keys()]).toEqual([5]);
   });
 
-  it("テンプレートを入れる前に控える (作成直後に落ちても追える)", async () => {
-    // 201 の後、テンプレートを書く前に Worker ごと消えると、例外は捕まらない。
-    // 控えが先に無いと、LFS の効かないリポジトリが誰にも知られず残る。
+  it("預かっている間も控える (譲渡前に落ちても追える)", async () => {
+    // 利用者はまだ触れないので push はされないが、預かったまま残るのを
+    // 見えなくしない。譲渡まで通れば控えは外す。
     const { createRepository } = await import("@beutl/forgejo");
-    let queuedBeforeCommit: number[] = [];
+    let queuedBeforeTransfer: number[] = [];
+    let committed = false;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      if (init?.method === "POST" && path.endsWith("/user/repos")) {
-        return json({ id: 9, name: "proj", default_branch: "main" }, 201);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
       }
-      if (init?.method === "POST" && path.endsWith("/contents")) {
-        queuedBeforeCommit = [...repairQueue.keys()];
-        return json({}, 201);
-      }
-      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
         return json({ message: "not found" }, 404);
       }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 9, name: "proj", default_branch: "main" }, 201);
+      }
+      if (method === "POST" && path.endsWith("/contents")) {
+        committed = true;
+        return json({}, 201);
+      }
       if (path.includes("/contents/.gitattributes")) {
-        return queuedBeforeCommit.length > 0
+        return committed
           ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
           : json({ message: "nope" }, 404);
       }
       if (path.includes("/contents/.gitignore")) {
-        return queuedBeforeCommit.length > 0
+        return committed
           ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
           : json({ message: "nope" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        queuedBeforeTransfer = [...repairQueue.keys()];
+        return json({ id: 9, name: "proj", owner: { id: 2, login: "someone" } });
       }
       return new Response(null, { status: 204 });
     });
@@ -1141,11 +1135,10 @@ describe("直せなかったリポジトリの片付け", () => {
       createRepository("someone", { name: "proj" }),
     ).resolves.toMatchObject({ id: 9 });
 
-    // コミットの時点では控えてある。
-    expect(queuedBeforeCommit).toEqual([9]);
-    // 揃ったので外す。
+    expect(queuedBeforeTransfer).toEqual([9]);
     expect(repairQueue.size).toBe(0);
   });
+
 
   it("控えは id で引き直す (名前が変わっていても別物を止めない)", async () => {
     const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");

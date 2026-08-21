@@ -330,7 +330,10 @@ export async function claimGitAccountDeletion({
   const db = prisma ?? (await getDb());
   const { count } = await db.gitAccountDeletion.updateMany({
     where: { userId, phase, ...leaseExpired(now) },
-    data: { intentId, leaseUntil, lastAttemptAt: now },
+    // **lastAttemptAt は進めない。** 掴んだだけで「見た」ことにすると、途中で
+    // 失敗した相手も見終わったように見え、一巡したかどうかを数えられなくなる。
+    // 重なった実行を防ぐのは leaseUntil の役目。
+    data: { intentId, leaseUntil },
   });
   return count === 1;
 }
@@ -399,6 +402,29 @@ export async function listPurgedGitAccountDeletions({
     },
     orderBy: [{ lastAttemptAt: "asc" }, { purgedAt: "asc" }],
     take: limit,
+  });
+}
+
+/**
+ * まだ見ていない墓標の件数。
+ *
+ * 復元の後、全件を見終わったかを外から判定するために使う。掴んだ時点では
+ * `lastAttemptAt` を進めないので、この数が 0 になったことが一巡の証拠になる。
+ */
+export async function countPurgedGitAccountDeletionsToCheck({
+  checkedBefore,
+  prisma,
+}: {
+  checkedBefore: Date;
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.count({
+    where: {
+      phase: GitAccountDeletionPhase.PURGED,
+      forgejoUsername: { not: null },
+      OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: checkedBefore } }],
+    },
   });
 }
 
@@ -499,6 +525,13 @@ export async function countGitAccountDeletionsNeedingReview({
   });
 }
 
+/**
+ * 失敗を記録する。
+ *
+ * **`lastAttemptAt` は進めない。** これは「見終わった時刻」で、失敗は見終わって
+ * いない。進めてしまうと、復元の後に全件を見終わったかを数えられなくなる
+ * (やり残しが見終わったように見える)。重なった実行を防ぐのは leaseUntil の役目。
+ */
 export async function recordGitAccountDeletionAttempt({
   userId,
   intentId,
@@ -516,7 +549,6 @@ export async function recordGitAccountDeletionAttempt({
     where: { userId, intentId },
     data: {
       attempts: { increment: 1 },
-      lastAttemptAt: new Date(),
       // 例外の文字列は長くなりうる。原因が分かる範囲で切る。
       lastError: error.slice(0, 500),
     },

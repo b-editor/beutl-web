@@ -192,7 +192,14 @@ export default {
     // 消したはずのアカウントが戻っていないかを見る。Forgejo だけを退会前へ
     // 復元すると、利用者もトークンも復活するが beutl-web 側には何も残らない。
     try {
-      const { repurged, review } = await reconcileGitAccountDeletionTombstones();
+      const { checked, repurged, review, failed, remaining } =
+        await reconcileGitAccountDeletionTombstones({ drain: true });
+      if (checked > 0 || failed > 0) {
+        console.log(
+          `git tombstones: checked ${checked}, repurged ${repurged}, ` +
+            `failed ${failed}, remaining ${remaining}`,
+        );
+      }
       if (repurged > 0) {
         console.error(
           `git deletions: ${repurged} purged Forgejo accounts had come back ` +
