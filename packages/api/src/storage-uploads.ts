@@ -1,5 +1,6 @@
 import {
   deleteStorageUpload,
+  findStorageUploadByIdAndUserId,
   listStorageUploadsStartedBefore,
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
@@ -48,8 +49,15 @@ export async function abandonStaleStorageUploads(
   let abandoned = 0;
   let failed = 0;
   for (const upload of stale) {
-    // 完了済みの控え。パートはもう無いので中止しに行く相手がいない。
-    if (upload.completedFileId) {
+    // 一覧を引いてから順番が回ってくるまでの間に、そのアップロードが完了して
+    // いることがある。古い姿のまま進むと、File が指しているオブジェクトを消して
+    // しまうので、必ず読み直す。
+    const current = await findStorageUploadByIdAndUserId({
+      id: upload.id,
+      userId: upload.userId,
+    }).catch(() => upload);
+    if (!current) continue;
+    if (current.completedFileId) {
       await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
       abandoned++;
       continue;
@@ -62,7 +70,7 @@ export async function abandonStaleStorageUploads(
       if (!bucket.resumeMultipartUpload) {
         throw new Error("The configured R2 bucket cannot abandon an upload.");
       }
-      await bucket.resumeMultipartUpload(upload.objectKey, upload.uploadId).abort();
+      await bucket.resumeMultipartUpload(current.objectKey, current.uploadId).abort();
       // 中止できたということは、まだパートのままだった。オブジェクトは無い。
       await deleteStorageUpload({ id: upload.id });
       abandoned++;
@@ -72,7 +80,20 @@ export async function abandonStaleStorageUploads(
       // 終わったあと、控えを書く前に Worker が落ちるとこうなる。控えが無い＝
       // File は誰も指していないので、残っているオブジェクトはここで消す。
       // これをしないと、追跡できない完成オブジェクトが保管され続ける。
-      const orphaned = await deleteOrphanedObject(upload.objectKey);
+      // ここでもう一度読む。abort を試している間に完了したのなら、そのオブジェクト
+      // はもう File のもの。
+      const settled = await findStorageUploadByIdAndUserId({
+        id: upload.id,
+        userId: upload.userId,
+      }).catch(() => null);
+      if (settled?.completedFileId) {
+        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+        abandoned++;
+        continue;
+      }
+
+      const orphaned = settled !== null
+        && await deleteOrphanedObject(current.objectKey);
       if (orphaned) {
         await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
         abandoned++;

@@ -73,6 +73,21 @@ export async function markStorageUploadCompleted({
   });
 }
 
+// まだ終わっていないアップロードの本数。完了済みの控えは数えない——パートは
+// もう無く、抱えているものが無いので。
+export async function countStorageUploadsByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.storageUpload.count({
+    where: { userId, completedFileId: null },
+  });
+}
+
 // What a browser started and never finished. An unfinished upload holds its
 // parts, and their storage, until it is abandoned.
 export async function listStorageUploadsStartedBefore({

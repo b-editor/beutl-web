@@ -134,6 +134,11 @@ async function requestIdentityOf(
     idempotencyKey: formData.get("idempotencyKey"),
     operation,
     input,
+    // 入れ替え配備の最中は、モデル省略の依頼が「解決済みの既定モデル入り」で
+    // 指紋化された job と並ぶ。その形も同じ依頼として認められるようにする。
+    legacyModelId: namedModelOf(formData)
+      ? undefined
+      : (await resolveModelOf(formData, operation))?.modelId,
   });
 }
 

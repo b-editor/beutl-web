@@ -5,7 +5,7 @@ import { apiErrorResponse } from "../../api/error";
 import {
   createReservedAiJob,
   findReplayableAiJob,
-  hasAiJobForIdempotencyKey,
+  aiJobStateForIdempotencyKey,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
@@ -246,6 +246,7 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
+      legacyModelId: selectedModel?.modelId,
       input: {
         // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。
         ...(parsedBody.data.model ? { model: parsedBody.data.model } : {}),
@@ -391,18 +392,22 @@ const app = new Hono()
       });
     }
 
-    // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前の job が
-    // 既にあるなら別——契約中に課金された結果は、契約が終わったあとでも取りに
-    // 来られなければならない。名前は自分の job しか指せないので、これで誰かが
-    // 契約なしに新しく走らせられるようになるわけではない。
+    // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前が取りに来る
+    // 価値のある job を指しているなら別——契約中に課金された結果は、契約が終わった
+    // あとでも取りに来られなければならない。名前は自分の job しか指せない。
+    const keyState = await aiJobStateForIdempotencyKey({
+      userId,
+      idempotencyKeyHash: await getAiIdempotencyKeyHash(c.req.raw),
+    });
+    // 指していた job が消えているなら、本文を読む必要はない。
+    if (keyState === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), {
+        status: 409,
+      });
+    }
+
     const entitlements = await getEntitlements(userId);
-    if (
-      !entitlements.canUseAi &&
-      !(await hasAiJobForIdempotencyKey({
-        userId,
-        idempotencyKeyHash: await getAiIdempotencyKeyHash(c.req.raw),
-      }))
-    ) {
+    if (!entitlements.canUseAi && keyState !== "collectable") {
       return c.json(await apiErrorResponse("aiPlanRequired"), {
         status: 402,
       });
@@ -487,6 +492,7 @@ const app = new Hono()
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
+      legacyModelId: selectedModel?.modelId,
       input: {
         ...(fields.data.model ? { model: fields.data.model } : {}),
         prompt,

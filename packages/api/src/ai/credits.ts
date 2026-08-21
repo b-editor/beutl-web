@@ -35,10 +35,12 @@ export async function findReplayableAiJob({
   userId,
   idempotencyKeyHash,
   requestFingerprint,
+  legacyRequestFingerprint,
 }: {
   userId: string;
   idempotencyKeyHash: string;
   requestFingerprint: string;
+  legacyRequestFingerprint?: string | undefined;
 }): Promise<
   | { outcome: "existing"; job: NonNullable<Awaited<ReturnType<typeof getAiJobByIdempotency>>> }
   | { outcome: "idempotencyConflict" }
@@ -47,26 +49,60 @@ export async function findReplayableAiJob({
 > {
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
   if (!existing) return null;
-  if (existing.requestFingerprint !== requestFingerprint) {
+  if (
+    !fingerprintMatches(
+      existing.requestFingerprint,
+      requestFingerprint,
+      legacyRequestFingerprint,
+    )
+  ) {
     return { outcome: "idempotencyConflict" };
   }
   if (existing.deletedAt) return { outcome: "deleted" };
   return { outcome: "existing", job: existing };
 }
 
-// その名前の job がこのユーザーに既にあるか。本文を読む前に、契約が切れている
-// ことを理由に断ってよいかどうかを決めるために使う。支払い済みの結果は、契約が
-// 終わったあとでも取りに来られなければならない。
-export async function hasAiJobForIdempotencyKey({
+// その名前が今なにを指しているか。本文を読む前に判断するために使う。
+//
+//  - collectable: 取りに来る価値がある（成功済み、または実行中）。契約が切れて
+//    いても本文を読ませ、回収まで進ませる。
+//  - deleted: 指していた job は消えた。本文を読む必要はなく、そう答えればよい。
+//  - settled: 失敗・取り消しで決着済み。回収できるものは無いので、契約切れを
+//    理由に断ってよい——大きな本文を何度も読ませる口実にはさせない。
+//  - none: そんな名前の job は無い。
+export type AiIdempotencyKeyState =
+  | "none"
+  | "collectable"
+  | "settled"
+  | "deleted";
+
+export async function aiJobStateForIdempotencyKey({
   userId,
   idempotencyKeyHash,
 }: {
   userId: string;
   idempotencyKeyHash: string | null;
-}): Promise<boolean> {
-  if (!idempotencyKeyHash) return false;
+}): Promise<AiIdempotencyKeyState> {
+  if (!idempotencyKeyHash) return "none";
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
-  return existing !== null && !existing.deletedAt;
+  if (!existing) return "none";
+  if (existing.deletedAt) return "deleted";
+  return existing.status === "succeeded" ||
+      existing.status === "queued" ||
+      existing.status === "running" ||
+      existing.status === "finalizing"
+    ? "collectable"
+    : "settled";
+}
+
+// 記録されている指紋が、この依頼のものか。入れ替え配備の最中に古い形で作られた
+// job も、同じ依頼として認める。
+function fingerprintMatches(
+  stored: string | null,
+  current: string,
+  legacy: string | undefined,
+): boolean {
+  return stored === current || (legacy !== undefined && stored === legacy);
 }
 
 export async function createReservedAiJob({
@@ -80,6 +116,7 @@ export async function createReservedAiJob({
   activeJobLimit,
   idempotencyKeyHash,
   requestFingerprint,
+  legacyRequestFingerprint,
   callbackNonceHash,
 }: {
   userId: string;
@@ -94,6 +131,7 @@ export async function createReservedAiJob({
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
+  legacyRequestFingerprint?: string | undefined;
   callbackNonceHash?: string;
 }) {
   if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
@@ -110,7 +148,13 @@ export async function createReservedAiJob({
           prisma,
         });
         if (existing) {
-          if (existing.requestFingerprint !== requestFingerprint) {
+          if (
+            !fingerprintMatches(
+              existing.requestFingerprint,
+              requestFingerprint,
+              legacyRequestFingerprint,
+            )
+          ) {
             return { outcome: "idempotencyConflict" as const };
           }
           return existing.deletedAt

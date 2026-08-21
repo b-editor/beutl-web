@@ -849,6 +849,49 @@ describe("v3 AI endpoints contract", () => {
       ).toHaveLength(1);
     });
 
+    it("still recognises a job fingerprinted the way the previous release did", async () => {
+      // 入れ替え配備の最中は、モデル省略の依頼を「解決済みの既定モデル入り」で
+      // 指紋化した job と、そうでない job が並ぶ。同じ名前で問い合わせ直したとき、
+      // 前の形で作られていたというだけで別の依頼に見えてはいけない。
+      await activatePro();
+      const key = "made-by-the-previous-release";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { prompt: "test", aspectRatio: "1:1" },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.generate",
+          input: {
+            prompt: "test",
+            aspectRatio: "1:1",
+            model: "openai/gpt-image-1",
+          },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders(key)),
+        },
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      // 走っている最中だと分かる＝同じ依頼として引き当てられた。別物と見なされた
+      // なら、ここで新しい job が作られて 200 が返る。
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error_code: "aiRequestInProgress",
+      });
+      expect(state.aiJobs.size).toBe(1);
+    });
+
     it("returns a typed conflict while an idempotent request is still running", async () => {
       await activatePro();
       const key = "image-running-replay-key";
@@ -1390,11 +1433,13 @@ describe("v3 AI endpoints contract", () => {
       });
       const headers = await authHeaders();
       const digest = crypto.subtle.digest.bind(crypto.subtle);
-      let digestCalls = 0;
-      vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      // 落とすのは put のあとのダイジェストだけ。何回目かで狙うと、名前や指紋を
+      // 作る呼び出しが増えただけで別のものを落としてしまう。
+      const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
         async (...args: Parameters<typeof crypto.subtle.digest>) => {
-          digestCalls++;
-          if (digestCalls === 3) throw new Error("digest unavailable");
+          if (vi.mocked(putObject).mock.calls.length > 0) {
+            throw new Error("digest unavailable");
+          }
           return await digest(...args);
         },
       );
@@ -1414,6 +1459,7 @@ describe("v3 AI endpoints contract", () => {
       expect(state.files.size).toBe(0);
       expect(state.aiStorageCleanups.size).toBe(0);
       expect([...state.aiJobs.values()][0]?.status).toBe("failed");
+      digestSpy.mockRestore();
       consoleError.mockRestore();
     });
 

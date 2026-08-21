@@ -20,6 +20,7 @@
     "uploadFailed": "アップロードを完了できませんでした。もう一度お試しください。",
     "invalidRequestBody": "このファイルはアップロードできません。",
     "authenticationIsRequired": "アップロードするにはサインインし直してください。",
-    "fileNotFound": "そのファイルはもうありません。"
+    "fileNotFound": "そのファイルはもうありません。",
+    "tooManyUploads": "進行中のアップロードが多すぎます。どれかが終わってからもう一度お試しください。"
   }
 }

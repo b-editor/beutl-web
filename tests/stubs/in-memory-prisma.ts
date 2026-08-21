@@ -2470,6 +2470,23 @@ export function createInMemoryPrisma() {
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },
+      count: async (
+        { where }: {
+          where?: { userId?: string; completedFileId?: string | null };
+        } = {},
+      ) => {
+        let total = 0;
+        for (const item of state.storageUploads.values()) {
+          if (where?.userId && item.userId !== where.userId) continue;
+          if (
+            where?.completedFileId === null && item.completedFileId !== null
+          ) {
+            continue;
+          }
+          total++;
+        }
+        return total;
+      },
       updateMany: async ({
         where,
         data,

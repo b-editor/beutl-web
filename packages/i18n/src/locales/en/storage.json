@@ -20,6 +20,7 @@
     "uploadFailed": "The upload could not be completed. Try again.",
     "invalidRequestBody": "This file could not be uploaded.",
     "authenticationIsRequired": "Sign in again to upload.",
-    "fileNotFound": "That file is no longer there."
+    "fileNotFound": "That file is no longer there.",
+    "tooManyUploads": "Too many uploads are already going. Wait for one to finish and try again."
   }
 }

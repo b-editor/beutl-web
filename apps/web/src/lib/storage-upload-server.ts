@@ -2,6 +2,7 @@ import "server-only";
 import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
 import {
   createFile,
+  countStorageUploadsByUserId,
   createStorageUpload,
   deleteStorageUpload,
   findStorageFileByIdAndUserId,
@@ -24,8 +25,13 @@ import { getR2Bucket } from "@beutl/api";
 // each part is streamed straight into the bucket — so a large file costs the
 // same memory as a small one.
 
+// 一度に抱えられる、まだ終わっていないアップロードの本数。大きなファイルを
+// 数本並行して送るには足り、放置された handle を積み上げるには足りない。
+const MAX_ACTIVE_UPLOADS = 16;
+
 export type UploadFailure =
   | "fileNotFound"
+  | "tooManyUploads"
   | "insufficientStorageSpace"
   | "uploadNotFound"
   | "uploadFailed";
@@ -132,7 +138,7 @@ export async function startUpload({
     httpMetadata: mimeType ? { contentType: mimeType } : undefined,
   });
 
-  let upload: Awaited<ReturnType<typeof createStorageUpload>> | null;
+  let upload: Awaited<ReturnType<typeof createStorageUpload>> | null | "tooMany";
   try {
     // Reading the totals and writing the row that changes them is one
     // transaction. CockroachDB runs it serializably, so two uploads started at
@@ -144,6 +150,11 @@ export async function startUpload({
       // 先にすると、同じ 1 本のアップロードを二重に数えて自分自身を弾いてしまう。
       const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
       if (raced) return raced;
+
+      // 小さなアップロードは枠をほとんど使わないので、大きさだけでは歯止めに
+      // ならない。同時に抱えられる本数そのものを限る。
+      const active = await countStorageUploadsByUserId({ userId, prisma });
+      if (active >= MAX_ACTIVE_UPLOADS) return "tooMany";
 
       const [stored, underway] = await Promise.all([
         sumFileSizeByUserId({ userId, prisma }),
@@ -172,9 +183,20 @@ export async function startUpload({
     throw error;
   }
 
+  if (upload === "tooMany") {
+    await abandon(objectKey, multipart.uploadId);
+    return { ok: false, reason: "tooManyUploads" };
+  }
+
   if (!upload) {
     await abandon(objectKey, multipart.uploadId);
     return { ok: false, reason: "insufficientStorageSpace" };
+  }
+
+  // 同じ名前の要求が同時に届いたとき、行を書けたのは片方だけ。負けたほうが
+  // 作ったマルチパートは誰も知らないままパートを抱えるので、ここで捨てる。
+  if (upload.uploadId !== multipart.uploadId) {
+    await abandon(objectKey, multipart.uploadId);
   }
 
   return {
@@ -349,11 +371,16 @@ export async function finishUpload({
     try {
       await bucket().delete?.(upload.objectKey);
     } catch (cleanupError) {
+      // 消せなかった。行は残す——sweeper がもう一度試せる唯一の手掛かりなので。
       throw new AggregateError(
         [error, cleanupError],
         "The upload failed and its object could not be cleaned up",
       );
     }
+
+    // 消せたなら片付けるものはもう無い。行を残しても、宣言された大きさで枠を
+    // 押さえ続けるだけになる。
+    await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
     throw error;
   }
 

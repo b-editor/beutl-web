@@ -103,6 +103,8 @@ export function ImageEditForm({
     };
   }, [sourcePreview]);
 
+  const holdsName =
+    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
   const blocked = blockedReason(
     access,
     EDIT_OPERATIONS,
@@ -112,10 +114,7 @@ export function ImageEditForm({
   );
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(
-    blocked,
-    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true,
-  );
+  const submitBlocked = blocksSubmit(blocked, holdsName);
   // Each task is its own operation with its own models, so the list changes
   // under the picker. Rather than resetting it from an effect, a choice that no
   // longer exists falls back to the new task's default.
@@ -127,7 +126,14 @@ export function ImageEditForm({
   const taskUnaffordable =
     blocked === null &&
     editTask !== "" &&
+    !holdsName &&
     !access.availability[`image.edit.${editTask}`];
+  // 全 task を通した判定とは別に、選ばれている task だけモデルがゼロのことが
+  // ある。そのまま送るとサーバーの既定モデルで必ず拒否されるので、ここで止める。
+  const taskHasNoModel =
+    editTask !== "" &&
+    !holdsName &&
+    (access.models[`image.edit.${editTask}`] ?? []).length === 0;
 
   async function prepareOutpaintFile(
     file: File,
@@ -260,6 +266,11 @@ export function ImageEditForm({
               {t("dashboard:ai.balanceExhaustedDescription")}
             </p>
           )}
+          {taskHasNoModel && (
+            <p className="text-sm text-destructive">
+              {t("dashboard:ai.operationUnavailableDescription")}
+            </p>
+          )}
         </div>
 
         <ModelSelect
@@ -338,6 +349,7 @@ export function ImageEditForm({
             submitBlocked ||
             editTask === "" ||
             taskUnaffordable ||
+            taskHasNoModel ||
             isPreparing ||
             isPending
           }

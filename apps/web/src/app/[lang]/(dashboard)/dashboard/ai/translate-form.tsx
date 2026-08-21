@@ -211,6 +211,8 @@ export function TranslateForm({
         setIdempotencyKey(randomUuid());
       }
     } catch {
+      // 送れたのかどうかも分からない。名前は捨てないし、次の送信も塞がない。
+      setHoldsName(true);
       setMessage(t("api-errors:aiProviderError"));
     } finally {
       setIsPending(false);

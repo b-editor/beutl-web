@@ -87,18 +87,22 @@ export function keepsIdempotencyKey(errorCode: string): boolean {
 /**
  * Whether the screen should refuse to send.
  *
- * A run holding its name may be answered by the job that name already made,
- * and the server looks that job up before it looks at the balance — so an empty
- * balance must not close the way to it. The request that emptied the balance is
- * exactly the one waiting to be collected. Nothing else is negotiable: without
- * a plan, or with no model to run on, there is nothing to collect either.
+ * A run holding its name may be answered by the job that name already made, and
+ * the server reaches that job before it asks anything else — before the plan,
+ * before the balance, before whether a model is still offered. Refusing here
+ * would close the only way back to something already paid for, so a held name
+ * overrides every reason the screen has to say no.
  */
 export function blocksSubmit(
   blocked: AiBlockReason | null,
   keepsKey: boolean,
 ): boolean {
   if (blocked === null) return false;
-  return !(blocked === "balance" && keepsKey);
+  // 名前を持っているあいだは何も理由にしない。サーバーは、その名前が指す job を
+  // 契約の有無やモデルの提供状況より先に返す——残高だけでなく、契約が終わった
+  // あとも、モデルが止められたあとも。ここで塞ぐと、支払い済みの結果に手が
+  // 届かなくなる。
+  return !keepsKey;
 }
 
 export type AiBlockReason = "plan" | "balance" | "unavailable";
