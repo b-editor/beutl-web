@@ -31,8 +31,12 @@ vi.mock("@beutl/db", () => ({
     return {
       intentId: deletionIntentOwner,
       owned: deletionIntentOwner === intentId,
+      tookOver: false,
     };
   },
+  // 期限の延長。握ったままである限り true。
+  renewGitAccountDeletionLease: async ({ intentId }: { intentId: string }) =>
+    deletionIntentOwner === null || deletionIntentOwner === intentId,
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
   claimGitAccountDeletion: async () => true,
@@ -51,6 +55,23 @@ vi.mock("@beutl/db", () => ({
     BLOCKING: "BLOCKING",
     READY_TO_PURGE: "READY_TO_PURGE",
     NEEDS_REVIEW: "NEEDS_REVIEW",
+  },
+  auditLogActions: {
+    git: {
+      credentialOrphaned: "git.credentialOrphaned",
+      accountNeedsReview: "git.accountNeedsReview",
+      deletionMarkerReleased: "git.deletionMarkerReleased",
+    },
+  },
+  createAuditLog: async ({
+    action,
+    details,
+  }: {
+    action: string;
+    details?: string | null;
+  }) => {
+    audited.push({ action, details: details ?? null });
+    return undefined;
   },
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
@@ -107,6 +128,7 @@ let pendingDeletion:
     }
   | null = null;
 let deletionStartsAfterFirstCheck = false;
+let audited: { action: string; details: string | null }[] = [];
 let deletionIntentOwner: string | null = null;
 let neededReview = false;
 let credentialCount = 0;
@@ -160,6 +182,7 @@ function record(fetchMock: ReturnType<typeof vi.fn>): Call[] {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  audited = [];
   pendingDeletion = null;
   deletionStartsAfterFirstCheck = false;
   deletionIntentOwner = null;
@@ -319,6 +342,42 @@ describe("トークンの発行", () => {
 
     const del = record(fetchMock).find((c) => c.method === "DELETE");
     expect(del?.url).toContain("/users/someone/tokens/13");
+    // 消せているので、置き去りの記録は要らない。
+    expect(audited).toHaveLength(0);
+  });
+
+  it("その取り消しにも失敗したら、手で消せるように記録を残す", async () => {
+    // ここで黙ると、一覧に出ないトークンが誰にも気付かれずに残る。利用者は
+    // 失効できず、退会が取りやめになった場合は掃き直しも走らない。
+    dbInsertFails = true;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
+      if (init?.method === "DELETE") return json({ message: "boom" }, 500);
+      if (init?.method === "POST" && path.endsWith("/tokens")) {
+        return json(
+          {
+            id: 13,
+            name: "desktop",
+            sha1: TOKEN,
+            token_last_eight: TOKEN.slice(-8),
+          },
+          201,
+        );
+      }
+      return json({});
+    });
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toBeTruthy();
+
+    expect(audited).toEqual([
+      {
+        action: "git.credentialOrphaned",
+        details: expect.stringContaining("tokenId: 13"),
+      },
+    ]);
   });
 
   it("退会処理が始まっていたら発行しない", async () => {
@@ -411,6 +470,53 @@ describe("リポジトリの作成", () => {
       0,
     );
     expect(commitAttempts).toBeGreaterThan(1);
+
+    // 直せなかったので読み取り専用にする。ここを外すと、.gitattributes の無い
+    // リポジトリに数 GiB の動画が LFS を通らず入る。
+    const lock = record(fetchMock).find((c) => c.method === "PATCH");
+    expect(lock?.url).toContain("/repos/someone/proj");
+    expect(lock?.body).toEqual({ archived: true });
+  });
+
+  it("同名で作り直すと、読み取り専用を外してから直す", async () => {
+    // 直せずに読み取り専用にしたリポジトリの、唯一の戻し方。ここで解除を
+    // 忘れると contents API が 423 を返し続け、二度と直せない。
+    const { createRepository } = await import("@beutl/forgejo");
+    // 読み出しは archived でも通る。書き込みだけが 423 (16.0.2 で実測)。
+    let archived = true;
+    let committed = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      if (init?.method === "PATCH" && path.endsWith("/repos/someone/proj")) {
+        archived = JSON.parse(String(init.body)).archived;
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        if (!committed) return json({ message: "not found" }, 404);
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        if (!committed) return json({ message: "not found" }, 404);
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        if (archived) return json({ message: "archived" }, 423);
+        committed = true;
+        return json({}, 201);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).resolves.toMatchObject({ id: 1 });
+
+    const unlock = record(fetchMock).find((c) => c.method === "PATCH");
+    expect(unlock?.body).toEqual({ archived: false });
+    expect(archived).toBe(false);
   });
 
   it("入れ直す相手が別のリポジトリになっていたら触らない", async () => {

@@ -1,13 +1,20 @@
 import {
   GitAccountDeletionPhase,
+  auditLogActions,
   cancelPendingGitAccountDeletion,
+  claimGitAccountDeletion,
+  countGitAccountDeletionsNeedingReview,
+  createAuditLog,
   deleteGitAccountDeletion,
+  existsUserById,
   findGitAccountByUserId,
   findGitAccountDeletion,
-  claimGitAccountDeletion,
+  listExpiredGitAccountDeletionBlocks,
   listPendingGitAccountDeletions,
   markGitAccountDeletionNeedsReview,
   recordGitAccountDeletionAttempt,
+  releaseGitAccountDeletionBlock,
+  renewGitAccountDeletionLease,
   setGitAccountDeletionTarget,
   startGitAccountDeletion,
 } from "@beutl/db";
@@ -36,6 +43,18 @@ import type { ForgejoAccessToken, ForgejoUser } from "./types";
  * 3 は毎回 id とメールを確かめ直す。待っている間に Forgejo が復元され、同じ名前が
  * 別人に渡っていることがある。
  */
+
+/**
+ * 印を握っている間の期限。
+ *
+ * 期限内は他の処理が触らない。切れていれば、握っていた処理は落ちたものとして
+ * 引き取られる。長くしすぎると Worker が落ちたあと利用者が待たされ、短くしすぎると
+ * 生きている処理が横から引き取られる。トークンの失効は延長しながら進めるので、
+ * ここは「1 往復が終わらないほど短くない」長さで足りる。
+ */
+const DELETION_LEASE_MS = 10 * 60 * 1000;
+
+const leaseDeadline = () => new Date(Date.now() + DELETION_LEASE_MS);
 
 /** トークン一覧の 1 ページあたりの件数。Forgejo の上限は 50。 */
 const TOKEN_PAGE_SIZE = 50;
@@ -121,11 +140,20 @@ async function findUnmappedTarget(
   }
 }
 
-/** 端末に配ったトークンを全て失効させる。@returns 消した本数。 */
-async function revokeAllTokens(username: string): Promise<number> {
+/**
+ * 端末に配ったトークンを全て失効させる。@returns 消した本数。
+ *
+ * `renewLease` は 1 ページ消すごとに呼ぶ。本数が多いと期限を超えることがあり、
+ * 超えたまま進むと別の処理に引き取られて 2 つが同じ相手を消しにいく。
+ */
+async function revokeAllTokens(
+  username: string,
+  renewLease?: () => Promise<void>,
+): Promise<number> {
   let revoked = 0;
 
   for (let round = 1; round <= MAX_TOKEN_PAGES; round++) {
+    if (round > 1) await renewLease?.();
     // page を指定しないと Forgejo は全件返すが、それは文書化された挙動ではない。
     // 明示的に読む。消しながら読むのでページ番号は進めない。
     const tokens = await forgejoRequest<ForgejoAccessToken[]>(
@@ -154,6 +182,54 @@ async function revokeAllTokens(username: string): Promise<number> {
 }
 
 /**
+ * 監査に残す。定期実行の中なので、要求元の情報は持たない。
+ *
+ * 書けなくても処理は続ける。ここで投げると、片付けそのものが止まる。
+ */
+async function audit(action: string, details: string): Promise<void> {
+  await createAuditLog({
+    userId: null,
+    action,
+    details,
+    ipAddress: null,
+    userAgent: null,
+    port: null,
+  }).catch((error) => {
+    console.error(`failed to record ${action}`, error);
+  });
+}
+
+/**
+ * 人の確認に回す。**管理画面から見えるように監査にも残す。**
+ *
+ * 行だけを NEEDS_REVIEW にしても、DB を直接見る人がいなければ誰も気付かない。
+ * その間、退会したはずの利用者の Forgejo アカウントが残り続ける。
+ */
+async function sendToReview(userId: string, reason: string): Promise<void> {
+  await markGitAccountDeletionNeedsReview({ userId, reason });
+  await audit(
+    auditLogActions.git.accountNeedsReview,
+    `userId: ${userId}; ${reason}`,
+  );
+}
+
+/**
+ * 期限を延ばす。引き取られていたら投げて、そこで処理を止める。
+ *
+ * 握っていないのに消し続けると、引き取った側と 2 つで同じ相手を触ることになる。
+ * どちらの操作も冪等だが、失敗の記録と監査が二重になって経緯が読めなくなる。
+ */
+async function renewLease(userId: string, intentId: string): Promise<void> {
+  if (!(await renewGitAccountDeletionLease({
+    userId,
+    intentId,
+    leaseUntil: leaseDeadline(),
+  }))) {
+    throw new GitAccountDeletionInProgressError(userId);
+  }
+}
+
+/**
  * 退会処理を始める。意思表示を書き、身元を確かめ、トークンを失効させる。
  *
  * 対象が見つからなくても行は残す。**Git を使っていないように見えて、この直後に
@@ -169,10 +245,22 @@ export async function beginGitAccountDeletion(
   // 返るのは「この行を持っている」id。同じ利用者の退会が同時に走ったら先勝ちで、
   // 後から来た方はここで相手の id を受け取る。取り消してよいのは自分の id のときだけ。
   const intentId = crypto.randomUUID();
-  const marker = await startGitAccountDeletion({ userId, intentId });
+  const marker = await startGitAccountDeletion({
+    userId,
+    intentId,
+    leaseUntil: leaseDeadline(),
+  });
   if (!marker.owned) {
-    // 既に別の退会処理が持っている印。乗らない。
+    // 期限内の他人の印。乗らない。期限が切れていれば上で引き取れている。
     throw new GitAccountDeletionInProgressError(userId);
+  }
+  if (marker.tookOver) {
+    // 前回の処理は印を立てた後に消えている。BLOCKING が残っている以上、
+    // ユーザー削除は確定していない (同一トランザクションなので)。やり直す。
+    console.warn(
+      `took over an expired deletion marker for ${userId}; ` +
+        "the previous attempt did not finish",
+    );
   }
 
   try {
@@ -184,7 +272,7 @@ export async function beginGitAccountDeletion(
       forgejoUsername: target.username,
       forgejoUserId: target.id,
     });
-    await revokeAllTokens(target.username);
+    await revokeAllTokens(target.username, () => renewLease(userId, intentId));
     return { forgejoUsername: target.username, intentId };
   } catch (error) {
     // 準備の段階で失敗した = 利用者はまだ生きている。印を残すと、その人は
@@ -286,17 +374,18 @@ export async function finishGitAccountDeletion(
     if (!idMatches || actual.email !== expectedEmail) {
       // 名前は残っているが別人のもの。**決して消しにいかない**。かといって
       // 元のユーザーを消せた証拠も無いので、完了にもしない。
-      await markGitAccountDeletionNeedsReview({
+      await sendToReview(
         userId,
-        reason:
-          `Forgejo user ${username} is now id ${actual.id} <${actual.email}>, ` +
+        `Forgejo user ${username} is now id ${actual.id} <${actual.email}>, ` +
           `expected id ${pending.forgejoUserId} <${expectedEmail}>`,
-      });
+      );
       return false;
     }
 
     // 掃き直す。意思表示の前に始まっていた発行が着地していることがある。
-    await revokeAllTokens(username);
+    await revokeAllTokens(username, () =>
+      renewLease(userId, pending.intentId),
+    );
 
     await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
       method: "DELETE",
@@ -324,31 +413,89 @@ export async function finishGitAccountDeletion(
 }
 
 /**
+ * 退会を始めたまま消えた処理の後始末。
+ *
+ * BLOCKING の印は、立てた処理がユーザー削除まで辿り着かなかったことを意味する
+ * (削除と READY_TO_PURGE への遷移は同一トランザクションなので、BLOCKING が
+ * 残っている = 削除は確定していない)。期限が切れているならその処理はもう居ない。
+ * 外さないと、その利用者は資格情報の発行も、やり直しの退会もできない。
+ *
+ * ただし**利用者が本当に生きているかを毎回確かめてから外す**。消えているのに
+ * BLOCKING が残っているなら、同一トランザクションの前提が崩れているか、この経路の
+ * 外でユーザーが消されている。どちらも自動で判断してよい状態ではないので、
+ * 人の確認に回す。
+ *
+ * @returns 外した件数と、人の確認に回した件数。
+ */
+export async function releaseExpiredGitAccountDeletionBlocks({
+  limit = 20,
+}: { limit?: number } = {}): Promise<{ released: number; review: number }> {
+  const expiredBefore = new Date();
+  const stuck = await listExpiredGitAccountDeletionBlocks({
+    expiredBefore,
+    limit,
+  });
+  let released = 0;
+  let review = 0;
+
+  for (const entry of stuck) {
+    if (!(await existsUserById({ id: entry.userId }))) {
+      await sendToReview(
+        entry.userId,
+        "the user is gone but the marker never reached READY_TO_PURGE; " +
+          "the Forgejo account may still exist",
+      );
+      review += 1;
+      continue;
+    }
+
+    // 見た行と同じであることを確かめてから外す。見てから外すまでの間に
+    // 新しい退会が始まっていたら、その印を消してしまう。
+    if (
+      await releaseGitAccountDeletionBlock({
+        userId: entry.userId,
+        intentId: entry.intentId,
+        expiredBefore,
+      })
+    ) {
+      released += 1;
+      await audit(
+        auditLogActions.git.deletionMarkerReleased,
+        `userId: ${entry.userId}; the attempt that created it never finished`,
+      );
+    }
+  }
+
+  return { released, review };
+}
+
+/**
  * 片付け待ちを拾って再試行する。定期実行から呼ぶ。
  *
- * @returns 片付いた件数と、まだ残っている件数。
+ * 掴んだ行は期限で押さえる。長引く場合は処理の中から延ばすので、重なった実行が
+ * 同じ相手を触ることはない。落ちた場合は期限切れとして次の実行が引き取る。
+ *
+ * @returns 片付いた件数、まだ残っている件数、人の確認待ちの件数。
  */
-/**
- * 直前に試したものを飛ばす幅。重なった定期実行が同じ行を掴むのを防ぐ。
- * 排他ではないので二重に走っても壊れないが、無駄な往復と重複した記録が減る。
- */
-const RETRY_COOLDOWN_MS = 5 * 60 * 1000;
-
 export async function retryPendingGitDeletions({
   limit = 20,
-}: { limit?: number } = {}): Promise<{ finished: number; pending: number }> {
-  const cutoff = new Date(Date.now() - RETRY_COOLDOWN_MS);
-  const pending = await listPendingGitAccountDeletions({
-    limit,
-    skipAttemptedSince: cutoff,
-  });
+}: { limit?: number } = {}): Promise<{
+  finished: number;
+  pending: number;
+  review: number;
+}> {
+  const pending = await listPendingGitAccountDeletions({ limit });
   let finished = 0;
   let attempted = 0;
 
   for (const entry of pending) {
-    // 掴めた分だけ進める。取り掛かる時点で時刻を進めるので、同時に始まった
-    // 別の実行は同じ行を飛ばす。
-    if (!(await claimGitAccountDeletion({ userId: entry.userId, notAttemptedSince: cutoff }))) {
+    // 掴めた分だけ進める。条件付き更新なので、同時に始まった別の実行は掴めない。
+    if (
+      !(await claimGitAccountDeletion({
+        userId: entry.userId,
+        leaseUntil: leaseDeadline(),
+      }))
+    ) {
       continue;
     }
     attempted += 1;
@@ -357,5 +504,9 @@ export async function retryPendingGitDeletions({
     }
   }
 
-  return { finished, pending: attempted - finished };
+  return {
+    finished,
+    pending: attempted - finished,
+    review: await countGitAccountDeletionsNeedingReview(),
+  };
 }

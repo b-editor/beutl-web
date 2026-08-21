@@ -74,6 +74,15 @@ export const auditLogActions = {
     // purge に失敗して Forgejo 側にユーザーが残った。自動では再試行されないので、
     // 手で消すための手がかりをここに残す。
     accountPurgeFailed: "git.accountPurgeFailed",
+    // 自動では決着できない (控えの相手が別人になっている、利用者が消えたのに
+    // 印が進んでいない)。人が判断するまで Forgejo 側にアカウントが残りうる。
+    accountNeedsReview: "git.accountNeedsReview",
+    // 退会を始めたまま消えた処理の印を外した。外さないとその利用者は資格情報の
+    // 発行も退会もできない。
+    deletionMarkerReleased: "git.deletionMarkerReleased",
+    // 発行したトークンの控えを残せず、Forgejo 側の取り消しにも失敗した。
+    // 一覧に出ないので利用者は失効できない。手で消すための手掛かりを残す。
+    credentialOrphaned: "git.credentialOrphaned",
   },
 } as const;
 

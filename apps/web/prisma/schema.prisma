@@ -207,6 +207,10 @@ model GitAccountDeletion {
   forgejoUsername String?
   forgejoUserId   Int?
   createdAt       DateTime @default(now())
+  // 今この行を進めている処理の期限。過ぎていれば、その処理はもう居ないものとして
+  // 他の要求が引き取ってよい。これが無いと、印を立てた直後に Worker が落ちた場合に
+  // BLOCKING のまま誰も進められず、資格情報の発行も退会もできなくなる。
+  leaseUntil      DateTime?
   attempts        Int      @default(0)
   lastAttemptAt   DateTime?
   lastError       String?

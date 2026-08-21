@@ -8,38 +8,114 @@ import type { PrismaTransaction } from "./transaction";
  * phase の意味は 1 つずつしかない。
  *   BLOCKING       退会を始めた。資格情報の発行を止める。**まだ purge しない**
  *   READY_TO_PURGE Beutl 側のユーザーが実際に消えた。purge してよい
+ *   NEEDS_REVIEW   自動では決着できない。人が確認するまで触らない
  *
  * BLOCKING のまま purge すると、ローカルの削除が失敗して生き残った利用者の
  * Forgejo アカウントとリポジトリを消すことになる。
+ *
+ * `leaseUntil` は「今この行を進めている処理が生きているとみなす期限」。
+ * 期限内は他の処理が触らない。期限切れは、握っていた処理が落ちた印なので
+ * 引き取ってよい。これが無いと、印を立てた直後に Worker が落ちただけで
+ * BLOCKING が永久に残り、その利用者は退会も資格情報の発行もできなくなる。
  */
 
 export { GitAccountDeletionPhase };
 
+/** 期限切れ (NULL を含む) を表す where 断片。NULL は移行前の行と、期限を持たない行。 */
+function leaseExpired(now: Date) {
+  return {
+    OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+  };
+}
+
 /**
  * 退会の意思表示。対象がまだ分からない段階でも書ける。
  *
- * @returns `owned` は、渡した intentId でこの行を立てられたかどうか。同じ利用者の
- *   退会が同時に走ると 1 つの行を共有するので、先に立てた方だけが true になる。
+ * @returns `owned` は、この呼び出しがこの行を握ったかどうか。同じ利用者の退会が
+ *   同時に走ると 1 つの行を共有するので、先に立てた方だけが true になる。
  *   **false のとき、この行は他人のもの**。取り消しても READY にしてもいけない。
+ *   `tookOver` は、期限切れの印を引き取った場合に true。
  */
 export async function startGitAccountDeletion({
   userId,
   intentId,
+  leaseUntil,
+  now = new Date(),
   prisma,
 }: {
   userId: string;
   intentId: string;
+  leaseUntil: Date;
+  now?: Date;
   prisma?: PrismaTransaction;
-}): Promise<{ intentId: string; owned: boolean }> {
+}): Promise<{ intentId: string; owned: boolean; tookOver: boolean }> {
   const db = prisma ?? (await getDb());
+
+  // 1. 期限切れの BLOCKING があれば引き取る。条件付き更新なので、同時に来た
+  //    2 つのうち 1 つしか成立しない (負けた方は期限が先に進んだ行を見る)。
+  //
+  //    引き取ってよいのは BLOCKING だけ。ユーザー削除と READY_TO_PURGE への
+  //    遷移は同一トランザクションなので、BLOCKING が残っている = ユーザーは
+  //    まだ生きている。READY_TO_PURGE と NEEDS_REVIEW は既に利用者が消えた後で、
+  //    新しい退会要求が乗ってよい状態ではない。
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: {
+      userId,
+      phase: GitAccountDeletionPhase.BLOCKING,
+      ...leaseExpired(now),
+    },
+    data: {
+      intentId,
+      leaseUntil,
+      attempts: { increment: 1 },
+      lastAttemptAt: now,
+      lastError: "前の退会処理が期限までに終わらなかったため引き取りました",
+    },
+  });
+  if (count === 1) {
+    return { intentId, owned: true, tookOver: true };
+  }
+
+  // 2. 無ければ立てる。既にあれば、それは期限内の他人の印。phase も intentId も
+  //    触らない (READY_TO_PURGE を BLOCKING に落とすと、既に消えた利用者の
+  //    後始末が二度と進まなくなる)。
   const row = await db.gitAccountDeletion.upsert({
     where: { userId },
-    create: { userId, intentId },
-    // やり直しでも phase は戻さない。READY_TO_PURGE を BLOCKING に落とすと、
-    // 既に消えた利用者の後始末が二度と進まなくなる。intentId も先勝ちのまま。
+    create: { userId, intentId, leaseUntil },
     update: {},
   });
-  return { intentId: row.intentId, owned: row.intentId === intentId };
+  return {
+    intentId: row.intentId,
+    owned: row.intentId === intentId,
+    tookOver: false,
+  };
+}
+
+/**
+ * 握っている期限を延ばす。**自分の印であるときだけ**通る。
+ *
+ * トークンの失効は本数に比例して時間がかかる。延ばさないと、作業中に期限が切れて
+ * 別の処理に引き取られ、2 つが同じ相手を消しにいく。
+ *
+ * @returns まだ自分が握っているかどうか。false なら引き取られている。
+ */
+export async function renewGitAccountDeletionLease({
+  userId,
+  intentId,
+  leaseUntil,
+  prisma,
+}: {
+  userId: string;
+  intentId: string;
+  leaseUntil: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: { userId, intentId },
+    data: { leaseUntil },
+  });
+  return count === 1;
 }
 
 /** Forgejo 側の対象が分かったら記録する。 */
@@ -85,8 +161,8 @@ export async function markGitAccountDeletionReady({
     data: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
   });
 
-  // 印が消えていたらユーザーを消してはいけない。誰も後始末できなくなり、
-  // その間に発行されたトークンが Forgejo に残ったままになる。
+  // 印が消えていたら (あるいは引き取られていたら) ユーザーを消してはいけない。
+  // 誰も後始末できなくなり、その間に発行されたトークンが Forgejo に残ったままになる。
   // 呼び出し元は同じトランザクションなので、投げれば削除ごと巻き戻る。
   if (count !== 1) {
     throw new Error(
@@ -114,6 +190,8 @@ export async function markGitAccountDeletionNeedsReview({
     where: { userId },
     data: {
       phase: GitAccountDeletionPhase.NEEDS_REVIEW,
+      // 人の判断待ちなので期限は持たせない。自動で引き取られないようにする。
+      leaseUntil: null,
       lastAttemptAt: new Date(),
       lastError: reason.slice(0, 500),
     },
@@ -168,29 +246,23 @@ export async function deleteGitAccountDeletion({
 /**
  * 片付け待ちを古い順に返す。**READY_TO_PURGE だけ**。
  * BLOCKING はまだ利用者が生きている可能性があるので、決して混ぜない。
+ *
+ * 期限が残っているものは飛ばす。別の実行が今まさに進めている。
  */
 export async function listPendingGitAccountDeletions({
   limit = 20,
-  /** これより後に試したものは飛ばす。重なった定期実行が同じ行を掴まないため。 */
-  skipAttemptedSince,
+  now = new Date(),
   prisma,
 }: {
   limit?: number;
-  skipAttemptedSince?: Date;
+  now?: Date;
   prisma?: PrismaTransaction;
 } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitAccountDeletion.findMany({
     where: {
       phase: GitAccountDeletionPhase.READY_TO_PURGE,
-      ...(skipAttemptedSince
-        ? {
-            OR: [
-              { lastAttemptAt: null },
-              { lastAttemptAt: { lt: skipAttemptedSince } },
-            ],
-          }
-        : {}),
+      ...leaseExpired(now),
     },
     orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
     take: limit,
@@ -198,21 +270,23 @@ export async function listPendingGitAccountDeletions({
 }
 
 /**
- * 取り掛かる印を付ける。
+ * 片付けに取り掛かる。期限を自分のものとして押さえる。
  *
- * `lastAttemptAt` を先に進めることで、同時に始まった定期実行が同じ行を掴まない
- * ようにする。厳密な排他ではない (2 つが同じ瞬間に更新しうる) が、処理自体は
- * 冪等なので、重複した往復と記録を減らせれば足りる。
+ * 条件付き更新なので、同時に始まった定期実行のうち 1 つしか掴めない。処理が長引く
+ * ときは renewGitAccountDeletionLease で延ばす。延ばさないまま期限が切れたら、
+ * 次の実行が引き取る (処理自体は冪等なので二重に走っても壊れない)。
  *
- * @returns 掴めたかどうか。既に誰かが進めていれば false。
+ * @returns 掴めたかどうか。
  */
 export async function claimGitAccountDeletion({
   userId,
-  notAttemptedSince,
+  leaseUntil,
+  now = new Date(),
   prisma,
 }: {
   userId: string;
-  notAttemptedSince: Date;
+  leaseUntil: Date;
+  now?: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
@@ -220,14 +294,78 @@ export async function claimGitAccountDeletion({
     where: {
       userId,
       phase: GitAccountDeletionPhase.READY_TO_PURGE,
-      OR: [
-        { lastAttemptAt: null },
-        { lastAttemptAt: { lt: notAttemptedSince } },
-      ],
+      ...leaseExpired(now),
     },
-    data: { lastAttemptAt: new Date() },
+    data: { leaseUntil, lastAttemptAt: now },
   });
   return count === 1;
+}
+
+/**
+ * 期限が切れた BLOCKING の印を古い順に返す。
+ *
+ * これがある = 退会を始めた処理が、ユーザー削除まで辿り着かずに消えた。
+ * 放っておくと、その利用者は退会も資格情報の発行もできない。
+ */
+export async function listExpiredGitAccountDeletionBlocks({
+  expiredBefore,
+  limit = 20,
+  prisma,
+}: {
+  expiredBefore: Date;
+  limit?: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.findMany({
+    where: {
+      phase: GitAccountDeletionPhase.BLOCKING,
+      ...leaseExpired(expiredBefore),
+    },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+}
+
+/**
+ * 期限切れの BLOCKING を外す。
+ *
+ * 見た時点と同じ行であることを intentId と期限で確かめてから消す。確かめずに消すと、
+ * 見てから消すまでの間に始まった新しい退会処理の印を消してしまう。
+ *
+ * @returns 外せたかどうか。false なら誰かが先に引き取っている。
+ */
+export async function releaseGitAccountDeletionBlock({
+  userId,
+  intentId,
+  expiredBefore,
+  prisma,
+}: {
+  userId: string;
+  intentId: string;
+  expiredBefore: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitAccountDeletion.deleteMany({
+    where: {
+      userId,
+      intentId,
+      phase: GitAccountDeletionPhase.BLOCKING,
+      ...leaseExpired(expiredBefore),
+    },
+  });
+  return count === 1;
+}
+
+/** 人の確認待ちの件数。0 でないなら誰かが見に行く必要がある。 */
+export async function countGitAccountDeletionsNeedingReview({
+  prisma,
+}: { prisma?: PrismaTransaction } = {}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.count({
+    where: { phase: GitAccountDeletionPhase.NEEDS_REVIEW },
+  });
 }
 
 export async function recordGitAccountDeletionAttempt({

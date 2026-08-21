@@ -26,7 +26,7 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
-import { isForgejoConfigured, retryPendingGitDeletions } from "@beutl/forgejo";
+import { isForgejoConfigured, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -150,16 +150,39 @@ export default {
    * Forgejo が落ちている間に退会があると purge が失敗し、GitAccountDeletion に
    * 残る。利用者のリクエストの中で拾うと、その人の応答が遅くなるうえ、退会が
    * 起きるまで永久に残る。定期実行でだけ消化する。
+   *
+   * 併せて、退会を始めたまま消えた処理の印も外す。これを外さないと、その利用者は
+   * 資格情報の発行も、やり直しの退会もできないまま固まる。
    */
   async reconcileGitDeletions(): Promise<void> {
 
     if (!isForgejoConfigured()) return;
 
     try {
-      const { finished, pending } = await retryPendingGitDeletions();
+      const stale = await releaseExpiredGitAccountDeletionBlocks();
+      if (stale.released > 0 || stale.review > 0) {
+        console.log(
+          `git deletions: released ${stale.released} stale markers, ` +
+            `${stale.review} sent to review`,
+        );
+      }
+    } catch (error) {
+      console.error("failed to release stale Git deletion markers", error);
+    }
+
+    try {
+      const { finished, pending, review } = await retryPendingGitDeletions();
       if (finished > 0 || pending > 0) {
         console.log(
           `git deletions: finished ${finished}, still pending ${pending}`,
+        );
+      }
+      // 自動では決着しない分。誰も見ないと Forgejo に生きたアカウントが残るので、
+      // 件数を毎回出して気付けるようにする (0 のときは黙る)。
+      if (review > 0) {
+        console.error(
+          `git deletions: ${review} entries need a human decision ` +
+            "(GitAccountDeletion.phase = NEEDS_REVIEW)",
         );
       }
     } catch (error) {

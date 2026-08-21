@@ -124,6 +124,26 @@ async function commitTemplates(
 }
 
 /**
+ * リポジトリを読み取り専用にする / 解除する。
+ *
+ * Forgejo の archived は push を 403 で拒み、clone は通す (16.0.2 で実測)。
+ * contents API の書き込みも 423 で拒まれるので、直す前には必ず解除する。
+ *
+ * 代理実行 (Sudo) は使わない。これは利用者の操作ではなく、壊れた状態を広げない
+ * ための処置で、当人の権限が揺れていても効く必要がある。
+ */
+async function setRepositoryArchived(
+  owner: string,
+  name: string,
+  archived: boolean,
+): Promise<void> {
+  await forgejoRequest(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+    { method: "PATCH", body: { archived } },
+  );
+}
+
+/**
  * テンプレートのコミットに失敗した後始末。
  *
  * **削除はしない。** 外部で作られたリポジトリを消す判断は、こちらからは安全に
@@ -132,8 +152,10 @@ async function commitTemplates(
  * 同じ隙間がある。空に見えるだけの誰かのリポジトリを消す危険を、テンプレートを
  * 入れ直す手間と引き換えにはできない。
  *
- * 代わりに足りないものを入れ直す。入れられなければ記録だけ残す。呼び出し元は
- * 既に別の例外を投げようとしていて、それを握り潰すと本来の失敗理由が消える。
+ * 代わりに足りないものを入れ直す。それも駄目なら読み取り専用にする。
+ * .gitattributes の無いリポジトリを push できる状態で残すと、数 GiB の動画が
+ * LFS を通らず普通の git オブジェクトとして入り、後から剥がせなくなる。
+ * archived なら clone はできるので、既に入っているものは取り出せる。
  */
 async function repairAfterTemplateFailure(
   sudo: string,
@@ -142,13 +164,25 @@ async function repairAfterTemplateFailure(
   const name = repository.name;
   try {
     const current = await getRepository(sudo, sudo, name);
+    // 自分が作ったものでなければ触らない。
     if (!current || current.id !== repository.id) return;
     await commitTemplates(sudo, name, current.default_branch);
+    return;
   } catch (error) {
     console.error(
       `${sudo}/${name} was created without .gitattributes and could not be ` +
-        "repaired; media pushed to it will not use LFS. Creating it again " +
-        "under the same name goes through the repair path.",
+        "repaired; locking it so media cannot be pushed without LFS",
+      error,
+    );
+  }
+
+  try {
+    await setRepositoryArchived(sudo, name, true);
+  } catch (error) {
+    console.error(
+      `${sudo}/${name} could not be locked either; media pushed to it will ` +
+        "not use LFS. Creating it again under the same name goes through " +
+        "the repair path.",
       error,
     );
   }
@@ -189,9 +223,9 @@ async function assertTemplatesAreCanonical(sudo: string, name: string) {
   if (await hasTemplates(sudo, name)) return;
   throw new Error(
     `${sudo}/${name} does not have the expected Beutl defaults; media pushed ` +
-      "to it will not use LFS. Creating the repository again under the same " +
-      "name repairs it; if that keeps failing, check .gitattributes and " +
-      ".gitignore by hand.",
+      "to it will not use LFS, so it is left read-only. Creating the " +
+      "repository again under the same name repairs it and lifts that; if " +
+      "that keeps failing, check .gitattributes and .gitignore by hand.",
   );
 }
 
@@ -223,6 +257,8 @@ async function reconcileAfterAmbiguousCreate(
     const existing = await getRepository(sudo, sudo, name);
     if (!existing) return null;
 
+    // 前回の失敗で読み取り専用にしてあると contents API は 423 を返す。先に外す。
+    if (existing.archived) await setRepositoryArchived(sudo, name, false);
     await commitTemplates(sudo, name, existing.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
     return existing;
@@ -267,6 +303,10 @@ export async function createRepository(
     // 揃っていないなら、前回の作成が途中で終わったもの。ここで 409 にすると
     // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
     // やり直しをそのまま修復として扱う。
+    //
+    // 前回の失敗で読み取り専用にしてあると contents API は 423 を返す。先に外す。
+    // 直せたときだけ push できる状態に戻る。
+    if (conflicting.archived) await setRepositoryArchived(sudo, name, false);
     await commitTemplates(sudo, name, conflicting.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
     return conflicting;

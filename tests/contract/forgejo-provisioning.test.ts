@@ -12,8 +12,16 @@ vi.mock("@beutl/db", () => ({
     return {
       intentId: deletionIntentOwner,
       owned: deletionIntentOwner === intentId,
+      tookOver: false,
     };
   },
+  renewGitAccountDeletionLease: async ({ intentId }: { intentId: string }) =>
+    deletionIntentOwner === null || deletionIntentOwner === intentId,
+  cancelPendingGitAccountDeletion: async () => {
+    deletionIntentOwner = null;
+    pendingDeletion = null;
+  },
+  markGitAccountDeletionNeedsReview: async () => undefined,
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
   claimGitAccountDeletion: async () => true,
@@ -22,7 +30,11 @@ vi.mock("@beutl/db", () => ({
   },
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
-  GitAccountDeletionPhase: { BLOCKING: "BLOCKING", READY_TO_PURGE: "READY_TO_PURGE" },
+  GitAccountDeletionPhase: {
+    BLOCKING: "BLOCKING",
+    READY_TO_PURGE: "READY_TO_PURGE",
+    NEEDS_REVIEW: "NEEDS_REVIEW",
+  },
   // 本物は競合時に再試行する。ここでは中身をそのまま実行するだけでよい。
   startRetryableTransaction: async (fn: (tx: unknown) => unknown) =>
     await fn(undefined),

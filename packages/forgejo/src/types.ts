@@ -32,6 +32,12 @@ export type ForgejoRepository = {
   private: boolean;
   empty: boolean;
   /**
+   * 読み取り専用。push は 403、contents API の書き込みは 423 で拒まれ、clone は
+   * 通る (Forgejo 16.0.2 で実測)。テンプレートを入れ損ねたリポジトリを、LFS を
+   * 通らない push から守るために立てる。
+   */
+  archived: boolean;
+  /**
    * KiB 単位。リポジトリ本体と LFS の合計で、LFS の保存先が S3 でも変わらない
    * (Forgejo 16.0.2 で実測)。同じ名前でも ForgejoContentsEntry.size は別物なので注意。
    */

@@ -1,5 +1,7 @@
 import {
+  auditLogActions,
   countGitCredentials,
+  createAuditLog,
   createGitCredential,
   deleteGitCredential,
   findGitCredential,
@@ -94,6 +96,43 @@ export function tokensPath(username: string, tokenId?: number): string {
 }
 
 /**
+ * 発行したトークンを畳む。畳めなかったら記録を残す。
+ *
+ * 控えを残せなかったトークンは一覧に出ないので、利用者からは失効できない。
+ * 取り消しにも失敗したなら、そのままでは誰も存在に気付けない。退会が最後まで
+ * 通れば purge 直前の掃き直しで消えるが、退会が取りやめになった場合は残り続ける。
+ * 手で消せるように、対象が分かる形で監査に残す。
+ */
+async function dropIssuedToken(
+  username: string,
+  tokenId: number,
+  why: string,
+): Promise<void> {
+  try {
+    await forgejoRequest(tokensPath(username, tokenId), {
+      method: "DELETE",
+      responseType: "none",
+    });
+  } catch (deleteError) {
+    console.error(
+      `failed to drop the Forgejo token ${tokenId} for ${username} (${why}); ` +
+        "it is not in our records, so nobody can revoke it from the UI",
+      deleteError,
+    );
+    await createAuditLog({
+      userId: null,
+      action: auditLogActions.git.credentialOrphaned,
+      details: `forgejoUsername: ${username}; tokenId: ${tokenId}; ${why}`,
+      ipAddress: null,
+      userAgent: null,
+      port: null,
+    }).catch((auditError) => {
+      console.error("failed to record the orphaned token", auditError);
+    });
+  }
+}
+
+/**
  * git のパスワードとして使うアクセストークンを発行する。
  *
  * 端末ごとに 1 本持てる。既存のトークンには触らないので、ある端末で発行しても
@@ -147,15 +186,7 @@ export async function issueGitCredential(
   // いるので、投げる前に Forgejo 側を畳む。放っておくと、誰にも使えず誰にも
   // 失効させられないトークンが残る。
   if (!issued.sha1) {
-    await forgejoRequest(tokensPath(username, issued.id), {
-      method: "DELETE",
-      responseType: "none",
-    }).catch((deleteError) => {
-      console.error(
-        `failed to drop the unusable token ${issued.id} for ${username}`,
-        deleteError,
-      );
-    });
+    await dropIssuedToken(username, issued.id, "Forgejo returned no token");
     throw new Error(
       `Forgejo returned no token for "${name}" (fields: ${Object.keys(issued).join(", ")})`,
     );
@@ -167,15 +198,11 @@ export async function issueGitCredential(
   try {
     await assertGitAccountNotBeingDeleted(userId);
   } catch (error) {
-    await forgejoRequest(tokensPath(username, issued.id), {
-      method: "DELETE",
-      responseType: "none",
-    }).catch((deleteError) => {
-      console.error(
-        `failed to drop the token ${issued.id} issued while ${userId} was being deleted`,
-        deleteError,
-      );
-    });
+    await dropIssuedToken(
+      username,
+      issued.id,
+      `issued while ${userId} was being deleted`,
+    );
     throw error;
   }
 
@@ -206,16 +233,7 @@ export async function issueGitCredential(
     // 控えを残せなかったので、Forgejo 側のトークンも消す。ここで諦めると、
     // 一覧にも出ず失効もできないトークンが生き続ける。消せなかった場合は、
     // 握り潰さずに記録を残す (元の例外は投げ直すので、ここでは投げない)。
-    await forgejoRequest(tokensPath(username, issued.id), {
-      method: "DELETE",
-      responseType: "none",
-    }).catch((deleteError) => {
-      console.error(
-        `failed to roll back the Forgejo token ${issued.id} for ${username}; ` +
-          "it is not in our records, so nobody can revoke it from the UI",
-        deleteError,
-      );
-    });
+    await dropIssuedToken(username, issued.id, "our record was not written");
 
     // 上限に達していた場合は、名前の重複と取り違えさせない。
     if (error instanceof CredentialLimitReachedError) {
