@@ -4,6 +4,7 @@ import {
   deleteGitAccountDeletion,
   findGitAccountByUserId,
   findGitAccountDeletion,
+  claimGitAccountDeletion,
   listPendingGitAccountDeletions,
   markGitAccountDeletionNeedsReview,
   recordGitAccountDeletionAttempt,
@@ -41,6 +42,20 @@ const TOKEN_PAGE_SIZE = 50;
 
 /** 一覧を読む上限ページ数。壊れた応答で無限に回らないための箍。 */
 const MAX_TOKEN_PAGES = 40;
+
+/**
+ * 同じ利用者の退会処理が既に走っている。
+ *
+ * 印は利用者ごとに 1 つしか持てないので、後から来た方は相手の印に乗るしかない。
+ * 乗ったまま進めると、相手が失敗して印を取り消したときに、後始末できないまま
+ * ユーザーだけが消える。乗らずに断る。
+ */
+export class GitAccountDeletionInProgressError extends Error {
+  constructor(readonly userId: string) {
+    super(`Another deletion of ${userId} is already in progress`);
+    this.name = "GitAccountDeletionInProgressError";
+  }
+}
 
 export class GitAccountBeingDeletedError extends Error {
   constructor(readonly userId: string) {
@@ -153,14 +168,16 @@ export async function beginGitAccountDeletion(
   //
   // 返るのは「この行を持っている」id。同じ利用者の退会が同時に走ったら先勝ちで、
   // 後から来た方はここで相手の id を受け取る。取り消してよいのは自分の id のときだけ。
-  const ownedIntentId = await startGitAccountDeletion({
-    userId,
-    intentId: crypto.randomUUID(),
-  });
+  const intentId = crypto.randomUUID();
+  const marker = await startGitAccountDeletion({ userId, intentId });
+  if (!marker.owned) {
+    // 既に別の退会処理が持っている印。乗らない。
+    throw new GitAccountDeletionInProgressError(userId);
+  }
 
   try {
     const target = await resolveForgejoUser(userId);
-    if (!target) return { forgejoUsername: null, intentId: ownedIntentId };
+    if (!target) return { forgejoUsername: null, intentId };
 
     await setGitAccountDeletionTarget({
       userId,
@@ -168,20 +185,19 @@ export async function beginGitAccountDeletion(
       forgejoUserId: target.id,
     });
     await revokeAllTokens(target.username);
-    return { forgejoUsername: target.username, intentId: ownedIntentId };
+    return { forgejoUsername: target.username, intentId };
   } catch (error) {
     // 準備の段階で失敗した = 利用者はまだ生きている。印を残すと、その人は
     // 二度と資格情報を発行できなくなる。BLOCKING のうちだけ取り消す。
-    await cancelPendingGitAccountDeletion({
-      userId,
-      intentId: ownedIntentId,
-    }).catch((cancelError) => {
-      console.error(
-        `failed to cancel the deletion marker of ${userId}; ` +
-          "they cannot issue git credentials until it is removed",
-        cancelError,
-      );
-    });
+    await cancelPendingGitAccountDeletion({ userId, intentId }).catch(
+      (cancelError) => {
+        console.error(
+          `failed to cancel the deletion marker of ${userId}; ` +
+            "they cannot issue git credentials until it is removed",
+          cancelError,
+        );
+      },
+    );
     throw error;
   }
 }
@@ -321,17 +337,25 @@ const RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 export async function retryPendingGitDeletions({
   limit = 20,
 }: { limit?: number } = {}): Promise<{ finished: number; pending: number }> {
+  const cutoff = new Date(Date.now() - RETRY_COOLDOWN_MS);
   const pending = await listPendingGitAccountDeletions({
     limit,
-    skipAttemptedSince: new Date(Date.now() - RETRY_COOLDOWN_MS),
+    skipAttemptedSince: cutoff,
   });
   let finished = 0;
+  let attempted = 0;
 
   for (const entry of pending) {
+    // 掴めた分だけ進める。取り掛かる時点で時刻を進めるので、同時に始まった
+    // 別の実行は同じ行を飛ばす。
+    if (!(await claimGitAccountDeletion({ userId: entry.userId, notAttemptedSince: cutoff }))) {
+      continue;
+    }
+    attempted += 1;
     if (await finishGitAccountDeletion(entry.userId)) {
       finished += 1;
     }
   }
 
-  return { finished, pending: pending.length - finished };
+  return { finished, pending: attempted - finished };
 }

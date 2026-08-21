@@ -154,6 +154,38 @@ git のトークン認証を素通しする。16.0.2 で実測)。確実に断�
 食い違えば中止する。復元ずれで同じ名前が別人を指しているとき、そのまま進めると
 別人のトークンを全部失効させてリポジトリごと消してしまう。
 
+#### 片付け待ちを見る
+
+自動で消化されるのは `READY_TO_PURGE` だけ。`NEEDS_REVIEW` は人が判断する。専用の
+画面もコマンドも用意していないので、当面は DB を直接見る。
+
+```sql
+-- 片付いていない退会
+SELECT "userId", "phase", "forgejoUsername", "forgejoUserId",
+       "attempts", "lastAttemptAt", "lastError"
+FROM "GitAccountDeletion"
+ORDER BY "createdAt";
+```
+
+`NEEDS_REVIEW` が出たら、Forgejo 側で何が起きているかを確かめる。
+
+- **控えの名前が別人になっている** — 元のユーザーが復元で消えたか、名前が再利用された。
+  Forgejo に元のユーザーが居ないことを確かめたら、行を消してよい
+- **一時的な障害が続いていた** — Forgejo が復旧したら `READY_TO_PURGE` に戻す。
+  次の定期実行が拾う
+
+```sql
+-- 再試行させる
+UPDATE "GitAccountDeletion" SET "phase" = 'READY_TO_PURGE', "attempts" = 0
+WHERE "userId" = '...';
+
+-- 片付いたと確認できたので閉じる
+DELETE FROM "GitAccountDeletion" WHERE "userId" = '...';
+```
+
+**行を消す前に、Forgejo 側にユーザーが残っていないことを必ず確かめる。** 残ったまま
+消すと、端末のトークンが生きたまま誰も気づけなくなる。
+
 ### 5. トークンは端末ごとに 1 本持てる
 
 トークンを 1 本に固定すると、ある端末で発行した瞬間に他の端末の資格情報が切れる。

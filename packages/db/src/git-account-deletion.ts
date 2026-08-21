@@ -18,8 +18,9 @@ export { GitAccountDeletionPhase };
 /**
  * 退会の意思表示。対象がまだ分からない段階でも書ける。
  *
- * @returns この行を持っている intentId。同じ利用者の退会が同時に走ったとき、
- *   先に立てた方の id が返る。取り消してよいのは自分の id のときだけ。
+ * @returns `owned` は、渡した intentId でこの行を立てられたかどうか。同じ利用者の
+ *   退会が同時に走ると 1 つの行を共有するので、先に立てた方だけが true になる。
+ *   **false のとき、この行は他人のもの**。取り消しても READY にしてもいけない。
  */
 export async function startGitAccountDeletion({
   userId,
@@ -29,7 +30,7 @@ export async function startGitAccountDeletion({
   userId: string;
   intentId: string;
   prisma?: PrismaTransaction;
-}): Promise<string> {
+}): Promise<{ intentId: string; owned: boolean }> {
   const db = prisma ?? (await getDb());
   const row = await db.gitAccountDeletion.upsert({
     where: { userId },
@@ -38,7 +39,7 @@ export async function startGitAccountDeletion({
     // 既に消えた利用者の後始末が二度と進まなくなる。intentId も先勝ちのまま。
     update: {},
   });
-  return row.intentId;
+  return { intentId: row.intentId, owned: row.intentId === intentId };
 }
 
 /** Forgejo 側の対象が分かったら記録する。 */
@@ -69,14 +70,18 @@ export async function setGitAccountDeletionTarget({
  */
 export async function markGitAccountDeletionReady({
   userId,
+  intentId,
   prisma,
 }: {
   userId: string;
+  intentId: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   const { count } = await db.gitAccountDeletion.updateMany({
-    where: { userId },
+    // 自分が立てた印であることまで見る。他人の印に乗って進めると、その相手が
+    // 失敗して印を取り消したときに、後始末できないままユーザーだけが消える。
+    where: { userId, intentId },
     data: { phase: GitAccountDeletionPhase.READY_TO_PURGE },
   });
 
@@ -85,7 +90,8 @@ export async function markGitAccountDeletionReady({
   // 呼び出し元は同じトランザクションなので、投げれば削除ごと巻き戻る。
   if (count !== 1) {
     throw new Error(
-      `expected exactly one GitAccountDeletion for ${userId}, updated ${count}`,
+      `expected exactly one GitAccountDeletion for ${userId} with intent ` +
+        `${intentId}, updated ${count}`,
     );
   }
 }
@@ -189,6 +195,39 @@ export async function listPendingGitAccountDeletions({
     orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
     take: limit,
   });
+}
+
+/**
+ * 取り掛かる印を付ける。
+ *
+ * `lastAttemptAt` を先に進めることで、同時に始まった定期実行が同じ行を掴まない
+ * ようにする。厳密な排他ではない (2 つが同じ瞬間に更新しうる) が、処理自体は
+ * 冪等なので、重複した往復と記録を減らせれば足りる。
+ *
+ * @returns 掴めたかどうか。既に誰かが進めていれば false。
+ */
+export async function claimGitAccountDeletion({
+  userId,
+  notAttemptedSince,
+  prisma,
+}: {
+  userId: string;
+  notAttemptedSince: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: {
+      userId,
+      phase: GitAccountDeletionPhase.READY_TO_PURGE,
+      OR: [
+        { lastAttemptAt: null },
+        { lastAttemptAt: { lt: notAttemptedSince } },
+      ],
+    },
+    data: { lastAttemptAt: new Date() },
+  });
+  return count === 1;
 }
 
 export async function recordGitAccountDeletionAttempt({

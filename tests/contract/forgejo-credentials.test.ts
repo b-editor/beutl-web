@@ -25,10 +25,17 @@ vi.mock("@beutl/db", () => ({
     }
     return value;
   },
-  startGitAccountDeletion: async ({ intentId }: { intentId: string }) =>
-    intentId,
+  startGitAccountDeletion: async ({ intentId }: { intentId: string }) => {
+    // 先に立てた方が勝つ。後から来た方には相手の id と owned:false を返す。
+    if (deletionIntentOwner === null) deletionIntentOwner = intentId;
+    return {
+      intentId: deletionIntentOwner,
+      owned: deletionIntentOwner === intentId,
+    };
+  },
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
+  claimGitAccountDeletion: async () => true,
   markGitAccountDeletionNeedsReview: async () => {
     neededReview = true;
   },
@@ -100,6 +107,7 @@ let pendingDeletion:
     }
   | null = null;
 let deletionStartsAfterFirstCheck = false;
+let deletionIntentOwner: string | null = null;
 let neededReview = false;
 let credentialCount = 0;
 let credentialCountAfterIssue: number | null = null;
@@ -113,6 +121,7 @@ const {
   MAX_CREDENTIALS_PER_USER,
   issueGitCredential,
   GitAccountBeingDeletedError,
+  GitAccountDeletionInProgressError,
   beginGitAccountDeletion,
   finishGitAccountDeletion,
   revokeGitCredential,
@@ -153,6 +162,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   pendingDeletion = null;
   deletionStartsAfterFirstCheck = false;
+  deletionIntentOwner = null;
   neededReview = false;
   credentialCount = 0;
   credentialCountAfterIssue = null;
@@ -718,6 +728,18 @@ describe("退会時の後始末", () => {
     expect(record(fetchMock).filter((c) => c.method === "DELETE")).toHaveLength(
       0,
     );
+  });
+
+  it("既に別の退会が走っていたら、その印に乗らない", async () => {
+    // 印は利用者ごとに 1 つ。相手の印に乗って進めると、相手が失敗して取り消した
+    // ときに、後始末できないままユーザーだけが消える。
+    deletionIntentOwner = "someone-elses-intent";
+
+    await expect(beginGitAccountDeletion("u1")).rejects.toBeInstanceOf(
+      GitAccountDeletionInProgressError,
+    );
+    // 相手の印を消しにいかない。
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("準備の段階で失敗したら印を取り消す", async () => {

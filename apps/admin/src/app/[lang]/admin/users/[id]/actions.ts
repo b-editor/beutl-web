@@ -256,7 +256,7 @@ export async function deleteUser({
       await deleteUserById({ userId, prisma: tx });
       // 「purge してよい」印は削除と同時に確定させる。別々にすると、削除が失敗
       // したのに purge 待ちの行だけが残り、生きている利用者のデータを消す。
-      await markGitAccountDeletionReady({ userId, prisma: tx });
+      await markGitAccountDeletionReady({ userId, intentId, prisma: tx });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.admin.userDeleted,

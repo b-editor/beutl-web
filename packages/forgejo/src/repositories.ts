@@ -147,7 +147,8 @@ async function repairAfterTemplateFailure(
   } catch (error) {
     console.error(
       `${sudo}/${name} was created without .gitattributes and could not be ` +
-        "repaired; media pushed to it will not use LFS",
+        "repaired; media pushed to it will not use LFS. Creating it again " +
+        "under the same name goes through the repair path.",
       error,
     );
   }
@@ -188,7 +189,9 @@ async function assertTemplatesAreCanonical(sudo: string, name: string) {
   if (await hasTemplates(sudo, name)) return;
   throw new Error(
     `${sudo}/${name} does not have the expected Beutl defaults; media pushed ` +
-      "to it will not use LFS. Check .gitattributes and .gitignore by hand.",
+      "to it will not use LFS. Creating the repository again under the same " +
+      "name repairs it; if that keeps failing, check .gitattributes and " +
+      ".gitignore by hand.",
   );
 }
 

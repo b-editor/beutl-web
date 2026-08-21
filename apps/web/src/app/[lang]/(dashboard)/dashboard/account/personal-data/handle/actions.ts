@@ -82,7 +82,7 @@ export async function deleteUser(token: string, identifier: string) {
       prisma,
     });
     await deleteUserById({ userId: intent.userId, prisma });
-    await markGitAccountDeletionReady({ userId: intent.userId, prisma });
+    await markGitAccountDeletionReady({ userId: intent.userId, intentId, prisma });
     return true;
   });
   if (!deleted) {

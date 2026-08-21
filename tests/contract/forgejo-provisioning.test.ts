@@ -6,10 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@beutl/db", () => ({
   // 退会処理の墓標。既定では「退会していない」。
   findGitAccountDeletion: async () => pendingDeletion,
-  startGitAccountDeletion: async ({ intentId }: { intentId: string }) =>
-    intentId,
+  startGitAccountDeletion: async ({ intentId }: { intentId: string }) => {
+    // 先に立てた方が勝つ。後から来た方には相手の id と owned:false を返す。
+    if (deletionIntentOwner === null) deletionIntentOwner = intentId;
+    return {
+      intentId: deletionIntentOwner,
+      owned: deletionIntentOwner === intentId,
+    };
+  },
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
+  claimGitAccountDeletion: async () => true,
   deleteGitAccountDeletion: async () => {
     pendingDeletion = null;
   },
@@ -31,6 +38,7 @@ vi.mock("@beutl/db", () => ({
   deleteGitCredential: async () => undefined,
 }));
 
+let deletionIntentOwner: string | null = null;
 let pendingDeletion: { userId: string; phase: string; forgejoUserId: number | null } | null =
   null;
 let profileUserName = "someone";
@@ -54,6 +62,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   pendingDeletion = null;
+  deletionIntentOwner = null;
   profileUserName = "someone";
   existingAccount = null;
   process.env.FORGEJO_BASE_URL = "https://git.example.test";
