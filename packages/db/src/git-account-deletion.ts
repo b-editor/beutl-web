@@ -123,23 +123,31 @@ export async function renewGitAccountDeletionLease({
   return count === 1;
 }
 
-/** Forgejo 側の対象が分かったら記録する。 */
+/**
+ * Forgejo 側の対象が分かったら記録する。**自分が握っている行だけ**。
+ *
+ * userId だけで書くと、期限切れで引き取られた後の処理が、引き取った側の控えを
+ * 上書きできてしまう。
+ */
 export async function setGitAccountDeletionTarget({
   userId,
+  intentId,
   forgejoUsername,
   forgejoUserId,
   prisma,
 }: {
   userId: string;
+  intentId: string;
   forgejoUsername: string;
   forgejoUserId: number;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitAccountDeletion.updateMany({
-    where: { userId },
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: { userId, intentId },
     data: { forgejoUsername, forgejoUserId },
   });
+  return count === 1;
 }
 
 /**
@@ -305,6 +313,7 @@ export async function listPendingGitAccountDeletions({
 export async function claimGitAccountDeletion({
   userId,
   intentId,
+  phase = GitAccountDeletionPhase.READY_TO_PURGE,
   leaseUntil,
   now = new Date(),
   prisma,
@@ -312,18 +321,101 @@ export async function claimGitAccountDeletion({
   userId: string;
   /** この実行が握る新しい印。以後の更新はすべてこれで条件付ける。 */
   intentId: string;
+  /** 掴む対象の状態。片付け待ちと、復活の照合待ち (PURGED) で使う。 */
+  phase?: GitAccountDeletionPhase;
   leaseUntil: Date;
   now?: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const { count } = await db.gitAccountDeletion.updateMany({
-    where: {
-      userId,
-      phase: GitAccountDeletionPhase.READY_TO_PURGE,
-      ...leaseExpired(now),
-    },
+    where: { userId, phase, ...leaseExpired(now) },
     data: { intentId, leaseUntil, lastAttemptAt: now },
+  });
+  return count === 1;
+}
+
+/**
+ * 消し終えた印を残す。**行は消さない。**
+ *
+ * Forgejo だけを退会前の時点に戻すと、ユーザーもリポジトリも端末のトークンも
+ * 復活する。beutl-web 側には利用者も行も残っていないので、消したという記録が
+ * 無ければ復活に誰も気付けず、Caddy を素通りする git 経路でそのトークンが使える。
+ * 消した相手を控え続け、後から照合できるようにする。
+ */
+export async function markGitAccountDeletionPurged({
+  userId,
+  intentId,
+  now = new Date(),
+  prisma,
+}: {
+  userId: string;
+  intentId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: { userId, intentId },
+    data: {
+      phase: GitAccountDeletionPhase.PURGED,
+      purgedAt: now,
+      // 照合は間隔を空けて回す。掴み直せるように期限は持たせない。
+      leaseUntil: null,
+      lastAttemptAt: now,
+      lastError: null,
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * 復活していないかを見る対象を古い順に返す。
+ *
+ * @param checkedBefore これより後に見たものは飛ばす。毎回全件を当たらないため。
+ */
+export async function listPurgedGitAccountDeletions({
+  checkedBefore,
+  limit = 20,
+  now = new Date(),
+  prisma,
+}: {
+  checkedBefore: Date;
+  limit?: number;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.findMany({
+    where: {
+      phase: GitAccountDeletionPhase.PURGED,
+      // 控えた相手が分からない行は照合しようがない。
+      forgejoUsername: { not: null },
+      ...leaseExpired(now),
+      OR: [
+        { lastAttemptAt: null },
+        { lastAttemptAt: { lt: checkedBefore } },
+      ],
+    },
+    orderBy: [{ lastAttemptAt: "asc" }, { purgedAt: "asc" }],
+    take: limit,
+  });
+}
+
+/** 見たという印だけ付ける。状態は変えない。 */
+export async function touchGitAccountDeletion({
+  userId,
+  intentId,
+  prisma,
+}: {
+  userId: string;
+  intentId: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: { userId, intentId },
+    data: { lastAttemptAt: new Date(), leaseUntil: null },
   });
   return count === 1;
 }

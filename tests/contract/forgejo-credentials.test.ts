@@ -37,7 +37,8 @@ vi.mock("@beutl/db", () => ({
   // 期限の延長。握ったままである限り true。
   renewGitAccountDeletionLease: async ({ intentId }: { intentId: string }) =>
     deletionIntentOwner === null || deletionIntentOwner === intentId,
-  setGitAccountDeletionTarget: async () => undefined,
+  // 本物は「自分が握っている行に書けたか」を返す。
+  setGitAccountDeletionTarget: async () => true,
   markGitAccountDeletionReady: async () => undefined,
   claimGitAccountDeletion: async () => true,
   markGitAccountDeletionNeedsReview: async () => {
@@ -52,6 +53,33 @@ vi.mock("@beutl/db", () => ({
     // 本物は「自分の印の行を消せたか」を返す。
     return true;
   },
+  // purge の成功時は行を消さず、消した相手を控えた墓標として残す。
+  markGitAccountDeletionPurged: async () => {
+    purgedTombstone = true;
+    pendingDeletion = null;
+    return true;
+  },
+  listPurgedGitAccountDeletions: async () => [],
+  touchGitAccountDeletion: async () => true,
+  // 直せなかったリポジトリの控え。id で持つ (名前は改名で変わる)。
+  enqueueGitRepositoryRepair: async ({
+    forgejoRepoId,
+    ownerUsername,
+    name,
+  }: {
+    forgejoRepoId: number;
+    ownerUsername: string;
+    name: string;
+  }) => {
+    repairQueue.set(forgejoRepoId, { forgejoRepoId, ownerUsername, name });
+  },
+  listGitRepositoryRepairs: async () => [...repairQueue.values()],
+  claimGitRepositoryRepair: async () => true,
+  recordGitRepositoryRepairAttempt: async () => undefined,
+  deleteGitRepositoryRepair: async ({ forgejoRepoId }: { forgejoRepoId: number }) => {
+    repairQueue.delete(forgejoRepoId);
+  },
+  countGitRepositoryRepairs: async () => repairQueue.size,
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
   GitAccountDeletionPhase: {
@@ -64,6 +92,7 @@ vi.mock("@beutl/db", () => ({
       credentialOrphaned: "git.credentialOrphaned",
       accountNeedsReview: "git.accountNeedsReview",
       deletionMarkerReleased: "git.deletionMarkerReleased",
+      repositoryLocked: "git.repositoryLocked",
     },
   },
   createAuditLog: async ({
@@ -132,6 +161,11 @@ let pendingDeletion:
   | null = null;
 let deletionStartsAfterFirstCheck = false;
 let audited: { action: string; details: string | null }[] = [];
+let repairQueue = new Map<
+  number,
+  { forgejoRepoId: number; ownerUsername: string; name: string }
+>();
+let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
 let neededReview = false;
 let credentialCount = 0;
@@ -189,6 +223,8 @@ beforeEach(() => {
   pendingDeletion = null;
   deletionStartsAfterFirstCheck = false;
   deletionIntentOwner = null;
+  purgedTombstone = false;
+  repairQueue = new Map();
   neededReview = false;
   credentialCount = 0;
   credentialCountAfterIssue = null;
@@ -968,7 +1004,7 @@ describe("退会時の後始末", () => {
     expect(purge.url).toContain("purge=true");
   });
 
-  it("purge が成功したら墓標を消す", async () => {
+  it("purge が成功しても行は消さず、墓標として残す", async () => {
     pendingDeletion = {
       userId: "u1",
       phase: "READY_TO_PURGE",
@@ -988,6 +1024,8 @@ describe("退会時の後始末", () => {
 
     const purge = record(fetchMock).find((c) => c.method === "DELETE")!;
     expect(purge.url).toContain("purge=true");
+    // 行ごと消すと、Forgejo だけを退会前へ戻したときに復活を誰も検出できない。
+    expect(purgedTombstone).toBe(true);
   });
 
   it("purge が失敗したら false を返す (投げない)", async () => {
@@ -1036,5 +1074,135 @@ describe("トークンの失効", () => {
 
   it("知らない id は null", async () => {
     await expect(revokeGitCredential("u1", "nope")).resolves.toBeNull();
+  });
+});
+
+describe("直せなかったリポジトリの片付け", () => {
+  // その場で直せず読み取り専用にもできなかった場合、記録が無ければ
+  // .gitattributes の無いリポジトリが push を受けられるまま誰にも気付かれない。
+
+  it("読み取り専用にすらできなかったら控えに積む", async () => {
+    const { createRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 5, name: "proj", default_branch: "main" }, 201);
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 5, name: "proj", default_branch: "main" });
+      }
+      // 直すことも読み取り専用にすることもできない。
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "boom" }, 500);
+      }
+      if (init?.method === "PATCH") return json({ message: "boom" }, 500);
+      if (path.includes("/contents/.git")) return json({ message: "nope" }, 404);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect([...repairQueue.keys()]).toEqual([5]);
+  });
+
+  it("控えは id で引き直す (名前が変わっていても別物を止めない)", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    // 控えた名前は古い。id で引くと今の名前が返る。
+    repairQueue.set(5, { forgejoRepoId: 5, ownerUsername: "someone", name: "old" });
+    let committedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "renamed",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        committedTo = path;
+        return json({}, 201);
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return committedTo
+          ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
+          : json({ message: "nope" }, 404);
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return committedTo
+          ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
+          : json({ message: "nope" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
+      fixed: 1,
+      pending: 0,
+    });
+    // 控えた "old" ではなく、今の名前に書く。
+    expect(committedTo).toContain("/repos/someone/renamed/contents");
+    expect(repairQueue.size).toBe(0);
+  });
+
+  it("消えているリポジトリの控えは外す", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, { forgejoRepoId: 5, ownerUsername: "someone", name: "gone" });
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/repositories/5")) return json({ message: "nope" }, 404);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
+      fixed: 1,
+      pending: 0,
+    });
+    expect(repairQueue.size).toBe(0);
+  });
+
+  it("直せなければ読み取り専用にして、控えを外す", async () => {
+    // 掛かった時点で push は通らない。控えに残すのは「まだ push できるもの」だけ。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, { forgejoRepoId: 5, ownerUsername: "someone", name: "proj" });
+    let archived = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          archived,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (init?.method === "PATCH") {
+        archived = JSON.parse(String(init.body)).archived;
+        return json({});
+      }
+      // 中身が違う。コミットの対象にならず、canonical 検証だけが落ちる。
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64("*.mp4 -text\n") });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
+      fixed: 0,
+      pending: 1,
+    });
+    expect(archived).toBe(true);
+    expect(repairQueue.size).toBe(0);
+    expect(audited.map((entry) => entry.action)).toContain(
+      "git.repositoryLocked",
+    );
   });
 });

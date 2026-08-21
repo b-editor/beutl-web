@@ -177,6 +177,10 @@ enum GitAccountDeletionPhase {
   // 自動では決着できない。控えの相手が見つからない、あるいは別人になっている。
   // 自動再試行の対象から外し、人が確認する。
   NEEDS_REVIEW
+  // 消し終えた。**行は消さずに残す。** Forgejo だけを退会前の時点に戻すと
+  // ユーザーもリポジトリもトークンも復活するが、beutl-web 側には利用者も
+  // 手掛かりも残っていないので、消したという記録が無ければ誰も気付けない。
+  PURGED
 }
 
 // 退会処理の途中経過。Forgejo 側を消し切るまで残す。
@@ -198,6 +202,28 @@ enum GitAccountDeletionPhase {
 // 初めての Forgejo ユーザーを作ることがある)。
 //
 // User への外部キーは張らない。User が消えた後も残る必要がある。
+/**
+ * テンプレートを入れ切れなかったリポジトリ。片付くまで残す。
+ *
+ * .gitattributes の無いリポジトリに push されると、数 GiB の動画が LFS を通らず
+ * 普通の git オブジェクトとして入り、後から剥がせない。その場で直せず読み取り
+ * 専用にすることもできなかった場合、記録が無ければ誰も気付けない。
+ *
+ * 相手は **Forgejo のリポジトリ id** で控える。名前は改名で変わり、空いた名前を
+ * 別のリポジトリが取ることがある。名前で引き直すと、別物を止めてしまう。
+ */
+model GitRepositoryRepair {
+  forgejoRepoId Int      @id
+  ownerUsername String
+  name          String
+  createdAt     DateTime @default(now())
+  attempts      Int      @default(0)
+  lastAttemptAt DateTime?
+  lastError     String?
+
+  @@index([lastAttemptAt])
+}
+
 model GitAccountDeletion {
   userId          String   @id
   // この行を立てた 1 回の退会処理を指す。同じ利用者の退会要求が同時に走ったとき、
@@ -211,6 +237,8 @@ model GitAccountDeletion {
   // 他の要求が引き取ってよい。これが無いと、印を立てた直後に Worker が落ちた場合に
   // BLOCKING のまま誰も進められず、資格情報の発行も退会もできなくなる。
   leaseUntil      DateTime?
+  // 消し終えた時刻。復元で戻ってきた相手を照合するための起点。
+  purgedAt        DateTime?
   attempts        Int      @default(0)
   lastAttemptAt   DateTime?
   lastError       String?

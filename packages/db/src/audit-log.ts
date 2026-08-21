@@ -80,6 +80,12 @@ export const auditLogActions = {
     // 退会を始めたまま消えた処理の印を外した。外さないとその利用者は資格情報の
     // 発行も退会もできない。
     deletionMarkerReleased: "git.deletionMarkerReleased",
+    // 消したはずの Forgejo アカウントが戻っていた (Forgejo だけを退会前の時点に
+    // 復元した場合など)。端末のトークンごと復活するので、消し直した記録を残す。
+    accountResurrected: "git.accountResurrected",
+    // テンプレートを入れ切れなかったリポジトリを読み取り専用にした。
+    // clone はできるが push は通らない。同名で作り直すと修復される。
+    repositoryLocked: "git.repositoryLocked",
     // 発行したトークンの控えを残せず、Forgejo 側の取り消しにも失敗した。
     // 一覧に出ないので利用者は失効できない。手で消すための手掛かりを残す。
     credentialOrphaned: "git.credentialOrphaned",

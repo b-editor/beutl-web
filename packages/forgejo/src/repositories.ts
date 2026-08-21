@@ -1,4 +1,13 @@
 import {
+  auditLogActions,
+  claimGitRepositoryRepair,
+  createAuditLog,
+  deleteGitRepositoryRepair,
+  enqueueGitRepositoryRepair,
+  listGitRepositoryRepairs,
+  recordGitRepositoryRepairAttempt,
+} from "@beutl/db";
+import {
   buildCloneUrl,
   forgejoFetch,
   forgejoRequest,
@@ -143,18 +152,67 @@ async function setRepositoryArchived(
   );
 }
 
-/** 読み取り専用にする。失敗しても投げない (呼び出し元は既に失敗の途中にいる)。 */
-async function lockRepository(owner: string, name: string): Promise<void> {
+/**
+ * 読み取り専用にする。失敗しても投げない (呼び出し元は既に失敗の途中にいる)。
+ *
+ * 掛けられなかったときは控えに積む。ログだけだと、.gitattributes の無い
+ * リポジトリが push を受けられる状態のまま誰にも気付かれない。
+ */
+async function lockRepository(
+  owner: string,
+  repository: Pick<ForgejoRepository, "id" | "name">,
+  reason: string,
+): Promise<void> {
   try {
-    await setRepositoryArchived(owner, name, true);
+    await setRepositoryArchived(owner, repository.name, true);
   } catch (error) {
     console.error(
-      `${owner}/${name} could not be locked; media pushed to it will not use ` +
-        "LFS. Creating it again under the same name goes through the repair " +
-        "path.",
+      `${owner}/${repository.name} could not be locked; queued for repair`,
       error,
     );
+    await queueRepair(owner, repository, reason);
+    return;
   }
+
+  // 掛かった時点で push は通らなくなる。控えは「まだ push できる」ものだけを
+  // 残すためのものなので、外す。直す経路は同名での作り直し。
+  await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+    () => undefined,
+  );
+  await createAuditLog({
+    userId: null,
+    action: auditLogActions.git.repositoryLocked,
+    details:
+      `${owner}/${repository.name} (id ${repository.id}) was locked because ` +
+      `its Beutl defaults could not be written: ${reason}`,
+    ipAddress: null,
+    userAgent: null,
+    port: null,
+  }).catch((error) => {
+    console.error("failed to record the repository lock", error);
+  });
+}
+
+/** 後で片付けるために控える。ここが失敗したら、もう記録は残らない。 */
+async function queueRepair(
+  owner: string,
+  repository: Pick<ForgejoRepository, "id" | "name">,
+  reason: string,
+): Promise<void> {
+  await enqueueGitRepositoryRepair({
+    forgejoRepoId: repository.id,
+    ownerUsername: owner,
+    name: repository.name,
+    reason,
+  }).catch((error) => {
+    console.error(
+      `${owner}/${repository.name} (id ${repository.id}) could not be queued ` +
+        "for repair; media pushed to it will not use LFS and nothing will " +
+        "retry. Creating it again under the same name goes through the " +
+        "repair path.",
+      error,
+    );
+  });
 }
 
 /**
@@ -178,7 +236,11 @@ async function repairTemplates(
     await commitTemplates(sudo, name, repository.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
   } catch (error) {
-    await lockRepository(sudo, name);
+    await lockRepository(
+      sudo,
+      repository,
+      error instanceof Error ? error.message : String(error),
+    );
     throw error;
   }
 }
@@ -206,14 +268,15 @@ async function repairAfterTemplateFailure(
   try {
     current = await getRepository(sudo, sudo, name);
   } catch (error) {
-    // 状態を読めなかった。作ったのは自分なので、確かめられないまま push を
-    // 受けさせるより読み取り専用にしておく (archived は後から戻せる)。
+    // 状態を読めなかった。ここで名前だけを見て読み取り専用にすると、改名で
+    // 空いた名前を別のリポジトリが取っていた場合にそちらを止めてしまう。
+    // id で控えて、次の定期実行が id で引き直してから決める。
     console.error(
       `${sudo}/${name} was created without .gitattributes and its state could ` +
-        "not be read; locking it so media cannot be pushed without LFS",
+        "not be read; queued for repair",
       error,
     );
-    await lockRepository(sudo, name);
+    await queueRepair(sudo, repository, "could not read the repository state");
     return;
   }
 
@@ -311,6 +374,76 @@ async function reconcileAfterAmbiguousCreate(
     );
     return null;
   }
+}
+
+/**
+ * 直前に試したものを飛ばす幅。重なった定期実行が同じ相手を触らないため。
+ */
+const REPAIR_COOLDOWN_MS = 15 * 60 * 1000;
+
+/**
+ * 入れ切れなかったテンプレートを後から入れ直す。定期実行から呼ぶ。
+ *
+ * 控えてあるのは **Forgejo のリポジトリ id**。名前で引き直すと、改名で空いた名前を
+ * 取った別のリポジトリを止めてしまう。id で引き、そのとき返る名前に対して操作する。
+ *
+ * 直せたら控えを外す。直せなければ読み取り専用にする (それも失敗したら控えは残る)。
+ *
+ * @returns 片付いた件数と、まだ残っている件数。
+ */
+export async function retryGitRepositoryRepairs({
+  limit = 20,
+}: { limit?: number } = {}): Promise<{ fixed: number; pending: number }> {
+  const cutoff = new Date(Date.now() - REPAIR_COOLDOWN_MS);
+  const queued = await listGitRepositoryRepairs({
+    notAttemptedSince: cutoff,
+    limit,
+  });
+  let fixed = 0;
+
+  for (const entry of queued) {
+    if (
+      !(await claimGitRepositoryRepair({
+        forgejoRepoId: entry.forgejoRepoId,
+        notAttemptedSince: cutoff,
+      }))
+    ) {
+      continue;
+    }
+
+    try {
+      // id で引き直す。控えた名前は古くなっていることがある。
+      const current = await forgejoRequestOrNull<ForgejoRepository>(
+        `/repositories/${entry.forgejoRepoId}`,
+      );
+      if (!current) {
+        // 消えている。守る相手がいない。
+        await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
+        fixed += 1;
+        continue;
+      }
+
+      const owner = current.owner.login;
+      if (await hasTemplates(owner, current.name)) {
+        // 誰かが直した (同名での作り直しなど)。
+        await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
+        fixed += 1;
+        continue;
+      }
+
+      // 直せなければ中で読み取り専用にし、それも駄目なら控えを残して投げる。
+      await repairTemplates(owner, current);
+      await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
+      fixed += 1;
+    } catch (error) {
+      await recordGitRepositoryRepairAttempt({
+        forgejoRepoId: entry.forgejoRepoId,
+        error: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
+    }
+  }
+
+  return { fixed, pending: queued.length - fixed };
 }
 
 /**

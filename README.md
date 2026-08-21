@@ -96,7 +96,8 @@ both read tables the Workers cannot serve without the migrations. Without a toke
 stops after the deploy and says so; pass `--skip-smoke` to accept that deliberately.
 `--dry-run` prints the steps without running them.
 
-The individual steps are also available:
+`pnpm run deploy` runs the same thing. The individual steps exist for when you
+deliberately want one of them, and running them alone skips the ordering:
 
 ```bash
 pnpm run migrate:deploy # apply pending migrations
@@ -106,10 +107,20 @@ pnpm run deploy:api     # API Worker (wrangler deploy)
 pnpm run deploy:admin   # Admin Worker (OpenNext build + deploy)
 ```
 
-A branch based on an older `main` can carry migrations that interleave with ones
-already applied from other branches. Rebase before releasing, and check
-`pnpm run migrate:status` first -- once applied out of order, the divergence is
-permanent.
+The smoke test covers what an anonymous request and one user's JWT can reach: all
+three Workers respond, and the API Worker serves a route backed by a table this
+branch adds. It does not cover the Web and Admin Workers' Forgejo secrets (those
+need a session), the admin deletion path, or the scheduled cron -- the script
+prints that list every run rather than leaving it implied. `/api/v3/git/account`
+provisions a Forgejo user when one is missing, so it is only called when
+`BEUTL_SMOKE_PROVISION=1` says the token belongs to a dedicated smoke account.
+
+The pre-check also catches a database carrying migrations this checkout does not
+have -- either the checkout is behind, or the database has an unmerged branch's
+migrations applied to it. The shared development cluster is in the second state,
+so `pnpm run migrate:status` reports a divergence there even when the checkout is
+current with `main`. Once migrations are applied out of order, that divergence is
+permanent, which is why the check runs before anything writes.
 
 Cloudflare bindings are declared in `apps/web/wrangler.jsonc`, `packages/api/wrangler.jsonc`
 and `apps/admin/wrangler.jsonc`; local environment placeholders are documented in

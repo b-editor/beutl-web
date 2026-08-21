@@ -25,8 +25,12 @@ const schema = join(webDir, "prisma", "schema.prisma");
 const args = process.argv.slice(2);
 const skipSmoke = args.includes("--skip-smoke");
 const dryRun = args.includes("--dry-run");
-const origin =
-  process.env.BEUTL_SMOKE_ORIGIN ?? "https://beutl.beditor.net";
+const origin = process.env.BEUTL_SMOKE_ORIGIN ?? "https://beutl.beditor.net";
+const adminOrigin =
+  process.env.BEUTL_SMOKE_ADMIN_ORIGIN ?? "https://admin.beutl.beditor.net";
+// /api/v3/git/account は無ければ Forgejo ユーザーを作る。本番で毎回叩くと、
+// smoke 用の JWT の持ち主に副作用が出る。専用アカウントを用意したときだけ有効に。
+const provisionCheck = process.env.BEUTL_SMOKE_PROVISION === "1";
 const unknown = args.filter(
   (arg) => !["--skip-smoke", "--dry-run"].includes(arg),
 );
@@ -110,34 +114,72 @@ for (const target of ["deploy:web", "deploy:api", "deploy:admin"]) {
   run("pnpm", ["run", target]);
 }
 
+/** 確かめていないものを黙って通さない。最後に必ず出す。 */
+function reportUnverified() {
+  console.error(
+    "\n確かめていないもの (smoke test の範囲外):\n" +
+      "  - Web / Admin Worker の Forgejo 用 secret (セッションが要るため)\n" +
+      "  - 管理画面からの削除経路\n" +
+      "  - beutl-web-api の定期実行 (cron は外から起動できない)",
+  );
+}
+
 if (skipSmoke) {
   console.error(
     "\n警告: smoke test を飛ばしました。新しい schema を Worker が読めるかは" +
       "確かめていません。",
   );
+  reportUnverified();
   process.exit(0);
 }
+
+step("確かめています");
+
+if (dryRun) {
+  console.log(`    (dry-run) GET ${origin}/`);
+  console.log(`    (dry-run) GET ${adminOrigin}/`);
+  console.log(`    (dry-run) GET ${origin}/api/v3/git/credentials (JWT)`);
+  if (provisionCheck) {
+    console.log(`    (dry-run) GET ${origin}/api/v3/git/account (JWT)`);
+  }
+  reportUnverified();
+  process.exit(0);
+}
+
+/** 到達できるか。セッションが要らないので、返るのは 2xx でも 3xx でもよい。 */
+async function checkReachable(url) {
+  const response = await fetch(url, { redirect: "manual" });
+  if (response.status >= 400) {
+    console.error(`error: GET ${url} が ${response.status} を返しました`);
+    return false;
+  }
+  console.log(`OK  GET ${url} (${response.status})`);
+  return true;
+}
+
+let ok = true;
+ok = (await checkReachable(`${origin}/`)) && ok;
+ok = (await checkReachable(`${adminOrigin}/`)) && ok;
 
 const jwt = process.env.BEUTL_SMOKE_JWT;
 if (!jwt) {
   console.error(
     "\nerror: BEUTL_SMOKE_JWT がありません。配備自体は終わっていますが、" +
-      "確認できていません。\n" +
+      "新しい schema を Worker が読めるかは確認できていません。\n" +
       "       利用者の JWT を入れて smoke test だけやり直すか、確かめない" +
       "ことを承知のうえで --skip-smoke を付けてください。",
   );
+  reportUnverified();
   process.exit(1);
 }
 
-step("認証付きで確かめています");
-if (dryRun) {
-  console.log(`    (dry-run) GET ${origin}/api/v3/git/{account,credentials}`);
-  process.exit(0);
-}
+// この分岐で入ったテーブルを読む経路。マイグレーションが当たっていなければ
+// 200 にはならない。/credentials は GitCredential を読むだけで副作用が無い。
+const paths = ["/api/v3/git/credentials"];
+// /account は無ければ Forgejo ユーザーを作る。専用アカウントのときだけ叩く。
+if (provisionCheck) paths.push("/api/v3/git/account");
 
-// この 2 つはどちらもこの分岐で入ったテーブルを読む。マイグレーションが
-// 当たっていなければ 200 にはならない。
-for (const path of ["/api/v3/git/account", "/api/v3/git/credentials"]) {
+for (const path of paths) {
   const response = await fetch(`${origin}${path}`, {
     headers: { Authorization: `Bearer ${jwt}` },
   });
@@ -146,9 +188,23 @@ for (const path of ["/api/v3/git/account", "/api/v3/git/credentials"]) {
     console.error(
       `error: GET ${path} が ${response.status} を返しました: ${body.slice(0, 300)}`,
     );
-    process.exit(1);
+    ok = false;
+    continue;
   }
   console.log(`OK  GET ${path}`);
 }
 
+if (!provisionCheck) {
+  console.log(
+    "    /api/v3/git/account は叩いていません (無ければ Forgejo ユーザーを" +
+      "作るため)。専用の smoke アカウントを使う場合は BEUTL_SMOKE_PROVISION=1。",
+  );
+}
+
+if (!ok) {
+  reportUnverified();
+  process.exit(1);
+}
+
 console.log("\n配備と確認が終わりました。");
+reportUnverified();

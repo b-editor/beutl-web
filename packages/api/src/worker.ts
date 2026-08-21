@@ -26,7 +26,7 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
-import { isForgejoConfigured, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
+import { reconcileGitAccountDeletionTombstones, retryGitRepositoryRepairs, isForgejoConfigured, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -187,6 +187,41 @@ export default {
       }
     } catch (error) {
       console.error("failed to retry pending Git deletions", error);
+    }
+
+    // 消したはずのアカウントが戻っていないかを見る。Forgejo だけを退会前へ
+    // 復元すると、利用者もトークンも復活するが beutl-web 側には何も残らない。
+    try {
+      const { repurged, review } = await reconcileGitAccountDeletionTombstones();
+      if (repurged > 0) {
+        console.error(
+          `git deletions: ${repurged} purged Forgejo accounts had come back ` +
+            "and were removed again",
+        );
+      }
+      if (review > 0) {
+        console.error(
+          `git deletions: ${review} purge tombstones need a human decision`,
+        );
+      }
+    } catch (error) {
+      console.error("failed to reconcile Git purge tombstones", error);
+    }
+
+    // テンプレートを入れ切れなかったリポジトリを入れ直す。残っている間は
+    // .gitattributes が無いので、push された素材が LFS に載らない。
+    try {
+      const { fixed, pending } = await retryGitRepositoryRepairs();
+      if (fixed > 0) {
+        console.log(`git repositories: repaired ${fixed}`);
+      }
+      if (pending > 0) {
+        console.error(
+          `git repositories: ${pending} still lack their Beutl defaults`,
+        );
+      }
+    } catch (error) {
+      console.error("failed to repair Git repositories", error);
     }
   },
 

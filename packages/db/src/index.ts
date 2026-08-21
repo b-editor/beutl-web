@@ -19,6 +19,7 @@ export * from "./feedback";
 export * from "./file";
 export * from "./git-account";
 export * from "./git-account-deletion";
+export * from "./git-repository-repair";
 export * from "./git-credential";
 export * from "./native-app-auth";
 export * from "./package";

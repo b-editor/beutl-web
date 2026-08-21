@@ -19,10 +19,12 @@ vi.mock("@beutl/db", () => ({
     deletionIntentOwner === null || deletionIntentOwner === intentId,
   cancelPendingGitAccountDeletion: async () => {
     deletionIntentOwner = null;
+  purgedTombstone = false;
     pendingDeletion = null;
   },
   markGitAccountDeletionNeedsReview: async () => true,
-  setGitAccountDeletionTarget: async () => undefined,
+  // 本物は「自分が握っている行に書けたか」を返す。
+  setGitAccountDeletionTarget: async () => true,
   markGitAccountDeletionReady: async () => undefined,
   claimGitAccountDeletion: async () => true,
   deleteGitAccountDeletion: async () => {
@@ -30,6 +32,14 @@ vi.mock("@beutl/db", () => ({
     // 本物は「自分の印の行を消せたか」を返す。
     return true;
   },
+  // purge の成功時は行を消さず、消した相手を控えた墓標として残す。
+  markGitAccountDeletionPurged: async () => {
+    purgedTombstone = true;
+    pendingDeletion = null;
+    return true;
+  },
+  listPurgedGitAccountDeletions: async () => [],
+  touchGitAccountDeletion: async () => true,
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
   GitAccountDeletionPhase: {
@@ -52,6 +62,7 @@ vi.mock("@beutl/db", () => ({
   deleteGitCredential: async () => undefined,
 }));
 
+let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
 let pendingDeletion: { userId: string; phase: string; forgejoUserId: number | null } | null =
   null;

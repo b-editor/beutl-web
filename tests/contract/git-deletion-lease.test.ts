@@ -18,6 +18,7 @@ type Row = {
   forgejoUserId: number | null;
   createdAt: Date;
   leaseUntil: Date | null;
+  purgedAt: Date | null;
   attempts: number;
   lastAttemptAt: Date | null;
   lastError: string | null;
@@ -43,7 +44,11 @@ function matches(row: Row, where: Filter): boolean {
       typeof expected === "object" &&
       !(expected instanceof Date)
     ) {
-      const range = expected as { lt?: Date };
+      const range = expected as { lt?: Date; not?: unknown };
+      if ("not" in range) {
+        if (actual === range.not) return false;
+        continue;
+      }
       if (!("lt" in range)) {
         throw new Error(`unsupported filter: ${JSON.stringify(expected)}`);
       }
@@ -109,6 +114,7 @@ const fakeDb = {
         forgejoUserId: null,
         createdAt: new Date(),
         leaseUntil: (create.leaseUntil as Date) ?? null,
+        purgedAt: null,
         attempts: 0,
         lastAttemptAt: null,
         lastError: null,
@@ -176,6 +182,15 @@ vi.mock("@beutl/db", async (importOriginal) => {
     countGitAccountDeletionsNeedingReview: withFake(
       actual.countGitAccountDeletionsNeedingReview,
     ),
+    listPurgedGitAccountDeletions: withFake(actual.listPurgedGitAccountDeletions),
+    markGitAccountDeletionPurged: withFake(actual.markGitAccountDeletionPurged),
+    touchGitAccountDeletion: withFake(actual.touchGitAccountDeletion),
+    claimGitAccountDeletion: withFake(actual.claimGitAccountDeletion),
+    renewGitAccountDeletionLease: withFake(actual.renewGitAccountDeletionLease),
+    recordGitAccountDeletionAttempt: withFake(
+      actual.recordGitAccountDeletionAttempt,
+    ),
+    findGitAccountByUserId: async () => null,
   };
 });
 
@@ -188,9 +203,10 @@ const {
   renewGitAccountDeletionLease,
   startGitAccountDeletion,
 } = await import("@beutl/db");
-const { releaseExpiredGitAccountDeletionBlocks } = await import(
-  "@beutl/forgejo"
-);
+const {
+  releaseExpiredGitAccountDeletionBlocks,
+  reconcileGitAccountDeletionTombstones,
+} = await import("@beutl/forgejo");
 
 const future = () => new Date(Date.now() + 60_000);
 const past = () => new Date(Date.now() - 60_000);
@@ -206,14 +222,48 @@ async function ready(intentId: string, leaseUntil: Date) {
   await markGitAccountDeletionReady({ userId: "u1", intentId, prisma });
 }
 
+/** 墓標を 1 つ置く。控えた相手は forgejo 上の someone / id 2。 */
+function tombstone(overrides: Partial<Row> = {}) {
+  rows.set("u1", {
+    userId: "u1",
+    intentId: "old",
+    phase: GitAccountDeletionPhase.PURGED,
+    forgejoUsername: "someone",
+    forgejoUserId: 2,
+    createdAt: new Date(0),
+    leaseUntil: null,
+    purgedAt: new Date(0),
+    attempts: 0,
+    lastAttemptAt: null,
+    lastError: null,
+    ...overrides,
+  });
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+let fetchMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   rows.clear();
   liveUsers = new Set(["u1"]);
   audited = [];
+  process.env.FORGEJO_BASE_URL = "https://git.example.test";
+  process.env.FORGEJO_ADMIN_TOKEN = "admin-token";
+  process.env.FORGEJO_PROXY_SECRET = "proxy-secret";
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  delete process.env.FORGEJO_BASE_URL;
+  delete process.env.FORGEJO_ADMIN_TOKEN;
+  delete process.env.FORGEJO_PROXY_SECRET;
 });
 
 describe("進行中の退会が持つ期限", () => {
@@ -490,5 +540,127 @@ describe("落ちた退会処理の印を外す", () => {
     expect(rows.get("u1")?.phase).toBe(
       GitAccountDeletionPhase.READY_TO_PURGE,
     );
+  });
+});
+
+describe("消したはずのアカウントが戻ってきた場合", () => {
+  // Forgejo だけを退会前の時点に復元すると、利用者もリポジトリも端末のトークンも
+  // 戻る。beutl-web 側には利用者も進行中の行も残っていないので、墓標が無ければ
+  // 誰も気付けない。git と LFS は Caddy を素通りするので、そのまま使えてしまう。
+  const purgedUser = {
+    id: 2,
+    login: "someone",
+    email: "u1@users.noreply.git.example.test",
+  };
+
+  function respondWith(user: unknown, tokens: { id: number }[] = []) {
+    // 消したトークンは次のページから消える。返し続けると失効の走査が終わらない。
+    let remaining = [...tokens];
+    fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      const tokenId = path.match(/\/tokens\/(\d+)$/);
+      if (method === "DELETE" && tokenId) {
+        remaining = remaining.filter((t) => t.id !== Number(tokenId[1]));
+        return new Response(null, { status: 204 });
+      }
+      if (path.endsWith("/tokens")) return json(remaining);
+      if (path.includes("/users/someone")) {
+        return user === null
+          ? json({ message: "not found" }, 404)
+          : json(user);
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  }
+
+  it("控えた相手がそのまま戻っていたら、消し直す", async () => {
+    tombstone();
+    liveUsers.delete("u1");
+    respondWith(purgedUser, [{ id: 7, name: "desktop" }]);
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 1,
+      review: 0,
+    });
+
+    const calls = fetchMock.mock.calls.map(([url, init]) => ({
+      url: String(url),
+      method: (init as RequestInit | undefined)?.method ?? "GET",
+    }));
+    // 復活したトークンを消してから、ユーザーごと消す。
+    expect(calls).toContainEqual(
+      expect.objectContaining({ method: "DELETE", url: expect.stringContaining("/tokens/7") }),
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        method: "DELETE",
+        url: expect.stringContaining("/admin/users/someone"),
+      }),
+    );
+    expect(audited.map((entry) => entry.action)).toEqual([
+      "git.accountResurrected",
+    ]);
+    // 墓標は残す。もう一度戻されることがある。
+    expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.PURGED);
+  });
+
+  it("Beutl 側の利用者が戻っていたら、消さずに人の確認に回す", async () => {
+    // 復元されたのは beutl-web の方。その人は生きているので消してはいけない。
+    tombstone();
+    respondWith(purgedUser);
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 0,
+      review: 1,
+    });
+    expect(
+      fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toHaveLength(0);
+    expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.NEEDS_REVIEW);
+  });
+
+  it("名前が別人に渡っていたら消さない", async () => {
+    tombstone();
+    liveUsers.delete("u1");
+    respondWith({ id: 99, login: "someone", email: "someone-else@example.test" });
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 0,
+      review: 0,
+    });
+    expect(
+      fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toHaveLength(0);
+    expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.PURGED);
+  });
+
+  it("消えたままなら何もしない", async () => {
+    tombstone();
+    liveUsers.delete("u1");
+    respondWith(null);
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 0,
+      review: 0,
+    });
+    expect(rows.get("u1")?.lastAttemptAt).not.toBeNull();
+  });
+
+  it("最近見たものは飛ばす", async () => {
+    tombstone({ lastAttemptAt: new Date() });
+    liveUsers.delete("u1");
+    respondWith(purgedUser);
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 0,
+      review: 0,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

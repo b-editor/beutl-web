@@ -6,6 +6,9 @@ import {
   countGitAccountDeletionsNeedingReview,
   createAuditLog,
   deleteGitAccountDeletion,
+  listPurgedGitAccountDeletions,
+  markGitAccountDeletionPurged,
+  touchGitAccountDeletion,
   existsUserById,
   findGitAccountByUserId,
   findGitAccountDeletion,
@@ -90,7 +93,11 @@ export class GitAccountBeingDeletedError extends Error {
  * ため。その 1 本は失効の走査に間に合わず、退会後も生き残る。
  */
 export async function assertGitAccountNotBeingDeleted(userId: string) {
-  if (await findGitAccountDeletion({ userId })) {
+  const pending = await findGitAccountDeletion({ userId });
+  // PURGED は「消し終えた」墓標で、進行中ではない。beutl-web 側だけを退会前へ
+  // 戻すと利用者が復活するが、そのとき墓標を理由に発行を断ると、生きている人が
+  // 二度と Git を使えなくなる。止めるのは決着していない 3 つだけ。
+  if (pending && pending.phase !== GitAccountDeletionPhase.PURGED) {
     throw new GitAccountBeingDeletedError(userId);
   }
 }
@@ -153,7 +160,9 @@ async function revokeAllTokens(
   let revoked = 0;
 
   for (let round = 1; round <= MAX_TOKEN_PAGES; round++) {
-    if (round > 1) await renewLease?.();
+    // 1 周目にも確かめる。引き取られた後に走り出した処理が、相手のトークンを
+    // 消しにいくのを止めるため (相手の失効はやり直せるが、無駄な往復は残る)。
+    await renewLease?.();
     // page を指定しないと Forgejo は全件返すが、それは文書化された挙動ではない。
     // 明示的に読む。消しながら読むのでページ番号は進めない。
     const tokens = await forgejoRequest<ForgejoAccessToken[]>(
@@ -282,11 +291,18 @@ export async function beginGitAccountDeletion(
     const target = await resolveForgejoUser(userId);
     if (!target) return { forgejoUsername: null, intentId };
 
-    await setGitAccountDeletionTarget({
-      userId,
-      forgejoUsername: target.username,
-      forgejoUserId: target.id,
-    });
+    // 控えを書けないなら、印は既に引き取られている。ここで進めても、相手の
+    // 控えを上書きしないだけで、無駄に Forgejo を触ることになる。
+    if (
+      !(await setGitAccountDeletionTarget({
+        userId,
+        intentId,
+        forgejoUsername: target.username,
+        forgejoUserId: target.id,
+      }))
+    ) {
+      throw new GitAccountDeletionInProgressError(userId);
+    }
     await revokeAllTokens(target.username, () =>
       renewLease(userId, intentId, GitAccountDeletionPhase.BLOCKING),
     );
@@ -421,7 +437,7 @@ export async function finishGitAccountDeletion(
 
     if (!actual) {
       // 404 だけが完了。元のユーザーはもう存在しない。
-      return await deleteGitAccountDeletion({ userId, intentId: epoch });
+      return await markGitAccountDeletionPurged({ userId, intentId: epoch });
     }
 
     const expectedEmail = noreplyEmailFor(userId);
@@ -472,7 +488,8 @@ export async function finishGitAccountDeletion(
     }
   }
 
-  return await deleteGitAccountDeletion({ userId, intentId: epoch });
+  // **行は消さない。** 消した相手を控え続け、復元で復活していないかを照合する。
+  return await markGitAccountDeletionPurged({ userId, intentId: epoch });
 }
 
 /**
@@ -535,6 +552,127 @@ export async function releaseExpiredGitAccountDeletionBlocks({
   }
 
   return { released, review };
+}
+
+/**
+ * 復活していないかを照合する間隔。全件を毎回当たると Forgejo への往復が増える。
+ * 復元は稀な事象なので、数時間ごとに回れば十分。
+ */
+const TOMBSTONE_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * 消したはずの Forgejo アカウントが戻っていないかを見る。
+ *
+ * **Forgejo だけを退会前の時点に戻すと、ユーザーもリポジトリも端末のトークンも
+ * 復活する。** beutl-web 側には利用者も進行中の行も残っていないので、墓標が
+ * 無ければ誰も気付けない。git と LFS は Caddy を素通りして Forgejo が直接
+ * 認証するので、復活したトークンはそのまま使える。
+ *
+ * 墓標の相手をもう一度引き、居れば消し直す。消しにいく前に、
+ *
+ *   - Beutl 側の利用者が復活していないか (復活していれば、戻したのは beutl-web の
+ *     方。その人は生きているので**消してはいけない**)
+ *   - 控えた id と合成メールが一致するか (名前を再利用した別人を消さないため)
+ *
+ * を確かめる。どちらかで判断が付かなければ人の確認に回す。
+ *
+ * @returns 消し直した件数と、人の確認に回した件数。
+ */
+export async function reconcileGitAccountDeletionTombstones({
+  limit = 20,
+}: { limit?: number } = {}): Promise<{ repurged: number; review: number }> {
+  const tombstones = await listPurgedGitAccountDeletions({
+    checkedBefore: new Date(Date.now() - TOMBSTONE_RECHECK_MS),
+    limit,
+  });
+  let repurged = 0;
+  let review = 0;
+
+  for (const tombstone of tombstones) {
+    const username = tombstone.forgejoUsername;
+    if (!username) continue;
+
+    // 掴んでから進める。照合の途中で別の実行が同じ相手を消しにいかないように。
+    const epoch = crypto.randomUUID();
+    if (
+      !(await claimGitAccountDeletion({
+        userId: tombstone.userId,
+        intentId: epoch,
+        phase: GitAccountDeletionPhase.PURGED,
+        leaseUntil: leaseDeadline(),
+      }))
+    ) {
+      continue;
+    }
+
+    try {
+      const actual = await forgejoRequestOrNull<ForgejoUser>(
+        `/users/${encodeURIComponent(username)}`,
+      );
+      if (!actual) {
+        // 消えたまま。見たという印だけ付けて次へ。
+        await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+        continue;
+      }
+
+      // Beutl 側の利用者が戻っているなら、復元されたのは beutl-web の方。
+      // その人は生きているので消してはいけない。墓標の方が古い。
+      if (await existsUserById({ id: tombstone.userId })) {
+        if (
+          await sendToReview(
+            tombstone.userId,
+            epoch,
+            `the Beutl user exists again while ${username} was recorded as purged; ` +
+              "beutl-web was probably restored to a point before the deletion",
+          )
+        ) {
+          review += 1;
+        }
+        continue;
+      }
+
+      // 名前が別人に渡っていることがある。控えた id と合成メールの両方を見る。
+      const expectedEmail = noreplyEmailFor(tombstone.userId);
+      const idMatches =
+        tombstone.forgejoUserId === null ||
+        tombstone.forgejoUserId === actual.id;
+      if (!idMatches || actual.email !== expectedEmail) {
+        // 別人。消しにいかない。墓標としては目的を果たしている。
+        await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+        continue;
+      }
+
+      // 復活している。端末のトークンも一緒に戻っているので、消し直す。
+      await revokeAllTokens(username, () =>
+        renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED),
+      );
+      await renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED);
+      await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
+        method: "DELETE",
+        searchParams: { purge: true },
+        responseType: "none",
+      });
+      await markGitAccountDeletionPurged({ userId: tombstone.userId, intentId: epoch });
+      await audit(
+        auditLogActions.git.accountResurrected,
+        `userId: ${tombstone.userId}; Forgejo user ${username} (id ${actual.id}) ` +
+          "came back after being purged and was removed again",
+      );
+      repurged += 1;
+    } catch (error) {
+      await recordGitAccountDeletionAttempt({
+        userId: tombstone.userId,
+        intentId: epoch,
+        error: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
+      console.error(
+        `failed to reconcile the purge tombstone of ${tombstone.userId}`,
+        error,
+      );
+    }
+  }
+
+  return { repurged, review };
 }
 
 /**
