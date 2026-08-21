@@ -477,13 +477,25 @@ export async function releaseGitAccountDeletionBlock({
   return count === 1;
 }
 
+/** 状態ごとの件数。1 回分の処理数ではなく、残っている総数を数えるために使う。 */
+export async function countGitAccountDeletions({
+  phase,
+  prisma,
+}: {
+  phase: GitAccountDeletionPhase;
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  return await db.gitAccountDeletion.count({ where: { phase } });
+}
+
 /** 人の確認待ちの件数。0 でないなら誰かが見に行く必要がある。 */
 export async function countGitAccountDeletionsNeedingReview({
   prisma,
 }: { prisma?: PrismaTransaction } = {}): Promise<number> {
-  const db = prisma ?? (await getDb());
-  return await db.gitAccountDeletion.count({
-    where: { phase: GitAccountDeletionPhase.NEEDS_REVIEW },
+  return await countGitAccountDeletions({
+    phase: GitAccountDeletionPhase.NEEDS_REVIEW,
+    prisma,
   });
 }
 

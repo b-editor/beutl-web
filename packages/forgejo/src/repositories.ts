@@ -1,6 +1,7 @@
 import {
   auditLogActions,
   claimGitRepositoryRepair,
+  countGitRepositoryRepairs,
   createAuditLog,
   deleteGitRepositoryRepair,
   enqueueGitRepositoryRepair,
@@ -235,6 +236,10 @@ async function repairTemplates(
     if (repository.archived) await setRepositoryArchived(sudo, name, false);
     await commitTemplates(sudo, name, repository.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
+    // 揃った。控えに残す理由が無い。
+    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+      () => undefined,
+    );
   } catch (error) {
     await lockRepository(
       sudo,
@@ -443,7 +448,8 @@ export async function retryGitRepositoryRepairs({
     }
   }
 
-  return { fixed, pending: queued.length - fixed };
+  // 1 回分ではなく残っている総数。21 件目以降が残っていても 0 と報告しない。
+  return { fixed, pending: await countGitRepositoryRepairs() };
 }
 
 /**
@@ -508,11 +514,20 @@ export async function createRepository(
     throw error;
   }
 
+  // **テンプレートを入れる前に控える。** ここから下のどこで落ちても — 例外では
+  // なく Worker ごと消える場合を含めて — .gitattributes の無いリポジトリが
+  // push を受けられる状態で残る。控えがあれば定期実行が拾って直すか止める。
+  // 201 が返ってからこの書き込みまでの隙間だけは埋められない。
+  await queueRepair(sudo, repository, "created; defaults not written yet");
+
   try {
     await commitTemplates(sudo, name, repository.default_branch);
     // 201 の後、こちらが書く前に利用者が別の .gitattributes を push している
     // ことがある。その場合 commitTemplates は「ある」と見て何もしない。
     await assertTemplatesAreCanonical(sudo, name);
+    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+      () => undefined,
+    );
   } catch (error) {
     // .gitattributes の無いリポジトリを残すと、その後 push された素材が LFS に
     // 載らず、数 GiB の動画が普通の git オブジェクトとして入ってしまう。作成自体を

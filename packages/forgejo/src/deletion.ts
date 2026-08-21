@@ -3,6 +3,7 @@ import {
   auditLogActions,
   cancelPendingGitAccountDeletion,
   claimGitAccountDeletion,
+  countGitAccountDeletions,
   countGitAccountDeletionsNeedingReview,
   createAuditLog,
   deleteGitAccountDeletion,
@@ -120,6 +121,18 @@ async function resolveForgejoUser(
     return { username: account.forgejoUsername, id: actual.id };
   }
 
+  return await findByNoreplyEmail(userId);
+}
+
+/**
+ * 合成メールから Forgejo 上のユーザーを引く。
+ *
+ * 合成メールは userId から決まるので、名前が変わっていても引ける。復元で
+ * 別の名前になった同じ人を取り逃がさないために要る。
+ */
+async function findByNoreplyEmail(
+  userId: string,
+): Promise<{ username: string; id: number } | null> {
   const email = noreplyEmailFor(userId);
   const found = await forgejoRequestOrNull<{ data?: ForgejoUser[] }>(
     "/users/search",
@@ -589,7 +602,7 @@ export async function reconcileGitAccountDeletionTombstones({
   let review = 0;
 
   for (const tombstone of tombstones) {
-    const username = tombstone.forgejoUsername;
+    let username = tombstone.forgejoUsername;
     if (!username) continue;
 
     // 掴んでから進める。照合の途中で別の実行が同じ相手を消しにいかないように。
@@ -606,13 +619,26 @@ export async function reconcileGitAccountDeletionTombstones({
     }
 
     try {
-      const actual = await forgejoRequestOrNull<ForgejoUser>(
+      let actual = await forgejoRequestOrNull<ForgejoUser>(
         `/users/${encodeURIComponent(username)}`,
       );
       if (!actual) {
-        // 消えたまま。見たという印だけ付けて次へ。
-        await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
-        continue;
+        // 控えた名前では見つからない。ただし復元先で名前が違うことがあるので、
+        // 合成メールでも引く。ここを飛ばすと、同じ人が別名で生き返っていても
+        // 「消えたまま」と結論してしまう。
+        const byEmail = await findByNoreplyEmail(tombstone.userId);
+        if (!byEmail) {
+          await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+          continue;
+        }
+        username = byEmail.username;
+        actual = await forgejoRequestOrNull<ForgejoUser>(
+          `/users/${encodeURIComponent(username)}`,
+        );
+        if (!actual) {
+          await touchGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+          continue;
+        }
       }
 
       // Beutl 側の利用者が戻っているなら、復元されたのは beutl-web の方。
@@ -704,7 +730,10 @@ export async function retryPendingGitDeletions({
 
   return {
     finished,
-    pending: pending.length - finished,
+    // 1 回分ではなく残っている総数。上限で切った分を 0 と報告しない。
+    pending: await countGitAccountDeletions({
+      phase: GitAccountDeletionPhase.READY_TO_PURGE,
+    }),
     review: await countGitAccountDeletionsNeedingReview(),
   };
 }

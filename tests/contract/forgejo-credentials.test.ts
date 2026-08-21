@@ -1107,6 +1107,46 @@ describe("直せなかったリポジトリの片付け", () => {
     expect([...repairQueue.keys()]).toEqual([5]);
   });
 
+  it("テンプレートを入れる前に控える (作成直後に落ちても追える)", async () => {
+    // 201 の後、テンプレートを書く前に Worker ごと消えると、例外は捕まらない。
+    // 控えが先に無いと、LFS の効かないリポジトリが誰にも知られず残る。
+    const { createRepository } = await import("@beutl/forgejo");
+    let queuedBeforeCommit: number[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 9, name: "proj", default_branch: "main" }, 201);
+      }
+      if (init?.method === "POST" && path.endsWith("/contents")) {
+        queuedBeforeCommit = [...repairQueue.keys()];
+        return json({}, 201);
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return queuedBeforeCommit.length > 0
+          ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
+          : json({ message: "nope" }, 404);
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return queuedBeforeCommit.length > 0
+          ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
+          : json({ message: "nope" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).resolves.toMatchObject({ id: 9 });
+
+    // コミットの時点では控えてある。
+    expect(queuedBeforeCommit).toEqual([9]);
+    // 揃ったので外す。
+    expect(repairQueue.size).toBe(0);
+  });
+
   it("控えは id で引き直す (名前が変わっていても別物を止めない)", async () => {
     const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
     // 控えた名前は古い。id で引くと今の名前が返る。
@@ -1195,9 +1235,11 @@ describe("直せなかったリポジトリの片付け", () => {
       return new Response(null, { status: 204 });
     });
 
+    // 直っていないので fixed には数えない。ただし読み取り専用になった時点で
+    // push は通らないので、控え (= まだ push できるもの) からは外れる。
     await expect(retryGitRepositoryRepairs()).resolves.toEqual({
       fixed: 0,
-      pending: 1,
+      pending: 0,
     });
     expect(archived).toBe(true);
     expect(repairQueue.size).toBe(0);

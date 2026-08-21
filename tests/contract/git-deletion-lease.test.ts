@@ -553,6 +553,14 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     email: "u1@users.noreply.git.example.test",
   };
 
+  let searchResult: unknown[] = [];
+  let renamedUser: { id: number; login: string; email: string } | null = null;
+
+  beforeEach(() => {
+    searchResult = [];
+    renamedUser = null;
+  });
+
   function respondWith(user: unknown, tokens: { id: number }[] = []) {
     // 消したトークンは次のページから消える。返し続けると失効の走査が終わらない。
     let remaining = [...tokens];
@@ -565,7 +573,12 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
         return new Response(null, { status: 204 });
       }
       if (path.endsWith("/tokens")) return json(remaining);
-      if (path.includes("/users/someone")) {
+      if (path.endsWith("/users/search")) return json({ data: searchResult });
+      // 前方一致で見ない。/users/someone-2 は /users/someone を含む。
+      if (renamedUser && path.endsWith(`/users/${renamedUser.login}`)) {
+        return json(renamedUser);
+      }
+      if (path.endsWith("/users/someone")) {
         return user === null
           ? json({ message: "not found" }, 404)
           : json(user);
@@ -638,6 +651,28 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
       ),
     ).toHaveLength(0);
     expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.PURGED);
+  });
+
+  it("控えた名前で見つからなくても、合成メールで引き直す", async () => {
+    // 復元先で名前が違うことがある。名前だけで諦めると、同じ人が別名で
+    // 生き返っていても「消えたまま」と結論してしまう。
+    tombstone();
+    liveUsers.delete("u1");
+    renamedUser = {
+      id: 2,
+      login: "someone-2",
+      email: "u1@users.noreply.git.example.test",
+    };
+    searchResult = [renamedUser];
+    respondWith(null, [{ id: 7, name: "desktop" }]);
+
+    await expect(reconcileGitAccountDeletionTombstones()).resolves.toEqual({
+      repurged: 1,
+      review: 0,
+    });
+    expect(
+      fetchMock.mock.calls.map(([url]) => String(url)),
+    ).toContainEqual(expect.stringContaining("/admin/users/someone-2"));
   });
 
   it("消えたままなら何もしない", async () => {
