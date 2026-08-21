@@ -11,6 +11,7 @@
   "invalidLocaleId": "無効なロケールIDです。",
   "invalidReleaseVersion": "無効なバージョンです。\n既に同じバージョンのリリースが存在している、またはフォーマットが無効である可能性があります。",
   "invalidRefreshToken": "無効なリフレッシュトークンです。",
+  "aiRequestChanged": "この名前は、直前に送った依頼のものです。内容を元に戻すとその結果を取り戻せます。別の内容で作るには、ページを再読み込みしてください。",
   "invalidRequestBody": "無効なリクエストボディです。",
   "packageResourceNotFound": "パッケージリソースが見つかりませんでした。",
   "packageResourceHasAlreadyBeenAdded": "このパッケージリソースは既に追加されています。",

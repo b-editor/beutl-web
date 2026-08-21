@@ -10,6 +10,7 @@ export async function createStorageUpload({
   mimeType,
   size,
   partSize,
+  abandonedAt,
   prisma,
 }: {
   userId: string;
@@ -20,11 +21,24 @@ export async function createStorageUpload({
   mimeType: string;
   size: bigint;
   partSize: number;
+  // 最初から掃除のものとして置く行。誰も知らないまま残ったマルチパートを、
+  // 掃除が見つけられる場所に書き留めるために使う。
+  abandonedAt?: Date;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   return await db.storageUpload.create({
-    data: { id, userId, objectKey, uploadId, name, mimeType, size, partSize },
+    data: {
+      id,
+      userId,
+      objectKey,
+      uploadId,
+      name,
+      mimeType,
+      size,
+      partSize,
+      ...(abandonedAt ? { abandonedAt } : {}),
+    },
   });
 }
 
@@ -84,16 +98,18 @@ export async function markStorageUploadCompleted({
 // オブジェクトを消しても、File がそれを指すことはない。
 export async function claimStorageUploadForAbandon({
   id,
+  userId,
   now,
   prisma,
 }: {
   id: string;
+  userId: string;
   now: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
-    where: { id, completedFileId: null, abandonedAt: null },
+    where: { id, userId, completedFileId: null, abandonedAt: null },
     data: { abandonedAt: now },
   });
   return result.count > 0;
@@ -109,6 +125,10 @@ export async function countStorageUploadsByUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
+  // 掃除に取られた行は数えない。ここで限っているのは「同時に走らせてよい本数」
+  // で、取られた行はもう利用者のものではない——中止に失敗しているあいだ、その分
+  // の容量は下の合計に出る。ここで数えると、片付けに失敗しているあいだ新しい
+  // アップロードを始められなくなる。
   return await db.storageUpload.count({
     where: { userId, completedFileId: null, abandonedAt: null },
   });
@@ -146,8 +166,9 @@ export async function sumStorageUploadSizeByUserId({
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.aggregate({
     // 完了済みの控えの分は File 側に移っているので、ここで数えると二重になる。
-    // 掃除に取られた行も同じ——パートはもう誰のものでもない。
-    where: { userId, completedFileId: null, abandonedAt: null },
+    // 掃除に取られた行は数える——宣言しただけで、中止に失敗しているあいだその
+    // パートはバケットに残っている。数えなければ、実際の使用量が枠の外に出る。
+    where: { userId, completedFileId: null },
     _sum: { size: true },
   });
   return result._sum.size ?? BigInt(0);

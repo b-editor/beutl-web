@@ -115,14 +115,25 @@ export async function aiJobStateForIdempotencyKey({
 // そうしないと、既定が入れ替わったあとやそのモデルが止められたあとに、支払い
 // 済みの job へ届かなくなる。
 async function fingerprintMatches(
-  stored: { requestFingerprint: string | null; model: string | null },
+  stored: {
+    requestFingerprint: string | null;
+    requestFingerprintVersion: number | null;
+    model: string | null;
+  },
   current: string,
   legacyFor: ((modelId: string) => Promise<string>) | undefined,
 ): Promise<boolean> {
   if (stored.requestFingerprint === current) return true;
+  // 作り直しを許すのは旧版が書いたジョブだけ。現行の形で「モデル A を名指し
+  // した」と記録されたジョブは、A で作り直した指紋がモデルを名乗らない依頼と
+  // 一致してしまう——別の依頼に A の結果を返すことになる。
+  if (stored.requestFingerprintVersion !== null) return false;
   if (!legacyFor || !stored.model) return false;
   return stored.requestFingerprint === await legacyFor(stored.model);
 }
+
+// いま記録する指紋の作り方。モデルを名指ししたかどうかが、そのまま指紋に出る。
+export const AI_REQUEST_FINGERPRINT_VERSION = 2;
 
 export async function createReservedAiJob({
   userId,
@@ -211,6 +222,9 @@ export async function createReservedAiJob({
         model,
         idempotencyKeyHash,
         requestFingerprint,
+        ...(requestFingerprint
+          ? { requestFingerprintVersion: AI_REQUEST_FINGERPRINT_VERSION }
+          : {}),
         callbackNonceHash,
         prisma,
       });

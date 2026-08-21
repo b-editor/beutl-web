@@ -878,6 +878,13 @@ describe("v3 AI endpoints contract", () => {
         })),
       });
       expect(reservation.ok).toBe(true);
+      // 旧版が書いた job には版が入っていない。作り直した指紋と突き合わせて
+      // よいのは、その形の job だけ。
+      const [legacyJob] = [...state.aiJobs.values()];
+      state.aiJobs.set(legacyJob!.id, {
+        ...legacyJob!,
+        requestFingerprintVersion: null,
+      });
 
       const response = await makeApp().request("/api/v3/ai/images", {
         method: "POST",
@@ -895,6 +902,47 @@ describe("v3 AI endpoints contract", () => {
         error_code: "aiRequestInProgress",
       });
       expect(state.aiJobs.size).toBe(1);
+    });
+
+    it("does not answer a request that names no model from one that named one", async () => {
+      // 作り直しを無条件に許すと、現行の形で「モデル A を名指しした」と記録
+      // された job が、モデルを名乗らない別の依頼に A の結果を返してしまう。
+      // 作り直してよいのは旧版が書いた job だけ。
+      await activatePro();
+      const key = "named-a-model-on-purpose";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { prompt: "test", aspectRatio: "1:1" },
+        usageUnits: 20,
+        model: "openai/gpt-image-1",
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.generate",
+          input: {
+            prompt: "test",
+            aspectRatio: "1:1",
+            model: "openai/gpt-image-1",
+          },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders(key)),
+        },
+        body: JSON.stringify({ prompt: "test", size: "1024x1024" }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error_code: "invalidRequestBody",
+      });
     });
 
     it("returns a typed conflict while an idempotent request is still running", async () => {

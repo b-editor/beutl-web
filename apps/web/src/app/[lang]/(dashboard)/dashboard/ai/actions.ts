@@ -176,7 +176,14 @@ function settledReplay(
   t: (key: string) => string,
 ): AiActionResult | null {
   if (replay?.outcome === "idempotencyConflict") {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
+    // この名前は、いま送られてきたものとは別の依頼のもの。名前を捨てると、その
+    // 依頼が支払い済みだったときに戻る道が閉じる——画面の中身を元に戻せば、
+    // 同じ名前でその結果を取りに行ける。
+    return {
+      success: false,
+      message: t("api-errors:aiRequestChanged"),
+      keepIdempotencyKey: true,
+    };
   }
   if (replay?.outcome === "deleted") {
     return { success: false, message: t("api-errors:aiRequestWasDeleted") };

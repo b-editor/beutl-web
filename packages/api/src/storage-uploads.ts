@@ -30,19 +30,24 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 const GIVE_UP_AFTER_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
-// 追跡行だけがあってレシートの無いキーに、完成したオブジェクトが残っていないか。
-// あれば誰も指していないので消す。消せたときだけ true。
-async function deleteOrphanedObject(objectKey: string): Promise<boolean> {
+// 取った行のキーに、完成したオブジェクトが残っていないか。
+//
+//  - deleted: 残っていたので消した。
+//  - absent: 何も残っていない。取った行なので控えも書けず、片付けるものは無い。
+//  - unknown: 確かめられなかった。残っているかもしれないので、行は残す。
+type OrphanedObject = "deleted" | "absent" | "unknown";
+
+async function clearOrphanedObject(objectKey: string): Promise<OrphanedObject> {
   try {
     const bucket = getR2Bucket();
-    if (!bucket.head || !bucket.delete) return false;
+    if (!bucket.head || !bucket.delete) return "unknown";
     const object = await bucket.head(objectKey);
-    if (!object) return false;
+    if (!object) return "absent";
     await bucket.delete(objectKey);
-    return true;
+    return "deleted";
   } catch (error) {
     console.error("Failed to clear an orphaned storage object", objectKey, error);
-    return false;
+    return "unknown";
   }
 }
 
@@ -61,6 +66,7 @@ export async function abandonStaleStorageUploads(
     // いることがある。行を取れなければ、それは完了したか、既に誰かが取ったか。
     const claimed = await claimStorageUploadForAbandon({
       id: upload.id,
+      userId: upload.userId,
       now,
     }).catch(() => false);
     if (!claimed) {
@@ -96,9 +102,11 @@ export async function abandonStaleStorageUploads(
       // 中止できない理由のひとつは「もう組み上がっている」こと。R2 の結合が
       // 終わったあと、控えを書く前に Worker が落ちるとこうなる。行はこちらの
       // ものなので控えはもう書けない＝ File は誰も指していない。残っている
-      // オブジェクトはここで消す。これをしないと、追跡できない完成オブジェクト
-      // が保管され続ける。
-      if (await deleteOrphanedObject(upload.objectKey)) {
+      // オブジェクトはここで消す——これをしないと、追跡できない完成オブジェクト
+      // が保管され続ける。何も残っていなかったのなら、この行が指していたものは
+      // もう無い。どちらの場合も行は用済みで、残しても次の回で同じところに来る
+      // だけになる。
+      if (await clearOrphanedObject(upload.objectKey) !== "unknown") {
         await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
         abandoned++;
         continue;

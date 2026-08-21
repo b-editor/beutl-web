@@ -372,6 +372,69 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(0);
   });
 
+  it("keeps the size of a claimed upload against the quota", async () => {
+    // 掃除が「捨てる」と宣言しても、中止に失敗しているあいだ、そのパートは
+    // 本当にバケットにある。枠から外すと、実際の使用量が枠の外に出る。
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(STORAGE_QUOTA_BYTES),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    state.storageUploads.set(tracked!.id, {
+      ...tracked!,
+      abandonedAt: new Date(),
+    });
+
+    const next = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "another.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+
+    expect(next).toEqual({ ok: false, reason: "insufficientStorageSpace" });
+  });
+
+  it("records a multipart nothing points at when it cannot be abandoned", async () => {
+    // 行の無いマルチパートは、どこからも辿れないままパートを抱え続ける。捨て
+    // られなかったのなら、せめて掃除が見つけられる場所に書き留める。
+    const first = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(STORAGE_QUOTA_BYTES),
+    });
+    if (!first.ok) throw new Error(first.reason);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw new Error("the bucket is unreachable");
+      },
+    }));
+
+    const refused = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "another.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+
+    expect(refused).toEqual({ ok: false, reason: "insufficientStorageSpace" });
+    // 断られたぶんの追跡行が、掃除のものとして残っている。
+    const abandoned = [...state.storageUploads.values()].filter(
+      (item) => item.abandonedAt !== null,
+    );
+    expect(abandoned).toHaveLength(1);
+  });
+
   it("refuses to start once the account holds as many files as it may", async () => {
     // 容量だけでは本数を縛れない。1 バイトのファイルを順に完成させれば、枠の
     // 内側で R2 のオブジェクトと行をいくらでも増やせる。

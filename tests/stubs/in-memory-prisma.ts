@@ -66,6 +66,7 @@ type AiJob = {
   providerJobId: string | null;
   idempotencyKeyHash: string | null;
   requestFingerprint: string | null;
+  requestFingerprintVersion: number | null;
   callbackNonceHash: string | null;
   status: string;
   inputParams: unknown;
@@ -1257,6 +1258,7 @@ export function createInMemoryPrisma() {
           providerJobId?: string;
           idempotencyKeyHash?: string;
           requestFingerprint?: string;
+          requestFingerprintVersion?: number;
           callbackNonceHash?: string;
           status: string;
           inputParams?: object;
@@ -1298,6 +1300,7 @@ export function createInMemoryPrisma() {
           providerJobId: data.providerJobId ?? null,
           idempotencyKeyHash: data.idempotencyKeyHash ?? null,
           requestFingerprint: data.requestFingerprint ?? null,
+          requestFingerprintVersion: data.requestFingerprintVersion ?? null,
           callbackNonceHash: data.callbackNonceHash ?? null,
           status: data.status,
           inputParams: data.inputParams ?? null,

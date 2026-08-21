@@ -5,6 +5,7 @@ import {
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
 import {
+  claimStorageUploadForAbandon,
   countFilesByUserId,
   createFile,
   countStorageUploadsByUserId,
@@ -197,29 +198,29 @@ export async function startUpload({
   } catch (error) {
     // The bucket is already holding an upload that nothing now points at. It
     // would keep its parts, and be paid for, until something threw them away.
-    await abandon(objectKey, multipart.uploadId);
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     throw error;
   }
 
   if (upload === "tooMany") {
-    await abandon(objectKey, multipart.uploadId);
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "tooManyUploads" };
   }
 
   if (upload === "tooManyFiles") {
-    await abandon(objectKey, multipart.uploadId);
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "tooManyFiles" };
   }
 
   if (!upload) {
-    await abandon(objectKey, multipart.uploadId);
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "insufficientStorageSpace" };
   }
 
   // 同じ名前の要求が同時に届いたとき、行を書けたのは片方だけ。負けたほうが
   // 作ったマルチパートは誰も知らないままパートを抱えるので、ここで捨てる。
   if (upload.uploadId !== multipart.uploadId) {
-    await abandon(objectKey, multipart.uploadId);
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
   }
 
   return {
@@ -430,18 +431,22 @@ async function finalizeUpload(
     }
 
     // A failure reported after the commit landed is indistinguishable from one
-    // reported before it, so the receipt is what decides: if it is there, a
-    // file points at this object and removing it would destroy a stored file.
-    const settled = await completedFileOf(upload.id, userId);
-    if (settled.kind === "completed") return { ok: true, file: settled.file };
-    // 読めなかったときは消さない。File が指しているかもしれないオブジェクトを
-    // 消すのは取り返しがつかない。掃除は sweeper に任せる。
-    if (settled.kind === "unknown") throw error;
+    // reported before it, so the row is what decides. Reading it is not enough:
+    // another completion of the same upload may be in a transaction that has
+    // not committed yet, and deleting the object on the strength of "no receipt
+    // yet" would leave the file it is about to record pointing at nothing.
+    // Claiming the row settles it — a claimed row can never take a receipt, so
+    // whatever is in the bucket is this call's to remove.
+    if (!await claimForCleanup(upload.id, userId)) {
+      const settled = await completedFileOf(upload.id, userId);
+      if (settled.kind === "completed") return { ok: true, file: settled.file };
+      // 取れず、控えも読めない。File が指しているかもしれないオブジェクトを
+      // 消すのは取り返しがつかないので、掃除に任せる。
+      throw error;
+    }
 
-    // Nothing points at the object: it would be stored, and paid for, without
-    // ever being seen again. The tracking row is left alone — a transaction
-    // that rolled back wrote no receipt, so the sweep can still find the upload
-    // and clear it.
+    // Nothing points at the object, and nothing ever can: it would be stored,
+    // and paid for, without ever being seen again.
     try {
       await bucket().delete?.(upload.objectKey);
     } catch (cleanupError) {
@@ -465,8 +470,12 @@ async function finalizeUpload(
   }
 
   if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
-    await bucket().delete?.(upload.objectKey);
-    await deleteStorageUpload({ id: upload.id });
+    // 断ったのはこの呼び出しだが、同じアップロードを仕上げようとしている別の
+    // 呼び出しがいるかもしれない。行を取れたときだけ消す。
+    if (await claimForCleanup(upload.id, userId)) {
+      await bucket().delete?.(upload.objectKey);
+      await deleteStorageUpload({ id: upload.id });
+    }
     return {
       ok: false,
       reason: outcome.kind === "overQuota"
@@ -521,6 +530,11 @@ export async function cancelUpload({
     await deleteStorageUpload({ id: upload.id });
     return true;
   }
+
+  // 取れなければ、そのアップロードは完了したか、掃除のものになったか。どちらも
+  // ここで捨てるものではない。呼び出し側には取り消せたと答える——この利用者から
+  // 見れば、もう進行中のアップロードではないので。
+  if (!await claimForCleanup(upload.id, userId)) return true;
 
   // The row is only dropped once the parts are known to be gone. Dropping it
   // after a failed abort leaves parts nothing knows about, which the sweep can
@@ -578,6 +592,67 @@ async function completedFileOf(
     kind: "completed",
     file: { id: file.id, name: file.name, size: BigInt(file.size) },
   };
+}
+
+// 「この行のパートとオブジェクトは自分が捨てる」と宣言する。取れた行にはもう
+// 控えを書けないので、そのあと何を消しても File が消えたものを指すことはない。
+// 完了済み・宣言済みの行は取れない。
+async function claimForCleanup(
+  uploadId: string,
+  userId: string,
+): Promise<boolean> {
+  try {
+    return await claimStorageUploadForAbandon({
+      id: uploadId,
+      userId,
+      now: new Date(),
+    });
+  } catch (error) {
+    console.error("Failed to claim a storage upload for cleanup", uploadId, error);
+    return false;
+  }
+}
+
+// 誰も指していないマルチパートを捨てる。捨てられなかったときは、掃除が見つけ
+// られる場所に書き留める——行の無いマルチパートは、どこからも辿れないままパート
+// を抱え続け、バケット自身の期限だけが頼りになる。
+async function abandonOrRecord({
+  userId,
+  objectKey,
+  multipart,
+  name,
+  mimeType,
+}: {
+  userId: string;
+  objectKey: string;
+  multipart: { uploadId: string };
+  name: string;
+  mimeType: string;
+}): Promise<void> {
+  if (await abandon(objectKey, multipart.uploadId)) return;
+
+  try {
+    // 最初から掃除のものとして置く。宣言済みなので控えは書けず、抱えている
+    // 大きさも分からないので枠には数えない——数えるべきものは、この行が指す
+    // パートが実際に消えるまで分からない。
+    await createStorageUpload({
+      userId,
+      id: crypto.randomUUID(),
+      objectKey,
+      uploadId: multipart.uploadId,
+      name,
+      mimeType,
+      size: BigInt(0),
+      partSize: STORAGE_UPLOAD_PART_BYTES,
+      abandonedAt: new Date(),
+    });
+  } catch (error) {
+    console.error(
+      "Failed to record a multipart upload nothing points at",
+      objectKey,
+      error,
+    );
+  }
 }
 
 async function abandon(objectKey: string, uploadId: string): Promise<boolean> {

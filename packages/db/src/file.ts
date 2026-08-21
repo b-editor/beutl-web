@@ -327,6 +327,11 @@ export async function findStorageFileByIdAndUserId({
 }
 
 // 何本持っているか。容量とは別に本数にも上限があるので、その判定に使う。
+//
+// AI の生成結果は数えない。合計サイズと一覧が除いているのと同じ理由——支払い
+// 済みのジョブが作った結果を保存時に断ることはできないので、これを数えると、
+// 断れないものが枠を食い、断れる通常のアップロードだけが拒否される。画面に
+// 出ていない結果のせいで、空に見えるストレージが上限に達することになる。
 export async function countFilesByUserId({
   userId,
   prisma,
@@ -335,7 +340,7 @@ export async function countFilesByUserId({
   prisma?: PrismaTransaction;
 }): Promise<number> {
   const db = prisma ?? (await getDb());
-  return await db.file.count({ where: { userId } });
+  return await db.file.count({ where: { userId, aiJobResult: null } });
 }
 
 export async function sumFileSizeByUserId({

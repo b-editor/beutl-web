@@ -42,9 +42,10 @@ const bucket = vi.hoisted(() => {
 });
 
 const createFile = vi.hoisted(() => vi.fn());
+const claimStorageUploadForAbandon = vi.hoisted(() => vi.fn());
 vi.mock("@beutl/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/db")>();
-  return { ...actual, createFile };
+  return { ...actual, createFile, claimStorageUploadForAbandon };
 });
 
 import { finishUpload, startUpload } from "../../apps/web/src/lib/storage-upload-server";
@@ -80,6 +81,7 @@ describe("storage upload consistency", () => {
       id: "file-1",
       name: "clip.mp4",
     }));
+    claimStorageUploadForAbandon.mockImplementation(async () => true);
   });
 
   it("waits for the bucket to join the parts before recording the file", async () => {
@@ -188,6 +190,28 @@ describe("storage upload consistency", () => {
 
     expect(outcome).toEqual({ ok: false, reason: "uploadFailed" });
     expect(createFile).not.toHaveBeenCalled();
+  });
+
+  it("leaves the object alone when the row is not this call's to clear", async () => {
+    // 取引が失敗したあとに控えが見えないのは、「書かれなかった」とは限らない
+    // ——同じアップロードを仕上げている別の呼び出しが、まだ commit していない
+    // だけかもしれない。行を取れなければ、このオブジェクトはこの呼び出しのもの
+    // ではない。消すと、直後に記録される File が消えたものを指すことになる。
+    const uploadId = await begin();
+    createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
+    claimStorageUploadForAbandon.mockResolvedValueOnce(false);
+
+    await expect(
+      finishUpload({
+        userId: USER_ID,
+        uploadId,
+        parts: [{ partNumber: 1, etag: "etag-1" }],
+      }),
+    ).rejects.toThrow("the database is unavailable");
+
+    expect(bucket.state.deleted).toHaveLength(0);
+    // 行も残る。掃除だけが、これを片付けてよいかを決められる。
+    expect(state.storageUploads.size).toBe(1);
   });
 
   it("reports both failures when the object cannot be thrown away either", async () => {

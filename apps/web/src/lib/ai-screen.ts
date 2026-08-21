@@ -128,3 +128,28 @@ export function canSubmitAiRequest({
     !taskHasNoModel &&
     !busy;
 }
+
+/**
+ * 依頼の中身を 1 本の文字列にする。
+ *
+ * 名前を持ったまま送り直せるのは、その名前を作った依頼と同じ形のときだけ。
+ * 違う形で送ると、サーバーは同じ名前の別の依頼として断り、そこで名前が失われる
+ * ——支払い済みの結果へ戻る道が閉じる。利用者が中身を変えたのなら、それは新しい
+ * 依頼なので、新しい名前で送る。
+ *
+ * ファイルは中身までは見ない。名前・大きさ・更新時刻が同じなら同じものとして
+ * 扱う——違えば別のファイルで、指紋も変わる。
+ */
+export function requestSignature(
+  parts: readonly (string | number | boolean | null | undefined | File)[],
+): string {
+  return parts
+    .map((part) => {
+      if (part === null || part === undefined) return "\u0000";
+      if (part instanceof File) {
+        return `file:${part.name}:${part.size}:${part.lastModified}`;
+      }
+      return String(part);
+    })
+    .join("\u001f");
+}

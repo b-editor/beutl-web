@@ -91,13 +91,13 @@ export function ImageEditForm({
   // 名前を作った依頼をそのまま送る——どちらも指紋の一部なので、片方でも変えると
   // 同じ名前が別の依頼に見え、支払い済みの job に届かなくなる。
   const [sentRequest, setSentRequest] = useState<
-    { task: string; model: string } | null
+    { task: string; model: string; prompt: string; expansion: string } | null
   >(null);
-  const [outpaintExpansion, setOutpaintExpansion] = useState<string>("25");
+  const [chosenExpansion, setChosenExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [comparisonMode, setComparisonMode] = useState<string>("result");
-  const [editPrompt, setEditPrompt] = useState("");
+  const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
   // action state to report through.
   const [prepareError, setPrepareError] = useState<string | null>(null);
@@ -110,12 +110,11 @@ export function ImageEditForm({
     };
   }, [sourcePreview]);
 
-  const holdsName =
+  const keepsName =
     (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
-  // 名前が残っているあいだ、画面はその依頼のまま動かない。task を切り替えたり
-  // モデルが差し替わったりしたら、同じ名前で別の依頼を送ることになる。
-  const held = holdsName ? sentRequest : null;
-  const editTask = held?.task ?? chosenTask;
+  const editTask = chosenTask;
+  const outpaintExpansion = chosenExpansion;
+  const editPrompt = typedPrompt;
   const blocked = blockedReason(
     access,
     EDIT_OPERATIONS,
@@ -123,18 +122,30 @@ export function ImageEditForm({
       (operation) => (access.models[operation] ?? []).length === 0,
     ),
   );
-  // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
-  // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(blocked, holdsName);
   // Each task is its own operation with its own models, so the list changes
   // under the picker. Rather than resetting it from an effect, a choice that no
   // longer exists falls back to the new task's default.
   const models = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
-  const selectedModel = held
-    ? held.model
-    : models.some((entry) => entry.id === model)
-      ? model
-      : defaultModelId(models);
+  // カタログが動いてもモデルは動かさない。名前を持ったまま別のモデルで送ると、
+  // サーバーは同じ名前の別の依頼として断り、支払い済みの結果へ戻る道が閉じる。
+  const heldModel = keepsName && sentRequest?.task === editTask
+    ? sentRequest.model
+    : null;
+  const selectedModel = heldModel ??
+    (models.some((entry) => entry.id === model) ? model : defaultModelId(models));
+  // 中身が同じときだけ、その名前をそのまま使う。利用者が書き換えたのなら、それは
+  // 新しい依頼——新しい名前で送る。同じ名前で別の依頼を送ると断られ、そこで
+  // 名前が失われる。ファイルだけはここでは見られないので、差し替えられたときは
+  // サーバーの拒否で分かる（名前はそのまま残る）。
+  const holdsName = keepsName &&
+    sentRequest !== null &&
+    sentRequest.task === editTask &&
+    sentRequest.model === selectedModel &&
+    sentRequest.prompt === typedPrompt &&
+    sentRequest.expansion === chosenExpansion;
+  // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
+  // 行く道を閉じることになる。
+  const submitBlocked = blocksSubmit(blocked, holdsName);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   const taskUnaffordable =
     blocked === null &&
@@ -199,7 +210,12 @@ export function ImageEditForm({
     // keyboard could start a run with no task, no plan, no balance for this
     // task, or no model that can serve it.
     if (!canSubmit) return;
-    setSentRequest({ task: editTask, model: selectedModel });
+    setSentRequest({
+      task: editTask,
+      model: selectedModel,
+      prompt: editPrompt,
+      expansion: outpaintExpansion,
+    });
     setPrepareError(null);
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -231,13 +247,15 @@ export function ImageEditForm({
   }
 
   function applyTemplate(template: PromptTemplate) {
-    setEditPrompt(template.prompt);
+    setTypedPrompt(template.prompt);
   }
 
   const form = (
     <Card>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
-        <IdempotencyKeyField state={state} />
+        {/* 中身が変わっていれば、それは新しい依頼。同じ名前で送ると断られる
+            ので、名前も新しくする。*/}
+        <IdempotencyKeyField state={state} holds={holdsName} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="editFile">{t("dashboard:ai.image")}</Label>
           <Input
@@ -269,11 +287,8 @@ export function ImageEditForm({
                 key={entry.task}
                 value={entry.task}
                 disabled={
-                  // 名前を持っているあいだは動かせない。task を変えると、その
-                  // 名前が指す支払い済みの job に届かなくなる。
-                  held !== null ||
-                  (blocked === null &&
-                    !access.availability[`image.edit.${entry.task}`])
+                  blocked === null &&
+                  !access.availability[`image.edit.${entry.task}`]
                 }
                 className="justify-start gap-2"
               >
@@ -307,7 +322,7 @@ export function ImageEditForm({
           models={models}
           value={selectedModel}
           onChange={setModel}
-          disabled={held !== null}
+          disabled={heldModel !== null}
         />
 
         {editTask === "outpaint" && (
@@ -317,7 +332,7 @@ export function ImageEditForm({
               type="single"
               variant="outline"
               value={outpaintExpansion}
-              onValueChange={(next) => next && setOutpaintExpansion(next)}
+              onValueChange={(next) => next && setChosenExpansion(next)}
               className="grid grid-cols-3"
             >
               {OUTPAINT_EXPANSIONS.map((percent) => (
@@ -359,7 +374,7 @@ export function ImageEditForm({
                 rows={3}
                 placeholder={t(`dashboard:ai.taskHints.${selected.task}`)}
                 value={editPrompt}
-                onChange={(event) => setEditPrompt(event.target.value)}
+                onChange={(event) => setTypedPrompt(event.target.value)}
               />
             </div>
           </>

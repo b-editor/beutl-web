@@ -257,9 +257,18 @@ export function AiUsageCard({
 // attempt — but only then. A run that is still going, or one whose paid result
 // could not be read, is not settled: the name it was sent under is the way back
 // to what it already bought, and a new one would buy it again.
-export function IdempotencyKeyField({ state }: { state: unknown }) {
+export function IdempotencyKeyField({
+  state,
+  holds,
+}: {
+  state: unknown;
+  // その名前を、いま画面にある依頼にそのまま使ってよいか。省略すると、失敗の
+  // 種類だけで決める。中身が変わったのなら新しい依頼なので、新しい名前で送る
+  // ——同じ名前で別の依頼を送ると、サーバーは断り、そこで名前が失われる。
+  holds?: boolean;
+}) {
   const [key, setKey] = useState("");
-  const keep =
+  const keep = holds ??
     (state as { keepIdempotencyKey?: boolean } | null | undefined)
       ?.keepIdempotencyKey === true;
 
