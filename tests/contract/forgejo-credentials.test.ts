@@ -66,14 +66,29 @@ vi.mock("@beutl/db", () => ({
     forgejoRepoId,
     ownerUsername,
     name,
+    intendedOwner,
+    intendedName,
   }: {
     forgejoRepoId: number;
     ownerUsername: string;
     name: string;
+    intendedOwner?: string;
+    intendedName?: string;
   }) => {
-    repairQueue.set(forgejoRepoId, { forgejoRepoId, ownerUsername, name });
+    repairQueue.set(forgejoRepoId, {
+      forgejoRepoId,
+      ownerUsername,
+      name,
+      intendedOwner: intendedOwner ?? null,
+      intendedName: intendedName ?? null,
+    });
   },
-  listGitRepositoryRepairs: async () => [...repairQueue.values()],
+  listGitRepositoryRepairs: async () =>
+    [...repairQueue.values()].map((entry) => ({
+      intendedOwner: null,
+      intendedName: null,
+      ...entry,
+    })),
   claimGitRepositoryRepair: async () => true,
   recordGitRepositoryRepairAttempt: async () => undefined,
   deleteGitRepositoryRepair: async ({ forgejoRepoId }: { forgejoRepoId: number }) => {
@@ -163,7 +178,13 @@ let deletionStartsAfterFirstCheck = false;
 let audited: { action: string; details: string | null }[] = [];
 let repairQueue = new Map<
   number,
-  { forgejoRepoId: number; ownerUsername: string; name: string }
+  {
+    forgejoRepoId: number;
+    ownerUsername: string;
+    name: string;
+    intendedOwner?: string | null;
+    intendedName?: string | null;
+  }
 >();
 let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
@@ -483,6 +504,7 @@ describe("リポジトリの作成", () => {
     transferFails = false,
   }: { commitFails?: boolean; transferFails?: boolean } = {}) {
     const state = { committed: false, deleted: false, transferred: false };
+    let holdingName = "";
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
       const method = init?.method ?? "GET";
@@ -494,7 +516,8 @@ describe("リポジトリの作成", () => {
         return json({ message: "not found" }, 404);
       }
       if (method === "POST" && path.endsWith("/user/repos")) {
-        return json({ id: 7, name: "proj", default_branch: "main" }, 201);
+        holdingName = JSON.parse(String(init?.body)).name;
+        return json({ id: 7, name: holdingName, default_branch: "main" }, 201);
       }
       if (method === "POST" && path.endsWith("/contents")) {
         if (commitFails) return json({ message: "boom" }, 500);
@@ -514,9 +537,26 @@ describe("リポジトリの作成", () => {
       if (method === "POST" && path.endsWith("/transfer")) {
         if (transferFails) return json({ message: "boom" }, 500);
         state.transferred = true;
+        return json({
+          id: 7,
+          name: holdingName,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      // 譲渡の後、本来の名前に直す。
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
         return json({ id: 7, name: "proj", owner: { id: 2, login: "someone" } });
       }
-      if (method === "DELETE" && path.endsWith("/repos/beutl-admin/proj")) {
+      // 畳むときは id で今の姿を確かめてから消す。
+      if (method === "GET" && path.endsWith("/repositories/7")) {
+        return json({
+          id: 7,
+          name: holdingName,
+          default_branch: "main",
+          owner: { id: 1, login: "beutl-admin" },
+        });
+      }
+      if (method === "DELETE" && path.includes("/repos/beutl-admin/")) {
         state.deleted = true;
         return new Response(null, { status: 204 });
       }
@@ -641,6 +681,7 @@ describe("リポジトリの作成", () => {
     // 名前空間を見て、在れば続きから進める。
     const { createRepository } = await import("@beutl/forgejo");
     let transferred = false;
+    let holdingName = "";
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
       const method = init?.method ?? "GET";
@@ -651,11 +692,16 @@ describe("リポジトリの作成", () => {
         return json({ message: "not found" }, 404);
       }
       if (method === "POST" && path.endsWith("/user/repos")) {
+        holdingName = JSON.parse(String(init?.body)).name;
         return new Response("gateway timeout", { status: 504 });
       }
-      // 管理者側には出来ている。
-      if (method === "GET" && path.endsWith("/repos/beutl-admin/proj")) {
-        return json({ id: 7, name: "proj", default_branch: "main" });
+      // 管理者側には**この呼び出しの名前で**出来ている。
+      if (
+        method === "GET" &&
+        holdingName &&
+        path.endsWith(`/repos/beutl-admin/${holdingName}`)
+      ) {
+        return json({ id: 7, name: holdingName, default_branch: "main" });
       }
       if (path.includes("/contents/.gitattributes")) {
         return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
@@ -665,6 +711,13 @@ describe("リポジトリの作成", () => {
       }
       if (method === "POST" && path.endsWith("/transfer")) {
         transferred = true;
+        return json({
+          id: 7,
+          name: holdingName,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
         return json({ id: 7, name: "proj", owner: { id: 2, login: "someone" } });
       }
       return new Response(null, { status: 204 });
@@ -1239,5 +1292,109 @@ describe("直せなかったリポジトリの片付け", () => {
     expect(audited.map((entry) => entry.action)).toContain(
       "git.repositoryLocked",
     );
+  });
+});
+
+describe("預かったままのリポジトリ", () => {
+  // 譲渡の前に Worker が消えると、管理者所有のまま残る。利用者からは見えないので
+  // push はされないが、控えを外して放置すると同じ名前を永久に塞ぐ。
+
+  it("控えに渡す先が入っていれば、後から渡し切る", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, {
+      forgejoRepoId: 5,
+      ownerUsername: "beutl-admin",
+      name: "beutl-holding-abc",
+      intendedOwner: "someone",
+      intendedName: "proj",
+    });
+    let transferredTo: string | null = null;
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "beutl-holding-abc",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 1, login: "beutl-admin" },
+        });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        transferredTo = JSON.parse(String(init?.body)).new_owner;
+        return json({
+          id: 5,
+          name: "beutl-holding-abc",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 5, name: "proj", owner: { id: 2, login: "someone" } });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
+    });
+    // 揃っているからと控えだけ外さない。渡し切る。
+    expect(transferredTo).toBe("someone");
+    expect(renamedTo).toBe("proj");
+    expect(repairQueue.size).toBe(0);
+  });
+
+  it("消せなかった預かりものは控えに残す", async () => {
+    // ログだけにすると、管理者所有のまま誰にも知られずに残る。
+    const { createRepository } = await import("@beutl/forgejo");
+    let holdingName = "";
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        holdingName = JSON.parse(String(init?.body)).name;
+        return json({ id: 5, name: holdingName, default_branch: "main" }, 201);
+      }
+      // テンプレートを入れられない。
+      if (method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "boom" }, 500);
+      }
+      if (path.includes("/contents/.git")) {
+        return json({ message: "nope" }, 404);
+      }
+      if (method === "GET" && path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: holdingName,
+          owner: { id: 1, login: "beutl-admin" },
+        });
+      }
+      // 畳むこともできない。
+      if (method === "DELETE") return json({ message: "boom" }, 500);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect([...repairQueue.keys()]).toEqual([5]);
   });
 });

@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "release": "node scripts/release.mjs",
     "migrate:deploy": "pnpm --filter @beutl/web exec prisma migrate deploy --schema prisma/schema.prisma",
+    "git:reconcile-status": "pnpm --filter @beutl/web exec node --env-file-if-exists=.env scripts/git-reconcile-status.mjs",
     "migrate:status": "pnpm --filter @beutl/web exec prisma migrate status --schema prisma/schema.prisma",
     "deploy": "pnpm run release",
     "deploy:web": "pnpm --filter @beutl/web run deploy",

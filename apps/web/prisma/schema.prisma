@@ -216,7 +216,14 @@ model GitRepositoryRepair {
   forgejoRepoId Int      @id
   ownerUsername String
   name          String
+  // 管理者の手元で組み立て中のものは、渡す先と最終的な名前を控える。
+  // これが無いと、譲渡の前に落ちた預かりものが「揃っているから片付いた」と
+  // 見なされ、管理者所有のまま残って同じ名前を永久に塞ぐ。
+  intendedOwner String?
+  intendedName  String?
   createdAt     DateTime @default(now())
+  // 掴んでいる間の期限。重なった定期実行が同じ相手を触らないため。
+  leaseUntil    DateTime?
   attempts      Int      @default(0)
   lastAttemptAt DateTime?
   lastError     String?

@@ -38,6 +38,12 @@ function matches(row: Row, where: Filter): boolean {
       }
       continue;
     }
+    if (key === "AND") {
+      if (!(expected as Filter[]).every((clause) => matches(row, clause))) {
+        return false;
+      }
+      continue;
+    }
     const actual = (row as unknown as Record<string, unknown>)[key];
     if (
       expected !== null &&

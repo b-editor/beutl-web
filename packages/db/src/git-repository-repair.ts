@@ -14,26 +14,36 @@ export async function enqueueGitRepositoryRepair({
   forgejoRepoId,
   ownerUsername,
   name,
+  intendedOwner,
+  intendedName,
   reason,
   prisma,
 }: {
   forgejoRepoId: number;
   ownerUsername: string;
   name: string;
+  /** 管理者の手元で組み立て中なら、渡す先と最終的な名前。 */
+  intendedOwner?: string;
+  intendedName?: string;
   reason: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
+  const handover = {
+    ...(intendedOwner === undefined ? {} : { intendedOwner }),
+    ...(intendedName === undefined ? {} : { intendedName }),
+  };
   await db.gitRepositoryRepair.upsert({
     where: { forgejoRepoId },
     create: {
       forgejoRepoId,
       ownerUsername,
       name,
+      ...handover,
       lastError: reason.slice(0, 500),
     },
     // 既に積んであるなら試行回数は保つ。名前は変わりうるので新しい方を採る。
-    update: { ownerUsername, name, lastError: reason.slice(0, 500) },
+    update: { ownerUsername, name, ...handover, lastError: reason.slice(0, 500) },
   });
 }
 
@@ -45,18 +55,26 @@ export async function enqueueGitRepositoryRepair({
 export async function listGitRepositoryRepairs({
   notAttemptedSince,
   limit = 20,
+  now = new Date(),
   prisma,
 }: {
   notAttemptedSince: Date;
   limit?: number;
+  now?: Date;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryRepair.findMany({
+    // 2 つの OR を並べると後の方で上書きされる。AND で束ねる。
     where: {
-      OR: [
-        { lastAttemptAt: null },
-        { lastAttemptAt: { lt: notAttemptedSince } },
+      AND: [
+        { OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] },
+        {
+          OR: [
+            { lastAttemptAt: null },
+            { lastAttemptAt: { lt: notAttemptedSince } },
+          ],
+        },
       ],
     },
     orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
@@ -71,22 +89,31 @@ export async function listGitRepositoryRepairs({
 export async function claimGitRepositoryRepair({
   forgejoRepoId,
   notAttemptedSince,
+  leaseUntil,
+  now = new Date(),
   prisma,
 }: {
   forgejoRepoId: number;
   notAttemptedSince: Date;
+  leaseUntil: Date;
+  now?: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const { count } = await db.gitRepositoryRepair.updateMany({
     where: {
       forgejoRepoId,
-      OR: [
-        { lastAttemptAt: null },
-        { lastAttemptAt: { lt: notAttemptedSince } },
+      AND: [
+        { OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] },
+        {
+          OR: [
+            { lastAttemptAt: null },
+            { lastAttemptAt: { lt: notAttemptedSince } },
+          ],
+        },
       ],
     },
-    data: { lastAttemptAt: new Date() },
+    data: { leaseUntil, lastAttemptAt: now },
   });
   return count === 1;
 }

@@ -394,10 +394,16 @@ export async function listPurgedGitAccountDeletions({
       phase: GitAccountDeletionPhase.PURGED,
       // 控えた相手が分からない行は照合しようがない。
       forgejoUsername: { not: null },
-      ...leaseExpired(now),
-      OR: [
-        { lastAttemptAt: null },
-        { lastAttemptAt: { lt: checkedBefore } },
+      // 2 つの OR を並べると後の方で上書きされ、期限の絞り込みが黙って消える。
+      // そうなると、掴まれている行が先頭を占めたまま後ろが処理されない。
+      AND: [
+        leaseExpired(now),
+        {
+          OR: [
+            { lastAttemptAt: null },
+            { lastAttemptAt: { lt: checkedBefore } },
+          ],
+        },
       ],
     },
     orderBy: [{ lastAttemptAt: "asc" }, { purgedAt: "asc" }],

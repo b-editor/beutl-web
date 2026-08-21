@@ -25,6 +25,16 @@ import type {
   ForgejoRepository,
 } from "./types";
 
+/** 管理者自身のログイン名。作成中のリポジトリを預かる所有者。 */
+let adminUsername: string | null = null;
+
+async function getAdminUsername(): Promise<string> {
+  if (adminUsername) return adminUsername;
+  const me = await forgejoRequest<{ login: string }>("/user");
+  adminUsername = me.login;
+  return me.login;
+}
+
 /** Forgejo のページングの上限。 */
 const MAX_PAGE_SIZE = 50;
 
@@ -199,11 +209,13 @@ async function queueRepair(
   owner: string,
   repository: Pick<ForgejoRepository, "id" | "name">,
   reason: string,
+  handover?: { intendedOwner: string; intendedName: string },
 ): Promise<void> {
   await enqueueGitRepositoryRepair({
     forgejoRepoId: repository.id,
     ownerUsername: owner,
     name: repository.name,
+    ...handover,
     reason,
   }).catch((error) => {
     console.error(
@@ -308,6 +320,12 @@ function fromBase64(encoded: string): string {
 const REPAIR_COOLDOWN_MS = 15 * 60 * 1000;
 
 /**
+ * 掴んでいる間の期限。譲渡まで行う場合があるので、単なる間隔では足りない。
+ * 期限内は他の実行が同じ相手を触らない。
+ */
+const REPAIR_LEASE_MS = 10 * 60 * 1000;
+
+/**
  * 入れ切れなかったテンプレートを後から入れ直す。定期実行から呼ぶ。
  *
  * 控えてあるのは **Forgejo のリポジトリ id**。名前で引き直すと、改名で空いた名前を
@@ -332,6 +350,7 @@ export async function retryGitRepositoryRepairs({
       !(await claimGitRepositoryRepair({
         forgejoRepoId: entry.forgejoRepoId,
         notAttemptedSince: cutoff,
+        leaseUntil: new Date(Date.now() + REPAIR_LEASE_MS),
       }))
     ) {
       continue;
@@ -350,15 +369,33 @@ export async function retryGitRepositoryRepairs({
       }
 
       const owner = current.owner.login;
-      if (await hasTemplates(owner, current.name)) {
+      const admin = await getAdminUsername();
+      // 管理者の手元に残っている預かりもの。**渡し切る。** 揃っているからと
+      // 控えだけ外すと、管理者所有のまま残って同じ名前を永久に塞ぐ。
+      const isHolding =
+        entry.intendedOwner !== null &&
+        entry.intendedName !== null &&
+        owner === admin;
+
+      if (!(await hasTemplates(owner, current.name))) {
+        // 直せなければ中で読み取り専用にし、それも駄目なら控えを残して投げる。
+        await repairTemplates(owner, current);
+      } else if (!isHolding) {
         // 誰かが直した (同名での作り直しなど)。
         await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
         fixed += 1;
         continue;
       }
 
-      // 直せなければ中で読み取り専用にし、それも駄目なら控えを残して投げる。
-      await repairTemplates(owner, current);
+      if (isHolding) {
+        await handOver(
+          admin,
+          current.name,
+          entry.intendedOwner as string,
+          entry.intendedName as string,
+        );
+      }
+
       await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
       fixed += 1;
     } catch (error) {
@@ -377,37 +414,68 @@ export async function retryGitRepositoryRepairs({
  * リポジトリを作り、Beutl 用の .gitattributes / .gitignore を最初のコミットに入れる。
  * .gitattributes が無いと素材が LFS に載らないので、作成と同時に置くのが要点。
  */
-/** 管理者自身のログイン名。作成中のリポジトリを預かる所有者。 */
-let adminUsername: string | null = null;
-
-async function getAdminUsername(): Promise<string> {
-  if (adminUsername) return adminUsername;
-  const me = await forgejoRequest<{ login: string }>("/user");
-  adminUsername = me.login;
-  return me.login;
-}
-
 /**
  * 預かったままのリポジトリを畳む。
  *
- * 直前に自分の名前空間へ作ったもので、利用者はまだ見ることも触ることもできない。
- * ここで消すのは、他人のリポジトリを消す危険とは別の話。
+ * **id で今の姿を確かめてから消す。** 名前で消すと、その名前が別のものに
+ * 渡っていた場合に巻き添えにする。消せなかったときは控えを残す。ログだけにすると、
+ * 管理者所有のまま誰にも知られずに残り、同じ名前の作成を塞ぎ続ける。
  */
 async function discardHolding(
   admin: string,
   repository: ForgejoRepository,
 ): Promise<void> {
-  await forgejoRequest(
-    `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(repository.name)}`,
-    { method: "DELETE", responseType: "none" },
-  ).catch((error) => {
+  try {
+    const current = await forgejoRequestOrNull<ForgejoRepository>(
+      `/repositories/${repository.id}`,
+    );
+    if (!current) {
+      // 既に無い。控えも要らない。
+      await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+        () => undefined,
+      );
+      return;
+    }
+    if (current.owner.login !== admin) {
+      // 既に渡っている。畳む相手ではない。
+      return;
+    }
+    await forgejoRequest(
+      `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(current.name)}`,
+      { method: "DELETE", responseType: "none" },
+    );
+    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
+      () => undefined,
+    );
+  } catch (error) {
+    // 控えは残す。次の定期実行が id で引き直して片付ける。
     console.error(
-      `could not discard the holding repository ${admin}/${repository.name}`,
+      `could not discard the holding repository ${admin}/${repository.name}; ` +
+        "it stays queued",
       error,
     );
-  });
-  await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-    () => undefined,
+  }
+}
+
+/** 譲渡して、最終的な名前に直す。@returns 渡し終えたリポジトリ。 */
+async function handOver(
+  admin: string,
+  holdingName: string,
+  intendedOwner: string,
+  intendedName: string,
+): Promise<ForgejoRepository> {
+  // ここで初めて利用者のものになる。既定値は入り終わっている。
+  // id は変わらない (16.0.2 で実測)。
+  const transferred = await forgejoRequest<ForgejoRepository>(
+    `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(holdingName)}/transfer`,
+    { method: "POST", body: { new_owner: intendedOwner } },
+  );
+  if (transferred.name === intendedName) return transferred;
+  // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
+  // 作成の前に確かめてある。
+  return await forgejoRequest<ForgejoRepository>(
+    `/repos/${encodeURIComponent(intendedOwner)}/${encodeURIComponent(transferred.name)}`,
+    { method: "PATCH", body: { name: intendedName } },
   );
 }
 
@@ -420,7 +488,9 @@ async function discardHolding(
  *
  * 隙間を残すと、そこへ入った数 GiB の動画は普通の git オブジェクトとして履歴に
  * 残る。後から .gitattributes を足しても、既に入った履歴は LFS に移らない。
- * 作成後に読み取り専用へ倒す仕掛けも、既に入ってしまったものは戻せない。
+ *
+ * 預かる名前は毎回違うものにする。最終的な名前で預かると、同じ名前を別の利用者が
+ * 同時に作ったときに、どちらの預かりものか区別できず、他人のものを渡してしまう。
  */
 export async function createRepository(
   sudo: string,
@@ -454,16 +524,17 @@ export async function createRepository(
   }
 
   const admin = await getAdminUsername();
+  // この 1 回の作成にしか使わない名前。応答を落としても、この名前で引ければ
+  // 自分が作ったものだと言い切れる。
+  const holdingName = `beutl-holding-${crypto.randomUUID()}`;
   let holding: ForgejoRepository;
-  // 自分で作ったと言い切れるかどうか。曖昧な応答から拾った場合は畳まない。
-  let owned = true;
 
   try {
     // Sudo を付けない = 管理者自身の名前空間に作る。
     holding = await forgejoRequest<ForgejoRepository>("/user/repos", {
       method: "POST",
       body: {
-        name,
+        name: holdingName,
         description,
         // プライベート専用で運用する。Forgejo 側も FORCE_PRIVATE で固定している。
         private: true,
@@ -472,50 +543,40 @@ export async function createRepository(
       },
     });
   } catch (error) {
-    if (error instanceof ForgejoError && error.isConflict) {
-      // 管理者の名前空間で衝突した = 同じ名前の作成が今まさに走っている。
-      // 利用者の名前空間は上で空だと確かめてあるので、待って直せばよい。
-      throw new ForgejoError(
-        409,
-        "POST",
-        "/user/repos",
-        `a repository named ${name} is being created; try again`,
-      );
-    }
-    // 502/504 など。作られたのか作られていないのかが分からない。管理者の
-    // 名前空間を見て、在れば引き継ぐ。無ければそのまま投げる。
-    const existing = await getRepository(admin, admin, name).catch(() => null);
+    // 502/504 など。作られたのか作られていないのかが分からない。**自分の名前で**
+    // 引き直す。他人の預かりものを拾うことはない。
+    const existing = await getRepository(admin, admin, holdingName).catch(
+      () => null,
+    );
     if (!existing) throw error;
     holding = existing;
-    owned = false;
   }
 
-  // 落ちても追えるように控える。この時点では利用者は触れないので push はされない
-  // が、預かったまま残るのを見えなくしない。
-  await queueRepair(admin, holding, "held for setup; not transferred yet");
+  // 落ちても追えるように控える。渡す先と最終的な名前も一緒に控えないと、
+  // 譲渡の前に落ちた預かりものが「揃っているから片付いた」と見なされ、
+  // 管理者所有のまま残って同じ名前を塞ぎ続ける。
+  await queueRepair(admin, holding, "held for setup; not transferred yet", {
+    intendedOwner: sudo,
+    intendedName: name,
+  });
 
   try {
-    await commitTemplates(admin, name, holding.default_branch);
-    await assertTemplatesAreCanonical(admin, name);
+    await commitTemplates(admin, holdingName, holding.default_branch);
+    await assertTemplatesAreCanonical(admin, holdingName);
   } catch (error) {
-    // 利用者はまだ触れない。自分で作ったものなら畳んでやり直させる方が良い。
-    if (owned) await discardHolding(admin, holding);
+    // 利用者はまだ触れない。自分で作ったものなので畳んでやり直させる。
+    await discardHolding(admin, holding);
     throw error;
   }
 
   try {
-    // ここで初めて利用者のものになる。既定値は入り終わっている。
-    // id は変わらない (実測)。
-    const transferred = await forgejoRequest<ForgejoRepository>(
-      `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(name)}/transfer`,
-      { method: "POST", body: { new_owner: sudo } },
-    );
+    const handed = await handOver(admin, holdingName, sudo, name);
     await deleteGitRepositoryRepair({ forgejoRepoId: holding.id }).catch(
       () => undefined,
     );
-    return transferred;
+    return handed;
   } catch (error) {
-    if (owned) await discardHolding(admin, holding);
+    await discardHolding(admin, holding);
     throw error;
   }
 }
