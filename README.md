@@ -81,6 +81,42 @@ cross-Worker secrets, admin session sharing, Paid AI settings, and required
 Stripe webhook events. The route split and its rollback procedure are recorded
 in [ADR 0002](docs/adr/0002-api-worker-split.md).
 
+Deploy through `pnpm run release`, which fixes the order. Deploying a Worker before
+its migrations have been applied breaks every path that reads a table the Worker
+expects; applying migrations first is safe, because a migration only ever adds.
+
+```bash
+BEUTL_SMOKE_JWT=<a user's JWT> pnpm run release
+```
+
+It runs `prisma migrate deploy`, refuses to go on unless `prisma migrate status`
+reports everything applied, deploys the three Workers, and then checks
+`GET /api/v3/git/account` and `GET /api/v3/git/credentials` with the supplied token --
+both read tables the Workers cannot serve without the migrations. Without a token it
+stops after the deploy and says so; pass `--skip-smoke` to accept that deliberately.
+`--dry-run` prints the steps without running them.
+
+The individual steps are also available:
+
+```bash
+pnpm run migrate:deploy # apply pending migrations
+pnpm run migrate:status # report what is applied
+pnpm run deploy:web     # Web Worker (OpenNext build + deploy)
+pnpm run deploy:api     # API Worker (wrangler deploy)
+pnpm run deploy:admin   # Admin Worker (OpenNext build + deploy)
+```
+
+A branch based on an older `main` can carry migrations that interleave with ones
+already applied from other branches. Rebase before releasing, and check
+`pnpm run migrate:status` first -- once applied out of order, the divergence is
+permanent.
+
+Cloudflare bindings are declared in `apps/web/wrangler.jsonc`, `packages/api/wrangler.jsonc`
+and `apps/admin/wrangler.jsonc`; local environment placeholders are documented in
+`apps/web/.env.sample` and `apps/admin/.env.sample`.
+`JWT_SECRET` / `JWT_ISSUER` / `JWT_AUDIENCE` must match between the Web and API Workers
+(CI deploys from GitHub Secrets).
+
 ## Documentation
 
 - [Deployment configuration](docs/deployment.md)

@@ -205,12 +205,20 @@ async function audit(action: string, details: string): Promise<void> {
  * 行だけを NEEDS_REVIEW にしても、DB を直接見る人がいなければ誰も気付かない。
  * その間、退会したはずの利用者の Forgejo アカウントが残り続ける。
  */
-async function sendToReview(userId: string, reason: string): Promise<void> {
-  await markGitAccountDeletionNeedsReview({ userId, reason });
+async function sendToReview(
+  userId: string,
+  intentId: string,
+  reason: string,
+): Promise<boolean> {
+  // 動かせなかったなら引き取られている。起きていないことを監査に書かない。
+  if (!(await markGitAccountDeletionNeedsReview({ userId, intentId, reason }))) {
+    return false;
+  }
   await audit(
     auditLogActions.git.accountNeedsReview,
     `userId: ${userId}; ${reason}`,
   );
+  return true;
 }
 
 /**
@@ -219,12 +227,19 @@ async function sendToReview(userId: string, reason: string): Promise<void> {
  * 握っていないのに消し続けると、引き取った側と 2 つで同じ相手を触ることになる。
  * どちらの操作も冪等だが、失敗の記録と監査が二重になって経緯が読めなくなる。
  */
-async function renewLease(userId: string, intentId: string): Promise<void> {
-  if (!(await renewGitAccountDeletionLease({
-    userId,
-    intentId,
-    leaseUntil: leaseDeadline(),
-  }))) {
+async function renewLease(
+  userId: string,
+  intentId: string,
+  phase: GitAccountDeletionPhase,
+): Promise<void> {
+  if (
+    !(await renewGitAccountDeletionLease({
+      userId,
+      intentId,
+      phase,
+      leaseUntil: leaseDeadline(),
+    }))
+  ) {
     throw new GitAccountDeletionInProgressError(userId);
   }
 }
@@ -272,7 +287,9 @@ export async function beginGitAccountDeletion(
       forgejoUsername: target.username,
       forgejoUserId: target.id,
     });
-    await revokeAllTokens(target.username, () => renewLease(userId, intentId));
+    await revokeAllTokens(target.username, () =>
+      renewLease(userId, intentId, GitAccountDeletionPhase.BLOCKING),
+    );
     return { forgejoUsername: target.username, intentId };
   } catch (error) {
     // 準備の段階で失敗した = 利用者はまだ生きている。印を残すと、その人は
@@ -315,20 +332,59 @@ export async function abortGitAccountDeletion(
  * 呼ぶ前に phase が READY_TO_PURGE であることを確かめる。BLOCKING のまま消すと、
  * ローカルの削除が失敗して生き残っている利用者のデータを落とすことになる。
  *
+ * **必ず印を握ってから進める。** 握れなければ他の処理が進めているので何もしない。
+ * 握った印 (epoch) で、以後の更新と purge の直前をすべて条件付ける。握らずに
+ * 期限だけを見ると、期限切れで引き取られた側が息を吹き返したときに、引き取った側と
+ * 同時に消しにいける。
+ *
  * 対象は毎回探し直す。始めた時点では居なくても、その後に作られていることがある。
  * 見つかったら id とメールを確かめ直してから消す。待っている間に Forgejo が復元され、
  * 同じ名前が別人に渡っていることがあるため。
  *
+ * @param heldIntentId 退会を始めた処理が握っている印。定期実行からは渡さない
+ *   (期限切れの行を新しい印で引き取る)。
  * @returns 消し切れたかどうか。false なら再試行の対象として残る。
  */
 export async function finishGitAccountDeletion(
   userId: string,
+  heldIntentId?: string,
 ): Promise<boolean> {
   const pending = await findGitAccountDeletion({ userId });
   if (!pending) return true;
   if (pending.phase !== GitAccountDeletionPhase.READY_TO_PURGE) {
-    // まだ Beutl 側が消えていない。ここで消すと生きている利用者のデータを失う。
+    // まだ Beutl 側が消えていないか、人の確認待ち。どちらもここでは進めない。
     return false;
+  }
+
+  // 進める前に握る。以後の更新はすべてこの epoch で条件付ける。
+  let epoch: string;
+  if (heldIntentId) {
+    // 退会を始めた処理からの続き。まだ自分のものであることを確かめ、押さえ直す。
+    // 待っている間に期限が切れて定期実行に引き取られていることがある。
+    if (
+      !(await renewGitAccountDeletionLease({
+        userId,
+        intentId: heldIntentId,
+        phase: GitAccountDeletionPhase.READY_TO_PURGE,
+        leaseUntil: leaseDeadline(),
+      }))
+    ) {
+      return false;
+    }
+    epoch = heldIntentId;
+  } else {
+    // 定期実行。期限切れの行を**新しい印で**引き取る。前の持ち主はこれで
+    // 以後 1 件も更新できなくなる。
+    epoch = crypto.randomUUID();
+    if (
+      !(await claimGitAccountDeletion({
+        userId,
+        intentId: epoch,
+        leaseUntil: leaseDeadline(),
+      }))
+    ) {
+      return false;
+    }
   }
 
   // 控えた名前を直接見る。合成メールで探し直すと、Forgejo のホスト名が変わった
@@ -341,6 +397,7 @@ export async function finishGitAccountDeletion(
       // 探せなかっただけ。次の定期実行でやり直す。
       await recordGitAccountDeletionAttempt({
         userId,
+        intentId: epoch,
         error:
           lookup.failed instanceof Error
             ? lookup.failed.message
@@ -350,9 +407,9 @@ export async function finishGitAccountDeletion(
     }
     if (!lookup.found) {
       // 控えにも無く、Forgejo にも居ない。Git を一度も使わなかった利用者。
-      // 片付けるものが無いので完了。
-      await deleteGitAccountDeletion({ userId });
-      return true;
+      // 片付けるものが無いので完了。消せなければ引き取られているので、
+      // 片付いたことにはしない。
+      return await deleteGitAccountDeletion({ userId, intentId: epoch });
     }
     username = lookup.found;
   }
@@ -364,8 +421,7 @@ export async function finishGitAccountDeletion(
 
     if (!actual) {
       // 404 だけが完了。元のユーザーはもう存在しない。
-      await deleteGitAccountDeletion({ userId });
-      return true;
+      return await deleteGitAccountDeletion({ userId, intentId: epoch });
     }
 
     const expectedEmail = noreplyEmailFor(userId);
@@ -376,6 +432,7 @@ export async function finishGitAccountDeletion(
       // 元のユーザーを消せた証拠も無いので、完了にもしない。
       await sendToReview(
         userId,
+        epoch,
         `Forgejo user ${username} is now id ${actual.id} <${actual.email}>, ` +
           `expected id ${pending.forgejoUserId} <${expectedEmail}>`,
       );
@@ -384,8 +441,14 @@ export async function finishGitAccountDeletion(
 
     // 掃き直す。意思表示の前に始まっていた発行が着地していることがある。
     await revokeAllTokens(username, () =>
-      renewLease(userId, pending.intentId),
+      renewLease(userId, epoch, GitAccountDeletionPhase.READY_TO_PURGE),
     );
+
+    // **消す直前にもう一度握りを確かめる。** ここまでの間に引き取られていたら、
+    // 引き取った側が別人と判定して人の確認待ちに移しているかもしれない。
+    // 完全に防げるわけではない (この確認と DELETE の間は開いたまま) が、
+    // 開いている幅を 1 往復に縮められる。
+    await renewLease(userId, epoch, GitAccountDeletionPhase.READY_TO_PURGE);
 
     await forgejoRequest(`/admin/users/${encodeURIComponent(username)}`, {
       method: "DELETE",
@@ -397,6 +460,7 @@ export async function finishGitAccountDeletion(
     if (!(error instanceof ForgejoError && error.isNotFound)) {
       await recordGitAccountDeletionAttempt({
         userId,
+        intentId: epoch,
         error: error instanceof Error ? error.message : String(error),
       }).catch(() => undefined);
       console.error(
@@ -408,8 +472,7 @@ export async function finishGitAccountDeletion(
     }
   }
 
-  await deleteGitAccountDeletion({ userId });
-  return true;
+  return await deleteGitAccountDeletion({ userId, intentId: epoch });
 }
 
 /**
@@ -440,12 +503,17 @@ export async function releaseExpiredGitAccountDeletionBlocks({
 
   for (const entry of stuck) {
     if (!(await existsUserById({ id: entry.userId }))) {
-      await sendToReview(
-        entry.userId,
-        "the user is gone but the marker never reached READY_TO_PURGE; " +
-          "the Forgejo account may still exist",
-      );
-      review += 1;
+      // 見てから今までに引き取られていたら false。数にも入れない。
+      if (
+        await sendToReview(
+          entry.userId,
+          entry.intentId,
+          "the user is gone but the marker never reached READY_TO_PURGE; " +
+            "the Forgejo account may still exist",
+        )
+      ) {
+        review += 1;
+      }
       continue;
     }
 
@@ -486,19 +554,11 @@ export async function retryPendingGitDeletions({
 }> {
   const pending = await listPendingGitAccountDeletions({ limit });
   let finished = 0;
-  let attempted = 0;
 
   for (const entry of pending) {
-    // 掴めた分だけ進める。条件付き更新なので、同時に始まった別の実行は掴めない。
-    if (
-      !(await claimGitAccountDeletion({
-        userId: entry.userId,
-        leaseUntil: leaseDeadline(),
-      }))
-    ) {
-      continue;
-    }
-    attempted += 1;
+    // 掴むのは finishGitAccountDeletion の中。ここで掴んでから渡すと、掴んだ印を
+    // 渡す手段が要るうえ、渡し忘れれば握っていない処理が消しにいける。
+    // 掴めなかった場合も false が返るので、片付いていない件数として数えられる。
     if (await finishGitAccountDeletion(entry.userId)) {
       finished += 1;
     }
@@ -506,7 +566,7 @@ export async function retryPendingGitDeletions({
 
   return {
     finished,
-    pending: attempted - finished,
+    pending: pending.length - finished,
     review: await countGitAccountDeletionsNeedingReview(),
   };
 }

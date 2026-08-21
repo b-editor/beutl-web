@@ -182,6 +182,8 @@ vi.mock("@beutl/db", async (importOriginal) => {
 const {
   GitAccountDeletionPhase,
   claimGitAccountDeletion,
+  deleteGitAccountDeletion,
+  markGitAccountDeletionNeedsReview,
   markGitAccountDeletionReady,
   renewGitAccountDeletionLease,
   startGitAccountDeletion,
@@ -192,6 +194,17 @@ const { releaseExpiredGitAccountDeletionBlocks } = await import(
 
 const future = () => new Date(Date.now() + 60_000);
 const past = () => new Date(Date.now() - 60_000);
+
+/** 印を立てて purge 待ちまで進める。 */
+async function ready(intentId: string, leaseUntil: Date) {
+  await startGitAccountDeletion({
+    userId: "u1",
+    intentId,
+    leaseUntil,
+    prisma,
+  });
+  await markGitAccountDeletionReady({ userId: "u1", intentId, prisma });
+}
 
 beforeEach(() => {
   rows.clear();
@@ -282,6 +295,7 @@ describe("進行中の退会が持つ期限", () => {
       renewGitAccountDeletionLease({
         userId: "u1",
         intentId: "a",
+        phase: GitAccountDeletionPhase.BLOCKING,
         leaseUntil: future(),
         prisma,
       }),
@@ -290,6 +304,7 @@ describe("進行中の退会が持つ期限", () => {
       renewGitAccountDeletionLease({
         userId: "u1",
         intentId: "b",
+        phase: GitAccountDeletionPhase.BLOCKING,
         leaseUntil: future(),
         prisma,
       }),
@@ -297,19 +312,112 @@ describe("進行中の退会が持つ期限", () => {
   });
 
   it("purge 待ちは、期限を握っている間は他の実行が掴めない", async () => {
-    await startGitAccountDeletion({
-      userId: "u1",
-      intentId: "a",
-      leaseUntil: past(),
-      prisma,
-    });
-    await markGitAccountDeletionReady({ userId: "u1", intentId: "a", prisma });
+    await ready("a", past());
 
     await expect(
-      claimGitAccountDeletion({ userId: "u1", leaseUntil: future(), prisma }),
+      claimGitAccountDeletion({
+        userId: "u1",
+        intentId: "cron-1",
+        leaseUntil: future(),
+        prisma,
+      }),
     ).resolves.toBe(true);
     await expect(
-      claimGitAccountDeletion({ userId: "u1", leaseUntil: future(), prisma }),
+      claimGitAccountDeletion({
+        userId: "u1",
+        intentId: "cron-2",
+        leaseUntil: future(),
+        prisma,
+      }),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("引き取られた実行を締め出す", () => {
+  it("引き取られたら期限を延ばせない", async () => {
+    // 期限だけ延ばす作りだと、期限切れで引き取られた側が息を吹き返しても
+    // renew に成功し、引き取った側と同時に消しにいける。
+    await ready("worker-a", past());
+    await claimGitAccountDeletion({
+      userId: "u1",
+      intentId: "worker-b",
+      leaseUntil: future(),
+      prisma,
+    });
+
+    await expect(
+      renewGitAccountDeletionLease({
+        userId: "u1",
+        intentId: "worker-a",
+        phase: GitAccountDeletionPhase.READY_TO_PURGE,
+        leaseUntil: future(),
+        prisma,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("引き取られたら人の確認待ちにも移せない", async () => {
+    await ready("worker-a", past());
+    await claimGitAccountDeletion({
+      userId: "u1",
+      intentId: "worker-b",
+      leaseUntil: future(),
+      prisma,
+    });
+
+    await markGitAccountDeletionNeedsReview({
+      userId: "u1",
+      intentId: "worker-a",
+      reason: "stale worker",
+      prisma,
+    });
+    expect(rows.get("u1")?.phase).toBe(
+      GitAccountDeletionPhase.READY_TO_PURGE,
+    );
+  });
+
+  it("引き取られたら、引き取った側が残した記録を消せない", async () => {
+    // 相手が別人と判定して人の確認待ちに移した行を、古い実行が「片付いた」と
+    // 見なして消してしまうと、Forgejo にアカウントが残ったまま追えなくなる。
+    await ready("worker-a", past());
+    await claimGitAccountDeletion({
+      userId: "u1",
+      intentId: "worker-b",
+      leaseUntil: future(),
+      prisma,
+    });
+    await markGitAccountDeletionNeedsReview({
+      userId: "u1",
+      intentId: "worker-b",
+      reason: "identity mismatch",
+      prisma,
+    });
+
+    await deleteGitAccountDeletion({
+      userId: "u1",
+      intentId: "worker-a",
+      prisma,
+    });
+    expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.NEEDS_REVIEW);
+  });
+
+  it("人の確認待ちに移った行は、握っていた側でも延長できない", async () => {
+    await ready("worker-a", future());
+    await markGitAccountDeletionNeedsReview({
+      userId: "u1",
+      intentId: "worker-a",
+      reason: "identity mismatch",
+      prisma,
+    });
+
+    await expect(
+      renewGitAccountDeletionLease({
+        userId: "u1",
+        intentId: "worker-a",
+        phase: GitAccountDeletionPhase.READY_TO_PURGE,
+        leaseUntil: future(),
+        prisma,
+      }),
     ).resolves.toBe(false);
   });
 });
@@ -373,13 +481,7 @@ describe("落ちた退会処理の印を外す", () => {
   });
 
   it("purge 待ちは外さない (利用者は既に消えている)", async () => {
-    await startGitAccountDeletion({
-      userId: "u1",
-      intentId: "a",
-      leaseUntil: past(),
-      prisma,
-    });
-    await markGitAccountDeletionReady({ userId: "u1", intentId: "a", prisma });
+    await ready("a", past());
 
     await expect(releaseExpiredGitAccountDeletionBlocks()).resolves.toEqual({
       released: 0,

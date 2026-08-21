@@ -21,12 +21,14 @@ vi.mock("@beutl/db", () => ({
     deletionIntentOwner = null;
     pendingDeletion = null;
   },
-  markGitAccountDeletionNeedsReview: async () => undefined,
+  markGitAccountDeletionNeedsReview: async () => true,
   setGitAccountDeletionTarget: async () => undefined,
   markGitAccountDeletionReady: async () => undefined,
   claimGitAccountDeletion: async () => true,
   deleteGitAccountDeletion: async () => {
     pendingDeletion = null;
+    // 本物は「自分の印の行を消せたか」を返す。
+    return true;
   },
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,

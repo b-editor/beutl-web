@@ -295,7 +295,7 @@ export async function deleteUser({
     // リポジトリの削除は最後。アクセスは既に断ってあるので、ここが失敗しても
     // 穴は開かない。先に消すと、上のトランザクションが失敗したときにアカウントだけ
     // 残ってリポジトリが戻せなくなる。
-    if (!(await finishGitAccountDeletion(userId))) {
+    if (!(await finishGitAccountDeletion(userId, intentId))) {
       // GitAccountDeletion の行が残るので再試行はされる。監査は経緯を追うため。
       await addAuditLog({
         userId: session.user.id,

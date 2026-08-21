@@ -97,22 +97,27 @@ export async function startGitAccountDeletion({
  * トークンの失効は本数に比例して時間がかかる。延ばさないと、作業中に期限が切れて
  * 別の処理に引き取られ、2 つが同じ相手を消しにいく。
  *
- * @returns まだ自分が握っているかどうか。false なら引き取られている。
+ * `phase` も見る。読んだ時点から今までに人の確認待ちへ移っていた場合、同じ
+ * intentId のままでも進めてはいけない。
+ *
+ * @returns まだ自分が握っているかどうか。false なら引き取られたか、状態が変わった。
  */
 export async function renewGitAccountDeletionLease({
   userId,
   intentId,
+  phase,
   leaseUntil,
   prisma,
 }: {
   userId: string;
   intentId: string;
+  phase: GitAccountDeletionPhase;
   leaseUntil: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const { count } = await db.gitAccountDeletion.updateMany({
-    where: { userId, intentId },
+    where: { userId, intentId, phase },
     data: { leaseUntil },
   });
   return count === 1;
@@ -178,16 +183,19 @@ export async function markGitAccountDeletionReady({
  */
 export async function markGitAccountDeletionNeedsReview({
   userId,
+  intentId,
   reason,
   prisma,
 }: {
   userId: string;
+  /** 握っている印。これを持っていない処理が状態を動かすと、引き取った側と食い違う。 */
+  intentId: string;
   reason: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitAccountDeletion.updateMany({
-    where: { userId },
+  const { count } = await db.gitAccountDeletion.updateMany({
+    where: { userId, intentId },
     data: {
       phase: GitAccountDeletionPhase.NEEDS_REVIEW,
       // 人の判断待ちなので期限は持たせない。自動で引き取られないようにする。
@@ -196,6 +204,7 @@ export async function markGitAccountDeletionNeedsReview({
       lastError: reason.slice(0, 500),
     },
   });
+  return count === 1;
 }
 
 /**
@@ -232,15 +241,26 @@ export async function findGitAccountDeletion({
   return await db.gitAccountDeletion.findUnique({ where: { userId } });
 }
 
+/**
+ * 片付いた印を消す。
+ *
+ * `intentId` を渡すと自分が握っている行だけを消す。引き取られた後の処理が、
+ * 引き取った側の記録 (人の確認待ちに移した行など) を消さないようにするため。
+ */
 export async function deleteGitAccountDeletion({
   userId,
+  intentId,
   prisma,
 }: {
   userId: string;
+  intentId?: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitAccountDeletion.deleteMany({ where: { userId } });
+  const { count } = await db.gitAccountDeletion.deleteMany({
+    where: { userId, ...(intentId === undefined ? {} : { intentId }) },
+  });
+  return count === 1;
 }
 
 /**
@@ -270,21 +290,28 @@ export async function listPendingGitAccountDeletions({
 }
 
 /**
- * 片付けに取り掛かる。期限を自分のものとして押さえる。
+ * 期限切れの片付け待ちを引き取る。**intentId を新しいものに差し替える**。
+ *
+ * 期限を延ばすだけでは足りない。前の持ち主は自分の intentId を握ったままなので、
+ * 期限が切れた後に息を吹き返しても renew に成功してしまい、引き取った側と同時に
+ * トークンの失効と purge を進められる。相手が別人と判定して人の確認待ちに移した
+ * 後でさえ、消しにいける。差し替えれば、前の持ち主のその後の更新は 1 件も通らない。
  *
  * 条件付き更新なので、同時に始まった定期実行のうち 1 つしか掴めない。処理が長引く
- * ときは renewGitAccountDeletionLease で延ばす。延ばさないまま期限が切れたら、
- * 次の実行が引き取る (処理自体は冪等なので二重に走っても壊れない)。
+ * ときは renewGitAccountDeletionLease で延ばす。
  *
  * @returns 掴めたかどうか。
  */
 export async function claimGitAccountDeletion({
   userId,
+  intentId,
   leaseUntil,
   now = new Date(),
   prisma,
 }: {
   userId: string;
+  /** この実行が握る新しい印。以後の更新はすべてこれで条件付ける。 */
+  intentId: string;
   leaseUntil: Date;
   now?: Date;
   prisma?: PrismaTransaction;
@@ -296,7 +323,7 @@ export async function claimGitAccountDeletion({
       phase: GitAccountDeletionPhase.READY_TO_PURGE,
       ...leaseExpired(now),
     },
-    data: { leaseUntil, lastAttemptAt: now },
+    data: { intentId, leaseUntil, lastAttemptAt: now },
   });
   return count === 1;
 }
@@ -370,16 +397,19 @@ export async function countGitAccountDeletionsNeedingReview({
 
 export async function recordGitAccountDeletionAttempt({
   userId,
+  intentId,
   error,
   prisma,
 }: {
   userId: string;
+  /** 握っている印。引き取られた後の処理が記録を上書きしないようにする。 */
+  intentId: string;
   error: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   await db.gitAccountDeletion.updateMany({
-    where: { userId },
+    where: { userId, intentId },
     data: {
       attempts: { increment: 1 },
       lastAttemptAt: new Date(),

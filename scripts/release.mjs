@@ -1,0 +1,154 @@
+// 配備の順序を固定する。
+//
+// マイグレーションより先に Worker を出すと、新しいテーブルや列を前提にした経路が
+// 本番で落ちる。この分岐で言えば、資格情報の発行前に見る GitAccountDeletion と、
+// 15 分ごとの cron がそれにあたる。逆に、マイグレーションだけ先に当てても
+// 古い Worker は動き続けられる (列が増えるだけで、消える列は無い)。
+//
+//   1. 当てる前に食い違いを見る (この分岐に無いものが本番に入っていたら止まる)
+//   2. prisma migrate deploy
+//   3. 適用し切れたことを確かめる (未適用が残っていたら Worker を配らない)
+//   4. Worker を 3 つ配る
+//   5. 認証付きの smoke test で、配った Worker が新しい schema を読めることを見る
+//
+// 5 には利用者の JWT が要る。BEUTL_SMOKE_JWT に入れる。持っていない場合は
+// --skip-smoke を明示する (黙って飛ばすと、確かめていないものを確かめたことに
+// してしまう)。
+import { execFileSync, spawnSync } from "node:child_process";
+import { join, resolve } from "node:path";
+
+const appRoot = resolve(import.meta.dirname, "..");
+const webDir = join(appRoot, "apps", "web");
+const prismaBin = join(webDir, "node_modules", ".bin", "prisma");
+const schema = join(webDir, "prisma", "schema.prisma");
+
+const args = process.argv.slice(2);
+const skipSmoke = args.includes("--skip-smoke");
+const dryRun = args.includes("--dry-run");
+const origin =
+  process.env.BEUTL_SMOKE_ORIGIN ?? "https://beutl.beditor.net";
+const unknown = args.filter(
+  (arg) => !["--skip-smoke", "--dry-run"].includes(arg),
+);
+if (unknown.length > 0) {
+  console.error(`usage: pnpm run release [--skip-smoke] [--dry-run]`);
+  process.exit(2);
+}
+
+const step = (message) => console.log(`\n==> ${message}`);
+
+function run(command, commandArgs, options = {}) {
+  if (dryRun) {
+    console.log(`    (dry-run) ${command} ${commandArgs.join(" ")}`);
+    return "";
+  }
+  return execFileSync(command, commandArgs, {
+    cwd: appRoot,
+    encoding: "utf8",
+    stdio: options.capture ? ["inherit", "pipe", "inherit"] : "inherit",
+    ...options,
+  });
+}
+
+/**
+ * status の出力を取る (stdout と stderr の両方)。
+ *
+ * 判断材料は **stderr** に出る。「Your local migration history and the migrations
+ * table from your database are different」も「not found locally」も stdout には
+ * 出ない (prisma 7.9.1 で実測)。片方だけ見ると、見ているつもりで何も見ていない。
+ * 成功時も execFileSync が返すのは stdout だけなので、spawnSync で両方取る。
+ */
+function migrateStatus() {
+  const result = spawnSync(
+    prismaBin,
+    ["migrate", "status", "--schema", schema],
+    { cwd: webDir, encoding: "utf8" },
+  );
+  if (result.error) throw result.error;
+  return {
+    ok: result.status === 0,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+// 「本番に入っているのに手元に無い」= この分岐が main より古い時点から生えている。
+// そのまま当てると順序が入れ替わり、以後ずっと食い違いが残る。
+const DIVERGED = "not found locally";
+
+step("当てる前に食い違いを見ています");
+if (!dryRun) {
+  const before = migrateStatus();
+  process.stdout.write(before.out);
+  if (before.out.includes(DIVERGED)) {
+    console.error(
+      "\nerror: 本番に入っているマイグレーションがこの分岐にありません。" +
+        "\n       main に追従してから配備してください。" +
+        "\n       このまま当てると順序が入れ替わり、後から直せません。" +
+        "\n       データベースには何もしていません。",
+    );
+    process.exit(1);
+  }
+}
+
+step("マイグレーションを適用しています");
+run(prismaBin, ["migrate", "deploy", "--schema", schema], { cwd: webDir });
+
+step("適用状態を確かめています");
+if (!dryRun) {
+  const after = migrateStatus();
+  process.stdout.write(after.out);
+  if (!after.ok) {
+    console.error(
+      "\nerror: マイグレーションが適用し切れていません。Worker は配りません。",
+    );
+    process.exit(1);
+  }
+}
+
+step("Worker を配っています");
+for (const target of ["deploy:web", "deploy:api", "deploy:admin"]) {
+  run("pnpm", ["run", target]);
+}
+
+if (skipSmoke) {
+  console.error(
+    "\n警告: smoke test を飛ばしました。新しい schema を Worker が読めるかは" +
+      "確かめていません。",
+  );
+  process.exit(0);
+}
+
+const jwt = process.env.BEUTL_SMOKE_JWT;
+if (!jwt) {
+  console.error(
+    "\nerror: BEUTL_SMOKE_JWT がありません。配備自体は終わっていますが、" +
+      "確認できていません。\n" +
+      "       利用者の JWT を入れて smoke test だけやり直すか、確かめない" +
+      "ことを承知のうえで --skip-smoke を付けてください。",
+  );
+  process.exit(1);
+}
+
+step("認証付きで確かめています");
+if (dryRun) {
+  console.log(`    (dry-run) GET ${origin}/api/v3/git/{account,credentials}`);
+  process.exit(0);
+}
+
+// この 2 つはどちらもこの分岐で入ったテーブルを読む。マイグレーションが
+// 当たっていなければ 200 にはならない。
+for (const path of ["/api/v3/git/account", "/api/v3/git/credentials"]) {
+  const response = await fetch(`${origin}${path}`, {
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    console.error(
+      `error: GET ${path} が ${response.status} を返しました: ${body.slice(0, 300)}`,
+    );
+    process.exit(1);
+  }
+  console.log(`OK  GET ${path}`);
+}
+
+console.log("\n配備と確認が終わりました。");

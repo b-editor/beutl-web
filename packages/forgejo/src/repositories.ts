@@ -143,6 +143,46 @@ async function setRepositoryArchived(
   );
 }
 
+/** 読み取り専用にする。失敗しても投げない (呼び出し元は既に失敗の途中にいる)。 */
+async function lockRepository(owner: string, name: string): Promise<void> {
+  try {
+    await setRepositoryArchived(owner, name, true);
+  } catch (error) {
+    console.error(
+      `${owner}/${name} could not be locked; media pushed to it will not use ` +
+        "LFS. Creating it again under the same name goes through the repair " +
+        "path.",
+      error,
+    );
+  }
+}
+
+/**
+ * テンプレートを入れ直し、**入った結果が正しいことまで確かめる**。
+ *
+ * `commitTemplates` は既にあるファイルに触らない (利用者が意図して編集したものを
+ * 壊さないため)。だから空の .gitattributes が置かれていると、何もせずに成功する。
+ * そこで返ると、LFS の効かないリポジトリを push できる状態のまま残すことになる。
+ *
+ * 確かめられなかったら読み取り専用にしてから投げる。**直す前に解除した場合も
+ * 必ず掛け直す。** 解除したまま抜けると、一度守った状態がやり直しのたびに緩む。
+ */
+async function repairTemplates(
+  sudo: string,
+  repository: ForgejoRepository,
+): Promise<void> {
+  const name = repository.name;
+  try {
+    // archived のままだと contents API は 423 を返す。直すには先に外す。
+    if (repository.archived) await setRepositoryArchived(sudo, name, false);
+    await commitTemplates(sudo, name, repository.default_branch);
+    await assertTemplatesAreCanonical(sudo, name);
+  } catch (error) {
+    await lockRepository(sudo, name);
+    throw error;
+  }
+}
+
 /**
  * テンプレートのコミットに失敗した後始末。
  *
@@ -162,27 +202,31 @@ async function repairAfterTemplateFailure(
   repository: ForgejoRepository,
 ): Promise<void> {
   const name = repository.name;
+  let current: ForgejoRepository | null;
   try {
-    const current = await getRepository(sudo, sudo, name);
-    // 自分が作ったものでなければ触らない。
-    if (!current || current.id !== repository.id) return;
-    await commitTemplates(sudo, name, current.default_branch);
-    return;
+    current = await getRepository(sudo, sudo, name);
   } catch (error) {
+    // 状態を読めなかった。作ったのは自分なので、確かめられないまま push を
+    // 受けさせるより読み取り専用にしておく (archived は後から戻せる)。
     console.error(
-      `${sudo}/${name} was created without .gitattributes and could not be ` +
-        "repaired; locking it so media cannot be pushed without LFS",
+      `${sudo}/${name} was created without .gitattributes and its state could ` +
+        "not be read; locking it so media cannot be pushed without LFS",
       error,
     );
+    await lockRepository(sudo, name);
+    return;
   }
 
+  // 自分が作ったものでなければ触らない。
+  if (!current || current.id !== repository.id) return;
+
   try {
-    await setRepositoryArchived(sudo, name, true);
+    await repairTemplates(sudo, current);
   } catch (error) {
+    // repairTemplates が読み取り専用にしてある。ここでは記録だけ。
     console.error(
-      `${sudo}/${name} could not be locked either; media pushed to it will ` +
-        "not use LFS. Creating it again under the same name goes through " +
-        "the repair path.",
+      `${sudo}/${name} was created without .gitattributes and could not be ` +
+        "repaired; it is locked so media cannot be pushed without LFS",
       error,
     );
   }
@@ -257,10 +301,7 @@ async function reconcileAfterAmbiguousCreate(
     const existing = await getRepository(sudo, sudo, name);
     if (!existing) return null;
 
-    // 前回の失敗で読み取り専用にしてあると contents API は 423 を返す。先に外す。
-    if (existing.archived) await setRepositoryArchived(sudo, name, false);
-    await commitTemplates(sudo, name, existing.default_branch);
-    await assertTemplatesAreCanonical(sudo, name);
+    await repairTemplates(sudo, existing);
     return existing;
   } catch (error) {
     console.error(
@@ -302,13 +343,8 @@ export async function createRepository(
 
     // 揃っていないなら、前回の作成が途中で終わったもの。ここで 409 にすると
     // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
-    // やり直しをそのまま修復として扱う。
-    //
-    // 前回の失敗で読み取り専用にしてあると contents API は 423 を返す。先に外す。
-    // 直せたときだけ push できる状態に戻る。
-    if (conflicting.archived) await setRepositoryArchived(sudo, name, false);
-    await commitTemplates(sudo, name, conflicting.default_branch);
-    await assertTemplatesAreCanonical(sudo, name);
+    // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
+    await repairTemplates(sudo, conflicting);
     return conflicting;
   }
 

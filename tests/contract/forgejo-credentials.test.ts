@@ -42,12 +42,15 @@ vi.mock("@beutl/db", () => ({
   claimGitAccountDeletion: async () => true,
   markGitAccountDeletionNeedsReview: async () => {
     neededReview = true;
+    return true;
   },
   cancelPendingGitAccountDeletion: async () => {
     pendingDeletion = null;
   },
   deleteGitAccountDeletion: async () => {
     pendingDeletion = null;
+    // 本物は「自分の印の行を消せたか」を返す。
+    return true;
   },
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
@@ -476,6 +479,81 @@ describe("リポジトリの作成", () => {
     const lock = record(fetchMock).find((c) => c.method === "PATCH");
     expect(lock?.url).toContain("/repos/someone/proj");
     expect(lock?.body).toEqual({ archived: true });
+  });
+
+  it("中身の違う .gitattributes が既にあったら、直せていないので読み取り専用にする", async () => {
+    // commitTemplates は既にあるファイルに触らない (利用者が編集したものを
+    // 壊さないため)。だから「コミットが成功した」だけでは直っていない。
+    // ここで書き込み可能なまま返すと、LFS の効かないリポジトリに push され続ける。
+    const { createRepository } = await import("@beutl/forgejo");
+    let archived = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (init?.method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 1, name: "proj", default_branch: "main" }, 201);
+      }
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      if (init?.method === "PATCH" && path.endsWith("/repos/someone/proj")) {
+        archived = JSON.parse(String(init.body)).archived;
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      // 中身が違う。コミットの対象にはならず、canonical 検証だけが落ちる。
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64("*.mp4 -text\n") });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    // 何もコミットしていないのに成功扱いしない。
+    expect(
+      record(fetchMock).filter(
+        (c) => c.method === "POST" && c.url.endsWith("/contents"),
+      ),
+    ).toHaveLength(0);
+    expect(archived).toBe(true);
+  });
+
+  it("読み取り専用を外して直せなかったら、掛け直す", async () => {
+    // 外したまま抜けると、一度守った状態がやり直しのたびに緩む。
+    const { createRepository } = await import("@beutl/forgejo");
+    let archived = true;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if ((init?.method ?? "GET") === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      if (init?.method === "PATCH" && path.endsWith("/repos/someone/proj")) {
+        archived = JSON.parse(String(init.body)).archived;
+        return json({ id: 1, name: "proj", default_branch: "main", archived });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64("*.mp4 -text\n") });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(
+      record(fetchMock)
+        .filter((c) => c.method === "PATCH")
+        .map((c) => c.body),
+    ).toEqual([{ archived: false }, { archived: true }]);
+    expect(archived).toBe(true);
   });
 
   it("同名で作り直すと、読み取り専用を外してから直す", async () => {

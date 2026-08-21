@@ -93,7 +93,10 @@ export async function deleteUser(token: string, identifier: string) {
     throw error;
   }
   {
-    const finished = await finishGitAccountDeletion(intent.userId);
+    const finished = await finishGitAccountDeletion(
+      intent.userId,
+      intentId,
+    );
     await addAuditLog({
       userId: null,
       action: finished
