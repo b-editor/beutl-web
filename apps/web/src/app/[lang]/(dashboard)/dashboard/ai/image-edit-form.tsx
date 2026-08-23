@@ -99,6 +99,9 @@ export function ImageEditForm({
   const [chosenExpansion, setChosenExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
+  // 選ばれている絵の見分け。中身までは読まないが、名前・大きさ・更新時刻が
+  // 変われば別の絵で、サーバーの指紋も変わる。
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
@@ -141,20 +144,25 @@ export function ImageEditForm({
     : null;
   const selectedModel = heldModel ??
     (models.some((entry) => entry.id === model) ? model : defaultModelId(models));
-  // その依頼の署名。中身が同じなら同じ名前で送り、書き換えたのなら別の名前で
-  // 送る——同じ名前で別の依頼を送ると断られる。ファイルだけはここでは見られない
-  // ので、差し替えられたときはサーバーの拒否で分かる（名前はそのまま残る）。
+  const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
+  // その依頼の署名。サーバーが指紋を取るのと同じものから作る——細かすぎれば、
+  // サーバーには同じ依頼が別の名前で届いて二度課金され、粗すぎれば、別の依頼が
+  // 同じ名前で届いて断られる。
+  //
+  // prompt は前後の空白を落としてから、そしてそれを取る task のときだけ数える
+  // （outpaint の前置きは task と prompt から決まるので、この 2 つで足りる）。
+  // 引き伸ばし幅は送る絵そのものに焼き込まれるので、絵の見分けと一緒に動く。
   const signature = requestSignature([
     editTask,
     selectedModel,
-    typedPrompt,
-    chosenExpansion,
+    selected?.needsPrompt ? typedPrompt.trim() : null,
+    editTask === "outpaint" ? chosenExpansion : null,
+    sourceFile,
   ]);
   const holdsName = names.holds(signature);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
   const submitBlocked = blocksSubmit(blocked, holdsName);
-  const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   const taskUnaffordable =
     blocked === null &&
     editTask !== "" &&
@@ -247,6 +255,7 @@ export function ImageEditForm({
 
   function handleSourceChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    setSourceFile(file ?? null);
     setSourcePreview(file ? URL.createObjectURL(file) : null);
   }
 

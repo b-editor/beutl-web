@@ -372,6 +372,39 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(0);
   });
 
+  it("tries the abort again when a cancel finds the row already claimed", async () => {
+    // 前の取り消しがここまで来て中止に失敗していると、行は掃除のものになって
+    // いる。そこで「もう済んでいる」と答えると、パートはバケットに残ったまま
+    // 一日ぶんの枠を抱える。
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    state.storageUploads.set(tracked!.id, {
+      ...tracked!,
+      abandonedAt: new Date(),
+    });
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .toBe(true);
+
+    expect([...bucket.uploads.values()].every((upload) => upload.aborted))
+      .toBe(true);
+    expect(state.storageUploads.size).toBe(0);
+  });
+
+  it("says so when there is no upload to cancel", async () => {
+    // 開始の応答が返らなかった側が取り消しに回ってくる。まだ行が現れていない
+    // だけかもしれないので、「もう無い」と答えて済ませない。
+    expect(await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
+      .toBe(false);
+  });
+
   it("keeps the size of a claimed upload against the quota", async () => {
     // 掃除が「捨てる」と宣言しても、中止に失敗しているあいだ、そのパートは
     // 本当にバケットにある。枠から外すと、実際の使用量が枠の外に出る。

@@ -30,7 +30,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export {
   canSubmitAiRequest,
@@ -50,6 +50,7 @@ import {
   holdsAiRequestName,
   IDEMPOTENCY_KEY_FIELD,
   newAiRequestNames,
+  readyAiRequestNames,
   settleAiRequestName,
   type AiBalance,
   type AiBlockReason,
@@ -273,7 +274,12 @@ export function useAiRequestNames(): {
   commit: (request: string) => void;
   settle: (keeps: boolean) => void;
 } {
-  const [names, setNames] = useState(() => newAiRequestNames(randomUuid));
+  const [names, setNames] = useState(newAiRequestNames);
+  // 人が触るより前に、ブラウザ側で 1 つ用意しておく。送信のとき欄に入っている
+  // 必要があり、そのときに作ったのでは間に合わない。
+  useEffect(() => {
+    setNames((current) => readyAiRequestNames(current, randomUuid));
+  }, []);
 
   return {
     nameFor: (request: string) => aiRequestNameOf(names, request),

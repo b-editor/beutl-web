@@ -24,7 +24,7 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
-import { randomUuid } from "@beutl/core";
+
 import { MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES } from "@beutl/api";
 import {
   AI_IMAGE_BACKGROUNDS,
@@ -52,6 +52,8 @@ import {
   blockedReason,
   blocksSubmit,
   keepsIdempotencyKey,
+  requestSignature,
+  useAiRequestNames,
   defaultModelId,
   downloadFromUrl,
   type AiAccess,
@@ -138,11 +140,11 @@ export function ImageGenerateForm({
   // The rough version the model is working through, shown while it works. Only
   // some providers send any; the rest simply have none to show.
   const [preview, setPreview] = useState<string | null>(null);
-  // Names this submission to the server. Kept when a run is cut off, because
-  // asking again under the same name recovers what was already paid for.
-  const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
-  // 名前を残したまま失敗したか。残していれば、支払い済みの結果を取りに行ける。
-  const [holdsName, setHoldsName] = useState(false);
+  // Names this submission to the server, one name per request. Kept when a run
+  // is cut off, because asking again under the same name recovers what was
+  // already paid for — and kept per request, because a second run started while
+  // the first is still uncollected must not take the first one's name with it.
+  const names = useAiRequestNames();
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
@@ -176,6 +178,20 @@ export function ImageGenerateForm({
     ["image.generate"],
     (access.models["image.generate"] ?? []).length === 0,
   );
+  // サーバーが指紋を取るのと同じものから。文章はここにある材料から組み立てられ
+  // るので、材料をそのまま数える。種は入力欄の中にあって描画のたびには読めない
+  // ——そのぶんこの署名は粗いが、粗いほうへ外れるのは安全側だ。
+  const signature = requestSignature([
+    model,
+    prompt,
+    style,
+    composition,
+    exclusions,
+    ratio,
+    chosenBackground,
+    ...references,
+  ]);
+  const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName);
   // The same composition the action validates, so the counter measures what the
   // server will.
@@ -224,6 +240,9 @@ export function ImageGenerateForm({
       return;
     }
 
+    const idempotencyKey = names.nameFor(signature);
+    if (!idempotencyKey) return;
+    names.commit(signature);
     const body = new FormData(event.currentTarget);
     // What the form carries is what the endpoint reads, save for the model and
     // the shapes this screen settled from the model's own capabilities.
@@ -258,8 +277,7 @@ export function ImageGenerateForm({
         });
         setReferences([]);
         if (referenceInput.current) referenceInput.current.value = "";
-        setIdempotencyKey(randomUuid());
-        setHoldsName(false);
+        names.settle(false);
         return;
       }
 
@@ -267,14 +285,10 @@ export function ImageGenerateForm({
       // A run that was cut off, one still going, or one whose paid result could
       // not be read may all be answered by asking again under the same name.
       // None of them is a settlement, so the name stays.
-      const keeps = keepsIdempotencyKey(outcome.errorCode);
-      setHoldsName(keeps);
-      if (!keeps) {
-        setIdempotencyKey(randomUuid());
-      }
+      names.settle(keepsIdempotencyKey(outcome.errorCode));
     } catch {
       // 送れたのかどうかも分からない。名前は捨てないし、次の送信も塞がない。
-      setHoldsName(true);
+      names.settle(true);
       setMessage(t("api-errors:aiProviderError"));
     } finally {
       setIsPending(false);

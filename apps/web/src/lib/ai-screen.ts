@@ -174,8 +174,19 @@ export type AiRequestNames = {
   sent: string | null;
 };
 
-export function newAiRequestNames(mint: () => string): AiRequestNames {
-  return { held: {}, next: mint(), sent: null };
+// 名前はまだ無い状態から始める。画面はサーバー側でも一度描かれるので、そこで
+// 作ってしまうと、ブラウザで描き直したときの値と食い違う。最初の 1 つはブラウザ
+// で、しかも人が触るより前に用意する。
+export function newAiRequestNames(): AiRequestNames {
+  return { held: {}, next: "", sent: null };
+}
+
+/** まだ名前を用意していなければ、1 つ用意する。 */
+export function readyAiRequestNames(
+  names: AiRequestNames,
+  mint: () => string,
+): AiRequestNames {
+  return names.next === "" ? { ...names, next: mint() } : names;
 }
 
 export function aiRequestNameOf(names: AiRequestNames, request: string): string {

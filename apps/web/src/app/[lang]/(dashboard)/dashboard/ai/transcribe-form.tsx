@@ -52,6 +52,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  requestSignature,
   useAiRequestNames,
   downloadTextFile,
   defaultModelId,
@@ -121,6 +122,9 @@ export function TranscribeForm({
   const [extractionError, setExtractionError] =
     useState<AudioExtractionFailure | null>(null);
   const [language, setLanguage] = useState("");
+  // 送ることになる音声の見分け。動画から抜き出したときは、抜き出したほうを見る
+  // ——送られるのはそちらで、サーバーはそれを指紋にする。
+  const [audioFile, setAudioFile] = useState<File | null>(null);
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["audio.transcribe"] ?? []),
   );
@@ -153,15 +157,16 @@ export function TranscribeForm({
     (access.models["audio.transcribe"] ?? []).length === 0,
   );
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
-  // 行く道を閉じることになる。この画面は送るものをここでは見分けられない
-  // ——ファイルは入力欄の中にあり、描画のたびに読めるものではない——ので、
-  // 名前は一度に 1 つだけ持つ。
+  // 行く道を閉じることになる。
   const keepsName =
     (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
   useEffect(() => {
     names.settle(keepsName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
+  // サーバーが指紋を取るのと同じものから。長さと中身のハッシュはその音声から
+  // 決まるので、音声の見分けで足りる。
+  const signature = requestSignature([model, language, audioFile]);
   const submitBlocked = blocksSubmit(blocked, keepsName);
   const models = access.models["audio.transcribe"] ?? [];
 
@@ -173,6 +178,7 @@ export function TranscribeForm({
     const input = event.target;
     const file = input.files?.[0];
     setExtractionError(null);
+    setAudioFile(file ?? null);
     if (!file) {
       setAudioName("transcription");
       return;
@@ -189,8 +195,10 @@ export function TranscribeForm({
       const transfer = new DataTransfer();
       transfer.items.add(audio);
       input.files = transfer.files;
+      setAudioFile(audio);
     } catch (error) {
       input.value = "";
+      setAudioFile(null);
       setExtractionError(
         error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
       );
@@ -316,10 +324,10 @@ export function TranscribeForm({
     <Card>
       <form
         action={dispatch}
-        onSubmit={() => names.commit("")}
+        onSubmit={() => names.commit(signature)}
         className="flex flex-col gap-4 p-6"
       >
-        <IdempotencyKeyField name={names.nameFor("")} />
+        <IdempotencyKeyField name={names.nameFor(signature)} />
         <div className="flex flex-col space-y-1.5">
           <Label htmlFor="transcribeFile">{t("dashboard:ai.audio")}</Label>
           <Input

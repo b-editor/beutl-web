@@ -88,8 +88,11 @@ export async function DELETE(
   if (!userId) return unauthorizedResponse();
 
   const { id } = await props.params;
-  await cancelUpload({ userId, uploadId: id });
-  // Given up either way: a request to forget an upload that is already gone has
-  // got what it asked for.
-  return new Response(null, { status: 204 });
+  // 見つからなかったときは、そう答える。始めた側の応答が返らずに取り消しへ回った
+  // ときは、開始のほうがまだ書き込み中ということがある——「もう無い」と答えると、
+  // そのあとに現れた行が一日ぶんの枠を抱えたまま残るので、呼び出し側にもう一度
+  // 来てもらう。
+  return new Response(null, {
+    status: await cancelUpload({ userId, uploadId: id }) ? 204 : 404,
+  });
 }

@@ -24,7 +24,6 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { randomUuid } from "@beutl/core";
 import { runAiStream } from "@/lib/ai-event-stream";
 import {
   applyTranslationToCues,
@@ -55,6 +54,8 @@ import {
   blockedReason,
   blocksSubmit,
   keepsIdempotencyKey,
+  requestSignature,
+  useAiRequestNames,
   downloadTextFile,
   defaultModelId,
   type AiAccess,
@@ -79,12 +80,11 @@ export function TranslateForm({
   // runs and replaced by the finished set when it ends, so a half-translated
   // list is never mistaken for the result.
   const [arriving, setArriving] = useState<TranslatableSegment[]>([]);
-  // Names this submission to the server. Kept when a run is cut off, because
-  // asking again under the same name recovers what was already paid for; a new
-  // one is drawn once a run has definitely ended.
-  const [idempotencyKey, setIdempotencyKey] = useState(() => randomUuid());
-  // 名前を残したまま失敗したか。残していれば、支払い済みの結果を取りに行ける。
-  const [holdsName, setHoldsName] = useState(false);
+  // Names this submission to the server, one name per request. Kept when a run
+  // is cut off, because asking again under the same name recovers what was
+  // already paid for — and kept per request, because a second run started while
+  // the first is still uncollected must not take the first one's name with it.
+  const names = useAiRequestNames();
   const [source, setSource] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
@@ -166,6 +166,9 @@ export function TranslateForm({
       ...(model ? { model } : {}),
     });
 
+    const idempotencyKey = names.nameFor(signature);
+    if (!idempotencyKey) return;
+    names.commit(signature);
     setIsPending(true);
     setMessage(null);
     setArriving([]);
@@ -196,8 +199,7 @@ export function TranslateForm({
           })),
         );
         setTranslatedSource(submittedSource);
-        setIdempotencyKey(randomUuid());
-        setHoldsName(false);
+        names.settle(false);
         return;
       }
 
@@ -205,14 +207,10 @@ export function TranslateForm({
       // A run that was cut off, one still going, or one whose paid result could
       // not be read may all be answered by asking again under the same name.
       // None of them is a settlement, so the name stays.
-      const keeps = keepsIdempotencyKey(outcome.errorCode);
-      setHoldsName(keeps);
-      if (!keeps) {
-        setIdempotencyKey(randomUuid());
-      }
+      names.settle(keepsIdempotencyKey(outcome.errorCode));
     } catch {
       // 送れたのかどうかも分からない。名前は捨てないし、次の送信も塞がない。
-      setHoldsName(true);
+      names.settle(true);
       setMessage(t("api-errors:aiProviderError"));
     } finally {
       setIsPending(false);
@@ -230,6 +228,17 @@ export function TranslateForm({
     ["subtitle.translate"],
     (access.models["subtitle.translate"] ?? []).length === 0,
   );
+  // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。行数や 1 行の
+  // 長さは入力欄の中にあって描画のたびには読めない——そのぶん粗いが、粗いほうへ
+  // 外れるのは安全側だ。
+  const signature = requestSignature([
+    model,
+    source,
+    sourceLanguage,
+    targetLanguage,
+    glossary,
+  ]);
+  const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName);
   const models = access.models["subtitle.translate"] ?? [];
   const contextsJson = useMemo(() => {

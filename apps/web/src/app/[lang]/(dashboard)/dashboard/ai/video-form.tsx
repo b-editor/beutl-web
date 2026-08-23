@@ -41,6 +41,7 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
+  requestSignature,
   useAiRequestNames,
   defaultModelId,
   type AiAccess,
@@ -194,9 +195,7 @@ export function VideoForm({
   const names = useAiRequestNames();
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
-  // 行く道を閉じることになる。この画面は送るものをここでは見分けられない
-  // ——ファイルは入力欄の中にあり、描画のたびに読めるものではない——ので、
-  // 名前は一度に 1 つだけ持つ。
+  // 行く道を閉じることになる。
   const keepsName =
     (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
   useEffect(() => {
@@ -208,6 +207,23 @@ export function VideoForm({
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
+  // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。文章はここに
+  // ある材料から組み立てられるので、材料をそのまま数える。種とフレームは入力欄
+  // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
+  // 外れるのは安全側だ。同じ名前で別の依頼が届けば断られるだけで、同じ依頼が
+  // 二つの名前に割れて二度課金されることはない。
+  const signature = requestSignature([
+    model,
+    videoPrompt,
+    videoStyle,
+    videoComposition,
+    videoMotion,
+    videoExclusions,
+    duration,
+    resolution,
+    aspectRatio,
+    generateAudio,
+  ]);
   // A model that cannot produce sound would refuse the request outright.
   const audio = options.generateAudio && generateAudio;
   // The same composition the action validates, so the counter measures what the
@@ -232,10 +248,10 @@ export function VideoForm({
     <Card>
       <form
         action={dispatch}
-        onSubmit={() => names.commit("")}
+        onSubmit={() => names.commit(signature)}
         className="flex flex-col gap-4 p-6"
       >
-        <IdempotencyKeyField name={names.nameFor("")} />
+        <IdempotencyKeyField name={names.nameFor(signature)} />
         <PromptLibrary
           lang={lang}
           onApply={applyTemplate}

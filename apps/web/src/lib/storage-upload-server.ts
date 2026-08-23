@@ -529,6 +529,10 @@ export async function cancelUpload({
   uploadId: string;
 }): Promise<boolean> {
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+  // まだ無い。始めた側の応答が返らずに取り消しへ回ったときは、開始のほうが
+  // まだ書き込み中ということがある——「もう無い」と答えると、そのあとに現れた
+  // 行が一日ぶんの枠を抱えたまま残る。無かったと正直に答えて、もう一度来て
+  // もらう。
   if (!upload) return false;
 
   // A finished upload has no parts left to throw away, and its file is not
@@ -538,10 +542,16 @@ export async function cancelUpload({
     return true;
   }
 
-  // 取れなければ、そのアップロードは完了したか、掃除のものになったか。どちらも
-  // ここで捨てるものではない。呼び出し側には取り消せたと答える——この利用者から
-  // 見れば、もう進行中のアップロードではないので。
-  if (!await claimForCleanup(upload.id, userId)) return true;
+  // 取れないのは、完了したか、掃除のものになったか。掃除のものというのは、前の
+  // 取り消しがここまで来て中止に失敗したということでもある——その場合はもう
+  // 一度中止を試す。控えはもう書けないので、消して困るものは残っていない。
+  if (!await claimForCleanup(upload.id, userId)) {
+    const current = await findStorageUploadByIdAndUserId({ id: uploadId, userId })
+      .catch(() => null);
+    if (current === null || current.completedFileId || !current.abandonedAt) {
+      return true;
+    }
+  }
 
   // The row is only dropped once the parts are known to be gone. Dropping it
   // after a failed abort leaves parts nothing knows about, which the sweep can
