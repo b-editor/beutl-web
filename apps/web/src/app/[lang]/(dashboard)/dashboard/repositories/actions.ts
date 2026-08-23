@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { authenticated } from "@/lib/auth-guard";
 import { isOwnedBy, resolveGitUsername } from "@/lib/git-account";
 import type { ActionResult } from "@beutl/core";
+import { GitRepositoryNameTakenError } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
@@ -56,7 +57,10 @@ async function withGitAccount(
     const { t } = await getTranslation(lang);
     const username = await resolveGitUsername(session.user.id);
     if (!username) {
-      return { success: false, message: t("repositories:errors.notConfigured") };
+      return {
+        success: false,
+        message: t("repositories:errors.notConfigured"),
+      };
     }
     if (owner !== undefined && !isOwnedBy(owner, username)) {
       return { success: false, message: t("repositories:errors.notFound") };
@@ -70,8 +74,16 @@ async function withGitAccount(
           return { success: false, message: t("repositories:errors.notFound") };
         }
         if (error.isConflict) {
-          return { success: false, message: t("repositories:errors.nameTaken") };
+          return {
+            success: false,
+            message: t("repositories:errors.nameTaken"),
+          };
         }
+      }
+      // 同じ名前の作成が同時に来て、こちらの予約で弾いた場合。利用者から見れば
+      // 名前の衝突と同じこと。
+      if (error instanceof GitRepositoryNameTakenError) {
+        return { success: false, message: t("repositories:errors.nameTaken") };
       }
       throw error;
     }

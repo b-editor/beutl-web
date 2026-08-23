@@ -109,7 +109,7 @@ vi.mock("@beutl/db", () => ({
     name: string;
     holdingName: string;
   }) => {
-    const key = `${ownerUsername}/${name}`;
+    const key = `${ownerUsername}/${name.toLowerCase()}`;
     if (reservations.has(key)) {
       const error: Error & { code?: string } = new Error("taken");
       error.code = "P2002";
@@ -131,8 +131,21 @@ vi.mock("@beutl/db", () => ({
   releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
     reservations.delete(id);
   },
-  listStaleGitRepositoryCreations: async () => staleReservations,
-  countStaleGitRepositoryCreations: async () => staleReservations.length,
+  listExpiredGitRepositoryCreations: async () => staleReservations,
+  claimGitRepositoryCreation: async () => true,
+  renewGitRepositoryCreationLease: async () => true,
+  releaseGitRepositoryReservationFor: async ({
+    ownerUsername,
+    name,
+  }: {
+    ownerUsername: string;
+    name: string;
+  }) => {
+    reservations.delete(`${ownerUsername}/${name}`);
+  },
+  normalizeRepositoryName: (name: string) => name.toLowerCase(),
+  countGitRepositoryCreations: async () =>
+    reservations.size + staleReservations.length,
   countGitRepositoryRepairs: async () =>
     [...repairQueue.values()].filter((entry) => !entry.needsReview).length,
   countGitRepositoryRepairsNeedingReview: async () =>
@@ -1714,6 +1727,7 @@ describe("作成の予約", () => {
         forgejoRepoId: null,
       },
     ];
+    let transferredTo: string | null = null;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
       const method = init?.method ?? "GET";
@@ -1721,25 +1735,43 @@ describe("作成の予約", () => {
         return json({ login: "beutl-admin" });
       }
       if (
-        method === "GET" &&
-        path.endsWith("/repos/beutl-admin/beutl-holding-lost")
+        (method === "GET" &&
+          path.endsWith("/repos/beutl-admin/beutl-holding-lost")) ||
+        path.endsWith("/repositories/31")
       ) {
         return json({
           id: 31,
           name: "beutl-holding-lost",
           default_branch: "main",
+          archived: false,
           owner: { id: 1, login: "beutl-admin" },
         });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        transferredTo = JSON.parse(String(init?.body)).new_owner;
+        return json({
+          id: 31,
+          name: "beutl-holding-lost",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
+        return json({ id: 31, name: "proj" });
       }
       return new Response(null, { status: 204 });
     });
 
     await retryGitRepositoryRepairs();
 
-    // 控えに載り、渡す先も引き継がれる。
-    expect(repairQueue.get(31)).toMatchObject({
-      intendedOwner: "someone",
-      intendedName: "proj",
-    });
+    // 控えに載せ替えたものは**同じ周回で**渡し切る。次の cron まで待つと、
+    // その間に同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
+    expect(transferredTo).toBe("someone");
+    expect(repairQueue.size).toBe(0);
   });
 });

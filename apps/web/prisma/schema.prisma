@@ -217,12 +217,20 @@ model GitRepositoryCreation {
   id            String   @id @default(uuid())
   ownerUsername String
   name          String
+  // 一意にするのはこちら。Forgejo は UNIQUE(owner_id, lower_name) で名前を
+  // 押さえている (実測) ので、大文字小文字を区別すると Proj と proj が両方
+  // 予約でき、片方が預かり名のまま残る。
+  normalizedName String
   holdingName   String   @unique
   forgejoRepoId Int?
   createdAt     DateTime @default(now())
+  // 掴んでいる 1 回の処理と、その期限。期限が切れるまでは前面の処理が持っている
+  // ものとみなす。時間だけで古いと決めると、遅い作成を横から回収してしまう。
+  intentId      String?
+  leaseUntil    DateTime?
 
-  @@unique([ownerUsername, name])
-  @@index([createdAt])
+  @@unique([ownerUsername, normalizedName])
+  @@index([leaseUntil])
 }
 
 /**

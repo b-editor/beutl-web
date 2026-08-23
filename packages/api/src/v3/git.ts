@@ -18,7 +18,7 @@ import {
   listRepositories,
   revokeGitCredential,
 } from "@beutl/forgejo";
-import { auditLogActions } from "@beutl/db";
+import { auditLogActions, GitRepositoryNameTakenError } from "@beutl/db";
 import { addApiAuditLog } from "../api/audit";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
@@ -32,7 +32,11 @@ import { apiErrorResponse } from "../api/error";
  */
 
 const createSchema = z.object({
-  name: z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/),
+  name: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z0-9._-]+$/),
   description: z.string().max(500).optional(),
 });
 
@@ -235,7 +239,12 @@ const app = new Hono()
         201,
       );
     } catch (error) {
-      if (error instanceof ForgejoError && error.isConflict) {
+      // 名前の衝突は 2 通り。Forgejo が返すものと、こちらの予約で弾いたもの
+      // (同じ名前の作成が同時に来た場合)。どちらも利用者から見れば同じこと。
+      if (
+        (error instanceof ForgejoError && error.isConflict) ||
+        error instanceof GitRepositoryNameTakenError
+      ) {
         return c.json(await apiErrorResponse("invalidRequestBody"), {
           status: 409,
         });

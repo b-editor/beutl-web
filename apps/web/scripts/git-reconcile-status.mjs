@@ -100,8 +100,30 @@ export function signProof(payload, encodedKey) {
   );
 }
 
+/**
+ * 鍵が対になっていることを、秘密鍵を動かさずに確かめるための固定文字列。
+ * git-server 側は公開鍵でこれを検証する。
+ */
+export const SELFTEST_PAYLOAD = "beutl-git-reopen-selftest";
+
 async function main() {
   const args = process.argv.slice(2);
+
+  // 鍵の疎通確認。DB には触らない。
+  if (args.includes("--selftest")) {
+    const key = process.env.GIT_REOPEN_SIGNING_KEY;
+    if (!key) {
+      console.error("GIT_REOPEN_SIGNING_KEY が要ります。");
+      process.exitCode = 1;
+      return;
+    }
+    console.log(
+      "git-server の .env に GIT_REOPEN_SELFTEST_SIGNATURE として置いてください。\n",
+    );
+    console.log(signProof(SELFTEST_PAYLOAD, key));
+    return;
+  }
+
   const proofIndex = args.indexOf("--proof");
   const nonce = proofIndex === -1 ? null : args[proofIndex + 1];
   if (proofIndex !== -1 && !nonce) {
