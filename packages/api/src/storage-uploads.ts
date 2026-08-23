@@ -86,6 +86,13 @@ export async function abandonStaleStorageUploads(
       if (!current.abandonedAt) continue;
     }
 
+    // 取り消しの墓標。抱えているものは何も無いので、消せばそれで終わり。
+    if (upload.uploadId === "") {
+      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+      abandoned++;
+      continue;
+    }
+
     try {
       const bucket = getR2Bucket();
       // A bucket that cannot abandon an upload would leave the row behind for

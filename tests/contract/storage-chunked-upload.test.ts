@@ -447,11 +447,28 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(0);
   });
 
-  it("says so when there is no upload to cancel", async () => {
+  it("records a cancellation for an upload that has not appeared yet", async () => {
     // 開始の応答が返らなかった側が取り消しに回ってくる。まだ行が現れていない
-    // だけかもしれないので、「もう無い」と答えて済ませない。
-    expect(await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
-      .toBe("missing");
+    // だけかもしれないので、先回りして墓標を置く——そのあとに始めようとしたもの
+    // は、この行にぶつかって始まらない。
+    const id = crypto.randomUUID();
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: id }))
+      .toBe("cancelled");
+
+    const refused = await startUpload({
+      userId: USER_ID,
+      id,
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+
+    expect(refused).toEqual({ ok: false, reason: "uploadFailed" });
+    // 墓標は何も抱えていないので、次の掃除で消える。
+    const swept = await abandonStaleStorageUploads(new Date());
+    expect(swept).toEqual({ abandoned: 1, failed: 0 });
+    expect(state.storageUploads.size).toBe(0);
   });
 
   it("keeps the size of a claimed upload against the quota", async () => {

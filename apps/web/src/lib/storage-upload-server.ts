@@ -151,7 +151,8 @@ export async function startUpload({
     | Awaited<ReturnType<typeof createStorageUpload>>
     | null
     | "tooMany"
-    | "tooManyFiles";
+    | "tooManyFiles"
+    | "cancelled";
   try {
     // Reading the totals and writing the row that changes them is one
     // transaction. CockroachDB runs it serializably, so two uploads started at
@@ -162,6 +163,8 @@ export async function startUpload({
       // 名前が先に取られていたら（同時に届いた 2 本目）、それを返す。枠の計算を
       // 先にすると、同じ 1 本のアップロードを二重に数えて自分自身を弾いてしまう。
       const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
+      // 取り消しの墓標。この名前は始まる前に取り消されているので、始めない。
+      if (raced?.abandonedAt) return "cancelled";
       if (raced) return raced;
 
       // 小さなアップロードは枠をほとんど使わないので、大きさだけでは歯止めに
@@ -210,6 +213,12 @@ export async function startUpload({
   if (upload === "tooManyFiles") {
     await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "tooManyFiles" };
+  }
+
+  if (upload === "cancelled") {
+    // 始める前に取り消されていた。作ってしまったマルチパートは誰も知らない。
+    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
+    return { ok: false, reason: "uploadFailed" };
   }
 
   if (!upload) {
@@ -530,10 +539,10 @@ export async function cancelUpload({
 }): Promise<CancelOutcome> {
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   // まだ無い。始めた側の応答が返らずに取り消しへ回ったときは、開始のほうが
-  // まだ書き込み中ということがある——「もう無い」と答えると、そのあとに現れた
-  // 行が一日ぶんの枠を抱えたまま残る。無かったと正直に答えて、もう一度来て
-  // もらう。
-  if (!upload) return "missing";
+  // まだ書き込み中ということがある。ここで「もう無い」と答えて終わると、その
+  // あとに現れた行が一日ぶんの枠を抱えたまま残るので、代わりに墓標を置く——
+  // その名前で始めようとしたものは、この行にぶつかって始まらない。
+  if (!upload) return await recordCancellation(userId, uploadId);
 
   // A finished upload has no parts left to throw away, and its file is not
   // this call's to delete.
@@ -615,6 +624,35 @@ async function completedFileOf(
     kind: "completed",
     file: { id: file.id, name: file.name, size: BigInt(file.size) },
   };
+}
+
+// まだ現れていない名前の取り消しを、先回りして書き留める。始めるほうはこの行に
+// ぶつかって始められず、作りかけのマルチパートを自分で捨てる。置けたということ
+// は取り消せたということ——置けなかったのは、その一瞬に行のほうが現れたときで、
+// そちらは普通の取り消しとして片付ける。
+//
+// 墓標そのものは何も抱えていないので、掃除が次に回ってきたときに消える。
+async function recordCancellation(
+  userId: string,
+  uploadId: string,
+): Promise<CancelOutcome> {
+  try {
+    await createStorageUpload({
+      userId,
+      id: uploadId,
+      objectKey: "",
+      uploadId: "",
+      name: "",
+      mimeType: "application/octet-stream",
+      size: BigInt(0),
+      partSize: STORAGE_UPLOAD_PART_BYTES,
+      abandonedAt: new Date(),
+    });
+    return "cancelled";
+  } catch {
+    // 一瞬の差で行のほうが現れた。もう一度来てもらえば、そちらを片付ける。
+    return "missing";
+  }
 }
 
 // 「この行のパートとオブジェクトは自分が捨てる」と宣言する。取れた行にはもう

@@ -2463,6 +2463,12 @@ export function createInMemoryPrisma() {
           id: data.id ?? crypto.randomUUID(),
           createdAt: data.createdAt ?? now(),
         };
+        if (state.storageUploads.has(record.id)) {
+          throw Object.assign(
+            new Error("Unique constraint failed on the fields: (`id`)"),
+            { code: "P2002" },
+          );
+        }
         state.storageUploads.set(record.id, record);
         return { ...record };
       },
