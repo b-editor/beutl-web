@@ -188,6 +188,12 @@ async function revokeAllTokens(
 
     for (const token of tokens) {
       try {
+        // **1 本ごとに確かめる。** ページの先頭で 1 回だけだと、1 ページ
+        // (最大 50 本) を消す間ずっと握りを見ないことになる。1 本あたりの待ち
+        // 時間の上限を考えると、それだけで期限を大きく超えうる。超えた後も
+        // 消し続けると、引き取った側が人の確認待ちに移した相手のトークンを
+        // 削り続けることになる。
+        await renewLease?.();
         await forgejoRequest(tokensPath(username, token.id), {
           method: "DELETE",
           responseType: "none",

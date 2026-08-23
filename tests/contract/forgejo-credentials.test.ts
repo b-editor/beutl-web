@@ -138,7 +138,13 @@ vi.mock("@beutl/db", () => ({
   releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
     reservations.delete(id);
   },
-  listExpiredGitRepositoryCreations: async () => staleReservations,
+  listExpiredGitRepositoryCreations: async () =>
+    staleReservations.map((entry) => ({
+      operation: "CREATE",
+      sourceName: null,
+      ...entry,
+    })),
+  GitRepositoryOperation: { CREATE: "CREATE", RENAME: "RENAME" },
   markGitRepositoryCreationMissing: async () => new Date(),
   clearGitRepositoryCreationMissing: async () => undefined,
   findGitRepositoryRepair: async ({
@@ -279,6 +285,8 @@ let staleReservations: {
   name: string;
   holdingName: string;
   forgejoRepoId: number | null;
+  operation?: string;
+  sourceName?: string | null;
 }[] = [];
 let leaseHeld = true;
 let enqueueFails = false;
@@ -1936,6 +1944,14 @@ describe("結果が分からない操作は予約を残す", () => {
       if (method === "GET" && path.endsWith("/repos/someone/old")) {
         return json({ id: 61, name: "old", default_branch: "main" });
       }
+      // 送る直前の確かめ。まだ同じ相手。
+      if (method === "GET" && path.endsWith("/repositories/61")) {
+        return json({
+          id: 61,
+          name: "old",
+          owner: { id: 2, login: "someone" },
+        });
+      }
       if (method === "PATCH") return json({ message: "boom" }, 502);
       return new Response(null, { status: 204 });
     });
@@ -1944,7 +1960,8 @@ describe("結果が分からない操作は予約を残す", () => {
       renameRepository("someone", "someone", "old", "new"),
     ).rejects.toBeTruthy();
 
-    expect(reservations.size).toBe(1);
+    // 行き先と元の両方を押さえたまま残す。
+    expect(reservations.size).toBe(2);
   });
 
   it("改名が 4xx で断られたら予約を外す", async () => {
@@ -1956,6 +1973,13 @@ describe("結果が分からない操作は予約を残す", () => {
       if (method === "GET" && path.endsWith("/repos/someone/old")) {
         return json({ id: 62, name: "old", default_branch: "main" });
       }
+      if (method === "GET" && path.endsWith("/repositories/62")) {
+        return json({
+          id: 62,
+          name: "old",
+          owner: { id: 2, login: "someone" },
+        });
+      }
       if (method === "PATCH") return json({ message: "taken" }, 409);
       return new Response(null, { status: 204 });
     });
@@ -1965,5 +1989,85 @@ describe("結果が分からない操作は予約を残す", () => {
     ).rejects.toBeTruthy();
 
     expect(reservations.size).toBe(0);
+  });
+});
+
+describe("改名は相手を確かめてから送る", () => {
+  it("名前が別のリポジトリに付け替わっていたら送らない", async () => {
+    // 最初の GET で id を得てから送るまでの間に、その名前が別物に渡ることが
+    // ある (消して作り直しなど)。名前でしか送れないので、直前に確かめ直す。
+    const { renameRepository } = await import("@beutl/forgejo");
+    let patched = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/old")) {
+        return json({ id: 71, name: "old", default_branch: "main" });
+      }
+      // 送る直前には、その id は別の名前になっている。
+      if (method === "GET" && path.endsWith("/repositories/71")) {
+        return json({
+          id: 71,
+          name: "moved",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH") {
+        patched = true;
+        return json({ id: 71, name: "new" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      renameRepository("someone", "someone", "old", "new"),
+    ).rejects.toMatchObject({ status: 409 });
+
+    expect(patched).toBe(false);
+    expect(reservations.size).toBe(0);
+  });
+
+  it("大小だけの改名が残っていたら完了扱いにしない", async () => {
+    // 小文字化して比べると proj と Proj が同じに見え、済んでいないのに
+    // 予約を外してしまう。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "r7",
+        ownerUsername: "someone",
+        name: "Proj",
+        holdingName: "beutl-rename-x",
+        forgejoRepoId: 81,
+        operation: "RENAME",
+        sourceName: "proj",
+      },
+    ];
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/81")) {
+        return json({
+          id: 81,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH") {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 81, name: "Proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    // 改名だけをやり直す。テンプレートの修復には回さない。
+    expect(renamedTo).toBe("Proj");
+    expect(repairQueue.size).toBe(0);
   });
 });

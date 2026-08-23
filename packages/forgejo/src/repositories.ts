@@ -4,6 +4,7 @@ import {
   claimGitRepositoryRepair,
   claimGitRepositoryCreation,
   clearGitRepositoryCreationMissing,
+  GitRepositoryOperation,
   markGitRepositoryCreationMissing,
   countGitRepositoryCreations,
   listExpiredGitRepositoryCreations,
@@ -659,11 +660,50 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
       // **最終形になっているときだけ**外す。最終形とは「渡す先が持っていて、
       // 名前も最終名」であること。管理者以外が持っているだけでは足りない
       // (第三者が最終名を持っている場合も同じ見え方になる)。
+      //
+      // 名前は**そのまま**比べる。小文字化して比べると、proj → Proj のような
+      // 大小だけの改名が済んでいなくても「同じ」に見えて完了扱いになる。
       const settled =
         holding !== null &&
         holding.owner.login.toLowerCase() ===
           entry.ownerUsername.toLowerCase() &&
-        holding.name.toLowerCase() === entry.name.toLowerCase();
+        holding.name === entry.name;
+      // 改名の予約は、名前が変わったかを確かめるだけ。控えに載せて渡し切る流れに
+      // 乗せると、利用者が編集した .gitattributes を「直す」対象にしてしまう。
+      if (
+        holding &&
+        !settled &&
+        entry.operation === GitRepositoryOperation.RENAME
+      ) {
+        if (
+          holding.owner.login.toLowerCase() ===
+            entry.ownerUsername.toLowerCase() &&
+          holding.name === (entry.sourceName ?? holding.name)
+        ) {
+          // まだ元の名前のまま。改名だけやり直す。
+          await holdReservation(entry.id, epoch);
+          await forgejoRequest(
+            `/repos/${encodeURIComponent(holding.owner.login)}/${encodeURIComponent(holding.name)}`,
+            {
+              method: "PATCH",
+              body: { name: entry.name },
+              timeoutMs: HELD_REQUEST_TIMEOUT_MS,
+            },
+          );
+          await releaseGitRepositoryReservation({
+            id: entry.id,
+            intentId: epoch,
+          });
+          continue;
+        }
+        // 元の名前でも最終名でもない。自動では決められない。
+        console.error(
+          `rename reservation ${entry.id} points at ${holding.owner.login}/${holding.name}, ` +
+            `expected ${entry.ownerUsername}/${entry.sourceName ?? "?"} or ${entry.name}`,
+        );
+        continue;
+      }
+
       if (holding && !settled) {
         // 控えに載せ替える。**予約は外さない。** ここで外すと、渡し終わる前に
         // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
@@ -1093,8 +1133,6 @@ export async function renameRepository(
   name: string,
   newName: string,
 ) {
-  // 予約に相手の id を控える。改名の結果が分からなくなった場合、定期実行が
-  // これで引き直して決着を付ける。
   const current = await getRepository(sudo, owner, name);
   if (!current) {
     throw new ForgejoError(
@@ -1106,37 +1144,92 @@ export async function renameRepository(
   }
 
   const renameEpoch = crypto.randomUUID();
-  const reservation = await reserveGitRepositoryName({
+  // **行き先と元の両方を押さえる。** 行き先だけだと、元の名前が消えたり別の
+  // リポジトリに付け替えられたりしたときに、名前で送る PATCH が別物に当たる。
+  const targetReservation = await reserveGitRepositoryName({
     ownerUsername: owner,
     name: newName,
-    // 改名では預かりものを作らない。一意制約のために別の名前を入れる。
     holdingName: `beutl-rename-${crypto.randomUUID()}`,
+    operation: GitRepositoryOperation.RENAME,
+    sourceName: name,
     intentId: renameEpoch,
     leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
   });
-  await attachGitRepositoryCreationId({
-    id: reservation,
-    intentId: renameEpoch,
-    forgejoRepoId: current.id,
-  }).catch(() => undefined);
+  let sourceReservation: string | null = null;
+  try {
+    sourceReservation = await reserveGitRepositoryName({
+      ownerUsername: owner,
+      name,
+      holdingName: `beutl-rename-src-${crypto.randomUUID()}`,
+      operation: GitRepositoryOperation.RENAME,
+      sourceName: name,
+      intentId: renameEpoch,
+      leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+    });
+  } catch (error) {
+    await releaseGitRepositoryReservation({
+      id: targetReservation,
+      intentId: renameEpoch,
+    }).catch(() => undefined);
+    throw error;
+  }
+
+  const releaseBoth = async () => {
+    for (const id of [targetReservation, sourceReservation]) {
+      if (!id) continue;
+      await releaseGitRepositoryReservation({
+        id,
+        intentId: renameEpoch,
+      }).catch(() => undefined);
+    }
+  };
 
   try {
+    // 相手の id を控える。結果が分からなくなった場合、定期実行がこれで引き直す。
+    // **書けなければ進めない。** 控えが無いと、曖昧に終わった改名を誰も
+    // 照合できない。
+    if (
+      !(await attachGitRepositoryCreationId({
+        id: targetReservation,
+        intentId: renameEpoch,
+        forgejoRepoId: current.id,
+      }))
+    ) {
+      throw new RepairTakenOverError(current.id);
+    }
+
+    // **送る直前に相手を確かめ直す。** 上の GET から間が空くと、その名前が別の
+    // リポジトリに付け替わっていることがある (削除して作り直しなど)。
+    // 名前でしか送れない (PATCH /repositories/{id} は 405) ので、開いている幅は
+    // この確認から送信までの 1 往復に縮める。
+    const stillThere = await forgejoRequestOrNull<ForgejoRepository>(
+      `/repositories/${current.id}`,
+      { timeoutMs: HELD_REQUEST_TIMEOUT_MS },
+    );
+    if (
+      !stillThere ||
+      stillThere.owner.login.toLowerCase() !== owner.toLowerCase() ||
+      stillThere.name !== name
+    ) {
+      await releaseBoth();
+      throw new ForgejoError(
+        409,
+        "PATCH",
+        `/repos/${owner}/${name}`,
+        `repository ${owner}/${name} is no longer id ${current.id}`,
+      );
+    }
+
     const renamed = await forgejoRequest<ForgejoRepository>(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       {
         method: "PATCH",
         sudo,
-        // 期限より短く切る。待っている間に引き取られると、こちらが解放するのは
-        // 相手の予約になる。
         timeoutMs: HELD_REQUEST_TIMEOUT_MS,
         body: { name: newName },
       },
     );
-    // 通った。名前は決着しているので予約を外す。
-    await releaseGitRepositoryReservation({
-      id: reservation,
-      intentId: renameEpoch,
-    }).catch(() => undefined);
+    await releaseBoth();
     return renamed;
   } catch (error) {
     // **結果が分からない場合は予約を残す。** 待つのをやめただけで、Forgejo が
@@ -1149,12 +1242,7 @@ export async function renameRepository(
       error instanceof ForgejoError &&
       error.status >= 400 &&
       error.status < 500;
-    if (decided) {
-      await releaseGitRepositoryReservation({
-        id: reservation,
-        intentId: renameEpoch,
-      }).catch(() => undefined);
-    }
+    if (decided) await releaseBoth();
     throw error;
   }
 }

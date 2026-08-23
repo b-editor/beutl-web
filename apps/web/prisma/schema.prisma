@@ -213,8 +213,19 @@ enum GitAccountDeletionPhase {
  * 預かり名も先に決めて書く。201 の直後に落ちても、この行から相手を引き当てられる
  * (リポジトリ id は応答で初めて分かるので、それだけでは追えない)。
  */
+enum GitRepositoryOperation {
+  // 管理者の手元で組み立ててから渡す。
+  CREATE
+  // 既にある相手の名前を変える。組み立ては要らない。
+  RENAME
+}
+
 model GitRepositoryCreation {
   id            String   @id @default(uuid())
+  // 何をしている最中の予約か。片付け方が違う。CREATE は預かりものを渡し切る、
+  // RENAME は名前が変わったかを確かめるだけ。混ぜると、利用者が編集した
+  // .gitattributes を「直す」対象にしてしまう。
+  operation     GitRepositoryOperation @default(CREATE)
   ownerUsername String
   name          String
   // 一意にするのはこちら。Forgejo は UNIQUE(owner_id, lower_name) で名前を
@@ -222,6 +233,8 @@ model GitRepositoryCreation {
   // 予約でき、片方が預かり名のまま残る。
   normalizedName String
   holdingName   String   @unique
+  // RENAME のときの元の名前。予約は行き先の名前で取るので、元の名前も控える。
+  sourceName    String?
   forgejoRepoId Int?
   createdAt     DateTime @default(now())
   // 掴んでいる 1 回の処理と、その期限。期限が切れるまでは前面の処理が持っている

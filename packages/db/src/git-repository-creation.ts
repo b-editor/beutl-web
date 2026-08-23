@@ -1,3 +1,4 @@
+import { GitRepositoryOperation } from "@prisma/client";
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
@@ -7,6 +8,8 @@ import type { PrismaTransaction } from "./transaction";
  * **Forgejo を触る前に書く。** 名前の重複を Forgejo 上の不在確認だけで判断すると、
  * 同じ名前の操作が同時に来たときに両方が通ってしまう。作成も改名も同じここを通す。
  */
+export { GitRepositoryOperation };
+
 export class GitRepositoryNameTakenError extends Error {
   constructor(
     readonly ownerUsername: string,
@@ -51,14 +54,20 @@ export async function reserveGitRepositoryName({
   ownerUsername,
   name,
   holdingName,
+  operation = GitRepositoryOperation.CREATE,
+  sourceName,
   intentId,
   leaseUntil,
   prisma,
 }: {
   ownerUsername: string;
   name: string;
-  /** 管理者の名前空間で使う名前。作成のときだけ。改名では名前そのものを使う。 */
+  /** 管理者の名前空間で使う名前。作成のときだけ。改名では別の名前を入れる。 */
   holdingName: string;
+  /** 何をしている最中か。片付け方が変わる。 */
+  operation?: GitRepositoryOperation;
+  /** 改名のときの元の名前。 */
+  sourceName?: string;
   intentId: string;
   leaseUntil: Date;
   prisma?: PrismaTransaction;
@@ -71,6 +80,8 @@ export async function reserveGitRepositoryName({
         name,
         normalizedName: normalizeRepositoryName(name),
         holdingName,
+        operation,
+        ...(sourceName === undefined ? {} : { sourceName }),
         intentId,
         leaseUntil,
       },
