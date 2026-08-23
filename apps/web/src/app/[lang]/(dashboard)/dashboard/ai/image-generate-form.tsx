@@ -154,6 +154,7 @@ export function ImageGenerateForm({
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [background, setBackground] = useState<AiImageBackground>("auto");
   const [references, setReferences] = useState<File[]>([]);
+  const [seed, setSeed] = useState("");
   const referenceInput = useRef<HTMLInputElement>(null);
 
   const options = optionsOf(capabilities, model);
@@ -189,6 +190,7 @@ export function ImageGenerateForm({
     composePrompt({ main: prompt, style, composition, exclusions }),
     ratio,
     chosenBackground,
+    options.seed ? seed : "",
     ...references,
   ]);
   const holdsName = names.holds(signature);
@@ -516,6 +518,8 @@ export function ImageGenerateForm({
               min={AI_MIN_SEED}
               max={AI_MAX_SEED}
               step={1}
+              value={seed}
+              onChange={(event) => setSeed(event.target.value)}
               className="max-w-[12rem]"
             />
             <p className="text-xs text-muted-foreground">

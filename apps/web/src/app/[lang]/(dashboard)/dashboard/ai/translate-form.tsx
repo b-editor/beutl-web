@@ -63,6 +63,11 @@ import {
 
 export type LanguageOption = { code: string; name: string };
 
+function positiveNumber(text: string): number | undefined {
+  const value = Number(text);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export function TranslateForm({
   lang,
   access,
@@ -98,6 +103,8 @@ export function TranslateForm({
   // the new cues — a subtitle file that looks finished and is not.
   const [translatedSource, setTranslatedSource] = useState<string | null>(null);
   const [glossary, setGlossary] = useState("");
+  const [maxCharactersPerLine, setMaxCharactersPerLine] = useState("");
+  const [maxLines, setMaxLines] = useState("");
   // Read when a result lands. Keeping the source out of that effect's
   // dependencies is the point: it must not re-run on every keystroke.
   const sourceRef = useRef(source);
@@ -124,20 +131,13 @@ export function TranslateForm({
       return;
     }
 
-    const options = new FormData(event.currentTarget);
-    const number = (name: string) => {
-      const value = Number(options.get(name));
-      return Number.isFinite(value) && value > 0 ? value : undefined;
-    };
     const glossaryEntries = parseGlossary(glossary);
     const style = {
       ...(Object.keys(glossaryEntries).length > 0
         ? { glossary: glossaryEntries }
         : {}),
-      ...(number("maxCharactersPerLine")
-        ? { maxCharactersPerLine: number("maxCharactersPerLine") }
-        : {}),
-      ...(number("maxLines") ? { maxLines: number("maxLines") } : {}),
+      ...(charactersPerLine ? { maxCharactersPerLine: charactersPerLine } : {}),
+      ...(lines ? { maxLines: lines } : {}),
     };
     const cues = parsed.cues;
     const body = JSON.stringify({
@@ -238,10 +238,16 @@ export function TranslateForm({
   // が同じでも別の名前になり、サーバーには同じ依頼が二度届いて二度課金される。
   // 行数や 1 行の長さは入力欄の中にあって描画のたびには読めない——そのぶん粗い
   // が、粗いほうへ外れるのは安全側だ。
+  // 送るのは、正の数のときだけ添えられる値。欄に書かれたままを数えると、送る
+  // ものが同じでも別の名前になる。
+  const charactersPerLine = positiveNumber(maxCharactersPerLine);
+  const lines = positiveNumber(maxLines);
   const signature = requestSignature([
     model,
     detectedSourceLanguage,
     targetLanguage,
+    charactersPerLine ?? null,
+    lines ?? null,
     ...(parsed.ok
       ? parsed.segments.flatMap((segment) => [segment.id, segment.text])
       : [source]),
@@ -410,6 +416,10 @@ export function TranslateForm({
                 max={200}
                 step={1}
                 placeholder="42"
+                value={maxCharactersPerLine}
+                onChange={(event) =>
+                  setMaxCharactersPerLine(event.target.value)
+                }
               />
             </div>
             <div className="flex flex-col space-y-1.5">
@@ -422,6 +432,8 @@ export function TranslateForm({
                 max={10}
                 step={1}
                 placeholder="2"
+                value={maxLines}
+                onChange={(event) => setMaxLines(event.target.value)}
               />
             </div>
           </div>

@@ -37,6 +37,7 @@ import {
   ModelSelect,
   AiWorkspace,
   DownloadButton,
+  IDEMPOTENCY_KEY_FIELD,
   IdempotencyKeyField,
   requestSignature,
   useAiRequestNames,
@@ -223,7 +224,6 @@ export function ImageEditForm({
     // keyboard could start a run with no task, no plan, no balance for this
     // task, or no model that can serve it.
     if (!canSubmit) return;
-    names.commit(signature);
     setPrepareError(null);
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -237,6 +237,17 @@ export function ImageEditForm({
           );
           const next = new FormData(form);
           next.set("file", prepared);
+          // サーバーが指紋にするのは、この広げたあとの絵。元の絵と広げ幅から
+          // 名乗ると、別々の元絵と幅が同じ絵になったときに、同じ依頼が二つの
+          // 名前に割れて二度課金される。
+          const preparedSignature = requestSignature([
+            editTask,
+            selectedModel,
+            typedPrompt.trim(),
+            prepared,
+          ]);
+          names.commit(preparedSignature);
+          next.set(IDEMPOTENCY_KEY_FIELD, names.nameFor(preparedSignature));
           dispatch(next);
         } catch {
           // 元のファイルをそのまま送ると、拡張されていない画像を outpaint の
@@ -246,6 +257,8 @@ export function ImageEditForm({
       });
       return;
     }
+
+    names.commit(signature);
     dispatch(formData);
   }
 

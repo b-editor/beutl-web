@@ -53,11 +53,15 @@ function FramePicker({
   name,
   label,
   hint,
+  onPick,
 }: {
   id: string;
   name: string;
   label: string;
   hint: string;
+  // どのフレームが選ばれているかは、依頼の一部。画面がそれを知らないと、
+  // フレームだけ差し替えた依頼が前の依頼と同じ名前で送られ、断られる。
+  onPick: (file: File | null) => void;
 }) {
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -68,7 +72,8 @@ function FramePicker({
   }, [preview]);
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const file = event.target.files?.[0] ?? null;
+    onPick(file);
     setPreview(file ? URL.createObjectURL(file) : null);
   }
 
@@ -190,6 +195,9 @@ export function VideoForm({
   const [videoComposition, setVideoComposition] = useState("");
   const [videoMotion, setVideoMotion] = useState("");
   const [videoExclusions, setVideoExclusions] = useState("");
+  const [videoSeed, setVideoSeed] = useState("");
+  const [firstFrame, setFirstFrame] = useState<File | null>(null);
+  const [lastFrame, setLastFrame] = useState<File | null>(null);
 
   const models = access.models["video.generate"] ?? [];
   const names = useAiRequestNames();
@@ -232,6 +240,9 @@ export function VideoForm({
     // 送るのはモデルの都合を通したあとの値。押した状態そのままを数えると、音を
     // 出せないモデルでは同じ依頼が別の名前になり、二度課金される。
     audio,
+    options.seed ? videoSeed : "",
+    options.firstFrame ? firstFrame : null,
+    options.firstFrame && options.lastFrame ? lastFrame : null,
   ]);
   // The same composition the action validates, so the counter measures what the
   // server will.
@@ -409,6 +420,8 @@ export function VideoForm({
               max={AI_MAX_SEED}
               step={1}
               disabled={!options.seed}
+              value={videoSeed}
+              onChange={(event) => setVideoSeed(event.target.value)}
               className="max-w-[12rem]"
             />
             <p className="text-xs text-muted-foreground">
@@ -467,6 +480,7 @@ export function VideoForm({
               name="firstFrame"
               label={t("dashboard:ai.firstFrame")}
               hint={t("dashboard:ai.firstFrameHint")}
+              onPick={setFirstFrame}
             />
           )}
           {options.lastFrame && (
@@ -475,6 +489,7 @@ export function VideoForm({
               name="lastFrame"
               label={t("dashboard:ai.lastFrame")}
               hint={t("dashboard:ai.lastFrameHint")}
+              onPick={setLastFrame}
             />
           )}
         </AdvancedOptions>
