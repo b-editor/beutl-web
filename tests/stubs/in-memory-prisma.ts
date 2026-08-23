@@ -2482,14 +2482,30 @@ export function createInMemoryPrisma() {
         where,
         take,
       }: {
-        where?: { createdAt?: { lt?: Date } };
+        where?: {
+          createdAt?: { lt?: Date };
+          OR?: {
+            createdAt?: { lt?: Date };
+            abandonedAt?: { not: null };
+          }[];
+        };
         orderBy?: unknown;
         take?: number;
       } = {}) => {
+        const matches = (item: StorageUploadRecord) => {
+          if (where?.OR) {
+            return where.OR.some((clause) =>
+              clause.abandonedAt
+                ? item.abandonedAt !== null
+                : clause.createdAt?.lt
+                  ? item.createdAt < clause.createdAt.lt
+                  : true,
+            );
+          }
+          return where?.createdAt?.lt ? item.createdAt < where.createdAt.lt : true;
+        };
         const rows = [...state.storageUploads.values()]
-          .filter((item) =>
-            where?.createdAt?.lt ? item.createdAt < where.createdAt.lt : true,
-          )
+          .filter(matches)
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },

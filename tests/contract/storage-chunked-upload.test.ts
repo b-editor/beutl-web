@@ -423,6 +423,30 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(1);
   });
 
+  it("sweeps a claimed upload without waiting out the day", async () => {
+    // 掃除のものになった行は、誰かが既に「捨てる」と決めて捨てられなかったもの。
+    // 手つかずのアップロードと同じ一日を待たせると、そのぶんの保管料と枠が理由
+    // なく残る。
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    state.storageUploads.set(tracked!.id, {
+      ...tracked!,
+      abandonedAt: new Date(),
+    });
+
+    const swept = await abandonStaleStorageUploads(new Date());
+
+    expect(swept).toEqual({ abandoned: 1, failed: 0 });
+    expect(state.storageUploads.size).toBe(0);
+  });
+
   it("says so when there is no upload to cancel", async () => {
     // 開始の応答が返らなかった側が取り消しに回ってくる。まだ行が現れていない
     // だけかもしれないので、「もう無い」と答えて済ませない。

@@ -245,7 +245,12 @@ export function TranslateForm({
     ...(parsed.ok
       ? parsed.segments.flatMap((segment) => [segment.id, segment.text])
       : [source]),
-    ...Object.entries(parseGlossary(glossary)).flat(),
+    // 語彙集は並べ替えてから数える。サーバーは指紋を取るときに鍵を並べ替える
+    // ので、行を入れ替えただけでは同じ依頼——数える順を揃えないと、別の名前で
+    // 二度課金される。
+    ...Object.entries(parseGlossary(glossary))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .flat(),
   ]);
   const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName);

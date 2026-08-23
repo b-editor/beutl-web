@@ -134,8 +134,13 @@ export async function countStorageUploadsByUserId({
   });
 }
 
-// What a browser started and never finished. An unfinished upload holds its
-// parts, and their storage, until it is abandoned.
+// What a browser started and never finished, plus anything already claimed for
+// clearing.
+//
+// A claimed row is one somebody already decided to destroy and could not — the
+// bucket would not let go of the parts. Making it wait out the same day as an
+// upload nobody has touched leaves that storage paid for, and the account's
+// quota spent, for no reason: it is due now.
 export async function listStorageUploadsStartedBefore({
   before,
   limit,
@@ -147,7 +152,9 @@ export async function listStorageUploadsStartedBefore({
 }) {
   const db = prisma ?? (await getDb());
   return await db.storageUpload.findMany({
-    where: { createdAt: { lt: before } },
+    where: {
+      OR: [{ createdAt: { lt: before } }, { abandonedAt: { not: null } }],
+    },
     orderBy: { createdAt: "asc" },
     take: limit,
   });

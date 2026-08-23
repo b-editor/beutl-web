@@ -144,9 +144,11 @@ export function canSubmitAiRequest({
  * 値。ここが細かすぎると、サーバーには同じ依頼が別の名前で届いて二度課金され、
  * 粗すぎると、別の依頼が同じ名前で届いて断られるだけで済む。迷うなら粗いほうへ。
  *
- * ファイルは名前・種類・大きさで見分ける。更新時刻は見ない——同じ中身を作り直す
- * たびに変わるので（動画から抜き出した音声がそうなる）、見ると同じ音声が別の
- * 依頼になってしまう。サーバーは中身のハッシュで見分けるので、こちらが粗い。
+ * ファイルは名前と大きさで見分ける。更新時刻も、ブラウザが名乗る種類も見ない
+ * ——更新時刻は同じ中身を作り直すたびに変わり（動画から抜き出した音声がそう
+ * なる）、種類はサーバー側で中身から見直されて image/jpg が image/jpeg に、
+ * 空が audio/mpeg に揃えられる。どちらも、同じものが別の依頼に化ける。サーバー
+ * は中身のハッシュで見分けるので、こちらが粗い。
  */
 export function requestSignature(
   parts: readonly (string | number | boolean | null | undefined | File)[],
@@ -157,7 +159,7 @@ export function requestSignature(
     .map((part) => {
       if (part === null || part === undefined) return "n";
       if (part instanceof File) {
-        return field("f", `${part.name}\u001e${part.type}\u001e${part.size}`);
+        return field("f", `${part.name}\u001e${part.size}`);
       }
       if (typeof part === "string") return field("s", part);
       return field("v", String(part));

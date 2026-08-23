@@ -164,9 +164,11 @@ export function TranscribeForm({
     names.settle(keepsName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-  // サーバーが指紋を取るのと同じものから。長さと中身のハッシュはその音声から
-  // 決まるので、音声の見分けで足りる。
-  const signature = requestSignature([model, language, audioFile]);
+  // サーバーが指紋を取るのと同じものから。"auto" は選び手の言い方で、依頼には
+  // 何も書かない——そのまま数えると、同じ依頼が別の名前になって二度課金される。
+  // 長さと中身のハッシュはその音声から決まるので、音声の見分けで足りる。
+  const chosenLanguage = language === "auto" ? "" : language;
+  const signature = requestSignature([model, chosenLanguage, audioFile]);
   const submitBlocked = blocksSubmit(blocked, keepsName);
   const models = access.models["audio.transcribe"] ?? [];
 

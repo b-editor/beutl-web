@@ -207,6 +207,8 @@ export function VideoForm({
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
+  // A model that cannot produce sound would refuse the request outright.
+  const audio = options.generateAudio && generateAudio;
   // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。文章はここに
   // ある材料から組み立てられるので、材料をそのまま数える。種とフレームは入力欄
   // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
@@ -227,10 +229,10 @@ export function VideoForm({
     duration,
     resolution,
     aspectRatio,
-    generateAudio,
+    // 送るのはモデルの都合を通したあとの値。押した状態そのままを数えると、音を
+    // 出せないモデルでは同じ依頼が別の名前になり、二度課金される。
+    audio,
   ]);
-  // A model that cannot produce sound would refuse the request outright.
-  const audio = options.generateAudio && generateAudio;
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({

@@ -174,6 +174,17 @@ describe("how a request is signed", () => {
       new File(["same bytes"], "clip.wav", { type: "audio/wav", lastModified });
 
     expect(requestSignature([made(1)])).toBe(requestSignature([made(2)]));
+    // ブラウザが名乗る種類も見ない。サーバーは中身から見直すので、image/jpg と
+    // image/jpeg は同じものになる。
+    expect(
+      requestSignature([
+        new File(["same"], "a.jpg", { type: "image/jpg" }),
+      ]),
+    ).toBe(
+      requestSignature([
+        new File(["same"], "a.jpg", { type: "image/jpeg" }),
+      ]),
+    );
     expect(requestSignature([made(1)])).not.toBe(
       requestSignature([
         new File(["same bytes"], "other.wav", { type: "audio/wav" }),
