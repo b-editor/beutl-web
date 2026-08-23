@@ -84,17 +84,35 @@ vi.mock("@beutl/db", () => ({
     });
   },
   listGitRepositoryRepairs: async () =>
-    [...repairQueue.values()].map((entry) => ({
-      intendedOwner: null,
-      intendedName: null,
-      ...entry,
-    })),
+    [...repairQueue.values()]
+      .filter((entry) => !entry.needsReview)
+      .map((entry) => ({
+        intendedOwner: null,
+        intendedName: null,
+        ...entry,
+      })),
   claimGitRepositoryRepair: async () => true,
   recordGitRepositoryRepairAttempt: async () => undefined,
-  deleteGitRepositoryRepair: async ({ forgejoRepoId }: { forgejoRepoId: number }) => {
-    repairQueue.delete(forgejoRepoId);
+  deleteGitRepositoryRepair: async ({
+    forgejoRepoId,
+  }: {
+    forgejoRepoId: number;
+  }) => repairQueue.delete(forgejoRepoId),
+  countGitRepositoryRepairs: async () =>
+    [...repairQueue.values()].filter((entry) => !entry.needsReview).length,
+  countGitRepositoryRepairsNeedingReview: async () =>
+    [...repairQueue.values()].filter((entry) => entry.needsReview).length,
+  markGitRepositoryRepairNeedsReview: async ({
+    forgejoRepoId,
+  }: {
+    forgejoRepoId: number;
+  }) => {
+    const entry = repairQueue.get(forgejoRepoId);
+    if (!entry) return false;
+    entry.needsReview = true;
+    return true;
   },
-  countGitRepositoryRepairs: async () => repairQueue.size,
+  renewGitRepositoryRepairLease: async () => true,
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
   GitAccountDeletionPhase: {
@@ -184,6 +202,7 @@ let repairQueue = new Map<
     name: string;
     intendedOwner?: string | null;
     intendedName?: string | null;
+    needsReview?: boolean;
   }
 >();
 let purgedTombstone = false;
@@ -1226,7 +1245,7 @@ describe("直せなかったリポジトリの片付け", () => {
       return new Response(null, { status: 204 });
     });
 
-    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
       fixed: 1,
       pending: 0,
     });
@@ -1244,14 +1263,14 @@ describe("直せなかったリポジトリの片付け", () => {
       return new Response(null, { status: 204 });
     });
 
-    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
       fixed: 1,
       pending: 0,
     });
     expect(repairQueue.size).toBe(0);
   });
 
-  it("直せなければ読み取り専用にして、控えを外す", async () => {
+  it("直せなければ読み取り専用にして片付いた扱いにする", async () => {
     // 掛かった時点で push は通らない。控えに残すのは「まだ push できるもの」だけ。
     const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
     repairQueue.set(5, { forgejoRepoId: 5, ownerUsername: "someone", name: "proj" });
@@ -1281,10 +1300,10 @@ describe("直せなかったリポジトリの片付け", () => {
       return new Response(null, { status: 204 });
     });
 
-    // 直っていないので fixed には数えない。ただし読み取り専用になった時点で
-    // push は通らないので、控え (= まだ push できるもの) からは外れる。
-    await expect(retryGitRepositoryRepairs()).resolves.toEqual({
-      fixed: 0,
+    // 読み取り専用になった時点で push は通らない。控え (= まだ push できるもの)
+    // からは外れるので、片付いた扱いになる。
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
       pending: 0,
     });
     expect(archived).toBe(true);
@@ -1396,5 +1415,123 @@ describe("預かったままのリポジトリ", () => {
     ).rejects.toBeTruthy();
 
     expect([...repairQueue.keys()]).toEqual([5]);
+  });
+});
+
+describe("預かりものは渡し切るまで控えを外さない", () => {
+  /** 管理者が預かっている、既定値の入っていないリポジトリ。 */
+  function heldRepository(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 5,
+      name: "beutl-holding-abc",
+      default_branch: "main",
+      archived: false,
+      owner: { id: 1, login: "beutl-admin" },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    repairQueue.set(5, {
+      forgejoRepoId: 5,
+      ownerUsername: "beutl-admin",
+      name: "beutl-holding-abc",
+      intendedOwner: "someone",
+      intendedName: "proj",
+    });
+  });
+
+  it("直した後、譲渡に失敗したら控えは残る", async () => {
+    // 直した時点で控えを外すと、譲渡の前に落ちたものが管理者所有のまま
+    // 追えなくなり、その名前の作成を永久に塞ぐ。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    let committed = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) return json(heldRepository());
+      if (method === "POST" && path.endsWith("/contents")) {
+        committed = true;
+        return json({}, 201);
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return committed
+          ? json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) })
+          : json({ message: "nope" }, 404);
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return committed
+          ? json({ encoding: "base64", content: utf8Base64(GITIGNORE) })
+          : json({ message: "nope" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        return json({ message: "boom" }, 500);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 0,
+      pending: 1,
+    });
+    expect([...repairQueue.keys()]).toEqual([5]);
+  });
+
+  it("譲渡だけ済んで改名が残っていたら、改名から再開する", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      // 譲渡は済んでいる。名前は預かり名のまま。
+      if (path.endsWith("/repositories/5")) {
+        return json(heldRepository({ owner: { id: 2, login: "someone" } }));
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 5, name: "proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
+    });
+    expect(renamedTo).toBe("proj");
+    expect(repairQueue.size).toBe(0);
+  });
+
+  it("渡す先でも管理者でもない誰かが持っていたら、人の確認に回す", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json(heldRepository({ owner: { id: 9, login: "stranger" } }));
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 0,
+      review: 1,
+    });
+    // 自動再試行の対象からは外れるが、記録は残る。
+    expect(repairQueue.get(5)?.needsReview).toBe(true);
   });
 });

@@ -481,30 +481,25 @@ export async function finishGitAccountDeletion(
       return await markGitAccountDeletionPurged({ userId, intentId: epoch });
     }
 
-    // 消す相手が本人かを確かめ直す。
+    // 消す相手が本人かを確かめ直す。**id と合成メールの両方**が控えと一致する
+    // ことを求める。削除は取り返しがつかないので、通常操作より 1 つ厳しくする。
     //
-    // **決め手は合成メール。** これは userId から決まり、Forgejo はメールの重複を
-    // 許さない (provisioning の ForgejoEmailInUseError がその証拠)。だからこの
-    // メールを持つアカウントは、その利用者のものだと言い切れる。
+    // 復元でアカウントが戻っても id は変わらない (同じ行が戻るため)。id が違うのは
+    // 「消して作り直された」など、こちらの控えでは説明が付かない事態なので、
+    // 消しにいかず人に確かめてもらう。
     //
-    // 控えた id と食い違うことはある。復元でアカウントが作り直されると id は
-    // 変わるが、メールは同じ。それはまさに消したい相手なので、止めずに記録する。
-    // 逆にメールが違えば、名前が同じでも別人。**決して消さない。**
-    if (actual.email !== expectedEmail) {
+    // 控えに id が無いのは、対応表を失った状態で合成メールから引き当てた古い行。
+    // その場合はメールだけで判断する (それ以外に手掛かりが無い)。
+    const idMatches =
+      pending.forgejoUserId === null || pending.forgejoUserId === actual.id;
+    if (!idMatches || actual.email !== expectedEmail) {
       await sendToReview(
         userId,
         epoch,
         `Forgejo user ${username} is id ${actual.id} <${actual.email}>, ` +
-          `expected <${expectedEmail}>`,
+          `expected id ${pending.forgejoUserId} <${expectedEmail}>`,
       );
       return false;
-    }
-    if (pending.forgejoUserId !== null && pending.forgejoUserId !== actual.id) {
-      console.warn(
-        `Forgejo user ${username} is now id ${actual.id}, recorded as ` +
-          `${pending.forgejoUserId}; the account was recreated (restore?) ` +
-          "but the address still identifies this user",
-      );
     }
     username = actual.login;
 
@@ -726,10 +721,14 @@ export async function reconcileGitAccountDeletionTombstones({
           continue;
         }
 
-        // 名前が別人に渡っていることがある。決め手は合成メール (userId から
-        // 決まり、Forgejo はメールの重複を許さない)。
+        // 名前が別人に渡っていることがある。控えた id と合成メールの**両方**が
+        // 一致するものだけを本人とみなす (退会の経路と同じ契約)。
         const expectedEmail = noreplyEmailFor(tombstone.userId);
-        if (actual.email !== expectedEmail) {
+        const matchesRecord =
+          actual.email === expectedEmail &&
+          (tombstone.forgejoUserId === null ||
+            tombstone.forgejoUserId === actual.id);
+        if (!matchesRecord) {
           // この名前は別人のもの。**本人が別名で生き返っていないか**を確かめる。
           // ここで諦めると、名前を取られた本人の復活を永久に見逃す。
           const byEmail = await findByNoreplyEmail(tombstone.userId);
@@ -738,7 +737,12 @@ export async function reconcileGitAccountDeletionTombstones({
                 `/users/${encodeURIComponent(byEmail.username)}`,
               )
             : null;
-          if (!renamed || renamed.email !== expectedEmail) {
+          const renamedMatches =
+            renamed !== null &&
+            renamed.email === expectedEmail &&
+            (tombstone.forgejoUserId === null ||
+              tombstone.forgejoUserId === renamed.id);
+          if (!renamedMatches) {
             await touchGitAccountDeletion({
               userId: tombstone.userId,
               intentId: epoch,
@@ -747,8 +751,8 @@ export async function reconcileGitAccountDeletionTombstones({
             progressed += 1;
             continue;
           }
-          username = renamed.login;
-          actual = renamed;
+          username = renamed!.login;
+          actual = renamed!;
         }
 
         // 復活している。端末のトークンも一緒に戻っているので、消し直す。

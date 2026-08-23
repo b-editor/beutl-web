@@ -1,6 +1,8 @@
 import {
   auditLogActions,
   claimGitRepositoryRepair,
+  countGitRepositoryRepairsNeedingReview,
+  markGitRepositoryRepairNeedsReview,
   countGitRepositoryRepairs,
   createAuditLog,
   deleteGitRepositoryRepair,
@@ -90,11 +92,7 @@ export async function listRepositories(sudo: string) {
   );
 }
 
-export async function getRepository(
-  sudo: string,
-  owner: string,
-  name: string,
-) {
+export async function getRepository(sudo: string, owner: string, name: string) {
   return await forgejoRequestOrNull<ForgejoRepository>(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
     { sudo },
@@ -169,27 +167,27 @@ async function setRepositoryArchived(
  * 掛けられなかったときは控えに積む。ログだけだと、.gitattributes の無い
  * リポジトリが push を受けられる状態のまま誰にも気付かれない。
  */
+/**
+ * 読み取り専用にする。**控えは触らない。** 何をもって片付いたとするかは
+ * 呼び出し元が決める (預かりものは譲渡し切るまで控えを外せない)。
+ *
+ * @returns 掛かったかどうか。
+ */
 async function lockRepository(
   owner: string,
   repository: Pick<ForgejoRepository, "id" | "name">,
   reason: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await setRepositoryArchived(owner, repository.name, true);
   } catch (error) {
     console.error(
-      `${owner}/${repository.name} could not be locked; queued for repair`,
+      `${owner}/${repository.name} could not be locked; it stays queued`,
       error,
     );
-    await queueRepair(owner, repository, reason);
-    return;
+    return false;
   }
 
-  // 掛かった時点で push は通らなくなる。控えは「まだ push できる」ものだけを
-  // 残すためのものなので、外す。直す経路は同名での作り直し。
-  await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-    () => undefined,
-  );
   await createAuditLog({
     userId: null,
     action: auditLogActions.git.repositoryLocked,
@@ -202,6 +200,7 @@ async function lockRepository(
   }).catch((error) => {
     console.error("failed to record the repository lock", error);
   });
+  return true;
 }
 
 /** 後で片付けるために控える。ここが失敗したら、もう記録は残らない。 */
@@ -238,10 +237,31 @@ async function queueRepair(
  * 確かめられなかったら読み取り専用にしてから投げる。**直す前に解除した場合も
  * 必ず掛け直す。** 解除したまま抜けると、一度守った状態がやり直しのたびに緩む。
  */
+type RepairOutcome =
+  /** 既定値が揃った。 */
+  | { state: "repaired" }
+  /** 直せなかったので読み取り専用にした。push は通らない。 */
+  | { state: "locked"; error: unknown }
+  /** 直すことも止めることもできなかった。**まだ push できる。** */
+  | { state: "open"; error: unknown };
+
+/**
+ * テンプレートを入れ直し、**入った結果が正しいことまで確かめる**。
+ *
+ * `commitTemplates` は既にあるファイルに触らない (利用者が意図して編集したものを
+ * 壊さないため)。だから空の .gitattributes が置かれていると、何もせずに成功する。
+ * そこで返ると、LFS の効かないリポジトリを push できる状態のまま残すことになる。
+ *
+ * 確かめられなかったら読み取り専用にする。**直す前に解除した場合も必ず掛け直す。**
+ * 解除したまま抜けると、一度守った状態がやり直しのたびに緩む。
+ *
+ * **控えは触らない。** 片付いたかどうかの判断は呼び出し元がする。ここで消すと、
+ * 預かりものを譲渡する前に控えが消え、管理者所有のまま追えなくなる。
+ */
 async function repairTemplates(
   sudo: string,
   repository: ForgejoRepository,
-): Promise<void> {
+): Promise<RepairOutcome> {
   const name = repository.name;
   // **外す前に控える。** 読み取り専用を外した直後に Worker ごと消えると、例外は
   // 捕まらず、書き込み可能で非 canonical なリポジトリが記録も無いまま残る。
@@ -251,18 +271,25 @@ async function repairTemplates(
     if (repository.archived) await setRepositoryArchived(sudo, name, false);
     await commitTemplates(sudo, name, repository.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
-    // 揃った。控えに残す理由が無い。
-    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-      () => undefined,
-    );
+    return { state: "repaired" };
   } catch (error) {
-    await lockRepository(
+    const locked = await lockRepository(
       sudo,
       repository,
       error instanceof Error ? error.message : String(error),
     );
-    throw error;
+    return locked ? { state: "locked", error } : { state: "open", error };
   }
+}
+
+/** 直せなければ投げる。利用者に返す経路で使う。 */
+async function requireRepairedTemplates(
+  sudo: string,
+  repository: ForgejoRepository,
+): Promise<void> {
+  const outcome = await repairTemplates(sudo, repository);
+  if (outcome.state === "repaired") return;
+  throw outcome.error;
 }
 
 /**
@@ -326,18 +353,93 @@ const REPAIR_COOLDOWN_MS = 15 * 60 * 1000;
 const REPAIR_LEASE_MS = 10 * 60 * 1000;
 
 /**
- * 入れ切れなかったテンプレートを後から入れ直す。定期実行から呼ぶ。
+ * 控え 1 件を片付ける。@returns 控えを外してよいか。
+ *
+ * 控えには 2 種類ある。混ぜてはいけない。
+ *
+ *   預かりもの (intendedOwner あり) — 管理者の手元で組み立て中。**譲渡と改名まで
+ *     終わって初めて片付いた**。揃っているからと途中で外すと、管理者所有のまま
+ *     残り、その名前の作成を永久に塞ぐ。
+ *   直し (intendedOwner なし) — 既に利用者のもの。既定値が揃うか、push できない
+ *     状態 (読み取り専用) になれば片付いた。
+ */
+async function settleRepositoryRepair(
+  entry: {
+    forgejoRepoId: number;
+    intendedOwner: string | null;
+    intendedName: string | null;
+  },
+  epoch: string,
+): Promise<boolean> {
+  // id で引き直す。控えた名前は古くなっていることがある。
+  const current = await forgejoRequestOrNull<ForgejoRepository>(
+    `/repositories/${entry.forgejoRepoId}`,
+  );
+  // 消えている。守る相手がいない。
+  if (!current) return true;
+
+  const owner = current.owner.login;
+  const admin = await getAdminUsername();
+  const handover =
+    entry.intendedOwner !== null && entry.intendedName !== null
+      ? { owner: entry.intendedOwner, name: entry.intendedName }
+      : null;
+
+  if (handover && owner !== admin && owner !== handover.owner) {
+    // 渡す先でも管理者でもない誰かが持っている。自動では決められない。
+    await markGitRepositoryRepairNeedsReview({
+      forgejoRepoId: entry.forgejoRepoId,
+      intentId: epoch,
+      reason: `held by ${owner}, expected ${admin} or ${handover.owner}`,
+    });
+    return false;
+  }
+
+  // 既定値が揃っていなければ先に直す。揃うまでは渡さない。
+  if (!(await hasTemplates(owner, current.name))) {
+    const outcome = await repairTemplates(owner, current);
+    if (outcome.state !== "repaired") {
+      // 直せなかった。預かりものなら渡さずに控えを残す (管理者の手元にある限り
+      // 利用者は触れない)。利用者のものなら、読み取り専用にできた時点で
+      // push は通らないので片付いたとみなす。
+      if (handover) return false;
+      return outcome.state === "locked";
+    }
+  }
+
+  if (!handover) return true;
+
+  // 預かりものを渡し切る。譲渡と改名のどちらが残っていても、ここで揃える。
+  if (owner === admin) {
+    await handOver(admin, current.name, handover.owner, handover.name);
+    return true;
+  }
+  // 譲渡は済んでいて改名だけが残っている。
+  if (current.name !== handover.name) {
+    await forgejoRequest(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(current.name)}`,
+      { method: "PATCH", body: { name: handover.name } },
+    );
+  }
+  return true;
+}
+
+/**
+ * 入れ切れなかったテンプレートと、渡し切れなかった預かりものを片付ける。
+ * 定期実行から呼ぶ。
  *
  * 控えてあるのは **Forgejo のリポジトリ id**。名前で引き直すと、改名で空いた名前を
  * 取った別のリポジトリを止めてしまう。id で引き、そのとき返る名前に対して操作する。
  *
- * 直せたら控えを外す。直せなければ読み取り専用にする (それも失敗したら控えは残る)。
- *
- * @returns 片付いた件数と、まだ残っている件数。
+ * @returns 片付いた件数、まだ残っている件数、人の確認待ちの件数。
  */
 export async function retryGitRepositoryRepairs({
   limit = 20,
-}: { limit?: number } = {}): Promise<{ fixed: number; pending: number }> {
+}: { limit?: number } = {}): Promise<{
+  fixed: number;
+  pending: number;
+  review: number;
+}> {
   const cutoff = new Date(Date.now() - REPAIR_COOLDOWN_MS);
   const queued = await listGitRepositoryRepairs({
     notAttemptedSince: cutoff,
@@ -346,9 +448,12 @@ export async function retryGitRepositoryRepairs({
   let fixed = 0;
 
   for (const entry of queued) {
+    // 掴むときに印を差し替える。前の持ち主はこれで以後 1 件も更新できない。
+    const epoch = crypto.randomUUID();
     if (
       !(await claimGitRepositoryRepair({
         forgejoRepoId: entry.forgejoRepoId,
+        intentId: epoch,
         notAttemptedSince: cutoff,
         leaseUntil: new Date(Date.now() + REPAIR_LEASE_MS),
       }))
@@ -357,57 +462,32 @@ export async function retryGitRepositoryRepairs({
     }
 
     try {
-      // id で引き直す。控えた名前は古くなっていることがある。
-      const current = await forgejoRequestOrNull<ForgejoRepository>(
-        `/repositories/${entry.forgejoRepoId}`,
-      );
-      if (!current) {
-        // 消えている。守る相手がいない。
-        await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
-        fixed += 1;
-        continue;
+      if (await settleRepositoryRepair(entry, epoch)) {
+        // 自分が握っている行だけを外す。引き取られていたら消えない。
+        if (
+          await deleteGitRepositoryRepair({
+            forgejoRepoId: entry.forgejoRepoId,
+            intentId: epoch,
+          })
+        ) {
+          fixed += 1;
+        }
       }
-
-      const owner = current.owner.login;
-      const admin = await getAdminUsername();
-      // 管理者の手元に残っている預かりもの。**渡し切る。** 揃っているからと
-      // 控えだけ外すと、管理者所有のまま残って同じ名前を永久に塞ぐ。
-      const isHolding =
-        entry.intendedOwner !== null &&
-        entry.intendedName !== null &&
-        owner === admin;
-
-      if (!(await hasTemplates(owner, current.name))) {
-        // 直せなければ中で読み取り専用にし、それも駄目なら控えを残して投げる。
-        await repairTemplates(owner, current);
-      } else if (!isHolding) {
-        // 誰かが直した (同名での作り直しなど)。
-        await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
-        fixed += 1;
-        continue;
-      }
-
-      if (isHolding) {
-        await handOver(
-          admin,
-          current.name,
-          entry.intendedOwner as string,
-          entry.intendedName as string,
-        );
-      }
-
-      await deleteGitRepositoryRepair({ forgejoRepoId: entry.forgejoRepoId });
-      fixed += 1;
     } catch (error) {
       await recordGitRepositoryRepairAttempt({
         forgejoRepoId: entry.forgejoRepoId,
+        intentId: epoch,
         error: error instanceof Error ? error.message : String(error),
       }).catch(() => undefined);
     }
   }
 
   // 1 回分ではなく残っている総数。21 件目以降が残っていても 0 と報告しない。
-  return { fixed, pending: await countGitRepositoryRepairs() };
+  return {
+    fixed,
+    pending: await countGitRepositoryRepairs(),
+    review: await countGitRepositoryRepairsNeedingReview(),
+  };
 }
 
 /**
@@ -519,7 +599,11 @@ export async function createRepository(
     // 揃っていないなら、以前の作成が途中で終わったもの。ここで 409 にすると
     // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
     // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
-    await repairTemplates(sudo, conflicting);
+    await requireRepairedTemplates(sudo, conflicting);
+    // 直った。控えに残す理由が無い。
+    await deleteGitRepositoryRepair({ forgejoRepoId: conflicting.id }).catch(
+      () => undefined,
+    );
     return conflicting;
   }
 

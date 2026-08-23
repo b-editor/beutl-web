@@ -222,8 +222,14 @@ model GitRepositoryRepair {
   intendedOwner String?
   intendedName  String?
   createdAt     DateTime @default(now())
+  // 掴んでいる 1 回の実行を指す。期限だけだと、期限切れで引き取られた側が
+  // 息を吹き返したときに譲渡や控えの削除を続けられる。
+  intentId      String?
   // 掴んでいる間の期限。重なった定期実行が同じ相手を触らないため。
   leaseUntil    DateTime?
+  // 自動では決着できない (渡す先でも管理者でもない誰かが持っている)。
+  // 自動再試行の対象から外し、人が確認する。
+  needsReview   Boolean  @default(false)
   attempts      Int      @default(0)
   lastAttemptAt DateTime?
   lastError     String?

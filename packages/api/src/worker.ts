@@ -218,13 +218,20 @@ export default {
     // テンプレートを入れ切れなかったリポジトリを入れ直す。残っている間は
     // .gitattributes が無いので、push された素材が LFS に載らない。
     try {
-      const { fixed, pending } = await retryGitRepositoryRepairs();
+      const { fixed, pending, review } = await retryGitRepositoryRepairs();
       if (fixed > 0) {
-        console.log(`git repositories: repaired ${fixed}`);
+        console.log(`git repositories: settled ${fixed}`);
       }
       if (pending > 0) {
         console.error(
-          `git repositories: ${pending} still lack their Beutl defaults`,
+          `git repositories: ${pending} are still unfinished (missing Beutl ` +
+            "defaults, or held by the admin and not handed over)",
+        );
+      }
+      if (review > 0) {
+        console.error(
+          `git repositories: ${review} need a human decision ` +
+            "(GitRepositoryRepair.needsReview)",
         );
       }
     } catch (error) {
