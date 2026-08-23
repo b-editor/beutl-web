@@ -58,6 +58,14 @@ type RequestOptions = {
   searchParams?: Record<string, string | number | boolean | undefined>;
   /** レスポンスをテキストとして受け取る (raw ファイルの取得など)。 */
   responseType?: "json" | "text" | "none";
+  /**
+   * 待ち時間の上限 (ミリ秒)。
+   *
+   * 既定では待ち続ける。期限付きの印を握って進める処理では、**その期限より短く
+   * 切る**こと。切らないと、応答を待っている間に握りが切れ、引き取られた後も
+   * 自分は気付かないまま外部への変更を続けることになる。
+   */
+  timeoutMs?: number;
   config?: ForgejoConfig;
 };
 
@@ -101,6 +109,9 @@ async function request(
     method,
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    ...(options.timeoutMs === undefined
+      ? {}
+      : { signal: AbortSignal.timeout(options.timeoutMs) }),
   });
 
   if (!response.ok) {

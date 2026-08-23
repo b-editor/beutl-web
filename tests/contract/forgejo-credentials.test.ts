@@ -68,12 +68,14 @@ vi.mock("@beutl/db", () => ({
     name,
     intendedOwner,
     intendedName,
+    reservationId,
   }: {
     forgejoRepoId: number;
     ownerUsername: string;
     name: string;
     intendedOwner?: string;
     intendedName?: string;
+    reservationId?: string;
   }) => {
     if (enqueueFails) throw new Error("db is down");
     repairQueue.set(forgejoRepoId, {
@@ -82,6 +84,7 @@ vi.mock("@beutl/db", () => ({
       name,
       intendedOwner: intendedOwner ?? null,
       intendedName: intendedName ?? null,
+      reservationId: reservationId ?? null,
     });
   },
   listGitRepositoryRepairs: async () =>
@@ -90,6 +93,7 @@ vi.mock("@beutl/db", () => ({
       .map((entry) => ({
         intendedOwner: null,
         intendedName: null,
+        reservationId: null,
         ...entry,
       })),
   claimGitRepositoryRepair: async () => leaseHeld,
@@ -126,12 +130,20 @@ vi.mock("@beutl/db", () => ({
     forgejoRepoId: number;
   }) => {
     const entry = reservations.get(id);
-    if (entry) entry.forgejoRepoId = forgejoRepoId;
+    if (!entry) return false;
+    entry.forgejoRepoId = forgejoRepoId;
+    // 本物は「自分の印の行に書けたか」を返す。
+    return true;
   },
   releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
     reservations.delete(id);
   },
   listExpiredGitRepositoryCreations: async () => staleReservations,
+  findGitRepositoryRepair: async ({
+    forgejoRepoId,
+  }: {
+    forgejoRepoId: number;
+  }) => repairQueue.get(forgejoRepoId) ?? null,
   claimGitRepositoryCreation: async () => true,
   renewGitRepositoryCreationLease: async () => true,
   releaseGitRepositoryReservationFor: async ({
@@ -251,6 +263,7 @@ let repairQueue = new Map<
     name: string;
     intendedOwner?: string | null;
     intendedName?: string | null;
+    reservationId?: string | null;
     needsReview?: boolean;
   }
 >();
@@ -1836,5 +1849,76 @@ describe("予約を握ったまま確かめる", () => {
     ).rejects.toBeTruthy();
 
     expect(reservations.size).toBe(1);
+  });
+});
+
+describe("予約を失った処理は止まる", () => {
+  it("作成の途中で引き取られていたら、そこで止める", async () => {
+    // 応答を待っている間に期限が切れて引き取られると、相手が予約を解放した後に
+    // 別の要求が同じ名前を取り、預かりものが 2 つになる。
+    const { createRepository } = await import("@beutl/forgejo");
+    let created = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        created = true;
+        // 作った後に引き取られた状態にする。
+        reservations.clear();
+        return json({ id: 41, name: "x", default_branch: "main" }, 201);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(created).toBe(true);
+    // 控えにも載せない。片付けは引き取った側の仕事。
+    expect(repairQueue.size).toBe(0);
+  });
+
+  it("第三者が最終名を持っていたら、予約を外さず控えに載せる", async () => {
+    // 「管理者が持っていない」だけを完成条件にすると、第三者が最終名を持って
+    // いる場合も完成と読んで予約を外してしまう。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "r9",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-holding-x",
+        forgejoRepoId: 51,
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/51")) {
+        return json({
+          id: 51,
+          name: "proj",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 9, login: "stranger" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    // 控えに載り、そこで人の確認に回る。
+    expect(repairQueue.get(51)).toMatchObject({ reservationId: "r9" });
   });
 });

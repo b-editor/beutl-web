@@ -9,6 +9,7 @@ import {
   renewGitRepositoryCreationLease,
   reserveGitRepositoryName,
   countGitRepositoryRepairsNeedingReview,
+  findGitRepositoryRepair,
   markGitRepositoryRepairNeedsReview,
   renewGitRepositoryRepairLease,
   countGitRepositoryRepairs,
@@ -484,6 +485,14 @@ const REPAIR_LEASE_MS = 10 * 60 * 1000;
 const CREATION_LEASE_MS = 10 * 60 * 1000;
 
 /**
+ * 予約を握って進める外部呼び出しの待ち時間の上限。
+ *
+ * **期限より短く切る。** 切らないと、応答を待っている間に期限が過ぎ、定期実行に
+ * 引き取られた後も自分は気付かないまま作成や改名を続けることになる。
+ */
+const HELD_REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
+
+/**
  * 控え 1 件を片付ける。@returns 控えを外してよいか。
  *
  * 控えには 2 種類ある。混ぜてはいけない。
@@ -620,6 +629,15 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
     }
 
     try {
+      // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
+      // 2 つに分かれる。渡し切った側が予約も外す。
+      if (entry.forgejoRepoId) {
+        const queuedAlready = await findGitRepositoryRepair({
+          forgejoRepoId: entry.forgejoRepoId,
+        });
+        if (queuedAlready) continue;
+      }
+
       // id が分かっていればそれで、分からなければ預かり名で引く。
       const holding = entry.forgejoRepoId
         ? await forgejoRequestOrNull<ForgejoRepository>(
@@ -627,15 +645,19 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
           )
         : await getRepository(admin, admin, entry.holdingName);
 
-      // 渡し終わっていない相手は、管理者が持っている場合とは限らない。譲渡だけ
-      // 済んで改名が残っていることもある。**最終形になっているときだけ**外す。
-      const unfinished =
+      // **最終形になっているときだけ**外す。最終形とは「渡す先が持っていて、
+      // 名前も最終名」であること。管理者以外が持っているだけでは足りない
+      // (第三者が最終名を持っている場合も同じ見え方になる)。
+      const settled =
         holding !== null &&
-        (holding.owner.login === admin || holding.name !== entry.name);
-      if (unfinished) {
+        holding.owner.login.toLowerCase() ===
+          entry.ownerUsername.toLowerCase() &&
+        holding.name.toLowerCase() === entry.name.toLowerCase();
+      if (holding && !settled) {
         // 控えに載せ替える。**予約は外さない。** ここで外すと、渡し終わる前に
         // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
-        // 外すのは渡し切った側 (settleRepositoryRepair)。
+        // 外すのは渡し切った側 (settleRepositoryRepair)。第三者が持っている
+        // 場合も、そこで人の確認に回る。
         await queueRepair(admin, holding, "abandoned before hand-over", {
           handover: {
             intendedOwner: entry.ownerUsername,
@@ -898,9 +920,11 @@ export async function createRepository(
     // 作る直前にも握りを確かめる。ここまでで期限が切れていたら、定期実行が
     // 予約を引き取っている。
     await holdReservation(reservation, reservationEpoch);
+    // 待ち時間は期限より短く切る (下の holdReservation まで届くように)。
     // Sudo を付けない = 管理者自身の名前空間に作る。
     holding = await forgejoRequest<ForgejoRepository>("/user/repos", {
       method: "POST",
+      timeoutMs: HELD_REQUEST_TIMEOUT_MS,
       body: {
         name: holdingName,
         description,
@@ -925,16 +949,21 @@ export async function createRepository(
 
   // 応答で初めて分かる id を予約に紐付ける。これで、この先どこで落ちても
   // 定期実行が id で引き直せる。
-  await attachGitRepositoryCreationId({
-    id: reservation,
-    intentId: reservationEpoch,
-    forgejoRepoId: holding.id,
-  }).catch((error) => {
-    console.error(
-      `could not attach ${holding.id} to the reservation of ${sudo}/${name}`,
-      error,
-    );
-  });
+  // **作った後にもう一度握りを確かめる。** 応答を待っている間に期限が切れて
+  // いれば、定期実行が予約を引き取っている。気付かずに進めると、相手が予約を
+  // 解放した後に別の要求が同じ名前を取り、預かりものが 2 つになる。
+  await holdReservation(reservation, reservationEpoch);
+
+  // 紐付けられない = 引き取られている。**続けない。**
+  if (
+    !(await attachGitRepositoryCreationId({
+      id: reservation,
+      intentId: reservationEpoch,
+      forgejoRepoId: holding.id,
+    }))
+  ) {
+    throw new RepairTakenOverError(holding.id);
+  }
 
   // 落ちても追えるように控える。渡す先と最終的な名前も一緒に控えないと、
   // 譲渡の前に落ちた預かりものが「揃っているから片付いた」と見なされ、
@@ -1024,12 +1053,13 @@ export async function renameRepository(
   name: string,
   newName: string,
 ) {
+  const renameEpoch = crypto.randomUUID();
   const reservation = await reserveGitRepositoryName({
     ownerUsername: owner,
     name: newName,
     // 改名では預かりものを作らない。一意制約のために名前そのものを入れる。
     holdingName: `beutl-rename-${crypto.randomUUID()}`,
-    intentId: crypto.randomUUID(),
+    intentId: renameEpoch,
     leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
   });
   try {
@@ -1038,14 +1068,20 @@ export async function renameRepository(
       {
         method: "PATCH",
         sudo,
+        // 期限より短く切る。待っている間に引き取られると、こちらが解放するのは
+        // 相手の予約になる。
+        timeoutMs: HELD_REQUEST_TIMEOUT_MS,
         body: { name: newName },
       },
     );
   } finally {
     // 成否によらず外す。名前は Forgejo 側で決着している。
-    await releaseGitRepositoryReservation({ id: reservation }).catch(
-      () => undefined,
-    );
+    // **自分の世代だけ**を外す。待っている間に引き取られていたら、相手の予約に
+    // なっているので触らない。
+    await releaseGitRepositoryReservation({
+      id: reservation,
+      intentId: renameEpoch,
+    }).catch(() => undefined);
   }
 }
 

@@ -261,3 +261,15 @@ export async function countGitRepositoryRepairs({
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryRepair.count({ where: { needsReview: false } });
 }
+
+/** 控えが積んであるか。予約の片付けが「これは控え側が持っている」と判断するのに使う。 */
+export async function findGitRepositoryRepair({
+  forgejoRepoId,
+  prisma,
+}: {
+  forgejoRepoId: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.gitRepositoryRepair.findUnique({ where: { forgejoRepoId } });
+}

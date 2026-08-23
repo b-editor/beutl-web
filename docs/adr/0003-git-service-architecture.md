@@ -432,9 +432,12 @@ PATCH /repos/{利用者}/{holding}            ({"name": "<本来の名前>"})
 名前空間に残っていないか確かめること)。
 
 ```sql
-SELECT "ownerUsername", lower("name"), count(*), array_agg("holdingName")
+SELECT lower("ownerUsername"), lower("name"), count(*), array_agg("holdingName")
 FROM "GitRepositoryCreation" GROUP BY 1, 2 HAVING count(*) > 1;
 ```
+
+所有者側も `20260824020000` で小文字へ揃える。生のまま残すと、`Someone/proj` と
+`someone/proj` が別の予約として通り続ける。
 
 **予約を取ってから Forgejo を見る。** 逆にすると、404 を見てから予約するまでの間に
 別の作成が最初から最後まで通り、こちらは古い 404 を信じて預かりものを作る。
@@ -581,7 +584,7 @@ stdout だけを見ると、見ているつもりで何も見ていないこと�
 
 ## この分岐を配備するときの前提
 
-この分岐は 13 本のマイグレーションを持ち込む。
+この分岐は 14 本のマイグレーションを持ち込む。
 
 ```
 20260816173000_add_git_account
@@ -597,6 +600,7 @@ stdout だけを見ると、見ているつもりで何も見ていないこと�
 20260823030000_add_git_repository_creation
 20260823040000_git_repository_creation_namespace
 20260824010000_git_repository_repair_reservation
+20260824020000_normalize_creation_owner
 ```
 
 **development クラスタには今のところ配備できない。** このクラスタには、まだ main に

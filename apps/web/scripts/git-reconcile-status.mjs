@@ -89,8 +89,13 @@ export function databaseIdentity(databaseUrl) {
   return `${url.hostname}:${url.port || "26257"}/${database}`;
 }
 
-/** 証拠が有効な長さ。作ってすぐ使う前提で短く切る。 */
-export const PROOF_TTL_SECONDS = 30 * 60;
+/**
+ * 証拠が有効な長さ。作ってすぐ使う前提で短く切る。
+ *
+ * git-server 側の上限より**短く**しておく。同じ値にすると、あちらの時計が
+ * わずかに遅れているだけで「期限が長すぎる」と拒まれる。
+ */
+export const PROOF_TTL_SECONDS = 10 * 60;
 
 export function signProof(payload, encodedKey) {
   // .env に PEM をそのまま置けないので base64 で持つ。
