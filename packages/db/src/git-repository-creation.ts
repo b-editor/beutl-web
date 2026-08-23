@@ -28,6 +28,16 @@ export function normalizeRepositoryName(name: string): string {
   return name.toLowerCase();
 }
 
+/**
+ * 所有者側の正規化。
+ *
+ * Forgejo のユーザー名も大文字小文字を区別しない。生の文字列で一意にすると、
+ * `someone/proj` と `Someone/proj` が別の予約として通ってしまう。
+ */
+export function normalizeOwnerName(owner: string): string {
+  return owner.toLowerCase();
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -57,7 +67,7 @@ export async function reserveGitRepositoryName({
   try {
     const row = await db.gitRepositoryCreation.create({
       data: {
-        ownerUsername,
+        ownerUsername: normalizeOwnerName(ownerUsername),
         name,
         normalizedName: normalizeRepositoryName(name),
         holdingName,
@@ -77,18 +87,22 @@ export async function reserveGitRepositoryName({
 /** 応答で分かったリポジトリ id を紐付ける。 */
 export async function attachGitRepositoryCreationId({
   id,
+  intentId,
   forgejoRepoId,
   prisma,
 }: {
   id: string;
+  /** 握っている印。引き取られた後の処理が書き換えないようにする。 */
+  intentId: string;
   forgejoRepoId: number;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitRepositoryCreation.updateMany({
-    where: { id },
+  const { count } = await db.gitRepositoryCreation.updateMany({
+    where: { id, intentId },
     data: { forgejoRepoId },
   });
+  return count === 1;
 }
 
 /**
@@ -100,30 +114,22 @@ export async function attachGitRepositoryCreationId({
  */
 export async function releaseGitRepositoryReservation({
   id,
+  intentId,
   prisma,
 }: {
   id: string;
+  /** 握っている印。渡すと自分の世代だけを外す。 */
+  intentId?: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitRepositoryCreation.deleteMany({ where: { id } });
+  const { count } = await db.gitRepositoryCreation.deleteMany({
+    where: { id, ...(intentId === undefined ? {} : { intentId }) },
+  });
+  return count === 1;
 }
 
-/** 渡し先と名前で外す。片付けが終わった側から呼ぶ。 */
-export async function releaseGitRepositoryReservationFor({
-  ownerUsername,
-  name,
-  prisma,
-}: {
-  ownerUsername: string;
-  name: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  await db.gitRepositoryCreation.deleteMany({
-    where: { ownerUsername, normalizedName: normalizeRepositoryName(name) },
-  });
-}
+
 
 /**
  * 期限が切れた予約。作成の途中で処理が消えたもの。

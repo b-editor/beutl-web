@@ -1775,3 +1775,66 @@ describe("作成の予約", () => {
     expect(repairQueue.size).toBe(0);
   });
 });
+
+describe("予約を握ったまま確かめる", () => {
+  it("Forgejo を見る前に予約を取る", async () => {
+    // 404 を見てから予約すると、その間に別の作成が最初から最後まで通り、
+    // こちらは古い 404 を信じて預かりものを作ってしまう。
+    const { createRepository } = await import("@beutl/forgejo");
+    const order: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        order.push(`lookup:reserved=${reservations.size}`);
+        return json({ id: 3, name: "proj", default_branch: "main" });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toMatchObject({ status: 409 });
+
+    // 不在確認の時点で、既に押さえてある。
+    expect(order).toEqual(["lookup:reserved=1"]);
+    // 衝突と分かったので予約は外す。
+    expect(reservations.size).toBe(0);
+  });
+
+  it("作成の応答を落としたら、404 でも予約を残す", async () => {
+    // Forgejo 側の処理が続いていて、後から現れることがある。ここで外すと、
+    // 追えない預かりものを残したまま同じ名前を再び予約できる。
+    const { createRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        return new Response("gateway timeout", { status: 504 });
+      }
+      // 預かり名でも今は見つからない。
+      return json({ message: "not found" }, 404);
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(reservations.size).toBe(1);
+  });
+});

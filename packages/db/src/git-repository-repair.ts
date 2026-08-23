@@ -16,6 +16,7 @@ export async function enqueueGitRepositoryRepair({
   name,
   intendedOwner,
   intendedName,
+  reservationId,
   intentId,
   leaseUntil,
   reason,
@@ -27,6 +28,8 @@ export async function enqueueGitRepositoryRepair({
   /** 管理者の手元で組み立て中なら、渡す先と最終的な名前。 */
   intendedOwner?: string;
   intendedName?: string;
+  /** どの予約から生まれたか。渡し切ったときにその世代だけを外すため。 */
+  reservationId?: string;
   /** 新しく積む場合に握る印と期限。**既にある行には効かない** (claim が決める)。 */
   intentId?: string;
   leaseUntil?: Date;
@@ -37,6 +40,7 @@ export async function enqueueGitRepositoryRepair({
   const handover = {
     ...(intendedOwner === undefined ? {} : { intendedOwner }),
     ...(intendedName === undefined ? {} : { intendedName }),
+    ...(reservationId === undefined ? {} : { reservationId }),
   };
   await db.gitRepositoryRepair.upsert({
     where: { forgejoRepoId },

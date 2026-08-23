@@ -6,7 +6,7 @@ import {
   countGitRepositoryCreations,
   listExpiredGitRepositoryCreations,
   releaseGitRepositoryReservation,
-  releaseGitRepositoryReservationFor,
+  renewGitRepositoryCreationLease,
   reserveGitRepositoryName,
   countGitRepositoryRepairsNeedingReview,
   markGitRepositoryRepairNeedsReview,
@@ -250,6 +250,7 @@ async function acquireRepair(
   repository: ForgejoRepository,
   reason: string,
   handover?: { intendedOwner: string; intendedName: string },
+  reservationId?: string,
 ): Promise<string> {
   const epoch = crypto.randomUUID();
   const leaseUntil = new Date(Date.now() + REPAIR_LEASE_MS);
@@ -257,6 +258,7 @@ async function acquireRepair(
   // ものが管理者の名前空間に残る。
   await queueRepair(owner, repository, reason, {
     handover,
+    reservationId,
     intentId: epoch,
     leaseUntil,
     required: handover !== undefined,
@@ -284,6 +286,21 @@ async function acquireRepair(
   throw new RepairTakenOverError(repository.id);
 }
 
+/**
+ * 予約を握っていることを確かめて期限を延ばす。握っていなければ投げる。
+ *
+ * **Forgejo を触る前に呼ぶ。** DB の書き込みだけを印で守っても、期限切れで
+ * 引き取られた側が作成や譲渡を続けられては意味が無い。
+ */
+async function holdReservation(id: string, epoch: string): Promise<void> {
+  const held = await renewGitRepositoryCreationLease({
+    id,
+    intentId: epoch,
+    leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+  });
+  if (!held) throw new RepairTakenOverError(-1);
+}
+
 /** 後で片付けるために控える。ここが失敗したら、もう記録は残らない。 */
 async function queueRepair(
   owner: string,
@@ -291,6 +308,7 @@ async function queueRepair(
   reason: string,
   options?: {
     handover?: { intendedOwner: string; intendedName: string };
+    reservationId?: string;
     intentId?: string;
     leaseUntil?: Date;
     /** 控えられなければ投げる。畳める相手 (預かりもの) で使う。 */
@@ -302,6 +320,7 @@ async function queueRepair(
     ownerUsername: owner,
     name: repository.name,
     ...options?.handover,
+    reservationId: options?.reservationId,
     intentId: options?.intentId,
     leaseUntil: options?.leaseUntil,
     reason,
@@ -480,6 +499,7 @@ async function settleRepositoryRepair(
     forgejoRepoId: number;
     intendedOwner: string | null;
     intendedName: string | null;
+    reservationId: string | null;
   },
   epoch: string,
 ): Promise<boolean> {
@@ -532,10 +552,11 @@ async function settleRepositoryRepair(
       entry.forgejoRepoId,
       epoch,
     );
-    await releaseGitRepositoryReservationFor({
-      ownerUsername: handover.owner,
-      name: handover.name,
-    }).catch(() => undefined);
+    if (entry.reservationId) {
+      await releaseGitRepositoryReservation({ id: entry.reservationId }).catch(
+        () => undefined,
+      );
+    }
     return true;
   }
   // 譲渡は済んでいて改名だけが残っている。
@@ -564,10 +585,11 @@ async function settleRepositoryRepair(
       throw error;
     }
   }
-  await releaseGitRepositoryReservationFor({
-    ownerUsername: handover.owner,
-    name: handover.name,
-  }).catch(() => undefined);
+  if (entry.reservationId) {
+    await releaseGitRepositoryReservation({ id: entry.reservationId }).catch(
+      () => undefined,
+    );
+  }
   return true;
 }
 
@@ -605,22 +627,28 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
           )
         : await getRepository(admin, admin, entry.holdingName);
 
-      if (holding && holding.owner.login === admin) {
-        // 預かったまま残っている。控えに載せ替える。**予約は外さない。**
-        // ここで外すと、渡し終わる前に同じ名前を再び予約でき、2 つの預かりものが
-        // 同じ相手に渡る。外すのは渡し切った側 (settleRepositoryRepair)。
+      // 渡し終わっていない相手は、管理者が持っている場合とは限らない。譲渡だけ
+      // 済んで改名が残っていることもある。**最終形になっているときだけ**外す。
+      const unfinished =
+        holding !== null &&
+        (holding.owner.login === admin || holding.name !== entry.name);
+      if (unfinished) {
+        // 控えに載せ替える。**予約は外さない。** ここで外すと、渡し終わる前に
+        // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
+        // 外すのは渡し切った側 (settleRepositoryRepair)。
         await queueRepair(admin, holding, "abandoned before hand-over", {
           handover: {
             intendedOwner: entry.ownerUsername,
             intendedName: entry.name,
           },
+          reservationId: entry.id,
           required: true,
         });
         continue;
       }
 
-      // 相手が居ない = 作られなかった。予約は不要。
-      await releaseGitRepositoryReservation({ id: entry.id });
+      // 相手が居ない (作られなかった) か、最終形になっている。予約は不要。
+      await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
     } catch (error) {
       // 分からないまま外さない。次の周回でやり直す。
       console.error(
@@ -813,10 +841,33 @@ export async function createRepository(
     description?: string;
   },
 ) {
-  // 先に不在を確かめる。作成 API が 502 や 504 で落ちたとき、衝突だったのか
-  // 応答を落としただけなのかは区別できない。
-  const conflicting = await getRepository(sudo, sudo, name);
+  // **予約を先に取る。** Forgejo で 404 を見てから予約を取ると、その間に別の
+  // 作成が最初から最後まで通り、こちらは古い 404 を信じて預かりものを作って
+  // しまう。名前を押さえてから見る。
+  const reservationEpoch = crypto.randomUUID();
+  const holdingName = `beutl-holding-${crypto.randomUUID()}`;
+  const reservation = await reserveGitRepositoryName({
+    ownerUsername: sudo,
+    name,
+    holdingName,
+    intentId: reservationEpoch,
+    leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+  });
+
+  const conflicting = await getRepository(sudo, sudo, name).catch(
+    async (error) => {
+      await releaseGitRepositoryReservation({
+        id: reservation,
+        intentId: reservationEpoch,
+      }).catch(() => undefined);
+      throw error;
+    },
+  );
   if (conflicting) {
+    await releaseGitRepositoryReservation({
+      id: reservation,
+      intentId: reservationEpoch,
+    }).catch(() => undefined);
     // テンプレートが揃っていれば普通の名前衝突。
     if (await hasTemplates(sudo, name)) {
       throw new ForgejoError(
@@ -842,25 +893,11 @@ export async function createRepository(
   }
 
   const admin = await getAdminUsername();
-  // この 1 回の作成にしか使わない名前。応答を落としても、この名前で引ければ
-  // 自分が作ったものだと言い切れる。
-  const holdingName = `beutl-holding-${crypto.randomUUID()}`;
-
-  // **Forgejo を触る前に予約する。** 上の不在確認だけでは、同じ名前の作成が
-  // 同時に来たときに両方が通り、両方が譲渡され、片方だけ改名に失敗して預かり名の
-  // まま利用者の手に残る。名前が埋まっていれば、ここで弾かれる。
-  // 預かり名も一緒に控えるので、201 の直後に落ちても相手を引き当てられる。
-  const reservationEpoch = crypto.randomUUID();
-  const reservation = await reserveGitRepositoryName({
-    ownerUsername: sudo,
-    name,
-    holdingName,
-    intentId: reservationEpoch,
-    leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
-  });
-
   let holding: ForgejoRepository;
   try {
+    // 作る直前にも握りを確かめる。ここまでで期限が切れていたら、定期実行が
+    // 予約を引き取っている。
+    await holdReservation(reservation, reservationEpoch);
     // Sudo を付けない = 管理者自身の名前空間に作る。
     holding = await forgejoRequest<ForgejoRepository>("/user/repos", {
       method: "POST",
@@ -876,22 +913,13 @@ export async function createRepository(
   } catch (error) {
     // 502/504 など。作られたのか作られていないのかが分からない。**自分の名前で**
     // 引き直す。他人の預かりものを拾うことはない。
-    // 「無い」と「確かめられなかった」を混ぜない。混ぜると、POST は通っていて
-    // 確認だけが落ちた場合に、追えない預かりものを残したまま予約まで外してしまう。
-    let existing: ForgejoRepository | null;
-    try {
-      existing = await getRepository(admin, admin, holdingName);
-    } catch {
-      // 分からない。予約は残す。期限が切れたら定期実行が引き取って判断する。
-      throw error;
-    }
-    if (!existing) {
-      // 作られていないと確かめられた。予約を外してよい。
-      await releaseGitRepositoryReservation({ id: reservation }).catch(
-        () => undefined,
-      );
-      throw error;
-    }
+    // **予約は残す。** POST が落ちたのか、応答だけが落ちたのかは分からない。
+    // この時点の 404 も確定ではない (Forgejo 側の処理が続いていて、後から
+    // 現れることがある)。期限が切れた後に定期実行が引き直して判断する。
+    const existing = await getRepository(admin, admin, holdingName).catch(
+      () => null,
+    );
+    if (!existing) throw error;
     holding = existing;
   }
 
@@ -899,6 +927,7 @@ export async function createRepository(
   // 定期実行が id で引き直せる。
   await attachGitRepositoryCreationId({
     id: reservation,
+    intentId: reservationEpoch,
     forgejoRepoId: holding.id,
   }).catch((error) => {
     console.error(
@@ -917,6 +946,7 @@ export async function createRepository(
       holding,
       "held for setup; not transferred yet",
       { intendedOwner: sudo, intendedName: name },
+      reservation,
     );
   } catch (error) {
     // 控えを作れなかった (DB に書けなかった)。このまま抜けると、名前も分からない
@@ -943,9 +973,10 @@ export async function createRepository(
     if (error instanceof RepairTakenOverError) throw error;
     // 利用者はまだ触れない。自分で作ったものなので畳んでやり直させる。
     if (await discardHolding(admin, holding, epoch)) {
-      await releaseGitRepositoryReservation({ id: reservation }).catch(
-        () => undefined,
-      );
+      await releaseGitRepositoryReservation({
+        id: reservation,
+        intentId: reservationEpoch,
+      }).catch(() => undefined);
     }
     throw error;
   }
@@ -963,16 +994,18 @@ export async function createRepository(
       forgejoRepoId: holding.id,
       intentId: epoch,
     }).catch(() => undefined);
-    await releaseGitRepositoryReservation({ id: reservation }).catch(
-      () => undefined,
-    );
+    await releaseGitRepositoryReservation({
+      id: reservation,
+      intentId: reservationEpoch,
+    }).catch(() => undefined);
     return handed;
   } catch (error) {
     if (error instanceof RepairTakenOverError) throw error;
     if (await discardHolding(admin, holding, epoch)) {
-      await releaseGitRepositoryReservation({ id: reservation }).catch(
-        () => undefined,
-      );
+      await releaseGitRepositoryReservation({
+        id: reservation,
+        intentId: reservationEpoch,
+      }).catch(() => undefined);
     }
     throw error;
   }

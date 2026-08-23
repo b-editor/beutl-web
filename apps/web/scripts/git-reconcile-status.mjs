@@ -20,7 +20,7 @@
 //     あちらの .env を読める人でも証拠は作れない。
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
-import { createPrivateKey, sign } from "node:crypto";
+import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 /**
@@ -117,10 +117,20 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    const pem = Buffer.from(key, "base64").toString("utf8");
+    const publicKey = createPublicKey(createPrivateKey(pem))
+      .export({ type: "spki", format: "pem" })
+      .toString();
     console.log(
-      "git-server の .env に GIT_REOPEN_SELFTEST_SIGNATURE として置いてください。\n",
+      "git-server の .env に GIT_REOPEN_SELFTEST_SIGNATURE として置いてください。\n" +
+        "**署名鍵を変えたら必ず作り直すこと。** 古い署名は古い公開鍵に対して\n" +
+        "通り続けるので、preflight は通るのに復旧時にだけ失敗します。\n" +
+        "下の公開鍵が git-server の GIT_REOPEN_PUBLIC_KEY と同じかも見てください。\n",
     );
     console.log(signProof(SELFTEST_PAYLOAD, key));
+    console.log(
+      `\nGIT_REOPEN_PUBLIC_KEY=${Buffer.from(publicKey).toString("base64")}`,
+    );
     return;
   }
 

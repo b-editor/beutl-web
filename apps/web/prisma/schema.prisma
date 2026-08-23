@@ -252,6 +252,9 @@ model GitRepositoryRepair {
   // 見なされ、管理者所有のまま残って同じ名前を永久に塞ぐ。
   intendedOwner String?
   intendedName  String?
+  // どの予約から生まれた控えか。渡し切ったときに**その世代の予約だけ**を外す。
+  // owner と名前で外すと、一度解放されて作り直された新しい予約を消してしまう。
+  reservationId String?
   createdAt     DateTime @default(now())
   // 掴んでいる 1 回の実行を指す。期限だけだと、期限切れで引き取られた側が
   // 息を吹き返したときに譲渡や控えの削除を続けられる。
