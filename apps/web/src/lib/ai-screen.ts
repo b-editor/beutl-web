@@ -261,6 +261,31 @@ export async function fileFingerprint(
 }
 
 /**
+ * 一覧から消えたモデルを、まだ回収していない依頼のために残す。
+ *
+ * 一覧は運営の都合で入れ替わる。選んでいたモデルがそこから消えたとき、既定へ
+ * 落とすと依頼の形が変わる——変わった形で送れば、サーバーは同じ名前の別の依頼
+ * として断り、支払い済みの結果へ戻る道が閉じる。名指しされたモデルは、一覧に
+ * 無くてもサーバーがそのまま受け取るので、その依頼が決着するまでは名乗り続ける。
+ *
+ * 新しく選べるようにはしない（available: false）——止められたモデルで新しい依頼
+ * を始めても、断られるだけなので。
+ */
+export function keepModelForHeldRequest(
+  models: readonly AiScreenModel[],
+  chosen: string,
+): AiScreenModel[] {
+  if (chosen === "" || models.some((model) => model.id === chosen)) {
+    return [...models];
+  }
+
+  return [
+    ...models,
+    { id: chosen, displayName: chosen, costTier: null, available: false },
+  ];
+}
+
+/**
  * 種として送られる値。
  *
  * 欄に書かれたままではなく、サーバーが読み取るのと同じ数にする——"1"、"01"、

@@ -9,6 +9,7 @@ import {
   keepsIdempotencyKey,
   newAiRequestNames,
   fileFingerprint,
+  keepModelForHeldRequest,
   requestSignature,
   seedValue,
   settleAiRequestName,
@@ -230,6 +231,50 @@ describe("what a screen reads before it names a request", () => {
     expect(requestSignature([one])).toBe(requestSignature([other]));
     expect(await fileFingerprint(one, 1024)).not.toBe(
       await fileFingerprint(other, 1024),
+    );
+  });
+});
+
+describe("which model a screen names", () => {
+  const offered = [
+    { id: "model-x", displayName: "Model X", costTier: null, available: true },
+  ] as const;
+
+  it("keeps a model the catalog dropped while its request is uncollected", () => {
+    // 一覧は運営の都合で入れ替わる。選んでいたモデルが消えたときに既定へ落とすと
+    // 依頼の形が変わり、サーバーは同じ名前の別の依頼として断る——支払い済みの
+    // 結果へ戻る道がそこで閉じる。
+    const kept = keepModelForHeldRequest(offered, "model-gone");
+
+    expect(kept.map((model) => model.id)).toEqual(["model-x", "model-gone"]);
+    // 新しく選べるようにはしない。止められたモデルで始めても断られるだけ。
+    expect(kept.at(-1)?.available).toBe(false);
+  });
+
+  it("leaves the list alone when the model is still on it", () => {
+    expect(keepModelForHeldRequest(offered, "model-x")).toEqual([...offered]);
+    expect(keepModelForHeldRequest(offered, "")).toEqual([...offered]);
+  });
+});
+
+describe("how a video frame is signed", () => {
+  it("reads the same frame the same way whatever the file is called", async () => {
+    // サーバーはフレームを中身と種類だけで見分ける。名前を数えると、場面から
+    // 切り出し直した同じ一枚が別の依頼になり、支払い済みのものへ戻れないまま
+    // 二度課金される。
+    const one = new File(["same frame"], "frame-a1b2.png", { type: "image/png" });
+    const other = new File(["same frame"], "frame-c3d4.png", { type: "image/png" });
+
+    const signatureOf = async (frame: File) =>
+      requestSignature([
+        "a prompt",
+        frame !== null,
+        await fileFingerprint(frame, 1024),
+      ]);
+
+    expect(await signatureOf(one)).toBe(await signatureOf(other));
+    expect(await signatureOf(one)).not.toBe(
+      await signatureOf(new File(["other frame"], "frame-a1b2.png", { type: "image/png" })),
     );
   });
 });

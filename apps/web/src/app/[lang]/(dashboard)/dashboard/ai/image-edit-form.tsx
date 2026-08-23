@@ -41,6 +41,7 @@ import {
   DownloadButton,
   IDEMPOTENCY_KEY_FIELD,
   IdempotencyKeyField,
+  keepModelForHeldRequest,
   requestSignature,
   useFileFingerprints,
   useAiRequestNames,
@@ -153,12 +154,10 @@ export function ImageEditForm({
   );
   // Each task is its own operation with its own models, so the list changes
   // under the picker. Rather than resetting it from an effect, a choice that no
-  // longer exists falls back to the new task's default.
-  const models = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
+  // longer exists falls back to the new task's default — except while a request
+  // built on it is still uncollected, which is what keeps that one on the list.
+  const offered = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
   const chosenModel = modelByTask[editTask] ?? "";
-  const selectedModel = models.some((entry) => entry.id === chosenModel)
-    ? chosenModel
-    : defaultModelId(models);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   // その依頼の署名。サーバーが指紋を取るのと同じものから作る——細かすぎれば、
   // サーバーには同じ依頼が別の名前で届いて二度課金され、粗すぎれば、別の依頼が
@@ -167,19 +166,37 @@ export function ImageEditForm({
   // prompt は前後の空白を落としてから、そしてそれを取る task のときだけ数える
   // （outpaint の前置きは task と prompt から決まるので、この 2 つで足りる）。
   // 引き伸ばし幅は送る絵そのものに焼き込まれるので、絵の見分けと一緒に動く。
-  const signature = requestSignature([
-    editTask,
-    selectedModel,
-    selected?.needsPrompt ? typedPrompt.trim() : null,
-    editTask === "outpaint" ? chosenExpansion : null,
-    sourceFile,
-    sourceContent,
-  ]);
-  // outpaint は送る直前に絵を広げ、その広げたあとの絵で名乗る。ここで名前の
-  // 有無を見るときも同じものを見ないと、回収できるはずの依頼で送信が閉じる。
-  const heldOutpaint = preparedFor[signature] ?? null;
-  const holdsName = names.holds(signature)
-    || (heldOutpaint !== null && names.holds(heldOutpaint));
+  const signatureWith = (model: string) =>
+    requestSignature([
+      editTask,
+      model,
+      selected?.needsPrompt ? typedPrompt.trim() : null,
+      editTask === "outpaint" ? chosenExpansion : null,
+      sourceFile,
+      sourceContent,
+    ]);
+  // outpaint は送る直前に絵を広げ、その広げたあとの絵で名乗る。名前の有無を
+  // 見るときも同じものを見ないと、回収できるはずの依頼で送信が閉じる。
+  function holdsSignature(request: string): boolean {
+    const prepared = preparedFor[request];
+    return names.holds(request)
+      || (prepared !== undefined && names.holds(prepared));
+  }
+  // 選んでいたモデルが一覧から消えても、そのモデルで出した依頼がまだ未回収なら
+  // 名乗り続ける。既定へ落とすと依頼の形が変わり、サーバーは同じ名前の別の依頼
+  // として断る——支払い済みの結果へ戻る道が、そこで閉じる。
+  const heldOnChosenModel =
+    chosenModel !== ""
+    && !offered.some((entry) => entry.id === chosenModel)
+    && holdsSignature(signatureWith(chosenModel));
+  const models = heldOnChosenModel
+    ? keepModelForHeldRequest(offered, chosenModel)
+    : offered;
+  const selectedModel = models.some((entry) => entry.id === chosenModel)
+    ? chosenModel
+    : defaultModelId(models);
+  const signature = signatureWith(selectedModel);
+  const holdsName = holdsSignature(signature);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
   const submitBlocked = blocksSubmit(blocked, holdsName);

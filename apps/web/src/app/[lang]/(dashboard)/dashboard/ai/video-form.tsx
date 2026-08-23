@@ -264,9 +264,12 @@ export function VideoForm({
     // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
     // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
     options.seed ? seedValue(videoSeed) : null,
-    options.firstFrame ? firstFrame : null,
+    // フレームは中身と、あるかないかだけ。サーバーはその名前を見ない——名前を
+    // 数えると、同じ一枚を別の名前で選び直しただけで別の依頼になり、支払い済み
+    // のものへ戻れないまま二度課金される。
+    options.firstFrame ? firstFrame !== null : null,
     options.firstFrame ? firstFrameContent : "",
-    options.firstFrame && options.lastFrame ? lastFrame : null,
+    options.firstFrame && options.lastFrame ? lastFrame !== null : null,
     options.firstFrame && options.lastFrame ? lastFrameContent : "",
   ]);
   // The same composition the action validates, so the counter measures what the

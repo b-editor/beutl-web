@@ -38,6 +38,7 @@ export {
   blocksSubmit,
   IDEMPOTENCY_KEY_FIELD,
   fileFingerprint,
+  keepModelForHeldRequest,
   keepsIdempotencyKey,
   requestSignature,
   seedValue,
