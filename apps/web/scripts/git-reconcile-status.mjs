@@ -78,8 +78,18 @@ export async function collectGitReconcileStatus(prisma, generation) {
  * 有効な時間を短く切る。**「その時点では終わっていた」ことしか示せない**ので、
  * 作ったらすぐ使う。
  */
+/**
+ * 証拠の版。
+ *
+ * 判定に使う項目を増やしたときに、古い署名側が作った証拠を受け取らないための
+ * 目印。版を上げれば、古い側の署名は検証に通らなくなる。
+ */
+export const PROOF_PROTOCOL = "beutl-reopen-v1";
+
 export function proofPayload({ nonce, environment, database, expiresAt }) {
-  return [nonce, environment, database, String(expiresAt)].join("\n");
+  return [PROOF_PROTOCOL, nonce, environment, database, String(expiresAt)].join(
+    "\n",
+  );
 }
 
 /** host:port/database。接続先を一意に指す。 */
@@ -136,6 +146,16 @@ async function main() {
     console.log(
       `\nGIT_REOPEN_PUBLIC_KEY=${Buffer.from(publicKey).toString("base64")}`,
     );
+    // 接続先も出す。git-server の GIT_REOPEN_DATABASE と突き合わせるため。
+    // 形だけ合っていても、実際に見に行く相手と違えば意味が無い。
+    if (process.env.DATABASE_URL) {
+      console.log(
+        `GIT_REOPEN_DATABASE=${databaseIdentity(process.env.DATABASE_URL)}`,
+      );
+    }
+    if (process.env.GIT_REOPEN_ENVIRONMENT) {
+      console.log(`GIT_REOPEN_ENVIRONMENT=${process.env.GIT_REOPEN_ENVIRONMENT}`);
+    }
     return;
   }
 

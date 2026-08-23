@@ -228,6 +228,9 @@ model GitRepositoryCreation {
   // ものとみなす。時間だけで古いと決めると、遅い作成を横から回収してしまう。
   intentId      String?
   leaseUntil    DateTime?
+  // 相手が見つからなくなった時刻。**1 回見つからないだけでは外さない。**
+  // 待つのをやめた後に Forgejo が確定させることがあるので、しばらく見続ける。
+  missingSince  DateTime?
 
   @@unique([ownerUsername, normalizedName])
   @@index([leaseUntil])

@@ -178,6 +178,51 @@ export async function claimGitRepositoryCreation({
   return count === 1;
 }
 
+/**
+ * 相手が見つからなかったことを記録する。
+ *
+ * **1 回で外さない。** 待つのをやめた後に Forgejo が確定させることがあるので、
+ * 最初に見失った時刻を控え、しばらく見続けてから判断する。
+ *
+ * @returns 最初に見失った時刻。既に控えてあればそれを返す。
+ */
+export async function markGitRepositoryCreationMissing({
+  id,
+  intentId,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  intentId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<Date | null> {
+  const db = prisma ?? (await getDb());
+  await db.gitRepositoryCreation.updateMany({
+    where: { id, intentId, missingSince: null },
+    data: { missingSince: now },
+  });
+  const row = await db.gitRepositoryCreation.findUnique({ where: { id } });
+  return row?.missingSince ?? null;
+}
+
+/** 見つかったので、見失った記録を消す。 */
+export async function clearGitRepositoryCreationMissing({
+  id,
+  intentId,
+  prisma,
+}: {
+  id: string;
+  intentId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitRepositoryCreation.updateMany({
+    where: { id, intentId },
+    data: { missingSince: null },
+  });
+}
+
 /** 期限を延ばす。**自分の印であるときだけ**通る。 */
 export async function renewGitRepositoryCreationLease({
   id,

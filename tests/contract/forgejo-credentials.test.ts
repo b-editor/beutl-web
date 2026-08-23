@@ -139,6 +139,8 @@ vi.mock("@beutl/db", () => ({
     reservations.delete(id);
   },
   listExpiredGitRepositoryCreations: async () => staleReservations,
+  markGitRepositoryCreationMissing: async () => new Date(),
+  clearGitRepositoryCreationMissing: async () => undefined,
   findGitRepositoryRepair: async ({
     forgejoRepoId,
   }: {
@@ -1920,5 +1922,48 @@ describe("予約を失った処理は止まる", () => {
 
     // 控えに載り、そこで人の確認に回る。
     expect(repairQueue.get(51)).toMatchObject({ reservationId: "r9" });
+  });
+});
+
+describe("結果が分からない操作は予約を残す", () => {
+  it("改名が 5xx で終わったら予約を残す", async () => {
+    // abort や 5xx は「Forgejo が確定させなかった」証明にはならない。ここで
+    // 外すと、その間に別の作成が同じ名前を取り、後から着地した改名とぶつかる。
+    const { renameRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/old")) {
+        return json({ id: 61, name: "old", default_branch: "main" });
+      }
+      if (method === "PATCH") return json({ message: "boom" }, 502);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      renameRepository("someone", "someone", "old", "new"),
+    ).rejects.toBeTruthy();
+
+    expect(reservations.size).toBe(1);
+  });
+
+  it("改名が 4xx で断られたら予約を外す", async () => {
+    // 受け付けられなかったと言い切れる。押さえ続ける理由が無い。
+    const { renameRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/old")) {
+        return json({ id: 62, name: "old", default_branch: "main" });
+      }
+      if (method === "PATCH") return json({ message: "taken" }, 409);
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      renameRepository("someone", "someone", "old", "new"),
+    ).rejects.toBeTruthy();
+
+    expect(reservations.size).toBe(0);
   });
 });

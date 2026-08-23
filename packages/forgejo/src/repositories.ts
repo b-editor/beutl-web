@@ -3,6 +3,8 @@ import {
   auditLogActions,
   claimGitRepositoryRepair,
   claimGitRepositoryCreation,
+  clearGitRepositoryCreationMissing,
+  markGitRepositoryCreationMissing,
   countGitRepositoryCreations,
   listExpiredGitRepositoryCreations,
   releaseGitRepositoryReservation,
@@ -493,6 +495,15 @@ const CREATION_LEASE_MS = 10 * 60 * 1000;
 const HELD_REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
 
 /**
+ * 相手が見つからない予約を諦めるまでの幅。
+ *
+ * 待つのをやめた後も Forgejo 側の処理は続くことがある。1 回見つからないだけで
+ * 予約を外すと、その後に現れた預かりものが誰にも追われないまま残り、名前も
+ * 空いてしまう。しばらく見続けてから外す。
+ */
+const CREATION_MISSING_GRACE_MS = 30 * 60 * 1000;
+
+/**
  * 控え 1 件を片付ける。@returns 控えを外してよいか。
  *
  * 控えには 2 種類ある。混ぜてはいけない。
@@ -658,6 +669,11 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
         // 外すのは渡し切った側 (settleRepositoryRepair)。第三者が持っている
         // 場合も、そこで人の確認に回る。
+        // 見つかったので、見失った記録は消す。
+        await clearGitRepositoryCreationMissing({
+          id: entry.id,
+          intentId: epoch,
+        });
         await queueRepair(admin, holding, "abandoned before hand-over", {
           handover: {
             intendedOwner: entry.ownerUsername,
@@ -669,7 +685,31 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         continue;
       }
 
-      // 相手が居ない (作られなかった) か、最終形になっている。予約は不要。
+      if (!holding) {
+        // **1 回見つからないだけでは外さない。** 待つのをやめた後に Forgejo が
+        // 確定させることがある。しばらく見続けて、それでも現れなければ外す。
+        const missingSince = await markGitRepositoryCreationMissing({
+          id: entry.id,
+          intentId: epoch,
+        });
+        if (
+          missingSince &&
+          Date.now() - missingSince.getTime() < CREATION_MISSING_GRACE_MS
+        ) {
+          continue;
+        }
+        await releaseGitRepositoryReservation({
+          id: entry.id,
+          intentId: epoch,
+        });
+        continue;
+      }
+
+      // 最終形になっている。予約は不要。
+      await clearGitRepositoryCreationMissing({
+        id: entry.id,
+        intentId: epoch,
+      });
       await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
     } catch (error) {
       // 分からないまま外さない。次の周回でやり直す。
@@ -1053,17 +1093,35 @@ export async function renameRepository(
   name: string,
   newName: string,
 ) {
+  // 予約に相手の id を控える。改名の結果が分からなくなった場合、定期実行が
+  // これで引き直して決着を付ける。
+  const current = await getRepository(sudo, owner, name);
+  if (!current) {
+    throw new ForgejoError(
+      404,
+      "PATCH",
+      `/repos/${owner}/${name}`,
+      `repository ${owner}/${name} does not exist`,
+    );
+  }
+
   const renameEpoch = crypto.randomUUID();
   const reservation = await reserveGitRepositoryName({
     ownerUsername: owner,
     name: newName,
-    // 改名では預かりものを作らない。一意制約のために名前そのものを入れる。
+    // 改名では預かりものを作らない。一意制約のために別の名前を入れる。
     holdingName: `beutl-rename-${crypto.randomUUID()}`,
     intentId: renameEpoch,
     leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
   });
+  await attachGitRepositoryCreationId({
+    id: reservation,
+    intentId: renameEpoch,
+    forgejoRepoId: current.id,
+  }).catch(() => undefined);
+
   try {
-    return await forgejoRequest<ForgejoRepository>(
+    const renamed = await forgejoRequest<ForgejoRepository>(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       {
         method: "PATCH",
@@ -1074,14 +1132,30 @@ export async function renameRepository(
         body: { name: newName },
       },
     );
-  } finally {
-    // 成否によらず外す。名前は Forgejo 側で決着している。
-    // **自分の世代だけ**を外す。待っている間に引き取られていたら、相手の予約に
-    // なっているので触らない。
+    // 通った。名前は決着しているので予約を外す。
     await releaseGitRepositoryReservation({
       id: reservation,
       intentId: renameEpoch,
     }).catch(() => undefined);
+    return renamed;
+  } catch (error) {
+    // **結果が分からない場合は予約を残す。** 待つのをやめただけで、Forgejo が
+    // 後から確定させることがある。ここで外すと、その間に別の作成が同じ名前を
+    // 取り、後から着地した改名とぶつかる。
+    //
+    // 4xx は「受け付けられなかった」と言い切れるので外してよい。5xx と、
+    // 待ち時間切れなどの例外は残す。定期実行が id で引き直して決着を付ける。
+    const decided =
+      error instanceof ForgejoError &&
+      error.status >= 400 &&
+      error.status < 500;
+    if (decided) {
+      await releaseGitRepositoryReservation({
+        id: reservation,
+        intentId: renameEpoch,
+      }).catch(() => undefined);
+    }
+    throw error;
   }
 }
 

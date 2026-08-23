@@ -41,6 +41,18 @@ export function isForgejoConfigured(): boolean {
   );
 }
 
+/**
+ * すべての API 呼び出しの既定の待ち時間 (ミリ秒)。
+ *
+ * 期限付きの印を握って進める処理がいくつもある。待ち続ける呼び出しが 1 つでも
+ * 残っていると、そこで期限を追い越し、引き取られた後も自分は気付かないまま
+ * 外部への変更を続けてしまう。**既定で切る**。
+ *
+ * 管理 API の応答は通常 1 秒未満。大きいのは purge くらいで、それでもこの幅に
+ * 収まる。個別に伸ばしたい場合は timeoutMs で上書きする。
+ */
+const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
+
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   /** JSON として送るリクエストボディ。 */
@@ -58,13 +70,7 @@ type RequestOptions = {
   searchParams?: Record<string, string | number | boolean | undefined>;
   /** レスポンスをテキストとして受け取る (raw ファイルの取得など)。 */
   responseType?: "json" | "text" | "none";
-  /**
-   * 待ち時間の上限 (ミリ秒)。
-   *
-   * 既定では待ち続ける。期限付きの印を握って進める処理では、**その期限より短く
-   * 切る**こと。切らないと、応答を待っている間に握りが切れ、引き取られた後も
-   * 自分は気付かないまま外部への変更を続けることになる。
-   */
+  /** 待ち時間の上限 (ミリ秒)。既定は DEFAULT_TIMEOUT_MS。 */
   timeoutMs?: number;
   config?: ForgejoConfig;
 };
@@ -109,9 +115,7 @@ async function request(
     method,
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    ...(options.timeoutMs === undefined
-      ? {}
-      : { signal: AbortSignal.timeout(options.timeoutMs) }),
+    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   });
 
   if (!response.ok) {
