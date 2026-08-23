@@ -489,6 +489,18 @@ describe("uploading a file too large for one request", () => {
       .toBe("missing");
   });
 
+  it("stops placing marks even when the cancellations arrive together", async () => {
+    // 数えるのと書くのが別々だと、同時に届いた取り消しがどれも「まだ上限より下」
+    // を読み、いくらでも置けてしまう。一続きにしてあれば、同時に来ても上限で
+    // 止まる。
+    await Promise.all(
+      Array.from({ length: 32 }, () =>
+        cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() })),
+    );
+
+    expect(state.storageUploads.size).toBe(16);
+  });
+
   it("keeps the size of a claimed upload against the quota", async () => {
     // 掃除が「捨てる」と宣言しても、中止に失敗しているあいだ、そのパートは
     // 本当にバケットにある。枠から外すと、実際の使用量が枠の外に出る。

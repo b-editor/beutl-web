@@ -8,7 +8,9 @@ import {
   holdsAiRequestName,
   keepsIdempotencyKey,
   newAiRequestNames,
+  fileFingerprint,
   requestSignature,
+  seedValue,
   settleAiRequestName,
   type AiAccess,
 } from "../../apps/web/src/lib/ai-screen";
@@ -189,6 +191,45 @@ describe("how a request is signed", () => {
       requestSignature([
         new File(["same bytes"], "other.wav", { type: "audio/wav" }),
       ]),
+    );
+  });
+});
+
+describe("what a screen reads before it names a request", () => {
+  it("counts a seed the way the server reads it", () => {
+    // サーバーは Number() で読む。欄に書かれたままを数えると、"1"、"01"、"1.0"
+    // が三つの名前になり、同じ依頼が三度課金される。
+    expect(seedValue("1")).toBe(seedValue("01"));
+    expect(seedValue("1")).toBe(seedValue("1.0"));
+    expect(requestSignature([seedValue("1")])).toBe(
+      requestSignature([seedValue(" 1 ")]),
+    );
+    // 種のない依頼と、種の欄が空の依頼は同じもの——サーバーはどちらでも seed を
+    // 載せない。
+    expect(seedValue("")).toBeNull();
+    expect(seedValue("   ")).toBeNull();
+    // 数として読めないものは名前にしない。サーバーはそれを断るので、粗いほうへ
+    // 外れても失うものはない。
+    expect(seedValue("abc")).toBeNull();
+  });
+
+  it("does not read a file the request is not allowed to send", async () => {
+    // 送っても断られるものを丸ごとメモリに載せると、その前にタブのほうが落ちる。
+    const file = new File(["0123456789"], "big.png", { type: "image/png" });
+
+    expect(await fileFingerprint(file, 4)).toBe("");
+    expect(await fileFingerprint(file, 10)).not.toBe("");
+  });
+
+  it("tells apart files a name and a size alone would merge", async () => {
+    // 中身の違う同名同サイズの絵。中身を見ないと同じ依頼に見え、片方が走って
+    // いる間もう片方を始められない。
+    const one = new File(["aaaa"], "same.png", { type: "image/png" });
+    const other = new File(["bbbb"], "same.png", { type: "image/png" });
+
+    expect(requestSignature([one])).toBe(requestSignature([other]));
+    expect(await fileFingerprint(one, 1024)).not.toBe(
+      await fileFingerprint(other, 1024),
     );
   });
 });

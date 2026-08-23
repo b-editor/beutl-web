@@ -18,7 +18,13 @@ import { Textarea } from "@beutl/ui/ui/textarea";
 import { useToast } from "@beutl/ui/use-toast";
 import { AudioLines, Languages, Merge, Plus, Scissors, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState, type ChangeEvent } from "react";
+import {
+  useActionState,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
 import { MAX_AI_TRANSCRIPTION_UPLOAD_BYTES } from "@beutl/core";
 import {
   AudioExtractionError,
@@ -52,8 +58,8 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
-  fileFingerprint,
   requestSignature,
+  useFileFingerprints,
   useAiRequestNames,
   downloadTextFile,
   defaultModelId,
@@ -126,7 +132,6 @@ export function TranscribeForm({
   // 送ることになる音声の見分け。動画から抜き出したときは、抜き出したほうを見る
   // ——送られるのはそちらで、サーバーはそれを指紋にする。
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [audioContent, setAudioContent] = useState<string>("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["audio.transcribe"] ?? []),
   );
@@ -170,6 +175,12 @@ export function TranscribeForm({
   // 何も書かない——そのまま数えると、同じ依頼が別の名前になって二度課金される。
   // 長さと中身のハッシュはその音声から決まるので、音声の見分けで足りる。
   const chosenLanguage = language === "auto" ? "" : language;
+  // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
+  // 音声が同じ依頼に見え、片方が走っている間もう片方を始められない。
+  const audioFiles = useMemo(() => (audioFile ? [audioFile] : []), [audioFile]);
+  const { contents: audioContents, reading: readingAudio } =
+    useFileFingerprints(audioFiles, MAX_AI_TRANSCRIPTION_UPLOAD_BYTES);
+  const audioContent = audioContents[0] ?? "";
   const signature = requestSignature([
     model,
     chosenLanguage,
@@ -183,21 +194,11 @@ export function TranscribeForm({
   // that carries video, and the audio alone is a fraction of the size. The
   // converted file replaces what the field holds, so the form still submits
   // exactly what the user picked.
-  // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
-  // 音声が同じ依頼に見え、片方が走っている間もう片方を始められない。
-  function rememberAudio(file: File | null) {
-    setAudioFile(file);
-    setAudioContent("");
-    if (file) {
-      void fileFingerprint(file).then(setAudioContent).catch(() => undefined);
-    }
-  }
-
   async function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
     const file = input.files?.[0];
     setExtractionError(null);
-    rememberAudio(file ?? null);
+    setAudioFile(file ?? null);
     if (!file) {
       setAudioName("transcription");
       return;
@@ -214,10 +215,10 @@ export function TranscribeForm({
       const transfer = new DataTransfer();
       transfer.items.add(audio);
       input.files = transfer.files;
-      rememberAudio(audio);
+      setAudioFile(audio);
     } catch (error) {
       input.value = "";
-      rememberAudio(null);
+      setAudioFile(null);
       setExtractionError(
         error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
       );
@@ -421,7 +422,9 @@ export function TranscribeForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPending}
-          disabled={submitBlocked || isPending}
+          // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
+          // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
+          disabled={submitBlocked || isPending || readingAudio}
         >
           {t("dashboard:ai.transcribe")}
         </SubmitButton>

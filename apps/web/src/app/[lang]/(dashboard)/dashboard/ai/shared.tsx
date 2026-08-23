@@ -40,6 +40,7 @@ export {
   fileFingerprint,
   keepsIdempotencyKey,
   requestSignature,
+  seedValue,
   type AiAccess,
   type AiBalance,
   type AiBlockReason,
@@ -48,6 +49,7 @@ export {
 import {
   aiRequestNameOf,
   commitAiRequestName,
+  fileFingerprint,
   holdsAiRequestName,
   IDEMPOTENCY_KEY_FIELD,
   newAiRequestNames,
@@ -265,6 +267,44 @@ export function AiUsageCard({
 // attempt — but only then. A run that is still going, or one whose paid result
 // could not be read, is not settled: the name it was sent under is the way back
 // to what it already bought, and a new one would buy it again.
+/**
+ * 選ばれているファイルの中身の見分けと、まだ読めていないかどうか。
+ *
+ * 読み終える前に送れてしまうと、中身の分からないまま作った名前で課金され、
+ * 読み終えた時点で名前が変わって、やり直しが二度目の課金になる。読んでいる間は
+ * 送らせない。
+ *
+ * 遅れて届いた読み取りは捨てる。A を選んですぐ B に変えると、A の読み取りが
+ * B の見分けとして収まり、B が A の名前で送られる。
+ */
+export function useFileFingerprints(
+  files: readonly File[],
+  limit: number,
+): { contents: string[]; reading: boolean } {
+  const [read, setRead] = useState<{ files: readonly File[]; contents: string[] }>(
+    { files: [], contents: [] },
+  );
+
+  useEffect(() => {
+    let current = true;
+    void Promise.all(files.map((file) => fileFingerprint(file, limit)))
+      .then((contents) => {
+        if (current) setRead({ files, contents });
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [files, limit]);
+
+  const ready = read.files.length === files.length
+    && read.files.every((file, index) => file === files[index]);
+  return {
+    contents: ready ? read.contents : [],
+    reading: files.length > 0 && !ready,
+  };
+}
+
 /**
  * 送信ごとの名前を、依頼ごとに持っておく。どれを残しどれを手放すかは
  * {@link commitAiRequestName} と {@link settleAiRequestName} が決める。

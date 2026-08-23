@@ -642,21 +642,28 @@ async function recordCancellation(
     // 応えて書くものなので。抱えているものが無いぶん枠にも本数にも数えられず、
     // 数だけが増えるので、ここで限る。1 つのブラウザが同時に始められる本数を
     // 超えて必要になることはない。
-    const placed = await countStorageUploadTombstonesByUserId({ userId });
-    if (placed >= MAX_ACTIVE_UPLOADS) return "missing";
+    //
+    // 数えるのと書くのは一続きにする。別々にすると、同時に届いた取り消しが
+    // どれも「まだ上限より下」を読み、いくらでも置けてしまう。
+    const placed = await startRetryableTransaction(async (prisma) => {
+      const already = await countStorageUploadTombstonesByUserId({ userId, prisma });
+      if (already >= MAX_ACTIVE_UPLOADS) return false;
 
-    await createStorageUpload({
-      userId,
-      id: uploadId,
-      objectKey: "",
-      uploadId: "",
-      name: "",
-      mimeType: "application/octet-stream",
-      size: BigInt(0),
-      partSize: STORAGE_UPLOAD_PART_BYTES,
-      abandonedAt: new Date(),
+      await createStorageUpload({
+        userId,
+        id: uploadId,
+        objectKey: "",
+        uploadId: "",
+        name: "",
+        mimeType: "application/octet-stream",
+        size: BigInt(0),
+        partSize: STORAGE_UPLOAD_PART_BYTES,
+        abandonedAt: new Date(),
+        prisma,
+      });
+      return true;
     });
-    return "cancelled";
+    return placed ? "cancelled" : "missing";
   } catch {
     // 一瞬の差で行のほうが現れた。もう一度来てもらえば、そちらを片付ける。
     return "missing";

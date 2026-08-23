@@ -247,9 +247,27 @@ export function settleAiRequestName(
  * 片方が走っている間、もう片方は同じ名前で送られて断られ、そちらの依頼を始め
  * られない。読むのは選ばれた時の一度だけで、送るたびではない。
  */
-export async function fileFingerprint(file: File): Promise<string> {
+export async function fileFingerprint(
+  file: File,
+  // 依頼が許されている大きさ。これを超えるものは読まない——送っても断られる
+  // ものを丸ごとメモリに載せると、その前にタブのほうが落ちる。
+  limit: number,
+): Promise<string> {
+  if (file.size > limit) return "";
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/**
+ * 種として送られる値。
+ *
+ * 欄に書かれたままではなく、サーバーが読み取るのと同じ数にする——"1"、"01"、
+ * "1.0" はどれも 1 で、そのまま数えると同じ依頼が三つの名前に割れる。
+ */
+export function seedValue(text: string): number | null {
+  if (text.trim() === "") return null;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
 }

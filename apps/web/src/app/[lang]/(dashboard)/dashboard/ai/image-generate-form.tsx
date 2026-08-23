@@ -19,13 +19,17 @@ import { Shimmer } from "@beutl/ui/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { ImageIcon, X } from "lucide-react";
 import {
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
 } from "react";
 
-import { MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES } from "@beutl/api";
+import {
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
+} from "@beutl/api";
 import {
   AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
@@ -51,9 +55,10 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
-  fileFingerprint,
   keepsIdempotencyKey,
   requestSignature,
+  seedValue,
+  useFileFingerprints,
   useAiRequestNames,
   defaultModelId,
   downloadFromUrl,
@@ -155,7 +160,6 @@ export function ImageGenerateForm({
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [background, setBackground] = useState<AiImageBackground>("auto");
   const [references, setReferences] = useState<File[]>([]);
-  const [referenceContents, setReferenceContents] = useState<string[]>([]);
   const [seed, setSeed] = useState("");
   const referenceInput = useRef<HTMLInputElement>(null);
 
@@ -175,15 +179,22 @@ export function ImageGenerateForm({
   const referencesTooLarge =
     references.reduce((total, file) => total + file.size, 0) >
       options.maxReferenceImagesTotalBytes;
+  // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
+  // 同じ依頼に見え、片方が走っている間もう片方を始められない。送れないと分かって
+  // いる選び方のものは読まない——名前には要らず、合計の分だけ抱えるだけになる。
+  const readableReferences = useMemo(
+    () => (tooManyReferences || referencesTooLarge ? [] : references),
+    [references, tooManyReferences, referencesTooLarge],
+  );
+  const { contents: referenceContents, reading: readingReferences } =
+    useFileFingerprints(readableReferences, MAX_AI_IMAGE_UPLOAD_BYTES);
 
   const blocked = blockedReason(
     access,
     ["image.generate"],
     (access.models["image.generate"] ?? []).length === 0,
   );
-  // サーバーが指紋を取るのと同じものから。文章はここにある材料から組み立てられ
-  // るので、材料をそのまま数える。種は入力欄の中にあって描画のたびには読めない
-  // ——そのぶんこの署名は粗いが、粗いほうへ外れるのは安全側だ。
+  // サーバーが指紋を取るのと同じものから。
   const signature = requestSignature([
     model,
     // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
@@ -192,7 +203,9 @@ export function ImageGenerateForm({
     composePrompt({ main: prompt, style, composition, exclusions }),
     ratio,
     chosenBackground,
-    options.seed ? seed : "",
+    // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
+    // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
+    options.seed ? seedValue(seed) : null,
     ...references,
     ...referenceContents,
   ]);
@@ -213,12 +226,6 @@ export function ImageGenerateForm({
   // only way to send more than one.
   function applyReferences(files: File[]) {
     setReferences(files);
-    // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
-    // 絵が同じ依頼に見え、片方が走っている間もう片方を始められない。
-    setReferenceContents([]);
-    void Promise.all(files.map(fileFingerprint))
-      .then(setReferenceContents)
-      .catch(() => undefined);
     const selection = new DataTransfer();
     for (const file of files) selection.items.add(file);
     if (referenceInput.current) referenceInput.current.files = selection.files;
@@ -247,7 +254,15 @@ export function ImageGenerateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || submitBlocked || tooManyReferences || referencesTooLarge) {
+    // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
+    // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
+    if (
+      isPending
+      || submitBlocked
+      || tooManyReferences
+      || referencesTooLarge
+      || readingReferences
+    ) {
       return;
     }
 
@@ -551,7 +566,8 @@ export function ImageGenerateForm({
             submitBlocked ||
             tooManyReferences ||
             referencesTooLarge ||
-            isPending
+            isPending ||
+            readingReferences
           }
         >
           {t("dashboard:ai.generate")}

@@ -19,6 +19,7 @@ import {
 import {
   useActionState,
   useEffect,
+  useMemo,
   useState,
   useTransition,
   type ChangeEvent,
@@ -30,6 +31,7 @@ import {
   aiImageEditTaskRequiresPrompt,
   type AiImageEditTask,
 } from "@beutl/core";
+import { MAX_AI_IMAGE_UPLOAD_BYTES } from "@beutl/api";
 import { editImageAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
@@ -39,8 +41,8 @@ import {
   DownloadButton,
   IDEMPOTENCY_KEY_FIELD,
   IdempotencyKeyField,
-  fileFingerprint,
   requestSignature,
+  useFileFingerprints,
   useAiRequestNames,
   ResultPanel,
   ResultShimmer,
@@ -104,12 +106,20 @@ export function ImageEditForm({
   // 選ばれている絵の見分け。中身までは読まないが、名前・大きさ・更新時刻が
   // 変われば別の絵で、サーバーの指紋も変わる。
   const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [sourceContent, setSourceContent] = useState<string>("");
   // 直前に広げた絵の名乗り。どの中身から広げたのかも一緒に覚えておく——画面が
   // 変わったら、その名乗りはもうこの画面のものではない。
-  const [preparedFor, setPreparedFor] = useState<
-    { from: string; signature: string } | null
-  >(null);
+  // 広げた絵での名乗りを、元の絵での名乗りから引けるようにしておく。二つ以上の
+  // 依頼が同時に未回収になり得るので、一件だけ覚えていては足りない。
+  const [preparedFor, setPreparedFor] = useState<Record<string, string>>({});
+  // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
+  // 同じ依頼に見え、片方が走っている間もう片方を始められない。
+  const sourceFiles = useMemo(
+    () => (sourceFile ? [sourceFile] : []),
+    [sourceFile],
+  );
+  const { contents: sourceContents, reading: readingSource } =
+    useFileFingerprints(sourceFiles, MAX_AI_IMAGE_UPLOAD_BYTES);
+  const sourceContent = sourceContents[0] ?? "";
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
@@ -167,7 +177,7 @@ export function ImageEditForm({
   ]);
   // outpaint は送る直前に絵を広げ、その広げたあとの絵で名乗る。ここで名前の
   // 有無を見るときも同じものを見ないと、回収できるはずの依頼で送信が閉じる。
-  const heldOutpaint = preparedFor?.from === signature ? preparedFor.signature : null;
+  const heldOutpaint = preparedFor[signature] ?? null;
   const holdsName = names.holds(signature)
     || (heldOutpaint !== null && names.holds(heldOutpaint));
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
@@ -191,7 +201,9 @@ export function ImageEditForm({
     hasTask: editTask !== "",
     taskUnaffordable,
     taskHasNoModel,
-    busy: isPending || isPreparing,
+    // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
+    // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
+    busy: isPending || isPreparing || readingSource,
   });
 
   async function prepareOutpaintFile(
@@ -260,7 +272,7 @@ export function ImageEditForm({
             prepared,
           ]);
           names.commit(preparedSignature);
-          setPreparedFor({ from: signature, signature: preparedSignature });
+          setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
           next.set(IDEMPOTENCY_KEY_FIELD, names.nameFor(preparedSignature));
           dispatch(next);
         } catch {
@@ -280,13 +292,7 @@ export function ImageEditForm({
   function handleSourceChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     setSourceFile(file ?? null);
-    setSourceContent("");
     setSourcePreview(file ? URL.createObjectURL(file) : null);
-    // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
-    // 絵が同じ依頼に見え、片方が走っている間もう片方を始められない。
-    if (file) {
-      void fileFingerprint(file).then(setSourceContent).catch(() => undefined);
-    }
   }
 
   function applyTemplate(template: PromptTemplate) {

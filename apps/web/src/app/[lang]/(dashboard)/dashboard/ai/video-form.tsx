@@ -19,7 +19,13 @@ import {
 import { Slider } from "@beutl/ui/ui/slider";
 import { Clapperboard, Clock, Coins, History } from "lucide-react";
 import Link from "next/link";
-import { useActionState, useEffect, useState, type ChangeEvent } from "react";
+import {
+  useActionState,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
 import {
   AI_MAX_SEED,
   AI_MIN_SEED,
@@ -28,6 +34,7 @@ import {
   AI_VIDEO_RESOLUTIONS,
   MAX_AI_PROMPT_LENGTH,
 } from "@beutl/core";
+import { MAX_AI_VIDEO_FRAME_UPLOAD_BYTES } from "@beutl/api";
 import { composePrompt } from "@/lib/ai-prompt";
 import { createVideoAction } from "./actions";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
@@ -41,27 +48,14 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
-  fileFingerprint,
   requestSignature,
+  seedValue,
+  useFileFingerprints,
   useAiRequestNames,
   defaultModelId,
   type AiAccess,
 } from "./shared";
 
-
-// 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
-// 同じ依頼に見え、片方が走っている間もう片方を始められない。
-function rememberFrame(
-  file: File | null,
-  setFile: (file: File | null) => void,
-  setContent: (content: string) => void,
-) {
-  setFile(file);
-  setContent("");
-  if (file) {
-    void fileFingerprint(file).then(setContent).catch(() => undefined);
-  }
-}
 
 function FramePicker({
   id,
@@ -212,9 +206,7 @@ export function VideoForm({
   const [videoExclusions, setVideoExclusions] = useState("");
   const [videoSeed, setVideoSeed] = useState("");
   const [firstFrame, setFirstFrame] = useState<File | null>(null);
-  const [firstFrameContent, setFirstFrameContent] = useState<string>("");
   const [lastFrame, setLastFrame] = useState<File | null>(null);
-  const [lastFrameContent, setLastFrameContent] = useState<string>("");
 
   const models = access.models["video.generate"] ?? [];
   const names = useAiRequestNames();
@@ -234,6 +226,18 @@ export function VideoForm({
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
   // A model that cannot produce sound would refuse the request outright.
   const audio = options.generateAudio && generateAudio;
+  // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
+  // 同じ依頼に見え、片方が走っている間もう片方を始められない。
+  const frames = useMemo(
+    () => [firstFrame, lastFrame].filter((frame): frame is File => frame !== null),
+    [firstFrame, lastFrame],
+  );
+  const { contents: frameContents, reading: readingFrames } =
+    useFileFingerprints(frames, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+  const firstFrameContent = firstFrame ? frameContents[0] ?? "" : "";
+  const lastFrameContent = lastFrame
+    ? frameContents[firstFrame ? 1 : 0] ?? ""
+    : "";
   // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。文章はここに
   // ある材料から組み立てられるので、材料をそのまま数える。種とフレームは入力欄
   // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
@@ -257,7 +261,9 @@ export function VideoForm({
     // 送るのはモデルの都合を通したあとの値。押した状態そのままを数えると、音を
     // 出せないモデルでは同じ依頼が別の名前になり、二度課金される。
     audio,
-    options.seed ? videoSeed : "",
+    // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
+    // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
+    options.seed ? seedValue(videoSeed) : null,
     options.firstFrame ? firstFrame : null,
     options.firstFrame ? firstFrameContent : "",
     options.firstFrame && options.lastFrame ? lastFrame : null,
@@ -499,7 +505,7 @@ export function VideoForm({
               name="firstFrame"
               label={t("dashboard:ai.firstFrame")}
               hint={t("dashboard:ai.firstFrameHint")}
-              onPick={(file) => rememberFrame(file, setFirstFrame, setFirstFrameContent)}
+              onPick={setFirstFrame}
             />
           )}
           {options.lastFrame && (
@@ -508,7 +514,7 @@ export function VideoForm({
               name="lastFrame"
               label={t("dashboard:ai.lastFrame")}
               hint={t("dashboard:ai.lastFrameHint")}
-              onPick={(file) => rememberFrame(file, setLastFrame, setLastFrameContent)}
+              onPick={setLastFrame}
             />
           )}
         </AdvancedOptions>
@@ -523,7 +529,9 @@ export function VideoForm({
         <SubmitButton
           className="w-full"
           forceSpinner={isPending}
-          disabled={submitBlocked || isPending}
+          // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
+          // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
+          disabled={submitBlocked || isPending || readingFrames}
         >
           {t("dashboard:ai.generate")}
         </SubmitButton>
