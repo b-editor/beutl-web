@@ -39,6 +39,7 @@ import {
   DownloadButton,
   IDEMPOTENCY_KEY_FIELD,
   IdempotencyKeyField,
+  fileFingerprint,
   requestSignature,
   useAiRequestNames,
   ResultPanel,
@@ -103,6 +104,12 @@ export function ImageEditForm({
   // 選ばれている絵の見分け。中身までは読まないが、名前・大きさ・更新時刻が
   // 変われば別の絵で、サーバーの指紋も変わる。
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceContent, setSourceContent] = useState<string>("");
+  // 直前に広げた絵の名乗り。どの中身から広げたのかも一緒に覚えておく——画面が
+  // 変わったら、その名乗りはもうこの画面のものではない。
+  const [preparedFor, setPreparedFor] = useState<
+    { from: string; signature: string } | null
+  >(null);
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
@@ -156,8 +163,13 @@ export function ImageEditForm({
     selected?.needsPrompt ? typedPrompt.trim() : null,
     editTask === "outpaint" ? chosenExpansion : null,
     sourceFile,
+    sourceContent,
   ]);
-  const holdsName = names.holds(signature);
+  // outpaint は送る直前に絵を広げ、その広げたあとの絵で名乗る。ここで名前の
+  // 有無を見るときも同じものを見ないと、回収できるはずの依頼で送信が閉じる。
+  const heldOutpaint = preparedFor?.from === signature ? preparedFor.signature : null;
+  const holdsName = names.holds(signature)
+    || (heldOutpaint !== null && names.holds(heldOutpaint));
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
   const submitBlocked = blocksSubmit(blocked, holdsName);
@@ -240,6 +252,7 @@ export function ImageEditForm({
           // サーバーが指紋にするのは、この広げたあとの絵。元の絵と広げ幅から
           // 名乗ると、別々の元絵と幅が同じ絵になったときに、同じ依頼が二つの
           // 名前に割れて二度課金される。
+          setModelByTask((current) => ({ ...current, [editTask]: selectedModel }));
           const preparedSignature = requestSignature([
             editTask,
             selectedModel,
@@ -247,6 +260,7 @@ export function ImageEditForm({
             prepared,
           ]);
           names.commit(preparedSignature);
+          setPreparedFor({ from: signature, signature: preparedSignature });
           next.set(IDEMPOTENCY_KEY_FIELD, names.nameFor(preparedSignature));
           dispatch(next);
         } catch {
@@ -259,13 +273,20 @@ export function ImageEditForm({
     }
 
     names.commit(signature);
+    setModelByTask((current) => ({ ...current, [editTask]: selectedModel }));
     dispatch(formData);
   }
 
   function handleSourceChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     setSourceFile(file ?? null);
+    setSourceContent("");
     setSourcePreview(file ? URL.createObjectURL(file) : null);
+    // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
+    // 絵が同じ依頼に見え、片方が走っている間もう片方を始められない。
+    if (file) {
+      void fileFingerprint(file).then(setSourceContent).catch(() => undefined);
+    }
   }
 
   function applyTemplate(template: PromptTemplate) {

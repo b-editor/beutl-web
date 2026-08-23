@@ -37,6 +37,7 @@ export {
   blockedReason,
   blocksSubmit,
   IDEMPOTENCY_KEY_FIELD,
+  fileFingerprint,
   keepsIdempotencyKey,
   requestSignature,
   type AiAccess,

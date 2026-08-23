@@ -115,6 +115,21 @@ export async function claimStorageUploadForAbandon({
   return result.count > 0;
 }
 
+// 取り消しの墓標の数。まだ現れていない名前の取り消しを書き留めたもので、
+// 抱えているものは無い——だからこそ、いくらでも置けてしまってはいけない。
+export async function countStorageUploadTombstonesByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  return await db.storageUpload.count({
+    where: { userId, uploadId: "", abandonedAt: { not: null } },
+  });
+}
+
 // まだ終わっていないアップロードの本数。完了済みの控えは数えない——パートは
 // もう無く、抱えているものが無いので。
 export async function countStorageUploadsByUserId({

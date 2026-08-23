@@ -7,6 +7,7 @@ import {
 import {
   claimStorageUploadForAbandon,
   countFilesByUserId,
+  countStorageUploadTombstonesByUserId,
   createFile,
   countStorageUploadsByUserId,
   createStorageUpload,
@@ -637,6 +638,13 @@ async function recordCancellation(
   uploadId: string,
 ): Promise<CancelOutcome> {
   try {
+    // 墓標は誰でも、どんな名前にでも置ける——そんな名前は無い、という取り消しに
+    // 応えて書くものなので。抱えているものが無いぶん枠にも本数にも数えられず、
+    // 数だけが増えるので、ここで限る。1 つのブラウザが同時に始められる本数を
+    // 超えて必要になることはない。
+    const placed = await countStorageUploadTombstonesByUserId({ userId });
+    if (placed >= MAX_ACTIVE_UPLOADS) return "missing";
+
     await createStorageUpload({
       userId,
       id: uploadId,

@@ -41,12 +41,27 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
+  fileFingerprint,
   requestSignature,
   useAiRequestNames,
   defaultModelId,
   type AiAccess,
 } from "./shared";
 
+
+// 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
+// 同じ依頼に見え、片方が走っている間もう片方を始められない。
+function rememberFrame(
+  file: File | null,
+  setFile: (file: File | null) => void,
+  setContent: (content: string) => void,
+) {
+  setFile(file);
+  setContent("");
+  if (file) {
+    void fileFingerprint(file).then(setContent).catch(() => undefined);
+  }
+}
 
 function FramePicker({
   id,
@@ -197,7 +212,9 @@ export function VideoForm({
   const [videoExclusions, setVideoExclusions] = useState("");
   const [videoSeed, setVideoSeed] = useState("");
   const [firstFrame, setFirstFrame] = useState<File | null>(null);
+  const [firstFrameContent, setFirstFrameContent] = useState<string>("");
   const [lastFrame, setLastFrame] = useState<File | null>(null);
+  const [lastFrameContent, setLastFrameContent] = useState<string>("");
 
   const models = access.models["video.generate"] ?? [];
   const names = useAiRequestNames();
@@ -242,7 +259,9 @@ export function VideoForm({
     audio,
     options.seed ? videoSeed : "",
     options.firstFrame ? firstFrame : null,
+    options.firstFrame ? firstFrameContent : "",
     options.firstFrame && options.lastFrame ? lastFrame : null,
+    options.firstFrame && options.lastFrame ? lastFrameContent : "",
   ]);
   // The same composition the action validates, so the counter measures what the
   // server will.
@@ -480,7 +499,7 @@ export function VideoForm({
               name="firstFrame"
               label={t("dashboard:ai.firstFrame")}
               hint={t("dashboard:ai.firstFrameHint")}
-              onPick={setFirstFrame}
+              onPick={(file) => rememberFrame(file, setFirstFrame, setFirstFrameContent)}
             />
           )}
           {options.lastFrame && (
@@ -489,7 +508,7 @@ export function VideoForm({
               name="lastFrame"
               label={t("dashboard:ai.lastFrame")}
               hint={t("dashboard:ai.lastFrameHint")}
-              onPick={setLastFrame}
+              onPick={(file) => rememberFrame(file, setLastFrame, setLastFrameContent)}
             />
           )}
         </AdvancedOptions>

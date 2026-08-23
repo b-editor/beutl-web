@@ -465,10 +465,28 @@ describe("uploading a file too large for one request", () => {
     });
 
     expect(refused).toEqual({ ok: false, reason: "uploadFailed" });
-    // 墓標は何も抱えていないので、次の掃除で消える。
-    const swept = await abandonStaleStorageUploads(new Date());
-    expect(swept).toEqual({ abandoned: 1, failed: 0 });
+    // すぐには消さない。遅れて現れる開始を止めるために置いたものなので、その
+    // 開始より先に消えては意味がない。
+    expect(await abandonStaleStorageUploads(new Date()))
+      .toEqual({ abandoned: 0, failed: 0 });
+    expect(state.storageUploads.size).toBe(1);
+
+    const later = new Date(Date.now() + 16 * 60 * 1000);
+    expect(await abandonStaleStorageUploads(later))
+      .toEqual({ abandoned: 1, failed: 0 });
     expect(state.storageUploads.size).toBe(0);
+  });
+
+  it("stops placing marks for uploads that never appear", async () => {
+    // 墓標はどんな名前にも置けるので、数だけが際限なく増える。抱えているものが
+    // 無いぶん枠にも本数にも数えられないから、ここで限る。
+    for (let index = 0; index < 20; index++) {
+      await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() });
+    }
+
+    expect(state.storageUploads.size).toBe(16);
+    expect(await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
+      .toBe("missing");
   });
 
   it("keeps the size of a claimed upload against the quota", async () => {

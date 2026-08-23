@@ -51,6 +51,7 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  fileFingerprint,
   keepsIdempotencyKey,
   requestSignature,
   useAiRequestNames,
@@ -154,6 +155,7 @@ export function ImageGenerateForm({
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [background, setBackground] = useState<AiImageBackground>("auto");
   const [references, setReferences] = useState<File[]>([]);
+  const [referenceContents, setReferenceContents] = useState<string[]>([]);
   const [seed, setSeed] = useState("");
   const referenceInput = useRef<HTMLInputElement>(null);
 
@@ -192,6 +194,7 @@ export function ImageGenerateForm({
     chosenBackground,
     options.seed ? seed : "",
     ...references,
+    ...referenceContents,
   ]);
   const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName);
@@ -210,6 +213,12 @@ export function ImageGenerateForm({
   // only way to send more than one.
   function applyReferences(files: File[]) {
     setReferences(files);
+    // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
+    // 絵が同じ依頼に見え、片方が走っている間もう片方を始められない。
+    setReferenceContents([]);
+    void Promise.all(files.map(fileFingerprint))
+      .then(setReferenceContents)
+      .catch(() => undefined);
     const selection = new DataTransfer();
     for (const file of files) selection.items.add(file);
     if (referenceInput.current) referenceInput.current.files = selection.files;

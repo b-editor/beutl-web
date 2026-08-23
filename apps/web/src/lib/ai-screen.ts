@@ -144,11 +144,12 @@ export function canSubmitAiRequest({
  * 値。ここが細かすぎると、サーバーには同じ依頼が別の名前で届いて二度課金され、
  * 粗すぎると、別の依頼が同じ名前で届いて断られるだけで済む。迷うなら粗いほうへ。
  *
- * ファイルは名前と大きさで見分ける。更新時刻も、ブラウザが名乗る種類も見ない
- * ——更新時刻は同じ中身を作り直すたびに変わり（動画から抜き出した音声がそう
- * なる）、種類はサーバー側で中身から見直されて image/jpg が image/jpeg に、
- * 空が audio/mpeg に揃えられる。どちらも、同じものが別の依頼に化ける。サーバー
- * は中身のハッシュで見分けるので、こちらが粗い。
+ * ファイルは、名前と{@link fileFingerprint}で読んだ中身で見分ける。更新時刻も、
+ * ブラウザが名乗る種類も見ない——更新時刻は同じ中身を作り直すたびに変わり（動画
+ * から抜き出した音声がそうなる）、種類はサーバー側で中身から見直されて image/jpg
+ * が image/jpeg に、空が audio/mpeg に揃えられる。どちらも、同じものが別の依頼に
+ * 化ける。中身を読んでいないファイルは名前と大きさだけで見分けるので、その分だけ
+ * 粗い。
  */
 export function requestSignature(
   parts: readonly (string | number | boolean | null | undefined | File)[],
@@ -237,4 +238,18 @@ export function settleAiRequestName(
   const held = { ...names.held };
   delete held[names.sent];
   return { ...names, held };
+}
+
+/**
+ * ファイルの中身の見分け。サーバーが指紋にするのと同じもの。
+ *
+ * 名前と大きさだけでは、中身の違う同名同サイズのファイルが同じ依頼に見える——
+ * 片方が走っている間、もう片方は同じ名前で送られて断られ、そちらの依頼を始め
+ * られない。読むのは選ばれた時の一度だけで、送るたびではない。
+ */
+export async function fileFingerprint(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }

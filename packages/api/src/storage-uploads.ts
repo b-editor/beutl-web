@@ -28,6 +28,9 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 // would be retried until the end of time; after this long the row is dropped
 // and the bucket's own lifecycle rules are what is left.
 const GIVE_UP_AFTER_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+// 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
+// なので、開始の要求が生きていられるより長く。
+const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
 // 取った行のキーに、完成したオブジェクトが残っていないか。
@@ -86,8 +89,17 @@ export async function abandonStaleStorageUploads(
       if (!current.abandonedAt) continue;
     }
 
-    // 取り消しの墓標。抱えているものは何も無いので、消せばそれで終わり。
+    // 取り消しの墓標。抱えているものは何も無いので、消せばそれで終わり——ただし
+    // すぐには消さない。これは「まだ現れていない開始」を止めるために置いたもの
+    // で、その開始が現れるより先に消すと、止めるつもりだったものが素通りする。
     if (upload.uploadId === "") {
+      if (
+        upload.createdAt.getTime() >
+          now.getTime() - TOMBSTONE_GRACE_MILLISECONDS
+      ) {
+        continue;
+      }
+
       await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
       abandoned++;
       continue;

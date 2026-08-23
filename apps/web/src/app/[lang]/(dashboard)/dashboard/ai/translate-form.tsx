@@ -248,8 +248,15 @@ export function TranslateForm({
     targetLanguage,
     charactersPerLine ?? null,
     lines ?? null,
+    // 台詞の時刻も依頼の一部。読みやすさをその時間に合わせるために送っている
+    // ので、数えないと、時刻だけ違う依頼が同じ名前で送られて断られる。
     ...(parsed.ok
-      ? parsed.segments.flatMap((segment) => [segment.id, segment.text])
+      ? parsed.segments.flatMap((segment, index) => [
+        segment.id,
+        segment.text,
+        sourceCues?.[index]?.start ?? null,
+        sourceCues?.[index]?.end ?? null,
+      ])
       : [source]),
     // 語彙集は並べ替えてから数える。サーバーは指紋を取るときに鍵を並べ替える
     // ので、行を入れ替えただけでは同じ依頼——数える順を揃えないと、別の名前で

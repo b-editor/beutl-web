@@ -279,8 +279,9 @@ type StorageUploadRecord = {
 type StorageUploadWhere = {
   id?: string;
   userId?: string;
+  uploadId?: string;
   completedFileId?: string | null;
-  abandonedAt?: Date | null;
+  abandonedAt?: Date | null | { not: null };
 };
 
 function matchesStorageUploadWhere(
@@ -290,10 +291,18 @@ function matchesStorageUploadWhere(
   if (!where) return true;
   if (where.id !== undefined && item.id !== where.id) return false;
   if (where.userId !== undefined && item.userId !== where.userId) return false;
+  if (where.uploadId !== undefined && item.uploadId !== where.uploadId) return false;
   if (where.completedFileId === null && item.completedFileId !== null) {
     return false;
   }
   if (where.abandonedAt === null && item.abandonedAt !== null) return false;
+  if (
+    where.abandonedAt !== null &&
+    typeof where.abandonedAt === "object" &&
+    item.abandonedAt === null
+  ) {
+    return false;
+  }
   return true;
 }
 
