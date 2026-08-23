@@ -19,6 +19,7 @@ type Row = {
   createdAt: Date;
   leaseUntil: Date | null;
   purgedAt: Date | null;
+  checkedGeneration: string | null;
   attempts: number;
   lastAttemptAt: Date | null;
   lastError: string | null;
@@ -27,6 +28,8 @@ type Row = {
 const rows = new Map<string, Row>();
 let liveUsers = new Set<string>();
 let audited: { action: string; details: string | null }[] = [];
+/** 今の復元世代。確認した墓標に書かれることを確かめる。 */
+let generation: string | null = "gen-1";
 
 type Filter = Record<string, unknown>;
 
@@ -121,6 +124,7 @@ const fakeDb = {
         createdAt: new Date(),
         leaseUntil: (create.leaseUntil as Date) ?? null,
         purgedAt: null,
+        checkedGeneration: null,
         attempts: 0,
         lastAttemptAt: null,
         lastError: null,
@@ -200,6 +204,7 @@ vi.mock("@beutl/db", async (importOriginal) => {
       actual.recordGitAccountDeletionAttempt,
     ),
     findGitAccountByUserId: async () => null,
+    currentGitRestoreGeneration: async () => generation,
   };
 });
 
@@ -242,6 +247,7 @@ function tombstone(overrides: Partial<Row> = {}) {
     createdAt: new Date(0),
     leaseUntil: null,
     purgedAt: new Date(0),
+    checkedGeneration: null,
     attempts: 0,
     lastAttemptAt: null,
     lastError: null,
@@ -262,6 +268,7 @@ beforeEach(() => {
   rows.clear();
   liveUsers = new Set(["u1"]);
   audited = [];
+  generation = "gen-1";
   process.env.FORGEJO_BASE_URL = "https://git.example.test";
   process.env.FORGEJO_ADMIN_TOKEN = "admin-token";
   process.env.FORGEJO_PROXY_SECRET = "proxy-secret";
@@ -692,7 +699,8 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     expect(rows.get("u1")?.lastAttemptAt).not.toBeNull();
   });
 
-  it("最近見たものは飛ばす", async () => {
+  it("最近見たものは飛ばす (新しい復元が無いとき)", async () => {
+    generation = null;
     tombstone({ lastAttemptAt: new Date() });
     liveUsers.delete("u1");
     respondWith(purgedUser);
@@ -701,5 +709,18 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
       reconcileGitAccountDeletionTombstones(),
     ).resolves.toMatchObject({ checked: 0, remaining: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("新しい復元があれば、間隔を待たずに見直す", async () => {
+    // 待たせると、復元の後 git を止めている時間が確認の間隔ぶん延びる。
+    tombstone({ lastAttemptAt: new Date(), checkedGeneration: "gen-0" });
+    liveUsers.delete("u1");
+    respondWith(null);
+
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, remaining: 0 });
+    // 見た世代を書く。これで「この復元より後に確認した」が時計抜きで分かる。
+    expect(rows.get("u1")?.checkedGeneration).toBe("gen-1");
   });
 });

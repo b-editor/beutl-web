@@ -6,6 +6,7 @@ import {
   countGitAccountDeletions,
   countGitAccountDeletionsNeedingReview,
   countPurgedGitAccountDeletionsToCheck,
+  currentGitRestoreGeneration,
   createAuditLog,
   deleteGitAccountDeletion,
   listPurgedGitAccountDeletions,
@@ -638,6 +639,9 @@ export async function reconcileGitAccountDeletionTombstones({
   remaining: number;
 }> {
   const checkedBefore = new Date(Date.now() - TOMBSTONE_RECHECK_MS);
+  // 今の復元世代。確認した墓標にこれを書く。復元の後、全件を見直したことを
+  // 時計に頼らず数えられるようにするため。
+  const generation = await currentGitRestoreGeneration();
   let checked = 0;
   let repurged = 0;
   let review = 0;
@@ -648,6 +652,7 @@ export async function reconcileGitAccountDeletionTombstones({
   for (let round = 1; round <= (drain ? 200 : 1); round++) {
     const tombstones = await listPurgedGitAccountDeletions({
       checkedBefore,
+      generation,
       limit,
     });
     if (tombstones.length === 0) break;
@@ -683,6 +688,7 @@ export async function reconcileGitAccountDeletionTombstones({
             await touchGitAccountDeletion({
               userId: tombstone.userId,
               intentId: epoch,
+              generation,
             });
             checked += 1;
             progressed += 1;
@@ -696,6 +702,7 @@ export async function reconcileGitAccountDeletionTombstones({
             await touchGitAccountDeletion({
               userId: tombstone.userId,
               intentId: epoch,
+              generation,
             });
             checked += 1;
             progressed += 1;
@@ -721,38 +728,56 @@ export async function reconcileGitAccountDeletionTombstones({
           continue;
         }
 
-        // 名前が別人に渡っていることがある。控えた id と合成メールの**両方**が
-        // 一致するものだけを本人とみなす (退会の経路と同じ契約)。
         const expectedEmail = noreplyEmailFor(tombstone.userId);
-        const matchesRecord =
-          actual.email === expectedEmail &&
-          (tombstone.forgejoUserId === null ||
-            tombstone.forgejoUserId === actual.id);
-        if (!matchesRecord) {
-          // この名前は別人のもの。**本人が別名で生き返っていないか**を確かめる。
-          // ここで諦めると、名前を取られた本人の復活を永久に見逃す。
+
+        // 控えた名前が別人のものになっていることがある。その場合でも、本人が
+        // 別名で生き返っていないかを合成メールで確かめる。諦めると、名前を
+        // 取られた本人の復活を永久に見逃す。
+        if (actual.email !== expectedEmail) {
           const byEmail = await findByNoreplyEmail(tombstone.userId);
           const renamed = byEmail
             ? await forgejoRequestOrNull<ForgejoUser>(
                 `/users/${encodeURIComponent(byEmail.username)}`,
               )
             : null;
-          const renamedMatches =
-            renamed !== null &&
-            renamed.email === expectedEmail &&
-            (tombstone.forgejoUserId === null ||
-              tombstone.forgejoUserId === renamed.id);
-          if (!renamedMatches) {
+          if (!renamed || renamed.email !== expectedEmail) {
+            // このメールを持つアカウントはどこにも無い。消えたままで確定。
             await touchGitAccountDeletion({
               userId: tombstone.userId,
               intentId: epoch,
+              generation,
             });
             checked += 1;
             progressed += 1;
             continue;
           }
-          username = renamed!.login;
-          actual = renamed!;
+          username = renamed.login;
+          actual = renamed;
+        }
+
+        // ここから先、相手は「この利用者のメールを持つアカウント」。**消えては
+        // いない。** 控えた id と食い違う場合、消して作り直されたのか、復元の
+        // 仕方が違うのか、こちらの控えでは説明が付かない。
+        //
+        // **確認済みにしてはいけない。** 生きたトークンを残したまま「見終わった」
+        // と数えると、復元後の公開判定がそれを 0 と読む。人の確認に回す。
+        if (
+          tombstone.forgejoUserId !== null &&
+          tombstone.forgejoUserId !== actual.id
+        ) {
+          if (
+            await sendToReview(
+              tombstone.userId,
+              epoch,
+              `Forgejo user ${username} holds <${expectedEmail}> but is id ` +
+                `${actual.id}, recorded as ${tombstone.forgejoUserId}`,
+            )
+          ) {
+            review += 1;
+          }
+          checked += 1;
+          progressed += 1;
+          continue;
         }
 
         // 復活している。端末のトークンも一緒に戻っているので、消し直す。
@@ -772,6 +797,7 @@ export async function reconcileGitAccountDeletionTombstones({
         await markGitAccountDeletionPurged({
           userId: tombstone.userId,
           intentId: epoch,
+          generation,
         });
         await audit(
           auditLogActions.git.accountResurrected,
@@ -806,7 +832,10 @@ export async function reconcileGitAccountDeletionTombstones({
     repurged,
     review,
     failed,
-    remaining: await countPurgedGitAccountDeletionsToCheck({ checkedBefore }),
+    remaining: await countPurgedGitAccountDeletionsToCheck({
+      checkedBefore,
+      generation,
+    }),
   };
 }
 

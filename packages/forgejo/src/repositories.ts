@@ -3,6 +3,7 @@ import {
   claimGitRepositoryRepair,
   countGitRepositoryRepairsNeedingReview,
   markGitRepositoryRepairNeedsReview,
+  renewGitRepositoryRepairLease,
   countGitRepositoryRepairs,
   createAuditLog,
   deleteGitRepositoryRepair,
@@ -203,18 +204,94 @@ async function lockRepository(
   return true;
 }
 
+/**
+ * 掴んでいることを確かめて期限を延ばす。握っていなければ投げる。
+ *
+ * **Forgejo を触る前に必ず呼ぶ。** DB の書き込みだけを印で守っても、期限切れで
+ * 引き取られた側が unarchive・commit・transfer・rename を続けられては意味が無い。
+ */
+async function holdRepair(forgejoRepoId: number, epoch: string): Promise<void> {
+  const held = await renewGitRepositoryRepairLease({
+    forgejoRepoId,
+    intentId: epoch,
+    leaseUntil: new Date(Date.now() + REPAIR_LEASE_MS),
+  });
+  if (!held) {
+    throw new RepairTakenOverError(forgejoRepoId);
+  }
+}
+
+/** 掴んでいた控えを他の実行に引き取られた。ここで止める。 */
+export class RepairTakenOverError extends Error {
+  constructor(readonly forgejoRepoId: number) {
+    super(`Repository repair ${forgejoRepoId} is held by another run`);
+    this.name = "RepairTakenOverError";
+  }
+}
+
+/**
+ * 控えを積み、**自分が握る**。
+ *
+ * 積むだけでは足りない。積んだ瞬間から定期実行が掴めるので、そのまま進めると
+ * 前面の処理と定期実行が同じ相手を同時に譲渡でき、印を持たない削除が相手の行を
+ * 消す。掴んでから進める。
+ *
+ * @returns 握った印。掴めなければ投げる (相手が進めているので任せる)。
+ */
+async function acquireRepair(
+  owner: string,
+  repository: ForgejoRepository,
+  reason: string,
+  handover?: { intendedOwner: string; intendedName: string },
+): Promise<string> {
+  const epoch = crypto.randomUUID();
+  const leaseUntil = new Date(Date.now() + REPAIR_LEASE_MS);
+  await queueRepair(owner, repository, reason, {
+    handover,
+    intentId: epoch,
+    leaseUntil,
+  });
+  // 新しく積んだ場合はここで既に自分のもの。既にあった場合は奪えたときだけ進む。
+  if (
+    await renewGitRepositoryRepairLease({
+      forgejoRepoId: repository.id,
+      intentId: epoch,
+      leaseUntil,
+    })
+  ) {
+    return epoch;
+  }
+  if (
+    await claimGitRepositoryRepair({
+      forgejoRepoId: repository.id,
+      intentId: epoch,
+      notAttemptedSince: new Date(Date.now() - REPAIR_COOLDOWN_MS),
+      leaseUntil,
+    })
+  ) {
+    return epoch;
+  }
+  throw new RepairTakenOverError(repository.id);
+}
+
 /** 後で片付けるために控える。ここが失敗したら、もう記録は残らない。 */
 async function queueRepair(
   owner: string,
   repository: Pick<ForgejoRepository, "id" | "name">,
   reason: string,
-  handover?: { intendedOwner: string; intendedName: string },
+  options?: {
+    handover?: { intendedOwner: string; intendedName: string };
+    intentId?: string;
+    leaseUntil?: Date;
+  },
 ): Promise<void> {
   await enqueueGitRepositoryRepair({
     forgejoRepoId: repository.id,
     ownerUsername: owner,
     name: repository.name,
-    ...handover,
+    ...options?.handover,
+    intentId: options?.intentId,
+    leaseUntil: options?.leaseUntil,
     reason,
   }).catch((error) => {
     console.error(
@@ -261,18 +338,22 @@ type RepairOutcome =
 async function repairTemplates(
   sudo: string,
   repository: ForgejoRepository,
+  epoch: string,
 ): Promise<RepairOutcome> {
   const name = repository.name;
-  // **外す前に控える。** 読み取り専用を外した直後に Worker ごと消えると、例外は
-  // 捕まらず、書き込み可能で非 canonical なリポジトリが記録も無いまま残る。
-  await queueRepair(sudo, repository, "repair in progress");
   try {
     // archived のままだと contents API は 423 を返す。直すには先に外す。
-    if (repository.archived) await setRepositoryArchived(sudo, name, false);
+    if (repository.archived) {
+      await holdRepair(repository.id, epoch);
+      await setRepositoryArchived(sudo, name, false);
+    }
+    await holdRepair(repository.id, epoch);
     await commitTemplates(sudo, name, repository.default_branch);
     await assertTemplatesAreCanonical(sudo, name);
     return { state: "repaired" };
   } catch (error) {
+    // 引き取られたなら、掛け直すのも引き取った側の仕事。触らずに抜ける。
+    if (error instanceof RepairTakenOverError) throw error;
     const locked = await lockRepository(
       sudo,
       repository,
@@ -286,8 +367,9 @@ async function repairTemplates(
 async function requireRepairedTemplates(
   sudo: string,
   repository: ForgejoRepository,
+  epoch: string,
 ): Promise<void> {
-  const outcome = await repairTemplates(sudo, repository);
+  const outcome = await repairTemplates(sudo, repository, epoch);
   if (outcome.state === "repaired") return;
   throw outcome.error;
 }
@@ -397,7 +479,7 @@ async function settleRepositoryRepair(
 
   // 既定値が揃っていなければ先に直す。揃うまでは渡さない。
   if (!(await hasTemplates(owner, current.name))) {
-    const outcome = await repairTemplates(owner, current);
+    const outcome = await repairTemplates(owner, current, epoch);
     if (outcome.state !== "repaired") {
       // 直せなかった。預かりものなら渡さずに控えを残す (管理者の手元にある限り
       // 利用者は触れない)。利用者のものなら、読み取り専用にできた時点で
@@ -411,15 +493,41 @@ async function settleRepositoryRepair(
 
   // 預かりものを渡し切る。譲渡と改名のどちらが残っていても、ここで揃える。
   if (owner === admin) {
-    await handOver(admin, current.name, handover.owner, handover.name);
+    await handOver(
+      admin,
+      current.name,
+      handover.owner,
+      handover.name,
+      entry.forgejoRepoId,
+      epoch,
+    );
     return true;
   }
   // 譲渡は済んでいて改名だけが残っている。
   if (current.name !== handover.name) {
-    await forgejoRequest(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(current.name)}`,
-      { method: "PATCH", body: { name: handover.name } },
-    );
+    await holdRepair(entry.forgejoRepoId, epoch);
+    try {
+      await forgejoRequest(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(current.name)}`,
+        { method: "PATCH", body: { name: handover.name } },
+      );
+    } catch (error) {
+      // 本来の名前が既に埋まっている。何度やり直しても通らないので、
+      // 15 分ごとに回し続けずに人へ回す。中身は揃っていて所有者も正しいので、
+      // 実害は「預かり名のままになっている」ことだけ。
+      if (
+        error instanceof ForgejoError &&
+        (error.isConflict || error.status === 422)
+      ) {
+        await markGitRepositoryRepairNeedsReview({
+          forgejoRepoId: entry.forgejoRepoId,
+          intentId: epoch,
+          reason: `cannot rename to ${handover.name}: ${error.body.slice(0, 200)}`,
+        });
+        return false;
+      }
+      throw error;
+    }
   }
   return true;
 }
@@ -543,14 +651,18 @@ async function handOver(
   holdingName: string,
   intendedOwner: string,
   intendedName: string,
+  repoId: number,
+  epoch: string,
 ): Promise<ForgejoRepository> {
   // ここで初めて利用者のものになる。既定値は入り終わっている。
   // id は変わらない (16.0.2 で実測)。
+  await holdRepair(repoId, epoch);
   const transferred = await forgejoRequest<ForgejoRepository>(
     `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(holdingName)}/transfer`,
     { method: "POST", body: { new_owner: intendedOwner } },
   );
   if (transferred.name === intendedName) return transferred;
+  await holdRepair(repoId, epoch);
   // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
   // 作成の前に確かめてある。
   return await forgejoRequest<ForgejoRepository>(
@@ -599,11 +711,14 @@ export async function createRepository(
     // 揃っていないなら、以前の作成が途中で終わったもの。ここで 409 にすると
     // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
     // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
-    await requireRepairedTemplates(sudo, conflicting);
+    // 直す前に握る。掴めなければ定期実行が触っているので、やり直させる。
+    const epoch = await acquireRepair(sudo, conflicting, "repair requested");
+    await requireRepairedTemplates(sudo, conflicting, epoch);
     // 直った。控えに残す理由が無い。
-    await deleteGitRepositoryRepair({ forgejoRepoId: conflicting.id }).catch(
-      () => undefined,
-    );
+    await deleteGitRepositoryRepair({
+      forgejoRepoId: conflicting.id,
+      intentId: epoch,
+    }).catch(() => undefined);
     return conflicting;
   }
 
@@ -639,12 +754,15 @@ export async function createRepository(
   // 落ちても追えるように控える。渡す先と最終的な名前も一緒に控えないと、
   // 譲渡の前に落ちた預かりものが「揃っているから片付いた」と見なされ、
   // 管理者所有のまま残って同じ名前を塞ぎ続ける。
-  await queueRepair(admin, holding, "held for setup; not transferred yet", {
-    intendedOwner: sudo,
-    intendedName: name,
-  });
+  const epoch = await acquireRepair(
+    admin,
+    holding,
+    "held for setup; not transferred yet",
+    { intendedOwner: sudo, intendedName: name },
+  );
 
   try {
+    await holdRepair(holding.id, epoch);
     await commitTemplates(admin, holdingName, holding.default_branch);
     await assertTemplatesAreCanonical(admin, holdingName);
   } catch (error) {
@@ -654,10 +772,18 @@ export async function createRepository(
   }
 
   try {
-    const handed = await handOver(admin, holdingName, sudo, name);
-    await deleteGitRepositoryRepair({ forgejoRepoId: holding.id }).catch(
-      () => undefined,
+    const handed = await handOver(
+      admin,
+      holdingName,
+      sudo,
+      name,
+      holding.id,
+      epoch,
     );
+    await deleteGitRepositoryRepair({
+      forgejoRepoId: holding.id,
+      intentId: epoch,
+    }).catch(() => undefined);
     return handed;
   } catch (error) {
     await discardHolding(admin, holding);

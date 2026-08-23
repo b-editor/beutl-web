@@ -5,60 +5,64 @@
 // LFS を通してはいけない。git-server 側からは CockroachDB に繋げないので、
 // 確かめるのはここ。
 //
-//   pnpm run git:reconcile-status
-//   pnpm run git:reconcile-status --proof '<復元時に出力された値>'
+//   pnpm run git:restore-generation --nonce '<復元時に出力された値>'   # 復元直後に 1 回
+//   pnpm run git:reconcile-status                                      # 様子見
+//   pnpm run git:reconcile-status --proof '<同じ値>'                   # 開けるための証拠
 //
-// --proof を付けると、確かめた**証拠**を出力する。証拠は復元時に立てた印の値と
-// FORGEJO_PROXY_SECRET から作るので、確認を飛ばして作ることはできない。印の値には
-// 復元の時刻が入っているので、「その復元より後に全件を確認した」ことまで示せる。
-// これが無いと、前回の確認結果が残っているだけで 0 に見える状態で開けてしまう。
+// --proof を付けると、確かめた**証拠**に署名して出力する。
 //
-//   remaining   その復元より後にまだ確認していない墓標
-//   failed      直近が失敗として記録されているもの
-//   needsReview 自動では決着できず人の判断待ちのもの
-//   unresolved  相手を控えていない墓標 (照合しようがない)
+//   - 判定は時刻ではなく**世代**で行う。復元ごとに世代を 1 つ登録し、墓標には
+//     「どの世代で確認したか」を書く。時刻で比べると、VPS と Worker と DB の
+//     時計のずれや、同じ秒に起きた復元前の確認を取り違える。
+//   - 世代がこのデータベースに存在することが、確認した相手が本番であることの
+//     裏付けになる。別の綺麗な DB を指しても、その世代が無いので通らない。
+//   - 署名鍵はこちら側にしかない。git-server は公開鍵で検証するだけなので、
+//     あちらの .env を読める人でも証拠は作れない。
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
-import { createHmac } from "node:crypto";
+import { createPrivateKey, sign } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 /**
- * @param checkedAfter これより後に確認したものだけを「確認済み」とする。
- *   省略すると、いつ確認したかは問わない。
+ * 4 つの数を**同じ断面**で取る。別々に取ると、その間に PURGED から
+ * NEEDS_REVIEW へ移った行を、remaining では移動後・needsReview では移動前として
+ * 数えてしまい、どちらも 0 に見える。
  */
-export async function collectGitReconcileStatus(prisma, checkedAfter) {
-  // 照合の対象は「相手を控えてある墓標」だけ。控えの無い行は引きようがないので、
-  // 対象から外すのではなく **unresolved として数える**。黙って除くと、照合できない
-  // ものが残ったまま 0 に見える。
+export async function collectGitReconcileStatus(prisma, generation) {
   const purged = { phase: "PURGED" };
   const tracked = { ...purged, forgejoUsername: { not: null } };
-  const notChecked = checkedAfter
-    ? { OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: checkedAfter } }] }
+  // 世代を指定した場合は「その世代で確認済み」だけを確認済みとする。
+  const notChecked = generation
+    ? {
+        OR: [
+          { checkedGeneration: null },
+          { checkedGeneration: { not: generation } },
+        ],
+      }
     : { lastAttemptAt: null };
 
-  const [remaining, failed, needsReview, unresolved] = await Promise.all([
-    prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
-    prisma.gitAccountDeletion.count({
-      where: { ...tracked, ...notChecked, lastError: { not: null } },
-    }),
-    prisma.gitAccountDeletion.count({ where: { phase: "NEEDS_REVIEW" } }),
-    prisma.gitAccountDeletion.count({
-      where: { ...purged, forgejoUsername: null },
-    }),
-  ]);
+  const [remaining, failed, needsReview, unresolved] = await prisma.$transaction(
+    [
+      prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
+      prisma.gitAccountDeletion.count({
+        where: { ...tracked, ...notChecked, lastError: { not: null } },
+      }),
+      prisma.gitAccountDeletion.count({ where: { phase: "NEEDS_REVIEW" } }),
+      prisma.gitAccountDeletion.count({
+        where: { ...purged, forgejoUsername: null },
+      }),
+    ],
+  );
 
   return { remaining, failed, needsReview, unresolved };
 }
 
-/** 印の値から「いつの復元か」を取り出す。形式は <エポック秒>:<乱数>。 */
-export function parseGateNonce(nonce) {
-  const match = /^(\d+):[0-9a-f]{8,}$/.exec(nonce);
-  if (!match) return null;
-  return new Date(Number(match[1]) * 1000);
-}
-
-export function buildProof(nonce, secret) {
-  return createHmac("sha256", secret).update(nonce).digest("hex");
+export function signProof(nonce, encodedKey) {
+  // .env に PEM をそのまま置けないので base64 で持つ。
+  const pem = Buffer.from(encodedKey, "base64").toString("utf8");
+  return sign(null, Buffer.from(nonce), createPrivateKey(pem)).toString(
+    "base64",
+  );
 }
 
 async function main() {
@@ -71,16 +75,6 @@ async function main() {
     return;
   }
 
-  let checkedAfter;
-  if (nonce) {
-    checkedAfter = parseGateNonce(nonce);
-    if (!checkedAfter) {
-      console.error(`印の値の形式が違います: ${nonce}`);
-      process.exitCode = 2;
-      return;
-    }
-  }
-
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("DATABASE_URL is required");
@@ -88,9 +82,24 @@ async function main() {
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   try {
+    if (nonce) {
+      const generation = await prisma.gitRestoreGeneration.findUnique({
+        where: { id: nonce },
+      });
+      if (!generation) {
+        console.error(
+          `この世代はこのデータベースに登録されていません: ${nonce}\n` +
+            "復元の直後に次を実行してから、定期実行を待ってください。\n" +
+            `  pnpm run git:restore-generation --nonce '${nonce}'`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
+
     let status;
     try {
-      status = await collectGitReconcileStatus(prisma, checkedAfter);
+      status = await collectGitReconcileStatus(prisma, nonce);
     } catch (error) {
       // 表そのものが無い = マイグレーションが当たっていない。Prisma の生の
       // 例外を出すより、何をすればよいかを言う。
@@ -105,9 +114,7 @@ async function main() {
       throw error;
     }
 
-    if (checkedAfter) {
-      console.log(`基準時刻     ${checkedAfter.toISOString()} より後の確認のみ`);
-    }
+    if (nonce) console.log(`世代         ${nonce}`);
     for (const [key, value] of Object.entries(status)) {
       console.log(`${key.padEnd(12)} ${value}`);
     }
@@ -131,14 +138,17 @@ async function main() {
       return;
     }
 
-    const secret = process.env.FORGEJO_PROXY_SECRET;
-    if (!secret) {
-      console.error("\nFORGEJO_PROXY_SECRET が要ります (証拠の作成に使います)。");
+    const key = process.env.GIT_REOPEN_SIGNING_KEY;
+    if (!key) {
+      console.error(
+        "\nGIT_REOPEN_SIGNING_KEY が要ります (証拠の署名に使う ed25519 秘密鍵を" +
+          " base64 にしたもの)。",
+      );
       process.exitCode = 1;
       return;
     }
     console.log("\n消し直しは終わっています。次の値を渡して開けてください。\n");
-    console.log(buildProof(nonce, secret));
+    console.log(signProof(nonce, key));
   } finally {
     await prisma.$disconnect();
   }

@@ -16,6 +16,8 @@ export async function enqueueGitRepositoryRepair({
   name,
   intendedOwner,
   intendedName,
+  intentId,
+  leaseUntil,
   reason,
   prisma,
 }: {
@@ -25,6 +27,9 @@ export async function enqueueGitRepositoryRepair({
   /** 管理者の手元で組み立て中なら、渡す先と最終的な名前。 */
   intendedOwner?: string;
   intendedName?: string;
+  /** 新しく積む場合に握る印と期限。**既にある行には効かない** (claim が決める)。 */
+  intentId?: string;
+  leaseUntil?: Date;
   reason: string;
   prisma?: PrismaTransaction;
 }) {
@@ -40,9 +45,13 @@ export async function enqueueGitRepositoryRepair({
       ownerUsername,
       name,
       ...handover,
+      ...(intentId === undefined ? {} : { intentId }),
+      ...(leaseUntil === undefined ? {} : { leaseUntil }),
       lastError: reason.slice(0, 500),
     },
     // 既に積んであるなら試行回数は保つ。名前は変わりうるので新しい方を採る。
+    // **intentId と leaseUntil は触らない。** 誰が握っているかは claim が決める。
+    // ここで書き換えると、掴んでいる相手を横から追い出せる。
     update: {
       ownerUsername,
       name,

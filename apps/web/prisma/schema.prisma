@@ -237,6 +237,20 @@ model GitRepositoryRepair {
   @@index([lastAttemptAt])
 }
 
+/**
+ * 復元の世代。
+ *
+ * 復元のたびに 1 行増える。墓標には「どの世代で確認したか」を書くので、
+ * 「その復元より後に確認したか」を時刻ではなく一致で判定できる。時刻で比べると、
+ * VPS と Worker と DB の時計のずれや、同じ秒に起きた復元前の確認を取り違える。
+ * 世代がこのデータベースに存在すること自体が、確認した相手が本番であることの
+ * 裏付けにもなる。
+ */
+model GitRestoreGeneration {
+  id        String   @id
+  createdAt DateTime @default(now())
+}
+
 model GitAccountDeletion {
   userId          String   @id
   // この行を立てた 1 回の退会処理を指す。同じ利用者の退会要求が同時に走ったとき、
@@ -252,6 +266,9 @@ model GitAccountDeletion {
   leaseUntil      DateTime?
   // 消し終えた時刻。復元で戻ってきた相手を照合するための起点。
   purgedAt        DateTime?
+  // どの復元世代で確認し終えたか。復元後に全件を見直したことを、時計に頼らず
+  // 判定するために使う。
+  checkedGeneration String?
   attempts        Int      @default(0)
   lastAttemptAt   DateTime?
   lastError       String?

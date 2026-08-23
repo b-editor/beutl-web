@@ -349,11 +349,13 @@ export async function claimGitAccountDeletion({
 export async function markGitAccountDeletionPurged({
   userId,
   intentId,
+  generation,
   now = new Date(),
   prisma,
 }: {
   userId: string;
   intentId: string;
+  generation?: string | null;
   now?: Date;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
@@ -367,6 +369,7 @@ export async function markGitAccountDeletionPurged({
       leaseUntil: null,
       lastAttemptAt: now,
       lastError: null,
+      ...(generation === undefined ? {} : { checkedGeneration: generation }),
     },
   });
   return count === 1;
@@ -379,11 +382,17 @@ export async function markGitAccountDeletionPurged({
  */
 export async function listPurgedGitAccountDeletions({
   checkedBefore,
+  generation,
   limit = 20,
   now = new Date(),
   prisma,
 }: {
   checkedBefore: Date;
+  /**
+   * 今の復元世代。これで確認していないものは、間隔を待たずに対象にする。
+   * 待たせると、復元の後 git を止めている時間が確認の間隔ぶん延びる。
+   */
+  generation?: string | null;
   limit?: number;
   now?: Date;
   prisma?: PrismaTransaction;
@@ -402,6 +411,14 @@ export async function listPurgedGitAccountDeletions({
           OR: [
             { lastAttemptAt: null },
             { lastAttemptAt: { lt: checkedBefore } },
+            // 今の世代で確認していないものは間隔を待たない。`not` は NULL を
+            // 除くので、まだ一度も書いていない行を別に足す。
+            ...(generation
+              ? [
+                  { checkedGeneration: null },
+                  { checkedGeneration: { not: generation } },
+                ]
+              : []),
           ],
         },
       ],
@@ -419,9 +436,11 @@ export async function listPurgedGitAccountDeletions({
  */
 export async function countPurgedGitAccountDeletionsToCheck({
   checkedBefore,
+  generation,
   prisma,
 }: {
   checkedBefore: Date;
+  generation?: string | null;
   prisma?: PrismaTransaction;
 }): Promise<number> {
   const db = prisma ?? (await getDb());
@@ -429,25 +448,72 @@ export async function countPurgedGitAccountDeletionsToCheck({
     where: {
       phase: GitAccountDeletionPhase.PURGED,
       forgejoUsername: { not: null },
-      OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: checkedBefore } }],
+      OR: [
+        { lastAttemptAt: null },
+        { lastAttemptAt: { lt: checkedBefore } },
+        ...(generation
+          ? [
+              { checkedGeneration: null },
+              { checkedGeneration: { not: generation } },
+            ]
+          : []),
+      ],
     },
   });
+}
+
+/**
+ * 復元の世代を登録する。復元の直後に 1 回だけ呼ぶ。
+ *
+ * 既にあれば何もしない (同じ復元で二度呼んでも増えない)。
+ */
+export async function registerGitRestoreGeneration({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitRestoreGeneration.upsert({
+    where: { id },
+    create: { id },
+    update: {},
+  });
+}
+
+/** 今の世代。まだ一度も復元していなければ null。 */
+export async function currentGitRestoreGeneration({
+  prisma,
+}: { prisma?: PrismaTransaction } = {}): Promise<string | null> {
+  const db = prisma ?? (await getDb());
+  const latest = await db.gitRestoreGeneration.findFirst({
+    orderBy: { createdAt: "desc" },
+  });
+  return latest?.id ?? null;
 }
 
 /** 見たという印だけ付ける。状態は変えない。 */
 export async function touchGitAccountDeletion({
   userId,
   intentId,
+  generation,
   prisma,
 }: {
   userId: string;
   intentId: string;
+  /** どの復元世代で確認したか。復元後の一巡を数えるために書く。 */
+  generation?: string | null;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const { count } = await db.gitAccountDeletion.updateMany({
     where: { userId, intentId },
-    data: { lastAttemptAt: new Date(), leaseUntil: null },
+    data: {
+      lastAttemptAt: new Date(),
+      leaseUntil: null,
+      ...(generation === undefined ? {} : { checkedGeneration: generation }),
+    },
   });
   return count === 1;
 }
