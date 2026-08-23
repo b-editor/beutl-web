@@ -31,7 +31,11 @@ async function main() {
       create: { id: nonce },
       update: {},
     });
-    console.log(`世代 ${nonce} を登録しました。`);
+    console.log(`世代 ${nonce} を登録しました (${new URL(connectionString).hostname})。`);
+    console.log(
+      "**この接続先が本番であることを確かめてください。** 証拠にはこの相手が" +
+        "含まれ、git-server 側でも突き合わせます。",
+    );
     console.log(
       "定期実行 (15 分ごと) が一巡したら、次で証拠を作ってください。\n" +
         `  pnpm run git:reconcile-status --proof '${nonce}'`,

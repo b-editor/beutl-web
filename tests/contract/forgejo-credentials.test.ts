@@ -75,6 +75,7 @@ vi.mock("@beutl/db", () => ({
     intendedOwner?: string;
     intendedName?: string;
   }) => {
+    if (enqueueFails) throw new Error("db is down");
     repairQueue.set(forgejoRepoId, {
       forgejoRepoId,
       ownerUsername,
@@ -91,7 +92,7 @@ vi.mock("@beutl/db", () => ({
         intendedName: null,
         ...entry,
       })),
-  claimGitRepositoryRepair: async () => true,
+  claimGitRepositoryRepair: async () => leaseHeld,
   recordGitRepositoryRepairAttempt: async () => undefined,
   deleteGitRepositoryRepair: async ({
     forgejoRepoId,
@@ -112,7 +113,8 @@ vi.mock("@beutl/db", () => ({
     entry.needsReview = true;
     return true;
   },
-  renewGitRepositoryRepairLease: async () => true,
+  // 握りを失った状態を作れるようにする。
+  renewGitRepositoryRepairLease: async () => leaseHeld,
   listPendingGitAccountDeletions: async () => [],
   recordGitAccountDeletionAttempt: async () => undefined,
   GitAccountDeletionPhase: {
@@ -205,6 +207,8 @@ let repairQueue = new Map<
     needsReview?: boolean;
   }
 >();
+let leaseHeld = true;
+let enqueueFails = false;
 let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
 let neededReview = false;
@@ -264,6 +268,8 @@ beforeEach(() => {
   deletionStartsAfterFirstCheck = false;
   deletionIntentOwner = null;
   purgedTombstone = false;
+  leaseHeld = true;
+  enqueueFails = false;
   repairQueue = new Map();
   neededReview = false;
   credentialCount = 0;
@@ -1533,5 +1539,82 @@ describe("預かりものは渡し切るまで控えを外さない", () => {
     });
     // 自動再試行の対象からは外れるが、記録は残る。
     expect(repairQueue.get(5)?.needsReview).toBe(true);
+  });
+});
+
+describe("握りを失った実行は後始末もしない", () => {
+  it("引き取られていたら、預かりものを畳まない", async () => {
+    // 畳んでしまうと、引き取った側がこれから渡そうとしているものを壊す。
+    const { createRepository } = await import("@beutl/forgejo");
+    let holdingName = "";
+    let deleted = false;
+    // 掴んだ直後に他の実行へ引き取られた状態にする。
+    leaseHeld = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        holdingName = JSON.parse(String(init?.body)).name;
+        return json({ id: 11, name: holdingName, default_branch: "main" }, 201);
+      }
+      if (method === "DELETE") {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(deleted).toBe(false);
+    // 控えも残す。片付けるのは引き取った側。
+    expect(repairQueue.has(11)).toBe(true);
+  });
+
+  it("控えを積めなければ、預かりものを畳んでから投げる", async () => {
+    // 控えが無いまま残すと、無作為な名前のリポジトリが管理者の名前空間に残り、
+    // 誰も片付けられない。
+    const { createRepository } = await import("@beutl/forgejo");
+    enqueueFails = true;
+    let deleted = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        return json({ id: 12, name: "beutl-holding-x", default_branch: "main" }, 201);
+      }
+      if (method === "GET" && path.endsWith("/repositories/12")) {
+        return json({
+          id: 12,
+          name: "beutl-holding-x",
+          owner: { id: 1, login: "beutl-admin" },
+        });
+      }
+      if (method === "DELETE") {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    expect(deleted).toBe(true);
   });
 });

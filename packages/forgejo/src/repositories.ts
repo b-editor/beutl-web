@@ -246,10 +246,13 @@ async function acquireRepair(
 ): Promise<string> {
   const epoch = crypto.randomUUID();
   const leaseUntil = new Date(Date.now() + REPAIR_LEASE_MS);
+  // 預かりものは控えられなければ進めない。控えが無いまま作ると、名前も分からない
+  // ものが管理者の名前空間に残る。
   await queueRepair(owner, repository, reason, {
     handover,
     intentId: epoch,
     leaseUntil,
+    required: handover !== undefined,
   });
   // 新しく積んだ場合はここで既に自分のもの。既にあった場合は奪えたときだけ進む。
   if (
@@ -283,9 +286,11 @@ async function queueRepair(
     handover?: { intendedOwner: string; intendedName: string };
     intentId?: string;
     leaseUntil?: Date;
+    /** 控えられなければ投げる。畳める相手 (預かりもの) で使う。 */
+    required?: boolean;
   },
 ): Promise<void> {
-  await enqueueGitRepositoryRepair({
+  const enqueued = enqueueGitRepositoryRepair({
     forgejoRepoId: repository.id,
     ownerUsername: owner,
     name: repository.name,
@@ -293,7 +298,12 @@ async function queueRepair(
     intentId: options?.intentId,
     leaseUntil: options?.leaseUntil,
     reason,
-  }).catch((error) => {
+  });
+  if (options?.required) {
+    await enqueued;
+    return;
+  }
+  await enqueued.catch((error) => {
     console.error(
       `${owner}/${repository.name} (id ${repository.id}) could not be queued ` +
         "for repair; media pushed to it will not use LFS and nothing will " +
@@ -354,6 +364,13 @@ async function repairTemplates(
   } catch (error) {
     // 引き取られたなら、掛け直すのも引き取った側の仕事。触らずに抜ける。
     if (error instanceof RepairTakenOverError) throw error;
+    // 長いコミットの後に握りが切れていることがある。読み取り専用にするのも
+    // 外部への変更なので、その直前にも確かめる。
+    try {
+      await holdRepair(repository.id, epoch);
+    } catch (takenOver) {
+      throw takenOver;
+    }
     const locked = await lockRepository(
       sudo,
       repository,
@@ -612,16 +629,21 @@ export async function retryGitRepositoryRepairs({
 async function discardHolding(
   admin: string,
   repository: ForgejoRepository,
+  epoch?: string,
 ): Promise<void> {
   try {
+    // **消す直前にも握りを確かめる。** 期限切れで引き取られた後に消しにいくと、
+    // 引き取った側が渡そうとしているものを壊す。
+    if (epoch) await holdRepair(repository.id, epoch);
     const current = await forgejoRequestOrNull<ForgejoRepository>(
       `/repositories/${repository.id}`,
     );
     if (!current) {
       // 既に無い。控えも要らない。
-      await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-        () => undefined,
-      );
+      await deleteGitRepositoryRepair({
+        forgejoRepoId: repository.id,
+        intentId: epoch,
+      }).catch(() => undefined);
       return;
     }
     if (current.owner.login !== admin) {
@@ -632,10 +654,13 @@ async function discardHolding(
       `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(current.name)}`,
       { method: "DELETE", responseType: "none" },
     );
-    await deleteGitRepositoryRepair({ forgejoRepoId: repository.id }).catch(
-      () => undefined,
-    );
+    await deleteGitRepositoryRepair({
+      forgejoRepoId: repository.id,
+      intentId: epoch,
+    }).catch(() => undefined);
   } catch (error) {
+    // 引き取られていたら、後始末も引き取った側の仕事。触らない。
+    if (error instanceof RepairTakenOverError) return;
     // 控えは残す。次の定期実行が id で引き直して片付ける。
     console.error(
       `could not discard the holding repository ${admin}/${repository.name}; ` +
@@ -754,20 +779,33 @@ export async function createRepository(
   // 落ちても追えるように控える。渡す先と最終的な名前も一緒に控えないと、
   // 譲渡の前に落ちた預かりものが「揃っているから片付いた」と見なされ、
   // 管理者所有のまま残って同じ名前を塞ぎ続ける。
-  const epoch = await acquireRepair(
-    admin,
-    holding,
-    "held for setup; not transferred yet",
-    { intendedOwner: sudo, intendedName: name },
-  );
+  let epoch: string;
+  try {
+    epoch = await acquireRepair(
+      admin,
+      holding,
+      "held for setup; not transferred yet",
+      { intendedOwner: sudo, intendedName: name },
+    );
+  } catch (error) {
+    // 控えを作れなかった (DB に書けなかった)。このまま抜けると、名前も分からない
+    // 預かりものが管理者の名前空間に残り、誰も片付けられない。畳んでから投げる。
+    // 引き取られていた場合だけは、相手のものなので触らない。
+    if (!(error instanceof RepairTakenOverError)) {
+      await discardHolding(admin, holding);
+    }
+    throw error;
+  }
 
   try {
     await holdRepair(holding.id, epoch);
     await commitTemplates(admin, holdingName, holding.default_branch);
     await assertTemplatesAreCanonical(admin, holdingName);
   } catch (error) {
+    // 引き取られたなら、後始末も相手の仕事。**決して消さない。**
+    if (error instanceof RepairTakenOverError) throw error;
     // 利用者はまだ触れない。自分で作ったものなので畳んでやり直させる。
-    await discardHolding(admin, holding);
+    await discardHolding(admin, holding, epoch);
     throw error;
   }
 
@@ -786,7 +824,8 @@ export async function createRepository(
     }).catch(() => undefined);
     return handed;
   } catch (error) {
-    await discardHolding(admin, holding);
+    if (error instanceof RepairTakenOverError) throw error;
+    await discardHolding(admin, holding, epoch);
     throw error;
   }
 }

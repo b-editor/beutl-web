@@ -57,10 +57,26 @@ export async function collectGitReconcileStatus(prisma, generation) {
   return { remaining, failed, needsReview, unresolved };
 }
 
-export function signProof(nonce, encodedKey) {
+/**
+ * 署名する中身。**接続先のホストを含める。**
+ *
+ * 世代を登録するだけなら、どの DATABASE_URL に対してもできてしまう。うっかり
+ * staging を指して登録し、そこで確認して署名すると、空の結果で本番向けの証拠が
+ * 作れる。実際に見た相手を署名に含め、git-server 側でも期待する相手と突き合わせる。
+ */
+export function proofPayload(nonce, databaseUrl) {
+  return `${nonce}\n${databaseHost(databaseUrl)}`;
+}
+
+export function databaseHost(databaseUrl) {
+  // postgresql://user:pass@host:port/db → host
+  return new URL(databaseUrl).hostname;
+}
+
+export function signProof(payload, encodedKey) {
   // .env に PEM をそのまま置けないので base64 で持つ。
   const pem = Buffer.from(encodedKey, "base64").toString("utf8");
-  return sign(null, Buffer.from(nonce), createPrivateKey(pem)).toString(
+  return sign(null, Buffer.from(payload), createPrivateKey(pem)).toString(
     "base64",
   );
 }
@@ -147,8 +163,9 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    console.log(`接続先       ${databaseHost(connectionString)}`);
     console.log("\n消し直しは終わっています。次の値を渡して開けてください。\n");
-    console.log(signProof(nonce, key));
+    console.log(signProof(proofPayload(nonce, connectionString), key));
   } finally {
     await prisma.$disconnect();
   }
