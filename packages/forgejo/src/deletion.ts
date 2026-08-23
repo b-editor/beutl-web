@@ -447,16 +447,9 @@ export async function finishGitAccountDeletion(
         actual = await forgejoRequestOrNull<ForgejoUser>(
           `/users/${encodeURIComponent(username)}`,
         );
-        // 引き当てた相手を控える。控えないと、この後の墓標が誰を指すのか
-        // 分からなくなり、復活の照合から外れる。
-        if (actual) {
-          await setGitAccountDeletionTarget({
-            userId,
-            intentId: epoch,
-            forgejoUsername: actual.login,
-            forgejoUserId: actual.id,
-          });
-        }
+        // **ここでは控えない。** 本人だと確かめる前に上書きすると、控えていた
+        // 元の id が失われ、食い違いの記録が lastError の文字列だけになる。
+        // 控えるのは下の 2 点照合を通った後。
       } else if (wrongPerson) {
         // 名前は別人のもので、本人はメールでも見つからない。**消しにいかない**。
         // かといって消せた証拠も無いので、完了にもしない。
@@ -503,6 +496,20 @@ export async function finishGitAccountDeletion(
       return false;
     }
     username = actual.login;
+
+    // 本人だと確かめたので控える。控えないと、この後の墓標が誰を指すのか
+    // 分からなくなり、復活の照合から外れる。
+    if (
+      pending.forgejoUsername !== actual.login ||
+      pending.forgejoUserId !== actual.id
+    ) {
+      await setGitAccountDeletionTarget({
+        userId,
+        intentId: epoch,
+        forgejoUsername: actual.login,
+        forgejoUserId: actual.id,
+      });
+    }
 
     // 掃き直す。意思表示の前に始まっていた発行が着地していることがある。
     await revokeAllTokens(username, () =>

@@ -203,6 +203,29 @@ enum GitAccountDeletionPhase {
 //
 // User への外部キーは張らない。User が消えた後も残る必要がある。
 /**
+ * これから作るリポジトリの予約。
+ *
+ * **Forgejo を触る前に書く。** 名前の重複を Forgejo 上の不在確認だけで判断すると、
+ * 同じ名前の作成が同時に来たときに両方が通り、両方が譲渡され、片方だけ改名に
+ * 失敗して預かり名のまま利用者の手に残る。(owner, name) を一意に予約してから
+ * 進めれば、後から来た方はここで弾かれる。
+ *
+ * 預かり名も先に決めて書く。201 の直後に落ちても、この行から相手を引き当てられる
+ * (リポジトリ id は応答で初めて分かるので、それだけでは追えない)。
+ */
+model GitRepositoryCreation {
+  id            String   @id @default(uuid())
+  ownerUsername String
+  name          String
+  holdingName   String   @unique
+  forgejoRepoId Int?
+  createdAt     DateTime @default(now())
+
+  @@unique([ownerUsername, name])
+  @@index([createdAt])
+}
+
+/**
  * テンプレートを入れ切れなかったリポジトリ。片付くまで残す。
  *
  * .gitattributes の無いリポジトリに push されると、数 GiB の動画が LFS を通らず

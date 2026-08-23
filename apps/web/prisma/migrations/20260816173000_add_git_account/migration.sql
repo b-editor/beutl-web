@@ -16,4 +16,3 @@ CREATE UNIQUE INDEX "GitAccount_forgejoUsername_key" ON "GitAccount"("forgejoUse
 
 -- AddForeignKey
 ALTER TABLE "GitAccount" ADD CONSTRAINT "GitAccount_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-

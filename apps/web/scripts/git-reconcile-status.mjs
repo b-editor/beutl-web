@@ -41,8 +41,8 @@ export async function collectGitReconcileStatus(prisma, generation) {
       }
     : { lastAttemptAt: null };
 
-  const [remaining, failed, needsReview, unresolved] = await prisma.$transaction(
-    [
+  const [remaining, failed, needsReview, unresolved, pendingPurge, blocking] =
+    await prisma.$transaction([
       prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
       prisma.gitAccountDeletion.count({
         where: { ...tracked, ...notChecked, lastError: { not: null } },
@@ -51,27 +51,46 @@ export async function collectGitReconcileStatus(prisma, generation) {
       prisma.gitAccountDeletion.count({
         where: { ...purged, forgejoUsername: null },
       }),
-    ],
-  );
+      // **消し切れていない退会。** Forgejo 側の purge が失敗した行はここに残る。
+      // 数えないと、退会したはずのアカウントと端末のトークンが生きたまま
+      // 「終わっている」と読める。
+      prisma.gitAccountDeletion.count({ where: { phase: "READY_TO_PURGE" } }),
+      // 退会を始めたまま進んでいないもの。掃除役が拾うが、残っている間は
+      // 「どうなっているか分からない」ので開けない。
+      prisma.gitAccountDeletion.count({ where: { phase: "BLOCKING" } }),
+    ]);
 
-  return { remaining, failed, needsReview, unresolved };
+  return { remaining, failed, needsReview, unresolved, pendingPurge, blocking };
 }
 
 /**
- * 署名する中身。**接続先のホストを含める。**
+ * 署名する中身。
  *
  * 世代を登録するだけなら、どの DATABASE_URL に対してもできてしまう。うっかり
  * staging を指して登録し、そこで確認して署名すると、空の結果で本番向けの証拠が
- * 作れる。実際に見た相手を署名に含め、git-server 側でも期待する相手と突き合わせる。
+ * 作れる。だから**実際に見た相手**を署名に入れ、git-server 側でも突き合わせる。
+ *
+ * ホスト名だけでは足りない。同じホストに本番と staging が別のデータベースとして
+ * 載っていることがある。port とデータベース名まで含め、さらに配備側で決めた
+ * 環境の名前 (GIT_REOPEN_ENVIRONMENT) も入れる。
+ *
+ * 期限も入れる。証拠を作った後に状態が悪くなっても署名は変わらないので、
+ * 有効な時間を短く切る。**「その時点では終わっていた」ことしか示せない**ので、
+ * 作ったらすぐ使う。
  */
-export function proofPayload(nonce, databaseUrl) {
-  return `${nonce}\n${databaseHost(databaseUrl)}`;
+export function proofPayload({ nonce, environment, database, expiresAt }) {
+  return [nonce, environment, database, String(expiresAt)].join("\n");
 }
 
-export function databaseHost(databaseUrl) {
-  // postgresql://user:pass@host:port/db → host
-  return new URL(databaseUrl).hostname;
+/** host:port/database。接続先を一意に指す。 */
+export function databaseIdentity(databaseUrl) {
+  const url = new URL(databaseUrl);
+  const database = url.pathname.replace(/^\//, "");
+  return `${url.hostname}:${url.port || "26257"}/${database}`;
 }
+
+/** 証拠が有効な長さ。作ってすぐ使う前提で短く切る。 */
+export const PROOF_TTL_SECONDS = 30 * 60;
 
 export function signProof(payload, encodedKey) {
   // .env に PEM をそのまま置けないので base64 で持つ。
@@ -163,9 +182,29 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    console.log(`接続先       ${databaseHost(connectionString)}`);
+    const environment = process.env.GIT_REOPEN_ENVIRONMENT;
+    if (!environment) {
+      console.error(
+        "\nGIT_REOPEN_ENVIRONMENT が要ります (git-server 側の同名の値と一致させる)。",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const database = databaseIdentity(connectionString);
+    const expiresAt = Math.floor(Date.now() / 1000) + PROOF_TTL_SECONDS;
+    console.log(`環境         ${environment}`);
+    console.log(`接続先       ${database}`);
+    console.log(
+      `有効期限     ${new Date(expiresAt * 1000).toISOString()} (${PROOF_TTL_SECONDS / 60} 分)`,
+    );
     console.log("\n消し直しは終わっています。次の値を渡して開けてください。\n");
-    console.log(signProof(proofPayload(nonce, connectionString), key));
+    console.log(
+      signProof(
+        proofPayload({ nonce, environment, database, expiresAt }),
+        key,
+      ),
+    );
+    console.log(`\n  ./scripts/restore.sh --reopen-git --proof <上の値> --expires ${expiresAt}`);
   } finally {
     await prisma.$disconnect();
   }

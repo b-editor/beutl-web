@@ -99,6 +99,40 @@ vi.mock("@beutl/db", () => ({
   }: {
     forgejoRepoId: number;
   }) => repairQueue.delete(forgejoRepoId),
+  // 予約 (Forgejo を触る前に取る名前の押さえ)。
+  reserveGitRepositoryName: async ({
+    ownerUsername,
+    name,
+    holdingName,
+  }: {
+    ownerUsername: string;
+    name: string;
+    holdingName: string;
+  }) => {
+    const key = `${ownerUsername}/${name}`;
+    if (reservations.has(key)) {
+      const error: Error & { code?: string } = new Error("taken");
+      error.code = "P2002";
+      throw error;
+    }
+    reservations.set(key, { id: key, holdingName, forgejoRepoId: null });
+    return key;
+  },
+  attachGitRepositoryCreationId: async ({
+    id,
+    forgejoRepoId,
+  }: {
+    id: string;
+    forgejoRepoId: number;
+  }) => {
+    const entry = reservations.get(id);
+    if (entry) entry.forgejoRepoId = forgejoRepoId;
+  },
+  releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
+    reservations.delete(id);
+  },
+  listStaleGitRepositoryCreations: async () => staleReservations,
+  countStaleGitRepositoryCreations: async () => staleReservations.length,
   countGitRepositoryRepairs: async () =>
     [...repairQueue.values()].filter((entry) => !entry.needsReview).length,
   countGitRepositoryRepairsNeedingReview: async () =>
@@ -207,6 +241,17 @@ let repairQueue = new Map<
     needsReview?: boolean;
   }
 >();
+let reservations = new Map<
+  string,
+  { id: string; holdingName: string; forgejoRepoId: number | null }
+>();
+let staleReservations: {
+  id: string;
+  ownerUsername: string;
+  name: string;
+  holdingName: string;
+  forgejoRepoId: number | null;
+}[] = [];
 let leaseHeld = true;
 let enqueueFails = false;
 let purgedTombstone = false;
@@ -270,6 +315,8 @@ beforeEach(() => {
   purgedTombstone = false;
   leaseHeld = true;
   enqueueFails = false;
+  reservations = new Map();
+  staleReservations = [];
   repairQueue = new Map();
   neededReview = false;
   credentialCount = 0;
@@ -1616,5 +1663,83 @@ describe("握りを失った実行は後始末もしない", () => {
     ).rejects.toBeTruthy();
 
     expect(deleted).toBe(true);
+  });
+});
+
+describe("作成の予約", () => {
+  it("同じ名前の作成が同時に来たら、後から来た方を弾く", async () => {
+    // Forgejo 上の不在確認だけでは両方が通り、両方が譲渡され、片方だけ改名に
+    // 失敗して預かり名のまま利用者の手に残る。
+    const { createRepository } = await import("@beutl/forgejo");
+    reservations.set("someone/proj", {
+      id: "someone/proj",
+      holdingName: "beutl-holding-other",
+      forgejoRepoId: null,
+    });
+    let created = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/user/repos")) {
+        created = true;
+        return json({ id: 21, name: "x", default_branch: "main" }, 201);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      createRepository("someone", { name: "proj" }),
+    ).rejects.toBeTruthy();
+
+    // Forgejo には触らない。
+    expect(created).toBe(false);
+  });
+
+  it("放置された予約は、預かり名から引き当てて控えに載せ替える", async () => {
+    // 201 の直後に落ちるとリポジトリ id は誰も知らない。先に決めた預かり名だけが
+    // 手掛かりになる。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "r1",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-holding-lost",
+        forgejoRepoId: null,
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (
+        method === "GET" &&
+        path.endsWith("/repos/beutl-admin/beutl-holding-lost")
+      ) {
+        return json({
+          id: 31,
+          name: "beutl-holding-lost",
+          default_branch: "main",
+          owner: { id: 1, login: "beutl-admin" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    // 控えに載り、渡す先も引き継がれる。
+    expect(repairQueue.get(31)).toMatchObject({
+      intendedOwner: "someone",
+      intendedName: "proj",
+    });
   });
 });
