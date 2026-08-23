@@ -289,7 +289,8 @@ describe("uploading a file too large for one request", () => {
     });
     if (!started.ok) throw new Error(started.reason);
 
-    expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id })).toBe(true);
+    expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .toBe("cancelled");
     expect(state.storageUploads.size).toBe(0);
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
   });
@@ -391,18 +392,42 @@ describe("uploading a file too large for one request", () => {
     });
 
     expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
-      .toBe(true);
+      .toBe("cancelled");
 
     expect([...bucket.uploads.values()].every((upload) => upload.aborted))
       .toBe(true);
     expect(state.storageUploads.size).toBe(0);
   });
 
+  it("says the parts are still there when the bucket will not let go", async () => {
+    // 片付いたと答えると、送った側はそこで手を引き、その分の枠が一日残る。
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw new Error("the bucket is unreachable");
+      },
+    }));
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .toBe("pending");
+    // 行は残る。掃除がもう一度試せる唯一の手掛かりなので。
+    expect(state.storageUploads.size).toBe(1);
+  });
+
   it("says so when there is no upload to cancel", async () => {
     // 開始の応答が返らなかった側が取り消しに回ってくる。まだ行が現れていない
     // だけかもしれないので、「もう無い」と答えて済ませない。
     expect(await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
-      .toBe(false);
+      .toBe("missing");
   });
 
   it("keeps the size of a claimed upload against the quota", async () => {

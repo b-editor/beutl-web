@@ -88,11 +88,11 @@ export async function DELETE(
   if (!userId) return unauthorizedResponse();
 
   const { id } = await props.params;
-  // 見つからなかったときは、そう答える。始めた側の応答が返らずに取り消しへ回った
-  // ときは、開始のほうがまだ書き込み中ということがある——「もう無い」と答えると、
-  // そのあとに現れた行が一日ぶんの枠を抱えたまま残るので、呼び出し側にもう一度
-  // 来てもらう。
+  // 片付いたときだけ 204。まだ残っているとき（バケットが中止を受け付けなかった）
+  // と、そんなものは無いとき（開始のほうがまだ書き込み中かもしれない）は、その
+  // まま手を引かれると一日ぶんの枠が残るので、呼び出し側にもう一度来てもらう。
+  const outcome = await cancelUpload({ userId, uploadId: id });
   return new Response(null, {
-    status: await cancelUpload({ userId, uploadId: id }) ? 204 : 404,
+    status: outcome === "cancelled" ? 204 : outcome === "pending" ? 503 : 404,
   });
 }

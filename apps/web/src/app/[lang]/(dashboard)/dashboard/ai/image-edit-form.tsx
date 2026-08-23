@@ -88,14 +88,14 @@ export function ImageEditForm({
     success: false,
   });
   const [chosenTask, setChosenTask] = useState<string>("");
-  const [model, setModel] = useState("");
+  // task ごとのモデル。5 つの task は 5 つの操作で、それぞれ別のモデルを持つ
+  // ——1 つしか覚えないと、別の task を見て戻ってきたときにモデルが変わり、
+  // 出してある名前が指す支払い済みの依頼へ届かなくなる。
+  const [modelByTask, setModelByTask] = useState<Record<string, string>>({});
   // 送信ごとの名前。依頼ごとに持つので、A を回収している最中に B を送っても
   // どちらの名前も残る。
   const names = useAiRequestNames();
-  // 直前の送信が名乗った task。カタログが動いてもモデルを動かさないために使う。
-  const [sentRequest, setSentRequest] = useState<
-    { task: string; model: string } | null
-  >(null);
+
   const [chosenExpansion, setChosenExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
@@ -137,13 +137,10 @@ export function ImageEditForm({
   // under the picker. Rather than resetting it from an effect, a choice that no
   // longer exists falls back to the new task's default.
   const models = editTask ? access.models[`image.edit.${editTask}`] ?? [] : [];
-  // カタログが動いてもモデルは動かさない。名前を持ったまま別のモデルで送ると、
-  // サーバーは同じ名前の別の依頼として断り、支払い済みの結果へ戻る道が閉じる。
-  const heldModel = keepsName && sentRequest?.task === editTask
-    ? sentRequest.model
-    : null;
-  const selectedModel = heldModel ??
-    (models.some((entry) => entry.id === model) ? model : defaultModelId(models));
+  const chosenModel = modelByTask[editTask] ?? "";
+  const selectedModel = models.some((entry) => entry.id === chosenModel)
+    ? chosenModel
+    : defaultModelId(models);
   const selected = EDIT_TASKS.find((entry) => entry.task === editTask) ?? null;
   // その依頼の署名。サーバーが指紋を取るのと同じものから作る——細かすぎれば、
   // サーバーには同じ依頼が別の名前で届いて二度課金され、粗すぎれば、別の依頼が
@@ -226,7 +223,6 @@ export function ImageEditForm({
     // keyboard could start a run with no task, no plan, no balance for this
     // task, or no model that can serve it.
     if (!canSubmit) return;
-    setSentRequest({ task: editTask, model: selectedModel });
     names.commit(signature);
     setPrepareError(null);
     const form = event.currentTarget;
@@ -332,8 +328,9 @@ export function ImageEditForm({
           lang={lang}
           models={models}
           value={selectedModel}
-          onChange={setModel}
-          disabled={heldModel !== null}
+          onChange={(id) =>
+            setModelByTask((current) => ({ ...current, [editTask]: id }))
+          }
         />
 
         {editTask === "outpaint" && (

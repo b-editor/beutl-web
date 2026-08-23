@@ -183,10 +183,10 @@ export function ImageGenerateForm({
   // ——そのぶんこの署名は粗いが、粗いほうへ外れるのは安全側だ。
   const signature = requestSignature([
     model,
-    prompt,
-    style,
-    composition,
-    exclusions,
+    // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
+    // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
+    // される。
+    composePrompt({ main: prompt, style, composition, exclusions }),
     ratio,
     chosenBackground,
     ...references,

@@ -8,6 +8,7 @@ import {
   holdsAiRequestName,
   keepsIdempotencyKey,
   newAiRequestNames,
+  requestSignature,
   settleAiRequestName,
   type AiAccess,
 } from "../../apps/web/src/lib/ai-screen";
@@ -149,5 +150,34 @@ describe("which names a screen holds", () => {
     expect(aiRequestNameOf(names, "request")).toBe(first);
     names = commitAiRequestName(names, "request", next);
     expect(aiRequestNameOf(names, "request")).toBe(first);
+  });
+});
+
+describe("how a request is signed", () => {
+  it("tells apart runs a separator alone would merge", () => {
+    // 区切りだけで繋ぐと、区切り文字を含む値や境目のずれた並びが同じ 1 本に
+    // なる。別の依頼が同じ名前で送られ、断られるまで気づけない。
+    expect(requestSignature(["a", "b"])).not.toBe(requestSignature(["a\u001fb"]));
+    expect(requestSignature(["ab", "c"])).not.toBe(requestSignature(["a", "bc"]));
+    expect(requestSignature(["", "a"])).not.toBe(requestSignature(["a", ""]));
+  });
+
+  it("tells a missing part from an empty one", () => {
+    expect(requestSignature([null])).not.toBe(requestSignature([""]));
+    expect(requestSignature([undefined])).toBe(requestSignature([null]));
+  });
+
+  it("reads the same file the same way however often it is made", () => {
+    // 動画から音声を抜き出すたびに新しい更新時刻がつく。そこを見ていると、同じ
+    // 音声が別の依頼になり、二度課金される。
+    const made = (lastModified: number) =>
+      new File(["same bytes"], "clip.wav", { type: "audio/wav", lastModified });
+
+    expect(requestSignature([made(1)])).toBe(requestSignature([made(2)]));
+    expect(requestSignature([made(1)])).not.toBe(
+      requestSignature([
+        new File(["same bytes"], "other.wav", { type: "audio/wav" }),
+      ]),
+    );
   });
 });

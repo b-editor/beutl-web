@@ -141,7 +141,9 @@ export function TranslateForm({
     };
     const cues = parsed.cues;
     const body = JSON.stringify({
-      ...(sourceLanguage ? { sourceLanguage } : {}),
+      ...(detectedSourceLanguage
+        ? { sourceLanguage: detectedSourceLanguage }
+        : {}),
       targetLanguage,
       segments: parsed.segments.map((segment, index) => {
         const cue = cues?.[index];
@@ -219,6 +221,10 @@ export function TranslateForm({
   }
 
   const parsed = useMemo(() => parseSubtitleSource(source), [source]);
+  // "auto" は選び手の言い方で、依頼には何も書かない。この画面は body を自分で
+  // 組み立てるので、隠し欄と同じ言い換えをここでもする——そのまま送ると API に
+  // 弾かれる。
+  const detectedSourceLanguage = sourceLanguage === "auto" ? "" : sourceLanguage;
   // The cues the source carried, so a translation can be written back out as a
   // subtitle file instead of a bare list of strings.
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
@@ -228,15 +234,18 @@ export function TranslateForm({
     ["subtitle.translate"],
     (access.models["subtitle.translate"] ?? []).length === 0,
   );
-  // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。行数や 1 行の
-  // 長さは入力欄の中にあって描画のたびには読めない——そのぶん粗いが、粗いほうへ
-  // 外れるのは安全側だ。
+  // 送るのは読み解いたあとの区切りと語彙集。書き写したままを数えると、送るもの
+  // が同じでも別の名前になり、サーバーには同じ依頼が二度届いて二度課金される。
+  // 行数や 1 行の長さは入力欄の中にあって描画のたびには読めない——そのぶん粗い
+  // が、粗いほうへ外れるのは安全側だ。
   const signature = requestSignature([
     model,
-    source,
-    sourceLanguage,
+    detectedSourceLanguage,
     targetLanguage,
-    glossary,
+    ...(parsed.ok
+      ? parsed.segments.flatMap((segment) => [segment.id, segment.text])
+      : [source]),
+    ...Object.entries(parseGlossary(glossary)).flat(),
   ]);
   const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName);

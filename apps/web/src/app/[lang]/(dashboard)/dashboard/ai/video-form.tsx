@@ -214,11 +214,16 @@ export function VideoForm({
   // 二つの名前に割れて二度課金されることはない。
   const signature = requestSignature([
     model,
-    videoPrompt,
-    videoStyle,
-    videoComposition,
-    videoMotion,
-    videoExclusions,
+    // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
+    // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
+    // される。
+    composePrompt({
+      main: videoPrompt,
+      style: videoStyle,
+      composition: videoComposition,
+      motion: videoMotion,
+      exclusions: videoExclusions,
+    }),
     duration,
     resolution,
     aspectRatio,

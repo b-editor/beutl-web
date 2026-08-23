@@ -527,19 +527,19 @@ export async function cancelUpload({
 }: {
   userId: string;
   uploadId: string;
-}): Promise<boolean> {
+}): Promise<CancelOutcome> {
   const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   // まだ無い。始めた側の応答が返らずに取り消しへ回ったときは、開始のほうが
   // まだ書き込み中ということがある——「もう無い」と答えると、そのあとに現れた
   // 行が一日ぶんの枠を抱えたまま残る。無かったと正直に答えて、もう一度来て
   // もらう。
-  if (!upload) return false;
+  if (!upload) return "missing";
 
   // A finished upload has no parts left to throw away, and its file is not
   // this call's to delete.
   if (upload.completedFileId) {
     await deleteStorageUpload({ id: upload.id });
-    return true;
+    return "cancelled";
   }
 
   // 取れないのは、完了したか、掃除のものになったか。掃除のものというのは、前の
@@ -549,20 +549,26 @@ export async function cancelUpload({
     const current = await findStorageUploadByIdAndUserId({ id: uploadId, userId })
       .catch(() => null);
     if (current === null || current.completedFileId || !current.abandonedAt) {
-      return true;
+      return "cancelled";
     }
   }
 
   // The row is only dropped once the parts are known to be gone. Dropping it
   // after a failed abort leaves parts nothing knows about, which the sweep can
-  // then never find. The caller is told the upload is cancelled either way —
-  // it is, as far as this account is concerned — and the sweep finishes the job.
-  if (await abandon(upload.objectKey, upload.uploadId)) {
-    await deleteStorageUpload({ id: upload.id });
+  // then never find.
+  if (!await abandon(upload.objectKey, upload.uploadId)) {
+    // まだバケットに残っている。片付いたと答えると、呼び出し側はそこで手を
+    // 引き、その分の枠が一日残る——まだ終わっていないと言って、もう一度来て
+    // もらう。次の掃除も同じ行を拾う。
+    return "pending";
   }
 
-  return true;
+  await deleteStorageUpload({ id: upload.id });
+  return "cancelled";
 }
+
+// 取り消しがどこまで行ったか。片付いた／まだ残っている／そんなものは無い。
+export type CancelOutcome = "cancelled" | "pending" | "missing";
 
 // Whether the parts are gone. A failure here is usually "already gone", but it
 // can be the bucket being briefly unreachable, and the two are told apart by

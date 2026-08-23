@@ -22,18 +22,29 @@ const PARTS_IN_FLIGHT = 3;
 // connection is the thing this is for.
 const ATTEMPTS_PER_PART = 3;
 
-// 取り消しは一度きりでは足りない。答えが返らなかっただけかもしれず、そのときは
-// この名前の枠が一日残る。何度も粘るものではない——掃除がいずれ拾う——ので、
-// もう一度だけ試す。
+// 取り消しは一度きりでは足りない。開始のほうがまだ書き込み中で行が見えないこと
+// も、バケットが中止を受け付けないこともあり、そこで手を引くとこの名前の枠が
+// 一日残る。間を置いて数回だけ試す——それでも駄目なら掃除がいずれ拾う。
+const CANCEL_ATTEMPTS = 3;
+const CANCEL_RETRY_MILLISECONDS = 400;
+
 async function cancelUpload(id: string): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < CANCEL_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, CANCEL_RETRY_MILLISECONDS * attempt),
+      );
+    }
+
     try {
       const response = await fetch(`/api/internal/storage/uploads/${id}`, {
         method: "DELETE",
         headers: { ...INTERNAL_REQUEST_HEADERS },
         keepalive: true,
       });
-      if (response.ok) return;
+      // 204 だけが「片付いた」。404 はまだ現れていないだけかもしれず、503 は
+      // バケットにまだ残っているということ。
+      if (response.status === 204) return;
     } catch {
       // 次で試す。
     }

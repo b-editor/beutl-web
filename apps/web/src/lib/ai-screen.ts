@@ -140,21 +140,33 @@ export function canSubmitAiRequest({
  * ——支払い済みの結果へ戻る道が閉じる。利用者が中身を変えたのなら、それは新しい
  * 依頼なので、新しい名前で送る。
  *
- * ファイルは中身までは見ない。名前・大きさ・更新時刻が同じなら同じものとして
- * 扱う——違えば別のファイルで、指紋も変わる。
+ * 渡すのは、サーバーが指紋を取るのと同じもの——組み立てたあと、正規化したあとの
+ * 値。ここが細かすぎると、サーバーには同じ依頼が別の名前で届いて二度課金され、
+ * 粗すぎると、別の依頼が同じ名前で届いて断られるだけで済む。迷うなら粗いほうへ。
+ *
+ * ファイルは名前・種類・大きさで見分ける。更新時刻は見ない——同じ中身を作り直す
+ * たびに変わるので（動画から抜き出した音声がそうなる）、見ると同じ音声が別の
+ * 依頼になってしまう。サーバーは中身のハッシュで見分けるので、こちらが粗い。
  */
 export function requestSignature(
   parts: readonly (string | number | boolean | null | undefined | File)[],
 ): string {
+  // 型と長さを添える。区切りだけで繋ぐと、区切り文字を含む値や、境目のずれた
+  // 並びが同じ 1 本になり、別の依頼が同じ名前で送られる。
   return parts
     .map((part) => {
-      if (part === null || part === undefined) return "\u0000";
+      if (part === null || part === undefined) return "n";
       if (part instanceof File) {
-        return `file:${part.name}:${part.size}:${part.lastModified}`;
+        return field("f", `${part.name}\u001e${part.type}\u001e${part.size}`);
       }
-      return String(part);
+      if (typeof part === "string") return field("s", part);
+      return field("v", String(part));
     })
-    .join("\u001f");
+    .join("");
+}
+
+function field(kind: string, value: string): string {
+  return `${kind}${value.length}:${value}`;
 }
 
 /**
