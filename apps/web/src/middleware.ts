@@ -5,8 +5,8 @@ import { refuseOversizedAiUpload } from "@/lib/ai-upload-guard";
 // matcher は Next.js がこのファイルから静的に読み取るため、共有パッケージへ
 // 移さず各アプリで宣言する。処理本体は localeMiddleware に集約している。
 export function middleware(request: NextRequest) {
-  // 本文を組み立てる前に。Action が動きはじめてからでは、断るころには全部を
-  // 抱えている。
+  // Action が FormData を組み立てる前に。境界ではない——素通りする道は
+  // refuseOversizedAiUpload の説明にある。
   const oversized = refuseOversizedAiUpload(request);
   if (oversized) return oversized;
 

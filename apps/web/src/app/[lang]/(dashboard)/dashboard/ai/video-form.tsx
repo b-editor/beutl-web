@@ -64,34 +64,51 @@ function FramePicker({
   name,
   label,
   hint,
+  file,
   onPick,
+  clearLabel,
 }: {
   id: string;
   name: string;
   label: string;
   hint: string;
+  // 選ばれている絵そのもの。欄ではなくここが持ち主——欄はモデルの都合で画面から
+  // 外れ、外れれば選ばれていたものを忘れる。画面から消えても依頼は消えないので、
+  // 戻ってきたときに見せるのはこちら。
+  file: File | null;
   // どのフレームが選ばれているかは、依頼の一部。画面がそれを知らないと、
   // フレームだけ差し替えた依頼が前の依頼と同じ名前で送られ、断られる。
   onPick: (file: File | null) => void;
+  clearLabel: string;
 }) {
   const [preview, setPreview] = useState<string | null>(null);
+  // 外したときに欄そのものを作り直すための番号。欄はブラウザが持っていて、
+  // こちらからは空にできない——番号を変えて作り直すのが、選び直せる状態に
+  // 戻す唯一の方法。
+  const [pickerGeneration, setPickerGeneration] = useState(0);
 
+  // 見せているものを、持っているものに合わせる。欄が空でも持ち主が覚えていれば
+  // それを見せる——見えないまま送られるのは、画面が嘘をついているのと同じ。
   useEffect(() => {
-    return () => {
-      if (preview) URL.revokeObjectURL(preview);
-    };
-  }, [preview]);
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
-    onPick(file);
-    setPreview(file ? URL.createObjectURL(file) : null);
+    onPick(event.target.files?.[0] ?? null);
   }
 
   return (
     <div className="flex flex-col space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
       <Input
+        key={pickerGeneration}
         id={id}
         name={name}
         type="file"
@@ -99,6 +116,22 @@ function FramePicker({
         onChange={handleChange}
       />
       <p className="text-xs text-muted-foreground">{hint}</p>
+      {file && (
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-muted-foreground">{file.name}</p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              onPick(null);
+              setPickerGeneration((current) => current + 1);
+            }}
+          >
+            {clearLabel}
+          </Button>
+        </div>
+      )}
       {preview && (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
@@ -547,7 +580,9 @@ export function VideoForm({
               name="firstFrame"
               label={t("dashboard:ai.firstFrame")}
               hint={t("dashboard:ai.firstFrameHint")}
+              file={firstFrame}
               onPick={setFirstFrame}
+              clearLabel={t("dashboard:ai.clearFrame")}
             />
           )}
           {options.firstFrame && options.lastFrame && (
@@ -556,7 +591,9 @@ export function VideoForm({
               name="lastFrame"
               label={t("dashboard:ai.lastFrame")}
               hint={t("dashboard:ai.lastFrameHint")}
+              file={lastFrame}
               onPick={setLastFrame}
+              clearLabel={t("dashboard:ai.clearFrame")}
             />
           )}
         </AdvancedOptions>

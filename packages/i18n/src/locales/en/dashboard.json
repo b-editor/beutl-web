@@ -166,6 +166,7 @@
     "firstFrameHint": "The video starts from this image.",
     "lastFrame": "Last frame (optional)",
     "lastFrameHint": "The video is generated to end on this image.",
+    "clearFrame": "Clear",
     "generate": "Generate",
     "edit": "Edit",
     "transcribe": "Transcribe",

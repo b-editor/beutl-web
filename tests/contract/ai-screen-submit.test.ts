@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { refuseOversizedAiUpload } from "../../apps/web/src/lib/ai-upload-guard";
 import {
   aiScreenUploadLimit,
   MAX_AI_IMAGE_UPLOAD_BYTES,
@@ -355,5 +356,58 @@ describe("which request a screen is looking at", () => {
 
     expect(kept.map((model) => model.id)).toEqual(["model-x", "model-a", "model-b"]);
     expect(kept.filter((model) => !model.available)).toHaveLength(2);
+  });
+});
+
+describe("what the AI upload guard refuses", () => {
+  function requestOf(pathname: string, headers: Record<string, string>) {
+    return {
+      method: "POST",
+      nextUrl: { pathname },
+      headers: new Headers(headers),
+    } as unknown as Parameters<typeof refuseOversizedAiUpload>[0];
+  }
+
+  it("refuses a body larger than the screen it names", () => {
+    const over = String(MAX_AI_IMAGE_UPLOAD_BYTES * 4);
+    expect(
+      refuseOversizedAiUpload(requestOf("/ja/dashboard/ai/edit", {
+        "content-length": over,
+      }))?.status,
+    ).toBe(413);
+    expect(
+      refuseOversizedAiUpload(requestOf("/ja/dashboard/ai/edit", {
+        "content-length": "1024",
+      })),
+    ).toBeNull();
+  });
+
+  it("refuses a body that does not say how long it is", () => {
+    // 量が分からないまま通すことになる。この画面へ本文を送るのはブラウザの
+    // フォームと Server Action だけで、どちらも長さを付ける。
+    expect(
+      refuseOversizedAiUpload(requestOf("/ja/dashboard/ai/edit", {}))?.status,
+    ).toBe(411);
+  });
+
+  it("says nothing about a path it does not know", () => {
+    // Server Action は URL ではなく Next-Action ヘッダーの ID で選ばれるので、
+    // AI の Action は AI 以外のパスへも POST できる——ここは境界ではなく、
+    // 間違って大きなものを選んだ普通の利用者のための入口の狭めでしかない。
+    expect(
+      refuseOversizedAiUpload(requestOf("/ja/dashboard", {
+        "content-length": String(MAX_AI_IMAGE_UPLOAD_BYTES * 4),
+        "next-action": "abcdef0123456789",
+      })),
+    ).toBeNull();
+  });
+
+  it("leaves anything that is not a POST alone", () => {
+    const get = {
+      method: "GET",
+      nextUrl: { pathname: "/ja/dashboard/ai/edit" },
+      headers: new Headers({}),
+    } as unknown as Parameters<typeof refuseOversizedAiUpload>[0];
+    expect(refuseOversizedAiUpload(get)).toBeNull();
   });
 });
