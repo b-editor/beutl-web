@@ -9,16 +9,27 @@ export type ForgejoConfig = {
   proxySecret: string;
 };
 
+/**
+ * 足りていない設定の名前。**何が足りないかまで返す。**
+ *
+ * 「設定されているか」だけだと、呼び出し側は黙って抜けることしかできない。
+ * 定期実行がそれをやると、退会のやり直しもリポジトリの直しも止まったまま、
+ * 誰にも見えない。名前を返して、ログに出せるようにする。
+ */
+export function missingForgejoConfig(): string[] {
+  return [
+    !process.env.FORGEJO_BASE_URL && "FORGEJO_BASE_URL",
+    !process.env.FORGEJO_ADMIN_TOKEN && "FORGEJO_ADMIN_TOKEN",
+    !process.env.FORGEJO_PROXY_SECRET && "FORGEJO_PROXY_SECRET",
+  ].filter((name): name is string => typeof name === "string");
+}
+
 export function getForgejoConfig(): ForgejoConfig {
   const baseUrl = process.env.FORGEJO_BASE_URL;
   const adminToken = process.env.FORGEJO_ADMIN_TOKEN;
   const proxySecret = process.env.FORGEJO_PROXY_SECRET;
 
-  const missing = [
-    !baseUrl && "FORGEJO_BASE_URL",
-    !adminToken && "FORGEJO_ADMIN_TOKEN",
-    !proxySecret && "FORGEJO_PROXY_SECRET",
-  ].filter(Boolean);
+  const missing = missingForgejoConfig();
 
   if (missing.length > 0) {
     throw new ForgejoConfigurationError(
@@ -34,11 +45,7 @@ export function getForgejoConfig(): ForgejoConfig {
 }
 
 export function isForgejoConfigured(): boolean {
-  return Boolean(
-    process.env.FORGEJO_BASE_URL &&
-      process.env.FORGEJO_ADMIN_TOKEN &&
-      process.env.FORGEJO_PROXY_SECRET,
-  );
+  return missingForgejoConfig().length === 0;
 }
 
 /**

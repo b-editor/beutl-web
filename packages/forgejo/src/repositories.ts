@@ -242,6 +242,52 @@ export class RepairTakenOverError extends Error {
   }
 }
 
+/** 送ろうとした名前が、もうこのリポジトリを指していない。 */
+export class RepositoryMovedError extends Error {
+  constructor(
+    readonly forgejoRepoId: number,
+    expected: string,
+  ) {
+    super(`repository ${forgejoRepoId} is no longer ${expected}`);
+    this.name = "RepositoryMovedError";
+  }
+}
+
+/**
+ * **名前で送る直前に、その名前がまだこの id を指しているかを確かめる。**
+ *
+ * 直しは全て名前で送るしかない (contents API も archived の PATCH も id では
+ * 送れない)。id から名前を引いてから送るまでの間に、そのリポジトリが改名され、
+ * 空いた名前を別のリポジトリが取ることがある。確かめずに送ると、無関係な
+ * リポジトリに .gitattributes を書き込み、読み取り専用にし、そのうえで元の
+ * リポジトリの直しを「片付いた」として控えから外してしまう。
+ *
+ * 握り (holdRepair) では防げない。あれが見ているのは「この処理がまだ担当か」で
+ * あって、「その名前がまだこの相手か」ではない。
+ *
+ * 開いている幅はこの確認から送信までの 1 往復に縮まる。名前で送る以上、
+ * これ以上は詰められない。
+ */
+async function assertStillNamed(
+  owner: string,
+  repository: Pick<ForgejoRepository, "id" | "name">,
+): Promise<void> {
+  const current = await forgejoRequestOrNull<ForgejoRepository>(
+    `/repositories/${repository.id}`,
+    { timeoutMs: HELD_REQUEST_TIMEOUT_MS },
+  );
+  if (
+    !current ||
+    current.owner.login.toLowerCase() !== owner.toLowerCase() ||
+    current.name !== repository.name
+  ) {
+    throw new RepositoryMovedError(
+      repository.id,
+      `${owner}/${repository.name}`,
+    );
+  }
+}
+
 /**
  * 控えを積み、**自分が握る**。
  *
@@ -387,22 +433,27 @@ async function repairTemplates(
     // archived のままだと contents API は 423 を返す。直すには先に外す。
     if (repository.archived) {
       await holdRepair(repository.id, epoch);
+      await assertStillNamed(sudo, repository);
       await setRepositoryArchived(sudo, name, false);
     }
     await holdRepair(repository.id, epoch);
+    await assertStillNamed(sudo, repository);
     await commitTemplates(sudo, name, repository.default_branch);
+    // 照合も名前で読む。読む直前にも確かめないと、入れ替わった別のリポジトリの
+    // 中身を見て「揃っている」と結論しうる。
+    await assertStillNamed(sudo, repository);
     await assertTemplatesAreCanonical(sudo, name);
     return { state: "repaired" };
   } catch (error) {
     // 引き取られたなら、掛け直すのも引き取った側の仕事。触らずに抜ける。
     if (error instanceof RepairTakenOverError) throw error;
+    // 名前が別のリポジトリに移っていた。読み取り専用にするのも名前で送るので、
+    // ここで掛けにいくと無関係なリポジトリを止めてしまう。触らずに投げ直す。
+    if (error instanceof RepositoryMovedError) throw error;
     // 長いコミットの後に握りが切れていることがある。読み取り専用にするのも
     // 外部への変更なので、その直前にも確かめる。
-    try {
-      await holdRepair(repository.id, epoch);
-    } catch (takenOver) {
-      throw takenOver;
-    }
+    await holdRepair(repository.id, epoch);
+    await assertStillNamed(sudo, repository);
     const locked = await lockRepository(
       sudo,
       repository,
@@ -519,6 +570,44 @@ const CREATION_MISSING_GRACE_MS = 30 * 60 * 1000;
 const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
 
 /**
+ * 照合できない予約を諦めるまでの幅。
+ *
+ * 元の名前が控えられていない改名の予約は、何度見ても判断材料が増えない。押さえた
+ * ままにすると外す条件が永久に来ず、その名前を恒久的に塞ぐ。何もせずに名前だけ
+ * 手放すのは安全な側 (利用者のリポジトリには触らない)。要求が始まってからこの幅を
+ * 過ぎたら、記録を残して外す。
+ */
+const UNMATCHABLE_RESERVATION_GRACE_MS = 30 * 60 * 1000;
+
+/** 預かり名の接頭辞。行に何の操作かを持たせる前から、これだけは付けてきた。 */
+const HOLDING_PREFIXES = [
+  { prefix: "beutl-delete-", operation: GitRepositoryOperation.DELETE },
+  { prefix: "beutl-rename-", operation: GitRepositoryOperation.RENAME },
+] as const;
+
+/**
+ * 予約が何をしている最中のものかを決める。
+ *
+ * **列の値だけを信じない。** `operation` は後から足した列で、既定値は CREATE。
+ * migration を先に当てて Worker を後から入れ替える手順では、その間に旧 Worker が
+ * 積んだ行が CREATE のまま残り、後から分類し直す機会がもう無い。CREATE として
+ * 拾うと、改名の後始末が預かりものの流れに入り、利用者が編集した .gitattributes を
+ * 「直す」対象にしてしまう。
+ *
+ * 預かり名の接頭辞は最初から付いているので、そちらでも判断する。
+ */
+function reservationOperation(entry: {
+  operation: GitRepositoryOperation;
+  holdingName: string;
+}): GitRepositoryOperation {
+  if (entry.operation !== GitRepositoryOperation.CREATE) return entry.operation;
+  const known = HOLDING_PREFIXES.find((candidate) =>
+    entry.holdingName.startsWith(candidate.prefix),
+  );
+  return known ? known.operation : entry.operation;
+}
+
+/**
  * 控え 1 件を片付ける。@returns 控えを外してよいか。
  *
  * 控えには 2 種類ある。混ぜてはいけない。
@@ -562,8 +651,13 @@ async function settleRepositoryRepair(
     return false;
   }
 
-  // 既定値が揃っていなければ先に直す。揃うまでは渡さない。
-  if (!(await hasTemplates(owner, current.name))) {
+  // 既定値が揃っているかも名前で読む。揃っていた場合は何も送らずに片付ける
+  // ことになるので、**読んだ相手がこの id だったこと**を確かめてから決める。
+  // 確かめずに片付けると、入れ替わった別のリポジトリの中身を見て、直っていない
+  // リポジトリの控えを外すことになる。
+  if (await hasTemplates(owner, current.name)) {
+    await assertStillNamed(owner, current);
+  } else {
     const outcome = await repairTemplates(owner, current, epoch);
     if (outcome.state !== "repaired") {
       // 直せなかった。預かりものなら渡さずに控えを残す (管理者の手元にある限り
@@ -597,6 +691,7 @@ async function settleRepositoryRepair(
   // 譲渡は済んでいて改名だけが残っている。
   if (current.name !== handover.name) {
     await holdRepair(entry.forgejoRepoId, epoch);
+    await assertStillNamed(owner, current);
     try {
       await forgejoRequest(
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(current.name)}`,
@@ -682,10 +777,12 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         holding.owner.login.toLowerCase() ===
           entry.ownerUsername.toLowerCase() &&
         holding.name === entry.name;
+      const operation = reservationOperation(entry);
+
       // 削除の予約は、消えたかどうかを確かめるだけ。**自動では消し直さない。**
       // 消すのは取り返しがつかないので、残っていたら「行われなかった」として
       // 名前を解放し、やり直すかどうかは利用者に委ねる。
-      if (entry.operation === GitRepositoryOperation.DELETE) {
+      if (operation === GitRepositoryOperation.DELETE) {
         if (holding) {
           // **まだ残っている = 削除が行われなかった、ではない。** 待つのをやめた
           // 後に Forgejo が確定させることがある。始めてからしばらくは押さえたまま
@@ -710,22 +807,41 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
 
       // 改名の予約は、名前が変わったかを確かめるだけ。控えに載せて渡し切る流れに
       // 乗せると、利用者が編集した .gitattributes を「直す」対象にしてしまう。
-      if (
-        holding &&
-        !settled &&
-        entry.operation === GitRepositoryOperation.RENAME
-      ) {
-        // **元の名前が控えられていない予約は動かさない。** 控えが無いものを
-        // 「今の名前が元の名前だ」と読むと、利用者が後から付け直した名前まで
-        // 書き換えてしまう。元の名前は、その取り違えを防ぐためだけにある。
+      if (holding && !settled && operation === GitRepositoryOperation.RENAME) {
+        // 元の名前が控えられていない行は、何度見ても判断材料が増えない。
+        // 押さえたままだと名前を恒久的に塞ぐので、しばらく置いてから手放す。
+        // 何もせずに手放すだけなので、利用者のリポジトリには触らない。
+        if (entry.sourceName === null) {
+          if (
+            Date.now() - entry.createdAt.getTime() <
+            UNMATCHABLE_RESERVATION_GRACE_MS
+          ) {
+            continue;
+          }
+          console.error(
+            `rename reservation ${entry.id} has no source name; ` +
+              `releasing ${entry.ownerUsername}/${entry.name} without renaming`,
+          );
+          await releaseGitRepositoryReservationsByIntent({
+            intentId: entry.intentId ?? epoch,
+          }).catch(() => undefined);
+          await releaseGitRepositoryReservation({
+            id: entry.id,
+            intentId: epoch,
+          });
+          continue;
+        }
+        // 控えてある元の名前と**そのまま**突き合わせる。「今の名前が元の名前だ」と
+        // 読み替えると、利用者が後から付け直した名前まで書き換えてしまう。
         if (
-          entry.sourceName !== null &&
           holding.owner.login.toLowerCase() ===
             entry.ownerUsername.toLowerCase() &&
           holding.name === entry.sourceName
         ) {
           // まだ元の名前のまま。改名だけやり直す。
           await holdReservation(entry.id, epoch);
+          // 送るのは名前。その名前がまだこの相手を指しているかを直前に確かめる。
+          await assertStillNamed(holding.owner.login, holding);
           await forgejoRequest(
             `/repos/${encodeURIComponent(holding.owner.login)}/${encodeURIComponent(holding.name)}`,
             {
@@ -954,6 +1070,7 @@ async function handOver(
   // ここで初めて利用者のものになる。既定値は入り終わっている。
   // id は変わらない (16.0.2 で実測)。
   await holdRepair(repoId, epoch);
+  await assertStillNamed(admin, { id: repoId, name: holdingName });
   const transferred = await forgejoRequest<ForgejoRepository>(
     `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(holdingName)}/transfer`,
     { method: "POST", body: { new_owner: intendedOwner } },
@@ -1322,17 +1439,52 @@ export async function renameRepository(
   }
 }
 
+/**
+ * 説明文を書き換える。
+ *
+ * **送る直前に相手を確かめる。** 改名で空いた名前を別のリポジトリが取ることが
+ * あるので、名前だけで送ると他人の説明文を書き換えうる。改名や削除ほどの実害は
+ * 無いが、名前で送る操作は全て同じ扱いにする。
+ */
 export async function updateRepositoryDescription(
   sudo: string,
   owner: string,
   name: string,
   description: string,
 ) {
+  const current = await getRepository(sudo, owner, name);
+  if (!current) {
+    throw new ForgejoError(
+      404,
+      "PATCH",
+      `/repos/${owner}/${name}`,
+      `repository ${owner}/${name} does not exist`,
+    );
+  }
+
+  const stillThere = await forgejoRequestOrNull<ForgejoRepository>(
+    `/repositories/${current.id}`,
+    { timeoutMs: HELD_REQUEST_TIMEOUT_MS },
+  );
+  if (
+    !stillThere ||
+    stillThere.owner.login.toLowerCase() !== owner.toLowerCase() ||
+    stillThere.name !== name
+  ) {
+    throw new ForgejoError(
+      409,
+      "PATCH",
+      `/repos/${owner}/${name}`,
+      `repository ${owner}/${name} is no longer id ${current.id}`,
+    );
+  }
+
   return await forgejoRequest<ForgejoRepository>(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
     {
       method: "PATCH",
       sudo,
+      timeoutMs: HELD_REQUEST_TIMEOUT_MS,
       body: { description },
     },
   );

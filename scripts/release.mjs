@@ -78,16 +78,33 @@ function migrateStatus() {
 // 「本番に入っているのに手元に無い」= この分岐が main より古い時点から生えている。
 // そのまま当てると順序が入れ替わり、以後ずっと食い違いが残る。
 const DIVERGED = "not found locally";
+// 履歴そのものが食い違っている。上と一緒に出ることが多いが、単独でも出る。
+const DRIFT = "migration history and the migrations table from your database are different";
+// **通してよい唯一の非 0**。まだ当てていないものがあるのは、これから当てるのだから当然。
+const PENDING = "have not yet been applied";
 
 step("当てる前に食い違いを見ています");
 if (!dryRun) {
   const before = migrateStatus();
   process.stdout.write(before.out);
-  if (before.out.includes(DIVERGED)) {
+  if (before.out.includes(DIVERGED) || before.out.includes(DRIFT)) {
     console.error(
       "\nerror: 本番に入っているマイグレーションがこの分岐にありません。" +
         "\n       main に追従してから配備してください。" +
         "\n       このまま当てると順序が入れ替わり、後から直せません。" +
+        "\n       データベースには何もしていません。",
+    );
+    process.exit(1);
+  }
+  // **知っている形以外は通さない。** 特定の文言だけを探していると、checksum の
+  // 不一致・途中で失敗した migration・接続の失敗といった別の異常が「食い違いは
+  // 無い」として素通りする。deploy 側が落ちるとしても、この検査が門である以上、
+  // 門が見ていないことを見ているように見せてはいけない。
+  if (!before.ok && !before.out.includes(PENDING)) {
+    console.error(
+      "\nerror: マイグレーションの状態を判断できませんでした (上の出力を確認して" +
+        "ください)。" +
+        "\n       まだ当てていないものがある、という形ではありません。" +
         "\n       データベースには何もしていません。",
     );
     process.exit(1);

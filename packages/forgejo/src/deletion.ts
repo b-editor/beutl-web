@@ -26,7 +26,7 @@ import {
 } from "@beutl/db";
 import { forgejoRequest, forgejoRequestOrNull } from "./client";
 import { tokensPath } from "./credentials";
-import { ForgejoAccountMismatchError, ForgejoError } from "./errors";
+import { ForgejoError } from "./errors";
 import { assertMappingMatches, noreplyEmailFor } from "./provisioning";
 import type { ForgejoAccessToken, ForgejoUser } from "./types";
 
@@ -143,23 +143,6 @@ async function findByNoreplyEmail(
   const matches = (found?.data ?? []).filter((user) => user.email === email);
   if (matches.length !== 1) return null;
   return { username: matches[0].login, id: matches[0].id };
-}
-
-/**
- * 控えに名前が無い場合だけ、合成メールから探す。
- *
- * 「探した結果いなかった」と「探せなかった」を混ぜない。混ぜると、Forgejo が
- * 一時的に落ちているだけで人の確認待ちに落ちてしまい、自動では二度と進まない。
- */
-async function findUnmappedTarget(
-  userId: string,
-): Promise<{ found: string | null } | { failed: unknown }> {
-  try {
-    const target = await resolveForgejoUser(userId);
-    return { found: target?.username ?? null };
-  } catch (error) {
-    return { failed: error };
-  }
 }
 
 /**

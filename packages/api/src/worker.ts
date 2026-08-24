@@ -26,7 +26,7 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
-import { reconcileGitAccountDeletionTombstones, retryGitRepositoryRepairs, isForgejoConfigured, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
+import { reconcileGitAccountDeletionTombstones, retryGitRepositoryRepairs, missingForgejoConfig, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -156,7 +156,20 @@ export default {
    */
   async reconcileGitDeletions(): Promise<void> {
 
-    if (!isForgejoConfigured()) return;
+    // **黙って抜けない。** ここで止まると、退会のやり直しも、復活したアカウントの
+    // 消し直しも、リポジトリの直しも全部止まる。どれも利用者からは見えないので、
+    // 気付ける手がかりはここしかない。
+    //
+    // ログに出すだけでなく投げる。cron の失敗として記録が残らないと、ログを
+    // 読みにいく人がいない限り、止まっていることに誰も気付けない。
+    const missing = missingForgejoConfig();
+    if (missing.length > 0) {
+      const message =
+        `git cleanup did not run: ${missing.join(", ")} ` +
+        "is not set on beutl-web-api";
+      console.error(message);
+      throw new Error(message);
+    }
 
     try {
       const stale = await releaseExpiredGitAccountDeletionBlocks();

@@ -89,6 +89,11 @@ export const auditLogActions = {
     // 発行したトークンの控えを残せず、Forgejo 側の取り消しにも失敗した。
     // 一覧に出ないので利用者は失効できない。手で消すための手掛かりを残す。
     credentialOrphaned: "git.credentialOrphaned",
+    // 対応表に無い Forgejo アカウントを、合成メールから本人のものと判断して
+    // 引き取った。作成の応答を落とした後にだけ起きる。**普段は起きない経路**なので、
+    // 起きたことが分かるように残す (誰の何を引き取ったかが後から追えないと、
+    // 対応表が正しいかを確かめる手立てが無い)。
+    accountAdopted: "git.accountAdopted",
   },
 } as const;
 

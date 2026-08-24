@@ -60,7 +60,27 @@ vi.mock("@beutl/db", () => ({
   findGitCredential: async () => null,
   createGitCredential: async () => ({ id: "c1" }),
   deleteGitCredential: async () => undefined,
+  // repositories.ts は読み込みの時点でこれを見る (預かり名の接頭辞表を組み立てる)。
+  // 足りないと、この観点とは関係なくファイルごと読み込めなくなる。
+  GitRepositoryOperation: {
+    CREATE: "CREATE",
+    RENAME: "RENAME",
+    DELETE: "DELETE",
+  },
+  auditLogActions: {
+    git: {
+      accountProvisioned: "git.accountProvisioned",
+      accountAdopted: "git.accountAdopted",
+      credentialOrphaned: "git.credentialOrphaned",
+    },
+  },
+  createAuditLog: async ({ action }: { action: string }) => {
+    audited.push(action);
+    return undefined;
+  },
 }));
+
+let audited: string[] = [];
 
 let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
@@ -86,6 +106,7 @@ function json(body: unknown, status = 200) {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  audited = [];
   pendingDeletion = null;
   deletionIntentOwner = null;
   profileUserName = "someone";
@@ -162,6 +183,10 @@ describe("Forgejo ユーザーの採番", () => {
       forgejoUsername: "someone",
       created: false,
     });
+
+    // 普段は通らない経路。誰の何を引き取ったかが残らないと、対応表が正しいかを
+    // 後から確かめる手立てが無い。
+    expect(audited).toContain("git.accountAdopted");
   });
 
   it("記号が続く名前でも Forgejo が受け付ける形に畳む", async () => {

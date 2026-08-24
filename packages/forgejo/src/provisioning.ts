@@ -1,4 +1,6 @@
 import {
+  auditLogActions,
+  createAuditLog,
   createGitAccount,
   existsGitAccountUsername,
   findGitAccountByUserId,
@@ -230,6 +232,19 @@ export async function ensureGitAccount(userId: string): Promise<{
               userId,
               forgejoUserId: orphan.id,
               forgejoUsername: orphan.login,
+            });
+            await createAuditLog({
+              userId,
+              action: auditLogActions.git.accountAdopted,
+              details:
+                `Forgejo user ${orphan.login} (id ${orphan.id}) was adopted ` +
+                `for ${userId}; it had been created without a record`,
+              ipAddress: null,
+              userAgent: null,
+              port: null,
+            }).catch((auditError) => {
+              // 対応表は書けている。記録が残せなくても引き取り自体は成立する。
+              console.error("failed to record the adopted account", auditError);
             });
             return {
               forgejoUserId: orphan.id,
