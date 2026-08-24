@@ -401,8 +401,9 @@ export async function listPurgedGitAccountDeletions({
   return await db.gitAccountDeletion.findMany({
     where: {
       phase: GitAccountDeletionPhase.PURGED,
-      // 控えた相手が分からない行は照合しようがない。
-      forgejoUsername: { not: null },
+      // **名前が控えられていない行も返す。** 相手の名前が分からなくても、合成
+      // メールなら userId から決まるので引ける。むしろその行こそ、待つのをやめた
+      // 後に Forgejo 側で作成が確定したアカウントを拾える唯一の手掛かりになる。
       // 2 つの OR を並べると後の方で上書きされ、期限の絞り込みが黙って消える。
       // そうなると、掴まれている行が先頭を占めたまま後ろが処理されない。
       AND: [
@@ -447,7 +448,8 @@ export async function countPurgedGitAccountDeletionsToCheck({
   return await db.gitAccountDeletion.count({
     where: {
       phase: GitAccountDeletionPhase.PURGED,
-      forgejoUsername: { not: null },
+      // 数える対象は listPurgedGitAccountDeletions と同じにする。片方だけ絞ると、
+      // 「残り 0」と言いながら見ていない行がある状態になる。
       OR: [
         { lastAttemptAt: null },
         { lastAttemptAt: { lt: checkedBefore } },

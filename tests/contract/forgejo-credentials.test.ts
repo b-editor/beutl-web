@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// 本物の reserveGitRepositoryName は一意制約の違反をこの型に畳んで投げる。
+// 名前を押さえる側はこの型を見て「今その名前は動いている」と判断する。
+class FakeNameTaken extends Error {
+  constructor(owner: string, name: string) {
+    super(`${owner}/${name} is taken`);
+    this.name = "GitRepositoryNameTakenError";
+  }
+}
+
 // git 資格情報の発行・失効が Forgejo に投げるリクエストと、レスポンスの読み取りを固定する。
 //
 // レスポンスの形は Forgejo 16.0.2+gitea-1.22.0 の実機で確認したもの:
@@ -115,9 +124,8 @@ vi.mock("@beutl/db", () => ({
   }) => {
     const key = `${ownerUsername}/${name.toLowerCase()}`;
     if (reservations.has(key)) {
-      const error: Error & { code?: string } = new Error("taken");
-      error.code = "P2002";
-      throw error;
+      // 本物は一意制約の違反をこの型に畳んでから投げる。
+      throw new FakeNameTaken(ownerUsername, name);
     }
     reservations.set(key, { id: key, holdingName, forgejoRepoId: null });
     return key;
@@ -253,6 +261,7 @@ vi.mock("@beutl/db", () => ({
           createdAt: new Date(0),
         }
       : null,
+  GitRepositoryNameTakenError: FakeNameTaken,
   createGitCredential: async (input: Record<string, unknown>) => {
     if (dbInsertFails) {
       throw Object.assign(new Error("unique constraint"), { code: "P2002" });
@@ -674,13 +683,16 @@ describe("リポジトリの作成", () => {
       if (method === "PATCH" && path.includes("/repos/someone/")) {
         return json({ id: 7, name: "proj", owner: { id: 2, login: "someone" } });
       }
-      // 畳むときは id で今の姿を確かめてから消す。
+      // 畳むときも、名前で送る直前の照合でも、id で今の姿を引く。
+      // 譲渡が済んでいれば所有者は変わっている (預かり名のまま渡る)。
       if (method === "GET" && path.endsWith("/repositories/7")) {
         return json({
           id: 7,
           name: holdingName,
           default_branch: "main",
-          owner: { id: 1, login: "beutl-admin" },
+          owner: state.transferred
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
         });
       }
       if (method === "DELETE" && path.includes("/repos/beutl-admin/")) {
@@ -826,7 +838,9 @@ describe("リポジトリの作成", () => {
         return json({
           id: 7,
           name: holdingName,
-          owner: { id: 1, login: "beutl-admin" },
+          owner: transferred
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
         });
       }
       if (method === "POST" && path.endsWith("/user/repos")) {
@@ -1308,7 +1322,9 @@ describe("直せなかったリポジトリの片付け", () => {
         return json({
           id: 9,
           name: holdingName,
-          owner: { id: 1, login: "beutl-admin" },
+          owner: queuedBeforeTransfer.length
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
         });
       }
       if (method === "POST" && path.endsWith("/user/repos")) {
@@ -1474,7 +1490,10 @@ describe("預かったままのリポジトリ", () => {
           name: "beutl-holding-abc",
           default_branch: "main",
           archived: false,
-          owner: { id: 1, login: "beutl-admin" },
+          // 譲渡が済めば所有者は渡す先に変わる (名前は預かり名のまま)。
+          owner: transferredTo
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
         });
       }
       if (path.includes("/contents/.gitattributes")) {
@@ -1811,7 +1830,10 @@ describe("作成の予約", () => {
           name: "beutl-holding-lost",
           default_branch: "main",
           archived: false,
-          owner: { id: 1, login: "beutl-admin" },
+          // 譲渡が済めば所有者は渡す先に変わる (名前は預かり名のまま)。
+          owner: transferredTo
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
         });
       }
       if (path.includes("/contents/.gitattributes")) {
@@ -2637,5 +2659,152 @@ describe("予約の種別は配備の順序に依存しない", () => {
 
     expect(renamedTo).toBeNull();
     expect(releasedIds).toContain("p2");
+  });
+});
+
+describe("名前を押さえてから触る", () => {
+  it("その名前を誰かが動かしている間は、直しに入らない", async () => {
+    // id を確かめるだけでは、確認から送信までの 1 往復が開いたまま。その間に
+    // 相手が改名され、空いた名前を別のリポジトリが取ると、無関係な相手へ
+    // .gitattributes を書き、読み取り専用を掛けてしまう。名前そのものを押さえる。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, {
+      forgejoRepoId: 5,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+    // 別の操作 (作成・改名・削除のどれか) が既にこの名前を押さえている。
+    reservations.set("someone/proj", {
+      id: "someone/proj",
+      holdingName: "beutl-holding-other",
+      forgejoRepoId: 6,
+    });
+    let committed = false;
+    let archivedTo: boolean | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.includes("/contents/.git")) {
+        return json({ message: "not found" }, 404);
+      }
+      if (method === "POST" && path.endsWith("/contents")) {
+        committed = true;
+        return json({}, 201);
+      }
+      if (method === "PATCH") {
+        archivedTo = JSON.parse(String(init?.body)).archived ?? null;
+        return json({ id: 5, name: "proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    // Forgejo には何も送らない。控えは残るので次の周回でやり直す。
+    expect(committed).toBe(false);
+    expect(archivedTo).toBeNull();
+    expect([...repairQueue.keys()]).toEqual([5]);
+  });
+
+  it("譲渡の間は、渡す先の名前空間でも預かり名を押さえる", async () => {
+    // 譲渡した瞬間から利用者はそのリポジトリの持ち主になる。最後の改名まで、
+    // 渡す先の名前空間でその名前を誰も守っていない状態を作らない。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, {
+      forgejoRepoId: 5,
+      ownerUsername: "beutl-admin",
+      name: "beutl-holding-abc",
+      intendedOwner: "someone",
+      intendedName: "proj",
+    });
+    let heldAtTransfer: string[] = [];
+    let transferred = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "beutl-holding-abc",
+          default_branch: "main",
+          owner: transferred
+            ? { id: 2, login: "someone" }
+            : { id: 1, login: "beutl-admin" },
+        });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        heldAtTransfer = [...reservations.keys()];
+        transferred = true;
+        return json({
+          id: 5,
+          name: "beutl-holding-abc",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH") {
+        return json({ id: 5, name: "proj", owner: { id: 2, login: "someone" } });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(heldAtTransfer).toContain("someone/beutl-holding-abc");
+    // 終わったら手放す。押さえたままにすると、その名前を永久に塞ぐ。
+    expect(reservations.size).toBe(0);
+  });
+
+  it("押さえただけの予約は、放置されていれば名前を手放すだけ", async () => {
+    // やり残した作業は控え (リポジトリ id) の側にあるので、こちらは名前を
+    // 手放すだけでよい。預かりものの流れに乗せると、利用者が編集した
+    // .gitattributes を「直す」対象にしてしまう。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "h1",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-repair-abandoned",
+        forgejoRepoId: 88,
+        operation: "CREATE",
+        sourceName: null,
+      },
+    ];
+    let touched = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method !== "GET") touched = true;
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("h1");
+    expect(touched).toBe(false);
+    expect(repairQueue.size).toBe(0);
   });
 });

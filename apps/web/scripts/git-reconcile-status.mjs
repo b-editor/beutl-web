@@ -48,8 +48,12 @@ export async function collectGitReconcileStatus(prisma, generation) {
         where: { ...tracked, ...notChecked, lastError: { not: null } },
       }),
       prisma.gitAccountDeletion.count({ where: { phase: "NEEDS_REVIEW" } }),
+      // **名前を控えていない墓標。** 相手の名前が分からなくても、合成メールは
+      // userId から決まるので引ける。だから「確認できない」ではなく「この世代で
+      // まだ確認していない」を数える。確認済みまで数えると、Git を使わずに退会した
+      // 人がいるだけで復旧が開けられなくなる。
       prisma.gitAccountDeletion.count({
-        where: { ...purged, forgejoUsername: null },
+        where: { ...purged, forgejoUsername: null, ...notChecked },
       }),
       // **消し切れていない退会。** Forgejo 側の purge が失敗した行はここに残る。
       // 数えないと、退会したはずのアカウントと端末のトークンが生きたまま

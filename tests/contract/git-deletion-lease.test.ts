@@ -197,6 +197,7 @@ vi.mock("@beutl/db", async (importOriginal) => {
       actual.countPurgedGitAccountDeletionsToCheck,
     ),
     markGitAccountDeletionPurged: withFake(actual.markGitAccountDeletionPurged),
+    deleteGitAccountDeletion: withFake(actual.deleteGitAccountDeletion),
     touchGitAccountDeletion: withFake(actual.touchGitAccountDeletion),
     claimGitAccountDeletion: withFake(actual.claimGitAccountDeletion),
     renewGitAccountDeletionLease: withFake(actual.renewGitAccountDeletionLease),
@@ -722,5 +723,60 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     ).resolves.toMatchObject({ checked: 1, remaining: 0 });
     // 見た世代を書く。これで「この復元より後に確認した」が時計抜きで分かる。
     expect(rows.get("u1")?.checkedGeneration).toBe("gen-1");
+  });
+
+  it("名前を控えていない墓標も、合成メールで見張る", async () => {
+    // 作成の待ち時間が切れた後に Forgejo 側だけ確定すると、合成メールを持つ
+    // アカウントだけが残る。名前で引く手掛かりは無いが、メールは userId から
+    // 決まる。飛ばすと、誰も追えないアカウントになる。
+    tombstone({ forgejoUsername: null, forgejoUserId: null });
+    liveUsers.delete("u1");
+    respondWith(purgedUser);
+    searchResult = [purgedUser];
+
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1, repurged: 1 });
+
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => ({
+        url: String(url),
+        method: (init as RequestInit | undefined)?.method ?? "GET",
+      })),
+    ).toContainEqual(
+      expect.objectContaining({
+        method: "DELETE",
+        url: expect.stringContaining("/admin/users/someone"),
+      }),
+    );
+  });
+
+  it("名前の無い墓標は、見つからないまま日が経てば消す", async () => {
+    // 守っているのは「待つのをやめた後に作成が確定する」一瞬だけ。残し続けると、
+    // Git を一度も使わなかった利用者の userId を理由なく保持することになる。
+    tombstone({
+      forgejoUsername: null,
+      forgejoUserId: null,
+      purgedAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+    });
+    liveUsers.delete("u1");
+    respondWith(null);
+
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1 });
+    expect(rows.has("u1")).toBe(false);
+  });
+
+  it("名前を控えてある墓標は、見つからなくても残す", async () => {
+    // こちらは復元で生き返ることがあるので見張り続ける。
+    tombstone({ purgedAt: new Date(Date.now() - 48 * 60 * 60 * 1000) });
+    liveUsers.delete("u1");
+    respondWith(null);
+
+    await expect(
+      reconcileGitAccountDeletionTombstones(),
+    ).resolves.toMatchObject({ checked: 1 });
+    expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.PURGED);
   });
 });

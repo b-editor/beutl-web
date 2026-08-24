@@ -1,6 +1,7 @@
 import {
   attachGitRepositoryCreationId,
   auditLogActions,
+  GitRepositoryNameTakenError,
   claimGitRepositoryRepair,
   claimGitRepositoryCreation,
   clearGitRepositoryCreationMissing,
@@ -254,6 +255,61 @@ export class RepositoryMovedError extends Error {
 }
 
 /**
+ * 直しの間だけ名前を押さえるときの預かり名。
+ *
+ * この接頭辞の予約は**名前を押さえているだけ**で、やり残した作業を表さない
+ * (作業そのものは GitRepositoryRepair 側にリポジトリ id で積んである)。
+ * だから放置されていても、後始末は名前を手放すだけでよい。
+ */
+const REPAIR_HOLDING_PREFIX = "beutl-repair-";
+
+/**
+ * これから触る名前を押さえる。
+ *
+ * **id を確かめるだけでは足りない。** 確認から送信までの 1 往復は開いたままで、
+ * その間に相手が改名され、空いた名前を別のリポジトリが取れる。予約を取れば、
+ * 作成・改名・削除はどれも同じ一意キー (所有者, 小文字化した名前) を取りにいくので、
+ * 押さえている間は誰もその名前を動かせない。Forgejo を触るのはこちらの経路だけ
+ * なので、これで直列化できる。
+ *
+ * @returns 予約の id。取れなければ null (今その名前を誰かが動かしている)。
+ */
+async function holdName(
+  owner: string,
+  name: string,
+  forgejoRepoId: number,
+  epoch: string,
+): Promise<string | null> {
+  let reservation: string;
+  try {
+    reservation = await reserveGitRepositoryName({
+      ownerUsername: owner,
+      name,
+      holdingName: `${REPAIR_HOLDING_PREFIX}${crypto.randomUUID()}`,
+      intentId: epoch,
+      leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+    });
+  } catch (error) {
+    if (error instanceof GitRepositoryNameTakenError) return null;
+    throw error;
+  }
+  // 相手を控える。取り残された場合に、何を押さえていたのかを追えるようにする。
+  await attachGitRepositoryCreationId({
+    id: reservation,
+    intentId: epoch,
+    forgejoRepoId,
+  }).catch(() => undefined);
+  return reservation;
+}
+
+/** 押さえた名前を手放す。決着の有無によらず、握っていた分だけ外す。 */
+async function releaseName(id: string, epoch: string): Promise<void> {
+  await releaseGitRepositoryReservation({ id, intentId: epoch }).catch(
+    () => undefined,
+  );
+}
+
+/**
  * **名前で送る直前に、その名前がまだこの id を指しているかを確かめる。**
  *
  * 直しは全て名前で送るしかない (contents API も archived の PATCH も id では
@@ -265,8 +321,9 @@ export class RepositoryMovedError extends Error {
  * 握り (holdRepair) では防げない。あれが見ているのは「この処理がまだ担当か」で
  * あって、「その名前がまだこの相手か」ではない。
  *
- * 開いている幅はこの確認から送信までの 1 往復に縮まる。名前で送る以上、
- * これ以上は詰められない。
+ * **これだけでは足りない。** 確認から送信までの 1 往復は開いたままなので、
+ * 名前そのものを押さえたうえで (holdName)、押さえた後にこれで確かめる。
+ * 押さえる前の姿を確かめても、押さえた時点の姿とは限らない。
  */
 async function assertStillNamed(
   owner: string,
@@ -651,6 +708,45 @@ async function settleRepositoryRepair(
     return false;
   }
 
+  // **これから触る名前を押さえる。** 押さえずに進めると、id を確かめてから送る
+  // までの 1 往復の間に相手が改名され、空いた名前を取った別のリポジトリへ
+  // .gitattributes を書き、読み取り専用を掛けてしまう。
+  const held = await holdName(owner, current.name, entry.forgejoRepoId, epoch);
+  if (held === null) {
+    // 今その名前を誰かが動かしている (作成・改名・削除のどれか)。割り込まない。
+    // 控えは残るので、次の周回でやり直す。
+    return false;
+  }
+  try {
+    return await settleHeldRepair(entry, epoch, current, owner, admin, handover);
+  } finally {
+    await releaseName(held, epoch);
+  }
+}
+
+/**
+ * 名前を押さえた状態で直しを進める。@returns 控えを外してよいか。
+ *
+ * 押さえているのは `current` の時点の (所有者, 名前)。譲渡でそこから動く場合は、
+ * 動いた先の名前を handOver がもう一度押さえる。
+ */
+async function settleHeldRepair(
+  entry: {
+    forgejoRepoId: number;
+    intendedOwner: string | null;
+    intendedName: string | null;
+    reservationId: string | null;
+  },
+  epoch: string,
+  current: ForgejoRepository,
+  owner: string,
+  admin: string,
+  handover: { owner: string; name: string } | null,
+): Promise<boolean> {
+  // **押さえた後にもう一度確かめる。** 押さえる前に見た姿は、押さえた時点の姿とは
+  // 限らない。ここを通れば、以後この名前は誰も動かせない。
+  await assertStillNamed(owner, current);
+
   // 既定値が揃っているかも名前で読む。揃っていた場合は何も送らずに片付ける
   // ことになるので、**読んだ相手がこの id だったこと**を確かめてから決める。
   // 確かめずに片付けると、入れ替わった別のリポジトリの中身を見て、直っていない
@@ -750,6 +846,15 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
     }
 
     try {
+      // **名前を押さえていただけの予約。** Forgejo は見ない。やり残した作業は控え
+      // (リポジトリ id) の側にあるので、ここは名前を手放すだけでよい。見に行くと、
+      // 相手の今の姿によっては預かりものの流れに乗せてしまい、利用者が編集した
+      // .gitattributes を「直す」対象にする。
+      if (entry.holdingName.startsWith(REPAIR_HOLDING_PREFIX)) {
+        await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
+        continue;
+      }
+
       // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
       // 2 つに分かれる。渡し切った側が予約も外す。
       if (entry.forgejoRepoId) {
@@ -1067,22 +1172,51 @@ async function handOver(
   repoId: number,
   epoch: string,
 ): Promise<ForgejoRepository> {
-  // ここで初めて利用者のものになる。既定値は入り終わっている。
-  // id は変わらない (16.0.2 で実測)。
-  await holdRepair(repoId, epoch);
-  await assertStillNamed(admin, { id: repoId, name: holdingName });
-  const transferred = await forgejoRequest<ForgejoRepository>(
-    `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(holdingName)}/transfer`,
-    { method: "POST", body: { new_owner: intendedOwner } },
-  );
-  if (transferred.name === intendedName) return transferred;
-  await holdRepair(repoId, epoch);
-  // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
-  // 作成の前に確かめてある。
-  return await forgejoRequest<ForgejoRepository>(
-    `/repos/${encodeURIComponent(intendedOwner)}/${encodeURIComponent(transferred.name)}`,
-    { method: "PATCH", body: { name: intendedName } },
-  );
+  // 譲渡でリポジトリは (管理者, 預かり名) から (渡す先, 預かり名) へ動く。
+  // **動いた先の名前も押さえてから譲渡する。** 押さえずに送ると、譲渡の直後から
+  // 最後の改名までの間、渡す先の名前空間でその名前を誰も守っていない状態になる。
+  // 渡した瞬間から利用者はそのリポジトリの持ち主なので、そこは操作が届く場所。
+  const landing = await holdName(intendedOwner, holdingName, repoId, epoch);
+  if (landing === null) {
+    throw new ForgejoError(
+      409,
+      "POST",
+      `/repos/${admin}/${holdingName}/transfer`,
+      `${intendedOwner}/${holdingName} is being used by another operation`,
+    );
+  }
+
+  try {
+    // ここで初めて利用者のものになる。既定値は入り終わっている。
+    // id は変わらない (16.0.2 で実測)。
+    await holdRepair(repoId, epoch);
+    await assertStillNamed(admin, { id: repoId, name: holdingName });
+    const transferred = await forgejoRequest<ForgejoRepository>(
+      `/repos/${encodeURIComponent(admin)}/${encodeURIComponent(holdingName)}/transfer`,
+      { method: "POST", body: { new_owner: intendedOwner } },
+    );
+    if (transferred.name === intendedName) return transferred;
+    // 押さえてあるのは預かり名。Forgejo が別の名前を返したなら、押さえていない
+    // 名前に対して送ることになる。そのまま進めず、次の周回に委ねる。
+    if (transferred.name !== holdingName) {
+      throw new ForgejoError(
+        409,
+        "PATCH",
+        `/repos/${intendedOwner}/${transferred.name}`,
+        `transfer returned ${transferred.name}, expected ${holdingName} or ${intendedName}`,
+      );
+    }
+    await holdRepair(repoId, epoch);
+    await assertStillNamed(intendedOwner, { id: repoId, name: transferred.name });
+    // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
+    // 作成の前に確かめてある。
+    return await forgejoRequest<ForgejoRepository>(
+      `/repos/${encodeURIComponent(intendedOwner)}/${encodeURIComponent(transferred.name)}`,
+      { method: "PATCH", body: { name: intendedName } },
+    );
+  } finally {
+    await releaseName(landing, epoch);
+  }
 }
 
 /**
@@ -1131,32 +1265,37 @@ export async function createRepository(
     },
   );
   if (conflicting) {
-    await releaseGitRepositoryReservation({
-      id: reservation,
-      intentId: reservationEpoch,
-    }).catch(() => undefined);
-    // テンプレートが揃っていれば普通の名前衝突。
-    if (await hasTemplates(sudo, name)) {
-      throw new ForgejoError(
-        409,
-        "POST",
-        "/user/repos",
-        `repository ${sudo}/${name} already exists`,
-      );
-    }
+    // **予約はここでは外さない。** 下の修復はこの名前に対して送るので、外して
+    // しまうと直している最中に別の作成や改名がその名前を取れる。決着してから外す。
+    try {
+      // テンプレートが揃っていれば普通の名前衝突。
+      if (await hasTemplates(sudo, name)) {
+        throw new ForgejoError(
+          409,
+          "POST",
+          "/user/repos",
+          `repository ${sudo}/${name} already exists`,
+        );
+      }
 
-    // 揃っていないなら、以前の作成が途中で終わったもの。ここで 409 にすると
-    // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
-    // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
-    // 直す前に握る。掴めなければ定期実行が触っているので、やり直させる。
-    const epoch = await acquireRepair(sudo, conflicting, "repair requested");
-    await requireRepairedTemplates(sudo, conflicting, epoch);
-    // 直った。控えに残す理由が無い。
-    await deleteGitRepositoryRepair({
-      forgejoRepoId: conflicting.id,
-      intentId: epoch,
-    }).catch(() => undefined);
-    return conflicting;
+      // 揃っていないなら、以前の作成が途中で終わったもの。ここで 409 にすると
+      // 二度と直せる経路が無くなり、LFS の効かないリポジトリに push され続ける。
+      // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
+      // 直す前に握る。掴めなければ定期実行が触っているので、やり直させる。
+      const epoch = await acquireRepair(sudo, conflicting, "repair requested");
+      await requireRepairedTemplates(sudo, conflicting, epoch);
+      // 直った。控えに残す理由が無い。
+      await deleteGitRepositoryRepair({
+        forgejoRepoId: conflicting.id,
+        intentId: epoch,
+      }).catch(() => undefined);
+      return conflicting;
+    } finally {
+      await releaseGitRepositoryReservation({
+        id: reservation,
+        intentId: reservationEpoch,
+      }).catch(() => undefined);
+    }
   }
 
   const admin = await getAdminUsername();
@@ -1462,32 +1601,31 @@ export async function updateRepositoryDescription(
     );
   }
 
-  const stillThere = await forgejoRequestOrNull<ForgejoRepository>(
-    `/repositories/${current.id}`,
-    { timeoutMs: HELD_REQUEST_TIMEOUT_MS },
-  );
-  if (
-    !stillThere ||
-    stillThere.owner.login.toLowerCase() !== owner.toLowerCase() ||
-    stillThere.name !== name
-  ) {
+  const epoch = crypto.randomUUID();
+  const held = await holdName(owner, name, current.id, epoch);
+  if (held === null) {
     throw new ForgejoError(
       409,
       "PATCH",
       `/repos/${owner}/${name}`,
-      `repository ${owner}/${name} is no longer id ${current.id}`,
+      `${owner}/${name} is being used by another operation`,
     );
   }
 
-  return await forgejoRequest<ForgejoRepository>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-    {
-      method: "PATCH",
-      sudo,
-      timeoutMs: HELD_REQUEST_TIMEOUT_MS,
-      body: { description },
-    },
-  );
+  try {
+    await assertStillNamed(owner, { id: current.id, name });
+    return await forgejoRequest<ForgejoRepository>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      {
+        method: "PATCH",
+        sudo,
+        timeoutMs: HELD_REQUEST_TIMEOUT_MS,
+        body: { description },
+      },
+    );
+  } finally {
+    await releaseName(held, epoch);
+  }
 }
 
 /**

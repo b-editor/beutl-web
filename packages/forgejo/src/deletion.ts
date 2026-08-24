@@ -457,8 +457,12 @@ export async function finishGitAccountDeletion(
     if (!actual) {
       if (!pending.forgejoUsername) {
         // 控えにも無く、Forgejo にも居ない。Git を一度も使わなかった利用者。
-        // 片付けるものが無いので完了。墓標を残す相手もいない。
-        return await deleteGitAccountDeletion({ userId, intentId: epoch });
+        //
+        // **行は消さない。** 作成の待ち時間が切れた場合、Forgejo 側だけ後から
+        // 確定することがある。行を消してしまうと、合成メールを持つアカウントが
+        // 誰にも追われないまま残る。名前の無い墓標として残し、定期実行が
+        // 合成メールで見張る (一定期間を過ぎたら墓標ごと消える)。
+        return await markGitAccountDeletionPurged({ userId, intentId: epoch });
       }
       // 控えた相手は居ない。名前でもメールでも見つからないので、消えている。
       return await markGitAccountDeletionPurged({ userId, intentId: epoch });
@@ -623,6 +627,42 @@ const TOMBSTONE_RECHECK_MS = 6 * 60 * 60 * 1000;
  *
  * @returns 消し直した件数と、人の確認に回した件数。
  */
+/**
+ * 名前を控えていない墓標を、いつまで見張るか。
+ *
+ * この墓標が守っているのは「待つのをやめた後に Forgejo 側で作成が確定する」
+ * 一瞬だけ。HTTP の要求がそれ以上生き続けることはないので、幅を持たせたうえで
+ * 打ち切る。残し続けると、Git を一度も使わなかった利用者の userId を理由なく
+ * 保持し続けることになる。
+ */
+const NAMELESS_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 相手が見つからなかった墓標を片付ける。
+ *
+ * 名前を控えてある墓標は残す。復元で生き返ることがあるので、見張り続ける必要が
+ * ある。名前が無いものは上の幅を過ぎたら消す。
+ */
+async function settleMissingTombstone(
+  tombstone: { userId: string; forgejoUsername: string | null; purgedAt: Date | null },
+  epoch: string,
+  generation: string | null,
+): Promise<void> {
+  const expired =
+    tombstone.forgejoUsername === null &&
+    tombstone.purgedAt !== null &&
+    Date.now() - tombstone.purgedAt.getTime() > NAMELESS_TOMBSTONE_TTL_MS;
+  if (expired) {
+    await deleteGitAccountDeletion({ userId: tombstone.userId, intentId: epoch });
+    return;
+  }
+  await touchGitAccountDeletion({
+    userId: tombstone.userId,
+    intentId: epoch,
+    generation,
+  });
+}
+
 export async function reconcileGitAccountDeletionTombstones({
   limit = 20,
   /** 見るものが無くなるまで繰り返す。復元の直後に一巡させるため。 */
@@ -655,8 +695,11 @@ export async function reconcileGitAccountDeletionTombstones({
     let progressed = 0;
 
     for (const tombstone of tombstones) {
+      // **名前の無い墓標も見る。** 一度も Git を使わずに退会した利用者の墓標が
+      // これにあたる。待つのをやめた後に Forgejo 側で作成が確定していると、合成
+      // メールを持つアカウントだけが残る。名前で引く手掛かりは無いが、メールは
+      // userId から決まるので引ける。飛ばすと、誰も追えないアカウントになる。
       let username = tombstone.forgejoUsername;
-      if (!username) continue;
 
       // 掴んでから進める。照合の途中で別の実行が同じ相手を消しにいかないように。
       const epoch = crypto.randomUUID();
@@ -672,20 +715,18 @@ export async function reconcileGitAccountDeletionTombstones({
       }
 
       try {
-        let actual = await forgejoRequestOrNull<ForgejoUser>(
-          `/users/${encodeURIComponent(username)}`,
-        );
+        let actual = username
+          ? await forgejoRequestOrNull<ForgejoUser>(
+              `/users/${encodeURIComponent(username)}`,
+            )
+          : null;
         if (!actual) {
           // 控えた名前では見つからない。ただし復元先で名前が違うことがあるので、
           // 合成メールでも引く。ここを飛ばすと、同じ人が別名で生き返っていても
           // 「消えたまま」と結論してしまう。
           const byEmail = await findByNoreplyEmail(tombstone.userId);
           if (!byEmail) {
-            await touchGitAccountDeletion({
-              userId: tombstone.userId,
-              intentId: epoch,
-              generation,
-            });
+            await settleMissingTombstone(tombstone, epoch, generation);
             checked += 1;
             progressed += 1;
             continue;
@@ -695,11 +736,7 @@ export async function reconcileGitAccountDeletionTombstones({
             `/users/${encodeURIComponent(username)}`,
           );
           if (!actual) {
-            await touchGitAccountDeletion({
-              userId: tombstone.userId,
-              intentId: epoch,
-              generation,
-            });
+            await settleMissingTombstone(tombstone, epoch, generation);
             checked += 1;
             progressed += 1;
             continue;
@@ -777,6 +814,7 @@ export async function reconcileGitAccountDeletionTombstones({
         }
 
         // 復活している。端末のトークンも一緒に戻っているので、消し直す。
+        username = actual.login;
         await revokeAllTokens(username, () =>
           renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED),
         );
