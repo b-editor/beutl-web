@@ -1,3 +1,7 @@
+import {
+  MAX_AI_RESULT_SEGMENTS,
+  MAX_AI_RESULT_TEXT_LENGTH,
+} from "@beutl/core";
 import { z } from "zod";
 
 export type TranscriptionSegment = {
@@ -101,6 +105,19 @@ export function validateTranscriptionResult(
   if (segments.some((segment) => segment.text.length === 0)) {
     throw new InvalidTranscriptionResultError(
       "Transcription contains an empty segment",
+    );
+  }
+  // エディタの読み手はこの数を超えた結果を丸ごと拒む。超えたまま保存すると、
+  // 支払い済みなのに取りに行けない結果ができる——ここで断れば、その実行は
+  // 失敗として払い戻される。
+  if (segments.length > MAX_AI_RESULT_SEGMENTS) {
+    throw new InvalidTranscriptionResultError(
+      "Transcription has more segments than a client can read",
+    );
+  }
+  if (segments.some((segment) => segment.text.length > MAX_AI_RESULT_TEXT_LENGTH)) {
+    throw new InvalidTranscriptionResultError(
+      "Transcription contains a segment longer than a client can read",
     );
   }
 

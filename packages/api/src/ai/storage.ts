@@ -1,3 +1,4 @@
+import { MAX_AI_RESULT_BYTES } from "@beutl/core";
 import {
   claimAiStorageCleanupForDeletion,
   completeAiJobWithOutput,
@@ -55,7 +56,7 @@ type R2BucketProvider = () => R2BucketLike;
 const AI_OUTPUT_WRITE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 export const AI_TEXT_RESULT_RETENTION_MILLISECONDS =
   30 * 24 * 60 * 60 * 1000;
-export const MAX_AI_TEXT_RESULT_BYTES = 8 * 1024 * 1024;
+export const MAX_AI_TEXT_RESULT_BYTES = MAX_AI_RESULT_BYTES;
 
 export class AiOutputCommitConflictError extends Error {
   constructor(jobId: string) {

@@ -3,6 +3,7 @@ import { refuseOversizedAiUpload } from "../../apps/web/src/lib/ai-upload-guard"
 import {
   aiScreenUploadLimit,
   MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_AI_RESULT_BYTES,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
 } from "@beutl/core";
@@ -109,7 +110,7 @@ describe("which names a screen holds", () => {
     // A を回収している途中で中身を変えた B を送ると、名前は 2 つ同時に未決着に
     // なり得る。B の応答で A の名前まで捨てると、支払い済みの A に戻れない。
     const next = mint();
-    let names = newAiRequestNames(next);
+    let names = readyAiRequestNames(newAiRequestNames(), next);
 
     const a = aiRequestNameOf(names, "request-a");
     names = commitAiRequestName(names, "request-a", next);
@@ -128,10 +129,20 @@ describe("which names a screen holds", () => {
     expect(aiRequestNameOf(names, "request-a")).toBe(a);
   });
 
+  it("has a name ready before anyone types", () => {
+    // 画面はサーバー側でも一度描かれる。そこで作ると描き直したときと食い違うので、
+    // 最初の 1 つはブラウザで、人が触るより前に用意する——用意する前に送れると、
+    // 空の名前で課金され、その依頼へ戻る道が最初から無い。
+    expect(newAiRequestNames().next).toBe("");
+    expect(
+      readyAiRequestNames(newAiRequestNames(), () => "key-a").next,
+    ).toBe("key-a");
+  });
+
   it("mints a name only when one is sent", () => {
     // 書き換えるたびに作っていては、打鍵のたびに使われない名前が積み上がる。
     const next = mint();
-    const names = newAiRequestNames(next);
+    const names = readyAiRequestNames(newAiRequestNames(), next);
 
     expect(aiRequestNameOf(names, "half-typed"))
       .toBe(aiRequestNameOf(names, "half-typed-more"));
@@ -140,7 +151,7 @@ describe("which names a screen holds", () => {
 
   it("keeps the name of a request that is still running", () => {
     const next = mint();
-    let names = newAiRequestNames(next);
+    let names = readyAiRequestNames(newAiRequestNames(), next);
     const sent = aiRequestNameOf(names, "request");
     names = commitAiRequestName(names, "request", next);
 
@@ -154,7 +165,7 @@ describe("which names a screen holds", () => {
     // 中身を戻したなら、それは同じ依頼。新しい名前を作ると、支払い済みのものを
     // もう一度買うことになる。
     const next = mint();
-    let names = newAiRequestNames(next);
+    let names = readyAiRequestNames(newAiRequestNames(), next);
     const first = aiRequestNameOf(names, "request");
     names = commitAiRequestName(names, "request", next);
     names = commitAiRequestName(names, "other", next);
@@ -256,8 +267,8 @@ describe("which model a screen names", () => {
     const kept = keepModelForHeldRequest(offered, "model-gone");
 
     expect(kept.map((model) => model.id)).toEqual(["model-x", "model-gone"]);
-    // 新しく選べるようにはしない。止められたモデルで始めても断られるだけ。
-    expect(kept.at(-1)?.available).toBe(false);
+    // 選べる形で残す。選べないと、その名前が指す支払い済みの結果へ戻れない。
+    expect(kept.at(-1)?.available).toBe(true);
   });
 
   it("leaves the list alone when the model is still on it", () => {
@@ -312,6 +323,20 @@ describe("what an AI screen may put in one body", () => {
     expect(aiScreenUploadLimit("/ja/dashboard/ai/jobs/abc")).toBeNull();
   });
 
+  it("leaves room for the result the screen sends back with the next request", () => {
+    // useActionState は前回の state を次の本文に載せる。切れ端を持ち帰る画面は
+    // 前回の文字起こしを丸ごと連れてくるので、そのぶんを見ておかないと、
+    // 正しい大きさの音声が届く前に断られる。
+    const transcribe = aiScreenUploadLimit("/ja/dashboard/ai/transcribe");
+    expect(transcribe).toBeGreaterThan(
+      MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + MAX_AI_RESULT_BYTES,
+    );
+    // 持ち帰らない画面まで広げはしない。
+    expect(aiScreenUploadLimit("/ja/dashboard/ai/edit")).toBeLessThan(
+      MAX_AI_IMAGE_UPLOAD_BYTES + MAX_AI_RESULT_BYTES,
+    );
+  });
+
   it("gives every screen room for the fields beside the file", () => {
     // 動画の画面は文章の欄を 5 つ持ち、どれも上限まで書ける。境界のぶんしか
     // 見ないと、上限まで書いた依頼が届く前に断られる。
@@ -355,7 +380,8 @@ describe("which request a screen is looking at", () => {
     );
 
     expect(kept.map((model) => model.id)).toEqual(["model-x", "model-a", "model-b"]);
-    expect(kept.filter((model) => !model.available)).toHaveLength(2);
+    // どちらへも戻れる。片方しか選べないと、もう一方は取り残される。
+    expect(kept.every((model) => model.available)).toBe(true);
   });
 });
 

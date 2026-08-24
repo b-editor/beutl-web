@@ -180,8 +180,11 @@ const app = new Hono().post("/", async (c) => {
     request: c.req.raw,
     operation: "audio.transcribe",
     input: {
+      // ブラウザが名乗る種類は数えない。同じ音声でも、選び方や取り込み元で
+      // 変わることがあり、そのたびに別の依頼になる——中身のハッシュと長さが
+      // 音声を見分けるので、これが無くて困ることはない。逆に数えると、送り手
+      // には同じ依頼に見えるものが指紋だけ食い違い、その名前では二度と通らない。
       fileName: file.name,
-      contentType: file.type || "audio/mpeg",
       durationSeconds: parsedAudio.durationSeconds,
       contentSha256: await sha256Hex(parsedAudio.bytes),
       // 名指しされたときだけ。既定が入れ替わっても同じ名前で回収できるように。

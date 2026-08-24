@@ -226,6 +226,7 @@
     "audioExtractionErrors": {
       "unsupportedFormat": "The browser could not read this file. Try another format.",
       "tooLong": "Too long: the extracted audio would exceed the limit. Trim it and try again.",
+      "tooLarge": "Too large for the browser to read. Re-encode it or trim it first.",
       "noAudioTrack": "This file carries no audio."
     },
     "processing": "Working…",

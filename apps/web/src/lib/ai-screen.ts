@@ -268,8 +268,10 @@ export async function fileFingerprint(
  * として断り、支払い済みの結果へ戻る道が閉じる。名指しされたモデルは、一覧に
  * 無くてもサーバーがそのまま受け取るので、その依頼が決着するまでは名乗り続ける。
  *
- * 新しく選べるようにはしない（available: false）——止められたモデルで新しい依頼
- * を始めても、断られるだけなので。
+ * 選べる形で残す。同じ task に未回収の依頼が二つあることもあり、そのときは
+ * 選び直せないと、もう一方の名前が指す支払い済みの結果へ戻れない——ここに載る
+ * のは未回収の名前を持つモデルだけなので、選んだ先にあるのは新しい課金ではなく
+ * 回収のほうだ。
  */
 export function keepModelForHeldRequest(
   models: readonly AiScreenModel[],
@@ -281,7 +283,7 @@ export function keepModelForHeldRequest(
 
   return [
     ...models,
-    { id: chosen, displayName: chosen, costTier: null, available: false },
+    { id: chosen, displayName: chosen, costTier: null, available: true },
   ];
 }
 

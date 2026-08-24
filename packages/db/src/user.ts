@@ -271,6 +271,10 @@ export async function countUsers({
   return db.user.count();
 }
 
+// 一度に書く件数。CockroachDB の 1 文あたりの上限と、トランザクションの
+// 期限のあいだで選んだ数。
+const CLEANUP_BATCH_SIZE = 500;
+
 export async function enqueueUserStorageCleanups({
   userId,
   now = new Date(),
@@ -296,16 +300,25 @@ export async function enqueueUserStorageCleanups({
     ...files.map((file) => file.objectKey),
     ...uploads.map((upload) => upload.objectKey),
   ]);
-  for (const objectKey of objectKeys) {
-    await db.aiStorageCleanup.upsert({
-      where: { objectKey },
-      create: {
+  // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
+  // 1 万回の往復になり、その全部がカスケードと同じトランザクションの中に入る
+  // ——期限に間に合わなければ、削除そのものが最後まで通らない。
+  const keys = [...objectKeys];
+  for (let at = 0; at < keys.length; at += CLEANUP_BATCH_SIZE) {
+    const batch = keys.slice(at, at + CLEANUP_BATCH_SIZE);
+    await db.aiStorageCleanup.createMany({
+      data: batch.map((objectKey) => ({
         objectKey,
         aiJobId: null,
         state: "cleanup",
         notBefore: now,
-      },
-      update: {
+      })),
+      skipDuplicates: true,
+    });
+    // 既にあった行を、いま置きたい状態へ揃える。createMany は飛ばすだけなので。
+    await db.aiStorageCleanup.updateMany({
+      where: { objectKey: { in: batch } },
+      data: {
         aiJobId: null,
         state: "cleanup",
         notBefore: now,

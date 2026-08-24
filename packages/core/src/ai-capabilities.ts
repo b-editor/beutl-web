@@ -213,10 +213,20 @@ export const MAX_AI_VIDEO_FRAME_UPLOAD_BYTES = 5 * 1024 * 1024;
 // A canonical maximum-size translation payload can contain 200 64-character
 // IDs plus 20,000 multi-byte UTF-8 text characters.
 export const MAX_AI_TRANSLATION_JSON_REQUEST_BYTES = 128 * 1024;
+// 保存する結果が、エディタで読める大きさに収まっていること。エディタの読み手
+// (AiCaptionHistoryResultParser) はこの数を超えたものを丸ごと拒む——超えた
+// まま保存すると、支払い済みなのに取りに行けない結果ができる。
+export const MAX_AI_RESULT_SEGMENTS = 10_000;
+export const MAX_AI_RESULT_TEXT_LENGTH = 100_000;
+// 保存する文字の結果そのものの大きさ。エディタの読み手が受け取る上限と同じ。
+export const MAX_AI_RESULT_BYTES = 8 * 1024 * 1024;
 // ファイル以外に本文へ入るもの——境界と、画面が並べる文章の欄。動画の画面は
 // 5 つの欄を持ち、どれも上限まで書けて、UTF-8 では 1 文字が 4 バイトになる。
 // 足りないと、送れるはずの依頼が届く前に断られるので、多めに見る。
 const AI_SCREEN_FIELDS_BYTES = MULTIPART_OVERHEAD_BYTES + 6 * MAX_AI_PROMPT_LENGTH * 4;
+// 切れ端を持ち帰る画面は、次の送信でその前の結果を一緒に送り返す
+// (useActionState が前回の state を本文に載せる)。そのぶんを見ておかないと、
+// 一度長い文字起こしをしたあと、正しい大きさの音声が届く前に断られる。
 
 /**
  * その画面の依頼が本文に許される大きさ。名前のない画面には null。
@@ -236,12 +246,20 @@ export function aiScreenUploadLimit(pathname: string): number | null {
     case "generate":
       return MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES + AI_SCREEN_FIELDS_BYTES;
     case "transcribe":
-      return MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+      return (
+        MAX_AI_TRANSCRIPTION_UPLOAD_BYTES
+        + AI_SCREEN_FIELDS_BYTES
+        + MAX_AI_RESULT_BYTES
+      );
     case "video":
       // 始まりと終わりで 2 枚。
       return 2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
     case "translate":
-      return MAX_AI_TRANSLATION_JSON_REQUEST_BYTES + AI_SCREEN_FIELDS_BYTES;
+      return (
+        MAX_AI_TRANSLATION_JSON_REQUEST_BYTES
+        + AI_SCREEN_FIELDS_BYTES
+        + MAX_AI_RESULT_BYTES
+      );
     default:
       return null;
   }

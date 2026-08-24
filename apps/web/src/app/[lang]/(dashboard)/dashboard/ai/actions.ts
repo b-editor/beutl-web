@@ -888,8 +888,11 @@ export async function transcribeAction(
   const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
   const identity = await requestIdentityOf(formData, "audio.transcribe", {
     ...fingerprintModelOf(formData),
+    // ブラウザが名乗る種類は数えない。同じ音声でも、選び方や取り込み元で
+    // 変わることがあり、そのたびに別の依頼になる——中身のハッシュと長さが
+    // 音声を見分けるので、これが無くて困ることはない。逆に数えると、送り手
+    // には同じ依頼に見えるものが指紋だけ食い違い、その名前では二度と通らない。
     fileName: file.name,
-    contentType: file.type || "audio/mpeg",
     durationSeconds: parsedAudio.durationSeconds,
     contentSha256: await sha256Hex(parsedAudio.bytes),
     ...(language ? { language } : {}),

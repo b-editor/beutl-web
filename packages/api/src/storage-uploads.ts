@@ -36,7 +36,8 @@ const MAX_PER_RUN = 100;
 // 取った行のキーに、完成したオブジェクトが残っていないか。
 //
 //  - deleted: 残っていたので消した。
-//  - absent: 何も残っていない。取った行なので控えも書けず、片付けるものは無い。
+//  - absent: オブジェクトが無い。組み上がる前——パートのままの multipart は
+//    オブジェクトを持たない——か、もう消えたあと。どちらかは分からない。
 //  - unknown: 確かめられなかった。残っているかもしれないので、行は残す。
 type OrphanedObject = "deleted" | "absent" | "unknown";
 
@@ -122,10 +123,14 @@ export async function abandonStaleStorageUploads(
       // 終わったあと、控えを書く前に Worker が落ちるとこうなる。行はこちらの
       // ものなので控えはもう書けない＝ File は誰も指していない。残っている
       // オブジェクトはここで消す——これをしないと、追跡できない完成オブジェクト
-      // が保管され続ける。何も残っていなかったのなら、この行が指していたものは
-      // もう無い。どちらの場合も行は用済みで、残しても次の回で同じところに来る
-      // だけになる。
-      if (await clearOrphanedObject(upload.objectKey) !== "unknown") {
+      // が保管され続ける。
+      //
+      // 消せたときだけ行を捨てる。「何も無い」は、組み上がっていないという意味
+      // でもある——パートのままの multipart はオブジェクトを持たないので、
+      // 一時の不調で中止に失敗しただけのときも同じ顔をする。そこで行を消すと、
+      // 中止に必要な uploadId ごと失われ、パートは誰にも消せないまま残る。
+      // 消せなかったものは次の回でもう一度、それでも駄目なら諦めの期限まで。
+      if (await clearOrphanedObject(upload.objectKey) === "deleted") {
         await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
         abandoned++;
         continue;

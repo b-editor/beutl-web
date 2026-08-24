@@ -14,7 +14,14 @@ const BYTES_PER_SAMPLE = 2;
 export type AudioExtractionFailure =
   | "unsupportedFormat"
   | "tooLong"
+  | "tooLarge"
   | "noAudioTrack";
+
+// 取り込む元の大きさ。長さの上限は、取り出したあとの音声にしかかからない
+// ——短くても極端に高いビットレートの動画はいくらでも大きく、そのままだと
+// 元のファイル、復号した PCM、詰め直した波形、WAV を同時に抱えることになり、
+// 取り出す前にタブのほうが落ちる。この長さの動画としては十分に大きい。
+const MAX_SOURCE_BYTES = 512 * 1024 * 1024;
 
 export class AudioExtractionError extends Error {
   constructor(readonly reason: AudioExtractionFailure) {
@@ -114,6 +121,10 @@ export async function extractAudioAsWav(
   file: File,
   maximumBytes: number,
 ): Promise<File> {
+  if (file.size > MAX_SOURCE_BYTES) {
+    throw new AudioExtractionError("tooLarge");
+  }
+
   const durationSeconds = await probeDurationSeconds(file);
   if (
     durationSeconds !== null &&

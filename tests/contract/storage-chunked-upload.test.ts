@@ -61,9 +61,13 @@ const bucket = vi.hoisted(() => {
     delete: vi.fn(async (key: string) => {
       bucketDeleted.push(key);
     }),
+    // 組み上がる前の multipart はオブジェクトを持たない。掃除がそれを
+    // 「もう何も無い」と読むかどうかが、この一覧の分かれ目になる。
+    head: vi.fn(async (key: string) => bucketObjects.get(key) ?? null),
   };
 });
 const bucketDeleted: string[] = [];
+const bucketObjects = new Map<string, { key: string }>();
 
 import {
   cancelUpload,
@@ -313,6 +317,34 @@ describe("uploading a file too large for one request", () => {
     expect(swept).toEqual({ abandoned: 1, failed: 0 });
     expect(state.storageUploads.size).toBe(0);
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
+  });
+
+  it("keeps the row when an abort fails and nothing was there to clear", async () => {
+    // 中止に失敗する理由は「もう組み上がっている」だけではない。パートのままの
+    // multipart はオブジェクトを持たないので、一時の不調で失敗しただけのときも
+    // 「何も無い」と同じ顔をする——そこで行を消すと、中止に必要な uploadId ごと
+    // 失われ、パートは誰にも消せないまま残る。
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw new Error("the bucket is unreachable");
+      },
+    }));
+
+    const tomorrow = new Date(Date.now() + 25 * 60 * 60 * 1000);
+    const swept = await abandonStaleStorageUploads(tomorrow);
+
+    expect(swept).toEqual({ abandoned: 0, failed: 1 });
+    expect(state.storageUploads.size).toBe(1);
   });
 
   it("leaves the object of an upload that finished while the sweep ran", async () => {

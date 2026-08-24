@@ -1,3 +1,4 @@
+import { MAX_AI_RESULT_TEXT_LENGTH } from "@beutl/core";
 import { z } from "zod";
 import { HTTPClient, OpenRouter, type Fetcher } from "@openrouter/sdk";
 import type {
@@ -975,6 +976,16 @@ function parseTranslationContent(
     throw new AiProviderError(
       "OpenRouter returned an incomplete translation segment ID set",
     );
+  }
+
+  // エディタの読み手はこの長さを超えた切れ端を含む結果を丸ごと拒む。返ってきた
+  // ものをそのまま保存すると、支払い済みなのに取りに行けない結果ができる。
+  for (const text of translatedById.values()) {
+    if (text.length > MAX_AI_RESULT_TEXT_LENGTH) {
+      throw new AiProviderError(
+        "OpenRouter returned a translated segment longer than a client can read",
+      );
+    }
   }
 
   return inputSegments.map((segment) => ({

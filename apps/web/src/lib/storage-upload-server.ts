@@ -556,8 +556,15 @@ export async function cancelUpload({
   // 取り消しがここまで来て中止に失敗したということでもある——その場合はもう
   // 一度中止を試す。控えはもう書けないので、消して困るものは残っていない。
   if (!await claimForCleanup(upload.id, userId)) {
-    const current = await findStorageUploadByIdAndUserId({ id: uploadId, userId })
-      .catch(() => null);
+    let current;
+    try {
+      current = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+    } catch {
+      // 読めなかった。取れなかったのが「もう無いから」なのか「一時の不調」なのか
+      // 分からない以上、片付いたとは言えない——言えば呼び出し側はそこで手を引き、
+      // パートは誰も取りに行かないまま残る。もう一度来てもらう。
+      return "pending";
+    }
     if (current === null || current.completedFileId || !current.abandonedAt) {
       return "cancelled";
     }

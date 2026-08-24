@@ -21,6 +21,12 @@ const PARTS_IN_FLIGHT = 3;
 // more of the network than a short one, and losing a whole file to one dropped
 // connection is the thing this is for.
 const ATTEMPTS_PER_PART = 3;
+// 完了を伝える回。サーバーは終わったアップロードの控えを持っていて、同じ id で
+// もう一度聞かれれば作ったファイルをそのまま返す——だから何度でも聞ける。
+// 聞くのをやめると、ブラウザにはファイルが出来たかどうかを知る手立てが無くなり、
+// やり直しは同じ中身をもう一つ作る。
+const COMPLETION_ATTEMPTS = 4;
+const COMPLETION_RETRY_MILLISECONDS = 500;
 
 // 取り消しは一度きりでは足りない。バケットが中止を受け付けないことがあり、そこ
 // で手を引くとこの名前の枠が一日残る。間を置いて数回だけ試す——それでも駄目なら
@@ -124,16 +130,21 @@ export async function uploadStorageFile(
   // answers a repeat with the file it already made. Without the retry, an
   // answer lost on the way back leaves the browser unable to tell whether the
   // file exists, and starting over stores the same bytes a second time.
-  let finished: Response;
-  try {
-    finished = await postCompletion(upload.id, body);
-  } catch {
+  let finished: Response | null = null;
+  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
     try {
       finished = await postCompletion(upload.id, body);
+      break;
     } catch {
-      return { ok: false, errorCode: "uploadFailed" };
+      if (attempt === COMPLETION_ATTEMPTS) {
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
     }
   }
+  if (!finished) return { ok: false, errorCode: "uploadFailed" };
   if (!finished.ok) return { ok: false, errorCode: await errorCodeOf(finished) };
 
   return {
