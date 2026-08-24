@@ -135,8 +135,12 @@ vi.mock("@beutl/db", () => ({
     // 本物は「自分の印の行に書けたか」を返す。
     return true;
   },
-  releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
-    reservations.delete(id);
+  releaseGitRepositoryReservation: async ({ id }: { id: string }) =>
+    reservations.delete(id),
+  releaseGitRepositoryReservationsByIntent: async () => {
+    // 実物は同じ 1 回の操作で取った行をまとめて外す。テストでは 1 操作ぶんしか
+    // 積まないので、全部消せば同じこと。
+    reservations.clear();
   },
   listExpiredGitRepositoryCreations: async () =>
     staleReservations.map((entry) => ({
@@ -2069,5 +2073,104 @@ describe("改名は相手を確かめてから送る", () => {
     // 改名だけをやり直す。テンプレートの修復には回さない。
     expect(renamedTo).toBe("Proj");
     expect(repairQueue.size).toBe(0);
+  });
+});
+
+describe("大小だけの改名", () => {
+  it("自分の予約とぶつからない", async () => {
+    // 行き先と元は同じ鍵になる (一意キーは小文字化した組)。2 本取ろうとすると
+    // 自分の 1 本目とぶつかり、通常の改名が必ず失敗する。
+    const { renameRepository } = await import("@beutl/forgejo");
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 91, name: "proj", default_branch: "main" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/91")) {
+        return json({
+          id: 91,
+          name: "proj",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH") {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 91, name: "Proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      renameRepository("someone", "someone", "proj", "Proj"),
+    ).resolves.toMatchObject({ name: "Proj" });
+
+    expect(renamedTo).toBe("Proj");
+    expect(reservations.size).toBe(0);
+  });
+});
+
+describe("削除は相手を確かめてから送る", () => {
+  it("名前が別のリポジトリに付け替わっていたら消さない", async () => {
+    // 消すのは取り返しがつかない。名前で引いてから送るまでの間に、その名前が
+    // 別物に渡ることがある。
+    const { deleteRepository } = await import("@beutl/forgejo");
+    let deleted = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 95, name: "proj", default_branch: "main" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/95")) {
+        // 送る直前には別のものになっている。
+        return json({
+          id: 95,
+          name: "renamed",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "DELETE") {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      deleteRepository("someone", "someone", "proj"),
+    ).rejects.toMatchObject({ status: 409 });
+
+    expect(deleted).toBe(false);
+  });
+
+  it("同じ相手なら消す", async () => {
+    const { deleteRepository } = await import("@beutl/forgejo");
+    let deletedPath: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 96, name: "proj", default_branch: "main" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/96")) {
+        return json({
+          id: 96,
+          name: "proj",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "DELETE") {
+        deletedPath = path;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await deleteRepository("someone", "someone", "proj");
+
+    expect(deletedPath).toBe("/api/v1/repos/someone/proj");
+    expect(reservations.size).toBe(0);
   });
 });

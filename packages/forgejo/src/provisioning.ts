@@ -21,6 +21,23 @@ const USERNAME_FALLBACK = "beutl-user";
 const MAX_USERNAME_ATTEMPTS = 20;
 
 /**
+ * 合成メールから Forgejo 上のユーザーを引く。
+ *
+ * 合成メールは userId から決まり、Forgejo はメールの重複を許さない。だから
+ * このメールを持つアカウントは、その利用者のものだと言い切れる。
+ */
+async function findByNoreplyEmail(
+  email: string,
+): Promise<ForgejoUser | null> {
+  const found = await forgejoRequestOrNull<{ data?: ForgejoUser[] }>(
+    "/users/search",
+    { searchParams: { q: email, limit: 2 } },
+  );
+  const matches = (found?.data ?? []).filter((user) => user.email === email);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
  * Beutl の表示名を Forgejo が受け付けるユーザー名に寄せる。
  * Forgejo は英数字と `-` `_` `.` だけを許し、先頭と末尾に記号を置けない。
  */
@@ -193,6 +210,30 @@ export async function ensureGitAccount(userId: string): Promise<{
             return {
               forgejoUserId: concurrent.forgejoUserId,
               forgejoUsername: concurrent.forgejoUsername,
+              created: false,
+            };
+          }
+
+          // 誰も対応表を書いていないのに、このメールを持つアカウントが Forgejo に
+          // ある。**前の作成が応答を落としただけ**の可能性が高い (作成は通って
+          // いて、こちらが結果を受け取れなかった)。
+          //
+          // ここで投げて終わると、対応表を書く人が二度と現れず、その利用者は
+          // 永久に Git を使えない。合成メールは userId から決まり、Forgejo は
+          // メールの重複を許さないので、このメールを持つアカウントは**その利用者の
+          // もの**だと言い切れる。引き取って対応表に載せる。
+          // 探せなかった場合は、元の「メールが埋まっている」で終える。別の理由に
+          // すり替えると、原因を追えなくなる。
+          const orphan = await findByNoreplyEmail(email).catch(() => null);
+          if (orphan) {
+            await createGitAccount({
+              userId,
+              forgejoUserId: orphan.id,
+              forgejoUsername: orphan.login,
+            });
+            return {
+              forgejoUserId: orphan.id,
+              forgejoUsername: orphan.login,
               created: false,
             };
           }

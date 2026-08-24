@@ -96,6 +96,33 @@ export function tokensPath(username: string, tokenId?: number): string {
 }
 
 /**
+ * 名前で引き当てて畳む。
+ *
+ * 発行の応答を落としたときに使う。Forgejo 側だけ成功していると、平文は誰にも
+ * 渡らないまま名前だけが埋まり、同じ端末名で二度と発行できなくなる。
+ */
+async function dropTokenByName(username: string, name: string): Promise<void> {
+  try {
+    const tokens = await forgejoRequest<ForgejoAccessToken[]>(
+      tokensPath(username),
+      { searchParams: { page: 1, limit: 50 } },
+    );
+    const stray = tokens.find((token) => token.name === name);
+    if (!stray) return;
+    await dropIssuedToken(
+      username,
+      stray.id,
+      "the issue call did not return a result",
+    );
+  } catch (error) {
+    console.error(
+      `could not look for a stray token named "${name}" of ${username}`,
+      error,
+    );
+  }
+}
+
+/**
  * 発行したトークンを畳む。畳めなかったら記録を残す。
  *
  * 控えを残せなかったトークンは一覧に出ないので、利用者からは失効できない。
@@ -178,6 +205,10 @@ export async function issueGitCredential(
     if (error instanceof ForgejoError && isTokenNameTaken(error)) {
       throw new CredentialNameTakenError(name);
     }
+    // **結果が分からない場合 (待ち時間切れ・5xx) は、作られている可能性がある。**
+    // 平文は失われているので誰も使えないが、名前は埋まったままになり、同じ端末名で
+    // やり直せない。名前で引き当てて畳む。
+    await dropTokenByName(username, name);
     throw error;
   }
 

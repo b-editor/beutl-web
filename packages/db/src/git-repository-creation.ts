@@ -143,6 +143,23 @@ export async function releaseGitRepositoryReservation({
 
 
 /**
+ * 同じ 1 回の操作で取った予約をまとめて外す。
+ *
+ * 改名は行き先と元の 2 本を取る。片方だけ外すと、残った方が要らなくなった名前を
+ * 期限まで塞ぎ続ける。決着が付いたら両方まとめて外す。
+ */
+export async function releaseGitRepositoryReservationsByIntent({
+  intentId,
+  prisma,
+}: {
+  intentId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitRepositoryCreation.deleteMany({ where: { intentId } });
+}
+
+/**
  * 期限が切れた予約。作成の途中で処理が消えたもの。
  *
  * 時間ではなく**期限**で判断する。作成が遅いだけの処理を横から回収しないため。

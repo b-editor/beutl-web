@@ -120,20 +120,48 @@ describe("Forgejo ユーザーの採番", () => {
     });
   });
 
-  it("メールが埋まっていたら即座に諦める", async () => {
+  it("メールが埋まっていて相手も見つからなければ諦める", async () => {
     // メールは userId から決まるので全候補で同じ。回しても同じ理由で失敗するだけで、
     // 20 回目に出るのは「ユーザー名が見つからない」という無関係なエラーになる。
     // beutl-web の DB と Forgejo が別の時点に復元されると起きる。
-    fetchMock = vi.fn(async () =>
-      json({ message: "e-mail already in use [email: u1@...]" }, 422),
-    );
+    fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/users/search")) return json({ data: [] });
+      return json({ message: "e-mail already in use [email: u1@...]" }, 422);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(ensureGitAccount("u1")).rejects.toBeInstanceOf(
       ForgejoEmailInUseError,
     );
-    // 1 回目で判る。20 回投げない。
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 候補を 20 回は回さない (作成 1 回 + 相手探し 1 回)。
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it("応答を落として作られたアカウントは引き取る", async () => {
+    // 作成は通っていて結果だけを受け取れなかった場合、対応表を書く人が二度と
+    // 現れず、その利用者は永久に Git を使えなくなる。合成メールを持つアカウントは
+    // その利用者のものだと言い切れるので、引き取って対応表に載せる。
+    fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/users/search")) {
+        return json({
+          data: [
+            {
+              id: 42,
+              login: "someone",
+              email: "u1@users.noreply.git.example.test",
+            },
+          ],
+        });
+      }
+      return json({ message: "e-mail already in use [email: u1@...]" }, 422);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(ensureGitAccount("u1")).resolves.toMatchObject({
+      forgejoUserId: 42,
+      forgejoUsername: "someone",
+      created: false,
+    });
   });
 
   it("記号が続く名前でも Forgejo が受け付ける形に畳む", async () => {

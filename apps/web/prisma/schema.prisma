@@ -218,6 +218,8 @@ enum GitRepositoryOperation {
   CREATE
   // 既にある相手の名前を変える。組み立ては要らない。
   RENAME
+  // 消す。消えたかどうかを確かめるだけ。
+  DELETE
 }
 
 model GitRepositoryCreation {

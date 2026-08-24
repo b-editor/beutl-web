@@ -5,6 +5,8 @@ import {
   claimGitRepositoryCreation,
   clearGitRepositoryCreationMissing,
   GitRepositoryOperation,
+  normalizeRepositoryName,
+  releaseGitRepositoryReservationsByIntent,
   markGitRepositoryCreationMissing,
   countGitRepositoryCreations,
   listExpiredGitRepositoryCreations,
@@ -668,6 +670,23 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         holding.owner.login.toLowerCase() ===
           entry.ownerUsername.toLowerCase() &&
         holding.name === entry.name;
+      // 削除の予約は、消えたかどうかを確かめるだけ。**自動では消し直さない。**
+      // 消すのは取り返しがつかないので、残っていたら「行われなかった」として
+      // 名前を解放し、やり直すかどうかは利用者に委ねる。
+      if (entry.operation === GitRepositoryOperation.DELETE) {
+        if (holding) {
+          console.warn(
+            `delete reservation ${entry.id} still sees ` +
+              `${holding.owner.login}/${holding.name}; the deletion did not take effect`,
+          );
+        }
+        await releaseGitRepositoryReservationsByIntent({
+          intentId: entry.intentId ?? epoch,
+        }).catch(() => undefined);
+        await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
+        continue;
+      }
+
       // 改名の予約は、名前が変わったかを確かめるだけ。控えに載せて渡し切る流れに
       // 乗せると、利用者が編集した .gitattributes を「直す」対象にしてしまう。
       if (
@@ -690,6 +709,10 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
               timeoutMs: HELD_REQUEST_TIMEOUT_MS,
             },
           );
+          // 行き先と元の 2 本をまとめて外す。
+          await releaseGitRepositoryReservationsByIntent({
+            intentId: entry.intentId ?? epoch,
+          }).catch(() => undefined);
           await releaseGitRepositoryReservation({
             id: entry.id,
             intentId: epoch,
@@ -1155,33 +1178,37 @@ export async function renameRepository(
     intentId: renameEpoch,
     leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
   });
+  // 大小だけの改名では、行き先と元が同じ鍵になる (一意キーは小文字化した組)。
+  // 2 本目を取ろうとすると自分の 1 本目とぶつかるので、1 本で兼ねる。
+  const sameKey =
+    normalizeRepositoryName(name) === normalizeRepositoryName(newName);
   let sourceReservation: string | null = null;
-  try {
-    sourceReservation = await reserveGitRepositoryName({
-      ownerUsername: owner,
-      name,
-      holdingName: `beutl-rename-src-${crypto.randomUUID()}`,
-      operation: GitRepositoryOperation.RENAME,
-      sourceName: name,
-      intentId: renameEpoch,
-      leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
-    });
-  } catch (error) {
-    await releaseGitRepositoryReservation({
-      id: targetReservation,
-      intentId: renameEpoch,
-    }).catch(() => undefined);
-    throw error;
-  }
-
-  const releaseBoth = async () => {
-    for (const id of [targetReservation, sourceReservation]) {
-      if (!id) continue;
+  if (!sameKey) {
+    try {
+      sourceReservation = await reserveGitRepositoryName({
+        ownerUsername: owner,
+        name,
+        holdingName: `beutl-rename-src-${crypto.randomUUID()}`,
+        operation: GitRepositoryOperation.RENAME,
+        sourceName: name,
+        intentId: renameEpoch,
+        leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+      });
+    } catch (error) {
       await releaseGitRepositoryReservation({
-        id,
+        id: targetReservation,
         intentId: renameEpoch,
       }).catch(() => undefined);
+      throw error;
     }
+  }
+
+  // 決着が付いたら**まとめて**外す。片方だけ外すと、残った方が要らなくなった
+  // 名前を期限まで塞ぎ続ける。
+  const releaseBoth = async () => {
+    await releaseGitRepositoryReservationsByIntent({
+      intentId: renameEpoch,
+    }).catch(() => undefined);
   };
 
   try {
@@ -1196,6 +1223,16 @@ export async function renameRepository(
       }))
     ) {
       throw new RepairTakenOverError(current.id);
+    }
+
+    // 元の名前を押さえた行にも同じ相手を控える。片方だけ回収されると、もう片方が
+    // 偽の預かり名を探し続けて、要らなくなった名前を塞ぎ続ける。
+    if (sourceReservation) {
+      await attachGitRepositoryCreationId({
+        id: sourceReservation,
+        intentId: renameEpoch,
+        forgejoRepoId: current.id,
+      }).catch(() => undefined);
     }
 
     // **送る直前に相手を確かめ直す。** 上の GET から間が空くと、その名前が別の
@@ -1218,6 +1255,14 @@ export async function renameRepository(
         `/repos/${owner}/${name}`,
         `repository ${owner}/${name} is no longer id ${current.id}`,
       );
+    }
+
+    // **送る直前に握りも確かめる。** 個々の呼び出しは上限内でも、DB の待ちを
+    // 含めた全体が期限を越えることがある。越えた後に送ると、引き取った側の
+    // 判断と食い違う。
+    await holdReservation(targetReservation, renameEpoch);
+    if (sourceReservation) {
+      await holdReservation(sourceReservation, renameEpoch);
     }
 
     const renamed = await forgejoRequest<ForgejoRepository>(
@@ -1263,15 +1308,93 @@ export async function updateRepositoryDescription(
   );
 }
 
+/**
+ * リポジトリを消す。
+ *
+ * **消す相手を名前だけで決めない。** 名前で引いてから送るまでの間に、その名前が
+ * 別のリポジトリに渡ることがある (消して作り直しなど)。消すのは取り返しがつかない
+ * ので、名前を押さえ、id で相手を確かめ直してから送る。
+ *
+ * `DELETE /repositories/{id}` は無いので、送るのは名前。開いている幅は確認から
+ * 送信までの 1 往復に縮める。
+ */
 export async function deleteRepository(
   sudo: string,
   owner: string,
   name: string,
 ) {
-  await forgejoRequest(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-    { method: "DELETE", sudo, responseType: "none" },
-  );
+  const current = await getRepository(sudo, owner, name);
+  if (!current) {
+    // 既に無い。消す相手がいない。
+    return;
+  }
+
+  const deleteEpoch = crypto.randomUUID();
+  const reservation = await reserveGitRepositoryName({
+    ownerUsername: owner,
+    name,
+    holdingName: `beutl-delete-${crypto.randomUUID()}`,
+    operation: GitRepositoryOperation.DELETE,
+    sourceName: name,
+    intentId: deleteEpoch,
+    leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+  });
+  if (
+    !(await attachGitRepositoryCreationId({
+      id: reservation,
+      intentId: deleteEpoch,
+      forgejoRepoId: current.id,
+    }))
+  ) {
+    throw new RepairTakenOverError(current.id);
+  }
+
+  try {
+    await holdReservation(reservation, deleteEpoch);
+    const stillThere = await forgejoRequestOrNull<ForgejoRepository>(
+      `/repositories/${current.id}`,
+      { timeoutMs: HELD_REQUEST_TIMEOUT_MS },
+    );
+    if (
+      !stillThere ||
+      stillThere.owner.login.toLowerCase() !== owner.toLowerCase() ||
+      stillThere.name !== name
+    ) {
+      await releaseGitRepositoryReservationsByIntent({
+        intentId: deleteEpoch,
+      }).catch(() => undefined);
+      throw new ForgejoError(
+        409,
+        "DELETE",
+        `/repos/${owner}/${name}`,
+        `repository ${owner}/${name} is no longer id ${current.id}`,
+      );
+    }
+
+    await forgejoRequest(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      {
+        method: "DELETE",
+        sudo,
+        responseType: "none",
+        timeoutMs: HELD_REQUEST_TIMEOUT_MS,
+      },
+    );
+    await releaseGitRepositoryReservationsByIntent({
+      intentId: deleteEpoch,
+    }).catch(() => undefined);
+  } catch (error) {
+    // 4xx は言い切れる。それ以外 (待ち時間切れ・5xx) は、消えたかどうか
+    // 分からない。予約を残し、定期実行が id で引き直して決着を付ける。
+    const decided =
+      error instanceof ForgejoError && error.status >= 400 && error.status < 500;
+    if (decided) {
+      await releaseGitRepositoryReservationsByIntent({
+        intentId: deleteEpoch,
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 /**
