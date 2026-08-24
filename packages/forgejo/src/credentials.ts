@@ -95,24 +95,61 @@ export function tokensPath(username: string, tokenId?: number): string {
   return tokenId === undefined ? base : `${base}/${tokenId}`;
 }
 
+/** 一覧の 1 ページの本数。Forgejo は 50 を超える limit を 50 に丸める (実測)。 */
+const TOKEN_PAGE_SIZE = 50;
+
+/** 一覧を読む上限。際限なく回さないための歯止め。 */
+const MAX_TOKEN_PAGES = 40;
+
+/**
+ * Forgejo 側のトークン名。**発行のたびに違う値にする。**
+ *
+ * 利用者に見せるラベルは控えの側で一意にしてある (userId との組に制約がある)。
+ * Forgejo 側の名前までラベルと同じにすると、応答を落としたときに「今回の要求が
+ * 作った 1 本」を名前で見分けられない。同じラベルの発行が重なると、後始末が
+ * 相手の生きたトークンを消し、平文だけ渡った使えない資格情報が残る。
+ *
+ * ラベルを頭に残すのは、Forgejo の管理画面で何のトークンか読めるようにするため。
+ */
+function forgejoTokenName(label: string, issueId: string): string {
+  return `${label} [${issueId}]`;
+}
+
 /**
  * 名前で引き当てて畳む。
  *
  * 発行の応答を落としたときに使う。Forgejo 側だけ成功していると、平文は誰にも
- * 渡らないまま名前だけが埋まり、同じ端末名で二度と発行できなくなる。
+ * 渡らないまま Forgejo にトークンだけが残り、誰も存在に気付けない。
+ *
+ * 渡すのは `forgejoTokenName` が作った一意な名前。ラベルで引くと、同じラベルの
+ * 別の発行が作った生きたトークンに当たる。
+ *
+ * **ページを明示して最後まで読む。** page を指定しなければ Forgejo は全件返すが、
+ * それは文書化された挙動ではない。page=1 だけを読むと 51 本目以降を取り逃す
+ * (並び順は発行順ではないので、直前に作った 1 本が後ろのページに来る)。
  */
 async function dropTokenByName(username: string, name: string): Promise<void> {
   try {
-    const tokens = await forgejoRequest<ForgejoAccessToken[]>(
-      tokensPath(username),
-      { searchParams: { page: 1, limit: 50 } },
-    );
-    const stray = tokens.find((token) => token.name === name);
-    if (!stray) return;
-    await dropIssuedToken(
-      username,
-      stray.id,
-      "the issue call did not return a result",
+    for (let page = 1; page <= MAX_TOKEN_PAGES; page++) {
+      const tokens = await forgejoRequest<ForgejoAccessToken[]>(
+        tokensPath(username),
+        { searchParams: { page, limit: TOKEN_PAGE_SIZE } },
+      );
+      const stray = tokens.find((token) => token.name === name);
+      if (stray) {
+        await dropIssuedToken(
+          username,
+          stray.id,
+          "the issue call did not return a result",
+        );
+        return;
+      }
+      // 半端なページで終わり。作られていなかった。
+      if (tokens.length < TOKEN_PAGE_SIZE) return;
+    }
+    console.error(
+      `could not find a stray token named "${name}" of ${username} ` +
+        `within ${MAX_TOKEN_PAGES} pages`,
     );
   } catch (error) {
     console.error(
@@ -194,21 +231,24 @@ export async function issueGitCredential(
     throw new CredentialNameTakenError(name);
   }
 
+  // Forgejo 側の名前は今回の発行だけのもの。畳むときにこれで引き当てる。
+  const forgejoName = forgejoTokenName(name, crypto.randomUUID());
+
   let issued: ForgejoAccessToken;
   try {
     issued = await forgejoRequest<ForgejoAccessToken>(tokensPath(username), {
       method: "POST",
-      body: { name, scopes: ["write:repository"] },
+      body: { name: forgejoName, scopes: ["write:repository"] },
     });
   } catch (error) {
-    // 控えと Forgejo がずれていた場合もここに来る。名前の重複として同じ扱いにする。
+    // 名前は毎回違うので、ここに来るのは Forgejo 側の状態がこちらの想定と
+    // 食い違っている場合だけ。念のため名前の重複として扱う。
     if (error instanceof ForgejoError && isTokenNameTaken(error)) {
       throw new CredentialNameTakenError(name);
     }
     // **結果が分からない場合 (待ち時間切れ・5xx) は、作られている可能性がある。**
-    // 平文は失われているので誰も使えないが、名前は埋まったままになり、同じ端末名で
-    // やり直せない。名前で引き当てて畳む。
-    await dropTokenByName(username, name);
+    // 平文は失われているので誰も使えず、誰も失効させられない。名前で引き当てて畳む。
+    await dropTokenByName(username, forgejoName);
     throw error;
   }
 

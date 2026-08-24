@@ -129,14 +129,18 @@ vi.mock("@beutl/db", () => ({
     id: string;
     forgejoRepoId: number;
   }) => {
+    // 引き取られた行には書けない状況を作れるようにする。
+    if (attachFailsFor.includes(id)) return false;
     const entry = reservations.get(id);
     if (!entry) return false;
     entry.forgejoRepoId = forgejoRepoId;
     // 本物は「自分の印の行に書けたか」を返す。
     return true;
   },
-  releaseGitRepositoryReservation: async ({ id }: { id: string }) =>
-    reservations.delete(id),
+  releaseGitRepositoryReservation: async ({ id }: { id: string }) => {
+    releasedIds.push(id);
+    return reservations.delete(id);
+  },
   releaseGitRepositoryReservationsByIntent: async () => {
     // 実物は同じ 1 回の操作で取った行をまとめて外す。テストでは 1 操作ぶんしか
     // 積まないので、全部消せば同じこと。
@@ -146,9 +150,15 @@ vi.mock("@beutl/db", () => ({
     staleReservations.map((entry) => ({
       operation: "CREATE",
       sourceName: null,
+      // 既定は「たった今積まれた」。削除の猶予を試す側で古い時刻を渡す。
+      createdAt: new Date(),
       ...entry,
     })),
-  GitRepositoryOperation: { CREATE: "CREATE", RENAME: "RENAME" },
+  GitRepositoryOperation: {
+    CREATE: "CREATE",
+    RENAME: "RENAME",
+    DELETE: "DELETE",
+  },
   markGitRepositoryCreationMissing: async () => new Date(),
   clearGitRepositoryCreationMissing: async () => undefined,
   findGitRepositoryRepair: async ({
@@ -291,7 +301,10 @@ let staleReservations: {
   forgejoRepoId: number | null;
   operation?: string;
   sourceName?: string | null;
+  createdAt?: Date;
 }[] = [];
+let attachFailsFor: string[] = [];
+let releasedIds: string[] = [];
 let leaseHeld = true;
 let enqueueFails = false;
 let purgedTombstone = false;
@@ -357,6 +370,8 @@ beforeEach(() => {
   enqueueFails = false;
   reservations = new Map();
   staleReservations = [];
+  attachFailsFor = [];
+  releasedIds = [];
   repairQueue = new Map();
   neededReview = false;
   credentialCount = 0;
@@ -2172,5 +2187,280 @@ describe("削除は相手を確かめてから送る", () => {
 
     expect(deletedPath).toBe("/api/v1/repos/someone/proj");
     expect(reservations.size).toBe(0);
+  });
+});
+
+describe("削除の予約は、消えたと分かるまで名前を離さない", () => {
+  // 待ち時間切れは「Forgejo が削除をやめた」ことの証明ではない。まだ残っているのを
+  // 見た瞬間に名前を解放すると、同じ名前で作り直された後に古い削除が着地しうる。
+  function reconcileWith(repo: unknown) {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/77")) {
+        return repo === null
+          ? json({ message: "not found" }, 404)
+          : json(repo);
+      }
+      if (method === "DELETE") {
+        deletedFromReconcile = true;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+  }
+  let deletedFromReconcile = false;
+
+  beforeEach(() => {
+    deletedFromReconcile = false;
+  });
+
+  it("消えていれば、その場で名前を解放する", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "d1",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-delete-1",
+        forgejoRepoId: 77,
+        operation: "DELETE",
+        sourceName: "proj",
+      },
+    ];
+    reconcileWith(null);
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("d1");
+  });
+
+  it("まだ残っていて日が浅ければ、名前を押さえたままにする", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "d2",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-delete-2",
+        forgejoRepoId: 77,
+        operation: "DELETE",
+        sourceName: "proj",
+        createdAt: new Date(),
+      },
+    ];
+    reconcileWith({ id: 77, name: "proj", owner: { id: 2, login: "someone" } });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).not.toContain("d2");
+    // 自動では消し直さない。消すのは取り返しがつかない。
+    expect(deletedFromReconcile).toBe(false);
+  });
+
+  it("しばらく待っても残っていたら、行われなかったとして解放する", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "d3",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-delete-3",
+        forgejoRepoId: 77,
+        operation: "DELETE",
+        sourceName: "proj",
+        createdAt: new Date(Date.now() - 40 * 60 * 1000),
+      },
+    ];
+    reconcileWith({ id: 77, name: "proj", owner: { id: 2, login: "someone" } });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("d3");
+    expect(deletedFromReconcile).toBe(false);
+  });
+});
+
+describe("元の名前が分からない改名の予約", () => {
+  it("今の名前を元の名前とみなして改名し直さない", async () => {
+    // operation と sourceName は同じ migration で入った。それより前に積まれた行には
+    // 元の名前が無い。無いものを「今の名前が元の名前だ」と読むと、利用者が後から
+    // 付け直した名前まで書き換えてしまう。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "n1",
+        ownerUsername: "someone",
+        name: "target",
+        holdingName: "beutl-rename-legacy",
+        forgejoRepoId: 78,
+        operation: "RENAME",
+        sourceName: null,
+      },
+    ];
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/78")) {
+        // 利用者が後から付け直した名前。
+        return json({
+          id: 78,
+          name: "renamed-by-hand",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH") {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 78, name: "target" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(renamedTo).toBeNull();
+    expect(releasedIds).not.toContain("n1");
+  });
+});
+
+describe("改名は 2 つの控えが揃ってから送る", () => {
+  it("元の名前側に相手を控えられなければ送らない", async () => {
+    const { renameRepository } = await import("@beutl/forgejo");
+    // 元の名前の予約 (キーは owner/小文字名) にだけ書けない状況を作る。
+    attachFailsFor = ["someone/proj"];
+    let patched = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/repos/someone/proj")) {
+        return json({ id: 79, name: "proj", default_branch: "main" });
+      }
+      if (method === "GET" && path.endsWith("/repositories/79")) {
+        return json({ id: 79, name: "proj", owner: { id: 2, login: "someone" } });
+      }
+      if (method === "PATCH") {
+        patched = true;
+        return json({ id: 79, name: "next" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      renameRepository("someone", "someone", "proj", "next"),
+    ).rejects.toThrow();
+
+    expect(patched).toBe(false);
+  });
+});
+
+describe("Forgejo 側のトークン名", () => {
+  it("発行ごとに違う値にする (ラベルは頭に残す)", async () => {
+    const names: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/users/someone") && (init?.method ?? "GET") === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
+      if (init?.method === "POST" && path.endsWith("/tokens")) {
+        const name = JSON.parse(String(init.body)).name;
+        names.push(name);
+        return json(
+          { id: names.length, name, sha1: TOKEN, token_last_eight: TOKEN.slice(-8) },
+          201,
+        );
+      }
+      return json({});
+    });
+
+    await issueGitCredential("u1", "desktop");
+    await issueGitCredential("u1", "desktop");
+
+    expect(names).toHaveLength(2);
+    expect(names[0]).not.toBe(names[1]);
+    for (const name of names) expect(name.startsWith("desktop [")).toBe(true);
+  });
+
+  it("応答を落としたとき、同じラベルの別の発行を消さない", async () => {
+    // 同じラベルの発行が重なると、名前だけを手掛かりにした後始末は相手の生きた
+    // トークンに当たる。平文だけ渡って使えない資格情報が残る。
+    let ours: string | null = null;
+    const deleted: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/users/someone") && method === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
+      if (method === "POST" && path.endsWith("/tokens")) {
+        ours = JSON.parse(String(init?.body)).name;
+        throw new Error("socket hang up");
+      }
+      if (method === "GET" && path.endsWith("/tokens")) {
+        // 71 は同じラベルで先に成功した別の発行。ラベルだけを手掛かりにすると
+        // こちらに当たる。72 が今回の要求が作った 1 本。
+        return json([
+          { id: 71, name: "desktop" },
+          { id: 72, name: ours },
+        ]);
+      }
+      if (method === "DELETE") {
+        deleted.push(path.split("/").at(-1) as string);
+        return new Response(null, { status: 204 });
+      }
+      return json({});
+    });
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toThrow(
+      "socket hang up",
+    );
+
+    expect(deleted).toEqual(["72"]);
+  });
+
+  it("一覧は最後まで読む (51 本目にあっても見つける)", async () => {
+    // page=1 だけを読むと 51 本目以降を取り逃す。並び順は発行順ではない (実測)。
+    let ours: string | null = null;
+    const deleted: string[] = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const target = new URL(String(url));
+      const path = target.pathname;
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/users/someone") && method === "GET") {
+        return json({ id: 2, login: "someone", email: EMAIL });
+      }
+      if (method === "POST" && path.endsWith("/tokens")) {
+        ours = JSON.parse(String(init?.body)).name;
+        throw new Error("socket hang up");
+      }
+      if (method === "GET" && path.endsWith("/tokens")) {
+        if (target.searchParams.get("page") === "1") {
+          return json(
+            Array.from({ length: 50 }, (_, i) => ({
+              id: 100 + i,
+              name: `other-${i}`,
+            })),
+          );
+        }
+        return json([{ id: 200, name: ours }]);
+      }
+      if (method === "DELETE") {
+        deleted.push(path.split("/").at(-1) as string);
+        return new Response(null, { status: 204 });
+      }
+      return json({});
+    });
+
+    await expect(issueGitCredential("u1", "desktop")).rejects.toThrow(
+      "socket hang up",
+    );
+
+    expect(deleted).toEqual(["200"]);
   });
 });

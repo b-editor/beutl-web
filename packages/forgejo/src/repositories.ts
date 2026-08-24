@@ -507,6 +507,18 @@ const HELD_REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
 const CREATION_MISSING_GRACE_MS = 30 * 60 * 1000;
 
 /**
+ * 削除の予約を「行われなかった」と判断するまでの幅。
+ *
+ * **待ち時間切れは、Forgejo が削除をやめたことの証明ではない。** こちらが待つのを
+ * やめただけで、向こうはまだ処理の途中かもしれない。まだ残っているのを見た瞬間に
+ * 名前を解放すると、同じ名前で作り直された後に古い削除が着地しうる。
+ *
+ * 相手が消えていれば、その時点で言い切れるので待たない。残っている場合だけ、
+ * 要求が始まってからこの幅を過ぎるまで押さえたままにする。
+ */
+const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
+
+/**
  * 控え 1 件を片付ける。@returns 控えを外してよいか。
  *
  * 控えには 2 種類ある。混ぜてはいけない。
@@ -675,6 +687,15 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
       // 名前を解放し、やり直すかどうかは利用者に委ねる。
       if (entry.operation === GitRepositoryOperation.DELETE) {
         if (holding) {
+          // **まだ残っている = 削除が行われなかった、ではない。** 待つのをやめた
+          // 後に Forgejo が確定させることがある。始めてからしばらくは押さえたまま
+          // にして、それでも残っていたら「行われなかった」として名前を解放する。
+          if (
+            Date.now() - entry.createdAt.getTime() <
+            DELETE_LATE_GRACE_MS
+          ) {
+            continue;
+          }
           console.warn(
             `delete reservation ${entry.id} still sees ` +
               `${holding.owner.login}/${holding.name}; the deletion did not take effect`,
@@ -694,10 +715,14 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         !settled &&
         entry.operation === GitRepositoryOperation.RENAME
       ) {
+        // **元の名前が控えられていない予約は動かさない。** 控えが無いものを
+        // 「今の名前が元の名前だ」と読むと、利用者が後から付け直した名前まで
+        // 書き換えてしまう。元の名前は、その取り違えを防ぐためだけにある。
         if (
+          entry.sourceName !== null &&
           holding.owner.login.toLowerCase() ===
             entry.ownerUsername.toLowerCase() &&
-          holding.name === (entry.sourceName ?? holding.name)
+          holding.name === entry.sourceName
         ) {
           // まだ元の名前のまま。改名だけやり直す。
           await holdReservation(entry.id, epoch);
@@ -1225,14 +1250,19 @@ export async function renameRepository(
       throw new RepairTakenOverError(current.id);
     }
 
-    // 元の名前を押さえた行にも同じ相手を控える。片方だけ回収されると、もう片方が
-    // 偽の預かり名を探し続けて、要らなくなった名前を塞ぎ続ける。
-    if (sourceReservation) {
-      await attachGitRepositoryCreationId({
+    // 元の名前を押さえた行にも同じ相手を控える。**こちらも書けなければ進めない。**
+    // 控えが無い行は、回収のときに偽の預かり名を探しにいくことしかできず、
+    // 要らなくなった名前を期限まで塞ぎ続ける。行き先の行から辿れるとはいえ、
+    // それは片方が生き残っている場合の話でしかない。
+    if (
+      sourceReservation &&
+      !(await attachGitRepositoryCreationId({
         id: sourceReservation,
         intentId: renameEpoch,
         forgejoRepoId: current.id,
-      }).catch(() => undefined);
+      }))
+    ) {
+      throw new RepairTakenOverError(current.id);
     }
 
     // **送る直前に相手を確かめ直す。** 上の GET から間が空くと、その名前が別の

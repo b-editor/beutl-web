@@ -336,7 +336,9 @@ model GitAccountDeletion {
 model GitCredential {
   id             String   @id @default(uuid())
   userId         String
-  // ユーザーに見せるラベル。Forgejo 上のトークン名と同じ値にする。
+  // ユーザーに見せるラベル。**一意なのはこちら側だけ。** Forgejo 上のトークン名は
+  // 発行のたびに違う値にしてある (応答を落としたときに、今回作った 1 本を名前で
+  // 見分けるため)。失効は名前ではなく forgejoTokenId で行う。
   name           String
   // 失効は名前ではなくこの id で行う (名前に / や空白が入りうるため)。
   // 幅の扱いは GitAccount.forgejoUserId と同じ。
