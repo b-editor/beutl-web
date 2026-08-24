@@ -22,6 +22,7 @@ import {
   useActionState,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
 } from "react";
@@ -126,6 +127,11 @@ export function TranscribeForm({
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string>("transcription");
   const [extracting, setExtracting] = useState(false);
+  // いま画面が待っている抜き出しの番号。動画から音声を抜くのは時間がかかり、
+  // 待っているあいだに別の動画を選べる——遅れて終わった前の一本が欄と画面の
+  // 持ちものを塗り替えると、画面はこちらの名前を見せながら、あちらの音声を
+  // 送ることになる。
+  const extraction = useRef(0);
   const [extractionError, setExtractionError] =
     useState<AudioExtractionFailure | null>(null);
   const [language, setLanguage] = useState("");
@@ -210,24 +216,30 @@ export function TranscribeForm({
     setAudioName(baseNameOf(file.name));
     if (!isVideoFile(file)) return;
 
+    const generation = ++extraction.current;
     setExtracting(true);
     try {
       const audio = await extractAudioAsWav(
         file,
         MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
       );
+      // 追い越されていた。この音声はもう誰も待っていないので、置いていく。
+      if (generation !== extraction.current) return;
+
       const transfer = new DataTransfer();
       transfer.items.add(audio);
       input.files = transfer.files;
       setAudioFile(audio);
     } catch (error) {
+      if (generation !== extraction.current) return;
+
       input.value = "";
       setAudioFile(null);
       setExtractionError(
         error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
       );
     } finally {
-      setExtracting(false);
+      if (generation === extraction.current) setExtracting(false);
     }
   }
 
@@ -428,7 +440,7 @@ export function TranscribeForm({
           forceSpinner={isPending}
           // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
           // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
-          disabled={submitBlocked || isPending || readingAudio}
+          disabled={submitBlocked || isPending || readingAudio || extracting}
         >
           {t("dashboard:ai.transcribe")}
         </SubmitButton>

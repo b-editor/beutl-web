@@ -167,6 +167,7 @@
     "lastFrame": "Last frame (optional)",
     "lastFrameHint": "The video is generated to end on this image.",
     "clearFrame": "Clear",
+    "lastFrameNeedsFirst": "This image is sent once a first frame is chosen.",
     "generate": "Generate",
     "edit": "Edit",
     "transcribe": "Transcribe",

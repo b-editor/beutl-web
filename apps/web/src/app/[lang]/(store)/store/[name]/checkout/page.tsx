@@ -108,6 +108,16 @@ export default async function Page(props: {
     metadata,
     success_url: `${origin}/${lang}/store/${name}/checkout/complete?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/${lang}/store/${name}`,
+  }, {
+    // 上の「開いている口を探す」と「作る」のあいだには隙間がある。同じ買い物を
+    // 二つのタブで開くと、どちらも「まだ無い」を読んで、それぞれ別の
+    // PaymentIntent を持つ口を作る——どちらも支払えるので、同じものに二度払える。
+    // この名前で作れば、二度目は Stripe が一度目と同じ口を返す。
+    //
+    // 名前に値段と通貨を入れておく。値段が変わったのに同じ口を返しては、
+    // 新しい値段で買えなくなる。
+    idempotencyKey:
+      `beutl:package-checkout:${session.user.id}:${pkg.id}:${price.currency}:${price.price}`,
   });
 
   if (!checkoutSession.url) {

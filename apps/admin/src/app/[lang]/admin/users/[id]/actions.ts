@@ -8,10 +8,12 @@ import {
   adjustPurchasedCreditsByAdmin,
   CreditAdjustmentRejectedError,
   deleteUserById,
+  enqueueUserStorageCleanups,
   existsUserById,
   findAdminCreditAdjustment,
   getSubscriptionByUserId,
   isUniqueConstraintViolation,
+  prepareAccountDeletionOutboxes,
   setMonthlyUsageUsedByAdmin,
   startRetryableTransaction,
 } from "@beutl/db";
@@ -42,11 +44,28 @@ export async function deleteUser({
       };
     }
 
+    // 課金の続いている相手は消せない。この画面から Stripe の解約はできず、
+    // 行だけ消すと請求はそのまま続き、こちらには誰の請求なのかを引く手掛かりが
+    // 残らない——webhook も、対応する行が無いものは黙って受け取る。
+    const subscription = await getSubscriptionByUserId({ userId });
+    if (subscription && isActiveProSubscription(subscription)) {
+      return {
+        success: false,
+        message:
+          "Cancel this user's Pro subscription before deleting the account",
+      };
+    }
+
     // 監査ログと対象の書き込みは同一トランザクションで確定させる
     // (片方だけ成功すると、呼び出し元へ返す結果と実際の状態が食い違う)。
     // ユーザー削除は 10 テーブル以上へカスケードするため、CockroachDB の
     // SERIALIZABLE では書き込み競合 (P2034) で落ちやすい。再試行版を使う。
     await startRetryableTransaction(async (tx) => {
+      // 本人が消すときと同じ後始末を、同じトランザクションで。行が消えたあとに
+      // 外の持ちものを指す手掛かりは残らないので、消す前に控えを取る——R2 の
+      // オブジェクトと、走っている provider の job がそれ。
+      await enqueueUserStorageCleanups({ userId, prisma: tx });
+      await prepareAccountDeletionOutboxes({ userId, prisma: tx });
       await deleteUserById({ userId, prisma: tx });
       await addAuditLog({
         userId: session.user.id,

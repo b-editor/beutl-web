@@ -167,6 +167,7 @@
     "lastFrame": "最後のフレーム (任意)",
     "lastFrameHint": "指定するとこの画像で終わるように生成します。",
     "clearFrame": "クリア",
+    "lastFrameNeedsFirst": "最初のフレームを選ぶと、この画像も一緒に送ります。",
     "generate": "生成",
     "edit": "編集",
     "transcribe": "文字起こし",

@@ -14,6 +14,7 @@ import {
 } from "@beutl/db";
 import { PRO_PLAN } from "@beutl/api";
 import { createHash } from "@beutl/core";
+import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { isStripeResourceMissingError } from "@/lib/stripe/errors";
 import { createStripe } from "@/lib/stripe/config";
 import {
@@ -130,6 +131,66 @@ async function compensateUnmappedCustomer({
       userId,
     });
   }
+}
+
+// 置き換えた古い Customer に、まだ請求の続く subscription が残っていないか。
+//
+// 残っていても、こちらからは解約しない。metadata の無い Customer は持ち主を
+// 確かめられず、移行のときに選ばれた利用者は当てにならない——別人の契約を
+// 止めるほうが、請求が続くよりも取り返しがつかない。代わりに、どの Customer の
+// どの subscription なのかを残す。行がここで途切れると、人が見て決めるための
+// 手掛かりまで消えてしまう。
+async function recordLegacyCustomerStillBilling({
+  stripe,
+  customerId,
+  userId,
+  replacedBy,
+}: {
+  stripe: StripeClient;
+  customerId: string;
+  userId: string;
+  replacedBy: string;
+}): Promise<void> {
+  const billing = new Set([
+    "active",
+    "trialing",
+    "past_due",
+    "unpaid",
+    "incomplete",
+    "paused",
+  ]);
+  let startingAfter: string | undefined;
+  const left: string[] = [];
+  for (;;) {
+    let subscriptions;
+    try {
+      subscriptions = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "all",
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+    } catch (error) {
+      if (isStripeResourceMissingError(error)) break;
+      throw error;
+    }
+    for (const subscription of subscriptions.data) {
+      if (billing.has(subscription.status)) left.push(subscription.id);
+    }
+    if (!subscriptions.has_more) break;
+    const last = subscriptions.data.at(-1);
+    if (!last) break;
+    startingAfter = last.id;
+  }
+  if (left.length === 0) return;
+
+  await addAuditLog({
+    userId,
+    action: auditLogActions.account.legacyCustomerLeftBilling,
+    details:
+      `Stripe customer ${customerId} was replaced by ${replacedBy} while `
+      + `still billing: ${left.join(", ")}`,
+  });
 }
 
 async function expireOwnedOpenCheckoutSessions({
@@ -254,6 +315,12 @@ async function createOwnedCustomer({
         stripe,
         customerId: replacesCustomerId,
         userId,
+      });
+      await recordLegacyCustomerStillBilling({
+        stripe,
+        customerId: replacesCustomerId,
+        userId,
+        replacedBy: customer.id,
       });
       await replaceCustomerMappingWithVerifiedOwnership({
         userId,

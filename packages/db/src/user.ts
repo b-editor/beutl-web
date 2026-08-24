@@ -285,11 +285,22 @@ export async function enqueueUserStorageCleanups({
     where: { userId },
     select: { objectKey: true },
   });
-  for (const file of files) {
+  // 途中のアップロードも。完了の控えを書く前に落ちたものは、R2 には出来上がった
+  // オブジェクトがあるのに File が無い——行ごと消してしまうと、そのオブジェクト
+  // を指す手掛かりはどこにも残らない。墓標には抱えているものが無いので飛ばす。
+  const uploads = await db.storageUpload.findMany({
+    where: { userId, NOT: { objectKey: "" } },
+    select: { objectKey: true },
+  });
+  const objectKeys = new Set([
+    ...files.map((file) => file.objectKey),
+    ...uploads.map((upload) => upload.objectKey),
+  ]);
+  for (const objectKey of objectKeys) {
     await db.aiStorageCleanup.upsert({
-      where: { objectKey: file.objectKey },
+      where: { objectKey },
       create: {
-        objectKey: file.objectKey,
+        objectKey,
         aiJobId: null,
         state: "cleanup",
         notBefore: now,
@@ -301,5 +312,5 @@ export async function enqueueUserStorageCleanups({
       },
     });
   }
-  return files.length;
+  return objectKeys.size;
 }

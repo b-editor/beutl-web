@@ -283,8 +283,7 @@ export function ImageEditForm({
     // task, or no model that can serve it.
     if (!canSubmit) return;
     setPrepareError(null);
-    const form = event.currentTarget;
-    const formData = new FormData(form);
+    const formData = new FormData(event.currentTarget);
     const file = formData.get("file");
     if (editTask === "outpaint" && file instanceof File && file.size > 0) {
       startPreparing(async () => {
@@ -293,7 +292,11 @@ export function ImageEditForm({
             file,
             Number(outpaintExpansion),
           );
-          const next = new FormData(form);
+          // 送るのは、押した時点の画面。広げているあいだに task や model、
+          // 文章や元の絵が変えられても、いま作った絵と、いま名乗る名前と、
+          // 本文の中身がばらばらになってはいけない——ばらばらなものを送れば、
+          // 名前が指すのとは別の依頼が処理され、その名前ではもう戻れない。
+          const next = formData;
           next.set("file", prepared);
           // サーバーが指紋にするのは、この広げたあとの絵。元の絵と広げ幅から
           // 名乗ると、別々の元絵と幅が同じ絵になったときに、同じ依頼が二つの

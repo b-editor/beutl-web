@@ -67,6 +67,7 @@ function FramePicker({
   file,
   onPick,
   clearLabel,
+  note = null,
 }: {
   id: string;
   name: string;
@@ -80,6 +81,9 @@ function FramePicker({
   // フレームだけ差し替えた依頼が前の依頼と同じ名前で送られ、断られる。
   onPick: (file: File | null) => void;
   clearLabel: string;
+  // 選ばれてはいるが、いまのままでは送らない——その理由。黙って落とすと、画面に
+  // 見えている条件と、買うものが食い違う。
+  note?: string | null;
 }) {
   const [preview, setPreview] = useState<string | null>(null);
   // 外したときに欄そのものを作り直すための番号。欄はブラウザが持っていて、
@@ -116,6 +120,7 @@ function FramePicker({
         onChange={handleChange}
       />
       <p className="text-xs text-muted-foreground">{hint}</p>
+      {note && <p className="text-xs text-destructive">{note}</p>}
       {file && (
         <div className="flex items-center gap-2">
           <p className="text-xs text-muted-foreground">{file.name}</p>
@@ -268,6 +273,12 @@ export function VideoForm({
   );
   const { contents: frameContents, reading: readingFrames } =
     useFileFingerprints(frames, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+  // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
+  // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
+  // 作るので、画面に見えている条件と、その名前で買うものが食い違わない。
+  const sentFirstFrame = options.firstFrame ? firstFrame : null;
+  const sentLastFrame =
+    sentFirstFrame && options.lastFrame ? lastFrame : null;
   const firstFrameContent = firstFrame ? frameContents[0] ?? "" : "";
   const lastFrameContent = lastFrame
     ? frameContents[firstFrame ? 1 : 0] ?? ""
@@ -301,10 +312,13 @@ export function VideoForm({
     // フレームは中身と、あるかないかだけ。サーバーはその名前を見ない——名前を
     // 数えると、同じ一枚を別の名前で選び直しただけで別の依頼になり、支払い済み
     // のものへ戻れないまま二度課金される。
-    options.firstFrame ? firstFrame !== null : null,
-    options.firstFrame ? firstFrameContent : "",
-    options.firstFrame && options.lastFrame ? lastFrame !== null : null,
-    options.firstFrame && options.lastFrame ? lastFrameContent : "",
+    //
+    // 数えるのは送るものだけ。選ばれていても送らないフレームを数えると、画面に
+    // 見えている条件と、その名前で買うものが食い違う。
+    sentFirstFrame !== null,
+    sentFirstFrame ? firstFrameContent : "",
+    sentLastFrame !== null,
+    sentLastFrame ? lastFrameContent : "",
   ]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
@@ -343,12 +357,8 @@ export function VideoForm({
     const formData = new FormData(event.currentTarget);
     formData.delete("firstFrame");
     formData.delete("lastFrame");
-    if (options.firstFrame && firstFrame) {
-      formData.set("firstFrame", firstFrame);
-      // 終わりのフレームだけの依頼は、この API には無い形。始まりが無いまま
-      // 送ると、予約してから断られる。
-      if (options.lastFrame && lastFrame) formData.set("lastFrame", lastFrame);
-    }
+    if (sentFirstFrame) formData.set("firstFrame", sentFirstFrame);
+    if (sentLastFrame) formData.set("lastFrame", sentLastFrame);
 
     names.commit(signature);
     dispatch(formData);
@@ -594,6 +604,11 @@ export function VideoForm({
               file={lastFrame}
               onPick={setLastFrame}
               clearLabel={t("dashboard:ai.clearFrame")}
+              note={
+                lastFrame && !sentLastFrame
+                  ? t("dashboard:ai.lastFrameNeedsFirst")
+                  : null
+              }
             />
           )}
         </AdvancedOptions>

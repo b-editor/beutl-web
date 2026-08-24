@@ -1,6 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": ".open-next/worker.js",
+  // OpenNext の worker をそのまま指さず、本文の大きさを見る入口で包む。
+  // 生成されるハンドラは利用者の middleware より先に本文をまるごと持つので、
+  // 抱える前に断れるのはここだけ。中身は worker.js を参照。
+  "main": "worker.js",
   "name": "beutl-web",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": [
