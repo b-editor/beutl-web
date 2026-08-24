@@ -1,22 +1,16 @@
-export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
-
-export const MAX_AI_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
-// 参照画像は全部そろえて base64 データ URL にし、JSON でもう一度複製される。
-// 1 枚あたりの上限を枚数分そのまま許すと、生バイトだけで 80MiB、base64 で
-// 107MiB になり Worker のメモリ予算を超える。1 枚のときと同じ総量までに抑える。
-export const MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES = MAX_AI_IMAGE_UPLOAD_BYTES;
-// Two frame images are embedded as base64 data URLs and then copied again by
-// JSON serialization. Keep this substantially below the ordinary image-edit
-// limit so a two-frame request stays within the Worker's memory budget.
-export const MAX_AI_VIDEO_FRAME_UPLOAD_BYTES = 5 * 1024 * 1024;
 export {
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+  MULTIPART_OVERHEAD_BYTES,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
+  aiScreenUploadLimit,
 } from "@beutl/core";
+import { MULTIPART_OVERHEAD_BYTES } from "@beutl/core";
+
 export const MAX_AI_JSON_REQUEST_BYTES = 32 * 1024;
-// A canonical maximum-size translation payload can contain 200 64-character
-// IDs plus 20,000 multi-byte UTF-8 text characters.
-export const MAX_AI_TRANSLATION_JSON_REQUEST_BYTES = 128 * 1024;
 
 export class UploadLimitExceededError extends Error {
   constructor() {

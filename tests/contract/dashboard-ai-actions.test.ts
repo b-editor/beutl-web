@@ -30,6 +30,7 @@ vi.mock("@/lib/content-url", () => ({
 }));
 
 import {
+  createVideoAction,
   generateImageAction,
   listJobsAction,
   retryJobAction,
@@ -66,6 +67,13 @@ vi.mock("@beutl/db", async (importOriginal) => {
   return { ...actual, getAiJobResultFile: vi.fn() };
 });
 
+const PNG_BYTES = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
+
 describe("dashboard AI actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -79,6 +87,10 @@ describe("dashboard AI actions", () => {
 
   // Every submission carries the key that makes a resubmission land on the job
   // the first arrival created instead of reserving and charging again.
+  function pngFile(name: string): File {
+    return new File([PNG_BYTES.slice()], name, { type: "image/png" });
+  }
+
   function generateForm(prompt = "a cat"): FormData {
     const formData = new FormData();
     formData.set("prompt", prompt);
@@ -86,6 +98,25 @@ describe("dashboard AI actions", () => {
     formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000001");
     return formData;
   }
+
+  // 終わりのフレームだけの依頼は v3 /videos/frames もエディタの DTO も断る。
+  // 入口によって受ける形が変わると、こちらから送ったぶんだけ、予約して課金して
+  // から断られる。
+  it("refuses a last frame with no first frame, as the API does", async () => {
+    const formData = new FormData();
+    formData.set("prompt", "Animate the scene");
+    formData.set("durationSeconds", "4");
+    formData.set("resolution", "720p");
+    formData.set("aspectRatio", "16:9");
+    formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000009");
+    formData.set("lastFrame", pngFile("last.png"));
+
+    const result = await createVideoAction({ success: false }, formData);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("invalidRequestBody");
+    expect(vi.mocked(createReservedAiJob)).not.toHaveBeenCalled();
+  });
 
   it("rejects an empty prompt", async () => {
     const formData = generateForm("  ");

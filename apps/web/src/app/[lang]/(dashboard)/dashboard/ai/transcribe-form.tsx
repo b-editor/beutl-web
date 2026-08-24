@@ -187,7 +187,11 @@ export function TranscribeForm({
     audioFile,
     audioContent,
   ]);
-  const submitBlocked = blocksSubmit(blocked, keepsName);
+  // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
+  // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
+  // 支払い済みの結果を取りに行く道が閉じる。
+  const holdsName = names.holds(signature);
+  const submitBlocked = blocksSubmit(blocked, holdsName);
   const models = access.models["audio.transcribe"] ?? [];
 
   // A video is converted here rather than uploaded: the endpoint refuses a file

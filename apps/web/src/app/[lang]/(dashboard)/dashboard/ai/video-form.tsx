@@ -25,6 +25,7 @@ import {
   useMemo,
   useState,
   type ChangeEvent,
+  type FormEvent,
 } from "react";
 import {
   AI_MAX_SEED,
@@ -48,6 +49,7 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
+  canSubmitAiRequest,
   requestSignature,
   seedValue,
   useFileFingerprints,
@@ -219,7 +221,6 @@ export function VideoForm({
     names.settle(keepsName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-  const submitBlocked = blocksSubmit(blocked, keepsName);
   const options = optionsOf(capabilities, model);
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
@@ -272,6 +273,20 @@ export function VideoForm({
     options.firstFrame && options.lastFrame ? lastFrame !== null : null,
     options.firstFrame && options.lastFrame ? lastFrameContent : "",
   ]);
+  // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
+  // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
+  // 支払い済みの結果を取りに行く道が閉じる。
+  const holdsName = names.holds(signature);
+  const submitBlocked = blocksSubmit(blocked, holdsName);
+  const canSubmit = canSubmitAiRequest({
+    submitBlocked,
+    hasTask: true,
+    taskUnaffordable: false,
+    taskHasNoModel: models.length === 0 && !holdsName,
+    // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
+    // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
+    busy: isPending || readingFrames,
+  });
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({
@@ -281,6 +296,30 @@ export function VideoForm({
     motion: videoMotion,
     exclusions: videoExclusions,
   }).length;
+
+  // 送るものを、名乗ったものに合わせる。フレームの入力欄はモデルの都合で画面
+  // から外れ、外れた時点で選ばれていたファイルは欄ごと消える——画面の状態だけ
+  // が残り、名前は「フレームあり」と言いながらフレームの無い本文が出ていく。
+  // 欄ではなく画面の状態から組み立てれば、その食い違いは起きない。
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
+    // Enter を押したときにボタンが断っているはずの依頼が出ていく。
+    if (!canSubmit) return;
+
+    const formData = new FormData(event.currentTarget);
+    formData.delete("firstFrame");
+    formData.delete("lastFrame");
+    if (options.firstFrame && firstFrame) {
+      formData.set("firstFrame", firstFrame);
+      // 終わりのフレームだけの依頼は、この API には無い形。始まりが無いまま
+      // 送ると、予約してから断られる。
+      if (options.lastFrame && lastFrame) formData.set("lastFrame", lastFrame);
+    }
+
+    names.commit(signature);
+    dispatch(formData);
+  }
 
   function applyTemplate(template: PromptTemplate) {
     setVideoPrompt(template.prompt);
@@ -294,7 +333,7 @@ export function VideoForm({
     <Card>
       <form
         action={dispatch}
-        onSubmit={() => names.commit(signature)}
+        onSubmit={handleSubmit}
         className="flex flex-col gap-4 p-6"
       >
         <IdempotencyKeyField name={names.nameFor(signature)} />
@@ -511,7 +550,7 @@ export function VideoForm({
               onPick={setFirstFrame}
             />
           )}
-          {options.lastFrame && (
+          {options.firstFrame && options.lastFrame && (
             <FramePicker
               id="videoLastFrame"
               name="lastFrame"

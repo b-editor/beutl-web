@@ -41,6 +41,7 @@ import {
   DownloadButton,
   IDEMPOTENCY_KEY_FIELD,
   IdempotencyKeyField,
+  fileFingerprint,
   keepModelForHeldRequest,
   requestSignature,
   useFileFingerprints,
@@ -55,6 +56,7 @@ import {
   downloadFromUrl,
   defaultModelId,
   type AiAccess,
+  type AiScreenModel,
 } from "./shared";
 
 // Only the icon is a presentation choice; which tasks exist and which need a
@@ -97,6 +99,11 @@ export function ImageEditForm({
   // ——1 つしか覚えないと、別の task を見て戻ってきたときにモデルが変わり、
   // 出してある名前が指す支払い済みの依頼へ届かなくなる。
   const [modelByTask, setModelByTask] = useState<Record<string, string>>({});
+  // その task で送ったことのあるモデル。同じ task の依頼が 2 つ未回収で残ること
+  // があるので、いま選んでいる 1 つだけでは足りない——一覧から消えたほうへ戻れ
+  // なくなり、その名前が指す支払い済みの結果に届かない。
+  const [sentModelsByTask, setSentModelsByTask] =
+    useState<Record<string, string[]>>({});
   // 送信ごとの名前。依頼ごとに持つので、A を回収している最中に B を送っても
   // どちらの名前も残る。
   const names = useAiRequestNames();
@@ -182,16 +189,14 @@ export function ImageEditForm({
     return names.holds(request)
       || (prepared !== undefined && names.holds(prepared));
   }
-  // 選んでいたモデルが一覧から消えても、そのモデルで出した依頼がまだ未回収なら
-  // 名乗り続ける。既定へ落とすと依頼の形が変わり、サーバーは同じ名前の別の依頼
-  // として断る——支払い済みの結果へ戻る道が、そこで閉じる。
-  const heldOnChosenModel =
-    chosenModel !== ""
-    && !offered.some((entry) => entry.id === chosenModel)
-    && holdsSignature(signatureWith(chosenModel));
-  const models = heldOnChosenModel
-    ? keepModelForHeldRequest(offered, chosenModel)
-    : offered;
+  // 一覧から消えたモデルでも、そのモデルで出した依頼がまだ未回収なら名乗り
+  // 続ける。既定へ落とすと依頼の形が変わり、サーバーは同じ名前の別の依頼として
+  // 断る——支払い済みの結果へ戻る道が、そこで閉じる。
+  const models = (sentModelsByTask[editTask] ?? [])
+    .filter((id) =>
+      !offered.some((entry) => entry.id === id)
+      && holdsSignature(signatureWith(id)))
+    .reduce(keepModelForHeldRequest, offered as AiScreenModel[]);
   const selectedModel = models.some((entry) => entry.id === chosenModel)
     ? chosenModel
     : defaultModelId(models);
@@ -258,6 +263,18 @@ export function ImageEditForm({
     });
   }
 
+  // 送ったモデルを覚えておく。一覧から消えたあとに、その依頼をもう一度名乗る
+  // には、どのモデルで出したのかがここに残っている必要がある。
+  function rememberSentModel(model: string) {
+    setModelByTask((current) => ({ ...current, [editTask]: model }));
+    setSentModelsByTask((current) => {
+      const sent = current[editTask] ?? [];
+      return sent.includes(model)
+        ? current
+        : { ...current, [editTask]: [...sent, model] };
+    });
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // Pressing Enter in a field submits even while the button is disabled, so
@@ -281,12 +298,16 @@ export function ImageEditForm({
           // サーバーが指紋にするのは、この広げたあとの絵。元の絵と広げ幅から
           // 名乗ると、別々の元絵と幅が同じ絵になったときに、同じ依頼が二つの
           // 名前に割れて二度課金される。
-          setModelByTask((current) => ({ ...current, [editTask]: selectedModel }));
+          rememberSentModel(selectedModel);
           const preparedSignature = requestSignature([
             editTask,
             selectedModel,
             typedPrompt.trim(),
             prepared,
+            // 広げたあとの絵の中身。名前と大きさだけでは、同じ名前の元絵から
+            // 作った別の絵が同じ名前になり、サーバーの指紋とは食い違ったまま
+            // 断られ続ける——その名前は残るので、送り直しても抜け出せない。
+            await fileFingerprint(prepared, MAX_AI_IMAGE_UPLOAD_BYTES),
           ]);
           names.commit(preparedSignature);
           setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
@@ -302,7 +323,7 @@ export function ImageEditForm({
     }
 
     names.commit(signature);
-    setModelByTask((current) => ({ ...current, [editTask]: selectedModel }));
+    rememberSentModel(selectedModel);
     dispatch(formData);
   }
 

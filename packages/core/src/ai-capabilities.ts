@@ -195,3 +195,54 @@ export function isIso6391LanguageCode(value: unknown): value is string {
 // and a copy in the browser would drift from the one being enforced.
 // Re-exported from ai/upload-limits.ts for the server side.
 export const MAX_AI_TRANSCRIPTION_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+// 同じ理由でここに置く上限たち。Server Action の本文上限はアプリ全体で 1 つしか
+// なく、パッケージのアップロードに合わせた大きさになっている——AI の画面が受け
+// 取れる量はそれよりずっと小さいので、届く前に断るには画面の側でも同じ数を
+// 知っている必要がある。Re-exported from ai/upload-limits.ts for the server side.
+export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+export const MAX_AI_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+// 参照画像は全部そろえて base64 データ URL にし、JSON でもう一度複製される。
+// 1 枚あたりの上限を枚数分そのまま許すと、生バイトだけで 80MiB、base64 で
+// 107MiB になり Worker のメモリ予算を超える。1 枚のときと同じ総量までに抑える。
+export const MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES = MAX_AI_IMAGE_UPLOAD_BYTES;
+// Two frame images are embedded as base64 data URLs and then copied again by
+// JSON serialization. Keep this substantially below the ordinary image-edit
+// limit so a two-frame request stays within the Worker's memory budget.
+export const MAX_AI_VIDEO_FRAME_UPLOAD_BYTES = 5 * 1024 * 1024;
+// A canonical maximum-size translation payload can contain 200 64-character
+// IDs plus 20,000 multi-byte UTF-8 text characters.
+export const MAX_AI_TRANSLATION_JSON_REQUEST_BYTES = 128 * 1024;
+// ファイル以外に本文へ入るもの——境界と、画面が並べる文章の欄。動画の画面は
+// 5 つの欄を持ち、どれも上限まで書けて、UTF-8 では 1 文字が 4 バイトになる。
+// 足りないと、送れるはずの依頼が届く前に断られるので、多めに見る。
+const AI_SCREEN_FIELDS_BYTES = MULTIPART_OVERHEAD_BYTES + 6 * MAX_AI_PROMPT_LENGTH * 4;
+
+/**
+ * その画面の依頼が本文に許される大きさ。名前のない画面には null。
+ *
+ * Server Action の本文上限はアプリ全体で 1 つで、いちばん大きいものに合わせて
+ * ある。そのままでは、AI の画面へ有効な 1 ファイルと無関係な詰め物を送るだけで、
+ * 断られるより先に本文まるごとを組み立てさせられる。画面ごとの上限がここにあれば、
+ * 本文を読む前に断れる。
+ *
+ * 迷うなら大きいほうへ——小さすぎれば、送れるはずの依頼が送れなくなる。
+ */
+export function aiScreenUploadLimit(pathname: string): number | null {
+  const screen = /\/dashboard\/ai\/([a-z-]+)\/?$/u.exec(pathname)?.[1];
+  switch (screen) {
+    case "edit":
+      return MAX_AI_IMAGE_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "generate":
+      return MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "transcribe":
+      return MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "video":
+      // 始まりと終わりで 2 枚。
+      return 2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "translate":
+      return MAX_AI_TRANSLATION_JSON_REQUEST_BYTES + AI_SCREEN_FIELDS_BYTES;
+    default:
+      return null;
+  }
+}

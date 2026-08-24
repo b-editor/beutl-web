@@ -1181,6 +1181,14 @@ export async function createVideoAction(
 
   const firstFrame = formData.get("firstFrame");
   const lastFrame = formData.get("lastFrame");
+  // 終わりのフレームだけの依頼は、この API には無い形——v3 /videos/frames も
+  // エディタの DTO も断る。ここで通すと、入口によって受ける形が変わり、
+  // 予約して課金してから断られることになる。
+  const hasFirstFrame = firstFrame instanceof File && firstFrame.size > 0;
+  const hasLastFrame = lastFrame instanceof File && lastFrame.size > 0;
+  if (hasLastFrame && !hasFirstFrame) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
   const frameImages: Array<{
     type: "image_url";
     image_url: { url: string };

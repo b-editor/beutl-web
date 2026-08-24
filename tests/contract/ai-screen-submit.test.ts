@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  aiScreenUploadLimit,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+} from "@beutl/core";
+import {
   aiRequestNameOf,
   blockedReason,
   blocksSubmit,
@@ -10,10 +16,12 @@ import {
   newAiRequestNames,
   fileFingerprint,
   keepModelForHeldRequest,
+  readyAiRequestNames,
   requestSignature,
   seedValue,
   settleAiRequestName,
   type AiAccess,
+  type AiScreenModel,
 } from "../../apps/web/src/lib/ai-screen";
 
 const NOTHING_BLOCKS = {
@@ -276,5 +284,76 @@ describe("how a video frame is signed", () => {
     expect(await signatureOf(one)).not.toBe(
       await signatureOf(new File(["other frame"], "frame-a1b2.png", { type: "image/png" })),
     );
+  });
+});
+
+describe("what an AI screen may put in one body", () => {
+  it("caps each screen at what its own files come to", () => {
+    // Server Action の本文上限はアプリ全体で 1 つで、パッケージのアップロードに
+    // 合わせた大きさ。そのままでは、有効な 1 枚と無関係な詰め物を並べるだけで、
+    // 断られるより先に本文まるごとを組み立てさせられる。
+    const edit = aiScreenUploadLimit("/ja/dashboard/ai/edit");
+    const transcribe = aiScreenUploadLimit("/dashboard/ai/transcribe");
+    const video = aiScreenUploadLimit("/en/dashboard/ai/video/");
+
+    expect(edit).toBeGreaterThan(MAX_AI_IMAGE_UPLOAD_BYTES);
+    expect(edit).toBeLessThan(2 * MAX_AI_IMAGE_UPLOAD_BYTES);
+    expect(transcribe).toBeGreaterThan(MAX_AI_TRANSCRIPTION_UPLOAD_BYTES);
+    // 始まりと終わりで 2 枚ぶん。1 枚しか見ないと、2 枚の依頼が届かない。
+    expect(video).toBeGreaterThan(2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+    expect(video).toBeLessThan(3 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+  });
+
+  it("leaves screens it does not name alone", () => {
+    // 名前のない画面まで縛ると、パッケージのアップロードが送れなくなる。
+    expect(aiScreenUploadLimit("/ja/dashboard/packages/upload")).toBeNull();
+    expect(aiScreenUploadLimit("/ja/dashboard/ai")).toBeNull();
+    expect(aiScreenUploadLimit("/ja/dashboard/ai/jobs/abc")).toBeNull();
+  });
+
+  it("gives every screen room for the fields beside the file", () => {
+    // 動画の画面は文章の欄を 5 つ持ち、どれも上限まで書ける。境界のぶんしか
+    // 見ないと、上限まで書いた依頼が届く前に断られる。
+    for (const screen of ["edit", "generate", "transcribe", "video", "translate"]) {
+      const limit = aiScreenUploadLimit(`/ja/dashboard/ai/${screen}`);
+      expect(limit).not.toBeNull();
+      expect(limit).toBeGreaterThan(6 * 4_000 * 4);
+    }
+  });
+});
+
+describe("which request a screen is looking at", () => {
+  it("still holds the name of a request the last answer was not about", () => {
+    // A が回収待ちのまま B を送って決着させ、A へ戻る。直前の応答だけを見ると
+    // 「決着済み」に見えて残高で塞がれ、支払い済みの A を取りに行けない。
+    let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
+    names = commitAiRequestName(names, "request-a", () => "key-b");
+    // A は不明のまま終わったので、その名前は残る。
+    names = settleAiRequestName(names, true);
+    names = commitAiRequestName(names, "request-b", () => "key-c");
+    // B は決着したので、B の名前だけ手放す。
+    names = settleAiRequestName(names, false);
+
+    expect(holdsAiRequestName(names, "request-b")).toBe(false);
+    expect(holdsAiRequestName(names, "request-a")).toBe(true);
+    expect(aiRequestNameOf(names, "request-a")).toBe("key-a");
+    // A へ戻ったとき、残高で塞いではいけない。
+    expect(blocksSubmit("balance", holdsAiRequestName(names, "request-a"))).toBe(false);
+    expect(blocksSubmit("balance", holdsAiRequestName(names, "request-b"))).toBe(true);
+  });
+
+  it("keeps every model an uncollected request named, not just the last", () => {
+    // 同じ task の依頼が 2 つ未回収で残ることがある。いま選んでいる 1 つだけを
+    // 残すと、もう一方のモデルへ戻れず、その名前が指す支払い済みの結果に届かない。
+    const offered = [
+      { id: "model-x", displayName: "Model X", costTier: null, available: true },
+    ] as const;
+    const kept = ["model-a", "model-b"].reduce(
+      keepModelForHeldRequest,
+      offered as unknown as AiScreenModel[],
+    );
+
+    expect(kept.map((model) => model.id)).toEqual(["model-x", "model-a", "model-b"]);
+    expect(kept.filter((model) => !model.available)).toHaveLength(2);
   });
 });
