@@ -143,6 +143,34 @@ export async function releaseGitRepositoryReservation({
 
 
 /**
+ * その名前を今押さえている予約を引く。
+ *
+ * 予約が取れなかったときに、**誰が押さえているのか**を見るためのもの。相手が
+ * 自分たちの取り残しだと証拠から言い切れる場合に限り、作り直さずに引き継ぐ
+ * (`claimGitRepositoryCreation`)。取り残しを引き継げないと、名前を手放さない
+ * 決まりと噛み合って、控えも予約も残ったまま誰も先へ進めなくなる。
+ */
+export async function findGitRepositoryReservationByName({
+  ownerUsername,
+  name,
+  prisma,
+}: {
+  ownerUsername: string;
+  name: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.gitRepositoryCreation.findUnique({
+    where: {
+      ownerUsername_normalizedName: {
+        ownerUsername: normalizeOwnerName(ownerUsername),
+        normalizedName: normalizeRepositoryName(name),
+      },
+    },
+  });
+}
+
+/**
  * 同じ 1 回の操作で取った予約をまとめて外す。
  *
  * 改名は行き先と元の 2 本を取る。片方だけ外すと、残った方が要らなくなった名前を

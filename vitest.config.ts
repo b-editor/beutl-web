@@ -1,5 +1,10 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// __dirname は ESM では定義されない。Vite の native config loader が将来の
+// 既定値になるので、import.meta.url から取る。
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Vite の alias は「完全一致」か「キー + '/' で始まる」ときにマッチするため、
 // バレル (index.ts) を指すエントリだけではサブパス import が

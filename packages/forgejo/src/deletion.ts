@@ -815,6 +815,15 @@ export async function reconcileGitAccountDeletionTombstones({
 
         // 復活している。端末のトークンも一緒に戻っているので、消し直す。
         username = actual.login;
+        // **発見した identity を墓標に控える。** 名前の無い墓標だった場合、この
+        // ままでは 24 時間後に削除され、遅延して着地した account が後日 restore
+        // で戻っても追跡不能になる。login/id を保存して永続墓標へ昇格させる。
+        await setGitAccountDeletionTarget({
+          userId: tombstone.userId,
+          intentId: epoch,
+          forgejoUsername: username,
+          forgejoUserId: actual.id,
+        });
         await revokeAllTokens(username, () =>
           renewLease(tombstone.userId, epoch, GitAccountDeletionPhase.PURGED),
         );

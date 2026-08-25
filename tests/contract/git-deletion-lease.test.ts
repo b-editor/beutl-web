@@ -197,6 +197,7 @@ vi.mock("@beutl/db", async (importOriginal) => {
       actual.countPurgedGitAccountDeletionsToCheck,
     ),
     markGitAccountDeletionPurged: withFake(actual.markGitAccountDeletionPurged),
+    setGitAccountDeletionTarget: withFake(actual.setGitAccountDeletionTarget),
     deleteGitAccountDeletion: withFake(actual.deleteGitAccountDeletion),
     touchGitAccountDeletion: withFake(actual.touchGitAccountDeletion),
     claimGitAccountDeletion: withFake(actual.claimGitAccountDeletion),
@@ -633,6 +634,11 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
     ]);
     // 墓標は残す。もう一度戻されることがある。
     expect(rows.get("u1")?.phase).toBe(GitAccountDeletionPhase.PURGED);
+
+    // **発見した identity を墓標に控える。** 控えないと 24 時間後に名前の無い
+    // 墓標が消え、遅延 account が後日 restore で戻っても追跡不能になる。
+    expect(rows.get("u1")?.forgejoUsername).toBe("someone");
+    expect(rows.get("u1")?.forgejoUserId).toBe(2);
   });
 
   it("Beutl 側の利用者が戻っていたら、消さずに人の確認に回す", async () => {
@@ -749,6 +755,10 @@ describe("消したはずのアカウントが戻ってきた場合", () => {
         url: expect.stringContaining("/admin/users/someone"),
       }),
     );
+    // **発見した identity を墓標に控える。** 控えないと 24 時間後に名前の無い
+    // 墓標が消え、遅延 account が後日 restore で戻っても追跡不能になる。
+    expect(rows.get("u1")?.forgejoUsername).toBe("someone");
+    expect(rows.get("u1")?.forgejoUserId).toBe(2);
   });
 
   it("名前の無い墓標は、見つからないまま日が経てば消す", async () => {

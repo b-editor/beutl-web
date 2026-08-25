@@ -117,17 +117,24 @@ vi.mock("@beutl/db", () => ({
     ownerUsername,
     name,
     holdingName,
+    leaseUntil,
   }: {
     ownerUsername: string;
     name: string;
     holdingName: string;
+    leaseUntil: Date;
   }) => {
     const key = `${ownerUsername}/${name.toLowerCase()}`;
     if (reservations.has(key)) {
       // 本物は一意制約の違反をこの型に畳んでから投げる。
       throw new FakeNameTaken(ownerUsername, name);
     }
-    reservations.set(key, { id: key, holdingName, forgejoRepoId: null });
+    reservations.set(key, {
+      id: key,
+      holdingName,
+      forgejoRepoId: null,
+      leaseUntil,
+    });
     return key;
   },
   attachGitRepositoryCreationId: async ({
@@ -154,14 +161,34 @@ vi.mock("@beutl/db", () => ({
     // 積まないので、全部消せば同じこと。
     reservations.clear();
   },
-  listExpiredGitRepositoryCreations: async () =>
-    staleReservations.map((entry) => ({
+  listExpiredGitRepositoryCreations: async () => [
+    ...staleReservations.map((entry) => ({
       operation: "CREATE",
       sourceName: null,
       // 既定は「たった今積まれた」。削除の猶予を試す側で古い時刻を渡す。
       createdAt: new Date(),
       ...entry,
     })),
+    // **実物は残っている予約も期限で拾う。** 拾わない模擬にすると、片付けが
+    // 予約を掴んで期限を伸ばし、直し側が引き継げなくなる失敗を見逃す。
+    // 期限を控えていない行 (テストが手で置いたもの) は判断材料が無いので外す。
+    ...[...reservations.values()]
+      .filter(
+        (entry) =>
+          entry.leaseUntil != null &&
+          entry.leaseUntil.getTime() <= Date.now(),
+      )
+      .map((entry) => ({
+        id: entry.id,
+        ownerUsername: entry.id.split("/")[0],
+        name: entry.id.split("/")[1],
+        holdingName: entry.holdingName,
+        forgejoRepoId: entry.forgejoRepoId,
+        operation: "CREATE",
+        sourceName: null,
+        createdAt: new Date(),
+      })),
+  ],
   GitRepositoryOperation: {
     CREATE: "CREATE",
     RENAME: "RENAME",
@@ -174,8 +201,43 @@ vi.mock("@beutl/db", () => ({
   }: {
     forgejoRepoId: number;
   }) => repairQueue.get(forgejoRepoId) ?? null,
-  claimGitRepositoryCreation: async () => true,
-  renewGitRepositoryCreationLease: async () => true,
+  findGitRepositoryReservationByName: async ({
+    ownerUsername,
+    name,
+  }: {
+    ownerUsername: string;
+    name: string;
+  }) => reservations.get(`${ownerUsername}/${name.toLowerCase()}`) ?? null,
+  // 本物は**期限が切れている行にしか**書けない。動いている処理から横取り
+  // させないため。ここを常に true にすると、期限を伸ばしただけの周回が
+  // 引き継ぎを塞ぐ失敗が通ってしまう。
+  claimGitRepositoryCreation: async ({
+    id,
+    leaseUntil,
+  }: {
+    id: string;
+    leaseUntil: Date;
+  }) => {
+    const entry = reservations.get(id);
+    // 期限切れの一覧から来た行は、この模擬では map に載っていない。
+    if (!entry) return true;
+    if (entry.leaseUntil && entry.leaseUntil.getTime() > Date.now()) {
+      return false;
+    }
+    entry.leaseUntil = leaseUntil;
+    return true;
+  },
+  renewGitRepositoryCreationLease: async ({
+    id,
+    leaseUntil,
+  }: {
+    id: string;
+    leaseUntil: Date;
+  }) => {
+    const entry = reservations.get(id);
+    if (entry) entry.leaseUntil = leaseUntil;
+    return true;
+  },
   releaseGitRepositoryReservationFor: async ({
     ownerUsername,
     name,
@@ -300,7 +362,14 @@ let repairQueue = new Map<
 >();
 let reservations = new Map<
   string,
-  { id: string; holdingName: string; forgejoRepoId: number | null }
+  {
+    id: string;
+    holdingName: string;
+    forgejoRepoId: number | null;
+    // 期限。**引き継ぎは期限切れだけを条件にする**ので、ここを持たないと
+    // 「掴んで期限を伸ばしただけ」の周回が引き継ぎを塞ぐ失敗を見逃す。
+    leaseUntil?: Date;
+  }
 >();
 let staleReservations: {
   id: string;
@@ -1625,11 +1694,79 @@ describe("預かりものは渡し切るまで控えを外さない", () => {
       return new Response(null, { status: 204 });
     });
 
+    // 5xx は結果が分からないので、出発地と着地名の両方の予約を保持したまま
+    // 控えに残す (次の周回で id から引き直す)。pending には repair queue 1 +
+    // 名前の予約 2 が入る。
     await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
       fixed: 0,
-      pending: 1,
     });
     expect([...repairQueue.keys()]).toEqual([5]);
+    // 予約は手放さない (5xx は後から着地しうる)。
+    expect(reservations.size).toBeGreaterThan(0);
+  });
+
+  it("次の周回は、残した予約を引き継いで渡し切る", async () => {
+    // 名前を手放さない決まりと、予約の片付けが「控えがあるなら控え側の仕事」と
+    // する決まりは、そのままでは噛み合わない。次の周回が同じ名前を取り直そうと
+    // して一意キーに阻まれ、控えも予約も残ったまま毎回何もせずに帰る。
+    // 取り残しは取り直すのではなく**引き継ぐ**。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    let transferFails = true;
+    let transferred = false;
+    let renamedTo: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json(
+          heldRepository(
+            transferred ? { owner: { id: 2, login: "someone" } } : {},
+          ),
+        );
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      if (method === "POST" && path.endsWith("/transfer")) {
+        if (transferFails) return json({ message: "boom" }, 500);
+        transferred = true;
+        return json({
+          id: 5,
+          name: "beutl-holding-abc",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "PATCH" && path.includes("/repos/someone/")) {
+        renamedTo = JSON.parse(String(init?.body)).name;
+        return json({ id: 5, name: "proj", owner: { id: 2, login: "someone" } });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    // 1 周目。5xx なので名前は手放さない。
+    await retryGitRepositoryRepairs();
+    expect(reservations.size).toBeGreaterThan(0);
+
+    // 冷却期間 (15 分) が過ぎた。予約の期限 (10 分) はもう切れている。
+    for (const entry of reservations.values()) {
+      entry.leaseUntil = new Date(Date.now() - 1000);
+    }
+    transferFails = false;
+
+    // 2 周目。取り残した予約を引き継いで、譲渡と改名まで進む。
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
+    });
+    expect(renamedTo).toBe("proj");
+    expect(repairQueue.size).toBe(0);
+    // 渡し切ったので名前も手放す。残すとその名前の作成を永久に塞ぐ。
+    expect(reservations.size).toBe(0);
   });
 
   it("譲渡だけ済んで改名が残っていたら、改名から再開する", async () => {
@@ -1663,6 +1800,58 @@ describe("預かりものは渡し切るまで控えを外さない", () => {
     });
     expect(renamedTo).toBe("proj");
     expect(repairQueue.size).toBe(0);
+  });
+
+  it("渡し切った後で予約だけ残っていたら、それを引き継いで外す", async () => {
+    // 改名まで通ってから、控えている予約を外す前に処理が消えた場合。相手は
+    // もう最終形なのに、最終名を自分の予約が押さえている。取り直そうとすると
+    // 一意キーに阻まれ、外す処理まで辿り着けずに永久に止まる。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(5, {
+      forgejoRepoId: 5,
+      ownerUsername: "someone",
+      name: "proj",
+      intendedOwner: "someone",
+      intendedName: "proj",
+      reservationId: "someone/proj",
+    });
+    // 作成のときに取った予約。期限は切れている。
+    reservations.set("someone/proj", {
+      id: "someone/proj",
+      holdingName: "beutl-holding-abc",
+      forgejoRepoId: 5,
+      leaseUntil: new Date(Date.now() - 1000),
+    });
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.includes("/contents/.gitattributes")) {
+        return json({ encoding: "base64", content: utf8Base64(GITATTRIBUTES) });
+      }
+      if (path.includes("/contents/.gitignore")) {
+        return json({ encoding: "base64", content: utf8Base64(GITIGNORE) });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
+    });
+    expect(repairQueue.size).toBe(0);
+    expect(releasedIds).toContain("someone/proj");
+    expect(reservations.size).toBe(0);
   });
 
   it("渡す先でも管理者でもない誰かが持っていたら、人の確認に回す", async () => {
@@ -2772,6 +2961,69 @@ describe("名前を押さえてから触る", () => {
     expect(heldAtTransfer).toContain("someone/beutl-holding-abc");
     // 終わったら手放す。押さえたままにすると、その名前を永久に塞ぐ。
     expect(reservations.size).toBe(0);
+  });
+
+  it("直しがまだ回るなら、押さえた名前は片付け側が触らない", async () => {
+    // 直しは複数の API 呼び出しを行い、その間に名前の期限が切れることがある。
+    // 切れたからと外すと、動いている直しと並行して同じ名前を別の作成が取れる。
+    // 外さないだけでなく**掴みもしない**。掴むと期限が伸び、直し側が引き継げない。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(88, {
+      forgejoRepoId: 88,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+    staleReservations = [
+      {
+        id: "h1",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-repair-inflight",
+        forgejoRepoId: 88,
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      if (path.endsWith("/repositories/88")) {
+        return json({ message: "not found" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).not.toContain("h1");
+  });
+
+  it("人の確認待ちで止まった控えの名前は手放す", async () => {
+    // 人が見るまで直しは進まない。押さえたままにすると、その間ずっとその名前の
+    // 作成を塞ぐ。直しの側から外し損ねてもここで拾えるようにしておく。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(88, {
+      forgejoRepoId: 88,
+      ownerUsername: "someone",
+      name: "proj",
+      needsReview: true,
+    });
+    staleReservations = [
+      {
+        id: "h1",
+        ownerUsername: "someone",
+        name: "proj",
+        holdingName: "beutl-repair-stalled",
+        forgejoRepoId: 88,
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("h1");
   });
 
   it("押さえただけの予約は、放置されていれば名前を手放すだけ", async () => {

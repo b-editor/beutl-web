@@ -16,6 +16,7 @@ import {
   reserveGitRepositoryName,
   countGitRepositoryRepairsNeedingReview,
   findGitRepositoryRepair,
+  findGitRepositoryReservationByName,
   markGitRepositoryRepairNeedsReview,
   renewGitRepositoryRepairLease,
   countGitRepositoryRepairs,
@@ -272,6 +273,7 @@ const REPAIR_HOLDING_PREFIX = "beutl-repair-";
  * 押さえている間は誰もその名前を動かせない。Forgejo を触るのはこちらの経路だけ
  * なので、これで直列化できる。
  *
+ * @param adoptableId 引き継いでよい予約の id。控えが控えている予約を指す。
  * @returns 予約の id。取れなければ null (今その名前を誰かが動かしている)。
  */
 async function holdName(
@@ -279,6 +281,7 @@ async function holdName(
   name: string,
   forgejoRepoId: number,
   epoch: string,
+  adoptableId?: string | null,
 ): Promise<string | null> {
   let reservation: string;
   try {
@@ -290,16 +293,107 @@ async function holdName(
       leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
     });
   } catch (error) {
-    if (error instanceof GitRepositoryNameTakenError) return null;
+    if (error instanceof GitRepositoryNameTakenError) {
+      return await adoptName(owner, name, forgejoRepoId, epoch, adoptableId);
+    }
     throw error;
   }
-  // 相手を控える。取り残された場合に、何を押さえていたのかを追えるようにする。
-  await attachGitRepositoryCreationId({
-    id: reservation,
-    intentId: epoch,
-    forgejoRepoId,
-  }).catch(() => undefined);
+  // **相手を控えられなければ追跡できない。** 書けないまま残すと、取り残された
+  // ときに何を押さえていたのか分からなくなる。握り潰さず、外して投げる。
+  if (
+    !(await attachGitRepositoryCreationId({
+      id: reservation,
+      intentId: epoch,
+      forgejoRepoId,
+    }))
+  ) {
+    await releaseGitRepositoryReservation({ id: reservation, intentId: epoch })
+      .catch(() => undefined);
+    throw new RepairTakenOverError(forgejoRepoId);
+  }
   return reservation;
+}
+
+/**
+ * 取り残した予約を引き継ぐ。**取り直しはしない。**
+ *
+ * 待ち時間切れや 5xx では名前を手放さない (手放すと、遅れて着地した処理が別の
+ * リポジトリに当たる)。その代わり、次の周回は同じ名前をもう予約できない。
+ * 引き継げないと、控えと予約が互いを待って永久に止まる:
+ * 予約の片付けは「控えがあるなら控え側の仕事」として触らず、控え側は名前を
+ * 取れずに何もせず帰る、という状態が毎回繰り返される。
+ *
+ * 引き継ぐのは、**自分たちの取り残しだと証拠から言い切れるものだけ**。
+ *
+ *   (a) 控えがその予約 id を控えている (預かりものを渡し切る途中で落ちた)
+ *   (b) 直しの預かり名で、同じリポジトリ id を指している (直しの途中で落ちた)
+ *
+ * どちらでもなければ、今まさに誰かが動かしている名前なので触らない。加えて
+ * **期限が切れているときだけ**引き継ぐ (`claimGitRepositoryCreation` がそう
+ * 条件付ける)。動いている処理から横取りはしない。
+ */
+async function adoptName(
+  owner: string,
+  name: string,
+  forgejoRepoId: number,
+  epoch: string,
+  adoptableId?: string | null,
+): Promise<string | null> {
+  const existing = await findGitRepositoryReservationByName({
+    ownerUsername: owner,
+    name,
+  });
+  // 見に行くまでの間に外れた。取り直しはここではしない (次の周回で取る)。
+  if (!existing) return null;
+
+  const ours =
+    (adoptableId != null && existing.id === adoptableId) ||
+    (existing.holdingName.startsWith(REPAIR_HOLDING_PREFIX) &&
+      existing.forgejoRepoId === forgejoRepoId);
+  if (!ours) return null;
+
+  if (
+    !(await claimGitRepositoryCreation({
+      id: existing.id,
+      intentId: epoch,
+      leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+    }))
+  ) {
+    // まだ期限内。前の持ち主が動いている。
+    return null;
+  }
+  // 引き継いだ後も相手を控えておく。控えられなければ追跡できないので、
+  // 新しく取ったときと同じく握り潰さずに外して投げる。
+  if (
+    !(await attachGitRepositoryCreationId({
+      id: existing.id,
+      intentId: epoch,
+      forgejoRepoId,
+    }))
+  ) {
+    await releaseGitRepositoryReservation({
+      id: existing.id,
+      intentId: epoch,
+    }).catch(() => undefined);
+    throw new RepairTakenOverError(forgejoRepoId);
+  }
+  return existing.id;
+}
+
+/**
+ * 押さえた名前の期限を延ばす。握っていなければ投げる。
+ *
+ * **各 mutation の前に呼ぶ。** 1 回取ったきりの期限 (10 分) は、直しの複数の
+ * API 呼び出し (最大 2 分 × 数回) で超えうる。超えると定期実行が期限切れと
+ * 読んで名前を解放し、実行中の直しと並行して同じ名前を作れる。
+ */
+async function renewName(id: string, epoch: string): Promise<void> {
+  const held = await renewGitRepositoryCreationLease({
+    id,
+    intentId: epoch,
+    leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+  });
+  if (!held) throw new RepairTakenOverError(-1);
 }
 
 /** 押さえた名前を手放す。決着の有無によらず、握っていた分だけ外す。 */
@@ -484,20 +578,29 @@ async function repairTemplates(
   sudo: string,
   repository: ForgejoRepository,
   epoch: string,
+  /** 押さえている名前の予約。各 mutation の前に延ばす (期限は 10 分で、
+   * 複数の API 呼び出しで超えうる)。無ければ延ばさない (呼び出し元が別途
+   * 管理している場合)。 */
+  nameHold?: { id: string; epoch: string },
 ): Promise<RepairOutcome> {
   const name = repository.name;
+  const renewNameHold = () =>
+    nameHold ? renewName(nameHold.id, nameHold.epoch) : Promise.resolve();
   try {
     // archived のままだと contents API は 423 を返す。直すには先に外す。
     if (repository.archived) {
+      await renewNameHold();
       await holdRepair(repository.id, epoch);
       await assertStillNamed(sudo, repository);
       await setRepositoryArchived(sudo, name, false);
     }
+    await renewNameHold();
     await holdRepair(repository.id, epoch);
     await assertStillNamed(sudo, repository);
     await commitTemplates(sudo, name, repository.default_branch);
     // 照合も名前で読む。読む直前にも確かめないと、入れ替わった別のリポジトリの
     // 中身を見て「揃っている」と結論しうる。
+    await renewNameHold();
     await assertStillNamed(sudo, repository);
     await assertTemplatesAreCanonical(sudo, name);
     return { state: "repaired" };
@@ -509,6 +612,7 @@ async function repairTemplates(
     if (error instanceof RepositoryMovedError) throw error;
     // 長いコミットの後に握りが切れていることがある。読み取り専用にするのも
     // 外部への変更なので、その直前にも確かめる。
+    await renewNameHold();
     await holdRepair(repository.id, epoch);
     await assertStillNamed(sudo, repository);
     const locked = await lockRepository(
@@ -525,8 +629,9 @@ async function requireRepairedTemplates(
   sudo: string,
   repository: ForgejoRepository,
   epoch: string,
+  nameHold?: { id: string; epoch: string },
 ): Promise<void> {
-  const outcome = await repairTemplates(sudo, repository, epoch);
+  const outcome = await repairTemplates(sudo, repository, epoch, nameHold);
   if (outcome.state === "repaired") return;
   throw outcome.error;
 }
@@ -711,16 +816,38 @@ async function settleRepositoryRepair(
   // **これから触る名前を押さえる。** 押さえずに進めると、id を確かめてから送る
   // までの 1 往復の間に相手が改名され、空いた名前を取った別のリポジトリへ
   // .gitattributes を書き、読み取り専用を掛けてしまう。
-  const held = await holdName(owner, current.name, entry.forgejoRepoId, epoch);
+  // 控えが控えている予約は、渡し切る途中で落ちた自分たちの取り残し。名前が
+  // 塞がっていたらそれを引き継ぐ (取り直しは一意キーに阻まれて通らない)。
+  const held = await holdName(
+    owner,
+    current.name,
+    entry.forgejoRepoId,
+    epoch,
+    entry.reservationId,
+  );
   if (held === null) {
     // 今その名前を誰かが動かしている (作成・改名・削除のどれか)。割り込まない。
     // 控えは残るので、次の周回でやり直す。
     return false;
   }
+  // **結果が分からない場合は名前を手放さない。** 待ち時間切れ・5xx は、Forgejo
+  // 側の処理が後から確定することがある。ここで外すと、その間に別の作成が同じ名前
+  // を取り、遅れて着地した直しが別のリポジトリに当たる。改名・削除と同じ扱い。
+  // 4xx は「受け付けられなかった」と言い切れるので外してよい。
+  let keepName = false;
   try {
-    return await settleHeldRepair(entry, epoch, current, owner, admin, handover);
+    return await settleHeldRepair(
+      entry, epoch, current, owner, admin, handover, held,
+    );
+  } catch (error) {
+    const decided =
+      error instanceof ForgejoError &&
+      error.status >= 400 &&
+      error.status < 500;
+    if (!decided) keepName = true;
+    throw error;
   } finally {
-    await releaseName(held, epoch);
+    if (!keepName) await releaseName(held, epoch);
   }
 }
 
@@ -742,9 +869,13 @@ async function settleHeldRepair(
   owner: string,
   admin: string,
   handover: { owner: string; name: string } | null,
+  held: string,
 ): Promise<boolean> {
+  const nameHold = { id: held, epoch };
+
   // **押さえた後にもう一度確かめる。** 押さえる前に見た姿は、押さえた時点の姿とは
   // 限らない。ここを通れば、以後この名前は誰も動かせない。
+  await renewName(held, epoch);
   await assertStillNamed(owner, current);
 
   // 既定値が揃っているかも名前で読む。揃っていた場合は何も送らずに片付ける
@@ -752,9 +883,10 @@ async function settleHeldRepair(
   // 確かめずに片付けると、入れ替わった別のリポジトリの中身を見て、直っていない
   // リポジトリの控えを外すことになる。
   if (await hasTemplates(owner, current.name)) {
+    await renewName(held, epoch);
     await assertStillNamed(owner, current);
   } else {
-    const outcome = await repairTemplates(owner, current, epoch);
+    const outcome = await repairTemplates(owner, current, epoch, nameHold);
     if (outcome.state !== "repaired") {
       // 直せなかった。預かりものなら渡さずに控えを残す (管理者の手元にある限り
       // 利用者は触れない)。利用者のものなら、読み取り専用にできた時点で
@@ -776,6 +908,7 @@ async function settleHeldRepair(
       handover.name,
       entry.forgejoRepoId,
       epoch,
+      nameHold,
     );
     if (entry.reservationId) {
       await releaseGitRepositoryReservation({ id: entry.reservationId }).catch(
@@ -833,6 +966,35 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
   const admin = await getAdminUsername();
 
   for (const entry of stale) {
+    // **掴む前に、控え側が持っているものかを見る。**
+    //
+    // 掴むと期限が伸びる。控え側の引き継ぎ (adoptName) は期限切れを条件に
+    // しているので、ここで伸ばすと引き継げなくなる。片付けもしないまま毎周回
+    // 伸ばし続けることになり、控えと予約が互いを待って永久に止まる。
+    const queued =
+      entry.forgejoRepoId == null
+        ? null
+        : await findGitRepositoryRepair({
+            forgejoRepoId: entry.forgejoRepoId,
+          });
+    // 人の確認待ちは自動では再開しない。控えがあっても引き継ぐ相手がいない。
+    const willRetry = queued !== null && !queued.needsReview;
+
+    // **名前を押さえていただけの予約。** Forgejo は見ない。やり残した作業は控え
+    // (リポジトリ id) の側にあるので、ここは名前を手放すだけでよい。見に行くと、
+    // 相手の今の姿によっては預かりものの流れに乗せてしまい、利用者が編集した
+    // .gitattributes を「直す」対象にする。
+    //
+    // **ただし、対応する直しがまだ回るなら外さない。** 直しは複数の API 呼び出しを
+    // 行い、その間に名前の期限が切れることがある。期限が切れたからと外すと、
+    // 実行中の直しと並行して同じ名前を別の作成が取れる。名前は直し側が引き継ぐ。
+    const repairHold = entry.holdingName.startsWith(REPAIR_HOLDING_PREFIX);
+    if (repairHold && willRetry) continue;
+
+    // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
+    // 2 つに分かれる。渡し切った側が予約も外す。
+    if (!repairHold && queued !== null) continue;
+
     // 掴む。期限内のもの (前面が進めているもの) は返ってこない。
     const epoch = crypto.randomUUID();
     if (
@@ -846,22 +1008,11 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
     }
 
     try {
-      // **名前を押さえていただけの予約。** Forgejo は見ない。やり残した作業は控え
-      // (リポジトリ id) の側にあるので、ここは名前を手放すだけでよい。見に行くと、
-      // 相手の今の姿によっては預かりものの流れに乗せてしまい、利用者が編集した
-      // .gitattributes を「直す」対象にする。
-      if (entry.holdingName.startsWith(REPAIR_HOLDING_PREFIX)) {
+      // 控えが無い、または人の確認待ちで止まっている預かり名。誰も引き継がない
+      // ので、押さえたままにするとその名前を永久に塞ぐ。手放すだけでよい。
+      if (repairHold) {
         await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
         continue;
-      }
-
-      // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
-      // 2 つに分かれる。渡し切った側が予約も外す。
-      if (entry.forgejoRepoId) {
-        const queuedAlready = await findGitRepositoryRepair({
-          forgejoRepoId: entry.forgejoRepoId,
-        });
-        if (queuedAlready) continue;
       }
 
       // id が分かっていればそれで、分からなければ預かり名で引く。
@@ -1171,6 +1322,8 @@ async function handOver(
   intendedName: string,
   repoId: number,
   epoch: string,
+  /** 呼び出し元が押さえている出発地の名前。譲渡の前に延ばす。 */
+  sourceHold?: { id: string; epoch: string },
 ): Promise<ForgejoRepository> {
   // 譲渡でリポジトリは (管理者, 預かり名) から (渡す先, 預かり名) へ動く。
   // **動いた先の名前も押さえてから譲渡する。** 押さえずに送ると、譲渡の直後から
@@ -1186,9 +1339,14 @@ async function handOver(
     );
   }
 
+  // **結果が分からない場合は着地名を手放さない。** 譲渡・改名とも 5xx・待ち時間
+  // 切れは後から着地しうる。外すとその間に別の作成が同じ名前を取る。
+  let keepLanding = false;
   try {
     // ここで初めて利用者のものになる。既定値は入り終わっている。
     // id は変わらない (16.0.2 で実測)。
+    if (sourceHold) await renewName(sourceHold.id, sourceHold.epoch);
+    await renewName(landing, epoch);
     await holdRepair(repoId, epoch);
     await assertStillNamed(admin, { id: repoId, name: holdingName });
     const transferred = await forgejoRequest<ForgejoRepository>(
@@ -1206,6 +1364,7 @@ async function handOver(
         `transfer returned ${transferred.name}, expected ${holdingName} or ${intendedName}`,
       );
     }
+    await renewName(landing, epoch);
     await holdRepair(repoId, epoch);
     await assertStillNamed(intendedOwner, { id: repoId, name: transferred.name });
     // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
@@ -1214,8 +1373,15 @@ async function handOver(
       `/repos/${encodeURIComponent(intendedOwner)}/${encodeURIComponent(transferred.name)}`,
       { method: "PATCH", body: { name: intendedName } },
     );
+  } catch (error) {
+    const decided =
+      error instanceof ForgejoError &&
+      error.status >= 400 &&
+      error.status < 500;
+    if (!decided) keepLanding = true;
+    throw error;
   } finally {
-    await releaseName(landing, epoch);
+    if (!keepLanding) await releaseName(landing, epoch);
   }
 }
 
@@ -1283,7 +1449,10 @@ export async function createRepository(
       // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
       // 直す前に握る。掴めなければ定期実行が触っているので、やり直させる。
       const epoch = await acquireRepair(sudo, conflicting, "repair requested");
-      await requireRepairedTemplates(sudo, conflicting, epoch);
+      await requireRepairedTemplates(sudo, conflicting, epoch, {
+        id: reservation,
+        epoch: reservationEpoch,
+      });
       // 直った。控えに残す理由が無い。
       await deleteGitRepositoryRepair({
         forgejoRepoId: conflicting.id,
@@ -1402,6 +1571,7 @@ export async function createRepository(
       name,
       holding.id,
       epoch,
+      { id: reservation, epoch: reservationEpoch },
     );
     await deleteGitRepositoryRepair({
       forgejoRepoId: holding.id,
@@ -1612,7 +1782,11 @@ export async function updateRepositoryDescription(
     );
   }
 
+  // **結果が分からない場合は名前を手放さない。** 5xx・待ち時間切れは後から
+  // 確定しうる。外すとその間に別の作成が同じ名前を取る。4xx は外してよい。
+  let keepName = false;
   try {
+    await renewName(held, epoch);
     await assertStillNamed(owner, { id: current.id, name });
     return await forgejoRequest<ForgejoRepository>(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
@@ -1623,8 +1797,15 @@ export async function updateRepositoryDescription(
         body: { description },
       },
     );
+  } catch (error) {
+    const decided =
+      error instanceof ForgejoError &&
+      error.status >= 400 &&
+      error.status < 500;
+    if (!decided) keepName = true;
+    throw error;
   } finally {
-    await releaseName(held, epoch);
+    if (!keepName) await releaseName(held, epoch);
   }
 }
 
