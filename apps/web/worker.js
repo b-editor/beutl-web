@@ -23,7 +23,10 @@ export { DOShardedTagCache } from "./.open-next/worker.js";
 //@ts-expect-error: Will be resolved by wrangler build
 export { BucketCachePurge } from "./.open-next/worker.js";
 
-const BODYLESS_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+// 下流が本文を持つとみなす条件と、同じにする。OpenNext は GET と HEAD 以外を
+// すべて arrayBuffer() で持つので、こちらだけ OPTIONS を本文なしとみなすと、
+// 本文の付いた OPTIONS がここを素通りして向こうで抱えられる。
+const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
 
 export default {
   async fetch(request, env, ctx) {

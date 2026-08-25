@@ -89,6 +89,25 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
   await bucket.delete(objectKey);
 }
 
+// まだ組み上がっていない multipart は、オブジェクトが無いので delete では消えない。
+// uploadId を持っていれば abort できる——持っていなければ、もう組み上がったか、
+// 最初から multipart ではなかったかのどちらかで、delete で足りる。
+async function abortMultipartIfPresent(
+  objectKey: string,
+  uploadId: string | null,
+): Promise<void> {
+  if (!uploadId) return;
+  const bucket = getR2Bucket();
+  if (!bucket.resumeMultipartUpload) return;
+  try {
+    await bucket.resumeMultipartUpload(objectKey, uploadId).abort();
+  } catch (error) {
+    // 組み上がっていれば abort は失敗する——そのときはオブジェクトを消せばよい。
+    // その他の失敗は、もう一度回ってくれば拾える。
+    console.error(`Failed to abort multipart ${objectKey}`, error);
+  }
+}
+
 export async function readAiJsonResult({
   objectKey,
   maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
@@ -377,6 +396,11 @@ export async function reconcileAiStorageCleanups(now = new Date()) {
       });
       if (!claim.claimed) continue;
       if (!claim.shouldDeleteObject) continue;
+      // まだ中断中の multipart があれば、それも。オブジェクトの delete だけでは
+      // パートは消えず、行が消えたあとに誰も abort できなくなる。
+      if (cleanup.uploadId) {
+        await abortMultipartIfPresent(cleanup.objectKey, cleanup.uploadId);
+      }
       await deleteAiOutputObject(cleanup.objectKey);
       await finalizeReconciledAiStorageCleanup({
         objectKey: cleanup.objectKey,

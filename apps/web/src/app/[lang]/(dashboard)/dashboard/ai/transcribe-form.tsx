@@ -141,6 +141,13 @@ export function TranscribeForm({
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["audio.transcribe"] ?? []),
   );
+  const transcribeModels = access.models["audio.transcribe"] ?? [];
+  useEffect(() => {
+    if (model !== "" && !transcribeModels.some((entry) => entry.id === model)) {
+      setModel(defaultModelId(transcribeModels));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcribeModels]);
   const [maxLineLength, setMaxLineLength] = useState<string>("42");
   const [maxLineCount, setMaxLineCount] = useState<string>("2");
   // What the focused timing field currently reads. A number input reports ""
@@ -207,16 +214,24 @@ export function TranscribeForm({
   async function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
     const file = input.files?.[0];
+    // 選び直した時点で番号を進める。動画を抜いている最中に音声を選んでも、
+    // 外しても、走っている抜き出しはもう誰も待っていない——動画のときだけ
+    // 進めていては、遅れて終わったほうが欄と持ちものを取り返し、画面が見せて
+    // いる名前で別の音声が課金される。
+    const generation = ++extraction.current;
     setExtractionError(null);
     setAudioFile(file ?? null);
     if (!file) {
       setAudioName("transcription");
+      setExtracting(false);
       return;
     }
     setAudioName(baseNameOf(file.name));
-    if (!isVideoFile(file)) return;
+    if (!isVideoFile(file)) {
+      setExtracting(false);
+      return;
+    }
 
-    const generation = ++extraction.current;
     setExtracting(true);
     try {
       const audio = await extractAudioAsWav(

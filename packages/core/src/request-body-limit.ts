@@ -1,4 +1,9 @@
-import { aiScreenUploadLimit } from "./ai-capabilities";
+import {
+  aiScreenUploadLimit,
+  MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+  MULTIPART_OVERHEAD_BYTES,
+} from "./ai-capabilities";
+import { STORAGE_UPLOAD_PART_BYTES } from "./storage-quota";
 
 /**
  * 1 リクエストの本文に許す大きさ。
@@ -9,6 +14,18 @@ import { aiScreenUploadLimit } from "./ai-capabilities";
  * 断られる。
  */
 export const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
+
+/**
+ * API の Worker が 1 リクエストで受ける大きさ。
+ *
+ * ここに来るいちばん大きいものは、文字起こしの音声とアップロードの 1 かけら。
+ * ページの Worker と違ってパッケージの送信は通らないので、その上限に付き合う
+ * 理由がない——JSON しか読まない v1 の入口は、認証の前に本文を丸ごと解釈する
+ * ので、外側で切っておく。
+ */
+export const MAX_API_REQUEST_BODY_BYTES =
+  Math.max(MAX_AI_TRANSCRIPTION_UPLOAD_BYTES, STORAGE_UPLOAD_PART_BYTES)
+  + MULTIPART_OVERHEAD_BYTES;
 
 /**
  * そのパスの本文に許す大きさ。

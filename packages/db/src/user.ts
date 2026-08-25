@@ -292,30 +292,36 @@ export async function enqueueUserStorageCleanups({
   // 途中のアップロードも。完了の控えを書く前に落ちたものは、R2 には出来上がった
   // オブジェクトがあるのに File が無い——行ごと消してしまうと、そのオブジェクト
   // を指す手掛かりはどこにも残らない。墓標には抱えているものが無いので飛ばす。
+  // uploadId も一緒に覚えておく——multipart を abort するにはその id が要る。
   const uploads = await db.storageUpload.findMany({
     where: { userId, NOT: { objectKey: "" } },
-    select: { objectKey: true },
+    select: { objectKey: true, uploadId: true },
   });
-  const objectKeys = new Set([
-    ...files.map((file) => file.objectKey),
-    ...uploads.map((upload) => upload.objectKey),
-  ]);
+  const byKey = new Map<string, string | null>();
+  for (const file of files) byKey.set(file.objectKey, null);
+  for (const upload of uploads) {
+    if (!byKey.has(upload.objectKey)) byKey.set(upload.objectKey, upload.uploadId);
+  }
+  const keys = [...byKey.keys()];
   // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
   // 1 万回の往復になり、その全部がカスケードと同じトランザクションの中に入る
   // ——期限に間に合わなければ、削除そのものが最後まで通らない。
-  const keys = [...objectKeys];
   for (let at = 0; at < keys.length; at += CLEANUP_BATCH_SIZE) {
     const batch = keys.slice(at, at + CLEANUP_BATCH_SIZE);
     await db.aiStorageCleanup.createMany({
       data: batch.map((objectKey) => ({
         objectKey,
         aiJobId: null,
+        uploadId: byKey.get(objectKey) ?? null,
         state: "cleanup",
         notBefore: now,
       })),
       skipDuplicates: true,
     });
     // 既にあった行を、いま置きたい状態へ揃える。createMany は飛ばすだけなので。
+    // 既にあった行を、いま置きたい状態へ揃える。createMany は飛ばすだけなので。
+    // uploadId は行ごとにちがうため updateMany では設定できない——新しく作った
+    // 行は createMany で正しく入り、古い行の uploadId はまだ有効なまま残す。
     await db.aiStorageCleanup.updateMany({
       where: { objectKey: { in: batch } },
       data: {
@@ -325,5 +331,5 @@ export async function enqueueUserStorageCleanups({
       },
     });
   }
-  return objectKeys.size;
+  return keys.length;
 }

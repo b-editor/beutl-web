@@ -10,6 +10,8 @@ import {
   deleteUserById,
   enqueueUserStorageCleanups,
   existsUserById,
+  findBoundProCheckoutAttemptForAccountDeletion,
+  findCustomerByUserId,
   findAdminCreditAdjustment,
   getSubscriptionByUserId,
   isUniqueConstraintViolation,
@@ -47,12 +49,41 @@ export async function deleteUser({
     // 課金の続いている相手は消せない。この画面から Stripe の解約はできず、
     // 行だけ消すと請求はそのまま続き、こちらには誰の請求なのかを引く手掛かりが
     // 残らない——webhook も、対応する行が無いものは黙って受け取る。
+    //
+    // active だけではなく、trialing、past_due、paused、incomplete も請求の途中
+    // なので、終わったもの（canceled、incomplete_expired）以外はすべて止める。
     const subscription = await getSubscriptionByUserId({ userId });
-    if (subscription && isActiveProSubscription(subscription)) {
+    if (
+      subscription
+      && subscription.status !== "canceled"
+      && subscription.status !== "incomplete_expired"
+    ) {
       return {
         success: false,
         message:
           "Cancel this user's Pro subscription before deleting the account",
+      };
+    }
+    // まだ完了していない Pro の買い物も。この画面からは解決できない——
+    // 完了していれば控えを書き、未完了なら Session を expire して返金するが、
+    // それができるのは本人の削除フローだけなので、ここでは止める。
+    const checkout = await findBoundProCheckoutAttemptForAccountDeletion({ userId });
+    if (checkout) {
+      return {
+        success: false,
+        message:
+          "Resolve this user's pending Pro checkout before deleting the account",
+      };
+    }
+    // Stripe の Customer が残っていると、PaymentMethod や過去の請求が指す先が
+    // 行ごと消えて分からなくなる。本人の削除フローなら Customer を閉じるが、
+    // この画面からはできないので、あるなら止める。
+    const customer = await findCustomerByUserId({ userId });
+    if (customer) {
+      return {
+        success: false,
+        message:
+          "Close this user's Stripe customer before deleting the account",
       };
     }
 

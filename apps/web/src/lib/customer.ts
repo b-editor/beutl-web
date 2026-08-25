@@ -151,6 +151,22 @@ async function recordLegacyCustomerStillBilling({
   userId: string;
   replacedBy: string;
 }): Promise<void> {
+  const left = await listActiveSubscriptionsOnCustomer(stripe, customerId);
+  if (left.length === 0) return;
+  await addAuditLog({
+    userId,
+    action: auditLogActions.account.legacyCustomerLeftBilling,
+    details:
+      `Stripe customer ${customerId} was replaced by ${replacedBy} while `
+      + `still billing: ${left.join(", ")}`,
+  });
+}
+
+// 持ち主を確かめられない Customer に、まだ請求の続く subscription があるか。
+async function listActiveSubscriptionsOnCustomer(
+  stripe: StripeClient,
+  customerId: string,
+): Promise<string[]> {
   const billing = new Set([
     "active",
     "trialing",
@@ -182,15 +198,7 @@ async function recordLegacyCustomerStillBilling({
     if (!last) break;
     startingAfter = last.id;
   }
-  if (left.length === 0) return;
-
-  await addAuditLog({
-    userId,
-    action: auditLogActions.account.legacyCustomerLeftBilling,
-    details:
-      `Stripe customer ${customerId} was replaced by ${replacedBy} while `
-      + `still billing: ${left.join(", ")}`,
-  });
+  return left;
 }
 
 async function expireOwnedOpenCheckoutSessions({
@@ -316,12 +324,28 @@ async function createOwnedCustomer({
         customerId: replacesCustomerId,
         userId,
       });
-      await recordLegacyCustomerStillBilling({
+      // 旧 Customer にまだ請求の続く subscription が残っている。新しい Customer
+      // へ mapping を移すと、利用者のポータルも以降の削除フローも新しいほう
+      // しか見ない——旧課金は利用者から解約できなくなる。自動で解約はしない
+      // （metadata が無いので持ち主を証明できない）が、移行も止める。
+      // 担当者が監査ログを見て手動で処理するまで、この利用者の買い物は閉じる。
+      const left = await listActiveSubscriptionsOnCustomer(
         stripe,
-        customerId: replacesCustomerId,
-        userId,
-        replacedBy: customer.id,
-      });
+        replacesCustomerId,
+      );
+      if (left.length > 0) {
+        await addAuditLog({
+          userId,
+          action: auditLogActions.account.legacyCustomerLeftBilling,
+          details:
+            `Stripe customer ${replacesCustomerId} still billing `
+            + `(${left.join(", ")}) — replacement blocked`,
+        });
+        throw new Error(
+          `Cannot replace a legacy Stripe customer that still has `
+          + `active subscriptions: ${replacesCustomerId}`,
+        );
+      }
       await replaceCustomerMappingWithVerifiedOwnership({
         userId,
         expectedStripeId: replacesCustomerId,

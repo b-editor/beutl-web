@@ -94,6 +94,13 @@ export function TranslateForm({
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
   );
+  const translateModels = access.models["subtitle.translate"] ?? [];
+  useEffect(() => {
+    if (model !== "" && !translateModels.some((entry) => entry.id === model)) {
+      setModel(defaultModelId(translateModels));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translateModels]);
   const [sourceLanguage, setSourceLanguage] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("");
   const [importedFrom, setImportedFrom] = useState<string | null>(null);

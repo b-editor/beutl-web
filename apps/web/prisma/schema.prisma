@@ -389,6 +389,7 @@ model AiJob {
 model AiStorageCleanup {
   objectKey String   @id
   aiJobId   String?
+  uploadId  String?
   state     String
   notBefore DateTime
   createdAt DateTime @default(now())

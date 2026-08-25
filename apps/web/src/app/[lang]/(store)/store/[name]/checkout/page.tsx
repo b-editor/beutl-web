@@ -114,10 +114,13 @@ export default async function Page(props: {
     // PaymentIntent を持つ口を作る——どちらも支払えるので、同じものに二度払える。
     // この名前で作れば、二度目は Stripe が一度目と同じ口を返す。
     //
-    // 名前に値段と通貨を入れておく。値段が変わったのに同じ口を返しては、
-    // 新しい値段で買えなくなる。
+    // 名前に値段も通貨も言語も入れない。入れると、同じ買い物を別の通貨や別の
+    // ロケールで開いたときに別の鍵になり、二つの口が並んで残る。最初に作った口が
+    // 勝ち、あとのタブはそれを使い回す——成功 URL が最初のタブのロケールでも、
+    // 完了画面は両方のロケールを受け付けるので支障はない。値段が変わったときは、
+    // 古い口の期限が切れてから新しく作られる。
     idempotencyKey:
-      `beutl:package-checkout:${session.user.id}:${pkg.id}:${price.currency}:${price.price}`,
+      `beutl:package-checkout:${session.user.id}:${pkg.id}`,
   });
 
   if (!checkoutSession.url) {

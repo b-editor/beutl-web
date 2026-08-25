@@ -73,22 +73,58 @@ export async function uploadStorageFile(
     mimeType: file.type || "application/octet-stream",
     size: file.size,
   });
-  let started: Response;
-  try {
-    started = await postStart(startBody);
-  } catch {
+  // 始めの問い合わせは、5xx と网络の両方で、JSON まで読めて初めて成功。
+  // 応答だけが返ってきても 5xx なら、始まっていないかもしれない——もう一度
+  // 聞けば、始まっていたら同じものが返る。JSON まで読めなければ、始まったか
+  // どうか分からないので、やはりもう一度。
+  let upload: StartedUpload | null = null;
+  for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
+    let started: Response;
     try {
       started = await postStart(startBody);
     } catch {
-      // 二度とも答えが返らなかった。始まっていないとは限らない——この名前で
-      // 始まっているなら、宣言した大きさぶんの枠を一日抱えたまま誰も手が
-      // 届かなくなる。手放す前に、その名前で取り消しておく。
-      await cancelUpload(id);
-      return { ok: false, errorCode: "uploadFailed" };
+      if (attempt === COMPLETION_ATTEMPTS) {
+        // 二度とも答えが返らなかった。始まっていないとは限らない——この名前で
+        // 始まっているなら、宣言した大きさぶんの枠を一日抱えたまま誰も手が
+        // 届かなくなる。手放す前に、その名前で取り消しておく。
+        await cancelUpload(id);
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
+      continue;
+    }
+    if (started.status >= 500) {
+      if (attempt === COMPLETION_ATTEMPTS) {
+        await cancelUpload(id);
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
+      continue;
+    }
+    if (!started.ok) {
+      return { ok: false, errorCode: await errorCodeOf(started) };
+    }
+    try {
+      upload = (await started.json()) as StartedUpload;
+      break;
+    } catch {
+      if (attempt === COMPLETION_ATTEMPTS) {
+        await cancelUpload(id);
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
     }
   }
-  if (!started.ok) return { ok: false, errorCode: await errorCodeOf(started) };
-  const upload = (await started.json()) as StartedUpload;
+  if (!upload) {
+    await cancelUpload(id);
+    return { ok: false, errorCode: "uploadFailed" };
+  }
 
   let sent = 0;
   const parts: UploadedPart[] = [];
@@ -130,11 +166,40 @@ export async function uploadStorageFile(
   // answers a repeat with the file it already made. Without the retry, an
   // answer lost on the way back leaves the browser unable to tell whether the
   // file exists, and starting over stores the same bytes a second time.
-  let finished: Response | null = null;
+  // 完了も同じ——5xx とネットワークの両方で、JSON まで読めて初めて成功。
+  // サーバーは終わったアップロードの控えを持っているので、何度聞いても同じ
+  // 答えが返る。JSON まで読めなければ、完了したかどうか分からない——やる
+  // やり直しは同じ中身をもう一つ作ることになるので、もう一度聞く。
   for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
+    let finished: Response;
     try {
       finished = await postCompletion(upload.id, body);
-      break;
+    } catch {
+      if (attempt === COMPLETION_ATTEMPTS) {
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
+      continue;
+    }
+    if (finished.status >= 500) {
+      if (attempt === COMPLETION_ATTEMPTS) {
+        return { ok: false, errorCode: "uploadFailed" };
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
+      );
+      continue;
+    }
+    if (!finished.ok) {
+      return { ok: false, errorCode: await errorCodeOf(finished) };
+    }
+    try {
+      return {
+        ok: true,
+        file: (await finished.json()) as { id: string; name: string; size: number },
+      };
     } catch {
       if (attempt === COMPLETION_ATTEMPTS) {
         return { ok: false, errorCode: "uploadFailed" };
@@ -144,13 +209,7 @@ export async function uploadStorageFile(
       );
     }
   }
-  if (!finished) return { ok: false, errorCode: "uploadFailed" };
-  if (!finished.ok) return { ok: false, errorCode: await errorCodeOf(finished) };
-
-  return {
-    ok: true,
-    file: (await finished.json()) as { id: string; name: string; size: number },
-  };
+  return { ok: false, errorCode: "uploadFailed" };
 }
 
 function postStart(body: string): Promise<Response> {

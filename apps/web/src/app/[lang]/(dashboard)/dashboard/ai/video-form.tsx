@@ -249,6 +249,13 @@ export function VideoForm({
   const [lastFrame, setLastFrame] = useState<File | null>(null);
 
   const models = access.models["video.generate"] ?? [];
+  // 一覧が替わっても、選んだものがまだあれば残す。消えていたら既定へ戻す。
+  useEffect(() => {
+    if (model !== "" && !models.some((entry) => entry.id === model)) {
+      setModel(defaultModelId(models));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models]);
   const names = useAiRequestNames();
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに

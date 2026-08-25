@@ -19,6 +19,7 @@ import { Shimmer } from "@beutl/ui/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { ImageIcon, X } from "lucide-react";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -157,6 +158,15 @@ export function ImageGenerateForm({
   const [exclusions, setExclusions] = useState("");
   const models = access.models["image.generate"] ?? [];
   const [model, setModel] = useState(() => defaultModelId(models));
+  // 一覧が替わっても、選んだものがまだあれば残す。消えていたら既定へ戻す
+  // ——戻さないと、古い値が hidden で送られ、サーバーはもう提供しないモデル
+  // で課金しようとする。
+  useEffect(() => {
+    if (model !== "" && !models.some((entry) => entry.id === model)) {
+      setModel(defaultModelId(models));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models]);
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [background, setBackground] = useState<AiImageBackground>("auto");
   const [references, setReferences] = useState<File[]>([]);

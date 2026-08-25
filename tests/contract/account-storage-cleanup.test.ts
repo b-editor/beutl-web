@@ -13,7 +13,7 @@ function providerFor(
       findMany: async () => files.map((objectKey) => ({ objectKey })),
     },
     storageUpload: {
-      findMany: async () => uploads.map((objectKey) => ({ objectKey })),
+      findMany: async () => uploads.map((objectKey) => ({ objectKey, uploadId: `mp-${objectKey}` })),
     },
     aiStorageCleanup: {
       createMany: async (args: {

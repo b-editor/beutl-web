@@ -565,8 +565,15 @@ export async function cancelUpload({
       // パートは誰も取りに行かないまま残る。もう一度来てもらう。
       return "pending";
     }
-    if (current === null || current.completedFileId || !current.abandonedAt) {
+    // 片付いたと言えるのは、行がもう無いか、完了していたときだけ。まだ生きて
+    // いる行が読めたなら、取れなかったのは一時の不調のほう——中止も削除もして
+    // いないのに片付いたと答えると、呼び出し側はそこで手を引き、パートは誰も
+    // 取りに行かないまま残る。
+    if (current === null || current.completedFileId) {
       return "cancelled";
+    }
+    if (!current.abandonedAt) {
+      return "pending";
     }
   }
 
