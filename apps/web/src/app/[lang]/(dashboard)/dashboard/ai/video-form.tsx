@@ -49,11 +49,14 @@ import {
   ResultShimmer,
   blockedReason,
   blocksSubmit,
+  canSubmitModelRequest,
   canSubmitAiRequest,
+  correctedModelId,
   requestSignature,
   seedValue,
   useFileFingerprints,
   useAiRequestNames,
+  useHeldModelCapabilities,
   defaultModelId,
   type AiAccess,
 } from "./shared";
@@ -221,10 +224,12 @@ function firstSupported<T>(current: T, supported: T[]): T {
 
 export function VideoForm({
   lang,
+  userId,
   access,
   capabilities,
 }: {
   lang: string;
+  userId: string;
   access: AiAccess;
   capabilities?: Record<string, AiVideoModelOptions>;
 }) {
@@ -238,6 +243,7 @@ export function VideoForm({
   const [generateAudio, setGenerateAudio] = useState(true);
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoStyle, setVideoStyle] = useState("");
+  const names = useAiRequestNames(userId, "video.generate");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["video.generate"] ?? []),
   );
@@ -248,15 +254,11 @@ export function VideoForm({
   const [firstFrame, setFirstFrame] = useState<File | null>(null);
   const [lastFrame, setLastFrame] = useState<File | null>(null);
 
-  const models = access.models["video.generate"] ?? [];
-  // 一覧が替わっても、選んだものがまだあれば残す。消えていたら既定へ戻す。
-  useEffect(() => {
-    if (model !== "" && !models.some((entry) => entry.id === model)) {
-      setModel(defaultModelId(models));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models]);
-  const names = useAiRequestNames();
+  const models = useMemo(
+    () => access.models["video.generate"] ?? [],
+    [access.models],
+  );
+  const selectableModels = names.modelsWithHeld(models);
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
@@ -266,7 +268,13 @@ export function VideoForm({
     names.settle(keepsName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
-  const options = optionsOf(capabilities, model);
+  const heldCapabilities = useHeldModelCapabilities(
+    capabilities,
+    names.heldRequestModels(),
+    models.map((entry) => entry.id),
+    names.heldRequestCapabilities(),
+  );
+  const options = optionsOf(heldCapabilities, model);
   const duration = nearestDuration(Number(videoDuration), options.durations);
   const resolution = firstSupported(videoResolution, options.resolutions);
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
@@ -327,11 +335,30 @@ export function VideoForm({
     sentLastFrame !== null,
     sentLastFrame ? lastFrameContent : "",
   ]);
+  useEffect(() => {
+    if (names.ready && !readingFrames) void names.ensure(signature);
+  }, [names.ready, names, readingFrames, signature]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
   // 支払い済みの結果を取りに行く道が閉じる。
   const holdsName = names.holds(signature);
-  const submitBlocked = blocksSubmit(blocked, holdsName);
+  const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
+  useEffect(() => {
+    if (readingFrames) return;
+    if (names.hasRestoredModel("") && !names.holdsModel("") && model !== "") {
+      setModel("");
+      return;
+    }
+    const corrected = correctedModelId(models, model, holdsSelectedModel);
+    if (corrected !== model) setModel(corrected);
+  }, [holdsSelectedModel, model, models, names, readingFrames]);
+  const modelCanSubmit = canSubmitModelRequest(
+    models,
+    model,
+    holdsSelectedModel,
+    holdsName,
+  );
+  const submitBlocked = blocksSubmit(blocked, holdsName) || !modelCanSubmit;
   const canSubmit = canSubmitAiRequest({
     submitBlocked,
     hasTask: true,
@@ -355,19 +382,27 @@ export function VideoForm({
   // から外れ、外れた時点で選ばれていたファイルは欄ごと消える——画面の状態だけ
   // が残り、名前は「フレームあり」と言いながらフレームの無い本文が出ていく。
   // 欄ではなく画面の状態から組み立てれば、その食い違いは起きない。
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
     // Enter を押したときにボタンが断っているはずの依頼が出ていく。
-    if (!canSubmit) return;
+    if (!canSubmit || !names.ready) return;
+
+    const idempotencyKey = await names.ensureAndGet(signature);
+    if (!idempotencyKey) return;
 
     const formData = new FormData(event.currentTarget);
+    formData.set("idempotencyKey", idempotencyKey);
     formData.delete("firstFrame");
     formData.delete("lastFrame");
     if (sentFirstFrame) formData.set("firstFrame", sentFirstFrame);
     if (sentLastFrame) formData.set("lastFrame", sentLastFrame);
 
-    names.commit(signature);
+    names.commitWithModel(
+      signature,
+      model,
+      names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
+    );
     dispatch(formData);
   }
 
@@ -429,7 +464,7 @@ export function VideoForm({
 
         <ModelSelect
           lang={lang}
-          models={models}
+          models={selectableModels}
           value={model}
           onChange={setModel}
         />

@@ -1,5 +1,6 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
+import { StorageCleanupBusyError } from "./ai-job";
 
 export async function findUserForLibrary({
   id: userId,
@@ -292,15 +293,20 @@ export async function enqueueUserStorageCleanups({
   // 途中のアップロードも。完了の控えを書く前に落ちたものは、R2 には出来上がった
   // オブジェクトがあるのに File が無い——行ごと消してしまうと、そのオブジェクト
   // を指す手掛かりはどこにも残らない。墓標には抱えているものが無いので飛ばす。
-  // uploadId も一緒に覚えておく——multipart を abort するにはその id が要る。
+  // Preserve uploadId as well; aborting a multipart upload requires that id.
   const uploads = await db.storageUpload.findMany({
     where: { userId, NOT: { objectKey: "" } },
-    select: { objectKey: true, uploadId: true },
+    select: { objectKey: true, uploadId: true, completedFileId: true },
   });
   const byKey = new Map<string, string | null>();
   for (const file of files) byKey.set(file.objectKey, null);
   for (const upload of uploads) {
-    if (!byKey.has(upload.objectKey)) byKey.set(upload.objectKey, upload.uploadId);
+    // Completed receipts are represented by their File row; only unfinished
+    // uploads still own a remote multipart operation.
+    const uploadId = upload.completedFileId === null ? upload.uploadId : null;
+    if (!byKey.has(upload.objectKey) || byKey.get(upload.objectKey) === null) {
+      byKey.set(upload.objectKey, uploadId);
+    }
   }
   const keys = [...byKey.keys()];
   // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
@@ -308,28 +314,70 @@ export async function enqueueUserStorageCleanups({
   // ——期限に間に合わなければ、削除そのものが最後まで通らない。
   for (let at = 0; at < keys.length; at += CLEANUP_BATCH_SIZE) {
     const batch = keys.slice(at, at + CLEANUP_BATCH_SIZE);
+    const existing = await db.aiStorageCleanup.findMany({
+      where: { objectKey: { in: batch } },
+      select: {
+        objectKey: true,
+        uploadId: true,
+        leaseToken: true,
+        state: true,
+        notBefore: true,
+      },
+    });
+    // A lease token means a cleaner owns the remote side effect until it
+    // explicitly settles. Expiry only makes the row claimable through the
+    // cleanup CAS; normal account-deletion writers must never overwrite it.
+    const busy = existing.filter((row) => row.leaseToken !== null);
+    if (busy.length > 0) {
+      throw new StorageCleanupBusyError(busy.map((row) => row.objectKey));
+    }
+    const existingByKey = new Map(
+      existing.map((row) => [row.objectKey, row]),
+    );
+    for (const objectKey of batch) {
+      const row = existingByKey.get(objectKey);
+      const uploadId = byKey.get(objectKey);
+      if (row?.uploadId && uploadId && row.uploadId !== uploadId) {
+        throw new StorageCleanupBusyError([objectKey]);
+      }
+    }
     await db.aiStorageCleanup.createMany({
       data: batch.map((objectKey) => ({
         objectKey,
         aiJobId: null,
         uploadId: byKey.get(objectKey) ?? null,
+        leaseToken: null,
         state: "cleanup",
         notBefore: now,
       })),
       skipDuplicates: true,
     });
-    // 既にあった行を、いま置きたい状態へ揃える。createMany は飛ばすだけなので。
-    // 既にあった行を、いま置きたい状態へ揃える。createMany は飛ばすだけなので。
-    // uploadId は行ごとにちがうため updateMany では設定できない——新しく作った
-    // 行は createMany で正しく入り、古い行の uploadId はまだ有効なまま残す。
-    await db.aiStorageCleanup.updateMany({
-      where: { objectKey: { in: batch } },
-      data: {
-        aiJobId: null,
-        state: "cleanup",
-        notBefore: now,
-      },
-    });
+    // Existing rows are updated once per batch. Active leases were rejected
+    // above, so this cannot move a claimed row backwards.
+    if (existing.length > 0) {
+      await db.aiStorageCleanup.updateMany({
+        where: {
+          objectKey: { in: existing.map((row) => row.objectKey) },
+          OR: [{ leaseToken: null }, { notBefore: { lte: now } }],
+        },
+        data: { aiJobId: null, state: "cleanup", notBefore: now },
+      });
+    }
+    // Only pre-existing rows lacking an unfinished upload id need an
+    // individual merge; newly-created rows already received it in createMany.
+    for (const row of existing) {
+      const uploadId = byKey.get(row.objectKey);
+      if (row.uploadId === null && uploadId !== null && uploadId !== undefined) {
+        await db.aiStorageCleanup.updateMany({
+          where: {
+            objectKey: row.objectKey,
+            uploadId: null,
+            leaseToken: row.leaseToken,
+          },
+          data: { uploadId },
+        });
+      }
+    }
   }
   return keys.length;
 }

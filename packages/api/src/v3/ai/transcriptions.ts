@@ -31,6 +31,7 @@ import {
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { validateTranscriptionResult } from "../../ai/audio-validation";
 import { isIso6391LanguageCode } from "../../ai/subtitle-validation";
+import { aiApiMultipartBodyLimit } from "@beutl/core";
 
 const languageSchema = z
   .string()
@@ -122,6 +123,7 @@ const app = new Hono().post("/", async (c) => {
     body = await parseBodyWithUploadLimit(
       c.req,
       MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+      aiApiMultipartBodyLimit("/api/v3/ai/transcriptions")!,
     );
   } catch (error) {
     if (isUploadLimitExceeded(error)) {

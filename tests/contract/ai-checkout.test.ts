@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   getOrCreateProCheckoutAttempt: vi.fn(),
   getSubscriptionByUserId: vi.fn(),
   setTopUpCheckoutSession: vi.fn(),
+  setProCheckoutAttemptParams: vi.fn(),
+  setTopUpCheckoutParams: vi.fn(),
   portalCreate: vi.fn(),
   portalConfigurationRetrieve: vi.fn(),
   invoicePaymentList: vi.fn(),
@@ -66,6 +68,8 @@ vi.mock("@beutl/db", () => ({
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
   setTopUpCheckoutSession: mocks.setTopUpCheckoutSession,
+  setProCheckoutAttemptParams: mocks.setProCheckoutAttemptParams,
+  setTopUpCheckoutParams: mocks.setTopUpCheckoutParams,
   startRetryableTransaction: mocks.startRetryableTransaction,
 }));
 import {
@@ -78,6 +82,8 @@ import {
 describe("AI checkout actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.setProCheckoutAttemptParams.mockResolvedValue({ count: 1 });
+    mocks.setTopUpCheckoutParams.mockResolvedValue({ count: 1 });
     process.env.PUBLIC_ORIGIN = "https://beutl.example";
     process.env.STRIPE_CREDIT_PRICE_ID = "price_credits";
     process.env.STRIPE_PRO_PRICE_ID = "price_pro";
@@ -152,7 +158,7 @@ describe("AI checkout actions", () => {
       billingOfferId: "offer_top_up",
       expiresAt: new Date(Date.now() + 86_400_000),
     });
-    mocks.setTopUpCheckoutSession.mockResolvedValue(true);
+    mocks.setTopUpCheckoutSession.mockResolvedValue("stored-for-checkout");
     mocks.bindProCheckoutSession.mockResolvedValue("bound");
     mocks.deleteBoundProCheckoutAttempt.mockResolvedValue(true);
     mocks.checkoutCreate.mockResolvedValue({

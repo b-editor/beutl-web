@@ -18,6 +18,7 @@
     "insufficientStorageSpace": "There is not enough storage space left for this file.",
     "uploadNotFound": "This upload is no longer in progress. Try again.",
     "uploadFailed": "The upload could not be completed. Try again.",
+    "storagePersistenceUnavailable": "Browser storage is unavailable. Keep this page open, enable browser storage, and retry. No new upload will start until the completion handle is saved.",
     "invalidRequestBody": "This file could not be uploaded.",
     "authenticationIsRequired": "Sign in again to upload.",
     "fileNotFound": "That file is no longer there.",

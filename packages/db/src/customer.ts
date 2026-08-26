@@ -210,6 +210,9 @@ export async function replaceCustomerMappingWithVerifiedOwnership({
       verifiedAt,
       prisma: tx,
     });
+    if (!current) {
+      return { count: 0 };
+    }
     if (current.stripeId === stripeId) {
       return { count: 1 };
     }

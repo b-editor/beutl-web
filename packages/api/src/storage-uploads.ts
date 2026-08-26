@@ -3,6 +3,7 @@ import {
   deleteStorageUpload,
   findStorageUploadByIdAndUserId,
   listStorageUploadsStartedBefore,
+  releaseStorageUploadCreation,
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
 
@@ -23,35 +24,31 @@ import { getR2Bucket } from "./ai/storage";
 // Long enough that a slow upload of the largest file this service takes is
 // never mistaken for an abandoned one.
 const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
-// An abort that fails is worth trying again on the next run, so the row stays.
-// It cannot stay for ever, though, or one upload the bucket will never abandon
-// would be retried until the end of time; after this long the row is dropped
-// and the bucket's own lifecycle rules are what is left.
-const GIVE_UP_AFTER_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
-// 取った行のキーに、完成したオブジェクトが残っていないか。
-//
-//  - deleted: 残っていたので消した。
-//  - absent: オブジェクトが無い。組み上がる前——パートのままの multipart は
-//    オブジェクトを持たない——か、もう消えたあと。どちらかは分からない。
-//  - unknown: 確かめられなかった。残っているかもしれないので、行は残す。
-type OrphanedObject = "deleted" | "absent" | "unknown";
+function isTerminalMultipartAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as Record<string, unknown>;
+  const code = String(record.code ?? record.name ?? "").toLowerCase();
+  if (code === "nosuchupload") return true;
+  return /(?:\(\s*10024\s*\)|\b10024)\s*$/u.test(
+    String(record.message ?? error),
+  );
+}
 
-async function clearOrphanedObject(objectKey: string): Promise<OrphanedObject> {
+async function deleteObjectAfterTerminalAbort(objectKey: string): Promise<boolean> {
   try {
     const bucket = getR2Bucket();
-    if (!bucket.head || !bucket.delete) return "unknown";
-    const object = await bucket.head(objectKey);
-    if (!object) return "absent";
+    if (!bucket.head || !bucket.delete) return false;
+    if (!await bucket.head(objectKey)) return true;
     await bucket.delete(objectKey);
-    return "deleted";
+    return true;
   } catch (error) {
-    console.error("Failed to clear an orphaned storage object", objectKey, error);
-    return "unknown";
+    console.error("Failed to clear object after terminal multipart abort", objectKey, error);
+    return false;
   }
 }
 
@@ -83,11 +80,27 @@ export async function abandonStaleStorageUploads(
       }).catch(() => null);
       if (!current) continue;
       if (current.completedFileId) {
-        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-        abandoned++;
+        // Completion receipts are bounded by the user's file-count limit and
+        // cascade with their File row; they are never multipart sweep state.
         continue;
       }
       if (!current.abandonedAt) continue;
+    }
+
+    // A pre-create intent has no remote handle to abort. Expired creating leases
+    // are returned to the retryable intent state; they keep their quota
+    // reservation until a later start either attaches the handle or cancellation
+    // claims the row. This avoids dropping the only durable request identity.
+    if (upload.uploadId === null) {
+      if (upload.startState === "creating") {
+        await releaseStorageUploadCreation({ id: upload.id, now, leaseToken: (upload as { creationLeaseToken?: string | null }).creationLeaseToken ?? null }).catch(() => undefined);
+      } else {
+        // An intent has never contacted R2, so dropping it after the normal
+        // abandonment window is safe and releases its quota reservation.
+        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+        abandoned++;
+      }
+      continue;
     }
 
     // 取り消しの墓標。抱えているものは何も無いので、消せばそれで終わり——ただし
@@ -119,28 +132,21 @@ export async function abandonStaleStorageUploads(
       abandoned++;
     } catch (error) {
       console.error("Failed to abandon a stale storage upload", upload.id, error);
-      // 中止できない理由のひとつは「もう組み上がっている」こと。R2 の結合が
-      // 終わったあと、控えを書く前に Worker が落ちるとこうなる。行はこちらの
-      // ものなので控えはもう書けない＝ File は誰も指していない。残っている
-      // オブジェクトはここで消す——これをしないと、追跡できない完成オブジェクト
-      // が保管され続ける。
-      //
-      // 消せたときだけ行を捨てる。「何も無い」は、組み上がっていないという意味
-      // でもある——パートのままの multipart はオブジェクトを持たないので、
-      // 一時の不調で中止に失敗しただけのときも同じ顔をする。そこで行を消すと、
-      // 中止に必要な uploadId ごと失われ、パートは誰にも消せないまま残る。
-      // 消せなかったものは次の回でもう一度、それでも駄目なら諦めの期限まで。
-      if (await clearOrphanedObject(upload.objectKey) === "deleted") {
-        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-        abandoned++;
+      // An abort failure is not proof that the multipart or a joined object is
+      // gone. Keep the cleanup row and its uploadId so a later sweep can retry;
+      // deleting the object or declaring success here could destroy a file that
+      // completed just before the receipt was committed.
+      if (isTerminalMultipartAbortError(error)) {
+        // NoSuchUpload is terminal for the multipart handle, but the object may
+        // already have been joined before its receipt was written. Only drop
+        // the row after confirming that object is absent or deleting it.
+        if (await deleteObjectAfterTerminalAbort(upload.objectKey)) {
+          await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
+          abandoned++;
+        } else {
+          failed++;
+        }
         continue;
-      }
-
-      if (
-        upload.createdAt.getTime() <=
-          now.getTime() - GIVE_UP_AFTER_MILLISECONDS
-      ) {
-        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
       }
       failed++;
     }

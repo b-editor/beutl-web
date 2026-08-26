@@ -665,12 +665,14 @@ describe("AI usage ledger", () => {
     const first = await getOrCreateProCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
+      customerId: "cus_1",
       now,
       expiresAt,
     });
     const second = await getOrCreateProCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
+      customerId: "cus_1",
       now,
       expiresAt,
     });
@@ -682,6 +684,7 @@ describe("AI usage ledger", () => {
     const replacement = await getOrCreateProCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
+      customerId: "cus_1",
       now,
       expiresAt,
     });
@@ -696,6 +699,7 @@ describe("AI usage ledger", () => {
     const first = await getOrCreateProCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
+      customerId: "cus_1",
       now,
       expiresAt,
     });
@@ -711,6 +715,7 @@ describe("AI usage ledger", () => {
     const afterRotation = await getOrCreateProCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v2",
+      customerId: "cus_1",
       now,
       expiresAt,
     });
@@ -737,6 +742,7 @@ describe("AI usage ledger", () => {
       getOrCreateProCheckoutAttempt({
         userId: USER_ID,
         billingOfferId: "offer-pro-v1",
+        customerId: "cus_1",
         now,
         expiresAt: new Date(now.getTime() + 86_400_000),
       }),

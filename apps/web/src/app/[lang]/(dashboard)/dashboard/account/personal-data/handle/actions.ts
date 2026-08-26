@@ -25,6 +25,7 @@ export async function deleteUser(token: string, identifier: string) {
   const stripeClosure = await closeStripeCustomerForAccountDeletion({
     userId: intent.userId,
     stripeCustomerId: intent.stripeCustomerId,
+    deletionAuthorizedAt: intent.authorizedAt,
   });
   if (stripeClosure.status === "owner-mismatch") {
     throw new Error("Stripe customer ownership could not be verified");
@@ -49,17 +50,20 @@ export async function deleteUser(token: string, identifier: string) {
       userId: intent.userId,
       prisma,
     });
+    // Re-snapshot billing attempts and provider jobs in the same serializable
+    // transaction that performs the User cascade. This closes the interval
+    // between durable authorization and final local deletion.
+    const prepared = await prepareAccountDeletionOutboxes({
+      userId: intent.userId,
+      prisma,
+    });
+    if (prepared.unboundCheckoutRecoveries > 0) {
+      throw new Error("Checkout recovery is pending before account deletion");
+    }
     await addAuditLog({
       userId: null,
       action: auditLogActions.account.accountDeleted,
       details: `User ${intent.userId} deleted their account`,
-      prisma,
-    });
-    // Re-snapshot billing attempts and provider jobs in the same serializable
-    // transaction that performs the User cascade. This closes the interval
-    // between durable authorization and final local deletion.
-    await prepareAccountDeletionOutboxes({
-      userId: intent.userId,
       prisma,
     });
     await deleteUserById({ userId: intent.userId, prisma });

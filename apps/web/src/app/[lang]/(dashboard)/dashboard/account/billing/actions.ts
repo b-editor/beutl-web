@@ -38,6 +38,7 @@ import {
   requireTopUpRefund,
   scheduleBillingRefundAttempt,
   setTopUpCheckoutSession,
+  setTopUpCheckoutParams,
   startRetryableTransaction,
 } from "@beutl/db";
 import { redirect } from "next/navigation";
@@ -456,6 +457,15 @@ export async function createProCheckout(): Promise<void> {
   }
 
   const origin = process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net";
+  const proCheckoutParams: Stripe.Checkout.SessionCreateParams = {
+    customer: customerId,
+    mode: "subscription",
+    line_items: [{ price: offer.stripePriceId, quantity: 1 }],
+    metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id },
+    subscription_data: { metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id } },
+    success_url: `${origin}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/dashboard/account/billing`,
+  };
   for (let attemptNumber = 0; attemptNumber < 2; attemptNumber++) {
     const now = new Date();
     const attempt = await getOrCreateProCheckoutAttempt({
@@ -463,6 +473,8 @@ export async function createProCheckout(): Promise<void> {
       billingOfferId: offer.id,
       now,
       expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+      customerId,
+      paramsJson: JSON.stringify(proCheckoutParams),
     });
 
     if (attempt.stripeCheckoutSessionId) {
@@ -592,35 +604,11 @@ export async function createProCheckout(): Promise<void> {
     }
 
     const checkoutSession = await stripe.checkout.sessions.create(
-      {
-        customer: customerId,
-        mode: "subscription",
-        line_items: [
-          {
-            price: offer.stripePriceId,
-            quantity: 1,
-          },
-        ],
-        metadata: {
-          ...stripeOwnerMetadata(session.user.id),
-          planId: PRO_PLAN.id,
-          billingOfferId: offer.id,
-        },
-        subscription_data: {
-          metadata: {
-            ...stripeOwnerMetadata(session.user.id),
-            planId: PRO_PLAN.id,
-            billingOfferId: offer.id,
-          },
-        },
-        success_url: `${origin}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/dashboard/account/billing`,
-      },
+      proCheckoutParams,
       {
         idempotencyKey: `ai-pro-checkout:${attempt.checkoutKey}`,
       },
     );
-
     const binding = await bindProCheckoutSession({
       userId: session.user.id,
       checkoutKey: attempt.checkoutKey,
@@ -716,8 +704,7 @@ export async function createCreditCheckout(): Promise<void> {
     billingOfferId: offer.id,
     expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
   });
-  const session_ = await stripe.checkout.sessions.create(
-    {
+  const topUpCheckoutParams: Stripe.Checkout.SessionCreateParams = {
       customer: customerId,
       mode: "payment",
       line_items: [
@@ -744,7 +731,11 @@ export async function createCreditCheckout(): Promise<void> {
       invoice_creation: { enabled: true },
       success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing`,
-    },
+    };
+  const persistedTopUpParams = await setTopUpCheckoutParams({ attemptId: attempt.id, paramsJson: JSON.stringify(topUpCheckoutParams) });
+  if (persistedTopUpParams.count !== 1) throw new Error("Top-up checkout attempt changed before Stripe create");
+  const session_ = await stripe.checkout.sessions.create(
+    topUpCheckoutParams,
     { idempotencyKey: `ai-top-up-checkout:${attempt.id}` },
   );
 
@@ -755,7 +746,7 @@ export async function createCreditCheckout(): Promise<void> {
       ? new Date(session_.expires_at * 1000)
       : attempt.expiresAt,
   });
-  if (!stored) {
+  if (stored !== "stored-for-checkout") {
     throw new Error("Top-up checkout attempt changed before session persistence");
   }
 

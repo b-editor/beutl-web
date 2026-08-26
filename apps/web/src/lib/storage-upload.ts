@@ -9,10 +9,206 @@ import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
 
 export type UploadOutcome =
   | { ok: true; file: { id: string; name: string; size: number } }
-  | { ok: false; errorCode: string };
+  | {
+      ok: false;
+      errorCode: string;
+      pendingCompletion?: PendingStorageUploadCompletion;
+    };
 
 type StartedUpload = { id: string; partSize: number; partCount: number };
 type UploadedPart = { partNumber: number; etag: string };
+/** The only durable state needed to ask a committed upload for its receipt. */
+export type PendingStorageUploadCompletion = Readonly<{
+  uploadId: string;
+  body: string;
+  ownerId: string;
+}>;
+
+export const PENDING_STORAGE_UPLOADS_KEY =
+  "beutl.storage-upload-completions.v1";
+
+export type StorageUploadLock = { current: boolean };
+
+export function tryAcquireStorageUploadLock(lock: StorageUploadLock): boolean {
+  if (lock.current) return false;
+  lock.current = true;
+  return true;
+}
+
+export function releaseStorageUploadLock(lock: StorageUploadLock): void {
+  lock.current = false;
+}
+
+export async function withStorageUploadLock<T>(
+  lock: StorageUploadLock,
+  action: () => Promise<T>,
+): Promise<T | undefined> {
+  if (!tryAcquireStorageUploadLock(lock)) return undefined;
+  try {
+    return await action();
+  } finally {
+    releaseStorageUploadLock(lock);
+  }
+}
+
+const TERMINAL_COMPLETION_ERRORS = new Set([
+  "invalidRequestBody",
+  "uploadNotFound",
+  "fileNotFound",
+  "insufficientStorageSpace",
+  "tooManyFiles",
+  "tooManyUploads",
+]);
+
+type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem"> & {
+  length?: number;
+  key?: (index: number) => string | null;
+};
+
+function browserStore(name: "localStorage" | "sessionStorage"): StorageLike | null {
+  try {
+    return typeof globalThis[name] === "undefined" ? null : globalThis[name];
+  } catch {
+    return null;
+  }
+}
+
+function persistentStore(): StorageLike | null {
+  return browserStore("localStorage") ?? browserStore("sessionStorage");
+}
+
+function sessionStore(): StorageLike | null {
+  return browserStore("sessionStorage");
+}
+
+function completionKey(uploadId: string, ownerId: string): string {
+  return `${PENDING_STORAGE_UPLOADS_KEY}:${encodeURIComponent(ownerId)}:${uploadId}`;
+}
+
+function validPending(value: unknown): value is PendingStorageUploadCompletion {
+  return !!value && typeof value === "object" &&
+    typeof (value as { uploadId?: unknown }).uploadId === "string" &&
+    typeof (value as { body?: unknown }).body === "string" &&
+    typeof (value as { ownerId?: unknown }).ownerId === "string" &&
+    (value as { ownerId: string }).ownerId.length > 0;
+}
+
+function isCompletedStorageFile(
+  value: unknown,
+): value is { id: string; name: string; size: number } {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Record<string, unknown>;
+  return typeof result.id === "string" && result.id.length > 0 &&
+    typeof result.name === "string" && result.name.length > 0 &&
+    typeof result.size === "number" && Number.isSafeInteger(result.size) &&
+    result.size >= 0;
+}
+
+function loadFromStorage(
+  storage: StorageLike | null,
+): PendingStorageUploadCompletion[] {
+  if (!storage) return [];
+  try {
+    const byId = new Map<string, PendingStorageUploadCompletion>();
+    if (storage.key && typeof storage.length === "number") {
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index);
+        if (!key?.startsWith(`${PENDING_STORAGE_UPLOADS_KEY}:`)) continue;
+        try {
+          const value = JSON.parse(storage.getItem(key) ?? "null");
+          if (validPending(value)) byId.set(value.uploadId, value);
+        } catch {
+          // One corrupt receipt must not hide the other owner-scoped receipts.
+        }
+      }
+    }
+    return [...byId.values()];
+  } catch {
+    return [];
+  }
+}
+
+export function loadPendingStorageUploadCompletions(
+  ownerId: string,
+  storage?: StorageLike | null,
+): PendingStorageUploadCompletion[] {
+  if (storage !== undefined) {
+    return loadFromStorage(storage).filter((entry) => entry.ownerId === ownerId);
+  }
+  // localStorage is the authoritative primary when it is available. Do not
+  // let the session fallback overwrite a newer local receipt for the same id.
+  const primary = browserStore("localStorage");
+  const secondary = sessionStore();
+  const byId = new Map<string, PendingStorageUploadCompletion>();
+  for (const value of loadFromStorage(primary)) {
+    if (value.ownerId === ownerId) byId.set(value.uploadId, value);
+  }
+  if (secondary && secondary !== primary) {
+    for (const value of loadFromStorage(secondary)) {
+      if (value.ownerId === ownerId && !byId.has(value.uploadId)) {
+        byId.set(value.uploadId, value);
+      }
+    }
+  }
+  return [...byId.values()];
+}
+
+export function persistPendingStorageUploadCompletion(
+  pending: PendingStorageUploadCompletion,
+  storage?: StorageLike | null,
+): boolean {
+  const stores = storage === undefined
+    ? [browserStore("localStorage"), sessionStore()]
+    : [storage];
+  const seen = new Set<StorageLike>();
+  const key = completionKey(pending.uploadId, pending.ownerId);
+  for (const [index, current] of stores.entries()) {
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+    // One key per receipt makes concurrent tabs independent: no read-modify-
+    // write of a shared queue can erase another tab's handle.
+    try {
+      current.setItem(
+        key,
+        JSON.stringify(pending),
+      );
+      // Once localStorage recovers, remove the stale session copy so future
+      // fallback reads cannot retain an older body indefinitely.
+      if (storage === undefined && index === 0) {
+        const session = sessionStore();
+        if (session && session !== current) {
+          try {
+            session.removeItem(key);
+          } catch {
+            // Best effort cleanup; localStorage remains authoritative.
+          }
+        }
+      }
+      return true;
+    } catch {
+      // Try the next durable browser store before giving up.
+    }
+  }
+  return false;
+}
+
+export function discardPendingStorageUploadCompletion(
+  uploadId: string,
+  ownerId: string,
+  storage?: StorageLike | null,
+): void {
+  const stores = storage === undefined
+    ? [persistentStore(), sessionStore()]
+    : [storage];
+  for (const current of stores) {
+    if (!current) continue;
+    try {
+      current.removeItem(completionKey(uploadId, ownerId));
+    } catch {
+      // The receipt may still be swept by the server if storage is unavailable.
+    }
+  }
+}
 
 // Enough to keep the connection busy while one part is being acknowledged,
 // without asking the browser to hold several parts at once.
@@ -27,7 +223,6 @@ const ATTEMPTS_PER_PART = 3;
 // やり直しは同じ中身をもう一つ作る。
 const COMPLETION_ATTEMPTS = 4;
 const COMPLETION_RETRY_MILLISECONDS = 500;
-
 // 取り消しは一度きりでは足りない。バケットが中止を受け付けないことがあり、そこ
 // で手を引くとこの名前の枠が一日残る。間を置いて数回だけ試す——それでも駄目なら
 // 掃除がいずれ拾う。行がまだ現れていないときは、サーバー側が墓標を置いて
@@ -60,7 +255,7 @@ async function cancelUpload(id: string): Promise<void> {
 
 export async function uploadStorageFile(
   file: File,
-  { onProgress }: { onProgress?: (sentBytes: number) => void } = {},
+  { onProgress, ownerId }: { onProgress?: (sentBytes: number) => void; ownerId: string },
 ): Promise<UploadOutcome> {
   // The upload is named before it is asked for, so an answer lost on the way
   // back can be asked for again and comes back as the same upload. Without
@@ -73,10 +268,8 @@ export async function uploadStorageFile(
     mimeType: file.type || "application/octet-stream",
     size: file.size,
   });
-  // 始めの問い合わせは、5xx と网络の両方で、JSON まで読めて初めて成功。
-  // 応答だけが返ってきても 5xx なら、始まっていないかもしれない——もう一度
-  // 聞けば、始まっていたら同じものが返る。JSON まで読めなければ、始まったか
-  // どうか分からないので、やはりもう一度。
+  // A start succeeds only after a non-5xx response and valid JSON are read.
+  // Retry either an error response or an unreadable response under the same id.
   let upload: StartedUpload | null = null;
   for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
     let started: Response;
@@ -84,9 +277,8 @@ export async function uploadStorageFile(
       started = await postStart(startBody);
     } catch {
       if (attempt === COMPLETION_ATTEMPTS) {
-        // 二度とも答えが返らなかった。始まっていないとは限らない——この名前で
-        // 始まっているなら、宣言した大きさぶんの枠を一日抱えたまま誰も手が
-        // 届かなくなる。手放す前に、その名前で取り消しておく。
+        // The start may have succeeded even without a response. Cancel by the
+        // same id before releasing the reserved quota.
         await cancelUpload(id);
         return { ok: false, errorCode: "uploadFailed" };
       }
@@ -162,21 +354,34 @@ export async function uploadStorageFile(
   const body = JSON.stringify({
     parts: parts.sort((left, right) => left.partNumber - right.partNumber),
   });
-  // Asking twice is safe: the server keeps a receipt of a finished upload and
-  // answers a repeat with the file it already made. Without the retry, an
-  // answer lost on the way back leaves the browser unable to tell whether the
-  // file exists, and starting over stores the same bytes a second time.
-  // 完了も同じ——5xx とネットワークの両方で、JSON まで読めて初めて成功。
-  // サーバーは終わったアップロードの控えを持っているので、何度聞いても同じ
-  // 答えが返る。JSON まで読めなければ、完了したかどうか分からない——やる
-  // やり直しは同じ中身をもう一つ作ることになるので、もう一度聞く。
+  if (!ownerId) {
+    throw new Error("Storage upload completion requires an owner identity");
+  }
+  const completion = { uploadId: upload.id, body, ownerId };
+  persistPendingStorageUploadCompletion(completion);
+  return resumeStorageUploadCompletion(completion);
+}
+
+export async function resumeStorageUploadCompletion(
+  pending: PendingStorageUploadCompletion,
+): Promise<UploadOutcome> {
+  // A completion response can be committed while its response is lost. Do not
+  // make that irreversible request unless the opaque handle is durable in at
+  // least one browser store; otherwise a reload would force a new upload id.
+  if (!persistPendingStorageUploadCompletion(pending)) {
+    return { ok: false, errorCode: "storagePersistenceUnavailable", pendingCompletion: pending };
+  }
   for (let attempt = 1; attempt <= COMPLETION_ATTEMPTS; attempt++) {
     let finished: Response;
     try {
-      finished = await postCompletion(upload.id, body);
+      finished = await postCompletion(pending.uploadId, pending.body);
     } catch {
       if (attempt === COMPLETION_ATTEMPTS) {
-        return { ok: false, errorCode: "uploadFailed" };
+        return {
+          ok: false,
+          errorCode: "uploadFailed",
+          pendingCompletion: pending,
+        };
       }
       await new Promise((resolve) =>
         setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
@@ -185,7 +390,11 @@ export async function uploadStorageFile(
     }
     if (finished.status >= 500) {
       if (attempt === COMPLETION_ATTEMPTS) {
-        return { ok: false, errorCode: "uploadFailed" };
+        return {
+          ok: false,
+          errorCode: "uploadFailed",
+          pendingCompletion: pending,
+        };
       }
       await new Promise((resolve) =>
         setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
@@ -193,23 +402,36 @@ export async function uploadStorageFile(
       continue;
     }
     if (!finished.ok) {
-      return { ok: false, errorCode: await errorCodeOf(finished) };
+      const errorCode = await errorCodeOf(finished);
+      if (!TERMINAL_COMPLETION_ERRORS.has(errorCode)) {
+        return { ok: false, errorCode, pendingCompletion: pending };
+      }
+      discardPendingStorageUploadCompletion(pending.uploadId, pending.ownerId);
+      return { ok: false, errorCode };
     }
     try {
-      return {
-        ok: true,
-        file: (await finished.json()) as { id: string; name: string; size: number },
-      };
+      const result: unknown = await finished.json();
+      if (!isCompletedStorageFile(result)) throw new Error("Invalid storage upload completion");
+      discardPendingStorageUploadCompletion(pending.uploadId, pending.ownerId);
+      return { ok: true, file: result };
     } catch {
       if (attempt === COMPLETION_ATTEMPTS) {
-        return { ok: false, errorCode: "uploadFailed" };
+        return {
+          ok: false,
+          errorCode: "uploadFailed",
+          pendingCompletion: pending,
+        };
       }
       await new Promise((resolve) =>
         setTimeout(resolve, COMPLETION_RETRY_MILLISECONDS * attempt),
       );
     }
   }
-  return { ok: false, errorCode: "uploadFailed" };
+  return {
+    ok: false,
+    errorCode: "uploadFailed",
+    pendingCompletion: pending,
+  };
 }
 
 function postStart(body: string): Promise<Response> {
@@ -270,4 +492,8 @@ async function errorCodeOf(response: Response): Promise<string> {
   } catch {
     return "uploadFailed";
   }
+}
+
+export function isTerminalStorageUploadError(errorCode: string): boolean {
+  return TERMINAL_COMPLETION_ERRORS.has(errorCode);
 }

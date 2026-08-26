@@ -11,17 +11,30 @@ import {
   aiRequestNameOf,
   blockedReason,
   blocksSubmit,
+  canSubmitModelRequest,
   canSubmitAiRequest,
   commitAiRequestName,
+  correctedModelId,
+  heldAiRequestModels,
+  holdsAiRequestModel,
   holdsAiRequestName,
   keepsIdempotencyKey,
   newAiRequestNames,
   fileFingerprint,
   keepModelForHeldRequest,
+  mergeHeldModelCapabilities,
+  mergeHeldRequestCapabilities,
+  modelsWithHeldRequests,
   readyAiRequestNames,
   requestSignature,
   seedValue,
   settleAiRequestName,
+  reduceAiRequestRecovery,
+  digestAiRequestSignature,
+  aiRecoveryStorageScope,
+  readAiRecoverySafely,
+  restoreAiRecoveryEntries,
+  serializeAiRecoveryEntries,
   type AiAccess,
   type AiScreenModel,
 } from "../../apps/web/src/lib/ai-screen";
@@ -44,6 +57,120 @@ function accessWith(overrides: Partial<AiAccess> = {}): AiAccess {
 }
 
 describe("what an AI screen will send", () => {
+  it("persists only a SHA-256 identity digest, never request plaintext", async () => {
+    const prompt = "secret prompt text";
+    const digest = await digestAiRequestSignature(prompt);
+    const serialized = serializeAiRecoveryEntries([{
+      digest,
+      key: "key-a",
+      model: "",
+      capability: null,
+      updatedAt: Date.now(),
+    }]);
+    expect(serialized).not.toContain(prompt);
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("restores multiple entries while dropping corrupt and expired records", () => {
+    const now = 10_000_000;
+    const valid = { digest: "a".repeat(64), key: "key-a", model: "", capability: null, updatedAt: now };
+    const expired = { ...valid, digest: "b".repeat(64), updatedAt: now - 31 * 24 * 60 * 60 * 1000 };
+    const raw = JSON.stringify({ version: 1, entries: [valid, expired, { nope: true }] });
+    expect(restoreAiRecoveryEntries(raw, now)).toEqual([valid]);
+  });
+
+  it("keeps the screen ready when browser recovery storage cannot be read", () => {
+    const valid = {
+      digest: "a".repeat(64), key: "key-a", model: "", capability: null,
+      updatedAt: Date.now(),
+    };
+    expect(readAiRecoverySafely(() => JSON.stringify({ version: 1, entries: [valid] })))
+      .toEqual([valid]);
+    expect(readAiRecoverySafely(() => { throw new DOMException("blocked", "SecurityError"); }))
+      .toEqual([]);
+  });
+
+  it("keeps valid image and video capability snapshots", () => {
+    const now = 10_000_000;
+    const image = {
+      digest: "d".repeat(64), key: "image-key", model: "openai/gpt-image-1",
+      capability: {
+        aspectRatios: ["1:1"], backgrounds: ["auto"], seed: true,
+        maxReferenceImages: 2,
+      }, updatedAt: now,
+    };
+    const video = {
+      digest: "e".repeat(64), key: "video-key", model: "google/veo-3.1",
+      capability: {
+        resolutions: ["720p"], durations: [4, 8], aspectRatios: ["16:9"],
+        generateAudio: true, seed: false, firstFrame: true, lastFrame: false,
+      }, updatedAt: now - 1,
+    };
+    expect(restoreAiRecoveryEntries(
+      JSON.stringify({ version: 1, entries: [image, video] }), now,
+    )).toEqual([image, video]);
+  });
+
+  it("nulls malformed capabilities and garbage-collects unsafe snapshots", () => {
+    const now = 10_000_000;
+    const entry = (digest: string, capability: unknown) => ({
+      digest, key: "key", model: "openai/gpt-image-1", capability, updatedAt: now,
+    });
+    const malformed = entry("f".repeat(64), "image capability");
+    const wrongField = entry("0".repeat(64), {
+      aspectRatios: null, backgrounds: ["auto"], seed: true, maxReferenceImages: 1,
+    });
+    const deep = entry("1".repeat(64), {
+      aspectRatios: [{ a: { b: { c: { d: { e: { f: { g: true } } } } } } }],
+    });
+    const raw = JSON.stringify({ version: 1, entries: [malformed, wrongField, deep] });
+    const restored = restoreAiRecoveryEntries(raw, now);
+    expect(restored).toEqual([
+      { ...malformed, capability: null },
+      { ...wrongField, capability: null },
+      { ...deep, capability: null },
+    ]);
+  });
+
+  it("keeps only the newest duplicate digest and rejects oversized identity fields", () => {
+    const now = 10_000_000;
+    const base = {
+      digest: "2".repeat(64), key: "key", model: "", capability: null,
+      updatedAt: now - 10,
+    };
+    const newest = { ...base, key: "new-key", updatedAt: now };
+    const oversizedKey = {
+      ...base, digest: "3".repeat(64), key: "k".repeat(256), updatedAt: now,
+    };
+    const oversizedModel = {
+      ...base, digest: "4".repeat(64), model: "m".repeat(129), updatedAt: now,
+    };
+    expect(restoreAiRecoveryEntries(
+      JSON.stringify({ version: 1, entries: [base, newest, oversizedKey, oversizedModel] }), now,
+    )).toEqual([newest]);
+  });
+
+  it("keeps recovery through the server retention boundary but not beyond it", () => {
+    const now = 10_000_000;
+    const entry = { digest: "c".repeat(64), key: "key-c", model: "", capability: null,
+      updatedAt: now - 30 * 24 * 60 * 60 * 1000 };
+    const atBoundary = restoreAiRecoveryEntries(
+      serializeAiRecoveryEntries([entry]), now,
+    );
+    expect(atBoundary).toEqual([entry]);
+    const beyond = restoreAiRecoveryEntries(
+      serializeAiRecoveryEntries([{ ...entry, updatedAt: entry.updatedAt - 1 }]), now,
+    );
+    expect(beyond).toEqual([]);
+  });
+
+  it("isolates recovery records by account and operation", () => {
+    expect(aiRecoveryStorageScope("user-a", "image.generate"))
+      .not.toBe(aiRecoveryStorageScope("user-b", "image.generate"));
+    expect(aiRecoveryStorageScope("user-a", "image.generate"))
+      .not.toBe(aiRecoveryStorageScope("user-a", "audio.transcribe"));
+  });
+
   it("sends when nothing is in the way", () => {
     expect(canSubmitAiRequest(NOTHING_BLOCKS)).toBe(true);
   });
@@ -174,6 +301,52 @@ describe("which names a screen holds", () => {
     names = commitAiRequestName(names, "request", next);
     expect(aiRequestNameOf(names, "request")).toBe(first);
   });
+
+  it("keeps model identity and capability snapshots per outstanding request", () => {
+    const next = mint();
+    let names = readyAiRequestNames(newAiRequestNames(), next);
+    names = reduceAiRequestRecovery(names, {
+      type: "commit",
+      request: "request-a",
+      model: "removed-model",
+      capability: { seed: false },
+    }, next);
+    names = reduceAiRequestRecovery(names, {
+      type: "commit",
+      request: "request-b",
+      model: "removed-model",
+      capability: { seed: true },
+    }, next);
+
+    expect(names.heldModels).toEqual({
+      "request-a": "removed-model",
+      "request-b": "removed-model",
+    });
+    expect(names.heldCapabilities).toEqual({
+      "request-a": { seed: false },
+      "request-b": { seed: true },
+    });
+    // While any request is outstanding, the first capability is frozen for the
+    // model. The second request therefore cannot accidentally use a refreshed
+    // catalog and produce a third signature.
+    expect(mergeHeldRequestCapabilities(
+      {},
+      names.heldCapabilities,
+      names.heldModels,
+    )).toEqual({ "removed-model": { seed: false } });
+
+    const bKey = aiRequestNameOf(names, "request-b");
+    names = reduceAiRequestRecovery(names, { type: "settle", keeps: false });
+    expect(names.heldCapabilities["request-b"]).toBeUndefined();
+    expect(names.heldCapabilities["request-a"]).toEqual({ seed: false });
+
+    // Replaying A still uses its original key and body option after the
+    // catalog has changed; B had a separate key before it settled.
+    expect(aiRequestNameOf(names, "request-a")).toBe("name-1");
+    expect(bKey).toBe("name-2");
+    expect(names.heldModels["request-a"]).toBe("removed-model");
+    expect(names.heldModels["request-b"]).toBeUndefined();
+  });
 });
 
 describe("how a request is signed", () => {
@@ -269,6 +442,143 @@ describe("which model a screen names", () => {
     expect(kept.map((model) => model.id)).toEqual(["model-x", "model-gone"]);
     // 選べる形で残す。選べないと、その名前が指す支払い済みの結果へ戻れない。
     expect(kept.at(-1)?.available).toBe(true);
+  });
+
+  it("preserves a removed model only while its paid request is outstanding", () => {
+    expect(correctedModelId([], "model-gone", true)).toBe("model-gone");
+    expect(correctedModelId([
+      { id: "model-b", displayName: "B", costTier: null, available: true },
+    ], "model-gone", true)).toBe("model-gone");
+    expect(correctedModelId([
+      { id: "model-b", displayName: "B", costTier: null, available: true },
+    ], "model-gone", false)).toBe("model-b");
+  });
+
+  it("does not let a held model bless a different request", () => {
+    let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
+    names = commitAiRequestName(names, "request-a", () => "key-b", "model-gone");
+    expect(holdsAiRequestName(names, "request-a")).toBe(true);
+    expect(holdsAiRequestName(names, "request-b")).toBe(false);
+    expect(holdsAiRequestModel(names, "model-gone")).toBe(true);
+    expect(correctedModelId(offered, "model-gone", true)).toBe("model-gone");
+    expect(canSubmitModelRequest(offered, "model-gone", true, false)).toBe(false);
+    expect(canSubmitModelRequest(offered, "model-x", true, false)).toBe(false);
+    expect(canSubmitModelRequest(offered, "model-x", true, true)).toBe(true);
+  });
+
+  it("keeps a removed held model selected while restoring A after A to B", () => {
+    const catalog = [
+      { id: "model-b", displayName: "B", costTier: null, available: true },
+    ] as const;
+    let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
+    names = commitAiRequestName(names, "request-a", () => "key-b", "model-a");
+    names = settleAiRequestName(names, true);
+    names = commitAiRequestName(names, "request-b", () => "key-c", "model-b");
+    names = settleAiRequestName(names, true);
+
+    // The catalog can briefly be empty during a refresh. The held A identity
+    // must survive that render and the later B catalog, rather than converging
+    // to an empty/default model.
+    expect(correctedModelId([], "model-a", true)).toBe("model-a");
+    expect(correctedModelId(catalog, "model-a", true)).toBe("model-a");
+    expect(
+      modelsWithHeldRequests(catalog, heldAiRequestModels(names)).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["model-b", "model-a"]);
+    expect(correctedModelId(catalog, "model-a", true)).toBe("model-a");
+    // Merely selecting A is not a new paid run: its fields must first restore
+    // the exact held signature. Once restored, the original key is reused.
+    expect(canSubmitModelRequest(catalog, "model-a", true, false)).toBe(false);
+    expect(canSubmitModelRequest(catalog, "model-a", true, true)).toBe(true);
+    expect(aiRequestNameOf(names, "request-a")).toBe("key-a");
+    expect(aiRequestNameOf(names, "request-b")).toBe("key-b");
+  });
+
+  it("freezes capability snapshots for removed held models", () => {
+    const snapshots: Record<string, {
+      aspectRatios?: string[];
+      seed?: boolean;
+      generateAudio?: boolean;
+      firstFrame?: boolean;
+      lastFrame?: boolean;
+    }> = {};
+    const first = mergeHeldModelCapabilities(
+      {
+        "model-a": {
+          aspectRatios: ["1:1"],
+          seed: false,
+          generateAudio: false,
+          firstFrame: false,
+          lastFrame: true,
+        },
+      },
+      snapshots,
+      [],
+    );
+    expect(first["model-a"]?.aspectRatios).toEqual(["1:1"]);
+    expect(first["model-a"]?.seed).toBe(false);
+    const afterRemoval = mergeHeldModelCapabilities(
+      {},
+      snapshots,
+      ["model-a"],
+    );
+    expect(afterRemoval["model-a"]?.generateAudio).toBe(false);
+    expect(afterRemoval["model-a"]?.firstFrame).toBe(false);
+    expect(afterRemoval["model-a"]?.lastFrame).toBe(true);
+    expect(afterRemoval["model-a"]?.seed).toBe(false);
+    const afterMutation = mergeHeldModelCapabilities(
+      { "model-a": { seed: true } },
+      snapshots,
+      ["model-a"],
+    );
+    expect(afterMutation["model-a"]?.seed).toBe(false);
+    const afterSettle = mergeHeldModelCapabilities(
+      { "model-b": { seed: true } },
+      snapshots,
+      [],
+    );
+    expect(afterSettle["model-a"]).toBeUndefined();
+  });
+
+  it("freezes an absent capability before it appears for a held request", () => {
+    const snapshots: Record<string, { seed?: boolean } | null> = {};
+    expect(
+      mergeHeldModelCapabilities({}, snapshots, [], ["model-a"])["model-a"],
+    ).toBeUndefined();
+
+    // The original request used unrestricted fallback semantics. Once it is
+    // held, a provider recovery that publishes restrictions must not change it.
+    const appeared = mergeHeldModelCapabilities(
+      { "model-a": { seed: false } },
+      snapshots,
+      ["model-a"],
+      ["model-a"],
+    );
+    expect(appeared["model-a"]).toBeUndefined();
+
+    const afterSettle = mergeHeldModelCapabilities(
+      { "model-a": { seed: false } },
+      snapshots,
+      [],
+      ["model-a"],
+    );
+    expect(afterSettle["model-a"]?.seed).toBe(false);
+  });
+
+  it("remembers the original model alongside an idempotency key", () => {
+    let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
+    names = commitAiRequestName(names, "request-a", () => "key-b", "model-gone");
+    expect(names.heldModels["request-a"]).toBe("model-gone");
+    names = settleAiRequestName(names, false);
+    expect(names.heldModels["request-a"]).toBeUndefined();
+  });
+
+  it("retains an explicit model-less identity while it is outstanding", () => {
+    let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
+    names = commitAiRequestName(names, "request-a", () => "key-b", "");
+    expect(correctedModelId(offered, "", true)).toBe("");
+    expect(names.heldModels["request-a"]).toBe("");
   });
 
   it("leaves the list alone when the model is still on it", () => {

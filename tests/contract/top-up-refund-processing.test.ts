@@ -138,7 +138,7 @@ describe("durable top-up refund processing", () => {
         stripeCheckoutSessionId: "cs_raced",
         expiresAt,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe("stored-for-refund");
     expect(database.state.topUpCheckoutAttempts.get("attempt-1")).toMatchObject({
       status: "refund_required",
       stripeCheckoutSessionId: "cs_raced",

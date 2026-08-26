@@ -31,6 +31,7 @@ import {
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  aiApiMultipartBodyLimit,
 } from "../../packages/api/src/ai/upload-limits";
 import {
   getAiRequestIdentity,
@@ -1657,7 +1658,7 @@ describe("v3 AI endpoints contract", () => {
         method: "POST",
         headers: {
           "content-type": "multipart/form-data; boundary=test",
-          "content-length": String(MAX_AI_IMAGE_UPLOAD_BYTES + 64 * 1024 + 1),
+          "content-length": String(aiApiMultipartBodyLimit("/api/v3/ai/images/edit")! + 1),
           ...(await authHeaders()),
         },
         body: "--test--",
@@ -1959,7 +1960,7 @@ describe("v3 AI endpoints contract", () => {
         headers: {
           "content-type": "multipart/form-data; boundary=test",
           "content-length": String(
-            MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + 64 * 1024 + 1,
+            aiApiMultipartBodyLimit("/api/v3/ai/transcriptions")! + 1,
           ),
           ...(await authHeaders()),
         },
@@ -2806,7 +2807,7 @@ describe("v3 AI endpoints contract", () => {
         headers: {
           "content-type": "multipart/form-data; boundary=test",
           "content-length": String(
-            MAX_AI_VIDEO_FRAME_UPLOAD_BYTES * 2 + 64 * 1024 + 1,
+            aiApiMultipartBodyLimit("/api/v3/ai/videos/frames")! + 1,
           ),
           ...(await authHeaders()),
         },
@@ -3574,7 +3575,7 @@ describe("v3 AI endpoints contract", () => {
 
         const result = await requestOversizedChunkedBody({
           path,
-          maximumBytes,
+        maximumBytes: aiApiMultipartBodyLimit(path)!,
         });
 
         expect(result.response.status).toBe(413);
@@ -3594,7 +3595,7 @@ describe("v3 AI endpoints contract", () => {
 
       const result = await requestOversizedChunkedBody({
         path: "/api/v3/ai/transcriptions",
-        maximumBytes: MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+        maximumBytes: aiApiMultipartBodyLimit("/api/v3/ai/transcriptions")!,
         forgedContentLength: "1",
       });
 

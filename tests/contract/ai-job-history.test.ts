@@ -9,7 +9,9 @@ import {
   findFileForContentAccess,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
+  prepareAiJobDeletionByUserId,
   setDbProvider,
+  StorageCleanupBusyError,
   updateFileVisibility,
   upsertSubscription,
 } from "@beutl/db";
@@ -537,6 +539,111 @@ describe("v3 AI job history contract", () => {
       deletedAt: expect.any(Date),
     });
     expect(state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("removes an expired cleanup claim before detaching a shared output", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "shared-expired-claim.png",
+      objectKey: "ai/images/shared-expired-claim",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PRIVATE",
+    });
+    const job = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "shared expired claim", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+    const expiredAt = new Date(Date.now() - 1_000);
+    state.aiStorageCleanups.set(file.objectKey, {
+      objectKey: file.objectKey,
+      aiJobId: job.id,
+      uploadId: null,
+      leaseToken: "expired-cleanup-claim",
+      state: "cleanup",
+      notBefore: expiredAt,
+      createdAt: expiredAt,
+      updatedAt: expiredAt,
+    });
+    const findFile = prisma.file.findFirst.bind(prisma.file);
+    vi.spyOn(prisma.file, "findFirst").mockImplementation(async (args) => {
+      const output = await findFile(args);
+      return output
+        ? { ...output, Package: [{ id: "package-1" }] }
+        : null;
+    });
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.files.has(file.id)).toBe(true);
+    expect(state.aiJobs.get(job.id)?.resultFileId).toBeNull();
+    expect(state.aiStorageCleanups.has(file.objectKey)).toBe(false);
+
+    await expect(
+      reconcileAiJobs(new Date(Date.now() + 10 * 60 * 1000)),
+    ).resolves.toMatchObject({
+      cleanupInspected: 0,
+      cleanupDeleted: 0,
+      cleanupErrors: 0,
+    });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(state.files.has(file.id)).toBe(true);
+  });
+
+  it("keeps a shared output attached while its cleanup lease is fresh", async () => {
+    const file = await createFile({
+      userId: USER_ID,
+      name: "shared-active-claim.png",
+      objectKey: "ai/images/shared-active-claim",
+      size: 4,
+      mimeType: "image/png",
+      visibility: "PRIVATE",
+    });
+    const job = await seedJob({
+      kind: "image",
+      inputParams: { prompt: "shared active claim", size: "1024x1024" },
+      createdAt: new Date("2026-08-03T00:00:00.000Z"),
+      resultFileId: file.id,
+    });
+    const leaseExpiresAt = new Date(Date.now() + 60_000);
+    state.aiStorageCleanups.set(file.objectKey, {
+      objectKey: file.objectKey,
+      aiJobId: job.id,
+      uploadId: null,
+      leaseToken: "active-cleanup-claim",
+      state: "cleanup",
+      notBefore: leaseExpiresAt,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const findFile = prisma.file.findFirst.bind(prisma.file);
+    vi.spyOn(prisma.file, "findFirst").mockImplementation(async (args) => {
+      const output = await findFile(args);
+      return output
+        ? { ...output, Package: [{ id: "package-1" }] }
+        : null;
+    });
+
+    await expect(
+      prepareAiJobDeletionByUserId({ userId: USER_ID, jobId: job.id }),
+    ).rejects.toBeInstanceOf(StorageCleanupBusyError);
+
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      resultFileId: file.id,
+      deletedAt: null,
+    });
+    expect(state.aiStorageCleanups.get(file.objectKey)).toMatchObject({
+      leaseToken: "active-cleanup-claim",
+      notBefore: leaseExpiresAt,
+    });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(state.files.has(file.id)).toBe(true);
   });
 
   it("scrubs and hides the job while retaining cleanup metadata when object deletion fails", async () => {

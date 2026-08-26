@@ -60,6 +60,7 @@ describe("resumable account deletion", () => {
       async (callback: (prisma: object) => Promise<unknown>) =>
         await callback({ transaction: true }),
     );
+    mocks.prepareAccountDeletionOutboxes.mockResolvedValue({ unboundCheckoutRecoveries: 0 });
   });
 
   it("durably authorizes before Stripe and deletes locally only after closure", async () => {
@@ -72,6 +73,7 @@ describe("resumable account deletion", () => {
     expect(mocks.closeStripeCustomerForAccountDeletion).toHaveBeenCalledWith({
       userId: "user-1",
       stripeCustomerId: "cus_1",
+      deletionAuthorizedAt: intent.authorizedAt,
     });
     expect(
       mocks.authorizeAccountDeletion.mock.invocationCallOrder[0],
@@ -194,7 +196,7 @@ describe("resumable account deletion", () => {
     ).rejects.toThrow("audit unavailable");
 
     expect(mocks.enqueueUserStorageCleanups).toHaveBeenCalled();
-    expect(mocks.prepareAccountDeletionOutboxes).not.toHaveBeenCalled();
+    expect(mocks.prepareAccountDeletionOutboxes).toHaveBeenCalled();
     expect(mocks.deleteUserById).not.toHaveBeenCalled();
   });
 });

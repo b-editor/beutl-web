@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FormEvent,
 } from "react";
 import { MAX_AI_TRANSCRIPTION_UPLOAD_BYTES } from "@beutl/core";
 import {
@@ -32,6 +33,7 @@ import {
   extractAudioAsWav,
   isVideoFile,
   maximumExtractableSeconds,
+  createAudioExtractionSelectionController,
   type AudioExtractionFailure,
 } from "@/lib/audio-extract";
 import {
@@ -54,11 +56,14 @@ import {
   CopyButton,
   DownloadButton,
   IdempotencyKeyField,
+  IDEMPOTENCY_KEY_FIELD,
   ResultPanel,
   ResultShimmer,
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  canSubmitModelRequest,
+  correctedModelId,
   requestSignature,
   useFileFingerprints,
   useAiRequestNames,
@@ -104,10 +109,12 @@ function baseNameOf(fileName: string): string {
 
 export function TranscribeForm({
   lang,
+  userId,
   access,
   languages,
 }: {
   lang: string;
+  userId: string;
   access: AiAccess;
   // Resolved on the server, exactly as the translation screen does it; see
   // languageOptions in the page.
@@ -131,23 +138,22 @@ export function TranscribeForm({
   // 待っているあいだに別の動画を選べる——遅れて終わった前の一本が欄と画面の
   // 持ちものを塗り替えると、画面はこちらの名前を見せながら、あちらの音声を
   // 送ることになる。
-  const extraction = useRef(0);
+  const extraction = useRef(createAudioExtractionSelectionController<File | null>());
   const [extractionError, setExtractionError] =
     useState<AudioExtractionFailure | null>(null);
   const [language, setLanguage] = useState("");
   // 送ることになる音声の見分け。動画から抜き出したときは、抜き出したほうを見る
   // ——送られるのはそちらで、サーバーはそれを指紋にする。
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const names = useAiRequestNames(userId, "audio.transcribe");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["audio.transcribe"] ?? []),
   );
-  const transcribeModels = access.models["audio.transcribe"] ?? [];
-  useEffect(() => {
-    if (model !== "" && !transcribeModels.some((entry) => entry.id === model)) {
-      setModel(defaultModelId(transcribeModels));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcribeModels]);
+  const transcribeModels = useMemo(
+    () => access.models["audio.transcribe"] ?? [],
+    [access.models],
+  );
   const [maxLineLength, setMaxLineLength] = useState<string>("42");
   const [maxLineCount, setMaxLineCount] = useState<string>("2");
   // What the focused timing field currently reads. A number input reports ""
@@ -170,7 +176,6 @@ export function TranscribeForm({
     setDetectedLanguage(state.language ?? null);
   }, [state.segments, state.words, state.language]);
 
-  const names = useAiRequestNames();
   const blocked = blockedReason(
     access,
     ["audio.transcribe"],
@@ -200,62 +205,109 @@ export function TranscribeForm({
     audioFile,
     audioContent,
   ]);
+  useEffect(() => {
+    if (names.ready && !readingAudio && !extracting) void names.ensure(signature);
+  }, [names.ready, names, readingAudio, extracting, signature]);
+  const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
+  useEffect(() => {
+    if (readingAudio || extracting) return;
+    if (names.hasRestoredModel("") && !names.holdsModel("") && model !== "") {
+      setModel("");
+      return;
+    }
+    const corrected = correctedModelId(
+      transcribeModels,
+      model,
+      holdsSelectedModel,
+    );
+    if (corrected !== model) setModel(corrected);
+  }, [extracting, holdsSelectedModel, model, names, readingAudio, transcribeModels]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
   // 支払い済みの結果を取りに行く道が閉じる。
   const holdsName = names.holds(signature);
-  const submitBlocked = blocksSubmit(blocked, holdsName);
-  const models = access.models["audio.transcribe"] ?? [];
+  const submitBlocked = blocksSubmit(blocked, holdsName) ||
+    !canSubmitModelRequest(
+      transcribeModels,
+      model,
+      holdsSelectedModel,
+      holdsName,
+    );
+  const models = names.modelsWithHeld(transcribeModels);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitBlocked || isPending || readingAudio || extracting) {
+      return;
+    }
+    if (!names.ready) return;
+    const idempotencyKey = await names.ensureAndGet(signature);
+    if (!idempotencyKey) return;
+    const formData = new FormData(event.currentTarget);
+    formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
+    names.commitWithModel(signature, model, null);
+    dispatch(formData);
+  }
 
   // A video is converted here rather than uploaded: the endpoint refuses a file
   // that carries video, and the audio alone is a fraction of the size. The
   // converted file replaces what the field holds, so the form still submits
   // exactly what the user picked.
+  async function processAudioSelections() {
+    for (;;) {
+      const selection = extraction.current.takeLatest();
+      if (!selection) {
+        extraction.current.finish();
+        setExtracting(false);
+        return;
+      }
+      const { generation, value: file } = selection;
+      if (!file || !isVideoFile(file)) continue;
+
+      setExtracting(true);
+      try {
+        const audio = await extractAudioAsWav(
+          file,
+          MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+        );
+        // A newer selection is already represented by the input and state. The
+        // old decode may finish, but it must never write its WAV over it.
+        if (!extraction.current.isCurrent(generation)) continue;
+
+        const input = fileInput.current;
+        if (!input) continue;
+        const transfer = new DataTransfer();
+        transfer.items.add(audio);
+        input.files = transfer.files;
+        setAudioFile(audio);
+      } catch (error) {
+        if (!extraction.current.isCurrent(generation)) continue;
+        const input = fileInput.current;
+        if (input) input.value = "";
+        setAudioFile(null);
+        setExtractionError(
+          error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
+        );
+      }
+    }
+  }
+
   async function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
     const file = input.files?.[0];
-    // 選び直した時点で番号を進める。動画を抜いている最中に音声を選んでも、
-    // 外しても、走っている抜き出しはもう誰も待っていない——動画のときだけ
-    // 進めていては、遅れて終わったほうが欄と持ちものを取り返し、画面が見せて
-    // いる名前で別の音声が課金される。
-    const generation = ++extraction.current;
+    const { accepted } = extraction.current.begin(file ?? null);
+    fileInput.current = input;
+    // Advance the generation for every selection. Audio, removal, and video
+    // replacement must all invalidate an in-flight extraction.
     setExtractionError(null);
     setAudioFile(file ?? null);
     if (!file) {
       setAudioName("transcription");
-      setExtracting(false);
-      return;
+    } else {
+      setAudioName(baseNameOf(file.name));
     }
-    setAudioName(baseNameOf(file.name));
-    if (!isVideoFile(file)) {
-      setExtracting(false);
-      return;
-    }
-
     setExtracting(true);
-    try {
-      const audio = await extractAudioAsWav(
-        file,
-        MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
-      );
-      // 追い越されていた。この音声はもう誰も待っていないので、置いていく。
-      if (generation !== extraction.current) return;
-
-      const transfer = new DataTransfer();
-      transfer.items.add(audio);
-      input.files = transfer.files;
-      setAudioFile(audio);
-    } catch (error) {
-      if (generation !== extraction.current) return;
-
-      input.value = "";
-      setAudioFile(null);
-      setExtractionError(
-        error instanceof AudioExtractionError ? error.reason : "unsupportedFormat",
-      );
-    } finally {
-      if (generation === extraction.current) setExtracting(false);
-    }
+    if (accepted) void processAudioSelections();
   }
 
   // The field keeps showing what was typed; the cue only moves once that text
@@ -375,7 +427,7 @@ export function TranscribeForm({
     <Card>
       <form
         action={dispatch}
-        onSubmit={() => names.commit(signature)}
+        onSubmit={handleSubmit}
         className="flex flex-col gap-4 p-6"
       >
         <IdempotencyKeyField name={names.nameFor(signature)} />
@@ -387,6 +439,7 @@ export function TranscribeForm({
             type="file"
             accept="audio/*,video/*"
             required
+            ref={fileInput}
             onChange={handleAudioChange}
           />
           <p className="text-xs text-muted-foreground">

@@ -29,6 +29,9 @@ function createPaymentStatePrisma() {
   let concurrentHistoryAfterRollback: History | null = null;
   let raceNextHistoryCreate = false;
   let transactionAttempts = 0;
+  let userExists = true;
+  let deletedAttemptCustomer: string | null = null;
+  const refundOutboxes: unknown[] = [];
   const packageKey = (userId: string, packageId: string) =>
     `${userId}:${packageId}`;
   const clone = (history: History): History => ({
@@ -152,6 +155,20 @@ function createPaymentStatePrisma() {
   const packageDelegate = {
     findFirst: async () => (packageAvailable ? { id: "package-1" } : null),
   };
+  const user = {
+    findUnique: async () => (userExists ? { id: "user-1" } : null),
+  };
+  const accountDeletionIntent = {
+    findFirst: async () => null,
+  };
+  const packageCheckoutAttempt = {
+    findFirst: async () => deletedAttemptCustomer ? { customerId: deletedAttemptCustomer } : null,
+  };
+  const packagePaymentRefundAttempt = {
+    findUnique: async () => null,
+    create: async ({ data }: any) => { refundOutboxes.push(data); return data; },
+    update: async ({ data }: any) => data,
+  };
   const prisma = {
     package: packageDelegate,
     userPaymentHistory,
@@ -161,6 +178,10 @@ function createPaymentStatePrisma() {
         userPaymentHistory: typeof userPaymentHistory;
         userPackage: typeof userPackage;
         package: typeof packageDelegate;
+        user: typeof user;
+        accountDeletionIntent: typeof accountDeletionIntent;
+        packageCheckoutAttempt: typeof packageCheckoutAttempt;
+        packagePaymentRefundAttempt: typeof packagePaymentRefundAttempt;
       }) => Promise<T>,
     ) => {
       transactionAttempts++;
@@ -173,6 +194,10 @@ function createPaymentStatePrisma() {
       try {
         return await callback({
           package: packageDelegate,
+          user,
+          accountDeletionIntent,
+          packageCheckoutAttempt,
+          packagePaymentRefundAttempt,
           userPaymentHistory,
           userPackage,
         });
@@ -212,6 +237,13 @@ function createPaymentStatePrisma() {
     seedPackage(userId: string, packageId: string, paymentManaged: boolean) {
       packages.set(packageKey(userId, packageId), { paymentManaged });
     },
+    setUserExists(value: boolean) {
+      userExists = value;
+    },
+    setDeletedAttempt(customerId: string | null) {
+      deletedAttemptCustomer = customerId;
+    },
+    refunds() { return refundOutboxes; },
     removePackage(userId: string, packageId: string) {
       packages.delete(packageKey(userId, packageId));
     },
@@ -717,6 +749,24 @@ describe("package payment entitlement state", () => {
         },
       }),
     ).rejects.toThrow("Package payment identity cannot be rebound");
+  });
+
+  it("schedules a durable refund when a delayed success arrives after the User was deleted", async () => {
+    store.setUserExists(false);
+    await expect(recordSuccess("pi_deleted")).resolves.toBeUndefined();
+    expect(store.history("pi_deleted")).toBeNull();
+    expect(store.refunds()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ paymentIntentId: "pi_deleted", userId: "user-1", packageId: "package-1", amount: 1_000, currency: "usd" }),
+    ]));
+  });
+
+  it("schedules a durable refund from a deleted attempt customer identity", async () => {
+    store.setDeletedAttempt("cus_deleted");
+    await expect(recordSuccess("pi_deleted_attempt")).resolves.toBeUndefined();
+    expect(store.history("pi_deleted_attempt")).toBeNull();
+    expect(store.refunds()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ paymentIntentId: "pi_deleted_attempt", customerId: "cus_deleted" }),
+    ]));
   });
 
   async function recordSuccess(paymentId: string) {

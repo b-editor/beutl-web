@@ -71,12 +71,12 @@ export async function setTopUpCheckoutSession({
     data: { stripeCheckoutSessionId, expiresAt },
   });
   if (open.count === 1) {
-    return true;
+    return "stored-for-checkout" as const;
   }
 
   // Account deletion can race the Stripe create call. Preserve the Session so
   // the refund processor can expire it, but tell checkout not to redirect.
-  await db.topUpCheckoutAttempt.updateMany({
+  const refund = await db.topUpCheckoutAttempt.updateMany({
     where: {
       id: attemptId,
       status: "refund_required",
@@ -85,7 +85,43 @@ export async function setTopUpCheckoutSession({
     },
     data: { stripeCheckoutSessionId, expiresAt },
   });
-  return false;
+  return refund.count === 1 ? "stored-for-refund" as const : "not-stored" as const;
+}
+
+export async function setTopUpCheckoutParams({ attemptId, paramsJson, prisma }: { attemptId: string; paramsJson: string; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, stripeCheckoutSessionId: null, accountDeletionAt: null }, data: { paramsJson } });
+}
+
+export async function claimDetachedTopUpCheckoutAttempts({ now, leaseToken, leaseExpiresAt, limit = 50, prisma }: { now: Date; leaseToken: string; leaseExpiresAt: Date; limit?: number; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  const rows = await db.topUpCheckoutAttempt.findMany({ where: { accountDeletionAt: { not: null }, recoveryInterventionAt: null, stripeCheckoutSessionId: null, status: { notIn: ["fulfilled", "refunded", "refund_not_required"] }, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }], AND: [{ OR: [{ recoveryNotBefore: null }, { recoveryNotBefore: { lte: now } }] }] }, take: limit });
+  const claimed = [];
+  for (const row of rows) {
+    const updated = await db.topUpCheckoutAttempt.updateMany({ where: { id: row.id, status: row.status, stripeCheckoutSessionId: null, recoveryLeaseToken: row.recoveryLeaseToken, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, data: { recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: { increment: 1 } } });
+    if (updated.count === 1) claimed.push({ ...row, recoveryLeaseToken: leaseToken });
+  }
+  return claimed;
+}
+
+export async function clearDetachedTopUpCheckoutRecovery({ attemptId, leaseToken, lastError, notBefore, prisma }: { attemptId: string; leaseToken: string; lastError?: string; notBefore?: Date; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryLastError: lastError ?? null, recoveryNotBefore: lastError ? (notBefore ?? new Date()) : null } });
+}
+
+export async function completeDetachedTopUpCheckoutRecovery({ attemptId, leaseToken, stripeCheckoutSessionId, expiresAt, prisma }: { attemptId: string; leaseToken: string; stripeCheckoutSessionId: string; expiresAt: Date; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null, accountDeletionAt: { not: null } }, data: { stripeCheckoutSessionId, expiresAt, status: "refund_required", refundNotBefore: new Date(), recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
+}
+
+export async function markDetachedTopUpCheckoutRecoveryIntervention({ attemptId, leaseToken, lastError, prisma }: { attemptId: string; leaseToken: string; lastError: string; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken }, data: { recoveryInterventionAt: new Date(), recoveryLastError: lastError, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
+}
+
+export async function markDetachedTopUpCheckoutRecoveryTerminal({ attemptId, leaseToken, prisma }: { attemptId: string; leaseToken: string; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { status: "refund_not_required", recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: null } });
 }
 
 export async function findTopUpCheckoutAttempt({

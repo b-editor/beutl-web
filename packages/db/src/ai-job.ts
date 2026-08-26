@@ -13,6 +13,35 @@ const AI_JOB_RESULT_FILE_SELECT = {
   mimeType: true,
 } as const;
 
+export class StorageCleanupBusyError extends Error {
+  readonly objectKeys: string[];
+
+  constructor(objectKeys: string[]) {
+    super("Storage cleanup is currently leased by another operation");
+    this.name = "StorageCleanupBusyError";
+    this.objectKeys = objectKeys;
+  }
+}
+
+async function findStorageCleanupForMutation(
+  tx: PrismaTransaction,
+  objectKey: string,
+  now: Date,
+) {
+  const row = await tx.aiStorageCleanup.findFirst({
+    where: { objectKey },
+    select: { objectKey: true, leaseToken: true, notBefore: true },
+  });
+  // A lease token means a cleaner owns the remote side effect, even after its
+  // deadline. Only the cleanup claimant may replace an expired token; writers
+  // must wait for that claimant to finish or they could publish a new object
+  // while the old cleaner is still deleting the same key.
+  if (row?.leaseToken) {
+    throw new StorageCleanupBusyError([objectKey]);
+  }
+  return row;
+}
+
 export type AiJobHistoryCursor = {
   createdAt: Date;
   id: string;
@@ -568,19 +597,29 @@ export async function completeAiJobWithOutput({
           objectKey: file.objectKey,
           aiJobId: jobId,
           state: "writing",
+          leaseToken: null,
         },
         data: {
           state: "cleanup",
           notBefore: retentionExpiresAt,
+          leaseToken: null,
         },
       });
       if (retained.count !== 1) {
         throw new Error(`AI output ${file.objectKey} retention was not saved`);
       }
     } else {
-      await tx.aiStorageCleanup.deleteMany({
-        where: { objectKey: file.objectKey },
+      const deletedCleanup = await tx.aiStorageCleanup.deleteMany({
+        where: {
+          objectKey: file.objectKey,
+          aiJobId: jobId,
+          state: "writing",
+          leaseToken: null,
+        },
       });
+      if (deletedCleanup.count !== 1) {
+        throw new Error(`AI output ${file.objectKey} cleanup intent changed`);
+      }
     }
     return output;
   };
@@ -784,6 +823,42 @@ export async function prepareAiJobDeletionByUserId({
       outputFile.Release.length > 0
     );
     if (sharedOutput) {
+      const cleanupSnapshot = await tx.aiStorageCleanup.findFirst({
+        where: { objectKey: outputFile.objectKey },
+        select: {
+          objectKey: true,
+          aiJobId: true,
+          uploadId: true,
+          leaseToken: true,
+          state: true,
+          notBefore: true,
+        },
+      });
+      if (
+        cleanupSnapshot?.leaseToken &&
+        cleanupSnapshot.notBefore.getTime() <= Date.now()
+      ) {
+        // An expired cleanup lease may be taken over only through the same
+        // cleanup claimant used by the reclaimer. This path is a cleanup
+        // operation too; it must not mutate the row as a normal writer.
+        const claimed = await claimAiStorageCleanupForDeletion({
+          objectKey: cleanupSnapshot.objectKey,
+          state: cleanupSnapshot.state,
+          notBefore: cleanupSnapshot.notBefore,
+          now: new Date(),
+          leaseToken: cleanupSnapshot.leaseToken,
+          prisma: tx,
+        });
+        if (!claimed.claimed) {
+          throw new StorageCleanupBusyError([outputFile.objectKey]);
+        }
+        return { outcome: "prepared" as const, outputFile: null };
+      }
+      const cleanup = await findStorageCleanupForMutation(
+        tx,
+        outputFile.objectKey,
+        new Date(),
+      );
       const detached = await tx.aiJob.updateMany({
         where: {
           id: jobId,
@@ -795,27 +870,54 @@ export async function prepareAiJobDeletionByUserId({
       if (detached.count !== 1) {
         throw new Error(`Shared AI output for job ${jobId} could not be detached`);
       }
-      await tx.aiStorageCleanup.deleteMany({
-        where: { objectKey: outputFile.objectKey },
-      });
+      if (cleanup) {
+        const deletedCleanup = await tx.aiStorageCleanup.deleteMany({
+          where: {
+            objectKey: outputFile.objectKey,
+            leaseToken: cleanup.leaseToken,
+          },
+        });
+        if (deletedCleanup.count !== 1) {
+          throw new StorageCleanupBusyError([outputFile.objectKey]);
+        }
+      }
       return { outcome: "prepared" as const, outputFile: null };
     }
 
     if (outputFile) {
-      await tx.aiStorageCleanup.upsert({
-        where: { objectKey: outputFile.objectKey },
-        create: {
-          objectKey: outputFile.objectKey,
-          aiJobId: jobId,
-          state: "cleanup",
-          notBefore: new Date(),
-        },
-        update: {
-          aiJobId: jobId,
-          state: "cleanup",
-          notBefore: new Date(),
-        },
-      });
+      const now = new Date();
+      const existing = await findStorageCleanupForMutation(
+        tx,
+        outputFile.objectKey,
+        now,
+      );
+      if (existing) {
+        const updated = await tx.aiStorageCleanup.updateMany({
+          where: {
+            objectKey: outputFile.objectKey,
+            leaseToken: existing.leaseToken,
+          },
+          data: {
+            aiJobId: jobId,
+            state: "cleanup",
+            notBefore: now,
+            leaseToken: null,
+          },
+        });
+        if (updated.count !== 1) {
+          throw new StorageCleanupBusyError([outputFile.objectKey]);
+        }
+      } else {
+        await tx.aiStorageCleanup.create({
+          data: {
+            objectKey: outputFile.objectKey,
+            aiJobId: jobId,
+            state: "cleanup",
+            notBefore: now,
+            leaseToken: null,
+          },
+        });
+      }
     }
 
     return { outcome: "prepared" as const, outputFile };
@@ -873,8 +975,9 @@ export async function finalizeAiJobDeletionByUserId({
       }
     }
     if (outputObjectKey) {
+      await findStorageCleanupForMutation(tx, outputObjectKey, new Date());
       await tx.aiStorageCleanup.deleteMany({
-        where: { objectKey: outputObjectKey },
+        where: { objectKey: outputObjectKey, leaseToken: null },
       });
     }
   };
@@ -900,10 +1003,19 @@ export async function registerAiStorageCleanup({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiStorageCleanup.upsert({
-    where: { objectKey },
-    create: { objectKey, aiJobId, state, notBefore },
-    update: { aiJobId, state, notBefore },
+  const existing = await findStorageCleanupForMutation(db, objectKey, new Date());
+  if (existing) {
+    const updated = await db.aiStorageCleanup.updateMany({
+      where: { objectKey, leaseToken: existing.leaseToken },
+      data: { aiJobId, state, notBefore, leaseToken: null },
+    });
+    if (updated.count !== 1) {
+      throw new StorageCleanupBusyError([objectKey]);
+    }
+    return await db.aiStorageCleanup.findFirst({ where: { objectKey } });
+  }
+  return await db.aiStorageCleanup.create({
+    data: { objectKey, aiJobId, state, notBefore, leaseToken: null },
   });
 }
 
@@ -918,35 +1030,56 @@ export async function makeAiStorageCleanupDue({
 }) {
   const db = prisma ?? await getDb();
   const result = await db.aiStorageCleanup.updateMany({
-    where: { objectKey, state: "writing" },
+    where: { objectKey, state: "writing", leaseToken: null },
     data: { state: "cleanup", notBefore: now },
   });
   return result.count === 1;
 }
+
+// A cleanup claim may perform two remote storage operations and then a
+// transactional database finalization. Keep the row leased for the duration
+// of the longest expected remote operation so concurrent sweepers cannot both
+// act on the same object; an expired lease remains eligible for retry.
+export const AI_STORAGE_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
+
+export type AiStorageCleanupClaim = {
+  objectKey: string;
+  aiJobId: string | null;
+  uploadId: string | null;
+  leaseToken: string;
+  notBefore: Date;
+};
 
 export async function claimAiStorageCleanupForDeletion({
   objectKey,
   state,
   notBefore,
   now,
+  leaseToken = null,
   prisma,
 }: {
   objectKey: string;
   state: string;
   notBefore: Date;
   now: Date;
+  leaseToken?: string | null;
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    const nextLeaseToken = crypto.randomUUID();
     const result = await tx.aiStorageCleanup.updateMany({
       where: {
         objectKey,
         state,
         notBefore,
+        leaseToken,
       },
       data: {
         state: "cleanup",
-        notBefore: now,
+        notBefore: new Date(
+          now.getTime() + AI_STORAGE_CLEANUP_LEASE_MILLISECONDS,
+        ),
+        leaseToken: nextLeaseToken,
       },
     });
     if (result.count !== 1) {
@@ -955,10 +1088,30 @@ export async function claimAiStorageCleanupForDeletion({
 
     const cleanup = await tx.aiStorageCleanup.findFirst({
       where: { objectKey },
-      select: { aiJobId: true },
+      select: {
+        objectKey: true,
+        aiJobId: true,
+        uploadId: true,
+        leaseToken: true,
+        notBefore: true,
+      },
     });
+    if (!cleanup || cleanup.leaseToken !== nextLeaseToken) {
+      return { claimed: false as const, shouldDeleteObject: false as const };
+    }
+    const claimedCleanup: AiStorageCleanupClaim = {
+      objectKey: cleanup.objectKey,
+      aiJobId: cleanup.aiJobId,
+      uploadId: cleanup.uploadId,
+      leaseToken: nextLeaseToken,
+      notBefore: cleanup.notBefore,
+    };
     if (!cleanup?.aiJobId) {
-      return { claimed: true as const, shouldDeleteObject: true as const };
+      return {
+        claimed: true as const,
+        shouldDeleteObject: true as const,
+        cleanup: claimedCleanup,
+      };
     }
 
     const job = await tx.aiJob.findUnique({
@@ -966,7 +1119,11 @@ export async function claimAiStorageCleanupForDeletion({
       select: { id: true, userId: true, resultFileId: true },
     });
     if (!job?.resultFileId) {
-      return { claimed: true as const, shouldDeleteObject: true as const };
+      return {
+        claimed: true as const,
+        shouldDeleteObject: true as const,
+        cleanup: claimedCleanup,
+      };
     }
     const output = await tx.file.findFirst({
       where: { id: job.resultFileId, userId: job.userId },
@@ -983,7 +1140,11 @@ export async function claimAiStorageCleanupForDeletion({
       },
     });
     if (!output) {
-      return { claimed: true as const, shouldDeleteObject: true as const };
+      return {
+        claimed: true as const,
+        shouldDeleteObject: true as const,
+        cleanup: claimedCleanup,
+      };
     }
     if (output.objectKey !== objectKey) {
       throw new Error(
@@ -997,7 +1158,11 @@ export async function claimAiStorageCleanupForDeletion({
       output.PackageScreenshot.length > 0 ||
       output.Release.length > 0;
     if (!shared) {
-      return { claimed: true as const, shouldDeleteObject: true as const };
+      return {
+        claimed: true as const,
+        shouldDeleteObject: true as const,
+        cleanup: claimedCleanup,
+      };
     }
 
     const detached = await tx.aiJob.updateMany({
@@ -1011,7 +1176,12 @@ export async function claimAiStorageCleanupForDeletion({
     if (detached.count !== 1) {
       throw new Error(`Shared AI output for job ${job.id} could not be detached`);
     }
-    await tx.aiStorageCleanup.deleteMany({ where: { objectKey } });
+    const detachedCleanup = await tx.aiStorageCleanup.deleteMany({
+      where: { objectKey, leaseToken: nextLeaseToken },
+    });
+    if (detachedCleanup.count !== 1) {
+      throw new Error(`AI cleanup ${objectKey} claim changed before detach`);
+    }
     return { claimed: true as const, shouldDeleteObject: false as const };
   };
 
@@ -1058,19 +1228,29 @@ export async function deleteAiStorageCleanup({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  await db.aiStorageCleanup.deleteMany({ where: { objectKey } });
+  await findStorageCleanupForMutation(db, objectKey, new Date());
+  await db.aiStorageCleanup.deleteMany({
+    where: { objectKey, leaseToken: null },
+  });
 }
 
 export async function finalizeReconciledAiStorageCleanup({
   objectKey,
   aiJobId,
+  leaseToken,
   prisma,
 }: {
   objectKey: string;
   aiJobId: string | null;
+  leaseToken: string;
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    const claim = await tx.aiStorageCleanup.findFirst({
+      where: { objectKey, leaseToken },
+      select: { aiJobId: true },
+    });
+    if (!claim || claim.aiJobId !== aiJobId) return false;
     if (aiJobId) {
       const job = await tx.aiJob.findUnique({ where: { id: aiJobId } });
       if (job?.resultFileId) {
@@ -1107,14 +1287,13 @@ export async function finalizeReconciledAiStorageCleanup({
         }
       }
     }
-    await tx.aiStorageCleanup.deleteMany({ where: { objectKey } });
+    const finalized = await tx.aiStorageCleanup.deleteMany({
+      where: { objectKey, leaseToken },
+    });
+    return finalized.count === 1;
   };
 
-  if (prisma) {
-    await run(prisma);
-  } else {
-    await startTransaction(run);
-  }
+  return prisma ? await run(prisma) : await startTransaction(run);
 }
 
 export async function listDueAiStorageCleanups({

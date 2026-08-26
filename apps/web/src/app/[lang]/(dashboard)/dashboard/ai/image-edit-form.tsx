@@ -81,9 +81,11 @@ const OUTPAINT_EXPANSIONS = [10, 25, 50] as const;
 
 export function ImageEditForm({
   lang,
+  userId,
   access,
 }: {
   lang: string;
+  userId: string;
   access: AiAccess;
 }) {
   const { t } = useTranslation(lang);
@@ -106,7 +108,7 @@ export function ImageEditForm({
     useState<Record<string, string[]>>({});
   // 送信ごとの名前。依頼ごとに持つので、A を回収している最中に B を送っても
   // どちらの名前も残る。
-  const names = useAiRequestNames();
+  const names = useAiRequestNames(userId, "image.edit");
 
   const [chosenExpansion, setChosenExpansion] = useState<string>("25");
   const [isPreparing, startPreparing] = useTransition();
@@ -150,6 +152,14 @@ export function ImageEditForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
   const editTask = chosenTask;
+  useEffect(() => {
+    const restored = names.restoredModels();
+    if (restored.length === 0 || editTask === "") return;
+    setSentModelsByTask((current) => ({
+      ...current,
+      [editTask]: [...new Set([...(current[editTask] ?? []), ...restored])],
+    }));
+  }, [editTask, names]);
   const outpaintExpansion = chosenExpansion;
   const editPrompt = typedPrompt;
   const blocked = blockedReason(
@@ -195,7 +205,7 @@ export function ImageEditForm({
   const models = (sentModelsByTask[editTask] ?? [])
     .filter((id) =>
       !offered.some((entry) => entry.id === id)
-      && holdsSignature(signatureWith(id)))
+      && (holdsSignature(signatureWith(id)) || names.hasRestoredModel(id)))
     .reduce(keepModelForHeldRequest, offered as AiScreenModel[]);
   const selectedModel = models.some((entry) => entry.id === chosenModel)
     ? chosenModel
@@ -204,7 +214,7 @@ export function ImageEditForm({
   const holdsName = holdsSignature(signature);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(blocked, holdsName);
+  const submitBlocked = blocksSubmit(blocked, holdsName) || !names.ready;
   const taskUnaffordable =
     blocked === null &&
     editTask !== "" &&
@@ -275,7 +285,7 @@ export function ImageEditForm({
     });
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // Pressing Enter in a field submits even while the button is disabled, so
     // everything the button refuses on is refused here too. Without this the
@@ -312,9 +322,11 @@ export function ImageEditForm({
             // 断られ続ける——その名前は残るので、送り直しても抜け出せない。
             await fileFingerprint(prepared, MAX_AI_IMAGE_UPLOAD_BYTES),
           ]);
-          names.commit(preparedSignature);
+          const idempotencyKey = await names.ensureAndGet(preparedSignature);
+          if (!idempotencyKey) return;
+          names.commitWithModel(preparedSignature, selectedModel, null);
           setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
-          next.set(IDEMPOTENCY_KEY_FIELD, names.nameFor(preparedSignature));
+          next.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
           dispatch(next);
         } catch {
           // 元のファイルをそのまま送ると、拡張されていない画像を outpaint の
@@ -325,7 +337,10 @@ export function ImageEditForm({
       return;
     }
 
-    names.commit(signature);
+    const idempotencyKey = await names.ensureAndGet(signature);
+    if (!idempotencyKey) return;
+    names.commitWithModel(signature, selectedModel, null);
+    formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
     rememberSentModel(selectedModel);
     dispatch(formData);
   }

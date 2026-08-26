@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  bindProCheckoutSession,
   deleteProCheckoutAttempt,
   getOrCreateProCheckoutAttempt,
 } from "../../packages/db/src/pro-checkout-attempt";
@@ -29,6 +30,7 @@ describe("Pro checkout attempts", () => {
         userId: "user-1",
         billingOfferId: "offer-current",
         now,
+        customerId: "cus_1",
         expiresAt: new Date("2026-08-13T00:00:00.000Z"),
         prisma: transaction as never,
       }),
@@ -58,5 +60,30 @@ describe("Pro checkout attempts", () => {
         stripeCheckoutSessionId: "cs_old",
       },
     });
+  });
+
+  it("preserves a post-cascade bound Session and writes cleanup outbox from stored customerId", async () => {
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const transaction = {
+      proCheckoutAttempt: {
+        findUnique: vi.fn().mockResolvedValue({
+          userId: "user-1", checkoutKey: "key-1", billingOfferId: "offer-1",
+          stripeCheckoutSessionId: null, customerId: "cus_1", accountDeletionAt: new Date(),
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
+      stripeCheckoutCleanup: { upsert, findUnique: vi.fn().mockResolvedValue(null), create: upsert, update: vi.fn() },
+    };
+    await expect(bindProCheckoutSession({
+      userId: "user-1",
+      checkoutKey: "key-1",
+      stripeCheckoutSessionId: "cs_late",
+      expiresAt: new Date(),
+      prisma: transaction as never,
+    })).resolves.toBe("account-deletion-authorized");
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ sessionId: "cs_late", customerId: "cus_1" }),
+    }));
   });
 });

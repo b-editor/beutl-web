@@ -157,6 +157,7 @@ export function aiImageEditTaskRequiresPrompt(task: string): boolean {
 // at the same number the server validates against; @beutl/api pulls in
 // @beutl/db. Re-exported from ai/upload-limits.ts for the server side.
 export const MAX_AI_PROMPT_LENGTH = 4_000;
+export const AI_TEXT_RESULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1000;
 
 // The shape of a translation request, here for the same reason: the form that
 // parses a pasted subtitle file rejects what the endpoint would reject, and a
@@ -260,6 +261,22 @@ export function aiScreenUploadLimit(pathname: string): number | null {
         + AI_SCREEN_FIELDS_BYTES
         + MAX_AI_RESULT_BYTES
       );
+    default:
+      return null;
+  }
+}
+
+/** Body cap for the standalone API multipart endpoints (no action-state result). */
+export function aiApiMultipartBodyLimit(pathname: string): number | null {
+  switch (pathname) {
+    case "/api/v3/ai/images/edit":
+      return MAX_AI_IMAGE_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "/api/v3/ai/images":
+      return MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "/api/v3/ai/transcriptions":
+      return MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "/api/v3/ai/videos/frames":
+      return 2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
     default:
       return null;
   }

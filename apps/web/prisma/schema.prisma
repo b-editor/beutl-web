@@ -35,7 +35,6 @@ model User {
   CreditTransaction            CreditTransaction[]
   AiJob                        AiJob[]
   Subscription                 Subscription?
-  ProCheckoutAttempt           ProCheckoutAttempt?
   accountDeletionIntents       AccountDeletionIntent[]
   stripeCustomerOwnerships     StripeCustomerOwnership[]
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
@@ -186,6 +185,7 @@ model File {
   Profile           Profile[]
   Release           Release[]
   aiJobResult       AiJob?              @relation("AiJobResultFile")
+  storageUploadReceipt StorageUpload? @relation("StorageUploadCompletedFile")
 
   @@index([userId])
 }
@@ -196,28 +196,37 @@ model File {
 ///
 /// The row is what says an upload is the user's: the key and the bucket's own
 /// upload id are never taken from the client, or anyone holding a pair of them
-/// could add parts to someone else's file. It is removed when the upload is
-/// finished or abandoned, and a sweep abandons what was left behind, because an
-/// unfinished upload keeps its parts — and their storage — until it is.
+/// could add parts to someone else's file. Unfinished rows are swept after a
+/// day; completed rows remain as receipts until their File is deleted.
 model StorageUpload {
   id              String   @id @default(uuid())
   userId          String
   objectKey       String
-  uploadId        String
+  // Null until the remote multipart create has committed. The row itself is
+  // the quota reservation and durable start intent.
+  uploadId        String?
   name            String
   mimeType        String
   size            BigInt
   partSize        Int
   createdAt       DateTime @default(now())
-  // 完了済みの控え。設定されている行はもう進行中ではなく、合計にも数えない。
-  completedFileId String?
+  // A completed receipt is retained with its File and is no longer in progress.
+  completedFileId String? @unique
   // 掃除が「この行のパートは自分が捨てる」と宣言した時刻。設定された行にはもう
   // 控えを書けない——書けてしまうと、掃除が消したオブジェクトを File が指す。
   abandonedAt     DateTime?
+  // Keep the database default active until every old writer is retired. New
+  // intent rows set this field explicitly; a later contract migration can
+  // switch the default once the rolling-deploy window has closed.
+  startState      String   @default("active")
+  creationLeaseUntil DateTime?
+  creationLeaseToken String?
+  completedFile      File?    @relation("StorageUploadCompletedFile", fields: [completedFileId], references: [id], onDelete: Cascade)
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])
+  @@index([startState, creationLeaseUntil])
 }
 
 model Package {
@@ -242,6 +251,120 @@ model Package {
   UserPackage       UserPackage[]
 
   @@index([userId])
+}
+
+model PackageCheckoutAttempt {
+  id                    String   @id @default(uuid())
+  discoveryToken        String   @unique @default(dbgenerated("gen_random_uuid()::text"))
+  createLeaseToken      String?
+  createLeaseExpiresAt  DateTime?
+  userId                String
+  packageId             String
+  fingerprint           String
+  checkoutKey           String   @unique
+  stripeCheckoutSessionId String? @unique
+  customerId            String
+  paramsJson            String
+  accountDeletionAt     DateTime?
+  recoveryLeaseToken    String?
+  recoveryLeaseExpiresAt DateTime?
+  recoveryAttempts      Int      @default(0)
+  recoveryLastError     String?
+  recoveryInterventionAt DateTime?
+  recoveryNotBefore     DateTime?
+  status                String   @default("open")
+  expiresAt             DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userId, packageId])
+  @@index([userId, packageId, status])
+  @@index([status, accountDeletionAt, recoveryNotBefore, recoveryLeaseExpiresAt, createLeaseExpiresAt], map: "PackageCheckoutAttempt_recovery_idx")
+  @@index([createLeaseExpiresAt], map: "PackageCheckoutAttempt_create_lease_idx")
+}
+
+model PackageCheckoutResolution {
+  id                  String   @id @default(uuid())
+  attemptId           String
+  discoveryToken      String
+  canonicalSessionId  String?
+  canonicalPaymentIntentId String?
+  expectedRefundPaymentIntentIds String @default("[]")
+  revision            Int      @default(0)
+  operatorUserId      String?
+  status              String   @default("intervention")
+  evidenceJson        String
+  lastError           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([attemptId, discoveryToken])
+  @@index([status, updatedAt])
+}
+
+model PackagePaymentRefundAttempt {
+  id                    String   @id @default(uuid())
+  paymentIntentId       String   @unique
+  customerId            String?
+  userId                String?
+  packageId             String?
+  amount                Int
+  currency              String
+  reason                String
+  status                String   @default("required")
+  notBefore             DateTime
+  attempts              Int      @default(0)
+  leaseToken            String?
+  leaseExpiresAt        DateTime?
+  lastError             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([status, notBefore, leaseExpiresAt])
+}
+
+model StripeCheckoutCleanup {
+  id                    String   @id @default(uuid())
+  sessionId             String   @unique
+  userId                String
+  kind                  String
+  customerId            String
+  packageId             String?
+  billingOfferId        String?
+  status                String   @default("required")
+  notBefore             DateTime
+  attempts              Int      @default(0)
+  leaseToken            String?
+  leaseExpiresAt        DateTime?
+  lastError             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status, notBefore, leaseExpiresAt])
+}
+
+// User-independent durable record for a Stripe Customer create/mapping saga.
+// It intentionally has no User foreign key so a failed remote cleanup survives
+// the eventual User cascade.
+model StripeCustomerProvisioning {
+  id               String   @id @default(uuid())
+  userId           String
+  operationKey     String   @unique
+  stripeIdempotencyKey String
+  stripeCustomerId String?
+  paramsJson       String
+  status           String   @default("pending")
+  notBefore        DateTime
+  attempts         Int      @default(0)
+  leaseToken       String?
+  leaseExpiresAt   DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status, notBefore, leaseExpiresAt])
 }
 
 model PackagePricing {
@@ -390,6 +513,7 @@ model AiStorageCleanup {
   objectKey String   @id
   aiJobId   String?
   uploadId  String?
+  leaseToken String?
   state     String
   notBefore DateTime
   createdAt DateTime @default(now())
@@ -427,14 +551,24 @@ model ProCheckoutAttempt {
   userId                  String       @id
   checkoutKey             String       @unique
   stripeCheckoutSessionId String?
+  customerId             String?
+  accountDeletionAt       DateTime?
+  paramsJson              String?
+  recoveryLeaseToken      String?
+  recoveryLeaseExpiresAt  DateTime?
+  recoveryAttempts        Int          @default(0)
+  recoveryLastError       String?
+  recoveryInterventionAt  DateTime?
+  recoveryNotBefore       DateTime?
+  recoveryCompletedAt     DateTime?
   billingOfferId          String
   expiresAt               DateTime
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
-  user                    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   billingOffer            BillingOffer @relation(fields: [billingOfferId], references: [id])
 
   @@index([billingOfferId])
+  @@index([accountDeletionAt, stripeCheckoutSessionId, recoveryNotBefore, recoveryLeaseExpiresAt, recoveryInterventionAt], map: "ProCheckoutAttempt_recovery_idx")
 }
 
 model BillingOffer {
@@ -468,6 +602,13 @@ model TopUpCheckoutAttempt {
   status                  String
   expiresAt               DateTime
   accountDeletionAt       DateTime?
+  paramsJson              String?
+  recoveryLeaseToken      String?
+  recoveryLeaseExpiresAt  DateTime?
+  recoveryAttempts        Int                @default(0)
+  recoveryLastError       String?
+  recoveryNotBefore       DateTime?
+  recoveryInterventionAt  DateTime?
   fulfilledAt             DateTime?
   refundId                String?
   refundStatus            String?
@@ -490,6 +631,45 @@ model TopUpCheckoutAttempt {
   @@index([ownerUserId, status])
   @@index([billingOfferId])
   @@index([status, refundNotBefore, refundLeaseExpiresAt])
+  @@index([accountDeletionAt, stripeCheckoutSessionId, recoveryNotBefore, recoveryLeaseExpiresAt, recoveryInterventionAt], map: "TopUpCheckoutAttempt_recovery_idx")
+}
+
+model TopUpDuplicateRefundAttempt {
+  id                 String   @id @default(uuid())
+  topUpAttemptId     String
+  stripePaymentIntentId String @unique
+  stripeCustomerId   String
+  ownerUserId        String
+  billingOfferId     String
+  amount             Int
+  currency           String
+  status             String   @default("required")
+  notBefore          DateTime @default(now())
+  leaseToken         String?
+  leaseExpiresAt     DateTime?
+  attempts           Int      @default(0)
+  refundId           String?
+  refundedAmount     Int      @default(0)
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([topUpAttemptId, status, notBefore, leaseExpiresAt], map: "TopUpDuplicateRefundAttempt_topUpAttemptId_status_idx")
+}
+
+model TopUpCheckoutResolution {
+  id                 String   @id @default(uuid())
+  topUpAttemptId     String   @unique
+  ownerUserId        String
+  stripeCustomerId   String
+  billingOfferId     String
+  canonicalSessionId String?
+  expectedPaymentIntentIds String
+  status             String   @default("refund_pending")
+  revision           Int      @default(0)
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model SubscriptionEntitlementHold {

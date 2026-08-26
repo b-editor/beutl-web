@@ -62,6 +62,7 @@ export default async function Page(props: {
       />
       <ImageGenerateForm
         lang={lang}
+        userId={session.user.id}
         access={{
           ...access,
           models: { ...access.models, "image.generate": models },

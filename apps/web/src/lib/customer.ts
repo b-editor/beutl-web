@@ -1,19 +1,26 @@
 import {
   createVerifiedCustomerMappingIfAbsent,
+  beginStripeCustomerProvisioning,
   findBillingOfferById,
   findBoundProCheckoutAttemptForAccountDeletion,
   findAccountDeletionIntentByUserId,
+  inspectAccountDeletionBillingBlockers,
+  countActiveStripeCustomerProvisioning,
   findCustomerByUserId,
   findStripeCustomerOwnershipByStripeId,
   markStripeCustomerOwnershipVerified,
   recordBillingRefundCancellation,
   replaceCustomerMappingWithVerifiedOwnership,
+  recordStripeCustomerProvisioningRemote,
+  scheduleStripeCustomerProvisioningCleanup,
+  settleStripeCustomerProvisioning,
+  updateStripeCustomerProvisioningKey,
   scheduleBillingRefundAttempt,
+  scheduleStripeCheckoutCleanup,
+  setTopUpCheckoutSession,
   startRetryableTransaction,
-  upsertCustomerMapping,
 } from "@beutl/db";
 import { PRO_PLAN } from "@beutl/api";
-import { createHash } from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { isStripeResourceMissingError } from "@/lib/stripe/errors";
 import { createStripe } from "@/lib/stripe/config";
@@ -65,13 +72,16 @@ async function createRecoverableCustomer({
   stripe,
   params,
   idempotencyKey,
+  beforeCreate,
 }: {
   stripe: StripeClient;
   params: Stripe.CustomerCreateParams;
   idempotencyKey: string;
+  beforeCreate?: (idempotencyKey: string) => Promise<void>;
 }): Promise<Stripe.Customer> {
   let nextIdempotencyKey = idempotencyKey;
   for (let recoveryAttempt = 0; recoveryAttempt < 8; recoveryAttempt++) {
+    await beforeCreate?.(nextIdempotencyKey);
     const created = await stripe.customers.create(params, {
       idempotencyKey: nextIdempotencyKey,
     });
@@ -133,36 +143,7 @@ async function compensateUnmappedCustomer({
   }
 }
 
-// 置き換えた古い Customer に、まだ請求の続く subscription が残っていないか。
-//
-// 残っていても、こちらからは解約しない。metadata の無い Customer は持ち主を
-// 確かめられず、移行のときに選ばれた利用者は当てにならない——別人の契約を
-// 止めるほうが、請求が続くよりも取り返しがつかない。代わりに、どの Customer の
-// どの subscription なのかを残す。行がここで途切れると、人が見て決めるための
-// 手掛かりまで消えてしまう。
-async function recordLegacyCustomerStillBilling({
-  stripe,
-  customerId,
-  userId,
-  replacedBy,
-}: {
-  stripe: StripeClient;
-  customerId: string;
-  userId: string;
-  replacedBy: string;
-}): Promise<void> {
-  const left = await listActiveSubscriptionsOnCustomer(stripe, customerId);
-  if (left.length === 0) return;
-  await addAuditLog({
-    userId,
-    action: auditLogActions.account.legacyCustomerLeftBilling,
-    details:
-      `Stripe customer ${customerId} was replaced by ${replacedBy} while `
-      + `still billing: ${left.join(", ")}`,
-  });
-}
-
-// 持ち主を確かめられない Customer に、まだ請求の続く subscription があるか。
+// List subscriptions that still bill a Customer whose owner cannot be verified.
 async function listActiveSubscriptionsOnCustomer(
   stripe: StripeClient,
   customerId: string,
@@ -210,6 +191,10 @@ async function expireOwnedOpenCheckoutSessions({
   customerId: string;
   userId: string;
 }): Promise<void> {
+  // Scan every page before mutating Stripe. If a later page contains an
+  // unowned legacy Session, no earlier Session may have been expired while we
+  // were still deciding whether replacement was safe.
+  const sessionsToExpire: Stripe.Checkout.Session[] = [];
   let startingAfter: string | undefined;
   for (;;) {
     const sessions = await stripe.checkout.sessions.list({
@@ -219,21 +204,31 @@ async function expireOwnedOpenCheckoutSessions({
       ...(startingAfter ? { starting_after: startingAfter } : {}),
     });
     for (const session of sessions.data) {
-      if (!hasStripeOwnerMetadata(session.metadata, userId)) continue;
-      try {
-        await stripe.checkout.sessions.expire(session.id);
-      } catch (error) {
-        // The session may have completed between list and expire. Its success
-        // replay performs the current-customer check and compensates it.
-        if (!isStripeResourceMissingError(error)) throw error;
+      if (!hasStripeOwnerMetadata(session.metadata, userId)) {
+        // An unowned legacy Session is still payable. Moving the local mapping
+        // would strand that payment under a Customer the user can no longer
+        // reach, so refuse migration until an operator resolves it.
+        throw new Error(
+          `Cannot replace legacy Stripe customer ${customerId} while open Checkout Session ${session.id} has no verified owner`,
+        );
       }
+      sessionsToExpire.push(session);
     }
-    if (!sessions.has_more) return;
+    if (!sessions.has_more) break;
     const lastSession = sessions.data.at(-1);
     if (!lastSession) {
       throw new Error("Stripe returned an empty Checkout page with has_more");
     }
     startingAfter = lastSession.id;
+  }
+  for (const session of sessionsToExpire) {
+    try {
+      await stripe.checkout.sessions.expire(session.id);
+    } catch (error) {
+      // The session may have completed between list and expire. Its success
+      // replay performs the current-customer check and compensates it.
+      if (!isStripeResourceMissingError(error)) throw error;
+    }
   }
 }
 
@@ -289,7 +284,6 @@ export async function updateCustomerEmailIfExist({
   if (proof === "mismatch") {
     return { status: "owner-mismatch", customerId: customer.id };
   }
-
   await syncCustomerEmail(stripe, customer.id, email);
   return { status: "synced", customerId: customer.id };
 }
@@ -305,30 +299,53 @@ async function createOwnedCustomer({
   userId: string;
   replacesCustomerId?: string;
 }): Promise<string> {
+  const customerParams: Stripe.CustomerCreateParams = {
+    metadata: stripeOwnerMetadata(userId),
+  };
+  const customerIdempotencyKey = replacesCustomerId
+    ? `beutl:customer:${userId}:replace:${replacesCustomerId}`
+    : `beutl:customer:${userId}`;
+  const provisioningLeaseToken = crypto.randomUUID();
+  const provisioningLeaseExpiresAt = new Date(Date.now() + 10 * 60_000);
+  const provisioning = await beginStripeCustomerProvisioning({
+    userId,
+    operationKey: `beutl:customer-provisioning:${userId}:${replacesCustomerId ?? "initial"}`,
+    stripeIdempotencyKey: customerIdempotencyKey,
+    paramsJson: JSON.stringify(customerParams),
+    leaseToken: provisioningLeaseToken,
+    leaseExpiresAt: provisioningLeaseExpiresAt,
+  });
   const customer = await createRecoverableCustomer({
     stripe,
-    params: {
-      metadata: stripeOwnerMetadata(userId),
+    params: customerParams,
+    idempotencyKey: customerIdempotencyKey,
+    beforeCreate: async (key) => {
+      const updated = await updateStripeCustomerProvisioningKey({ id: provisioning.id, stripeIdempotencyKey: key, leaseToken: provisioningLeaseToken });
+      if (updated.count !== 1) {
+        throw new Error("Stripe customer provisioning lease changed before remote create");
+      }
     },
-    idempotencyKey: replacesCustomerId
-      ? `beutl:customer:${userId}:replace:${replacesCustomerId}`
-      : `beutl:customer:${userId}`,
   });
   if (!hasStripeOwnerMetadata(customer.metadata, userId)) {
     throw new Error("Stripe did not persist customer ownership metadata");
   }
+  let mappingCommitted = false;
   try {
+    await recordStripeCustomerProvisioningRemote({
+      id: provisioning.id,
+      stripeCustomerId: customer.id,
+      leaseToken: provisioningLeaseToken,
+    });
     if (replacesCustomerId) {
       await expireOwnedOpenCheckoutSessions({
         stripe,
         customerId: replacesCustomerId,
         userId,
       });
-      // 旧 Customer にまだ請求の続く subscription が残っている。新しい Customer
-      // へ mapping を移すと、利用者のポータルも以降の削除フローも新しいほう
-      // しか見ない——旧課金は利用者から解約できなくなる。自動で解約はしない
-      // （metadata が無いので持ち主を証明できない）が、移行も止める。
-      // 担当者が監査ログを見て手動で処理するまで、この利用者の買い物は閉じる。
+      // Moving the mapping would hide billing on the old Customer from the
+      // user's portal and all later deletion flows. Ownership cannot be proven
+      // without metadata, so neither cancel the subscription nor migrate the
+      // mapping; leave the account blocked for an operator to resolve.
       const left = await listActiveSubscriptionsOnCustomer(
         stripe,
         replacesCustomerId,
@@ -361,12 +378,24 @@ async function createOwnedCustomer({
     if (!mapping || mapping.stripeId !== customer.id) {
       throw new Error("Stripe customer mapping changed concurrently");
     }
+    mappingCommitted = true;
 
     // Persist the ownership mapping before secondary Stripe attributes. If this
     // update fails, the next billing operation retries it using the saved mapping.
     await syncCustomerEmail(stripe, customer.id, email);
+    await settleStripeCustomerProvisioning({ id: provisioning.id, leaseToken: provisioningLeaseToken });
     return customer.id;
   } catch (error) {
+    if (mappingCommitted) {
+      throw error;
+    }
+    await scheduleStripeCustomerProvisioningCleanup({
+      id: provisioning.id,
+      leaseToken: provisioningLeaseToken,
+      lastError: error instanceof Error ? error.message : String(error),
+    }).catch((cleanupError) => {
+      console.error("Could not persist Stripe customer cleanup", cleanupError);
+    });
     await compensateUnmappedCustomer({ stripe, customer, userId });
     throw error;
   }
@@ -396,10 +425,12 @@ export async function createOrRetrieveOwnedCustomerId({
         await syncCustomerEmail(stripe, customer.id, email);
         return customer.id;
       }
+      throw new Error(
+        `Cannot replace legacy Stripe customer ${mapping.stripeId} without verified ownership`,
+      );
     }
-    // Never stamp ownership onto a legacy customer. The migration cohort may
-    // have selected an arbitrary local user, so only existing Stripe metadata
-    // can authorize reuse; otherwise create a fresh metadata-owned customer.
+    // A deleted Customer has no remote payable state left to strand, so its
+    // local mapping may be replaced with a newly metadata-owned Customer.
     return await createOwnedCustomer({
       stripe,
       email,
@@ -409,55 +440,6 @@ export async function createOrRetrieveOwnedCustomerId({
   }
 
   return await createOwnedCustomer({ stripe, email, userId });
-}
-
-export async function createOrRetrieveCustomerId({
-  email,
-  userId,
-}: {
-  email: string;
-  userId: string;
-}): Promise<string> {
-  const mapping = await findCustomerByUserId({ userId });
-  const stripe = createStripe();
-
-  if (mapping) {
-    const customer = await retrieveCustomerIfPresent(stripe, mapping.stripeId);
-    if (customer && hasStripeOwnerMetadata(customer.metadata, userId)) {
-      if (customer.email !== email) {
-        await stripe.customers.update(customer.id, { email });
-      }
-      return customer.id;
-    }
-  }
-
-  const emailDigest = (await createHash(email)).slice(0, 16);
-  const customer = await createRecoverableCustomer({
-    stripe,
-    params: {
-      email,
-      metadata: stripeOwnerMetadata(userId),
-    },
-    idempotencyKey: mapping
-      ? `beutl:customer:${userId}:replace:${mapping.stripeId}:${emailDigest}`
-      : `beutl:customer:${userId}:${emailDigest}`,
-  });
-  try {
-    if (!hasStripeOwnerMetadata(customer.metadata, userId)) {
-      throw new Error("Stripe did not persist customer ownership metadata");
-    }
-    const stored = await upsertCustomerMapping({
-      userId,
-      stripeId: customer.id,
-    });
-    if (stored.stripeId !== customer.id) {
-      throw new Error("Stripe customer mapping changed concurrently");
-    }
-    return customer.id;
-  } catch (error) {
-    await compensateUnmappedCustomer({ stripe, customer, userId });
-    throw error;
-  }
 }
 
 function isTerminalSubscription(subscription: Stripe.Subscription): boolean {
@@ -733,9 +715,11 @@ async function resolveBoundProCheckoutForAccountDeletion({
 export async function closeStripeCustomerForAccountDeletion({
   userId,
   stripeCustomerId,
+  deletionAuthorizedAt,
 }: {
   userId: string;
   stripeCustomerId?: string | null;
+  deletionAuthorizedAt: Date;
 }): Promise<CustomerClosureResult> {
   const mapping =
     stripeCustomerId === undefined
@@ -760,6 +744,12 @@ export async function closeStripeCustomerForAccountDeletion({
   if (proof === "mismatch") {
     return { status: "owner-mismatch", customerId: customer.id };
   }
+  if (await countActiveStripeCustomerProvisioning({ userId }) > 0) {
+    throw new Error("Stripe Customer provisioning cleanup is pending");
+  }
+  if (Object.values(await inspectAccountDeletionBillingBlockers({ userId })).some((count) => count > 0)) {
+    throw new Error("Checkout recovery is pending before Stripe Customer closure");
+  }
 
   // The attempt retains its Stripe handle after deletion authorization. Resolve
   // it before any destructive Customer operation so a Checkout completion that
@@ -769,6 +759,61 @@ export async function closeStripeCustomerForAccountDeletion({
     expectedCustomerId: customer.id,
     userId,
   });
+
+  // Capture and durably handle open Sessions before inspecting recent
+  // completions; this closes the list/complete race without touching history.
+  let openSessionCursor: string | undefined;
+  for (;;) {
+    const sessions = await stripe.checkout.sessions.list({ customer: customer.id, status: "open", limit: 100, ...(openSessionCursor ? { starting_after: openSessionCursor } : {}) });
+    for (const session of sessions.data) {
+      if (!hasStripeOwnerMetadata(session.metadata, userId)) return { status: "owner-mismatch", customerId: customer.id };
+      const isPackage = session.metadata?.beutlPurchaseKind === "package" && Boolean(session.metadata.packageId);
+      const isTopUp = Boolean(session.metadata?.topUpAttemptId);
+      const isPro = Boolean(session.metadata?.billingOfferId) && !isTopUp;
+      if (isTopUp) { if (!session.metadata?.topUpAttemptId || (await setTopUpCheckoutSession({ attemptId: session.metadata.topUpAttemptId, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : new Date() })) === "not-stored") return { status: "owner-mismatch", customerId: customer.id }; }
+      else if (isPackage || isPro) await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: isPackage ? "package" : "pro", customerId: customer.id, packageId: isPackage ? session.metadata?.packageId : null, billingOfferId: isPro ? session.metadata?.billingOfferId : null });
+      else return { status: "owner-mismatch", customerId: customer.id };
+      try { await stripe.checkout.sessions.expire(session.id); } catch (error) { const current = await stripe.checkout.sessions.retrieve(session.id); if (current.status !== "complete" && current.status !== "expired") throw error; }
+    }
+    if (!sessions.has_more) break;
+    openSessionCursor = sessions.data.at(-1)?.id;
+    if (!openSessionCursor) throw new Error("Stripe returned an empty Checkout page with has_more");
+  }
+
+  let recentCompleteCursor: string | undefined;
+  for (;;) {
+    const completed = await stripe.checkout.sessions.list({ customer: customer.id, status: "complete", limit: 100, created: { gte: Math.max(0, Math.floor(deletionAuthorizedAt.getTime() / 1000) - 24 * 60 * 60 - 1) }, ...(recentCompleteCursor ? { starting_after: recentCompleteCursor } : {}) });
+    for (const session of completed.data) {
+      if (!hasStripeOwnerMetadata(session.metadata, userId)) return { status: "owner-mismatch", customerId: customer.id };
+      const isPackage = session.metadata?.beutlPurchaseKind === "package" && Boolean(session.metadata.packageId);
+      const isTopUp = Boolean(session.metadata?.topUpAttemptId);
+      const isPro = Boolean(session.metadata?.billingOfferId) && !isTopUp;
+      if (isPackage || isTopUp) {
+        const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+        if (!paymentIntentId) return { status: "owner-mismatch", customerId: customer.id };
+        let paymentIntent: Stripe.PaymentIntent;
+        try { paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId); } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        const chargeId = typeof paymentIntent.latest_charge === "string" ? paymentIntent.latest_charge : paymentIntent.latest_charge?.id;
+        let charge: Stripe.Charge | null;
+        try { charge = chargeId ? await stripe.charges.retrieve(chargeId) : null; } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        if (!charge) return { status: "owner-mismatch", customerId: customer.id };
+        if (charge.created < Math.floor(deletionAuthorizedAt.getTime() / 1000)) continue;
+        if (isTopUp) {
+          if (!session.metadata?.topUpAttemptId || (await setTopUpCheckoutSession({ attemptId: session.metadata.topUpAttemptId, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : new Date() })) === "not-stored") return { status: "owner-mismatch", customerId: customer.id };
+        } else await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: "package", customerId: customer.id, packageId: session.metadata?.packageId, billingOfferId: null });
+      } else if (isPro) {
+        const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+        if (!subscriptionId) return { status: "owner-mismatch", customerId: customer.id };
+        let subscription: Stripe.Subscription;
+        try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        if (subscription.created < Math.floor(deletionAuthorizedAt.getTime() / 1000)) continue;
+        await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: "pro", customerId: customer.id, packageId: null, billingOfferId: session.metadata?.billingOfferId });
+      } else return { status: "owner-mismatch", customerId: customer.id };
+    }
+    if (!completed.has_more) break;
+    recentCompleteCursor = completed.data.at(-1)?.id;
+    if (!recentCompleteCursor) throw new Error("Stripe returned an empty completed Checkout page with has_more");
+  }
 
   let startingAfter: string | undefined;
   while (true) {
@@ -823,6 +868,9 @@ export async function closeStripeCustomerForAccountDeletion({
     }
     startingAfter = lastSubscription.id;
   }
+
+  const finalOpen = await stripe.checkout.sessions.list({ customer: customer.id, status: "open", limit: 100 });
+  if (finalOpen.data.length > 0 || finalOpen.has_more) return { status: "owner-mismatch", customerId: customer.id };
 
   try {
     await stripe.customers.del(

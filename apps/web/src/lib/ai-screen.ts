@@ -1,6 +1,11 @@
 // 課金つき AI 画面が「送ってよいか」を決めるための判断。React に触れないので、
 // ボタンとキーボード送信が同じ答えを使えるし、そのまま試験できる。
 
+import {
+  AI_TEXT_RESULT_RETENTION_MILLISECONDS,
+  MAX_MODEL_ID_LENGTH,
+} from "@beutl/core";
+
 // The field name the AI server actions read the idempotency key from. The v3
 // API takes the same value in an Idempotency-Key header; a Server Action has no
 // header the caller controls, so it travels as a form field.
@@ -168,6 +173,223 @@ export function requestSignature(
     .join("");
 }
 
+/** Hash request identity before it crosses the browser persistence boundary. */
+export async function digestAiRequestSignature(signature: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(signature),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export type PersistedAiRecoveryEntry = {
+  digest: string;
+  key: string;
+  model: string;
+  capability: unknown | null;
+  updatedAt: number;
+};
+
+const MAX_AI_RECOVERY_ENTRIES = 64;
+const MAX_AI_RECOVERY_KEY_LENGTH = 255;
+const MAX_AI_RECOVERY_CAPABILITY_BYTES = 16 * 1024;
+const MAX_AI_RECOVERY_CAPABILITY_DEPTH = 6;
+const MAX_AI_RECOVERY_CAPABILITY_KEYS = 32;
+const MAX_AI_RECOVERY_CAPABILITY_ARRAY_LENGTH = 64;
+const MAX_AI_RECOVERY_CAPABILITY_STRING_LENGTH = 256;
+const MAX_AI_RECOVERY_STORAGE_BYTES = 256 * 1024;
+
+const PROTOTYPE_POLLUTION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+export const AI_RECOVERY_TTL_MS = AI_TEXT_RESULT_RETENTION_MILLISECONDS;
+
+export function aiRecoveryStorageScope(userId: string, operation: string): string {
+  return `beutl.ai.recovery.v1.${encodeURIComponent(userId)}.${operation}`;
+}
+
+/** Parse and garbage-collect browser recovery records without exposing raw requests. */
+export function restoreAiRecoveryEntries(
+  raw: string | null,
+  now = Date.now(),
+): PersistedAiRecoveryEntry[] {
+  try {
+    if (
+      raw === null ||
+      new TextEncoder().encode(raw).byteLength > MAX_AI_RECOVERY_STORAGE_BYTES
+    ) {
+      return [];
+    }
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return [];
+    const value = parsed as { version?: unknown; entries?: unknown };
+    if (value.version !== 1 || !Array.isArray(value.entries)) return [];
+    const newestByDigest = new Map<string, PersistedAiRecoveryEntry>();
+    for (const candidate of value.entries) {
+      if (!isRecoveryEntry(candidate, now)) continue;
+      const entry: PersistedAiRecoveryEntry = {
+        digest: candidate.digest,
+        key: candidate.key,
+        model: candidate.model,
+        capability: isSafeRecoveryCapability(candidate.capability)
+          ? normalizeRecoveryCapability(candidate.capability)
+          : null,
+        updatedAt: candidate.updatedAt,
+      };
+      const previous = newestByDigest.get(entry.digest);
+      // The later entry wins ties as well. This makes duplicate recovery data
+      // deterministic even when a corrupted writer reused a timestamp.
+      if (!previous || entry.updatedAt >= previous.updatedAt) {
+        newestByDigest.set(entry.digest, entry);
+      }
+    }
+    return [...newestByDigest.values()]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, MAX_AI_RECOVERY_ENTRIES);
+  } catch {
+    return [];
+  }
+}
+
+/** Read browser recovery storage without letting privacy failures block the screen. */
+export function readAiRecoverySafely(
+  read: () => string | null,
+  now = Date.now(),
+): PersistedAiRecoveryEntry[] {
+  try {
+    return restoreAiRecoveryEntries(read(), now);
+  } catch {
+    return [];
+  }
+}
+
+type RecoveryEntryCandidate = {
+  digest: string;
+  key: string;
+  model: string;
+  capability: unknown;
+  updatedAt: number;
+};
+
+function isRecoveryEntry(value: unknown, now: number): value is RecoveryEntryCandidate {
+  if (!isPlainJsonObject(value)) return false;
+  const entry = value as Record<string, unknown>;
+  if (Object.keys(entry).some((key) => PROTOTYPE_POLLUTION_KEYS.has(key))) {
+    return false;
+  }
+  const valid = (
+    typeof entry.digest === "string" &&
+    /^[0-9a-f]{64}$/u.test(entry.digest) &&
+    typeof entry.key === "string" &&
+    entry.key.length > 0 &&
+    entry.key.length <= MAX_AI_RECOVERY_KEY_LENGTH &&
+    /^[\x21-\x7e]+$/u.test(entry.key) &&
+    typeof entry.model === "string" &&
+    entry.model.length <= MAX_MODEL_ID_LENGTH &&
+    typeof entry.updatedAt === "number" &&
+    Number.isFinite(entry.updatedAt) &&
+    entry.updatedAt <= now &&
+    now - entry.updatedAt <= AI_RECOVERY_TTL_MS
+  );
+  return valid;
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isSafeRecoveryCapability(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isSafeJsonValue(value)) return false;
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength <= MAX_AI_RECOVERY_CAPABILITY_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+function isSafeJsonValue(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") {
+    return value.length <= MAX_AI_RECOVERY_CAPABILITY_STRING_LENGTH;
+  }
+  if (depth >= MAX_AI_RECOVERY_CAPABILITY_DEPTH || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length <= MAX_AI_RECOVERY_CAPABILITY_ARRAY_LENGTH &&
+      value.every((item) => isSafeJsonValue(item, depth + 1));
+  }
+  if (!isPlainJsonObject(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length <= MAX_AI_RECOVERY_CAPABILITY_KEYS &&
+    keys.every((key) =>
+      key.length <= MAX_AI_RECOVERY_CAPABILITY_STRING_LENGTH &&
+      !PROTOTYPE_POLLUTION_KEYS.has(key) &&
+      isSafeJsonValue(value[key], depth + 1)
+    );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isBoundedInteger(value: unknown, minimum: number, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= minimum && value <= maximum;
+}
+
+function normalizeRecoveryCapability(value: unknown): unknown | null {
+  if (value === null || !isPlainJsonObject(value)) return null;
+  const capability = value as Record<string, unknown>;
+  const keys = new Set(Object.keys(capability));
+  const imageKeys = new Set(["aspectRatios", "backgrounds", "seed", "maxReferenceImages"]);
+  const videoKeys = new Set([
+    "resolutions", "durations", "aspectRatios", "generateAudio", "seed",
+    "firstFrame", "lastFrame",
+  ]);
+  const hasVideoField = ["resolutions", "durations", "generateAudio", "firstFrame", "lastFrame"]
+    .some((key) => keys.has(key));
+  const expected = hasVideoField ? videoKeys : imageKeys;
+  if (keys.size !== expected.size || [...keys].some((key) => !expected.has(key))) return null;
+  if (hasVideoField) {
+    return isStringArray(capability.resolutions) &&
+      Array.isArray(capability.durations) &&
+      capability.durations.every((duration) => isBoundedInteger(duration, 1, 60)) &&
+      isStringArray(capability.aspectRatios) &&
+      isBoolean(capability.generateAudio) &&
+      isBoolean(capability.seed) &&
+      isBoolean(capability.firstFrame) &&
+      isBoolean(capability.lastFrame)
+      ? value
+      : null;
+  }
+  return isStringArray(capability.aspectRatios) &&
+    isStringArray(capability.backgrounds) &&
+    isBoolean(capability.seed) &&
+    isBoundedInteger(capability.maxReferenceImages, 0, 4)
+    ? value
+    : null;
+}
+
+export function serializeAiRecoveryEntries(
+  entries: readonly PersistedAiRecoveryEntry[],
+): string {
+  const bounded = [...entries].sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_AI_RECOVERY_ENTRIES);
+  return JSON.stringify({ version: 1, entries: bounded });
+}
+
 function field(kind: string, value: string): string {
   return `${kind}${value.length}:${value}`;
 }
@@ -182,6 +404,12 @@ function field(kind: string, value: string): string {
 export type AiRequestNames = {
   // 送った依頼ごとの名前。まだ決着していないものだけが入っている。
   held: Readonly<Record<string, string>>;
+  // The model that was sent with each held request. It remains available even
+  // when the catalog is refreshed and no longer publishes that model.
+  heldModels: Readonly<Record<string, string>>;
+  // Capability snapshots belong to a request, not to a model. Two unsettled
+  // requests may use the same model while the provider catalog changes.
+  heldCapabilities: Readonly<Record<string, unknown | null>>;
   // 次に送るものに使う名前。作るのは送るときだけ——書き換えるたびに作っていては、
   // 打鍵のたびに使われない名前が積み上がる。
   next: string;
@@ -193,7 +421,7 @@ export type AiRequestNames = {
 // 作ってしまうと、ブラウザで描き直したときの値と食い違う。最初の 1 つはブラウザ
 // で、しかも人が触るより前に用意する。
 export function newAiRequestNames(): AiRequestNames {
-  return { held: {}, next: "", sent: null };
+  return { held: {}, heldModels: {}, heldCapabilities: {}, next: "", sent: null };
 }
 
 /** まだ名前を用意していなければ、1 つ用意する。 */
@@ -215,15 +443,49 @@ export function holdsAiRequestName(
   return request in names.held;
 }
 
+export function holdsAiRequestModel(
+  names: AiRequestNames,
+  model: string,
+): boolean {
+  return Object.values(names.heldModels).some((heldModel) => heldModel === model);
+}
+
+export function heldAiRequestModels(names: AiRequestNames): string[] {
+  return [...new Set(Object.values(names.heldModels))];
+}
+
+export function heldAiRequestModelMap(
+  names: AiRequestNames,
+): Readonly<Record<string, string>> {
+  return names.heldModels;
+}
+
+export function heldAiRequestCapabilityMap(
+  names: AiRequestNames,
+): Readonly<Record<string, unknown | null>> {
+  return names.heldCapabilities;
+}
+
+export function heldAiRequestCapability(
+  names: AiRequestNames,
+  request: string,
+): unknown | null | undefined {
+  return names.heldCapabilities[request];
+}
+
 /** 送る直前に。この依頼にはこの名前、と決める。 */
 export function commitAiRequestName(
   names: AiRequestNames,
   request: string,
   mint: () => string,
+  model = "",
+  capability: unknown | null = null,
 ): AiRequestNames {
   if (request in names.held) return { ...names, sent: request };
   return {
     held: { ...names.held, [request]: names.next },
+    heldModels: { ...names.heldModels, [request]: model },
+    heldCapabilities: { ...names.heldCapabilities, [request]: capability },
     next: mint(),
     sent: request,
   };
@@ -237,7 +499,80 @@ export function settleAiRequestName(
   if (keeps || names.sent === null || !(names.sent in names.held)) return names;
   const held = { ...names.held };
   delete held[names.sent];
-  return { ...names, held };
+  const heldModels = { ...names.heldModels };
+  delete heldModels[names.sent];
+  const heldCapabilities = { ...names.heldCapabilities };
+  delete heldCapabilities[names.sent];
+  return { ...names, held, heldModels, heldCapabilities };
+}
+
+export type AiRequestRecoveryEvent =
+  | {
+      type: "commit";
+      request: string;
+      model?: string;
+      capability?: unknown | null;
+    }
+  | { type: "settle"; keeps: boolean };
+
+/**
+ * The shared recovery state machine used by every paid AI form. Keeping this
+ * transition pure makes catalog refreshes and asynchronous responses testable
+ * without relying on a particular DOM implementation.
+ */
+export function reduceAiRequestRecovery(
+  names: AiRequestNames,
+  event: AiRequestRecoveryEvent,
+  mint: () => string = () => "",
+): AiRequestNames {
+  return event.type === "commit"
+    ? commitAiRequestName(
+      names,
+      event.request,
+      mint,
+      event.model ?? "",
+      event.capability ?? null,
+    )
+    : settleAiRequestName(names, event.keeps);
+}
+
+/**
+ * Keep a selected model for an outstanding paid request, otherwise converge to
+ * the currently available default. An empty selection is meaningful while a
+ * request is held: it represents the server's explicit model-less identity.
+ */
+export function correctedModelId(
+  models: readonly AiScreenModel[],
+  chosen: string,
+  hasOutstandingModelRequest: boolean,
+): string {
+  if (hasOutstandingModelRequest) return chosen;
+  if (models.some((model) => model.id === chosen)) return chosen;
+  return defaultModelIdOf(models);
+}
+
+/**
+ * A catalog model may start a new request. A removed model may only replay the
+ * exact outstanding request that kept it available; while the user restores
+ * that request's fields, selecting the model is allowed but submitting is not.
+ */
+export function canSubmitModelRequest(
+  models: readonly AiScreenModel[],
+  chosen: string,
+  hasOutstandingModelRequest: boolean,
+  hasOutstandingRequest: boolean,
+): boolean {
+  // A model with an unsettled request remains on its first capability
+  // snapshot. Do not start a second request under that model until the first
+  // one settles; otherwise the UI could not distinguish the two option sets
+  // when the catalog changes between renders.
+  if (hasOutstandingModelRequest && !hasOutstandingRequest) return false;
+  if (models.some((model) => model.id === chosen)) return true;
+  return hasOutstandingModelRequest && hasOutstandingRequest;
+}
+
+function defaultModelIdOf(models: readonly AiScreenModel[]): string {
+  return (models.find((model) => model.available) ?? models[0])?.id ?? "";
 }
 
 /**
@@ -285,6 +620,81 @@ export function keepModelForHeldRequest(
     ...models,
     { id: chosen, displayName: chosen, costTier: null, available: true },
   ];
+}
+
+export function modelsWithHeldRequests(
+  models: readonly AiScreenModel[],
+  heldModels: readonly string[],
+): AiScreenModel[] {
+  return heldModels.reduce(
+    (current, model) => keepModelForHeldRequest(current, model),
+    [...models],
+  );
+}
+
+export type HeldModelCapabilitySnapshots<T> = Record<string, T | null>;
+
+export function mergeHeldRequestCapabilities<T>(
+  capabilities: Record<string, T> | undefined,
+  snapshots: HeldModelCapabilitySnapshots<T>,
+  heldRequests: Readonly<Record<string, string>>,
+): Record<string, T> {
+  // A model is frozen to its first outstanding request. This keeps every
+  // later request on that model deterministic too, so returning to either
+  // signature cannot observe a catalog mutation between submissions.
+  const merged = { ...(capabilities ?? {}) };
+  const byModel = new Map<string, T | null>();
+  for (const [request, model] of Object.entries(heldRequests)) {
+    const snapshot = snapshots[request];
+    if (snapshot === undefined) continue;
+    const previous = byModel.get(model);
+    if (previous === undefined) {
+      byModel.set(model, snapshot);
+    }
+  }
+  for (const [model, snapshot] of byModel) {
+    if (snapshot === null) delete merged[model];
+    else merged[model] = snapshot;
+  }
+  return merged;
+}
+
+export function mergeHeldModelCapabilities<T>(
+  capabilities: Record<string, T> | undefined,
+  snapshots: HeldModelCapabilitySnapshots<T>,
+  heldModels: readonly string[],
+  observedModels: readonly string[] = Object.keys(capabilities ?? {}),
+): Record<string, T> {
+  const held = new Set(heldModels);
+  const observed = new Set([
+    ...Object.keys(capabilities ?? {}),
+    ...observedModels,
+    ...heldModels,
+  ]);
+  const hasCapability = (model: string) =>
+    Object.prototype.hasOwnProperty.call(capabilities ?? {}, model);
+
+  for (const model of observed) {
+    // Keep the latest catalog state until a paid request holds this model. The
+    // explicit null matters: no capability entry means unrestricted defaults,
+    // and a later provider recovery must not rewrite an already-paid signature.
+    if (!held.has(model) || !(model in snapshots)) {
+      snapshots[model] = hasCapability(model)
+        ? capabilities![model]!
+        : null;
+    }
+  }
+  for (const model of Object.keys(snapshots)) {
+    if (!observed.has(model)) delete snapshots[model];
+  }
+
+  const merged = { ...(capabilities ?? {}) };
+  for (const model of heldModels) {
+    const snapshot = snapshots[model];
+    if (snapshot === null) delete merged[model];
+    else if (snapshot !== undefined) merged[model] = snapshot;
+  }
+  return merged;
 }
 
 /**

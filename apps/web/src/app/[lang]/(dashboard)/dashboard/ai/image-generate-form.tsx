@@ -56,11 +56,14 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  canSubmitModelRequest,
+  correctedModelId,
   keepsIdempotencyKey,
   requestSignature,
   seedValue,
   useFileFingerprints,
   useAiRequestNames,
+  useHeldModelCapabilities,
   defaultModelId,
   downloadFromUrl,
   type AiAccess,
@@ -130,10 +133,12 @@ function optionsOf(
 
 export function ImageGenerateForm({
   lang,
+  userId,
   access,
   capabilities,
 }: {
   lang: string;
+  userId: string;
   access: AiAccess;
   // Resolved on the server; see imageModelOptions in the page.
   capabilities?: Record<string, AiImageModelOptions>;
@@ -151,29 +156,29 @@ export function ImageGenerateForm({
   // is cut off, because asking again under the same name recovers what was
   // already paid for — and kept per request, because a second run started while
   // the first is still uncollected must not take the first one's name with it.
-  const names = useAiRequestNames();
+  const names = useAiRequestNames(userId, "image.generate");
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
   const [composition, setComposition] = useState("");
   const [exclusions, setExclusions] = useState("");
-  const models = access.models["image.generate"] ?? [];
+  const models = useMemo(
+    () => access.models["image.generate"] ?? [],
+    [access.models],
+  );
   const [model, setModel] = useState(() => defaultModelId(models));
-  // 一覧が替わっても、選んだものがまだあれば残す。消えていたら既定へ戻す
-  // ——戻さないと、古い値が hidden で送られ、サーバーはもう提供しないモデル
-  // で課金しようとする。
-  useEffect(() => {
-    if (model !== "" && !models.some((entry) => entry.id === model)) {
-      setModel(defaultModelId(models));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models]);
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [background, setBackground] = useState<AiImageBackground>("auto");
   const [references, setReferences] = useState<File[]>([]);
   const [seed, setSeed] = useState("");
   const referenceInput = useRef<HTMLInputElement>(null);
 
-  const options = optionsOf(capabilities, model);
+  const heldCapabilities = useHeldModelCapabilities(
+    capabilities,
+    names.heldRequestModels(),
+    models.map((entry) => entry.id),
+    names.heldRequestCapabilities(),
+  );
+  const options = optionsOf(heldCapabilities, model);
   const ratio = options.aspectRatios.some((option) => option.value === aspectRatio)
     ? aspectRatio
     : options.aspectRatios[0]!.value;
@@ -219,8 +224,29 @@ export function ImageGenerateForm({
     ...references,
     ...referenceContents,
   ]);
-  const holdsName = names.holds(signature);
-  const submitBlocked = blocksSubmit(blocked, holdsName);
+  useEffect(() => {
+    if (names.ready && !readingReferences) void names.ensure(signature);
+  }, [names.ready, names, readingReferences, signature]);
+  const holdsCurrentRequest = names.holds(signature);
+  const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
+  useEffect(() => {
+    if (readingReferences) return;
+    if (names.hasRestoredModel("") && !names.holdsModel("") && model !== "") {
+      setModel("");
+      return;
+    }
+    const corrected = correctedModelId(models, model, holdsSelectedModel);
+    if (corrected !== model) setModel(corrected);
+  }, [holdsSelectedModel, model, models, names, readingReferences]);
+  const selectableModels = names.modelsWithHeld(models);
+  const holdsName = holdsCurrentRequest;
+  const modelCanSubmit = canSubmitModelRequest(
+    models,
+    model,
+    holdsSelectedModel,
+    holdsCurrentRequest,
+  );
+  const submitBlocked = blocksSubmit(blocked, holdsName) || !modelCanSubmit;
   // The same composition the action validates, so the counter measures what the
   // server will.
   const composedLength = composePrompt({
@@ -272,13 +298,18 @@ export function ImageGenerateForm({
       || tooManyReferences
       || referencesTooLarge
       || readingReferences
+      || !names.ready
     ) {
       return;
     }
 
-    const idempotencyKey = names.nameFor(signature);
+    const idempotencyKey = await names.ensureAndGet(signature);
     if (!idempotencyKey) return;
-    names.commit(signature);
+    names.commitWithModel(
+      signature,
+      model,
+      names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
+    );
     const body = new FormData(event.currentTarget);
     // What the form carries is what the endpoint reads, save for the model and
     // the shapes this screen settled from the model's own capabilities.
@@ -378,7 +409,7 @@ export function ImageGenerateForm({
 
         <ModelSelect
           lang={lang}
-          models={models}
+          models={selectableModels}
           value={model}
           onChange={setModel}
         />

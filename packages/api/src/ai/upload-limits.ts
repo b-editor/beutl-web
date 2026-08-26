@@ -6,13 +6,21 @@ export {
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
-  aiScreenUploadLimit,
 } from "@beutl/core";
-import { MULTIPART_OVERHEAD_BYTES } from "@beutl/core";
+import {
+  aiApiMultipartBodyLimit as canonicalAiApiMultipartBodyLimit,
+  MULTIPART_OVERHEAD_BYTES,
+  RequestBodyLimitExceededError,
+  boundedBody,
+} from "@beutl/core";
+
+export function aiApiMultipartBodyLimit(pathname: string): number | null {
+  return canonicalAiApiMultipartBodyLimit(pathname);
+}
 
 export const MAX_AI_JSON_REQUEST_BYTES = 32 * 1024;
 
-export class UploadLimitExceededError extends Error {
+export class UploadLimitExceededError extends RequestBodyLimitExceededError {
   constructor() {
     super("Upload body exceeds the configured limit");
     this.name = "UploadLimitExceededError";
@@ -23,75 +31,18 @@ export function requestUploadLimit(maxFileBytes: number): number {
   return maxFileBytes + MULTIPART_OVERHEAD_BYTES;
 }
 
-export function requestExceedsUploadLimit(
-  request: Request,
-  maxFileBytes: number,
-): boolean {
-  return requestExceedsBodyLimit(
-    request,
-    requestUploadLimit(maxFileBytes),
-  );
-}
-
-function requestExceedsBodyLimit(
-  request: Request,
-  maximumBytes: number,
-): boolean {
+function requestExceedsBodyLimit(request: Request, maximumBytes: number): boolean {
   const header = request.headers.get("content-length");
   if (!header) return false;
-
   const contentLength = Number(header);
-  return (
-    Number.isFinite(contentLength) &&
-    contentLength > maximumBytes
-  );
+  return Number.isFinite(contentLength) && contentLength > maximumBytes;
 }
 
 function boundedRequestBody(request: Request, maximumBytes: number): Request {
   if (!request.body) return request;
-
-  const source = request.body.getReader();
-  let consumedBytes = 0;
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      let next: ReadableStreamReadResult<Uint8Array>;
-      try {
-        next = await source.read();
-      } catch (error) {
-        controller.error(error);
-        return;
-      }
-      if (next.done) {
-        controller.close();
-        return;
-      }
-
-      consumedBytes += next.value.byteLength;
-      if (consumedBytes > maximumBytes) {
-        const error = new UploadLimitExceededError();
-        await source.cancel(error).catch(() => undefined);
-        controller.error(error);
-        return;
-      }
-      controller.enqueue(next.value);
-    },
-    async cancel(reason) {
-      await source.cancel(reason).catch(() => undefined);
-    },
-  });
-
-  // Built from the URL rather than by copying the request that came in. Copying
-  // it works on workerd and under the test runner, but on Node the incoming
-  // request belongs to the server's own Request class, and the copy then reads
-  // as an object of a different class: `Cannot read private member #state`,
-  // raised only when the body is finally read. That surfaced as every AI
-  // request from the editor being refused as an invalid body.
+  const body = boundedBody(request.body, maximumBytes);
   return new Request(request.url, {
-    method: request.method,
-    headers: request.headers,
-    body,
-    signal: request.signal,
-    // Required by Node's Request implementation and ignored by workerd.
+    method: request.method, headers: request.headers, body, signal: request.signal,
     duplex: "half",
   } as RequestInit & { duplex: "half" });
 }
@@ -99,7 +50,10 @@ function boundedRequestBody(request: Request, maximumBytes: number): Request {
 export function isUploadLimitExceeded(error: unknown): boolean {
   let current = error;
   for (let depth = 0; depth < 5; depth++) {
-    if (current instanceof UploadLimitExceededError) return true;
+    if (
+      current instanceof UploadLimitExceededError ||
+      current instanceof RequestBodyLimitExceededError
+    ) return true;
     if (
       typeof current !== "object" ||
       current === null ||
@@ -115,13 +69,14 @@ export function isUploadLimitExceeded(error: unknown): boolean {
 export async function parseBodyWithUploadLimit<T>(
   request: { raw: Request; parseBody(): Promise<T> },
   maxFileBytes: number,
+  maxBodyBytes = requestUploadLimit(maxFileBytes),
 ): Promise<T> {
-  if (requestExceedsUploadLimit(request.raw, maxFileBytes)) {
+  if (requestExceedsBodyLimit(request.raw, maxBodyBytes)) {
     throw new UploadLimitExceededError();
   }
   request.raw = boundedRequestBody(
     request.raw,
-    requestUploadLimit(maxFileBytes),
+    maxBodyBytes,
   );
   return await request.parseBody();
 }

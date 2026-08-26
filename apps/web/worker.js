@@ -12,7 +12,7 @@
 // Action を AI 以外のパスへ送れば、そのパスの上限——全体の上限——で受ける。
 // 画面ごとの上限は、その画面へ普通に送られてくるものを縮めるためのもので、
 // 境界ではない。
-import { boundedBody, requestBodyLimit } from "@beutl/core";
+import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 //@ts-expect-error: Will be resolved by wrangler build
 import openNext from "./.open-next/worker.js";
 
@@ -23,36 +23,10 @@ export { DOShardedTagCache } from "./.open-next/worker.js";
 //@ts-expect-error: Will be resolved by wrangler build
 export { BucketCachePurge } from "./.open-next/worker.js";
 
-// 下流が本文を持つとみなす条件と、同じにする。OpenNext は GET と HEAD 以外を
-// すべて arrayBuffer() で持つので、こちらだけ OPTIONS を本文なしとみなすと、
-// 本文の付いた OPTIONS がここを素通りして向こうで抱えられる。
-const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
-
 export default {
   async fetch(request, env, ctx) {
-    if (BODYLESS_METHODS.has(request.method) || !request.body) {
-      return openNext.fetch(request, env, ctx);
-    }
-
-    const limit = requestBodyLimit(new URL(request.url).pathname);
-    const declared = request.headers.get("content-length");
-    if (declared !== null) {
-      const length = Number(declared);
-      if (!Number.isFinite(length) || length > limit) {
-        return new Response(null, { status: 413 });
-      }
-      // 名乗った長さは信じきらない。実際に流れるぶんも数える。
-    }
-
-    // 作り直すと `cf` は引き継がれない。地域などの手掛かりが要る経路は本文を
-    // 持たないので、失われるのは本文のある POST/PUT だけ。
-    const bounded = new Request(request.url, {
-      method: request.method,
-      headers: request.headers,
-      body: boundedBody(request.body, limit),
-      signal: request.signal,
-      duplex: "half",
-    });
-    return openNext.fetch(bounded, env, ctx);
+    return await fetchWithBodyLimit(request, env, ctx, (bounded, nextEnv, nextCtx) =>
+      openNext.fetch(bounded, nextEnv, nextCtx),
+    );
   },
 };

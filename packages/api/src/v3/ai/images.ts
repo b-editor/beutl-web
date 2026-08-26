@@ -20,6 +20,7 @@ import {
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
+  aiApiMultipartBodyLimit,
   parseBodyWithUploadLimit,
   parseJsonWithBodyLimit,
 } from "../../ai/upload-limits";
@@ -169,6 +170,7 @@ const app = new Hono()
         body = await parseBodyWithUploadLimit(
           c.req,
           MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
+          aiApiMultipartBodyLimit("/api/v3/ai/images")!,
         );
       } catch (error) {
         if (isUploadLimitExceeded(error)) {
@@ -518,6 +520,7 @@ const app = new Hono()
       body = await parseBodyWithUploadLimit(
         c.req,
         MAX_AI_IMAGE_UPLOAD_BYTES,
+        aiApiMultipartBodyLimit("/api/v3/ai/images/edit")!,
       );
     } catch (error) {
       if (isUploadLimitExceeded(error)) {

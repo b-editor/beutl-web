@@ -3,6 +3,7 @@ import {
   claimAiJobForFinalization,
   getCreditAccount,
   getAiJobById,
+  registerAiStorageCleanup,
   setDbProvider,
   setQueuedAiJobRunning,
   upsertSubscription,
@@ -13,6 +14,7 @@ import {
   createReservedAiJob,
   failAiJobAndRefundUsage,
   reconcileAiJobs,
+  reconcileAiStorageCleanups,
   saveAiJsonResult,
   saveAiImage,
   readAiJsonResult,
@@ -673,6 +675,7 @@ describe("AI job reconciliation", () => {
     const firstLease = store.state.aiJobs.get(snapshot.id)
       ?.finalizationLeaseExpiresAt;
     expect(firstToken).toEqual(expect.any(String));
+    const firstObjectKey = String(putObject.mock.calls[0]?.[0]);
     if (!firstLease) throw new Error("First finalizer has no lease");
 
     const takeover = await claimAiJobForFinalization({
@@ -695,9 +698,7 @@ describe("AI job reconciliation", () => {
     expect(createFile).toHaveBeenCalledOnce();
     expect(deleteFile).toHaveBeenCalledOnce();
     expect(store.state.aiStorageCleanups.size).toBe(0);
-    expect(deleteObject).toHaveBeenCalledWith(
-      `ai/video/${snapshot.id}/${firstToken}`,
-    );
+    expect(deleteObject).toHaveBeenCalledWith(firstObjectKey);
     expect(
       store.state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(0);
@@ -742,6 +743,76 @@ describe("AI job reconciliation", () => {
     expect(store.state.files.size).toBe(0);
     expect(store.state.aiStorageCleanups.size).toBe(0);
     expect(deleteObject).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates a retry object from a stalled expired cleaner", async () => {
+    const firstReservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+    });
+    const secondReservation = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+    });
+    if (!firstReservation.ok || !secondReservation.ok) {
+      throw new Error("AI job reservation failed");
+    }
+
+    const now = new Date("2026-08-25T03:00:00.000Z");
+    const oldKey = "ai/image/stalled-cleaner/orphan-a";
+    await registerAiStorageCleanup({
+      objectKey: oldKey,
+      aiJobId: firstReservation.job.id,
+      state: "cleanup",
+      notBefore: now,
+    });
+
+    let releaseFirstDelete!: () => void;
+    let deleteCalls = 0;
+    deleteObject.mockImplementation((key: string) => {
+      deleteCalls++;
+      if (deleteCalls === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirstDelete = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const firstCleaner = reconcileAiStorageCleanups(now);
+    await vi.waitFor(() => expect(deleteObject).toHaveBeenCalledWith(oldKey));
+
+    const leaseExpiry = new Date(
+      now.getTime() + 5 * 60 * 1000,
+    );
+    const secondCleaner = await reconcileAiStorageCleanups(leaseExpiry);
+    expect(secondCleaner).toMatchObject({ inspected: 1, deleted: 1, errors: 0 });
+
+    const retry = await saveAiImage({
+      jobId: secondReservation.job.id,
+      userId: USER_ID,
+      bytes: Uint8Array.from([9, 8, 7]).buffer,
+      mimeType: "image/png",
+      filename: "retry.png",
+    });
+    const newKey = retry.objectKey;
+    expect(newKey).not.toBe(oldKey);
+    expect(newKey).toMatch(new RegExp(`^ai/image/${secondReservation.job.id}/`));
+
+    releaseFirstDelete();
+    await expect(firstCleaner).resolves.toMatchObject({
+      inspected: 1,
+      deleted: 0,
+      errors: 1,
+    });
+    expect(deleteObject.mock.calls.every(([key]) => key === oldKey)).toBe(true);
+    expect([...store.state.files.values()].some((file) => file.objectKey === newKey)).toBe(true);
   });
 
   it("expires a recoverable text result without refunding its completed usage", async () => {

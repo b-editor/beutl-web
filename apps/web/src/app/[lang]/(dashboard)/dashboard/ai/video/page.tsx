@@ -64,6 +64,7 @@ export default async function Page(props: {
       />
       <VideoForm
         lang={lang}
+        userId={session.user.id}
         access={{
           ...access,
           models: { ...access.models, "video.generate": models },

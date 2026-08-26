@@ -6,9 +6,13 @@ const mocks = vi.hoisted(() => ({
   checkoutRetrieve: vi.fn(),
   expireCheckoutSession: vi.fn(),
   createCustomer: vi.fn(),
+  beginStripeCustomerProvisioning: vi.fn(),
   createVerifiedCustomerMappingIfAbsent: vi.fn(),
   deleteCustomer: vi.fn(),
   findAccountDeletionIntentByUserId: vi.fn(),
+  inspectAccountDeletionBillingBlockers: vi.fn(),
+  countUnboundAccountDeletionCheckoutAttempts: vi.fn(),
+  countActiveStripeCustomerProvisioning: vi.fn(),
   findBillingOfferById: vi.fn(),
   findBoundProCheckoutAttemptForAccountDeletion: vi.fn(),
   findCustomerByUserId: vi.fn(),
@@ -18,12 +22,17 @@ const mocks = vi.hoisted(() => ({
   listCheckoutSessions: vi.fn(),
   markStripeCustomerOwnershipVerified: vi.fn(),
   recordBillingRefundCancellation: vi.fn(),
+  recordStripeCustomerProvisioningRemote: vi.fn(),
   replaceCustomerMappingWithVerifiedOwnership: vi.fn(),
   retrieveCustomer: vi.fn(),
   retrieveSubscription: vi.fn(),
   scheduleBillingRefundAttempt: vi.fn(),
+  scheduleStripeCustomerProvisioningCleanup: vi.fn(),
+  settleStripeCustomerProvisioning: vi.fn(),
+  setTopUpCheckoutSession: vi.fn(),
   startRetryableTransaction: vi.fn(),
   updateCustomer: vi.fn(),
+  updateStripeCustomerProvisioningKey: vi.fn(),
 }));
 
 vi.mock("@beutl/db", () => ({
@@ -31,7 +40,12 @@ vi.mock("@beutl/db", () => ({
     "pre-owner-metadata-2026-08-09",
   createVerifiedCustomerMappingIfAbsent:
     mocks.createVerifiedCustomerMappingIfAbsent,
+  beginStripeCustomerProvisioning: mocks.beginStripeCustomerProvisioning,
   findAccountDeletionIntentByUserId: mocks.findAccountDeletionIntentByUserId,
+  inspectAccountDeletionBillingBlockers:
+    mocks.inspectAccountDeletionBillingBlockers,
+  countUnboundAccountDeletionCheckoutAttempts: mocks.countUnboundAccountDeletionCheckoutAttempts,
+  countActiveStripeCustomerProvisioning: mocks.countActiveStripeCustomerProvisioning,
   findBillingOfferById: mocks.findBillingOfferById,
   findBoundProCheckoutAttemptForAccountDeletion:
     mocks.findBoundProCheckoutAttemptForAccountDeletion,
@@ -41,9 +55,14 @@ vi.mock("@beutl/db", () => ({
   markStripeCustomerOwnershipVerified:
     mocks.markStripeCustomerOwnershipVerified,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
+  recordStripeCustomerProvisioningRemote: mocks.recordStripeCustomerProvisioningRemote,
   replaceCustomerMappingWithVerifiedOwnership:
     mocks.replaceCustomerMappingWithVerifiedOwnership,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
+  scheduleStripeCustomerProvisioningCleanup: mocks.scheduleStripeCustomerProvisioningCleanup,
+  settleStripeCustomerProvisioning: mocks.settleStripeCustomerProvisioning,
+  setTopUpCheckoutSession: mocks.setTopUpCheckoutSession,
+  updateStripeCustomerProvisioningKey: mocks.updateStripeCustomerProvisioningKey,
   startRetryableTransaction: mocks.startRetryableTransaction,
 }));
 
@@ -176,8 +195,18 @@ function proSubscription() {
 
 describe("application-owned Stripe customer lifecycle", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.findAccountDeletionIntentByUserId.mockResolvedValue(null);
+    mocks.inspectAccountDeletionBillingBlockers.mockResolvedValue({
+      proCheckout: 0,
+      buyerPackageCheckout: 0,
+      sellerPackageCheckout: 0,
+      topUpCheckout: 0,
+      topUpRefund: 0,
+      topUpResolution: 0,
+    });
+    mocks.countUnboundAccountDeletionCheckoutAttempts.mockResolvedValue(0);
+    mocks.countActiveStripeCustomerProvisioning.mockResolvedValue(0);
     mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue(null);
     mocks.findBillingOfferById.mockResolvedValue(proOffer);
     mocks.cancelSubscription.mockResolvedValue({
@@ -188,6 +217,12 @@ describe("application-owned Stripe customer lifecycle", () => {
       id: "cus_new",
       metadata: ownerMetadata(),
     });
+    mocks.beginStripeCustomerProvisioning.mockResolvedValue({ id: "provisioning-1" });
+    mocks.recordStripeCustomerProvisioningRemote.mockResolvedValue({ count: 1 });
+    mocks.scheduleStripeCustomerProvisioningCleanup.mockResolvedValue({ count: 1 });
+    mocks.settleStripeCustomerProvisioning.mockResolvedValue({ count: 1 });
+    mocks.setTopUpCheckoutSession.mockResolvedValue(true);
+    mocks.updateStripeCustomerProvisioningKey.mockResolvedValue({ count: 1 });
     mocks.createVerifiedCustomerMappingIfAbsent.mockResolvedValue({
       userId: "user-1",
       stripeId: "cus_new",
@@ -256,6 +291,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("keeps a verified mapped customer and its active subscriptions", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
+    mocks.retrieveCustomer.mockResolvedValue({
+      id: "cus_existing",
+      deleted: false,
+      metadata: ownerMetadata(),
+    });
 
     await expect(
       createOrRetrieveOwnedCustomerId({
@@ -270,12 +310,10 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
   });
 
-  it("replaces a metadata-free migration-cohort customer", async () => {
-    mocks.findCustomerByUserId
-      .mockResolvedValueOnce(
-        mapping("cus_legacy", legacyOwnership("cus_legacy")),
-      )
-      .mockResolvedValueOnce(mapping("cus_new"));
+  it("refuses a live metadata-free migration-cohort customer without creating a replacement", async () => {
+    mocks.findCustomerByUserId.mockResolvedValue(
+      mapping("cus_legacy", legacyOwnership("cus_legacy")),
+    );
     mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_legacy",
       deleted: false,
@@ -287,24 +325,16 @@ describe("application-owned Stripe customer lifecycle", () => {
         userId: "user-1",
         email: "owner@example.com",
       }),
-    ).resolves.toBe("cus_new");
-
-    expect(mocks.createCustomer).toHaveBeenCalledWith(
-      { metadata: ownerMetadata() },
-      { idempotencyKey: "beutl:customer:user-1:replace:cus_legacy" },
-    );
-    expect(mocks.replaceCustomerMappingWithVerifiedOwnership).toHaveBeenCalledWith({
-      userId: "user-1",
-      expectedStripeId: "cus_legacy",
-      stripeId: "cus_new",
-    });
+    ).rejects.toThrow("without verified ownership");
+    expect(mocks.createCustomer).not.toHaveBeenCalled();
+    expect(mocks.replaceCustomerMappingWithVerifiedOwnership).not.toHaveBeenCalled();
     expect(mocks.updateCustomer).not.toHaveBeenCalledWith(
       "cus_legacy",
       expect.anything(),
     );
   });
 
-  it("expires every owned open Checkout session before replacing a customer", async () => {
+  it("refuses replacement when any open legacy Checkout session is unowned", async () => {
     mocks.findCustomerByUserId
       .mockResolvedValueOnce(
         mapping("cus_legacy", legacyOwnership("cus_legacy")),
@@ -328,20 +358,13 @@ describe("application-owned Stripe customer lifecycle", () => {
         has_more: false,
       });
 
-    await createOrRetrieveOwnedCustomerId({
+    await expect(createOrRetrieveOwnedCustomerId({
       userId: "user-1",
       email: "owner@example.com",
-    });
+    })).rejects.toThrow("without verified ownership");
 
-    expect(mocks.listCheckoutSessions).toHaveBeenNthCalledWith(2, {
-      customer: "cus_legacy",
-      status: "open",
-      limit: 100,
-      starting_after: "cs_unowned",
-    });
-    expect(mocks.expireCheckoutSession).toHaveBeenCalledTimes(2);
-    expect(mocks.expireCheckoutSession).toHaveBeenCalledWith("cs_owned");
-    expect(mocks.expireCheckoutSession).toHaveBeenCalledWith("cs_owned_2");
+    expect(mocks.listCheckoutSessions).not.toHaveBeenCalled();
+    expect(mocks.expireCheckoutSession).not.toHaveBeenCalled();
   });
 
   it("uses a metadata-owned customer and verifies its legacy ownership record", async () => {
@@ -371,12 +394,9 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
   });
 
-  it("never claims conflicting metadata and replaces only the current mapping", async () => {
+  it("refuses conflicting Stripe metadata instead of claiming the Customer", async () => {
     mocks.findCustomerByUserId
-      .mockResolvedValueOnce(
-        mapping("cus_legacy", legacyOwnership("cus_legacy")),
-      )
-      .mockResolvedValueOnce(mapping("cus_new"));
+      .mockResolvedValueOnce(mapping("cus_legacy", legacyOwnership("cus_legacy")));
     mocks.retrieveCustomer.mockResolvedValueOnce({
       id: "cus_legacy",
       deleted: false,
@@ -388,15 +408,8 @@ describe("application-owned Stripe customer lifecycle", () => {
         userId: "user-1",
         email: "owner@example.com",
       }),
-    ).resolves.toBe("cus_new");
-
-    expect(
-      mocks.replaceCustomerMappingWithVerifiedOwnership,
-    ).toHaveBeenCalledWith({
-      userId: "user-1",
-      expectedStripeId: "cus_legacy",
-      stripeId: "cus_new",
-    });
+    ).rejects.toThrow("without verified ownership");
+    expect(mocks.replaceCustomerMappingWithVerifiedOwnership).not.toHaveBeenCalled();
     expect(mocks.updateCustomer).not.toHaveBeenCalledWith(
       "cus_legacy",
       expect.anything(),
@@ -578,6 +591,18 @@ describe("application-owned Stripe customer lifecycle", () => {
     expect(mocks.updateCustomer).not.toHaveBeenCalled();
   });
 
+  it("expires top-up Sessions without misclassifying them as Pro cleanup", async () => {
+    mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
+    mocks.findStripeCustomerOwnershipByStripeId.mockResolvedValue(legacyOwnership("cus_existing"));
+    mocks.retrieveCustomer.mockResolvedValue({ id: "cus_existing", deleted: false, metadata: ownerMetadata() });
+    mocks.listCheckoutSessions.mockResolvedValue({
+      data: [{ id: "cs_topup", metadata: { ...ownerMetadata(), billingOfferId: "offer_topup", topUpAttemptId: "topup-1" } }],
+      has_more: false,
+    });
+    await closeStripeCustomerForAccountDeletion({ userId: "user-1", stripeCustomerId: "cus_existing", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
+    expect(mocks.expireCheckoutSession).toHaveBeenCalledWith("cs_topup");
+  });
+
   it("does not close a metadata-free legacy customer", async () => {
     mocks.findStripeCustomerOwnershipByStripeId.mockResolvedValue(
       legacyOwnership("cus_legacy"),
@@ -598,7 +623,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
 
     await expect(
-      closeStripeCustomerForAccountDeletion({
+      closeStripeCustomerForAccountDeletion({ deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z"),
         userId: "user-1",
         stripeCustomerId: "cus_legacy",
       }),
@@ -644,7 +669,7 @@ describe("application-owned Stripe customer lifecycle", () => {
       },
     );
 
-    await closeStripeCustomerForAccountDeletion({ userId: "user-1" });
+    await closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
 
     expect(
       mocks.findBoundProCheckoutAttemptForAccountDeletion,
@@ -710,7 +735,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     );
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("refund persistence unavailable");
 
     expect(mocks.cancelSubscription).not.toHaveBeenCalled();
@@ -735,7 +760,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     mocks.recordBillingRefundCancellation.mockResolvedValue(false);
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("Failed to persist account-deletion cancellation");
 
     expect(mocks.scheduleBillingRefundAttempt).toHaveBeenCalled();
@@ -770,7 +795,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("Subscription sub_bound remains active after cancellation");
 
     expect(mocks.recordBillingRefundCancellation).not.toHaveBeenCalled();
@@ -793,7 +818,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("failed ownership validation");
 
     expect(mocks.scheduleBillingRefundAttempt).not.toHaveBeenCalled();
@@ -814,7 +839,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     );
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("Stripe temporarily unavailable");
     expect(mocks.deleteCustomer).not.toHaveBeenCalled();
   });
@@ -833,7 +858,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
 
     await expect(
-      closeStripeCustomerForAccountDeletion({ userId: "user-1" }),
+      closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") }),
     ).rejects.toThrow("Subscription sub_active remains active after cancellation");
 
     expect(mocks.deleteCustomer).not.toHaveBeenCalled();
@@ -855,7 +880,7 @@ describe("application-owned Stripe customer lifecycle", () => {
         url: "/v1/subscriptions",
       });
 
-    await closeStripeCustomerForAccountDeletion({ userId: "user-1" });
+    await closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
 
     expect(mocks.listSubscriptions).toHaveBeenNthCalledWith(2, {
       customer: "cus_existing",

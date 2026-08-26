@@ -53,6 +53,8 @@ import {
   ResultPlaceholder,
   blockedReason,
   blocksSubmit,
+  canSubmitModelRequest,
+  correctedModelId,
   keepsIdempotencyKey,
   requestSignature,
   useAiRequestNames,
@@ -70,10 +72,12 @@ function positiveNumber(text: string): number | undefined {
 
 export function TranslateForm({
   lang,
+  userId,
   access,
   languages,
 }: {
   lang: string;
+  userId: string;
   access: AiAccess;
   // Resolved on the server; see languageOptions in the page.
   languages: LanguageOption[];
@@ -89,18 +93,15 @@ export function TranslateForm({
   // is cut off, because asking again under the same name recovers what was
   // already paid for — and kept per request, because a second run started while
   // the first is still uncollected must not take the first one's name with it.
-  const names = useAiRequestNames();
+  const names = useAiRequestNames(userId, "subtitle.translate");
   const [source, setSource] = useState("");
   const [model, setModel] = useState(() =>
     defaultModelId(access.models["subtitle.translate"] ?? []),
   );
-  const translateModels = access.models["subtitle.translate"] ?? [];
-  useEffect(() => {
-    if (model !== "" && !translateModels.some((entry) => entry.id === model)) {
-      setModel(defaultModelId(translateModels));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [translateModels]);
+  const translateModels = useMemo(
+    () => access.models["subtitle.translate"] ?? [],
+    [access.models],
+  );
   const [sourceLanguage, setSourceLanguage] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("");
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
@@ -116,8 +117,12 @@ export function TranslateForm({
   // dependencies is the point: it must not re-run on every keystroke.
   const sourceRef = useRef(source);
   useEffect(() => {
+    if (names.hasRestoredModel("") && !names.holdsModel("") && model !== "") {
+      setModel("");
+      return;
+    }
     sourceRef.current = source;
-  }, [source]);
+  }, [model, names, source]);
 
   // Picking up where the transcription screen left off. Consumed once so a
   // later visit starts from an empty field rather than a stale transcript.
@@ -134,9 +139,12 @@ export function TranslateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || !parsed.ok || targetLanguage === "" || submitBlocked) {
+    if (isPending || !parsed.ok || targetLanguage === "" || submitBlocked || !names.ready) {
       return;
     }
+
+    const idempotencyKey = await names.ensureAndGet(signature);
+    if (!idempotencyKey) return;
 
     const glossaryEntries = parseGlossary(glossary);
     const style = {
@@ -175,9 +183,8 @@ export function TranslateForm({
       ...(model ? { model } : {}),
     });
 
-    const idempotencyKey = names.nameFor(signature);
     if (!idempotencyKey) return;
-    names.commit(signature);
+    names.commitWithModel(signature, model, null);
     setIsPending(true);
     setMessage(null);
     setArriving([]);
@@ -272,9 +279,27 @@ export function TranslateForm({
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .flat(),
   ]);
+  useEffect(() => {
+    if (names.ready) void names.ensure(signature);
+  }, [names.ready, names, signature]);
+  const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
+  useEffect(() => {
+    const corrected = correctedModelId(
+      translateModels,
+      model,
+      holdsSelectedModel,
+    );
+    if (corrected !== model) setModel(corrected);
+  }, [holdsSelectedModel, model, translateModels]);
   const holdsName = names.holds(signature);
-  const submitBlocked = blocksSubmit(blocked, holdsName);
-  const models = access.models["subtitle.translate"] ?? [];
+  const submitBlocked = blocksSubmit(blocked, holdsName) ||
+    !canSubmitModelRequest(
+      translateModels,
+      model,
+      holdsSelectedModel,
+      holdsName,
+    );
+  const models = names.modelsWithHeld(translateModels);
   const contextsJson = useMemo(() => {
     if (!parsed.ok || !parsed.cues) return "";
     return JSON.stringify(

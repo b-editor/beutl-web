@@ -105,6 +105,7 @@ describe("account deletion intent authorization", () => {
           topUpRefundRequired = true;
           return { count: 1 };
         },
+        count: async () => 0,
       },
       proCheckoutAttempt: {
         findUnique: async ({ where }: any) =>
@@ -126,6 +127,22 @@ describe("account deletion intent authorization", () => {
           proCheckoutAttempt = { ...proCheckoutAttempt, ...data };
           return { count: 1 };
         },
+        count: async () => 0,
+      },
+      packageCheckoutAttempt: {
+        findMany: async () => [],
+        updateMany: async () => ({ count: 0 }),
+        count: async () => 0,
+      },
+      topUpDuplicateRefundAttempt: { count: async () => 0 },
+      topUpCheckoutResolution: { count: async () => 0 },
+      user: { findUnique: async () => ({ id: "user-1" }) },
+      package: { findMany: async () => [] },
+      stripeCustomerProvisioning: { updateMany: async () => ({ count: 0 }) },
+      stripeCheckoutCleanup: {
+        findUnique: async () => null,
+        create: async ({ data }: any) => ({ ...data }),
+        update: async ({ data }: any) => ({ ...data }),
       },
       aiJob: {
         findMany: async () => [

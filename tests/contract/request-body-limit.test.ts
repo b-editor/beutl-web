@@ -3,6 +3,7 @@ import {
   boundedBody,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_REQUEST_BODY_BYTES,
+  RequestBodyLimitExceededError,
   requestBodyLimit,
 } from "@beutl/core";
 
@@ -52,7 +53,7 @@ describe("counting a body that does not say how long it is", () => {
     // 名乗った長さは信じない——名乗らずに送ることも、名乗った以上に送ることも
     // できる。抱えたまま増え続けるより、切るほうがいい。
     await expect(drain(boundedBody(streamOf([600, 600]), 1000)))
-      .rejects.toThrow(/exceeds the configured limit/);
+      .rejects.toBeInstanceOf(RequestBodyLimitExceededError);
   });
 
   it("cuts on the chunk that crosses the line, not after the whole body", async () => {

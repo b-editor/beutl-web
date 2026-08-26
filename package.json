@@ -22,7 +22,8 @@
     "upload:web": "pnpm --filter @beutl/web upload",
     "upload:api": "pnpm --filter @beutl/api upload",
     "upload:admin": "pnpm --filter @beutl/admin upload",
-    "preview": "pnpm --filter @beutl/web preview"
+    "preview": "pnpm --filter @beutl/web preview",
+    "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach"
   },
   "devDependencies": {
     "fflate": "^0.8.3",

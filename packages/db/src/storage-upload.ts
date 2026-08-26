@@ -1,7 +1,7 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
-export async function createStorageUpload({
+async function insertStorageUpload({
   userId,
   id,
   objectKey,
@@ -11,12 +11,15 @@ export async function createStorageUpload({
   size,
   partSize,
   abandonedAt,
+  startState = "active",
+  creationLeaseUntil,
+  creationLeaseToken,
   prisma,
 }: {
   userId: string;
   id: string;
   objectKey: string;
-  uploadId: string;
+  uploadId: string | null;
   name: string;
   mimeType: string;
   size: bigint;
@@ -24,6 +27,9 @@ export async function createStorageUpload({
   // 最初から掃除のものとして置く行。誰も知らないまま残ったマルチパートを、
   // 掃除が見つけられる場所に書き留めるために使う。
   abandonedAt?: Date;
+  startState?: "intent" | "creating" | "active";
+  creationLeaseUntil?: Date | null;
+  creationLeaseToken?: string | null;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
@@ -38,7 +44,172 @@ export async function createStorageUpload({
       size,
       partSize,
       ...(abandonedAt ? { abandonedAt } : {}),
+      startState,
+      creationLeaseUntil: creationLeaseUntil ?? null,
+      creationLeaseToken: creationLeaseToken ?? null,
     },
+  });
+}
+
+/** Reserve quota and persist a start intent before contacting the bucket. */
+export async function createStorageUploadIntent({
+  userId,
+  id,
+  objectKey,
+  name,
+  mimeType,
+  size,
+  partSize,
+  prisma,
+}: {
+  userId: string;
+  id: string;
+  objectKey: string;
+  name: string;
+  mimeType: string;
+  size: bigint;
+  partSize: number;
+  prisma?: PrismaTransaction;
+}) {
+  return insertStorageUpload({
+    userId,
+    id,
+    objectKey,
+    uploadId: null,
+    name,
+    mimeType,
+    size,
+    partSize,
+    startState: "intent",
+    creationLeaseUntil: null,
+    prisma,
+  });
+}
+
+/** Persist a cancellation tombstone for an upload that never reached storage. */
+export async function createStorageUploadCancellationTombstone({
+  userId, id, now, prisma,
+}: { userId: string; id: string; now: Date; prisma?: PrismaTransaction }) {
+  return insertStorageUpload({
+    userId, id, objectKey: "", uploadId: "", name: "",
+    mimeType: "application/octet-stream", size: BigInt(0),
+    partSize: 5 * 1024 * 1024, abandonedAt: now, startState: "active", prisma,
+  });
+}
+
+/** Claim a durable intent for remote creation. Exactly one caller wins. */
+export async function claimStorageUploadCreation({
+  id,
+  userId,
+  now,
+  leaseUntil,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now: Date;
+  leaseUntil: Date;
+  leaseToken: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      uploadId: null,
+      abandonedAt: null,
+      OR: [
+        { startState: "intent" },
+        { startState: "creating", creationLeaseUntil: { lte: now } },
+      ],
+    },
+    data: { startState: "creating", creationLeaseUntil: leaseUntil, creationLeaseToken: leaseToken },
+  });
+  return result.count > 0;
+}
+
+/** Attach the exact remote handle only while this creator's lease is current. */
+export async function attachStorageUploadRemote({
+  id,
+  userId,
+  uploadId,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  uploadId: string;
+  leaseToken: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: { id, userId, uploadId: null, startState: "creating", abandonedAt: null, creationLeaseToken: leaseToken },
+    data: { uploadId, startState: "active", creationLeaseUntil: null, creationLeaseToken: null },
+  });
+  return result.count > 0;
+}
+
+/** Record a remote handle after the creator lost its attach CAS. */
+export async function recordStorageUploadRemoteForCleanup({
+  id,
+  userId,
+  uploadId,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  uploadId: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: { id, userId, uploadId: null, completedFileId: null },
+    data: {
+      uploadId,
+      startState: "active",
+      creationLeaseUntil: null,
+      creationLeaseToken: null,
+    },
+  });
+  return result.count > 0;
+}
+
+/** Return an unknown-outcome create to the retryable intent state. */
+export async function releaseStorageUploadCreation({
+  id,
+  now,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  now: Date;
+  leaseToken: string | null;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: {
+      id,
+      uploadId: null,
+      startState: "creating",
+      creationLeaseUntil: { lte: now },
+      creationLeaseToken: leaseToken,
+    },
+    data: { startState: "intent", creationLeaseUntil: null, creationLeaseToken: null },
+  });
+  return result.count > 0;
+}
+
+/** Persist a remote multipart handle whose local row was lost, for cleanup. */
+export async function createStorageUploadOrphanedMultipart({
+  userId, id, objectKey, uploadId, name, mimeType, now, prisma,
+}: { userId: string; id: string; objectKey: string; uploadId: string; name: string; mimeType: string; now: Date; prisma?: PrismaTransaction }) {
+  return insertStorageUpload({
+    userId, id, objectKey, uploadId, name, mimeType, size: BigInt(0),
+    partSize: 5 * 1024 * 1024, abandonedAt: now, startState: "active", prisma,
   });
 }
 
@@ -87,7 +258,7 @@ export async function markStorageUploadCompleted({
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
-    where: { id, abandonedAt: null },
+    where: { id, completedFileId: null, abandonedAt: null },
     data: { completedFileId: fileId },
   });
   return result.count > 0;
@@ -168,7 +339,7 @@ export async function listStorageUploadsStartedBefore({
   const db = prisma ?? (await getDb());
   return await db.storageUpload.findMany({
     where: {
-      OR: [{ createdAt: { lt: before } }, { abandonedAt: { not: null } }],
+      OR: [{ completedFileId: null, createdAt: { lt: before } }, { abandonedAt: { not: null } }],
     },
     orderBy: { createdAt: "asc" },
     take: limit,

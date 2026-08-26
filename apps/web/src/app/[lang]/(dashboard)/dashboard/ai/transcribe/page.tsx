@@ -25,6 +25,7 @@ export default async function Page(props: {
       />
       <TranscribeForm
         lang={lang}
+        userId={session.user.id}
         access={access}
         languages={languageOptions(lang)}
       />

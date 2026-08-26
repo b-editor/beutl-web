@@ -53,6 +53,7 @@ export const auditLogActions = {
     aiOperationModelRemoved: "admin.aiOperationModelRemoved",
     aiCreditsAdjusted: "admin.aiCreditsAdjusted",
     aiMonthlyUsageAdjusted: "admin.aiMonthlyUsageAdjusted",
+    packageCheckoutResolution: "admin.packageCheckoutResolution",
   },
 } as const;
 

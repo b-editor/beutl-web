@@ -1,4 +1,5 @@
 import { getTranslation } from "@beutl/i18n";
+import { RequestBodyLimitExceededError } from "@beutl/core";
 import type { ErrorHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { JwtTokenExpired } from "hono/utils/jwt/types";
@@ -92,6 +93,11 @@ export async function apiErrorResponse(
 }
 
 export const apiOnErrorHandler: ErrorHandler = async (err, c) => {
+  if (err instanceof RequestBodyLimitExceededError) {
+    return c.json(await apiErrorResponse("fileIsTooLarge"), {
+      status: 413,
+    });
+  }
   console.error(err);
   if (err instanceof HTTPException) {
     return err.getResponse();

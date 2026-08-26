@@ -59,6 +59,7 @@ export default async function Page(props: {
       />
       <ImageEditForm
         lang={lang}
+        userId={session.user.id}
         access={{ ...access, models: { ...access.models, ...models } }}
       />
     </div>

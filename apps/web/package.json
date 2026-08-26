@@ -15,6 +15,7 @@
     "reconcile:package-payments": "node --env-file-if-exists=.env scripts/reconcile-package-payments.mjs",
     "backfill:package-payment-amounts": "node --env-file-if-exists=.env scripts/backfill-package-payment-amounts.mjs",
     "reconcile:stale-subscriptions": "node --env-file-if-exists=.env scripts/reconcile-stale-subscriptions.mjs",
+    "migrate:fresh-cockroach": "node --env-file-if-exists=.env scripts/migrate-fresh-cockroach.mjs",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts",

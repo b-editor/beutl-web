@@ -18,6 +18,7 @@
     "insufficientStorageSpace": "このファイルを保存できる空き容量がありません。",
     "uploadNotFound": "このアップロードは進行中ではありません。もう一度お試しください。",
     "uploadFailed": "アップロードを完了できませんでした。もう一度お試しください。",
+    "storagePersistenceUnavailable": "ブラウザーのストレージを利用できません。ページを開いたままストレージを有効にして、もう一度お試しください。完了ハンドルを保存できるまで新しいアップロードは開始されません。",
     "invalidRequestBody": "このファイルはアップロードできません。",
     "authenticationIsRequired": "アップロードするにはサインインし直してください。",
     "fileNotFound": "そのファイルはもうありません。",

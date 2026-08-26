@@ -84,9 +84,10 @@ Runtime ownership is deliberately fail-closed:
 - absent, partial, or conflicting owner metadata is never accepted for email
   changes, billing portal access, checkout reuse, webhook entitlement, or
   account deletion;
-- a user whose mapped legacy customer lacks valid metadata receives a new
-  metadata-owned customer for future billing. The old customer remains for
-  operator review rather than being claimed automatically.
+- a live mapping whose Stripe customer lacks valid metadata is not replaced
+  automatically. Billing and account-deletion operations fail closed until an
+  operator reconciles ownership and any payable remote state; the legacy
+  customer remains untouched during that intervention.
 
 Before replacing a mapping, the application expires every owned open Checkout
 Session on the old customer. If mapping persistence still loses a race with
@@ -159,6 +160,65 @@ each newly created billing table before it adds indexes or foreign keys and
 relocks it after the schema change completes. Do not manually mark a partially
 applied migration as complete; first recover its incomplete tables, then retry
 the corrected migration through Prisma.
+
+## Fresh Cockroach bootstrap
+
+The historical migration `20260302201320_change_bigint_to_int` contains a
+Cockroach-incompatible statement on a fresh chain: with the cluster default
+`create_table_with_schema_locked = true`, Prisma can report P3018 before later
+migrations run. Do not edit that historical migration or mark it applied; its
+checksum is part of the migration history. Existing production upgrades do not
+re-run an already applied migration, so this is a fresh-database bootstrap
+concern only.
+
+For a new Cockroach v26.1+ database, use the dedicated command below. It
+requires a separately provisioned empty database URL and changes only the
+migration subprocess URL; the runtime `DATABASE_URL` remains unchanged:
+
+```bash
+FRESH_COCKROACH_DATABASE_URL='postgresql://root@host:26257/new_empty_db?sslmode=verify-full' \
+  vp run --workspace-root migrate:fresh-cockroach
+```
+
+The command appends the session option
+`options=-c%20create_table_with_schema_locked%3Doff` (Cockroach's actual v26.3
+session variable is `create_table_with_schema_locked`) while preserving any
+existing query parameters. It must not be added to the normal runtime or
+upgrade URL, because turning schema locking off globally weakens the intended
+schema-ownership guard. After deployment, verify the explicit relocks (and
+investigate any application table that is still unlocked):
+
+```sql
+SHOW CREATE TABLE "PackageCheckoutResolution";
+SHOW CREATE TABLE "TopUpDuplicateRefundAttempt";
+SHOW CREATE TABLE "TopUpCheckoutResolution";
+SHOW CREATE TABLE "StorageUpload";
+```
+
+Each result must include `WITH (schema_locked = true)`. Repeat `SHOW CREATE
+TABLE` for the other application tables listed by `SHOW TABLES`; an application
+table whose result lacks that clause is an incomplete relock and must be
+repaired before traffic resumes.
+
+The durable storage-upload start migration requires a maintenance cutover.
+`20260825160000_durable_storage_upload_start` is immutable and defaults
+`StorageUpload.startState` to `intent` while enforcing that only `active` rows
+have a non-null `uploadId`; an old writer that omits `startState` therefore
+cannot write during this transition. Quiesce storage-upload starts before
+running `prisma migrate deploy` through `20260826000000_repair_storage_upload_start_default`.
+Verify that the repaired default is `active`, the three start-state checks are
+present, and `SHOW CREATE TABLE "StorageUpload"` reports
+`schema_locked = true`. Deploy the new runtime (which writes `intent`
+explicitly), then resume storage traffic. Do not edit or resolve the 1600
+migration to change its checksum; the 2600 migration is the forward repair for
+databases where 1600 was already applied.
+
+The receipt-retention migration preflights orphaned and duplicate receipts,
+then drops and recreates its named index and foreign key because Cockroach does
+not support conditional dynamic DDL in a migration block. Run it during the
+maintenance window with no concurrent storage-upload writes. If any migration
+fails after its temporary unlock, do not resume traffic: retry the migration
+and confirm `SHOW CREATE TABLE` reports `schema_locked = true` before release.
 
 ## Resumable account deletion
 

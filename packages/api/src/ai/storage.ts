@@ -1,4 +1,4 @@
-import { MAX_AI_RESULT_BYTES } from "@beutl/core";
+import { AI_TEXT_RESULT_RETENTION_MILLISECONDS, MAX_AI_RESULT_BYTES } from "@beutl/core";
 import {
   claimAiStorageCleanupForDeletion,
   completeAiJobWithOutput,
@@ -9,6 +9,8 @@ import {
   makeAiStorageCleanupDue,
   registerAiStorageCleanup,
 } from "@beutl/db";
+
+export { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "@beutl/core";
 
 // R2 bucket injection point. The standalone worker registers its wrangler.jsonc
 // binding and Next.js registers the getCloudflareContext environment through
@@ -54,8 +56,6 @@ export type R2BucketLike = {
 
 type R2BucketProvider = () => R2BucketLike;
 const AI_OUTPUT_WRITE_GRACE_MILLISECONDS = 15 * 60 * 1000;
-export const AI_TEXT_RESULT_RETENTION_MILLISECONDS =
-  30 * 24 * 60 * 60 * 1000;
 export const MAX_AI_TEXT_RESULT_BYTES = MAX_AI_RESULT_BYTES;
 
 export class AiOutputCommitConflictError extends Error {
@@ -89,22 +89,35 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
   await bucket.delete(objectKey);
 }
 
-// まだ組み上がっていない multipart は、オブジェクトが無いので delete では消えない。
-// uploadId を持っていれば abort できる——持っていなければ、もう組み上がったか、
-// 最初から multipart ではなかったかのどちらかで、delete で足りる。
+// Unassembled multipart parts require the upload ID for abort; object deletion
+// alone cannot remove them. Without an upload ID, object deletion is sufficient.
+export function isTerminalMultipartAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as Record<string, unknown>;
+  const code = String(record.code ?? record.name ?? "").toLowerCase();
+  if (code === "nosuchupload") return true;
+  const message = String(record.message ?? "");
+  // Workers bindings may expose only the numeric R2 code in the message.
+  return /(?:\(\s*10024\s*\)|\b10024)\s*$/u.test(message);
+}
+
 async function abortMultipartIfPresent(
   objectKey: string,
   uploadId: string | null,
 ): Promise<void> {
   if (!uploadId) return;
   const bucket = getR2Bucket();
-  if (!bucket.resumeMultipartUpload) return;
+  if (!bucket.resumeMultipartUpload) {
+    throw new Error("The configured R2 bucket cannot abort a multipart upload.");
+  }
   try {
     await bucket.resumeMultipartUpload(objectKey, uploadId).abort();
   } catch (error) {
-    // 組み上がっていれば abort は失敗する——そのときはオブジェクトを消せばよい。
-    // その他の失敗は、もう一度回ってくれば拾える。
-    console.error(`Failed to abort multipart ${objectKey}`, error);
+    // A completed, already-aborted, or unknown upload is terminal: deleting the
+    // object (if one exists) is safe. Transient failures must escape so the
+    // claimed cleanup row and uploadId remain for the next reconciliation.
+    if (isTerminalMultipartAbortError(error)) return;
+    throw error;
   }
 }
 
@@ -344,7 +357,9 @@ export async function saveAiVideo({
     bytes,
     mimeType,
     filename,
-    objectKey: `ai/video/${jobId}/${finalizationToken}`,
+    // A finalization token identifies the job lease, not an object lifetime.
+    // A retry must never reuse a key that an expired cleaner may still delete.
+    objectKey: `ai/video/${jobId}/${crypto.randomUUID()}`,
   });
 }
 
@@ -393,19 +408,30 @@ export async function reconcileAiStorageCleanups(now = new Date()) {
         state: cleanup.state,
         notBefore: cleanup.notBefore,
         now,
+        leaseToken: cleanup.leaseToken,
       });
       if (!claim.claimed) continue;
       if (!claim.shouldDeleteObject) continue;
-      // まだ中断中の multipart があれば、それも。オブジェクトの delete だけでは
-      // パートは消えず、行が消えたあとに誰も abort できなくなる。
-      if (cleanup.uploadId) {
-        await abortMultipartIfPresent(cleanup.objectKey, cleanup.uploadId);
+      const claimedCleanup = claim.cleanup;
+      // Abort a tracked multipart before deleting its object; otherwise its
+      // parts survive after the only durable upload handle is removed.
+      if (claimedCleanup.uploadId) {
+        await abortMultipartIfPresent(
+          claimedCleanup.objectKey,
+          claimedCleanup.uploadId,
+        );
       }
-      await deleteAiOutputObject(cleanup.objectKey);
-      await finalizeReconciledAiStorageCleanup({
-        objectKey: cleanup.objectKey,
-        aiJobId: cleanup.aiJobId,
+      await deleteAiOutputObject(claimedCleanup.objectKey);
+      const finalized = await finalizeReconciledAiStorageCleanup({
+        objectKey: claimedCleanup.objectKey,
+        aiJobId: claimedCleanup.aiJobId,
+        leaseToken: claimedCleanup.leaseToken,
       });
+      if (!finalized) {
+        throw new Error(
+          `AI storage cleanup ${claimedCleanup.objectKey} lost its claim before finalization`,
+        );
+      }
       deleted++;
     } catch (error) {
       errors++;

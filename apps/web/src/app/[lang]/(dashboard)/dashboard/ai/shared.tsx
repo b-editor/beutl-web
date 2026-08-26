@@ -30,35 +30,64 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export {
   canSubmitAiRequest,
+  canSubmitModelRequest,
   blockedReason,
   blocksSubmit,
+  correctedModelId,
+  digestAiRequestSignature,
+  aiRecoveryStorageScope,
+  restoreAiRecoveryEntries,
+  serializeAiRecoveryEntries,
   IDEMPOTENCY_KEY_FIELD,
   fileFingerprint,
+  heldAiRequestModels,
+  heldAiRequestModelMap,
+  heldAiRequestCapabilityMap,
+  heldAiRequestCapability,
+  holdsAiRequestModel,
   keepModelForHeldRequest,
+  modelsWithHeldRequests,
+  mergeHeldModelCapabilities,
+  mergeHeldRequestCapabilities,
   keepsIdempotencyKey,
+  readAiRecoverySafely,
   requestSignature,
   seedValue,
   type AiAccess,
   type AiBalance,
   type AiBlockReason,
   type AiScreenModel,
+  type HeldModelCapabilitySnapshots,
 } from "@/lib/ai-screen";
 import {
   aiRequestNameOf,
-  commitAiRequestName,
+  aiRecoveryStorageScope,
+  digestAiRequestSignature,
+  serializeAiRecoveryEntries,
   fileFingerprint,
+  heldAiRequestModels,
+  heldAiRequestModelMap,
+  heldAiRequestCapabilityMap,
+  heldAiRequestCapability,
+  holdsAiRequestModel,
   holdsAiRequestName,
   IDEMPOTENCY_KEY_FIELD,
+  mergeHeldModelCapabilities,
+  mergeHeldRequestCapabilities,
+  modelsWithHeldRequests,
   newAiRequestNames,
   readyAiRequestNames,
-  settleAiRequestName,
+  reduceAiRequestRecovery,
+  readAiRecoverySafely,
   type AiBalance,
   type AiBlockReason,
   type AiScreenModel,
+  type HeldModelCapabilitySnapshots,
+  type AiRequestNames,
 } from "@/lib/ai-screen";
 
 export function billingHref(lang: string): string {
@@ -310,28 +339,232 @@ export function useFileFingerprints(
  * 送信ごとの名前を、依頼ごとに持っておく。どれを残しどれを手放すかは
  * {@link commitAiRequestName} と {@link settleAiRequestName} が決める。
  */
-export function useAiRequestNames(): {
+type PersistedAiRecoveryEntry = import("@/lib/ai-screen").PersistedAiRecoveryEntry;
+
+function recoveryStorageKey(userId: string, operation: string): string {
+  return aiRecoveryStorageScope(userId, operation);
+}
+
+function writePersistedRecovery(
+  userId: string,
+  operation: string,
+  entries: readonly PersistedAiRecoveryEntry[],
+): void {
+  try {
+    if (entries.length === 0) {
+      window.localStorage.removeItem(recoveryStorageKey(userId, operation));
+      return;
+    }
+    window.localStorage.setItem(recoveryStorageKey(userId, operation), serializeAiRecoveryEntries(entries));
+  } catch {
+    // Storage can be disabled or full. In-memory recovery remains valid.
+  }
+}
+
+export function useAiRequestNames(userId = "", operation = "unknown"): {
+  ready: boolean;
   nameFor: (request: string) => string;
   holds: (request: string) => boolean;
+  holdsModel: (model: string) => boolean;
+  hasRestoredModel: (model: string) => boolean;
+  restoredModels: () => string[];
+  restoredModelsKey: string;
+  heldModels: () => string[];
+  heldRequestModels: () => Readonly<Record<string, string>>;
+  heldRequestCapabilities: () => Readonly<Record<string, unknown | null>>;
+  heldCapabilityFor: (request: string) => unknown | null | undefined;
+  ensure: (request: string) => Promise<void>;
+  ensureAndGet: (request: string) => Promise<string>;
+  modelsWithHeld: (models: readonly AiScreenModel[]) => AiScreenModel[];
   commit: (request: string) => void;
+  commitWithModel: (request: string, model: string, capability?: unknown) => void;
   settle: (keeps: boolean) => void;
 } {
   const [names, setNames] = useState(newAiRequestNames);
-  // 人が触るより前に、ブラウザ側で 1 つ用意しておく。送信のとき欄に入っている
-  // 必要があり、そのときに作ったのでは間に合わない。
-  useEffect(() => {
-    setNames((current) => readyAiRequestNames(current, randomUuid));
-  }, []);
+  const namesRef = useRef(names);
+  const restoredRef = useRef<Map<string, PersistedAiRecoveryEntry>>(new Map());
+  const requestDigestsRef = useRef<Map<string, string>>(new Map());
+  const entriesRef = useRef<PersistedAiRecoveryEntry[]>([]);
+  const ensurePromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const generationRef = useRef(0);
+  const [ready, setReady] = useState(false);
 
-  return {
-    nameFor: (request: string) => aiRequestNameOf(names, request),
-    holds: (request: string) => holdsAiRequestName(names, request),
-    commit: (request: string) =>
-      setNames((current) => commitAiRequestName(current, request, randomUuid)),
-    settle: (keeps: boolean) =>
-      setNames((current) => settleAiRequestName(current, keeps)),
-  };
+  useEffect(() => {
+    let active = true;
+    ++generationRef.current;
+    setReady(false);
+    namesRef.current = newAiRequestNames();
+    requestDigestsRef.current = new Map();
+    ensurePromisesRef.current.clear();
+    const entries = typeof window === "undefined" || !userId
+      ? []
+      : readAiRecoverySafely(() => window.localStorage.getItem(recoveryStorageKey(userId, operation)));
+    if (typeof window !== "undefined" && userId) {
+      // Rewrite after validation so malformed and expired records are garbage-collected.
+      writePersistedRecovery(userId, operation, entries);
+    }
+    entriesRef.current = entries;
+    restoredRef.current = new Map(entries.map((entry) => [entry.digest, entry]));
+    const next = readyAiRequestNames(newAiRequestNames(), randomUuid);
+    namesRef.current = next;
+    if (active) {
+      setNames(next);
+      setReady(true);
+    }
+    return () => { active = false; };
+  }, [operation, userId]);
+
+  useEffect(() => { namesRef.current = names; }, [names]);
+
+  const ensure = useCallback(async (request: string): Promise<void> => {
+    if (!ready) return;
+    if (requestDigestsRef.current.has(request)) return;
+    const pending = ensurePromisesRef.current.get(request);
+    if (pending) return pending;
+    const requestGeneration = generationRef.current;
+    const task = (async () => {
+      const digest = await digestAiRequestSignature(request);
+      if (generationRef.current !== requestGeneration) return;
+      requestDigestsRef.current.set(request, digest);
+      const restored = restoredRef.current.get(digest);
+      if (!restored || request in namesRef.current.held) return;
+      const current = namesRef.current;
+      const restoredNames: AiRequestNames = {
+        ...current,
+        held: { ...current.held, [request]: restored.key },
+        heldModels: { ...current.heldModels, [request]: restored.model },
+        heldCapabilities: { ...current.heldCapabilities, [request]: restored.capability },
+      };
+      namesRef.current = restoredNames;
+      setNames(restoredNames);
+    })();
+    ensurePromisesRef.current.set(request, task);
+    try { await task; } finally {
+      if (ensurePromisesRef.current.get(request) === task) {
+        ensurePromisesRef.current.delete(request);
+      }
+    }
+  }, [ready]);
+
+  const ensureAndGet = useCallback(async (request: string): Promise<string> => {
+    const generation = generationRef.current;
+    await ensure(request);
+    if (generationRef.current !== generation || !ready) return "";
+    return aiRequestNameOf(namesRef.current, request);
+  }, [ensure, ready]);
+
+  const persist = useCallback((request: string, key: string, model: string, capability: unknown | null): void => {
+    if (!userId || typeof window === "undefined") return;
+    const digest = requestDigestsRef.current.get(request);
+    if (!digest) return;
+    const entry: PersistedAiRecoveryEntry = {
+      digest,
+      key,
+      model,
+      capability,
+      updatedAt: Date.now(),
+    };
+    entriesRef.current = [...entriesRef.current.filter((item) => item.digest !== digest), entry];
+    writePersistedRecovery(userId, operation, entriesRef.current);
+  }, [operation, userId]);
+
+  const commit = useCallback((request: string, model = "", capability: unknown | null = null): void => {
+    const current = namesRef.current;
+    const next = reduceAiRequestRecovery(current, {
+      type: "commit", request, model, capability,
+    }, randomUuid);
+    namesRef.current = next;
+    setNames(next);
+    const key = next.held[request];
+    if (key) persist(request, key, model, capability);
+  }, [persist]);
+
+  const settle = useCallback((keeps: boolean): void => {
+    const current = namesRef.current;
+    const sent = current.sent;
+    const next = reduceAiRequestRecovery(current, { type: "settle", keeps });
+    namesRef.current = next;
+    setNames(next);
+    if (!keeps && sent) {
+      const digest = requestDigestsRef.current.get(sent);
+      if (digest) {
+        entriesRef.current = entriesRef.current.filter((entry) => entry.digest !== digest);
+        writePersistedRecovery(userId, operation, entriesRef.current);
+      }
+    }
+  }, [operation, userId]);
+
+  const restoredModelsKey = [...new Set(entriesRef.current.map((entry) => entry.model))].join("\u001f");
+  return useMemo(() => ({
+    ready,
+    nameFor: (request: string) => aiRequestNameOf(namesRef.current, request),
+    holds: (request: string) => holdsAiRequestName(namesRef.current, request),
+    holdsModel: (model: string) => holdsAiRequestModel(namesRef.current, model),
+    hasRestoredModel: (model: string) =>
+      entriesRef.current.some((entry) => entry.model === model),
+    restoredModels: () => [...new Set(entriesRef.current.map((entry) => entry.model))],
+    restoredModelsKey,
+    heldModels: () => heldAiRequestModels(namesRef.current),
+    heldRequestModels: () => heldAiRequestModelMap(namesRef.current),
+    heldRequestCapabilities: () => heldAiRequestCapabilityMap(namesRef.current),
+    heldCapabilityFor: (request: string) => heldAiRequestCapability(namesRef.current, request),
+    ensureAndGet,
+    modelsWithHeld: (models: readonly AiScreenModel[]) =>
+      modelsWithHeldRequests(models, [
+        ...heldAiRequestModels(namesRef.current),
+        ...entriesRef.current.map((entry) => entry.model),
+      ]),
+    ensure,
+    commit: (request: string) => commit(request),
+    commitWithModel: (request: string, model: string, capability?: unknown) =>
+      commit(request, model, capability ?? null),
+    settle,
+  }), [commit, ensure, ensureAndGet, ready, restoredModelsKey, settle]);
 }
+
+/**
+ * Freeze the first capability description observed for a held paid model. A
+ * catalog refresh may remove or mutate that entry, but replaying the held
+ * signature must use the same option normalization as the original request.
+ */
+export function useHeldModelCapabilities<T>(
+  capabilities: Record<string, T> | undefined,
+  heldModels: readonly string[] | Readonly<Record<string, string>>,
+  observedModels: readonly string[] = [],
+  heldCapabilities: Readonly<Record<string, unknown | null>> = {},
+): Record<string, T> {
+  const snapshots = useRef<HeldModelCapabilitySnapshots<T>>({});
+  const snapshotsNext = { ...snapshots.current };
+  const heldRequestModels: Readonly<Record<string, string>> = Array.isArray(heldModels)
+    ? Object.fromEntries(heldModels.map((model) => [model, model]))
+    : heldModels;
+  for (const [request, model] of Object.entries(heldRequestModels)) {
+    if (!(request in snapshotsNext)) {
+      const capability = heldCapabilities[request];
+      snapshotsNext[request] = capability === undefined
+        ? (capabilities?.[model] ?? null)
+        : capability as T | null;
+    }
+  }
+  for (const request of Object.keys(snapshotsNext)) {
+    if (!(request in heldRequestModels)) delete snapshotsNext[request];
+  }
+  const merged = Array.isArray(heldModels)
+    ? mergeHeldModelCapabilities(
+      capabilities,
+      snapshotsNext,
+      heldModels,
+      observedModels,
+    )
+    : mergeHeldRequestCapabilities(
+      capabilities,
+      snapshotsNext,
+      heldRequestModels,
+    );
+  snapshots.current = snapshotsNext;
+  return merged;
+}
+
 
 // The idempotency key travels as a form field. Screens that can tell one
 // request from another pass a signature of it, so a name is kept for as long as
@@ -485,7 +718,7 @@ export function ModelSelect({
   // choose between. A screen may be offering fewer models than are registered —
   // video drops the ones that cannot serve any request it can build — and a
   // form that submits no model silently runs on the registered default instead.
-  if (models.length <= 1) {
+  if (models.length <= 1 && (models[0]?.id ?? "") === value) {
     return value ? <input type="hidden" name="model" value={value} /> : null;
   }
 

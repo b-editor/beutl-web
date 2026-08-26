@@ -33,6 +33,7 @@ import {
   createAndAttachVideoJob,
   synchronizeAiVideoJob,
 } from "../../ai/video-jobs";
+import { aiApiMultipartBodyLimit } from "@beutl/core";
 import {
   validateAiInputImage,
   type AiInputImageMimeType,
@@ -416,6 +417,7 @@ const app = new Hono()
       body = await parseBodyWithUploadLimit(
         c.req,
         MAX_AI_VIDEO_FRAME_UPLOAD_BYTES * 2,
+        aiApiMultipartBodyLimit("/api/v3/ai/videos/frames")!,
       );
     } catch (error) {
       if (isUploadLimitExceeded(error)) {

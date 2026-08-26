@@ -1,6 +1,8 @@
 import { getDb } from "./provider";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
+import { startRetryableTransaction } from "./transaction";
+import { preparePackageDeletionOutboxes } from "./package-checkout-attempt";
 
 export async function findPackageIdById({
   id,
@@ -820,12 +822,11 @@ export async function deleteDevPackage({
   packageId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.package.delete({
-    where: {
-      id: packageId,
-    },
-  });
+  const run = async (tx: PrismaTransaction) => {
+    await preparePackageDeletionOutboxes({ packageId, prisma: tx });
+    return await tx.package.delete({ where: { id: packageId } });
+  };
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
 export async function upsertPackagePricings({

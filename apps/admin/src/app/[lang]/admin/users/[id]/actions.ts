@@ -10,17 +10,50 @@ import {
   deleteUserById,
   enqueueUserStorageCleanups,
   existsUserById,
-  findBoundProCheckoutAttemptForAccountDeletion,
-  findCustomerByUserId,
   findAdminCreditAdjustment,
+  findAccountDeletionIntentByUserId,
+  findCustomerByUserId,
   getSubscriptionByUserId,
   isUniqueConstraintViolation,
   prepareAccountDeletionOutboxes,
+  reserveAdminAccountDeletion,
   setMonthlyUsageUsedByAdmin,
   startRetryableTransaction,
 } from "@beutl/db";
-import { isActiveProSubscription, loadAiSettings } from "@beutl/api";
+import {
+  closeStripeCustomerForAdminAccountDeletion,
+  isActiveProSubscription,
+  loadAiSettings,
+} from "@beutl/api";
 import { revalidatePath } from "next/cache";
+import Stripe from "stripe";
+import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
+import { resolveLegacyPackageCheckoutMultiple } from "@beutl/api";
+
+export async function resolvePackageCheckoutMultiple(input: unknown): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    if (!input || typeof input !== "object") return { success: false, message: "Invalid resolver input" };
+    const value = input as Record<string, unknown>;
+    const attemptId = value.attemptId;
+    const discoveryToken = value.discoveryToken;
+    const choice = value.choice;
+    if (typeof attemptId !== "string" || typeof discoveryToken !== "string" || (choice !== "all-refund" && typeof choice !== "string")) return { success: false, message: "Invalid resolver input" };
+    const leaseToken = crypto.randomUUID();
+    const attempt = await claimPackageCheckoutInterventionById({ id: attemptId, discoveryToken, now: new Date(), leaseToken, leaseExpiresAt: new Date(Date.now() + 10 * 60_000) });
+    if (!attempt) return { success: false, message: "Resolution is unavailable" };
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) return { success: false, message: "Stripe is not configured" };
+    try {
+      const result = await resolveLegacyPackageCheckoutMultiple({ stripe: new Stripe(secret), attempt, discoveryToken, recoveryLeaseToken: leaseToken, operatorUserId: session.user.id, choice: choice === "all-refund" ? { kind: "all-refund" } : { kind: "choose", sessionId: choice } });
+      try { await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.packageCheckoutResolution, details: `attemptId: ${attempt.id}, discoveryToken: ${discoveryToken}, choice: ${choice}, refunds: ${result.refundCount}` }); } catch { /* durable resolution operatorUserId remains authoritative */ }
+      return { success: true, message: `Resolution scheduled (${result.refundCount} refunds)` };
+    } catch (error) {
+      await reschedulePackageCheckoutIntervention({ id: attempt.id, discoveryToken, leaseToken, notBefore: new Date(), lastError: error instanceof Error ? error.message : "Resolution failed" });
+      return { success: false, message: error instanceof Error ? error.message : "Resolution failed" };
+    }
+  });
+}
+
 
 // A typo of one order of magnitude must not hand out a fortune. Larger
 // corrections are still possible by repeating the adjustment.
@@ -46,57 +79,78 @@ export async function deleteUser({
       };
     }
 
-    // 課金の続いている相手は消せない。この画面から Stripe の解約はできず、
-    // 行だけ消すと請求はそのまま続き、こちらには誰の請求なのかを引く手掛かりが
-    // 残らない——webhook も、対応する行が無いものは黙って受け取る。
-    //
-    // active だけではなく、trialing、past_due、paused、incomplete も請求の途中
-    // なので、終わったもの（canceled、incomplete_expired）以外はすべて止める。
-    const subscription = await getSubscriptionByUserId({ userId });
-    if (
-      subscription
-      && subscription.status !== "canceled"
-      && subscription.status !== "incomplete_expired"
-    ) {
-      return {
-        success: false,
-        message:
+    // The intent is committed before any remote work and is deliberately kept
+    // when closure fails. A later admin retry resumes the same remote saga.
+    const reservation = await startRetryableTransaction(async (tx) =>
+      await reserveAdminAccountDeletion({ userId, prisma: tx }),
+    );
+    if (reservation.status !== "reserved") {
+      const message = {
+        "already-authorized": "Account deletion is already in progress",
+        subscription:
           "Cancel this user's Pro subscription before deleting the account",
-      };
-    }
-    // まだ完了していない Pro の買い物も。この画面からは解決できない——
-    // 完了していれば控えを書き、未完了なら Session を expire して返金するが、
-    // それができるのは本人の削除フローだけなので、ここでは止める。
-    const checkout = await findBoundProCheckoutAttemptForAccountDeletion({ userId });
-    if (checkout) {
-      return {
-        success: false,
-        message:
+        checkout:
           "Resolve this user's pending Pro checkout before deleting the account",
-      };
+        customer: "Close this user's Stripe customer before deleting the account",
+        provisioning: "Wait for this user's Stripe customer provisioning to settle",
+      }[reservation.reason];
+      return { success: false, message };
     }
-    // Stripe の Customer が残っていると、PaymentMethod や過去の請求が指す先が
-    // 行ごと消えて分からなくなる。本人の削除フローなら Customer を閉じるが、
-    // この画面からはできないので、あるなら止める。
-    const customer = await findCustomerByUserId({ userId });
-    if (customer) {
-      return {
-        success: false,
-        message:
-          "Close this user's Stripe customer before deleting the account",
-      };
+    const intent = await findAccountDeletionIntentByUserId({ userId });
+    if (!intent) {
+      return { success: false, message: "Account deletion intent was not persisted" };
+    }
+    const closure = await closeStripeCustomerForAdminAccountDeletion({
+      userId,
+      stripeCustomerId: intent.stripeCustomerId,
+      deletionAuthorizedAt: intent.authorizedAt,
+    });
+    if (closure.status === "owner-mismatch") {
+      return { success: false, message: "Stripe customer ownership could not be verified" };
+    }
+    if (closure.status === "active-subscription") {
+      return { success: false, message: "Cancel this user's Pro subscription before deleting the account" };
     }
 
-    // 監査ログと対象の書き込みは同一トランザクションで確定させる
-    // (片方だけ成功すると、呼び出し元へ返す結果と実際の状態が食い違う)。
-    // ユーザー削除は 10 テーブル以上へカスケードするため、CockroachDB の
-    // SERIALIZABLE では書き込み競合 (P2034) で落ちやすい。再試行版を使う。
-    await startRetryableTransaction(async (tx) => {
+    const result = await startRetryableTransaction(async (tx) => {
+      const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
+      if (!currentIntent) return { status: "already-completed" as const };
+      // The remote closure ran outside this transaction. Revalidate the exact
+      // intent snapshot and Customer identity before cascading rows; otherwise
+      // a provisioning/mapping race could make a successful closure apply to
+      // a newly assigned Customer.
+      if (
+        currentIntent.stripeCustomerId !== intent.stripeCustomerId ||
+        closure.customerId !== currentIntent.stripeCustomerId
+      ) {
+        return { status: "blocked" as const, reason: "customer" as const };
+      }
+      const subscription = await getSubscriptionByUserId({ userId, prisma: tx });
+      if (subscription && isActiveProSubscription(subscription)) {
+        return { status: "blocked" as const, reason: "subscription" as const };
+      }
+      const provisioning = await tx.stripeCustomerProvisioning.findFirst({
+        where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } },
+        select: { id: true },
+      });
+      if (provisioning) {
+        return { status: "blocked" as const, reason: "provisioning" as const };
+      }
+      const mapping = await findCustomerByUserId({ userId, prisma: tx });
+      if (mapping && mapping.stripeId !== currentIntent.stripeCustomerId) {
+        return { status: "blocked" as const, reason: "customer" as const };
+      }
+      if (mapping && closure.status !== "closed" && closure.status !== "already-closed") {
+        return { status: "blocked" as const, reason: "customer" as const };
+      }
       // 本人が消すときと同じ後始末を、同じトランザクションで。行が消えたあとに
       // 外の持ちものを指す手掛かりは残らないので、消す前に控えを取る——R2 の
       // オブジェクトと、走っている provider の job がそれ。
       await enqueueUserStorageCleanups({ userId, prisma: tx });
-      await prepareAccountDeletionOutboxes({ userId, prisma: tx });
+      const prepared = await prepareAccountDeletionOutboxes({ userId, prisma: tx });
+      if (prepared.unboundCheckoutRecoveries > 0) {
+        return { status: "blocked" as const, reason: "checkout" as const };
+      }
       await deleteUserById({ userId, prisma: tx });
       await addAuditLog({
         userId: session.user.id,
@@ -104,7 +158,20 @@ export async function deleteUser({
         details: `userId: ${userId}`,
         prisma: tx,
       });
+      return { status: "deleted" as const };
     });
+    if (result.status === "blocked") {
+      const message = {
+        subscription:
+          "Cancel this user's Pro subscription before deleting the account",
+        checkout:
+          "Resolve this user's pending Pro checkout before deleting the account",
+        customer: "Close this user's Stripe customer before deleting the account",
+        provisioning: "Wait for this user's Stripe customer provisioning to settle",
+      }[result.reason];
+      return { success: false, message };
+    }
+    if (result.status === "already-completed") return { success: true };
     // middleware が既定ロケールを rewrite するため、リクエストのパスから描画時のロケールを特定できない。
     // ルートパターンを指定して、全ロケールのキャッシュをまとめて破棄する。
     revalidatePath("/[lang]/admin/users", "page");

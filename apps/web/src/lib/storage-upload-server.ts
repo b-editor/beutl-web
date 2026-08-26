@@ -6,15 +6,20 @@ import {
 } from "@beutl/core";
 import {
   claimStorageUploadForAbandon,
+  claimStorageUploadCreation,
+  attachStorageUploadRemote,
   countFilesByUserId,
   countStorageUploadTombstonesByUserId,
   createFile,
   countStorageUploadsByUserId,
-  createStorageUpload,
+  createStorageUploadCancellationTombstone,
+  createStorageUploadOrphanedMultipart,
+  createStorageUploadIntent,
   deleteStorageUpload,
   findStorageFileByIdAndUserId,
   findStorageUploadByIdAndUserId,
   markStorageUploadCompleted,
+  recordStorageUploadRemoteForCleanup,
   type PrismaTransaction,
   retrieveFileNamesAndSizesByUserId,
   startRetryableTransaction,
@@ -65,10 +70,6 @@ function bucket() {
 
 // A name of our own, never the one the file came with: an object key built from
 // user input is a path the user chooses inside the bucket.
-function newObjectKey(): string {
-  return crypto.randomUUID();
-}
-
 // A second file of the same name becomes "clip (1).mp4" rather than replacing
 // the first, which is what the screen did before an upload came in parts.
 async function availableName({
@@ -131,9 +132,11 @@ export async function startUpload({
   if (existing) {
     // 完了しているか、掃除に取られているか。どちらもこの名前ではもう続けられ
     // ない——取られた行のパートはもう捨てられている。
-    return existing.completedFileId || existing.abandonedAt
-      ? { ok: false, reason: "uploadFailed" }
-      : {
+    if (existing.completedFileId || existing.abandonedAt) {
+      return { ok: false, reason: "uploadFailed" };
+    }
+    if (existing.uploadId) {
+      return {
         ok: true,
         upload: {
           id: existing.id,
@@ -141,15 +144,14 @@ export async function startUpload({
           partCount: partCountOf(existing.size),
         },
       };
+    }
   }
 
-  const objectKey = newObjectKey();
-  const multipart = await bucket().createMultipartUpload(objectKey, {
-    httpMetadata: mimeType ? { contentType: mimeType } : undefined,
-  });
-
+  // Persist the quota reservation and deterministic remote identity before
+  // touching R2. This is the durable saga's start intent.
+  const objectKey = `storage-upload/${userId}/${id}`;
   let upload:
-    | Awaited<ReturnType<typeof createStorageUpload>>
+    | Awaited<ReturnType<typeof createStorageUploadIntent>>
     | null
     | "tooMany"
     | "tooManyFiles"
@@ -187,11 +189,10 @@ export async function startUpload({
         return null;
       }
 
-      return await createStorageUpload({
+      return await createStorageUploadIntent({
         userId,
         id,
         objectKey,
-        uploadId: multipart.uploadId,
         name: await availableName({ userId, name, prisma }),
         mimeType,
         size,
@@ -200,45 +201,86 @@ export async function startUpload({
       });
     });
   } catch (error) {
-    // The bucket is already holding an upload that nothing now points at. It
-    // would keep its parts, and be paid for, until something threw them away.
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
+    // No remote call happened: the durable intent is the retry handle.
     throw error;
   }
 
   if (upload === "tooMany") {
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "tooManyUploads" };
   }
 
   if (upload === "tooManyFiles") {
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "tooManyFiles" };
   }
 
   if (upload === "cancelled") {
-    // 始める前に取り消されていた。作ってしまったマルチパートは誰も知らない。
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "uploadFailed" };
   }
 
   if (!upload) {
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
     return { ok: false, reason: "insufficientStorageSpace" };
   }
 
-  // 同じ名前の要求が同時に届いたとき、行を書けたのは片方だけ。負けたほうが
-  // 作ったマルチパートは誰も知らないままパートを抱えるので、ここで捨てる。
-  if (upload.uploadId !== multipart.uploadId) {
-    await abandonOrRecord({ userId, objectKey, multipart, name, mimeType });
+  if (upload.uploadId) {
+    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size) } };
+  }
+
+  const leaseToken = crypto.randomUUID();
+  const claimed = await claimStorageUploadCreation({
+    id,
+    userId,
+    now: new Date(),
+    leaseUntil: new Date(Date.now() + 5 * 60 * 1000),
+    leaseToken,
+  });
+  if (!claimed) {
+    const current = await findStorageUploadByIdAndUserId({ id, userId });
+    if (current?.uploadId) {
+      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size) } };
+    }
+    return { ok: false, reason: "uploadFailed" };
+  }
+
+  const multipart = await bucket().createMultipartUpload(objectKey, {
+    httpMetadata: mimeType ? { contentType: mimeType } : undefined,
+  });
+  let attached = false;
+  for (let attempt = 0; attempt < 3 && !attached; attempt++) {
+    try {
+      attached = await attachStorageUploadRemote({ id, userId, uploadId: multipart.uploadId, leaseToken });
+    } catch (error) {
+      if (attempt === 2) console.error("Failed to attach multipart handle; leaving durable creating intent", id, error);
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
+  if (!attached) {
+    const current = await findStorageUploadByIdAndUserId({ id, userId }).catch(() => null);
+    if (current?.uploadId === null) {
+      await recordStorageUploadRemoteForCleanup({
+        id,
+        userId,
+        uploadId: multipart.uploadId,
+      });
+    } else if (!current) {
+      await abandonOrRecord({
+        userId,
+        objectKey,
+        multipart,
+        name,
+        mimeType,
+      });
+    } else if (current.uploadId !== multipart.uploadId) {
+      await abandon(objectKey, multipart.uploadId);
+    }
+    throw new Error("Storage upload remote handle could not be durably attached");
   }
 
   return {
     ok: true,
     upload: {
       id: upload.id,
-      partSize: STORAGE_UPLOAD_PART_BYTES,
-      partCount: partCountOf(size),
+      partSize: upload.partSize,
+      partCount: partCountOf(upload.size),
     },
   };
 }
@@ -272,6 +314,7 @@ export async function uploadPart({
   if (BigInt(contentLength) > allowedPartSize(upload.size, upload.partSize, partNumber)) {
     return { ok: false, reason: "insufficientStorageSpace" };
   }
+  if (!upload.uploadId) return { ok: false, reason: "uploadFailed" };
 
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
@@ -322,6 +365,7 @@ export async function finishUpload({
   // 掃除がこの行を取っている。パートも、組み上がっていたオブジェクトも、もう
   // 掃除のもの。ここで仕上げると、消される予定のオブジェクトを File が指す。
   if (upload.abandonedAt) return { ok: false, reason: "uploadFailed" };
+  if (!upload.uploadId) return { ok: false, reason: "uploadFailed" };
 
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
@@ -351,7 +395,7 @@ export async function finishUpload({
     // upload keeps its parts until it is abandoned, so it is abandoned here —
     // and the row is kept when that did not work, so a later sweep can try
     // again rather than losing the parts for good.
-    if (await abandon(upload.objectKey, upload.uploadId)) {
+    if (upload.uploadId && await abandon(upload.objectKey, upload.uploadId)) {
       await deleteStorageUpload({ id: upload.id });
     }
 
@@ -538,7 +582,7 @@ export async function cancelUpload({
   userId: string;
   uploadId: string;
 }): Promise<CancelOutcome> {
-  const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+  let upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
   // まだ無い。始めた側の応答が返らずに取り消しへ回ったときは、開始のほうが
   // まだ書き込み中ということがある。ここで「もう無い」と答えて終わると、その
   // あとに現れた行が一日ぶんの枠を抱えたまま残るので、代わりに墓標を置く——
@@ -565,22 +609,26 @@ export async function cancelUpload({
       // パートは誰も取りに行かないまま残る。もう一度来てもらう。
       return "pending";
     }
-    // 片付いたと言えるのは、行がもう無いか、完了していたときだけ。まだ生きて
-    // いる行が読めたなら、取れなかったのは一時の不調のほう——中止も削除もして
-    // いないのに片付いたと答えると、呼び出し側はそこで手を引き、パートは誰も
-    // 取りに行かないまま残る。
+    // Cleanup is complete only when the row is gone or completed. A live row
+    // means the claim failed transiently, so keep it retryable.
     if (current === null || current.completedFileId) {
       return "cancelled";
     }
     if (!current.abandonedAt) {
       return "pending";
     }
+    upload = current;
+  }
+
+  if (!upload.uploadId) {
+    await deleteStorageUpload({ id: upload.id });
+    return "cancelled";
   }
 
   // The row is only dropped once the parts are known to be gone. Dropping it
   // after a failed abort leaves parts nothing knows about, which the sweep can
   // then never find.
-  if (!await abandon(upload.objectKey, upload.uploadId)) {
+  if (!upload.uploadId || !await abandon(upload.objectKey, upload.uploadId)) {
     // まだバケットに残っている。片付いたと答えると、呼び出し側はそこで手を
     // 引き、その分の枠が一日残る——まだ終わっていないと言って、もう一度来て
     // もらう。次の掃除も同じ行を拾う。
@@ -663,18 +711,7 @@ async function recordCancellation(
       const already = await countStorageUploadTombstonesByUserId({ userId, prisma });
       if (already >= MAX_ACTIVE_UPLOADS) return false;
 
-      await createStorageUpload({
-        userId,
-        id: uploadId,
-        objectKey: "",
-        uploadId: "",
-        name: "",
-        mimeType: "application/octet-stream",
-        size: BigInt(0),
-        partSize: STORAGE_UPLOAD_PART_BYTES,
-        abandonedAt: new Date(),
-        prisma,
-      });
+      await createStorageUploadCancellationTombstone({ userId, id: uploadId, now: new Date(), prisma });
       return true;
     });
     return placed ? "cancelled" : "missing";
@@ -721,28 +758,19 @@ async function abandonOrRecord({
 }): Promise<void> {
   if (await abandon(objectKey, multipart.uploadId)) return;
 
-  try {
-    // 最初から掃除のものとして置く。宣言済みなので控えは書けず、抱えている
-    // 大きさも分からないので枠には数えない——数えるべきものは、この行が指す
-    // パートが実際に消えるまで分からない。
-    await createStorageUpload({
-      userId,
-      id: crypto.randomUUID(),
-      objectKey,
-      uploadId: multipart.uploadId,
-      name,
-      mimeType,
-      size: BigInt(0),
-      partSize: STORAGE_UPLOAD_PART_BYTES,
-      abandonedAt: new Date(),
-    });
-  } catch (error) {
-    console.error(
-      "Failed to record a multipart upload nothing points at",
-      objectKey,
-      error,
-    );
-  }
+  // Record the orphan as cleanup-owned. It cannot receive a receipt and its
+  // size is unknown; report persistence failure so operations can retry.
+  await createStorageUploadOrphanedMultipart({ userId, id: crypto.randomUUID(), objectKey, uploadId: multipart.uploadId, name, mimeType, now: new Date() });
+}
+
+function isTerminalMultipartAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as Record<string, unknown>;
+  const code = String(record.code ?? record.name ?? "").toLowerCase();
+  if (code === "nosuchupload") return true;
+  return /(?:\(\s*10024\s*\)|\b10024)\s*$/u.test(
+    String(record.message ?? error),
+  );
 }
 
 async function abandon(objectKey: string, uploadId: string): Promise<boolean> {
@@ -750,6 +778,18 @@ async function abandon(objectKey: string, uploadId: string): Promise<boolean> {
     await bucket().resumeMultipartUpload(objectKey, uploadId).abort();
     return true;
   } catch (error) {
+    if (isTerminalMultipartAbortError(error)) {
+      try {
+        const configured = bucket();
+        if (!configured.head || !configured.delete) return false;
+        if (!await configured.head(objectKey)) return true;
+        await configured.delete(objectKey);
+        return true;
+      } catch (cleanupError) {
+        console.error("Failed to clear object after terminal multipart abort", objectKey, cleanupError);
+        return false;
+      }
+    }
     console.error("Failed to abandon a storage upload", error);
     return false;
   }

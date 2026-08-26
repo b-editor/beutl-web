@@ -59,6 +59,7 @@ const bucket = vi.hoisted(() => {
       },
     })),
     delete: vi.fn(async (key: string) => {
+      if (bucketDeleteFails) throw new Error("delete unavailable");
       bucketDeleted.push(key);
     }),
     // 組み上がる前の multipart はオブジェクトを持たない。掃除がそれを
@@ -67,6 +68,7 @@ const bucket = vi.hoisted(() => {
   };
 });
 const bucketDeleted: string[] = [];
+let bucketDeleteFails = false;
 const bucketObjects = new Map<string, { key: string }>();
 
 import {
@@ -96,6 +98,8 @@ describe("uploading a file too large for one request", () => {
     vi.clearAllMocks();
     bucket.uploads.clear();
     bucketDeleted.length = 0;
+    bucketDeleteFails = false;
+    bucketObjects.clear();
     const memory = createInMemoryPrisma();
     state = memory.state;
     setDbProvider(async () => memory.prisma as never);
@@ -347,6 +351,89 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(1);
   });
 
+  it("deletes a joined object before dropping a terminal NoSuchUpload row", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "joined-terminal.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+    }));
+
+    await expect(abandonStaleStorageUploads(
+      new Date(Date.now() + 25 * 60 * 60 * 1000),
+    )).resolves.toEqual({ abandoned: 1, failed: 0 });
+    expect(bucketDeleted).toEqual([tracked!.objectKey]);
+    expect(state.storageUploads.size).toBe(0);
+  });
+
+  it("retains a terminal row when deleting its joined object fails", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "joined-terminal-retry.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+    bucketDeleteFails = true;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+    }));
+
+    await expect(abandonStaleStorageUploads(
+      new Date(Date.now() + 25 * 60 * 60 * 1000),
+    )).resolves.toEqual({ abandoned: 0, failed: 1 });
+    expect(state.storageUploads.size).toBe(1);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+  });
+
+  it("keeps the cleanup row and object when abort failure sees a joined object", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "joined-before-receipt.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw new Error("the bucket is unreachable");
+      },
+    }));
+
+    const swept = await abandonStaleStorageUploads(
+      new Date(Date.now() + 25 * 60 * 60 * 1000),
+    );
+
+    expect(swept).toEqual({ abandoned: 0, failed: 1 });
+    expect(state.storageUploads.size).toBe(1);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    expect(bucketDeleted).toHaveLength(0);
+    expect(bucketObjects.has(tracked!.objectKey)).toBe(true);
+  });
+
   it("leaves the object of an upload that finished while the sweep ran", async () => {
     const started = await startUpload({
       userId: USER_ID,
@@ -367,11 +454,49 @@ describe("uploading a file too large for one request", () => {
 
     const swept = await abandonStaleStorageUploads(tomorrow);
 
-    expect(swept).toEqual({ abandoned: 1, failed: 0 });
-    expect(state.storageUploads.size).toBe(0);
+    expect(swept).toEqual({ abandoned: 0, failed: 0 });
+    expect(state.storageUploads.size).toBe(1);
     expect(bucketDeleted).toHaveLength(0);
     expect([...bucket.uploads.values()].every((upload) => !upload.aborted))
       .toBe(true);
+  });
+
+  it("retains a completed receipt after multipart cleanup until its File is removed", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "receipt-retention.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    await uploadPart({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      partNumber: 1,
+      contentLength: 4,
+      body: streamOf(4),
+    });
+    const finished = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+    expect(finished.ok).toBe(true);
+    const receipt = [...state.storageUploads.values()][0]!;
+    const afterMultipartWindow = new Date(Date.now() + 25 * 60 * 60 * 1000);
+    await expect(abandonStaleStorageUploads(afterMultipartWindow)).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(receipt.id)).toBe(true);
+
+    const afterLongRetention = new Date(Date.now() + 31 * 24 * 60 * 60 * 1000);
+    await expect(abandonStaleStorageUploads(afterLongRetention)).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(receipt.id)).toBe(true);
   });
 
   it("cannot be finished once the sweep has claimed it", async () => {
@@ -453,6 +578,57 @@ describe("uploading a file too large for one request", () => {
       .toBe("pending");
     // 行は残る。掃除がもう一度試せる唯一の手掛かりなので。
     expect(state.storageUploads.size).toBe(1);
+  });
+
+  it("cleans a joined object before cancel drops a terminal upload row", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "cancel-terminal.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+    }));
+
+    await expect(cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .resolves.toBe("cancelled");
+    expect(bucketDeleted).toEqual([tracked!.objectKey]);
+    expect(state.storageUploads.size).toBe(0);
+  });
+
+  it("keeps cancel retryable when terminal object cleanup fails", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "cancel-terminal-retry.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const [tracked] = [...state.storageUploads.values()];
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+    bucketDeleteFails = true;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+    }));
+
+    await expect(cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .resolves.toBe("pending");
+    expect(state.storageUploads.size).toBe(1);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
   });
 
   it("sweeps a claimed upload without waiting out the day", async () => {
@@ -561,9 +737,9 @@ describe("uploading a file too large for one request", () => {
     expect(next).toEqual({ ok: false, reason: "insufficientStorageSpace" });
   });
 
-  it("records a multipart nothing points at when it cannot be abandoned", async () => {
-    // 行の無いマルチパートは、どこからも辿れないままパートを抱え続ける。捨て
-    // られなかったのなら、せめて掃除が見つけられる場所に書き留める。
+  it("does not create a remote multipart before quota admission", async () => {
+    // Quota rejection happens from the durable start-intent transaction. No
+    // remote handle exists, so there is nothing to abort or record.
     const first = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -572,14 +748,6 @@ describe("uploading a file too large for one request", () => {
       size: BigInt(STORAGE_QUOTA_BYTES),
     });
     if (!first.ok) throw new Error(first.reason);
-    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
-      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
-      complete: async () => ({ size: 0 }),
-      abort: async () => {
-        throw new Error("the bucket is unreachable");
-      },
-    }));
-
     const refused = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -589,11 +757,8 @@ describe("uploading a file too large for one request", () => {
     });
 
     expect(refused).toEqual({ ok: false, reason: "insufficientStorageSpace" });
-    // 断られたぶんの追跡行が、掃除のものとして残っている。
-    const abandoned = [...state.storageUploads.values()].filter(
-      (item) => item.abandonedAt !== null,
-    );
-    expect(abandoned).toHaveLength(1);
+    expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(1);
+    expect([...state.storageUploads.values()]).toHaveLength(1);
   });
 
   it("refuses to start once the account holds as many files as it may", async () => {
@@ -643,5 +808,53 @@ describe("uploading a file too large for one request", () => {
       failed: 0,
     });
     expect(state.storageUploads.size).toBe(1);
+  });
+
+  it("does not contact R2 when the durable start transaction is unavailable", async () => {
+    setDbProvider(async () => {
+      throw new Error("database unavailable");
+    });
+
+    await expect(startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "blocked.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    })).rejects.toThrow("database unavailable");
+    expect(bucket.createMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("converges duplicate starts on one remote multipart", async () => {
+    const id = crypto.randomUUID();
+    const outcomes = await Promise.all([
+      startUpload({ userId: USER_ID, id, name: "same.bin", mimeType: "application/octet-stream", size: BigInt(1_000) }),
+      startUpload({ userId: USER_ID, id, name: "same.bin", mimeType: "application/octet-stream", size: BigInt(1_000) }),
+    ]);
+    expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(1);
+    expect([...state.storageUploads.values()]).toHaveLength(1);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    expect(outcomes.some((outcome) => outcome.ok)).toBe(true);
+  });
+
+  it("expires an intent without calling a nonexistent multipart", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "intent.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = [...state.storageUploads.values()][0]!;
+    state.storageUploads.set(row.id, {
+      ...row,
+      uploadId: null,
+      startState: "intent",
+      createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    });
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toMatchObject({ abandoned: 1 });
+    expect(state.storageUploads.size).toBe(0);
+    expect([...bucket.uploads.values()].every((upload) => !upload.aborted)).toBe(true);
   });
 });

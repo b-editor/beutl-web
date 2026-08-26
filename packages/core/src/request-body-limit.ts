@@ -1,9 +1,4 @@
-import {
-  aiScreenUploadLimit,
-  MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
-  MULTIPART_OVERHEAD_BYTES,
-} from "./ai-capabilities";
-import { STORAGE_UPLOAD_PART_BYTES } from "./storage-quota";
+import { aiScreenUploadLimit } from "./ai-capabilities";
 
 /**
  * 1 リクエストの本文に許す大きさ。
@@ -14,18 +9,15 @@ import { STORAGE_UPLOAD_PART_BYTES } from "./storage-quota";
  * 断られる。
  */
 export const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
+export const MAX_API_JSON_REQUEST_BYTES = 32 * 1024;
 
-/**
- * API の Worker が 1 リクエストで受ける大きさ。
- *
- * ここに来るいちばん大きいものは、文字起こしの音声とアップロードの 1 かけら。
- * ページの Worker と違ってパッケージの送信は通らないので、その上限に付き合う
- * 理由がない——JSON しか読まない v1 の入口は、認証の前に本文を丸ごと解釈する
- * ので、外側で切っておく。
- */
-export const MAX_API_REQUEST_BODY_BYTES =
-  Math.max(MAX_AI_TRANSCRIPTION_UPLOAD_BYTES, STORAGE_UPLOAD_PART_BYTES)
-  + MULTIPART_OVERHEAD_BYTES;
+/** A request body crossed the limit while it was being consumed. */
+export class RequestBodyLimitExceededError extends Error {
+  constructor(message = "Request body exceeds the configured limit") {
+    super(message);
+    this.name = "RequestBodyLimitExceededError";
+  }
+}
 
 /**
  * そのパスの本文に許す大きさ。
@@ -51,6 +43,7 @@ export function requestBodyLimit(pathname: string): number {
 export function boundedBody(
   body: ReadableStream<Uint8Array>,
   limit: number,
+  onLimitExceeded?: () => void,
 ): ReadableStream<Uint8Array> {
   const source = body.getReader();
   let seen = 0;
@@ -70,7 +63,8 @@ export function boundedBody(
 
       seen += next.value.byteLength;
       if (seen > limit) {
-        const error = new Error("Request body exceeds the configured limit");
+        onLimitExceeded?.();
+        const error = new RequestBodyLimitExceededError();
         await source.cancel(error).catch(() => undefined);
         controller.error(error);
         return;

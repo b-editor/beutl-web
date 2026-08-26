@@ -1,5 +1,6 @@
 import { getDb } from "./provider";
 import { startTransaction, type PrismaTransaction } from "./transaction";
+import { schedulePackagePaymentRefundAttempt } from "./package-payment-refund-attempt";
 
 export const PACKAGE_PAYMENT_EVENT_RANK = {
   paymentSucceeded: 10,
@@ -344,6 +345,30 @@ export async function recordPackagePaymentSucceeded({
   }
 
   const record = async (tx: PrismaTransaction) => {
+    const user = await tx.user.findUnique({ where: { id: reference.userId }, select: { id: true } });
+    const deletionIntent = await tx.accountDeletionIntent.findFirst({
+      where: { userId: reference.userId, expiresAt: { gt: new Date() } },
+      select: { userId: true },
+    });
+    const deletedAttempt = await tx.packageCheckoutAttempt.findFirst({
+      where: { userId: reference.userId, packageId: reference.packageId, accountDeletionAt: { not: null } },
+      select: { customerId: true },
+    });
+    if (!user || deletionIntent || deletedAttempt) {
+      await schedulePackagePaymentRefundAttempt({
+        paymentIntentId: reference.paymentId,
+        amount: billing.amount,
+        currency: billing.currency,
+        reason: "account deletion authorized before package payment fulfillment",
+        customerId: undefined,
+        ...(deletedAttempt?.customerId ? { customerId: deletedAttempt.customerId } : {}),
+        userId: reference.userId,
+        packageId: reference.packageId,
+        now: event.createdAt,
+        prisma: tx,
+      });
+      return null;
+    }
     const existing = await findPackagePaymentReference({
       paymentId: reference.paymentId,
       prisma: tx,

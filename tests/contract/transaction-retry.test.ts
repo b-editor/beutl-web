@@ -289,6 +289,7 @@ describe("database transactions", () => {
     const tx = {
       accountDeletionIntent: {
         findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(intent),
       },
       confirmationToken: {
@@ -303,13 +304,38 @@ describe("database transactions", () => {
         findUnique: vi.fn().mockResolvedValue(null),
       },
       proCheckoutAttempt: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
-      topUpCheckoutAttempt: {
+      packageCheckoutAttempt: {
+        findMany: vi.fn().mockResolvedValue([]),
+        count: vi.fn().mockResolvedValue(0),
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
+      package: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      stripeCheckoutCleanup: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({}),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      stripeCustomerProvisioning: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      topUpCheckoutAttempt: {
+        count: vi.fn().mockResolvedValue(0),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      topUpDuplicateRefundAttempt: { count: vi.fn().mockResolvedValue(0) },
+      topUpCheckoutResolution: { count: vi.fn().mockResolvedValue(0) },
       aiJob: {
         findMany: vi.fn().mockResolvedValue([]),
+      },
+      aiRemoteJobCleanup: {
+        upsert: vi.fn().mockResolvedValue({}),
       },
     };
     const conflict = Object.assign(new Error("write conflict"), {
