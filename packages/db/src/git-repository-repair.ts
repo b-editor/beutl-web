@@ -171,6 +171,29 @@ export async function renewGitRepositoryRepairLease({
   return count === 1;
 }
 
+/**
+ * この直しが読み取り専用を掛けたことを控える。
+ *
+ * 遅れて着地したコミットで既定値が揃った場合、掛けたものを外してから片付ける
+ * 必要がある。控えが無いと、利用者が自分で掛けたものと区別できず外せない。
+ */
+export async function markGitRepositoryRepairLocked({
+  forgejoRepoId,
+  intentId,
+  prisma,
+}: {
+  forgejoRepoId: number;
+  intentId: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const { count } = await db.gitRepositoryRepair.updateMany({
+    where: { forgejoRepoId, intentId },
+    data: { locked: true },
+  });
+  return count === 1;
+}
+
 /** 自動では決着できないものとして外す。人が確認するまで触らない。 */
 export async function markGitRepositoryRepairNeedsReview({
   forgejoRepoId,

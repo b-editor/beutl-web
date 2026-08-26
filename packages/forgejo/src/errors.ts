@@ -81,3 +81,18 @@ export class ForgejoConfigurationError extends Error {
     this.name = "ForgejoConfigurationError";
   }
 }
+
+/**
+ * 送った変更が「届かなかった」と言い切れるか。
+ *
+ * 言い切れるのは 4xx だけ。5xx も待ち時間切れも、Forgejo 側が後から確定させる
+ * ことがある。言い切れないものを「無かったこと」にすると、押さえていた名前を
+ * 手放した後に遅れて着地し、その名前を取った別のリポジトリに当たる。
+ * 逆に、言い切れるものを「分からない」扱いにすると、断られた削除の控えが残り、
+ * 定期実行が後からそれを実行してしまう。
+ */
+export function isDecided(error: unknown): boolean {
+  return (
+    error instanceof ForgejoError && error.status >= 400 && error.status < 500
+  );
+}

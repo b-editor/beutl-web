@@ -170,17 +170,27 @@ describe("開けてよいかの集計", () => {
 
   function fakePrisma(
     rows: Row[],
-    tombstones: { credentials?: Row[]; repositories?: Row[] } = {},
+    tombstones: {
+      credentials?: Row[];
+      repositories?: Row[];
+      reservations?: Row[];
+      repairs?: Row[];
+    } = {},
   ) {
     const queries: Row[] = [];
+    // 本物は where 無しでも呼べる (全件)。渡されない場合を落とさない。
     const counter = (source: Row[]) => ({
-      count: ({ where }: { where: Row }) => {
+      count: (args?: { where?: Row }) => {
+        const where = args?.where ?? {};
         queries.push(where);
         return source.filter((row) => matches(row, where)).length;
       },
     });
     return {
       gitAccountDeletion: counter(rows),
+      // 決着していない予約と直し。ここも 0 でなければ開けない。
+      gitRepositoryCreation: counter(tombstones.reservations ?? []),
+      gitRepositoryRepair: counter(tombstones.repairs ?? []),
       // **退会とは別の控え。** 生きている利用者が 1 本だけ失効させたトークンと、
       // 消したリポジトリ。退会の数には一切現れない。
       gitCredentialRevocation: counter(tombstones.credentials ?? []),
@@ -328,19 +338,40 @@ describe("開けてよいかの集計", () => {
     ).resolves.toMatchObject({ repositories: 0, repositoriesReview: 1 });
   });
 
-  it("11 個を 1 つのトランザクションで数える", async () => {
+  it("決着していない予約と直しも数える", async () => {
+    // 曖昧に終わった改名や削除が残っている間は、Forgejo 側がどうなったのかが
+    // 分からない。分からないまま開けてよいとは言えない。
+    const prisma = fakePrisma([], {
+      reservations: [{}],
+      repairs: [{ needsReview: false }],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ inflightReservations: 1, inflightRepairs: 1 });
+  });
+
+  it("人の確認待ちの直しも数える", async () => {
+    const prisma = fakePrisma([], { repairs: [{ needsReview: true }] });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ repairsNeedReview: 1, inflightRepairs: 0 });
+  });
+
+  it("14 個を 1 つのトランザクションで数える", async () => {
     // 別々に数えると、数えている間に状態が動いて別の時点の数が混ざる。
     let batched = 0;
     const prisma = {
       gitAccountDeletion: { count: () => 0 },
       gitCredentialRevocation: { count: () => 0 },
       gitRepositoryDeletion: { count: () => 0 },
+      gitRepositoryCreation: { count: () => 0 },
+      gitRepositoryRepair: { count: () => 0 },
       $transaction: async (calls: number[]) => {
         batched = calls.length;
         return calls;
       },
     };
     await collectGitReconcileStatus(prisma, "gen-1");
-    expect(batched).toBe(11);
+    expect(batched).toBe(14);
   });
 });

@@ -17,6 +17,7 @@ import {
   countGitRepositoryRepairsNeedingReview,
   findGitRepositoryRepair,
   findGitRepositoryReservationByName,
+  markGitRepositoryRepairLocked,
   markGitRepositoryRepairNeedsReview,
   renewGitRepositoryRepairLease,
   countGitRepositoryRepairs,
@@ -24,6 +25,8 @@ import {
   deleteGitRepositoryRepair,
   enqueueGitRepositoryRepair,
   listGitRepositoryRepairs,
+  confirmGitRepositoryDeletion,
+  dropGitRepositoryDeletion,
   recordGitRepositoryDeletion,
   recordGitRepositoryRepairAttempt,
 } from "@beutl/db";
@@ -33,7 +36,7 @@ import {
   forgejoRequest,
   forgejoRequestOrNull,
 } from "./client";
-import { ForgejoError } from "./errors";
+import { ForgejoError, isDecided } from "./errors";
 import { MAX_LFS_POINTER_BYTES, parseLfsPointer } from "./lfs";
 import { encodeRepositoryPath } from "./paths";
 import { GITATTRIBUTES_TEMPLATE, GITIGNORE_TEMPLATE } from "./templates";
@@ -194,10 +197,16 @@ async function lockRepository(
   owner: string,
   repository: Pick<ForgejoRepository, "id" | "name">,
   reason: string,
+  /** 補償そのものが曖昧に終わったら、ここに印を立てる。 */
+  pending?: { value: boolean },
 ): Promise<boolean> {
   try {
     await setRepositoryArchived(owner, repository.name, true);
   } catch (error) {
+    // **補償が曖昧に終わることもある。** 待ち時間切れや 5xx では、読み取り専用が
+    // 後から掛かることがある。掛からなかったものとして名前を手放すと、遅れて
+    // 着地した archive が、その名前を取った別のリポジトリを止めてしまう。
+    if (pending && !isDecided(error)) pending.value = true;
     console.error(
       `${owner}/${repository.name} could not be locked; it stays queued`,
       error,
@@ -235,19 +244,6 @@ async function holdRepair(forgejoRepoId: number, epoch: string): Promise<void> {
   if (!held) {
     throw new RepairTakenOverError(forgejoRepoId);
   }
-}
-
-/**
- * 送った変更が「届かなかった」と言い切れるか。
- *
- * 言い切れるのは 4xx だけ。5xx も待ち時間切れも、Forgejo 側が後から確定させる
- * ことがある。言い切れないものを「無かったこと」にすると、押さえていた名前を
- * 手放した後に遅れて着地し、その名前を取った別のリポジトリに当たる。
- */
-function isDecided(error: unknown): boolean {
-  return (
-    error instanceof ForgejoError && error.status >= 400 && error.status < 500
-  );
 }
 
 /** 変更を送る。結果が分からない失敗だったら印を立てて投げ直す。 */
@@ -681,7 +677,16 @@ async function repairTemplates(
       sudo,
       repository,
       error instanceof Error ? error.message : String(error),
+      pending,
     );
+    // **掛けたことを控えに残す。** 遅れて着地したコミットで既定値が揃った場合、
+    // 掛けたものを外してから片付ける必要がある。誰が掛けたか分からないと外せない。
+    if (locked) {
+      await markGitRepositoryRepairLocked({
+        forgejoRepoId: repository.id,
+        intentId: epoch,
+      }).catch(() => undefined);
+    }
     return locked
       ? { state: "locked", error, pending: pending.value }
       : { state: "open", error, pending: pending.value };
@@ -815,6 +820,22 @@ const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
 const HOLD_LATE_GRACE_MS = 30 * 60 * 1000;
 
 /**
+ * その予約に最後に触れた時刻。
+ *
+ * **作った時刻から数えない。** 期限は各 mutation の直前に延ばしているので、
+ * 期限から持ち幅を引けば「最後に送ろうとした時刻」になる。作った時刻を起点に
+ * すると、操作にかかった分だけ猶予が短くなり、遅れて着地しうる幅を割り込む。
+ */
+function lastTouched(entry: {
+  createdAt: Date;
+  leaseUntil: Date | null;
+}): number {
+  return entry.leaseUntil
+    ? entry.leaseUntil.getTime() - CREATION_LEASE_MS
+    : entry.createdAt.getTime();
+}
+
+/**
  * 1 回の片付けで見る行数の上限 (片付ける上限の何倍まで走査するか)。
  *
  * 触らずに飛ばす行 (直しが押さえている名前など) は古い順の先頭に居座り続ける。
@@ -822,6 +843,16 @@ const HOLD_LATE_GRACE_MS = 30 * 60 * 1000;
  * 届かない。飛ばした分は数えずに頁を進め、走査そのものにだけ上限を置く。
  */
 const RECONCILE_SCAN_FACTOR = 10;
+
+/**
+ * 走査の上限に当たった位置。次の周回はここから読む。
+ *
+ * 触らずに飛ばす行が上限を超えて並ぶと、先頭から読み直す限りそこで頭打ちになり、
+ * 後ろにある放置された作成・改名・削除へ永久に届かない。Worker は使い回されるので
+ * 1 回の cron を越えて覚えておける。忘れても (別のインスタンスに当たっても)
+ * 先頭から読み直すだけで、正しさは変わらない。
+ */
+let reconcileResumeAfter: string | undefined;
 
 /**
  * 照合できない予約を諦めるまでの幅。
@@ -888,6 +919,8 @@ async function settleRepositoryRepair(
     intendedOwner: string | null;
     intendedName: string | null;
     reservationId: string | null;
+    /** この直しが読み取り専用を掛けたか。片付ける前に外す必要がある。 */
+    locked: boolean;
   },
   epoch: string,
 ): Promise<boolean> {
@@ -967,6 +1000,8 @@ async function settleHeldRepair(
     intendedOwner: string | null;
     intendedName: string | null;
     reservationId: string | null;
+    /** この直しが読み取り専用を掛けたか。片付ける前に外す必要がある。 */
+    locked: boolean;
   },
   epoch: string,
   current: ForgejoRepository,
@@ -989,6 +1024,20 @@ async function settleHeldRepair(
   if (await hasTemplates(owner, current.name)) {
     await renewName(held, epoch);
     await assertStillNamed(owner, current);
+    // **この直しが掛けた読み取り専用は、片付ける前に外す。**
+    //
+    // 前の周回で「直せなかった」として archive を掛け、その後に遅れてコミットが
+    // 着地する、という順序が起こりうる。既定値は揃っているので直しは片付くが、
+    // 掛けた archive はそのまま。外さずに控えを消すと、利用者のリポジトリが
+    // 読み取り専用のまま、誰にも追われずに残る。
+    //
+    // 外すのは**自分が掛けたと控えてあるとき**だけ。控えが無いものに触ると、
+    // 利用者が意図して掛けたものを外すことになる。
+    if (entry.locked && current.archived) {
+      await holdRepair(entry.forgejoRepoId, epoch);
+      await assertStillNamed(owner, current);
+      await setRepositoryArchived(owner, current.name, false);
+    }
   } else {
     const outcome = await repairTemplates(owner, current, epoch, nameHold);
     if (outcome.state !== "repaired") {
@@ -1076,10 +1125,13 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
   const admin = await getAdminUsername();
   // **打ち切るのは「片付けた数」で。** 取得した数で打ち切ると、触らずに飛ばす
   // 行が先頭を占め続けたときに、その後ろへ永久に届かない。
+  //
+  // 走査そのものにも上限がある。飛ばす行がその上限を超えて並ぶと、今度はそこで
+  // 頭打ちになる。上限に当たった位置を控え、次の周回はその続きから読む。
   const scanLimit = limit * RECONCILE_SCAN_FACTOR;
   let handled = 0;
   let scanned = 0;
-  let after: string | undefined;
+  let after: string | undefined = reconcileResumeAfter;
 
   while (handled < limit && scanned < scanLimit) {
     const page = await listExpiredGitRepositoryCreations({ limit, after });
@@ -1117,8 +1169,7 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         // **遅れて着地しうる幅は空ける。** 説明文の書き換えのように控えを積まない
         // 操作は、結果が分からないまま押さえたままここへ来る。期限切れで即座に
         // 手放すと、後から着地した PATCH がその名前を取った別のリポジトリに当たる。
-        if (Date.now() - entry.createdAt.getTime() < HOLD_LATE_GRACE_MS)
-          continue;
+        if (Date.now() - lastTouched(entry) < HOLD_LATE_GRACE_MS) continue;
       }
 
       // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
@@ -1358,11 +1409,16 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
   // **打ち切ったことを黙って伏せない。** 何件見て何件片付けたかを言わないと、
   // 届いていない行があっても「片付いた」と読める。
   if (scanned >= scanLimit && handled < limit) {
+    // 次の周回はここから読む。先頭へ戻すと、飛ばす行が上限を超えて並んだときに
+    // 毎回同じところで止まり、その後ろへ永久に届かない。
+    reconcileResumeAfter = after;
     console.warn(
       `reconcile stopped after scanning ${scanned} reservations and settling ` +
-        `${handled}; the rest are held by work in progress and will be seen ` +
-        "on the next run",
+        `${handled}; the next run resumes after ${after ?? "the start"}`,
     );
+  } else {
+    // 最後まで読み切った。次は先頭から。
+    reconcileResumeAfter = undefined;
   }
 }
 
@@ -2066,6 +2122,10 @@ export async function deleteRepository(
     // 控えが無ければ、戻した後にそれを消し直したかどうかを誰も数えられない。
     //
     // 名前ではなく id で控える。名前は空いた後に別のリポジトリが取る。
+    //
+    // **この時点ではまだ「消えた」ではない。** 控えを書いただけの状態で消し直しの
+    // 対象にすると、この後 403 や 422 で断られた削除を、定期実行が後から実行して
+    // しまう。確かめてから confirm する。
     await recordGitRepositoryDeletion({
       forgejoRepoId: current.id,
       ownerUsername: stillThere.owner.login,
@@ -2081,6 +2141,7 @@ export async function deleteRepository(
         timeoutMs: HELD_REQUEST_TIMEOUT_MS,
       },
     );
+    await confirmGitRepositoryDeletion({ forgejoRepoId: current.id });
     await releaseGitRepositoryReservationsByIntent({
       intentId: deleteEpoch,
     }).catch(() => undefined);
@@ -2088,11 +2149,79 @@ export async function deleteRepository(
     // 4xx は言い切れる。それ以外 (待ち時間切れ・5xx) は、消えたかどうか
     // 分からない。予約を残し、定期実行が id で引き直して決着を付ける。
     if (isDecided(error)) {
+      // **控えも外す。** 断られた削除の控えを残すと、定期実行がそれを実行する。
+      await dropGitRepositoryDeletion({ forgejoRepoId: current.id }).catch(
+        () => undefined,
+      );
       await releaseGitRepositoryReservationsByIntent({
         intentId: deleteEpoch,
       }).catch(() => undefined);
     }
     throw error;
+  }
+}
+
+/**
+ * 復元で生き返ったリポジトリを消し直す。
+ *
+ * **ここも名前を押さえてから送る。** `DELETE /repositories/{id}` は無いので、
+ * 消すのは名前。id で相手を確かめてから送るまでの 1 往復の間に、そのリポジトリが
+ * 改名され、空いた名前を別のリポジトリが取ることがある。押さえずに送ると、
+ * 無関係なリポジトリを消してしまう — 取り返しがつかない。
+ *
+ * @returns 消したか (相手が居なければ false)。
+ */
+export async function deleteResurrectedRepository(entry: {
+  forgejoRepoId: number;
+  ownerUsername: string;
+  name: string;
+}): Promise<"deleted" | "gone" | "moved" | "busy"> {
+  const current = await forgejoRequestOrNull<ForgejoRepository>(
+    `/repositories/${entry.forgejoRepoId}`,
+  );
+  // 生き返っていない。
+  if (!current) return "gone";
+
+  // **控えた姿と違うなら触らない。** 復元で採番がやり直されると、同じ id を
+  // 別のリポジトリが持ちうる。
+  if (
+    current.owner.login.toLowerCase() !== entry.ownerUsername.toLowerCase() ||
+    current.name !== entry.name
+  ) {
+    return "moved";
+  }
+
+  const epoch = crypto.randomUUID();
+  const held = await holdName(
+    current.owner.login,
+    current.name,
+    entry.forgejoRepoId,
+    epoch,
+  );
+  // 今その名前を誰かが動かしている。割り込まない。次の周回でやり直す。
+  if (held === null) return "busy";
+
+  let keepName = false;
+  try {
+    await renewName(held, epoch);
+    // 押さえた後にもう一度。押さえる前に見た姿は、押さえた時点の姿とは限らない。
+    await assertStillNamed(current.owner.login, current);
+    await forgejoRequest(
+      `/repos/${encodeURIComponent(current.owner.login)}/${encodeURIComponent(current.name)}`,
+      {
+        method: "DELETE",
+        responseType: "none",
+        timeoutMs: HELD_REQUEST_TIMEOUT_MS,
+      },
+    );
+    return "deleted";
+  } catch (error) {
+    // 結果が分からないなら名前を手放さない。遅れて着地した削除が、その名前を
+    // 取った別のリポジトリに当たる。
+    if (!isDecided(error)) keepName = true;
+    throw error;
+  } finally {
+    if (!keepName) await releaseName(held, epoch);
   }
 }
 

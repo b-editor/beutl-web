@@ -5,13 +5,15 @@ import {
   createGitCredential,
   deleteGitCredential,
   findGitCredential,
+  confirmGitCredentialRevocation,
+  dropGitCredentialRevocation,
   recordGitCredentialRevocation,
   findGitCredentialByName,
   listGitCredentialsByUserId,
   startRetryableTransaction,
 } from "@beutl/db";
 import { forgejoRequest } from "./client";
-import { ForgejoError } from "./errors";
+import { ForgejoError, isDecided } from "./errors";
 import { assertGitAccountNotBeingDeleted } from "./deletion";
 import { ensureGitAccount } from "./provisioning";
 import type { ForgejoAccessToken } from "./types";
@@ -366,8 +368,9 @@ export async function revokeGitCredential(
   //
   // 先に書くので、この後の削除が失敗した場合は「消していないのに控えがある」状態に
   // なる。復元の後にその控えを見て消しにいくのは正しい動作なので、害は無い。
-  await recordGitCredentialRevocation({
+  const tombstone = await recordGitCredentialRevocation({
     userId,
+    credentialId: record.id,
     forgejoUsername: account.forgejoUsername,
     forgejoTokenId: record.forgejoTokenId,
     lastEight: record.lastEight,
@@ -380,9 +383,21 @@ export async function revokeGitCredential(
   } catch (error) {
     // 既に無いなら目的は達している。それ以外は投げる (控えだけ消すと、生きた
     // トークンが誰にも失効できなくなる)。
-    if (!(error instanceof ForgejoError && error.isNotFound)) throw error;
+    if (!(error instanceof ForgejoError && error.isNotFound)) {
+      // **断られたなら控えも外す。** 残すと、消えていないトークンを定期実行が
+      // 後から消すことになる。結果が分からない失敗 (5xx・待ち時間切れ) では
+      // 残す。消えたかどうかは定期実行が確かめて決着を付ける。
+      if (isDecided(error)) {
+        await dropGitCredentialRevocation({ id: tombstone }).catch(
+          () => undefined,
+        );
+      }
+      throw error;
+    }
   }
 
+  // ここで初めて「消えた」と言える。消し直しの対象になるのはここから。
+  await confirmGitCredentialRevocation({ id: tombstone });
   await deleteGitCredential({ id: record.id });
   return {
     id: record.id,

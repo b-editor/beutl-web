@@ -18,6 +18,7 @@
     "migrate:deploy": "pnpm --filter @beutl/web exec prisma migrate deploy --schema prisma/schema.prisma",
     "git:restore-generation": "pnpm --filter @beutl/web exec node --env-file-if-exists=.env scripts/git-restore-generation.mjs",
     "git:reconcile-status": "pnpm --filter @beutl/web exec node --env-file-if-exists=.env scripts/git-reconcile-status.mjs",
+    "git:start-resurrection-watch": "pnpm --filter @beutl/web exec node --env-file-if-exists=.env scripts/git-start-resurrection-watch.mjs",
     "migrate:status": "pnpm --filter @beutl/web exec prisma migrate status --schema prisma/schema.prisma",
     "deploy": "pnpm run release",
     "deploy:web": "pnpm --filter @beutl/web run deploy",

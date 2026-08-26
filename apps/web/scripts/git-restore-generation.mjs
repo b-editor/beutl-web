@@ -13,10 +13,29 @@ async function main() {
   const args = process.argv.slice(2);
   const index = args.indexOf("--nonce");
   const nonce = index === -1 ? null : args[index + 1];
+  const stampIndex = args.indexOf("--backup-at");
+  const stampRaw = stampIndex === -1 ? null : args[stampIndex + 1];
   if (!nonce) {
-    console.error("usage: --nonce <復元時に出力された値>");
+    console.error(
+      "usage: --nonce <復元時に出力された値> --backup-at <戻した控えの時点>",
+    );
     process.exitCode = 2;
     return;
+  }
+  // **戻した控えの時点。** 生き返りの見張りを始める前に取った控えには、控えの
+  // 無い消去が入っている。それを戻した場合は証拠を出さない。判断できるように、
+  // ここで控えの時点を控える。
+  let backupAt = null;
+  if (stampRaw) {
+    backupAt = new Date(stampRaw);
+    if (Number.isNaN(backupAt.getTime())) {
+      console.error(
+        `--backup-at を日時として読めません: ${stampRaw}\n` +
+          "restore.sh が出力した値 (ISO 8601) をそのまま渡してください。",
+      );
+      process.exitCode = 2;
+      return;
+    }
   }
 
   const connectionString = process.env.DATABASE_URL;
@@ -28,9 +47,17 @@ async function main() {
   try {
     await prisma.gitRestoreGeneration.upsert({
       where: { id: nonce },
-      create: { id: nonce },
-      update: {},
+      create: { id: nonce, backupAt },
+      // 登録し直しても、控えの時点は後から足せるようにする。消しはしない。
+      update: backupAt ? { backupAt } : {},
     });
+    if (!backupAt) {
+      console.warn(
+        "\n警告: --backup-at を渡していません。戻した控えが、生き返りの見張りを" +
+          "\n      始めるより前のものかどうかを判断できないため、証拠は出せません。" +
+          "\n      restore.sh が出力した時点を付けて、もう一度実行してください。",
+      );
+    }
     console.log(`世代 ${nonce} を登録しました (${new URL(connectionString).hostname})。`);
     console.log(
       "**この接続先が本番であることを確かめてください。** 証拠にはこの相手が" +

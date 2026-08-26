@@ -282,6 +282,10 @@ model GitRepositoryRepair {
   // 自動では決着できない (渡す先でも管理者でもない誰かが持っている)。
   // 自動再試行の対象から外し、人が確認する。
   needsReview   Boolean  @default(false)
+  // **この直しが読み取り専用を掛けた。** 遅れて着地したコミットで既定値が
+  // 揃った場合、掛けたものを外してから片付ける必要がある。外さないと、
+  // 利用者のリポジトリが読み取り専用のまま誰にも追われずに残る。
+  locked        Boolean  @default(false)
   attempts      Int      @default(0)
   lastAttemptAt DateTime?
   lastError     String?
@@ -308,6 +312,16 @@ model GitCredentialRevocation {
   id              String   @id @default(uuid())
   /// 誰のものだったか。利用者が消えていても墓標は残すので、参照は張らない。
   userId          String
+  /// 失効させた GitCredential の行。**Forgejo から消せたのにこちらの行を
+  /// 消せなかった場合**に、後から片付けるために持つ。持たないと、使えない
+  /// トークンが一覧と上限件数に残り続ける。
+  credentialId    String?
+  /// **Forgejo から消えたことを確かめた印。**
+  ///
+  /// 控えは消す前に書く (書いた後に落ちても追えるように)。だから「控えがある =
+  /// 消えた」ではない。確かめる前のものを消し直しの対象にすると、断られた失効を
+  /// 定期実行が後から実行してしまう。
+  confirmed       Boolean  @default(false)
   forgejoUsername String
   forgejoTokenId  Int
   /// 復元先で id が使い回されていないかを見分けるための末尾 8 文字。
@@ -332,6 +346,11 @@ model GitRepositoryDeletion {
   /// 消した時点の持ち主と名前。消し直す前に、その id が今もこれを指すかを見る。
   ownerUsername   String
   name            String
+  /// **Forgejo から消えたことを確かめた印。**
+  ///
+  /// 控えは消す前に書く。確かめる前のものを消し直しの対象にすると、403 や 422 で
+  /// 断られた削除を定期実行が後から実行し、利用者のリポジトリを消してしまう。
+  confirmed       Boolean  @default(false)
   deletedAt       DateTime @default(now())
   checkedGeneration String?
   /// その id が別のリポジトリを指している。自動では決められないので人が見る。
@@ -347,6 +366,23 @@ model GitRepositoryDeletion {
 model GitRestoreGeneration {
   id        String   @id
   createdAt DateTime @default(now())
+  /// 戻した控えの時点。**これが見張りの開始より古ければ証拠は出せない。**
+  /// その時点の控えには、控えを取り始める前に消したものが入っているため。
+  backupAt  DateTime?
+}
+
+/// 生き返りの見張りを始めた時点。**1 行だけ。**
+///
+/// 控え (GitCredentialRevocation / GitRepositoryDeletion) は、この時点より後の
+/// 消去しか持っていない。それより前に取った控えを戻すと、控えの無い消去が
+/// 生き返る。だから、その時点より古い控えからの復元では証拠を出さない。
+///
+/// **書き込むのは配備の最後** (`scripts/release.mjs`)。マイグレーションを当てた
+/// 時点にすると、3 つの Worker を入れ替え終わるまでの間に古い Worker が控えを
+/// 書かずに消したものを、見張っているつもりになってしまう。
+model GitResurrectionWatch {
+  id        String   @id @default("singleton")
+  startedAt DateTime?
 }
 
 model GitAccountDeletion {

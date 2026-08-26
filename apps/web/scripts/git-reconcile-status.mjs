@@ -72,6 +72,9 @@ export async function collectGitReconcileStatus(prisma, generation) {
     repositories,
     repositoriesFailed,
     repositoriesReview,
+    inflightReservations,
+    inflightRepairs,
+    repairsNeedReview,
   ] = await prisma.$transaction([
       prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
       prisma.gitAccountDeletion.count({
@@ -112,6 +115,13 @@ export async function collectGitReconcileStatus(prisma, generation) {
       }),
       // その id が別のリポジトリを指している。人が見るまで自動では決められない。
       prisma.gitRepositoryDeletion.count({ where: { needsReview: true } }),
+      // **決着していない予約。** 曖昧に終わった改名や削除がここに残る。
+      // 残っている間は「Forgejo 側がどうなったか分からない」ということなので、
+      // 開けてよいとは言えない。放っておけば 30 分ほどで片が付く。
+      prisma.gitRepositoryCreation.count(),
+      // **渡し切れていない預かりものと、直せていないリポジトリ。**
+      prisma.gitRepositoryRepair.count({ where: { needsReview: false } }),
+      prisma.gitRepositoryRepair.count({ where: { needsReview: true } }),
     ]);
 
   return {
@@ -126,6 +136,9 @@ export async function collectGitReconcileStatus(prisma, generation) {
     repositories,
     repositoriesFailed,
     repositoriesReview,
+    inflightReservations,
+    inflightRepairs,
+    repairsNeedReview,
   };
 }
 
@@ -183,6 +196,14 @@ export function signProof(payload, encodedKey) {
   return sign(null, Buffer.from(payload), createPrivateKey(pem)).toString(
     "base64",
   );
+}
+
+/** 今の復元世代。まだ一度も復元していなければ null。 */
+async function currentGeneration(prisma) {
+  const latest = await prisma.gitRestoreGeneration.findFirst({
+    orderBy: { createdAt: "desc" },
+  });
+  return latest?.id ?? null;
 }
 
 /**
@@ -252,24 +273,71 @@ async function main() {
         console.error(
           `この世代はこのデータベースに登録されていません: ${nonce}\n` +
             "復元の直後に次を実行してから、定期実行を待ってください。\n" +
-            `  pnpm run git:restore-generation --nonce '${nonce}'`,
+            `  pnpm run git:restore-generation --nonce '${nonce}' --backup-at '<控えの時点>'`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      // **見張りを始める前の控えからは開けない。**
+      //
+      // 失効と削除の控え (GitCredentialRevocation / GitRepositoryDeletion) は、
+      // 見張りを始めてからの消去しか持っていない。それより前に取った控えを戻すと、
+      // 控えの無い消去が生き返る。数はすべて 0 になるので、そのままでは証拠が
+      // 出てしまう。
+      const watch = await prisma.gitResurrectionWatch.findUnique({
+        where: { id: "singleton" },
+      });
+      if (!watch?.startedAt) {
+        console.error(
+          "生き返りの見張りがまだ始まっていません。\n" +
+            "3 つの Worker を配り終えると `pnpm run release` が記録します。\n" +
+            "配備の途中では証拠を出せません (古い Worker が控えを書かずに" +
+            "消したものを、見張っているつもりになるため)。",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (!generation.backupAt) {
+        console.error(
+          `世代 ${nonce} に、戻した控えの時点が記録されていません。\n` +
+            "見張りを始めた時点より前の控えかどうかを判断できません。\n" +
+            `  pnpm run git:restore-generation --nonce '${nonce}' --backup-at '<控えの時点>'`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (generation.backupAt < watch.startedAt) {
+        console.error(
+          `戻した控え (${generation.backupAt.toISOString()}) は、生き返りの` +
+            `見張りを始めた時点 (${watch.startedAt.toISOString()}) より前のものです。\n` +
+            "その時点より前に失効させたトークンと消したリポジトリには控えが無いので、\n" +
+            "生き返っていても数に出ません。**証拠は出せません。**\n" +
+            "beutl-web 側も対で戻すか、人の手で Forgejo 側を確かめてください。",
         );
         process.exitCode = 1;
         return;
       }
     }
 
+    // **様子見でも、判定は現在の世代で行う。**
+    //
+    // null で数えると「一度も確認していない」ものしか数えない。前の世代で確認
+    // 済みのものは今の世代では未確認なのに 0 と出て、「終わっています」と読める。
+    const generation = nonce ?? (await currentGeneration(prisma));
+
     let status;
     try {
-      status = await collectGitReconcileStatus(prisma, nonce);
+      status = await collectGitReconcileStatus(prisma, generation);
     } catch (error) {
       // 表そのものが無い = マイグレーションが当たっていない。Prisma の生の
       // 例外を出すより、何をすればよいかを言う。
       if (error?.code === "P2021") {
         console.error(
           "必要な表がありません (GitAccountDeletion / GitCredentialRevocation " +
-            "/ GitRepositoryDeletion)。マイグレーションが当たっていない" +
-            "データベースです (pnpm run migrate:status で確認してください)。",
+            "/ GitRepositoryDeletion / GitResurrectionWatch)。マイグレーションが" +
+            "当たっていないデータベースです " +
+            "(pnpm run migrate:status で確認してください)。",
         );
         process.exitCode = 1;
         return;
@@ -277,7 +345,7 @@ async function main() {
       throw error;
     }
 
-    if (nonce) console.log(`${"世代".padEnd(19)} ${nonce}`);
+    if (generation) console.log(`${"世代".padEnd(19)} ${generation}`);
     for (const [key, value] of Object.entries(status)) {
       console.log(`${key.padEnd(20)} ${value}`);
     }

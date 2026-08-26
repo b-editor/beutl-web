@@ -136,13 +136,29 @@ for (const target of ["deploy:web", "deploy:api", "deploy:admin"]) {
   run("pnpm", ["run", target]);
 }
 
+// **生き返りの見張りは、3 つを配り終えてから始める。**
+//
+// 失効と削除の控えを書くのは Worker の側。マイグレーションを当てた時点を開始に
+// すると、入れ替え終わるまでの間に古い Worker が控えを書かずに消したものを、
+// 見張っているつもりになる。その控えを戻したときに、生き返りが数に出ない。
+//
+// 復元の証拠は、戻した控えの時点がここより後であることを求める。
+step("生き返りの見張りを始めています");
+if (!dryRun) {
+  run("pnpm", ["run", "git:start-resurrection-watch"]);
+}
+
 /** 確かめていないものを黙って通さない。最後に必ず出す。 */
 function reportUnverified() {
   console.error(
     "\n確かめていないもの (smoke test の範囲外):\n" +
       "  - Web / Admin Worker の Forgejo 用 secret (セッションが要るため)\n" +
-      "  - 管理画面からの削除経路\n" +
-      "  - beutl-web-api の定期実行 (cron は外から起動できない)",
+      "  - 管理画面からの削除経路 (リポジトリの削除・資格情報の失効)\n" +
+      "  - beutl-web-api の定期実行 (cron は外から起動できない)\n" +
+      "  - 失効と削除の控えが実際に書かれること\n" +
+      "    ↑ ここが黙って壊れると、復元の証拠が「終わっている」と言い続ける。\n" +
+      "      配備の後に 1 度、資格情報を 1 本発行して失効させ、\n" +
+      "      GitCredentialRevocation に confirmed=true の行が増えることを見ること。",
   );
 }
 
