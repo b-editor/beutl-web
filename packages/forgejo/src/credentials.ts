@@ -5,6 +5,7 @@ import {
   createGitCredential,
   deleteGitCredential,
   findGitCredential,
+  recordGitCredentialRevocation,
   findGitCredentialByName,
   listGitCredentialsByUserId,
   startRetryableTransaction,
@@ -358,6 +359,19 @@ export async function revokeGitCredential(
   if (!record) return null;
 
   const account = await ensureGitAccount(userId);
+  // **消す前に控える。** 失効は Forgejo からトークンを消して終わりで、こちら側の
+  // 行も一緒に消える。Forgejo をこの時点より前へ戻すと、そのトークンは生き返る。
+  // 利用者の端末には平文が残っているので、戻した後に消し直すまで git を開けては
+  // いけない。控えが無ければ、消し直したかどうかを誰も数えられない。
+  //
+  // 先に書くので、この後の削除が失敗した場合は「消していないのに控えがある」状態に
+  // なる。復元の後にその控えを見て消しにいくのは正しい動作なので、害は無い。
+  await recordGitCredentialRevocation({
+    userId,
+    forgejoUsername: account.forgejoUsername,
+    forgejoTokenId: record.forgejoTokenId,
+    lastEight: record.lastEight,
+  });
   try {
     await forgejoRequest(
       tokensPath(account.forgejoUsername, record.forgejoTokenId),

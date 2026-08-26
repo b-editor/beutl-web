@@ -24,6 +24,7 @@ import {
   deleteGitRepositoryRepair,
   enqueueGitRepositoryRepair,
   listGitRepositoryRepairs,
+  recordGitRepositoryDeletion,
   recordGitRepositoryRepairAttempt,
 } from "@beutl/db";
 import {
@@ -236,6 +237,52 @@ async function holdRepair(forgejoRepoId: number, epoch: string): Promise<void> {
   }
 }
 
+/**
+ * 送った変更が「届かなかった」と言い切れるか。
+ *
+ * 言い切れるのは 4xx だけ。5xx も待ち時間切れも、Forgejo 側が後から確定させる
+ * ことがある。言い切れないものを「無かったこと」にすると、押さえていた名前を
+ * 手放した後に遅れて着地し、その名前を取った別のリポジトリに当たる。
+ */
+function isDecided(error: unknown): boolean {
+  return (
+    error instanceof ForgejoError && error.status >= 400 && error.status < 500
+  );
+}
+
+/** 変更を送る。結果が分からない失敗だったら印を立てて投げ直す。 */
+async function sendMutation<T>(
+  pending: { value: boolean },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isDecided(error)) pending.value = true;
+    throw error;
+  }
+}
+
+/**
+ * 直しの途中で送った変更が、届いたかどうか分からないまま終わった。
+ *
+ * **控えも名前の予約も残す。** 補償の読み取り専用が通っていても、遅れて着地した
+ * unarchive や commit がその後に効けば、既定値の入っていないリポジトリがまた
+ * 書き込み可能になる。片付いたことにしてよいのは、送ったものが確定した後だけ。
+ */
+export class RepairPendingError extends Error {
+  constructor(
+    readonly forgejoRepoId: number,
+    readonly reason: unknown,
+  ) {
+    super(
+      `repair of repository ${forgejoRepoId} left a mutation in an unknown ` +
+        `state: ${reason instanceof Error ? reason.message : String(reason)}`,
+    );
+    this.name = "RepairPendingError";
+  }
+}
+
 /** 掴んでいた控えを他の実行に引き取られた。ここで止める。 */
 export class RepairTakenOverError extends Error {
   constructor(readonly forgejoRepoId: number) {
@@ -307,8 +354,10 @@ async function holdName(
       forgejoRepoId,
     }))
   ) {
-    await releaseGitRepositoryReservation({ id: reservation, intentId: epoch })
-      .catch(() => undefined);
+    await releaseGitRepositoryReservation({
+      id: reservation,
+      intentId: epoch,
+    }).catch(() => undefined);
     throw new RepairTakenOverError(forgejoRepoId);
   }
   return reservation;
@@ -556,10 +605,16 @@ async function queueRepair(
 type RepairOutcome =
   /** 既定値が揃った。 */
   | { state: "repaired" }
-  /** 直せなかったので読み取り専用にした。push は通らない。 */
-  | { state: "locked"; error: unknown }
+  /**
+   * 直せなかったので読み取り専用にした。push は通らない。
+   *
+   * `pending` は「送った変更のどれかが、届いたか分からないまま終わった」印。
+   * 立っている間は片付いたと見なせない (読み取り専用にできていても、遅れて
+   * 着地した unarchive がそれを外しうる)。
+   */
+  | { state: "locked"; error: unknown; pending: boolean }
   /** 直すことも止めることもできなかった。**まだ push できる。** */
-  | { state: "open"; error: unknown };
+  | { state: "open"; error: unknown; pending: boolean };
 
 /**
  * テンプレートを入れ直し、**入った結果が正しいことまで確かめる**。
@@ -586,18 +641,25 @@ async function repairTemplates(
   const name = repository.name;
   const renewNameHold = () =>
     nameHold ? renewName(nameHold.id, nameHold.epoch) : Promise.resolve();
+  // 外へ送った変更のうち、届いたか分からないものがあるか。**補償の読み取り専用が
+  // 通っても、これが立っていれば片付いたことにはできない。**
+  const pending = { value: false };
   try {
     // archived のままだと contents API は 423 を返す。直すには先に外す。
     if (repository.archived) {
       await renewNameHold();
       await holdRepair(repository.id, epoch);
       await assertStillNamed(sudo, repository);
-      await setRepositoryArchived(sudo, name, false);
+      await sendMutation(pending, () =>
+        setRepositoryArchived(sudo, name, false),
+      );
     }
     await renewNameHold();
     await holdRepair(repository.id, epoch);
     await assertStillNamed(sudo, repository);
-    await commitTemplates(sudo, name, repository.default_branch);
+    await sendMutation(pending, () =>
+      commitTemplates(sudo, name, repository.default_branch),
+    );
     // 照合も名前で読む。読む直前にも確かめないと、入れ替わった別のリポジトリの
     // 中身を見て「揃っている」と結論しうる。
     await renewNameHold();
@@ -620,7 +682,9 @@ async function repairTemplates(
       repository,
       error instanceof Error ? error.message : String(error),
     );
-    return locked ? { state: "locked", error } : { state: "open", error };
+    return locked
+      ? { state: "locked", error, pending: pending.value }
+      : { state: "open", error, pending: pending.value };
   }
 }
 
@@ -633,6 +697,12 @@ async function requireRepairedTemplates(
 ): Promise<void> {
   const outcome = await repairTemplates(sudo, repository, epoch, nameHold);
   if (outcome.state === "repaired") return;
+  // 結果が分からないまま終わったものは、そうと分かる形で投げる。呼び出し元は
+  // これを見て名前の予約を残す (外すと、遅れて着地した変更が別のリポジトリに
+  // 当たる)。
+  if (outcome.pending) {
+    throw new RepairPendingError(repository.id, outcome.error);
+  }
   throw outcome.error;
 }
 
@@ -732,6 +802,28 @@ const CREATION_MISSING_GRACE_MS = 30 * 60 * 1000;
 const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
 
 /**
+ * 押さえただけの名前を手放すまでの幅。
+ *
+ * 説明文の書き換えは、結果が分からなければ名前を押さえたまま終わる。控えは
+ * 積まない (直す作業が残っているわけではない) ので、片付けるのは予約の期限が
+ * 切れた後のここになる。期限は 10 分で、定期実行の間隔を足しても 30 分に届かない。
+ * それでは、遅れて着地しうる幅として他で受け入れている 30 分より短くなり、
+ * 手放した後に着地した PATCH が、その名前を取った別のリポジトリに当たる。
+ *
+ * 予約が**作られてから**この幅を過ぎるまでは手放さない。
+ */
+const HOLD_LATE_GRACE_MS = 30 * 60 * 1000;
+
+/**
+ * 1 回の片付けで見る行数の上限 (片付ける上限の何倍まで走査するか)。
+ *
+ * 触らずに飛ばす行 (直しが押さえている名前など) は古い順の先頭に居座り続ける。
+ * 取得件数で打ち切ると、その後ろにある放置された作成・改名・削除へ永久に
+ * 届かない。飛ばした分は数えずに頁を進め、走査そのものにだけ上限を置く。
+ */
+const RECONCILE_SCAN_FACTOR = 10;
+
+/**
  * 照合できない予約を諦めるまでの幅。
  *
  * 元の名前が控えられていない改名の予約は、何度見ても判断材料が増えない。押さえた
@@ -740,6 +832,16 @@ const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
  * 過ぎたら、記録を残して外す。
  */
 const UNMATCHABLE_RESERVATION_GRACE_MS = 30 * 60 * 1000;
+
+/**
+ * 改名で**元の名前**を押さえている行の預かり名。
+ *
+ * 行き先の行と役目が違う。行き先は「その名前を先に押さえる」ためのもので、
+ * 元の名前の側は「改名し終えるまでその名前を空けない」ためのもの。だから
+ * 済んだかどうかの見方も違う (行き先は最終名になったか、元の側はその名前から
+ * 動いたか)。名前だけでは区別できないので、預かり名で分ける。
+ */
+const RENAME_SOURCE_PREFIX = "beutl-rename-src-";
 
 /** 預かり名の接頭辞。行に何の操作かを持たせる前から、これだけは付けてきた。 */
 const HOLDING_PREFIXES = [
@@ -837,14 +939,16 @@ async function settleRepositoryRepair(
   let keepName = false;
   try {
     return await settleHeldRepair(
-      entry, epoch, current, owner, admin, handover, held,
+      entry,
+      epoch,
+      current,
+      owner,
+      admin,
+      handover,
+      held,
     );
   } catch (error) {
-    const decided =
-      error instanceof ForgejoError &&
-      error.status >= 400 &&
-      error.status < 500;
-    if (!decided) keepName = true;
+    if (!isDecided(error)) keepName = true;
     throw error;
   } finally {
     if (!keepName) await releaseName(held, epoch);
@@ -888,6 +992,13 @@ async function settleHeldRepair(
   } else {
     const outcome = await repairTemplates(owner, current, epoch, nameHold);
     if (outcome.state !== "repaired") {
+      // **送ったものが確定していないなら、まだ片付いていない。** 読み取り専用に
+      // できていても、遅れて着地した unarchive や commit がその後に効けば、
+      // 既定値の入っていないリポジトリがまた書き込み可能になる。投げれば外側が
+      // 名前を保持し、控えも残る (次の周回で id から引き直して決着を付ける)。
+      if (outcome.pending) {
+        throw new RepairPendingError(entry.forgejoRepoId, outcome.error);
+      }
       // 直せなかった。預かりものなら渡さずに控えを残す (管理者の手元にある限り
       // 利用者は触れない)。利用者のものなら、読み取り専用にできた時点で
       // push は通らないので片付いたとみなす。
@@ -962,151 +1073,121 @@ async function settleHeldRepair(
  * 進行中のものを掴まないよう、しばらく前の予約だけを見る。
  */
 async function reconcileStaleCreations(limit: number): Promise<void> {
-  const stale = await listExpiredGitRepositoryCreations({ limit });
   const admin = await getAdminUsername();
+  // **打ち切るのは「片付けた数」で。** 取得した数で打ち切ると、触らずに飛ばす
+  // 行が先頭を占め続けたときに、その後ろへ永久に届かない。
+  const scanLimit = limit * RECONCILE_SCAN_FACTOR;
+  let handled = 0;
+  let scanned = 0;
+  let after: string | undefined;
 
-  for (const entry of stale) {
-    // **掴む前に、控え側が持っているものかを見る。**
-    //
-    // 掴むと期限が伸びる。控え側の引き継ぎ (adoptName) は期限切れを条件に
-    // しているので、ここで伸ばすと引き継げなくなる。片付けもしないまま毎周回
-    // 伸ばし続けることになり、控えと予約が互いを待って永久に止まる。
-    const queued =
-      entry.forgejoRepoId == null
-        ? null
-        : await findGitRepositoryRepair({
-            forgejoRepoId: entry.forgejoRepoId,
-          });
-    // 人の確認待ちは自動では再開しない。控えがあっても引き継ぐ相手がいない。
-    const willRetry = queued !== null && !queued.needsReview;
+  while (handled < limit && scanned < scanLimit) {
+    const page = await listExpiredGitRepositoryCreations({ limit, after });
+    if (page.length === 0) break;
+    after = page[page.length - 1].id;
 
-    // **名前を押さえていただけの予約。** Forgejo は見ない。やり残した作業は控え
-    // (リポジトリ id) の側にあるので、ここは名前を手放すだけでよい。見に行くと、
-    // 相手の今の姿によっては預かりものの流れに乗せてしまい、利用者が編集した
-    // .gitattributes を「直す」対象にする。
-    //
-    // **ただし、対応する直しがまだ回るなら外さない。** 直しは複数の API 呼び出しを
-    // 行い、その間に名前の期限が切れることがある。期限が切れたからと外すと、
-    // 実行中の直しと並行して同じ名前を別の作成が取れる。名前は直し側が引き継ぐ。
-    const repairHold = entry.holdingName.startsWith(REPAIR_HOLDING_PREFIX);
-    if (repairHold && willRetry) continue;
-
-    // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
-    // 2 つに分かれる。渡し切った側が予約も外す。
-    if (!repairHold && queued !== null) continue;
-
-    // 掴む。期限内のもの (前面が進めているもの) は返ってこない。
-    const epoch = crypto.randomUUID();
-    if (
-      !(await claimGitRepositoryCreation({
-        id: entry.id,
-        intentId: epoch,
-        leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
-      }))
-    ) {
-      continue;
-    }
-
-    try {
-      // 控えが無い、または人の確認待ちで止まっている預かり名。誰も引き継がない
-      // ので、押さえたままにするとその名前を永久に塞ぐ。手放すだけでよい。
-      if (repairHold) {
-        await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
-        continue;
-      }
-
-      // id が分かっていればそれで、分からなければ預かり名で引く。
-      const holding = entry.forgejoRepoId
-        ? await forgejoRequestOrNull<ForgejoRepository>(
-            `/repositories/${entry.forgejoRepoId}`,
-          )
-        : await getRepository(admin, admin, entry.holdingName);
-
-      // **最終形になっているときだけ**外す。最終形とは「渡す先が持っていて、
-      // 名前も最終名」であること。管理者以外が持っているだけでは足りない
-      // (第三者が最終名を持っている場合も同じ見え方になる)。
+    for (const entry of page) {
+      if (handled >= limit || scanned >= scanLimit) break;
+      scanned += 1;
+      // **掴む前に、控え側が持っているものかを見る。**
       //
-      // 名前は**そのまま**比べる。小文字化して比べると、proj → Proj のような
-      // 大小だけの改名が済んでいなくても「同じ」に見えて完了扱いになる。
-      const settled =
-        holding !== null &&
-        holding.owner.login.toLowerCase() ===
-          entry.ownerUsername.toLowerCase() &&
-        holding.name === entry.name;
-      const operation = reservationOperation(entry);
+      // 掴むと期限が伸びる。控え側の引き継ぎ (adoptName) は期限切れを条件に
+      // しているので、ここで伸ばすと引き継げなくなる。片付けもしないまま毎周回
+      // 伸ばし続けることになり、控えと予約が互いを待って永久に止まる。
+      const queued =
+        entry.forgejoRepoId == null
+          ? null
+          : await findGitRepositoryRepair({
+              forgejoRepoId: entry.forgejoRepoId,
+            });
+      // 人の確認待ちは自動では再開しない。控えがあっても引き継ぐ相手がいない。
+      const willRetry = queued !== null && !queued.needsReview;
 
-      // 削除の予約は、消えたかどうかを確かめるだけ。**自動では消し直さない。**
-      // 消すのは取り返しがつかないので、残っていたら「行われなかった」として
-      // 名前を解放し、やり直すかどうかは利用者に委ねる。
-      if (operation === GitRepositoryOperation.DELETE) {
-        if (holding) {
-          // **まだ残っている = 削除が行われなかった、ではない。** 待つのをやめた
-          // 後に Forgejo が確定させることがある。始めてからしばらくは押さえたまま
-          // にして、それでも残っていたら「行われなかった」として名前を解放する。
-          if (
-            Date.now() - entry.createdAt.getTime() <
-            DELETE_LATE_GRACE_MS
-          ) {
-            continue;
-          }
-          console.warn(
-            `delete reservation ${entry.id} still sees ` +
-              `${holding.owner.login}/${holding.name}; the deletion did not take effect`,
-          );
-        }
-        await releaseGitRepositoryReservationsByIntent({
-          intentId: entry.intentId ?? epoch,
-        }).catch(() => undefined);
-        await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
-        continue;
+      // **名前を押さえていただけの予約。** Forgejo は見ない。やり残した作業は控え
+      // (リポジトリ id) の側にあるので、ここは名前を手放すだけでよい。見に行くと、
+      // 相手の今の姿によっては預かりものの流れに乗せてしまい、利用者が編集した
+      // .gitattributes を「直す」対象にする。
+      //
+      // **ただし、対応する直しがまだ回るなら外さない。** 直しは複数の API 呼び出しを
+      // 行い、その間に名前の期限が切れることがある。期限が切れたからと外すと、
+      // 実行中の直しと並行して同じ名前を別の作成が取れる。名前は直し側が引き継ぐ。
+      const repairHold = entry.holdingName.startsWith(REPAIR_HOLDING_PREFIX);
+      if (repairHold) {
+        if (willRetry) continue;
+        // **遅れて着地しうる幅は空ける。** 説明文の書き換えのように控えを積まない
+        // 操作は、結果が分からないまま押さえたままここへ来る。期限切れで即座に
+        // 手放すと、後から着地した PATCH がその名前を取った別のリポジトリに当たる。
+        if (Date.now() - entry.createdAt.getTime() < HOLD_LATE_GRACE_MS)
+          continue;
       }
 
-      // 改名の予約は、名前が変わったかを確かめるだけ。控えに載せて渡し切る流れに
-      // 乗せると、利用者が編集した .gitattributes を「直す」対象にしてしまう。
-      if (holding && !settled && operation === GitRepositoryOperation.RENAME) {
-        // 元の名前が控えられていない行は、何度見ても判断材料が増えない。
-        // 押さえたままだと名前を恒久的に塞ぐので、しばらく置いてから手放す。
-        // 何もせずに手放すだけなので、利用者のリポジトリには触らない。
-        if (entry.sourceName === null) {
-          if (
-            Date.now() - entry.createdAt.getTime() <
-            UNMATCHABLE_RESERVATION_GRACE_MS
-          ) {
-            continue;
-          }
-          console.error(
-            `rename reservation ${entry.id} has no source name; ` +
-              `releasing ${entry.ownerUsername}/${entry.name} without renaming`,
-          );
-          await releaseGitRepositoryReservationsByIntent({
-            intentId: entry.intentId ?? epoch,
-          }).catch(() => undefined);
+      // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
+      // 2 つに分かれる。渡し切った側が予約も外す。
+      if (!repairHold && queued !== null) continue;
+
+      // 掴む。期限内のもの (前面が進めているもの) は返ってこない。
+      const epoch = crypto.randomUUID();
+      if (
+        !(await claimGitRepositoryCreation({
+          id: entry.id,
+          intentId: epoch,
+          leaseUntil: new Date(Date.now() + CREATION_LEASE_MS),
+        }))
+      ) {
+        // 期限内 = 前面の処理が持っている。飛ばした分は数えない。
+        continue;
+      }
+      // ここから先はどう転んでも「1 件片付けにいった」。
+      handled += 1;
+
+      try {
+        // 控えが無い、または人の確認待ちで止まっている預かり名。誰も引き継がない
+        // ので、押さえたままにするとその名前を永久に塞ぐ。手放すだけでよい
+        // (着地の猶予は掴む前に見てある)。
+        if (repairHold) {
           await releaseGitRepositoryReservation({
             id: entry.id,
             intentId: epoch,
           });
           continue;
         }
-        // 控えてある元の名前と**そのまま**突き合わせる。「今の名前が元の名前だ」と
-        // 読み替えると、利用者が後から付け直した名前まで書き換えてしまう。
-        if (
+
+        // id が分かっていればそれで、分からなければ預かり名で引く。
+        const holding = entry.forgejoRepoId
+          ? await forgejoRequestOrNull<ForgejoRepository>(
+              `/repositories/${entry.forgejoRepoId}`,
+            )
+          : await getRepository(admin, admin, entry.holdingName);
+
+        // **最終形になっているときだけ**外す。最終形とは「渡す先が持っていて、
+        // 名前も最終名」であること。管理者以外が持っているだけでは足りない
+        // (第三者が最終名を持っている場合も同じ見え方になる)。
+        //
+        // 名前は**そのまま**比べる。小文字化して比べると、proj → Proj のような
+        // 大小だけの改名が済んでいなくても「同じ」に見えて完了扱いになる。
+        const settled =
+          holding !== null &&
           holding.owner.login.toLowerCase() ===
             entry.ownerUsername.toLowerCase() &&
-          holding.name === entry.sourceName
-        ) {
-          // まだ元の名前のまま。改名だけやり直す。
-          await holdReservation(entry.id, epoch);
-          // 送るのは名前。その名前がまだこの相手を指しているかを直前に確かめる。
-          await assertStillNamed(holding.owner.login, holding);
-          await forgejoRequest(
-            `/repos/${encodeURIComponent(holding.owner.login)}/${encodeURIComponent(holding.name)}`,
-            {
-              method: "PATCH",
-              body: { name: entry.name },
-              timeoutMs: HELD_REQUEST_TIMEOUT_MS,
-            },
-          );
-          // 行き先と元の 2 本をまとめて外す。
+          holding.name === entry.name;
+        const operation = reservationOperation(entry);
+
+        // 削除の予約は、消えたかどうかを確かめるだけ。**自動では消し直さない。**
+        // 消すのは取り返しがつかないので、残っていたら「行われなかった」として
+        // 名前を解放し、やり直すかどうかは利用者に委ねる。
+        if (operation === GitRepositoryOperation.DELETE) {
+          if (holding) {
+            // **まだ残っている = 削除が行われなかった、ではない。** 待つのをやめた
+            // 後に Forgejo が確定させることがある。始めてからしばらくは押さえたまま
+            // にして、それでも残っていたら「行われなかった」として名前を解放する。
+            if (Date.now() - entry.createdAt.getTime() < DELETE_LATE_GRACE_MS) {
+              continue;
+            }
+            console.warn(
+              `delete reservation ${entry.id} still sees ` +
+                `${holding.owner.login}/${holding.name}; the deletion did not take effect`,
+            );
+          }
           await releaseGitRepositoryReservationsByIntent({
             intentId: entry.intentId ?? epoch,
           }).catch(() => undefined);
@@ -1116,68 +1197,172 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
           });
           continue;
         }
-        // 元の名前でも最終名でもない。自動では決められない。
-        console.error(
-          `rename reservation ${entry.id} points at ${holding.owner.login}/${holding.name}, ` +
-            `expected ${entry.ownerUsername}/${entry.sourceName ?? "?"} or ${entry.name}`,
-        );
-        continue;
-      }
 
-      if (holding && !settled) {
-        // 控えに載せ替える。**予約は外さない。** ここで外すと、渡し終わる前に
-        // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
-        // 外すのは渡し切った側 (settleRepositoryRepair)。第三者が持っている
-        // 場合も、そこで人の確認に回る。
-        // 見つかったので、見失った記録は消す。
+        // **元の名前を押さえていた行。** 役目は「改名し終えるまでその名前を空けない」
+        // ことなので、相手がその名前から動いていれば済んでいる。
+        //
+        // これを行き先の行と同じ物差しで見ると、押さえているのは旧名なのに最終名と
+        // 比べることになり、改名が通っていても永久に食い違う。旧名がずっと再利用
+        // できなくなる。
+        if (
+          holding &&
+          entry.holdingName.startsWith(RENAME_SOURCE_PREFIX) &&
+          entry.sourceName !== null
+        ) {
+          const stillAtSource =
+            holding.owner.login.toLowerCase() ===
+              entry.ownerUsername.toLowerCase() &&
+            holding.name === entry.sourceName;
+          if (!stillAtSource) {
+            // その名前から動いた。行き先の行と一緒に外す。
+            await releaseGitRepositoryReservationsByIntent({
+              intentId: entry.intentId ?? epoch,
+            }).catch(() => undefined);
+            await releaseGitRepositoryReservation({
+              id: entry.id,
+              intentId: epoch,
+            });
+            continue;
+          }
+          // まだ元の名前のまま。改名は行き先の行がやり直す。こちらは押さえたまま。
+          continue;
+        }
+
+        // 改名の予約は、名前が変わったかを確かめるだけ。控えに載せて渡し切る流れに
+        // 乗せると、利用者が編集した .gitattributes を「直す」対象にしてしまう。
+        if (
+          holding &&
+          !settled &&
+          operation === GitRepositoryOperation.RENAME
+        ) {
+          // 元の名前が控えられていない行は、何度見ても判断材料が増えない。
+          // 押さえたままだと名前を恒久的に塞ぐので、しばらく置いてから手放す。
+          // 何もせずに手放すだけなので、利用者のリポジトリには触らない。
+          if (entry.sourceName === null) {
+            if (
+              Date.now() - entry.createdAt.getTime() <
+              UNMATCHABLE_RESERVATION_GRACE_MS
+            ) {
+              continue;
+            }
+            console.error(
+              `rename reservation ${entry.id} has no source name; ` +
+                `releasing ${entry.ownerUsername}/${entry.name} without renaming`,
+            );
+            await releaseGitRepositoryReservationsByIntent({
+              intentId: entry.intentId ?? epoch,
+            }).catch(() => undefined);
+            await releaseGitRepositoryReservation({
+              id: entry.id,
+              intentId: epoch,
+            });
+            continue;
+          }
+          // 控えてある元の名前と**そのまま**突き合わせる。「今の名前が元の名前だ」と
+          // 読み替えると、利用者が後から付け直した名前まで書き換えてしまう。
+          if (
+            holding.owner.login.toLowerCase() ===
+              entry.ownerUsername.toLowerCase() &&
+            holding.name === entry.sourceName
+          ) {
+            // まだ元の名前のまま。改名だけやり直す。
+            await holdReservation(entry.id, epoch);
+            // 送るのは名前。その名前がまだこの相手を指しているかを直前に確かめる。
+            await assertStillNamed(holding.owner.login, holding);
+            await forgejoRequest(
+              `/repos/${encodeURIComponent(holding.owner.login)}/${encodeURIComponent(holding.name)}`,
+              {
+                method: "PATCH",
+                body: { name: entry.name },
+                timeoutMs: HELD_REQUEST_TIMEOUT_MS,
+              },
+            );
+            // 行き先と元の 2 本をまとめて外す。
+            await releaseGitRepositoryReservationsByIntent({
+              intentId: entry.intentId ?? epoch,
+            }).catch(() => undefined);
+            await releaseGitRepositoryReservation({
+              id: entry.id,
+              intentId: epoch,
+            });
+            continue;
+          }
+          // 元の名前でも最終名でもない。自動では決められない。
+          console.error(
+            `rename reservation ${entry.id} points at ${holding.owner.login}/${holding.name}, ` +
+              `expected ${entry.ownerUsername}/${entry.sourceName ?? "?"} or ${entry.name}`,
+          );
+          continue;
+        }
+
+        if (holding && !settled) {
+          // 控えに載せ替える。**予約は外さない。** ここで外すと、渡し終わる前に
+          // 同じ名前を再び予約でき、2 つの預かりものが同じ相手に渡る。
+          // 外すのは渡し切った側 (settleRepositoryRepair)。第三者が持っている
+          // 場合も、そこで人の確認に回る。
+          // 見つかったので、見失った記録は消す。
+          await clearGitRepositoryCreationMissing({
+            id: entry.id,
+            intentId: epoch,
+          });
+          await queueRepair(admin, holding, "abandoned before hand-over", {
+            handover: {
+              intendedOwner: entry.ownerUsername,
+              intendedName: entry.name,
+            },
+            reservationId: entry.id,
+            required: true,
+          });
+          continue;
+        }
+
+        if (!holding) {
+          // **1 回見つからないだけでは外さない。** 待つのをやめた後に Forgejo が
+          // 確定させることがある。しばらく見続けて、それでも現れなければ外す。
+          const missingSince = await markGitRepositoryCreationMissing({
+            id: entry.id,
+            intentId: epoch,
+          });
+          if (
+            missingSince &&
+            Date.now() - missingSince.getTime() < CREATION_MISSING_GRACE_MS
+          ) {
+            continue;
+          }
+          await releaseGitRepositoryReservation({
+            id: entry.id,
+            intentId: epoch,
+          });
+          continue;
+        }
+
+        // 最終形になっている。予約は不要。
         await clearGitRepositoryCreationMissing({
           id: entry.id,
           intentId: epoch,
         });
-        await queueRepair(admin, holding, "abandoned before hand-over", {
-          handover: {
-            intendedOwner: entry.ownerUsername,
-            intendedName: entry.name,
-          },
-          reservationId: entry.id,
-          required: true,
-        });
-        continue;
-      }
-
-      if (!holding) {
-        // **1 回見つからないだけでは外さない。** 待つのをやめた後に Forgejo が
-        // 確定させることがある。しばらく見続けて、それでも現れなければ外す。
-        const missingSince = await markGitRepositoryCreationMissing({
-          id: entry.id,
-          intentId: epoch,
-        });
-        if (
-          missingSince &&
-          Date.now() - missingSince.getTime() < CREATION_MISSING_GRACE_MS
-        ) {
-          continue;
-        }
         await releaseGitRepositoryReservation({
           id: entry.id,
           intentId: epoch,
         });
-        continue;
+      } catch (error) {
+        // 分からないまま外さない。次の周回でやり直す。
+        console.error(
+          `could not reconcile the reservation of ${entry.ownerUsername}/${entry.name}`,
+          error,
+        );
       }
-
-      // 最終形になっている。予約は不要。
-      await clearGitRepositoryCreationMissing({
-        id: entry.id,
-        intentId: epoch,
-      });
-      await releaseGitRepositoryReservation({ id: entry.id, intentId: epoch });
-    } catch (error) {
-      // 分からないまま外さない。次の周回でやり直す。
-      console.error(
-        `could not reconcile the reservation of ${entry.ownerUsername}/${entry.name}`,
-        error,
-      );
     }
+  }
+
+  // **打ち切ったことを黙って伏せない。** 何件見て何件片付けたかを言わないと、
+  // 届いていない行があっても「片付いた」と読める。
+  if (scanned >= scanLimit && handled < limit) {
+    console.warn(
+      `reconcile stopped after scanning ${scanned} reservations and settling ` +
+        `${handled}; the rest are held by work in progress and will be seen ` +
+        "on the next run",
+    );
   }
 }
 
@@ -1366,7 +1551,10 @@ async function handOver(
     }
     await renewName(landing, epoch);
     await holdRepair(repoId, epoch);
-    await assertStillNamed(intendedOwner, { id: repoId, name: transferred.name });
+    await assertStillNamed(intendedOwner, {
+      id: repoId,
+      name: transferred.name,
+    });
     // 預かり名は毎回違うので、渡した後に本来の名前へ直す。名前が空いていることは
     // 作成の前に確かめてある。
     return await forgejoRequest<ForgejoRepository>(
@@ -1374,11 +1562,7 @@ async function handOver(
       { method: "PATCH", body: { name: intendedName } },
     );
   } catch (error) {
-    const decided =
-      error instanceof ForgejoError &&
-      error.status >= 400 &&
-      error.status < 500;
-    if (!decided) keepLanding = true;
+    if (!isDecided(error)) keepLanding = true;
     throw error;
   } finally {
     if (!keepLanding) await releaseName(landing, epoch);
@@ -1433,6 +1617,8 @@ export async function createRepository(
   if (conflicting) {
     // **予約はここでは外さない。** 下の修復はこの名前に対して送るので、外して
     // しまうと直している最中に別の作成や改名がその名前を取れる。決着してから外す。
+    // 決着が付かなかった場合 (送ったものが確定していない場合) も外さない。
+    let keepReservation = false;
     try {
       // テンプレートが揃っていれば普通の名前衝突。
       if (await hasTemplates(sudo, name)) {
@@ -1449,10 +1635,19 @@ export async function createRepository(
       // やり直しをそのまま修復として扱う。**直せたときだけ** push できる状態に戻る。
       // 直す前に握る。掴めなければ定期実行が触っているので、やり直させる。
       const epoch = await acquireRepair(sudo, conflicting, "repair requested");
-      await requireRepairedTemplates(sudo, conflicting, epoch, {
-        id: reservation,
-        epoch: reservationEpoch,
-      });
+      try {
+        await requireRepairedTemplates(sudo, conflicting, epoch, {
+          id: reservation,
+          epoch: reservationEpoch,
+        });
+      } catch (error) {
+        // **送ったものが確定していないなら、名前は手放さない。** 手放すと、
+        // 遅れて着地した unarchive や commit が、その名前を取った別の
+        // リポジトリに当たる。控えは acquireRepair が積んであるので、
+        // 次の周回が id から引き直して決着を付ける。
+        if (error instanceof RepairPendingError) keepReservation = true;
+        throw error;
+      }
       // 直った。控えに残す理由が無い。
       await deleteGitRepositoryRepair({
         forgejoRepoId: conflicting.id,
@@ -1460,10 +1655,12 @@ export async function createRepository(
       }).catch(() => undefined);
       return conflicting;
     } finally {
-      await releaseGitRepositoryReservation({
-        id: reservation,
-        intentId: reservationEpoch,
-      }).catch(() => undefined);
+      if (!keepReservation) {
+        await releaseGitRepositoryReservation({
+          id: reservation,
+          intentId: reservationEpoch,
+        }).catch(() => undefined);
+      }
     }
   }
 
@@ -1639,7 +1836,7 @@ export async function renameRepository(
       sourceReservation = await reserveGitRepositoryName({
         ownerUsername: owner,
         name,
-        holdingName: `beutl-rename-src-${crypto.randomUUID()}`,
+        holdingName: `${RENAME_SOURCE_PREFIX}${crypto.randomUUID()}`,
         operation: GitRepositoryOperation.RENAME,
         sourceName: name,
         intentId: renameEpoch,
@@ -1739,11 +1936,7 @@ export async function renameRepository(
     //
     // 4xx は「受け付けられなかった」と言い切れるので外してよい。5xx と、
     // 待ち時間切れなどの例外は残す。定期実行が id で引き直して決着を付ける。
-    const decided =
-      error instanceof ForgejoError &&
-      error.status >= 400 &&
-      error.status < 500;
-    if (decided) await releaseBoth();
+    if (isDecided(error)) await releaseBoth();
     throw error;
   }
 }
@@ -1798,11 +1991,7 @@ export async function updateRepositoryDescription(
       },
     );
   } catch (error) {
-    const decided =
-      error instanceof ForgejoError &&
-      error.status >= 400 &&
-      error.status < 500;
-    if (!decided) keepName = true;
+    if (!isDecided(error)) keepName = true;
     throw error;
   } finally {
     if (!keepName) await releaseName(held, epoch);
@@ -1872,6 +2061,17 @@ export async function deleteRepository(
       );
     }
 
+    // **消す前に控える。** 消去は Forgejo 側で完結し、こちらには何も残らない。
+    // Forgejo をこの時点より前へ戻すと、消したはずのリポジトリが復活する。
+    // 控えが無ければ、戻した後にそれを消し直したかどうかを誰も数えられない。
+    //
+    // 名前ではなく id で控える。名前は空いた後に別のリポジトリが取る。
+    await recordGitRepositoryDeletion({
+      forgejoRepoId: current.id,
+      ownerUsername: stillThere.owner.login,
+      name: stillThere.name,
+    });
+
     await forgejoRequest(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       {
@@ -1887,9 +2087,7 @@ export async function deleteRepository(
   } catch (error) {
     // 4xx は言い切れる。それ以外 (待ち時間切れ・5xx) は、消えたかどうか
     // 分からない。予約を残し、定期実行が id で引き直して決着を付ける。
-    const decided =
-      error instanceof ForgejoError && error.status >= 400 && error.status < 500;
-    if (decided) {
+    if (isDecided(error)) {
       await releaseGitRepositoryReservationsByIntent({
         intentId: deleteEpoch,
       }).catch(() => undefined);

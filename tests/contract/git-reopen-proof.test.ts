@@ -37,6 +37,7 @@ describe("証拠の中身", () => {
       expiresAt: 1787536940,
     });
 
+    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v2");
     expect(payload.split("\n")).toEqual([
       PROOF_PROTOCOL,
       "1787536325:c9a7",
@@ -163,20 +164,29 @@ describe("署名", () => {
 });
 
 describe("開けてよいかの集計", () => {
-  // 6 つの数のどれかが 0 でなければ証拠は作られない。どれか 1 つでも数え落とすと、
-  // 生きたトークンを残したまま「終わっている」と読める。
+  // どれか 1 つでも 0 でなければ証拠は作られない。数え落とすと、生きたトークンや
+  // 戻ってきたリポジトリを残したまま「終わっている」と読める。
   type Row = Record<string, unknown>;
 
-  function fakePrisma(rows: Row[]) {
+  function fakePrisma(
+    rows: Row[],
+    tombstones: { credentials?: Row[]; repositories?: Row[] } = {},
+  ) {
     const queries: Row[] = [];
-    const count = ({ where }: { where: Row }) => {
-      queries.push(where);
-      return rows.filter((row) => matches(row, where)).length;
-    };
+    const counter = (source: Row[]) => ({
+      count: ({ where }: { where: Row }) => {
+        queries.push(where);
+        return source.filter((row) => matches(row, where)).length;
+      },
+    });
     return {
-      gitAccountDeletion: { count },
+      gitAccountDeletion: counter(rows),
+      // **退会とは別の控え。** 生きている利用者が 1 本だけ失効させたトークンと、
+      // 消したリポジトリ。退会の数には一切現れない。
+      gitCredentialRevocation: counter(tombstones.credentials ?? []),
+      gitRepositoryDeletion: counter(tombstones.repositories ?? []),
       // 本物は 1 つのトランザクションで数える。数える間に状態が動くと、
-      // 6 つの数が別々の時点のものになる。
+      // それぞれの数が別々の時点のものになる。
       $transaction: async (calls: number[]) => calls,
       queries,
     };
@@ -266,17 +276,71 @@ describe("開けてよいかの集計", () => {
     });
   });
 
-  it("6 つを 1 つのトランザクションで数える", async () => {
+  it("失効させたトークンの控えも、この世代で確認していなければ数える", async () => {
+    // 生きている利用者のトークンなので、退会の墓標には現れない。端末には平文が
+    // 残っているので、復元で生き返ったまま開けると git と LFS が通ってしまう。
+    const prisma = fakePrisma([], {
+      credentials: [{ checkedGeneration: null, lastError: null }],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ credentials: 1, credentialsFailed: 0 });
+  });
+
+  it("失効の控えも、確認済みなら数えない", async () => {
+    const prisma = fakePrisma([], {
+      credentials: [{ checkedGeneration: "gen-1", lastError: null }],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ credentials: 0 });
+  });
+
+  it("失効の控えの失敗は credentialsFailed にも数える", async () => {
+    const prisma = fakePrisma([], {
+      credentials: [{ checkedGeneration: null, lastError: "boom" }],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ credentials: 1, credentialsFailed: 1 });
+  });
+
+  it("消したリポジトリの控えも数える", async () => {
+    const prisma = fakePrisma([], {
+      repositories: [
+        { checkedGeneration: null, needsReview: false, lastError: null },
+      ],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ repositories: 1, repositoriesReview: 0 });
+  });
+
+  it("id が別のリポジトリを指している控えは人の確認に数える", async () => {
+    // 自動では消せない。数えないと、戻ってきたリポジトリを残したまま開ける。
+    const prisma = fakePrisma([], {
+      repositories: [
+        { checkedGeneration: "gen-1", needsReview: true, lastError: "moved" },
+      ],
+    });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ repositories: 0, repositoriesReview: 1 });
+  });
+
+  it("11 個を 1 つのトランザクションで数える", async () => {
     // 別々に数えると、数えている間に状態が動いて別の時点の数が混ざる。
     let batched = 0;
     const prisma = {
       gitAccountDeletion: { count: () => 0 },
+      gitCredentialRevocation: { count: () => 0 },
+      gitRepositoryDeletion: { count: () => 0 },
       $transaction: async (calls: number[]) => {
         batched = calls.length;
         return calls;
       },
     };
     await collectGitReconcileStatus(prisma, "gen-1");
-    expect(batched).toBe(6);
+    expect(batched).toBe(11);
   });
 });

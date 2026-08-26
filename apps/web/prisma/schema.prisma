@@ -298,6 +298,52 @@ model GitRepositoryRepair {
  * 世代がこのデータベースに存在すること自体が、確認した相手が本番であることの
  * 裏付けにもなる。
  */
+/// 1 本だけ失効させたトークンの墓標。
+///
+/// 失効は Forgejo 側でトークンを消して完了するが、**Forgejo を失効より前へ
+/// 戻すと生き返る**。利用者の端末には平文が残っているので、戻した後に消し直す
+/// まで git と LFS を開けてはいけない。GitCredential の行は失効時に消えるため、
+/// 消し直す相手はここにしか残らない。
+model GitCredentialRevocation {
+  id              String   @id @default(uuid())
+  /// 誰のものだったか。利用者が消えていても墓標は残すので、参照は張らない。
+  userId          String
+  forgejoUsername String
+  forgejoTokenId  Int
+  /// 復元先で id が使い回されていないかを見分けるための末尾 8 文字。
+  /// **id だけで消すと、復元後に採番し直された別のトークンを消しうる。**
+  lastEight       String
+  revokedAt       DateTime @default(now())
+  /// どの復元世代で確認し終えたか。時計ではなく世代で数える。
+  checkedGeneration String?
+  attempts        Int      @default(0)
+  lastAttemptAt   DateTime?
+  lastError       String?
+
+  @@index([revokedAt])
+  @@index([checkedGeneration])
+}
+
+/// 消したリポジトリの墓標。理由は上と同じで、Forgejo を戻すと復活する。
+///
+/// **相手は Forgejo のリポジトリ id。** 名前は空いた後に別のリポジトリが取る。
+model GitRepositoryDeletion {
+  forgejoRepoId   Int      @id
+  /// 消した時点の持ち主と名前。消し直す前に、その id が今もこれを指すかを見る。
+  ownerUsername   String
+  name            String
+  deletedAt       DateTime @default(now())
+  checkedGeneration String?
+  /// その id が別のリポジトリを指している。自動では決められないので人が見る。
+  needsReview     Boolean  @default(false)
+  attempts        Int      @default(0)
+  lastAttemptAt   DateTime?
+  lastError       String?
+
+  @@index([deletedAt])
+  @@index([checkedGeneration])
+}
+
 model GitRestoreGeneration {
   id        String   @id
   createdAt DateTime @default(now())

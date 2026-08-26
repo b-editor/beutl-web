@@ -26,7 +26,7 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
-import { reconcileGitAccountDeletionTombstones, retryGitRepositoryRepairs, missingForgejoConfig, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
+import { reconcileGitResurrectionTombstones, reconcileGitAccountDeletionTombstones, retryGitRepositoryRepairs, missingForgejoConfig, releaseExpiredGitAccountDeletionBlocks, retryPendingGitDeletions } from "@beutl/forgejo";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -226,6 +226,34 @@ export default {
       }
     } catch (error) {
       console.error("failed to reconcile Git purge tombstones", error);
+    }
+
+    // 失効させたトークンと消したリポジトリが、復元で生き返っていないかを見る。
+    // 退会の墓標には現れない (アカウントは生きているため)。ここを回さないと、
+    // 端末に平文の残る失効済みトークンが通るようになっていても気付けない。
+    try {
+      const { checked, revoked, deleted, review, failed, pruned } =
+        await reconcileGitResurrectionTombstones({ drain: true });
+      if (checked > 0 || failed > 0 || pruned > 0) {
+        console.log(
+          `git resurrection: checked ${checked}, revoked ${revoked}, ` +
+            `deleted ${deleted}, failed ${failed}, pruned ${pruned}`,
+        );
+      }
+      if (revoked > 0 || deleted > 0) {
+        console.error(
+          `git resurrection: ${revoked} revoked credentials and ${deleted} ` +
+            "deleted repositories had come back and were removed again",
+        );
+      }
+      if (review > 0) {
+        console.error(
+          `git resurrection: ${review} deletion tombstones need a human ` +
+            "decision (the repository id points at something else now)",
+        );
+      }
+    } catch (error) {
+      console.error("failed to reconcile Git resurrection tombstones", error);
     }
 
     // テンプレートを入れ切れなかったリポジトリを入れ直す。残っている間は

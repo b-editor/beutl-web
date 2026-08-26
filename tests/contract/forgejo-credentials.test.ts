@@ -161,7 +161,11 @@ vi.mock("@beutl/db", () => ({
     // 積まないので、全部消せば同じこと。
     reservations.clear();
   },
-  listExpiredGitRepositoryCreations: async () => [
+  listExpiredGitRepositoryCreations: async ({
+    limit = 20,
+    after,
+  }: { limit?: number; after?: string } = {}) => {
+    const rows = [
     ...staleReservations.map((entry) => ({
       operation: "CREATE",
       sourceName: null,
@@ -188,7 +192,12 @@ vi.mock("@beutl/db", () => ({
         sourceName: null,
         createdAt: new Date(),
       })),
-  ],
+    ];
+    // 本物は位置 (行) で続きを読む。ここで無視すると、飛ばされた行が先頭に
+    // 居座り続けたときに同じ頁を読み直すだけになり、飢餓を試せない。
+    const start = after === undefined ? 0 : rows.findIndex((r) => r.id === after) + 1;
+    return rows.slice(start, start + limit);
+  },
   GitRepositoryOperation: {
     CREATE: "CREATE",
     RENAME: "RENAME",
@@ -312,6 +321,51 @@ vi.mock("@beutl/db", () => ({
   listGitCredentialsByUserId: async () => [],
   findGitCredentialByName: async ({ name }: { name: string }) =>
     existingNames.includes(name) ? { id: "c0", name } : null,
+  // 生き返りの控え。失効も削除もこちら側に何も残さないので、消し直す相手は
+  // ここにしか残らない。
+  recordGitCredentialRevocation: async (input: Record<string, unknown>) => {
+    revocationTombstones.push(input);
+  },
+  recordGitRepositoryDeletion: async (input: Record<string, unknown>) => {
+    deletionTombstones.push(input);
+  },
+  currentGitRestoreGeneration: async () => restoreGeneration,
+  listGitCredentialRevocations: async () =>
+    revocationRows.filter((row) => row.checkedGeneration !== restoreGeneration),
+  listGitRepositoryDeletions: async () =>
+    deletionRows.filter(
+      (row) => !row.needsReview && row.checkedGeneration !== restoreGeneration,
+    ),
+  markGitCredentialRevocationChecked: async ({ id }: { id: string }) => {
+    const row = revocationRows.find((entry) => entry.id === id);
+    if (row) row.checkedGeneration = restoreGeneration;
+  },
+  markGitRepositoryDeletionChecked: async ({
+    forgejoRepoId,
+  }: {
+    forgejoRepoId: number;
+  }) => {
+    const row = deletionRows.find(
+      (entry) => entry.forgejoRepoId === forgejoRepoId,
+    );
+    if (row) row.checkedGeneration = restoreGeneration;
+  },
+  markGitRepositoryDeletionNeedsReview: async ({
+    forgejoRepoId,
+  }: {
+    forgejoRepoId: number;
+  }) => {
+    const row = deletionRows.find(
+      (entry) => entry.forgejoRepoId === forgejoRepoId,
+    );
+    if (row) row.needsReview = true;
+  },
+  recordGitCredentialRevocationAttempt: async () => undefined,
+  recordGitRepositoryDeletionAttempt: async () => undefined,
+  pruneGitResurrectionTombstones: async () => ({
+    credentials: 0,
+    repositories: 0,
+  }),
   findGitCredential: async ({ id }: { id: string }) =>
     id === "c1"
       ? {
@@ -392,6 +446,23 @@ let credentialCount = 0;
 let credentialCountAfterIssue: number | null = null;
 let existingNames: string[] = [];
 let dbInsertFails = false;
+let revocationTombstones: Record<string, unknown>[] = [];
+let deletionTombstones: Record<string, unknown>[] = [];
+let restoreGeneration: string | null = null;
+let revocationRows: {
+  id: string;
+  forgejoUsername: string;
+  forgejoTokenId: number;
+  lastEight: string;
+  checkedGeneration: string | null;
+}[] = [];
+let deletionRows: {
+  forgejoRepoId: number;
+  ownerUsername: string;
+  name: string;
+  needsReview: boolean;
+  checkedGeneration: string | null;
+}[] = [];
 
 const {
   CredentialLimitReachedError,
@@ -448,6 +519,11 @@ beforeEach(() => {
   enqueueFails = false;
   reservations = new Map();
   staleReservations = [];
+  revocationTombstones = [];
+  deletionTombstones = [];
+  restoreGeneration = null;
+  revocationRows = [];
+  deletionRows = [];
   attachFailsFor = [];
   releasedIds = [];
   repairQueue = new Map();
@@ -2851,6 +2927,437 @@ describe("予約の種別は配備の順序に依存しない", () => {
   });
 });
 
+describe("復元で生き返ったものを消し直す", () => {
+  it("失効させたトークンが戻っていたら、消し直す", async () => {
+    // 退会の墓標には現れない (利用者は生きている)。端末には平文が残っているので、
+    // 戻ったまま git を開けると、失効したはずのトークンで通ってしまう。
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    restoreGeneration = "gen-2";
+    revocationRows = [
+      {
+        id: "rev1",
+        forgejoUsername: "someone",
+        forgejoTokenId: 42,
+        lastEight: "deadbeef",
+        checkedGeneration: null,
+      },
+    ];
+    let deletedPath: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/tokens")) {
+        return json([
+          { id: 42, name: "desktop", token_last_eight: "deadbeef", scopes: [] },
+        ]);
+      }
+      if (method === "DELETE") {
+        deletedPath = path;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      reconcileGitResurrectionTombstones(),
+    ).resolves.toMatchObject({ revoked: 1, checked: 1 });
+    expect(deletedPath).toContain("/tokens/42");
+    expect(revocationRows[0].checkedGeneration).toBe("gen-2");
+  });
+
+  it("同じ id でも中身が別のトークンなら消さない", async () => {
+    // 復元で採番がやり直されると、同じ id を別のトークンが持ちうる。id だけで
+    // 消すと、その利用者が復元後に作った生きたトークンを消してしまう。
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    restoreGeneration = "gen-2";
+    revocationRows = [
+      {
+        id: "rev1",
+        forgejoUsername: "someone",
+        forgejoTokenId: 42,
+        lastEight: "deadbeef",
+        checkedGeneration: null,
+      },
+    ];
+    let deleted = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/tokens")) {
+        return json([
+          { id: 42, name: "new", token_last_eight: "12345678", scopes: [] },
+        ]);
+      }
+      if (method === "DELETE") deleted = true;
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      reconcileGitResurrectionTombstones(),
+    ).resolves.toMatchObject({ revoked: 0, checked: 1 });
+    expect(deleted).toBe(false);
+  });
+
+  it("消したリポジトリが戻っていたら、消し直す", async () => {
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    restoreGeneration = "gen-2";
+    deletionRows = [
+      {
+        forgejoRepoId: 5,
+        ownerUsername: "someone",
+        name: "proj",
+        needsReview: false,
+        checkedGeneration: null,
+      },
+    ];
+    let deletedPath: string | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "DELETE") {
+        deletedPath = path;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      reconcileGitResurrectionTombstones(),
+    ).resolves.toMatchObject({ deleted: 1 });
+    expect(deletedPath).toContain("/repos/someone/proj");
+  });
+
+  it("その id が別のリポジトリなら消さず、人の確認に回す", async () => {
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    restoreGeneration = "gen-2";
+    deletionRows = [
+      {
+        forgejoRepoId: 5,
+        ownerUsername: "someone",
+        name: "proj",
+        needsReview: false,
+        checkedGeneration: null,
+      },
+    ];
+    let deleted = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "other",
+          default_branch: "main",
+          owner: { id: 3, login: "stranger" },
+        });
+      }
+      if (method === "DELETE") deleted = true;
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      reconcileGitResurrectionTombstones(),
+    ).resolves.toMatchObject({ review: 1, deleted: 0 });
+    expect(deleted).toBe(false);
+    expect(deletionRows[0].needsReview).toBe(true);
+  });
+
+  it("消えたままなら、この世代の確認済みとして印を書く", async () => {
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    restoreGeneration = "gen-2";
+    deletionRows = [
+      {
+        forgejoRepoId: 5,
+        ownerUsername: "someone",
+        name: "proj",
+        needsReview: false,
+        checkedGeneration: null,
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/repositories/5")) {
+        return json({ message: "not found" }, 404);
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      reconcileGitResurrectionTombstones(),
+    ).resolves.toMatchObject({ deleted: 0, checked: 1 });
+    expect(deletionRows[0].checkedGeneration).toBe("gen-2");
+  });
+});
+
+describe("消す前に控える", () => {
+  it("トークンを 1 本失効させたら、消し直す相手を控える", async () => {
+    // 控えが無いと、Forgejo を戻したときに何を消し直せばよいのか分からない。
+    // GitCredential の行は失効と同時に消えるので、ここにしか残らない。
+    const { revokeGitCredential } = await import("@beutl/forgejo");
+
+    await revokeGitCredential("u1", "c1");
+
+    expect(revocationTombstones).toHaveLength(1);
+    expect(revocationTombstones[0]).toMatchObject({
+      forgejoUsername: "someone",
+      forgejoTokenId: 42,
+      lastEight: "deadbeef",
+    });
+  });
+
+  it("リポジトリを消したら、消し直す相手を id で控える", async () => {
+    // 名前で控えると、空いた名前を別のリポジトリが取ったときに巻き添えにする。
+    const { deleteRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repos/someone/proj") && method === "GET") {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await deleteRepository("someone", "someone", "proj");
+
+    expect(deletionTombstones).toHaveLength(1);
+    expect(deletionTombstones[0]).toMatchObject({
+      forgejoRepoId: 5,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+  });
+});
+
+describe("結果の分からない直しは、片付いたことにしない", () => {
+  it("補償の読み取り専用が通っても、控えも名前も残す", async () => {
+    // unarchive や commit が 5xx・待ち時間切れで終わると、後から着地しうる。
+    // 補償で読み取り専用にできても、遅れて着地した unarchive がそれを外せば、
+    // 既定値の入っていないリポジトリがまた書き込み可能になる。控えを外して
+    // 名前も手放すと、それを追える記録がどこにも残らない。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(7, {
+      forgejoRepoId: 7,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+    let archivedTo: boolean | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/7")) {
+        return json({
+          id: 7,
+          name: "proj",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.includes("/contents/.git")) return json({ message: "no" }, 404);
+      // テンプレートの書き込みが 5xx。届いたかどうか分からない。
+      if (method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "boom" }, 500);
+      }
+      // 補償の読み取り専用は通る。
+      if (method === "PATCH") {
+        archivedTo = JSON.parse(String(init?.body)).archived ?? null;
+        return json({ id: 7, name: "proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 0,
+    });
+    // 読み取り専用にはできている。
+    expect(archivedTo).toBe(true);
+    // それでも片付いてはいない。
+    expect([...repairQueue.keys()]).toEqual([7]);
+    expect(reservations.size).toBeGreaterThan(0);
+  });
+
+  it("4xx で断られたなら、読み取り専用にできた時点で片付いたとみなす", async () => {
+    // こちらは届かなかったと言い切れる。遅れて着地するものが無いので、
+    // 押さえ続ける理由も無い。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(7, {
+      forgejoRepoId: 7,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/7")) {
+        return json({
+          id: 7,
+          name: "proj",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.includes("/contents/.git")) return json({ message: "no" }, 404);
+      if (method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "refused" }, 422);
+      }
+      if (method === "PATCH") return json({ id: 7, name: "proj" });
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(retryGitRepositoryRepairs()).resolves.toMatchObject({
+      fixed: 1,
+    });
+    expect(repairQueue.size).toBe(0);
+    expect(reservations.size).toBe(0);
+  });
+});
+
+describe("改名で元の名前を押さえた行", () => {
+  it("改名が通っていれば、行き先の行と一緒に外す", async () => {
+    // 元の名前を押さえた行は旧名しか持たない。行き先と同じ物差し (最終名か) で
+    // 見ると永久に食い違い、旧名が二度と使えなくなる。見るべきは「その名前から
+    // 動いたか」。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "r-src",
+        ownerUsername: "someone",
+        name: "old",
+        holdingName: "beutl-rename-src-abc",
+        forgejoRepoId: 11,
+        operation: "RENAME",
+        sourceName: "old",
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      if (path.endsWith("/repositories/11")) {
+        // 改名は通っていた。もう old ではない。
+        return json({
+          id: 11,
+          name: "new",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("r-src");
+  });
+
+  it("まだ元の名前のままなら押さえ続ける", async () => {
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    staleReservations = [
+      {
+        id: "r-src",
+        ownerUsername: "someone",
+        name: "old",
+        holdingName: "beutl-rename-src-abc",
+        forgejoRepoId: 11,
+        operation: "RENAME",
+        sourceName: "old",
+      },
+    ];
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      if (path.endsWith("/repositories/11")) {
+        return json({
+          id: 11,
+          name: "old",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).not.toContain("r-src");
+  });
+});
+
+describe("片付けは、飛ばした行の後ろにも届く", () => {
+  it("直しが押さえている行が先頭を占めていても、後ろの放置分を片付ける", async () => {
+    // 取得した件数で打ち切ると、触らない行が古い順の先頭に居座り続けたときに、
+    // その後ろへ永久に届かない。数えるのは片付けた件数。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    // 直しが動いている行を、既定の取得件数 (20) ぶん先頭に並べる。
+    for (let i = 0; i < 20; i += 1) {
+      repairQueue.set(100 + i, {
+        forgejoRepoId: 100 + i,
+        ownerUsername: "someone",
+        name: `busy${i}`,
+      });
+      staleReservations.push({
+        id: `busy-${i}`,
+        ownerUsername: "someone",
+        name: `busy${i}`,
+        holdingName: `beutl-repair-busy${i}`,
+        forgejoRepoId: 100 + i,
+        operation: "CREATE",
+        sourceName: null,
+      });
+    }
+    // その後ろに、放置された預かり名を 1 つ。
+    staleReservations.push({
+      id: "abandoned",
+      ownerUsername: "someone",
+      name: "left",
+      holdingName: "beutl-repair-left",
+      forgejoRepoId: 999,
+      operation: "CREATE",
+      sourceName: null,
+      createdAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    expect(releasedIds).toContain("abandoned");
+  });
+});
+
 describe("名前を押さえてから触る", () => {
   it("その名前を誰かが動かしている間は、直しに入らない", async () => {
     // id を確かめるだけでは、確認から送信までの 1 往復が開いたまま。その間に
@@ -3013,6 +3520,7 @@ describe("名前を押さえてから触る", () => {
         name: "proj",
         holdingName: "beutl-repair-stalled",
         forgejoRepoId: 88,
+        createdAt: new Date(Date.now() - 60 * 60 * 1000),
       },
     ];
     fetchMock.mockImplementation(async (url: string) => {
@@ -3040,6 +3548,8 @@ describe("名前を押さえてから触る", () => {
         forgejoRepoId: 88,
         operation: "CREATE",
         sourceName: null,
+        // 遅れて着地しうる幅 (30 分) は過ぎている。
+        createdAt: new Date(Date.now() - 60 * 60 * 1000),
       },
     ];
     let touched = false;

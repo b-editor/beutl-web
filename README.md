@@ -83,7 +83,14 @@ in [ADR 0002](docs/adr/0002-api-worker-split.md).
 
 Deploy through `pnpm run release`, which fixes the order. Deploying a Worker before
 its migrations have been applied breaks every path that reads a table the Worker
-expects; applying migrations first is safe, because a migration only ever adds.
+expects, so migrations go first.
+
+Migrations are usually additive, which is what makes that order safe: the running
+Worker keeps working while the new columns appear. **That is a habit, not a rule.**
+`20260824060000_drop_legacy_rename_reservations` deletes rows, and a migration that
+deletes has to be read against what the old Worker is still doing at the time — in
+that case rename reservations recorded before the source name existed, which no
+longer had a Worker able to settle them. Check each one rather than assuming.
 
 ```bash
 BEUTL_SMOKE_JWT=<a user's JWT> pnpm run release

@@ -6,5 +6,6 @@ export * from "./lfs";
 export * from "./paths";
 export * from "./provisioning";
 export * from "./repositories";
+export * from "./resurrection";
 export * from "./templates";
 export * from "./types";

@@ -140,8 +140,6 @@ export async function releaseGitRepositoryReservation({
   return count === 1;
 }
 
-
-
 /**
  * その名前を今押さえている予約を引く。
  *
@@ -195,16 +193,27 @@ export async function releaseGitRepositoryReservationsByIntent({
 export async function listExpiredGitRepositoryCreations({
   now = new Date(),
   limit = 20,
+  after,
   prisma,
 }: {
   now?: Date;
   limit?: number;
+  /**
+   * ここまでは見た、という位置。**件数ではなく行で覚える。**
+   *
+   * 触らずに飛ばす行があるので、頁を進めないと同じ先頭を何度も読むことになる。
+   * 件数 (offset) で進めると、その間に外れた行のぶんだけ後ろがずれて、読み飛ばす。
+   */
+  after?: string;
   prisma?: PrismaTransaction;
 } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryCreation.findMany({
     where: { OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] },
-    orderBy: { createdAt: "asc" },
+    // 並びに一意な列を足す。createdAt だけだと同時刻の行の順が決まらず、
+    // 位置で続きを読めない。
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    ...(after === undefined ? {} : { cursor: { id: after }, skip: 1 }),
     take: limit,
   });
 }

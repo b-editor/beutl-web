@@ -24,9 +24,17 @@ import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 /**
- * 4 つの数を**同じ断面**で取る。別々に取ると、その間に PURGED から
- * NEEDS_REVIEW へ移った行を、remaining では移動後・needsReview では移動前として
- * 数えてしまい、どちらも 0 に見える。
+ * 数を**同じ断面**で取る。別々に取ると、その間に PURGED から NEEDS_REVIEW へ
+ * 移った行を、remaining では移動後・needsReview では移動前として数えてしまい、
+ * どちらも 0 に見える。
+ *
+ * 見るのは 2 種類。
+ *
+ *   退会 (GitAccountDeletion) — アカウントごと消えた人。
+ *   個別の消去 (GitCredentialRevocation / GitRepositoryDeletion) — 生きている
+ *     利用者が 1 本だけ失効させたトークンと、消したリポジトリ。**退会の数には
+ *     一切現れない。** これを見ないと、端末に平文の残る失効済みトークンが復元で
+ *     生き返っていても、6 つの数はすべて 0 のまま証拠が作れてしまう。
  */
 export async function collectGitReconcileStatus(prisma, generation) {
   const purged = { phase: "PURGED" };
@@ -41,8 +49,30 @@ export async function collectGitReconcileStatus(prisma, generation) {
       }
     : { lastAttemptAt: null };
 
-  const [remaining, failed, needsReview, unresolved, pendingPurge, blocking] =
-    await prisma.$transaction([
+  // 個別の消去の控えは phase を持たない。「この世代で確認していない」の条件だけ
+  // 同じものを使う。
+  const notCheckedTombstone = generation
+    ? {
+        OR: [
+          { checkedGeneration: null },
+          { checkedGeneration: { not: generation } },
+        ],
+      }
+    : { checkedGeneration: null };
+
+  const [
+    remaining,
+    failed,
+    needsReview,
+    unresolved,
+    pendingPurge,
+    blocking,
+    credentials,
+    credentialsFailed,
+    repositories,
+    repositoriesFailed,
+    repositoriesReview,
+  ] = await prisma.$transaction([
       prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
       prisma.gitAccountDeletion.count({
         where: { ...tracked, ...notChecked, lastError: { not: null } },
@@ -62,9 +92,41 @@ export async function collectGitReconcileStatus(prisma, generation) {
       // 退会を始めたまま進んでいないもの。掃除役が拾うが、残っている間は
       // 「どうなっているか分からない」ので開けない。
       prisma.gitAccountDeletion.count({ where: { phase: "BLOCKING" } }),
+      // **失効させたトークン。** 生きている利用者のものなので退会には現れない。
+      // 端末には平文が残っている。復元で生き返ったまま開けると、失効したはずの
+      // トークンで git と LFS が通る。
+      prisma.gitCredentialRevocation.count({ where: notCheckedTombstone }),
+      prisma.gitCredentialRevocation.count({
+        where: { ...notCheckedTombstone, lastError: { not: null } },
+      }),
+      // **消したリポジトリ。** 同じく退会には現れない。
+      prisma.gitRepositoryDeletion.count({
+        where: { needsReview: false, ...notCheckedTombstone },
+      }),
+      prisma.gitRepositoryDeletion.count({
+        where: {
+          needsReview: false,
+          ...notCheckedTombstone,
+          lastError: { not: null },
+        },
+      }),
+      // その id が別のリポジトリを指している。人が見るまで自動では決められない。
+      prisma.gitRepositoryDeletion.count({ where: { needsReview: true } }),
     ]);
 
-  return { remaining, failed, needsReview, unresolved, pendingPurge, blocking };
+  return {
+    remaining,
+    failed,
+    needsReview,
+    unresolved,
+    pendingPurge,
+    blocking,
+    credentials,
+    credentialsFailed,
+    repositories,
+    repositoriesFailed,
+    repositoriesReview,
+  };
 }
 
 /**
@@ -87,8 +149,12 @@ export async function collectGitReconcileStatus(prisma, generation) {
  *
  * 判定に使う項目を増やしたときに、古い署名側が作った証拠を受け取らないための
  * 目印。版を上げれば、古い側の署名は検証に通らなくなる。
+ *
+ * v1 -> v2: 失効させたトークンと消したリポジトリの控えを数に加えた。v1 の証拠は
+ * それらを見ていないので、**受け取ってはいけない**。git-server 側も v2 だけを
+ * 受ける。両側を同時に配ること (片方だけだと復旧が開けられなくなる)。
  */
-export const PROOF_PROTOCOL = "beutl-reopen-v1";
+export const PROOF_PROTOCOL = "beutl-reopen-v2";
 
 export function proofPayload({ nonce, environment, database, expiresAt }) {
   return [PROOF_PROTOCOL, nonce, environment, database, String(expiresAt)].join(
@@ -201,7 +267,8 @@ async function main() {
       // 例外を出すより、何をすればよいかを言う。
       if (error?.code === "P2021") {
         console.error(
-          "GitAccountDeletion が存在しません。マイグレーションが当たっていない" +
+          "必要な表がありません (GitAccountDeletion / GitCredentialRevocation " +
+            "/ GitRepositoryDeletion)。マイグレーションが当たっていない" +
             "データベースです (pnpm run migrate:status で確認してください)。",
         );
         process.exitCode = 1;
@@ -210,9 +277,9 @@ async function main() {
       throw error;
     }
 
-    if (nonce) console.log(`世代         ${nonce}`);
+    if (nonce) console.log(`${"世代".padEnd(19)} ${nonce}`);
     for (const [key, value] of Object.entries(status)) {
-      console.log(`${key.padEnd(12)} ${value}`);
+      console.log(`${key.padEnd(20)} ${value}`);
     }
 
     const blocking = Object.entries(status).filter(([, value]) => value > 0);
