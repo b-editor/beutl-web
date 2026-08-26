@@ -232,12 +232,38 @@ export default {
     // 退会の墓標には現れない (アカウントは生きているため)。ここを回さないと、
     // 端末に平文の残る失効済みトークンが通るようになっていても気付けない。
     try {
-      const { checked, revoked, deleted, review, failed, pruned } =
-        await reconcileGitResurrectionTombstones({ drain: true });
-      if (checked > 0 || failed > 0 || pruned > 0) {
+      const {
+        checked,
+        revoked,
+        deleted,
+        review,
+        failed,
+        pruned,
+        confirmed,
+        dropped,
+        repaired,
+      } = await reconcileGitResurrectionTombstones({ drain: true });
+      // **決着させただけの回も黙らない。** 復元が無い間の cron はここしか動かない
+      // ので、出さないと「何もしていない」のか「動いていない」のか分からない。
+      if (
+        checked > 0 ||
+        failed > 0 ||
+        pruned > 0 ||
+        confirmed > 0 ||
+        dropped > 0 ||
+        repaired > 0
+      ) {
         console.log(
-          `git resurrection: checked ${checked}, revoked ${revoked}, ` +
+          `git resurrection: confirmed ${confirmed}, dropped ${dropped}, ` +
+            `repaired ${repaired}, checked ${checked}, revoked ${revoked}, ` +
             `deleted ${deleted}, failed ${failed}, pruned ${pruned}`,
+        );
+      }
+      // 消えていなかったので控えを外した = 利用者の消去が通っていなかった。
+      if (dropped > 0) {
+        console.error(
+          `git resurrection: ${dropped} deletions never took effect and their ` +
+            "tombstones were dropped (the user's request did not go through)",
         );
       }
       if (revoked > 0 || deleted > 0) {

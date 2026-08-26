@@ -9,6 +9,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, verify } from "
 
 const {
   PROOF_PROTOCOL,
+  generationsDigest,
   PROOF_TTL_SECONDS,
   SELFTEST_PAYLOAD,
   collectGitReconcileStatus,
@@ -35,15 +36,17 @@ describe("証拠の中身", () => {
       environment: "production",
       database: "db.example:26257/beutl",
       expiresAt: 1787536940,
+      generations: "abc123",
     });
 
-    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v2");
+    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v3");
     expect(payload.split("\n")).toEqual([
       PROOF_PROTOCOL,
       "1787536325:c9a7",
       "production",
       "db.example:26257/beutl",
       "1787536940",
+      "abc123",
     ]);
   });
 
@@ -53,15 +56,42 @@ describe("証拠の中身", () => {
       environment: "e",
       database: "d",
       expiresAt: 1,
+      generations: "g",
     });
     expect(payload.startsWith(`${PROOF_PROTOCOL}\n`)).toBe(true);
   });
 
   it("nonce が違えば中身も違う (別の復元の証拠を使い回せない)", () => {
-    const base = { environment: "e", database: "d", expiresAt: 1 };
+    const base = {
+      environment: "e",
+      database: "d",
+      expiresAt: 1,
+      generations: "g",
+    };
     expect(proofPayload({ ...base, nonce: "a" })).not.toBe(
       proofPayload({ ...base, nonce: "b" }),
     );
+  });
+});
+
+describe("これまでの復元世代の指紋", () => {
+  // 接続先の名前 (host:port/database) は、DB を過去へ戻しても変わらない。
+  // git-server は自分が出した値を全部覚えているので、そこから同じ指紋を作って
+  // 突き合わせれば、1 つでも欠けていること (= 巻き戻し) が分かる。
+  it("並び順が違っても同じ値になる", () => {
+    expect(generationsDigest(["b", "a"])).toBe(generationsDigest(["a", "b"]));
+  });
+
+  it("1 つ欠ければ違う値になる", () => {
+    expect(generationsDigest(["a", "b"])).not.toBe(generationsDigest(["a"]));
+  });
+
+  it("同じ内容なら git-server 側と同じ手順で作れる (改行で連結して sha256)", async () => {
+    const { createHash } = await import("node:crypto");
+    const expected = createHash("sha256")
+      .update("a\nb", "utf8")
+      .digest("hex");
+    expect(generationsDigest(["b", "a"])).toBe(expected);
   });
 });
 
@@ -102,6 +132,7 @@ describe("署名", () => {
       environment: "e",
       database: "d",
       expiresAt: 2,
+      generations: "g",
     });
 
     const signature = signProof(payload, encodedPrivate);

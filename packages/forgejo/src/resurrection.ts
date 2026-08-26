@@ -135,17 +135,36 @@ async function settleUnconfirmed(limit: number): Promise<{
           token.token_last_eight === entry.lastEight,
       );
       if (!alive) {
-        await confirmGitCredentialRevocation({ id: entry.id });
-        confirmed += 1;
         // **Forgejo からは消えたのに、こちらの行が残っていることがある。**
         // 失効の途中で落ちた場合がこれ。放っておくと、使えないトークンが
-        // 一覧と上限件数に残り続ける。ここで片付ける。
+        // 一覧と上限件数に残り続ける。先に片付ける。
+        //
+        // **片付けられなければ確定させない。** 確定させてしまうと、この控えは
+        // 世代ごとの照合へ移り、残った行を誰も見なくなる。次の周回でやり直す。
         if (entry.credentialId) {
-          const removed = await deleteGitCredential({
-            id: entry.credentialId,
-          }).catch(() => null);
-          if (removed) repaired += 1;
+          let removed = false;
+          try {
+            await deleteGitCredential({ id: entry.credentialId });
+            removed = true;
+            repaired += 1;
+          } catch (error) {
+            // 既に無いなら目的は達している。それ以外は次の周回へ回す。
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (!/no credential|not found|Record to delete does not exist/i.test(message)) {
+              await recordGitCredentialRevocationAttempt({
+                id: entry.id,
+                error: message,
+              }).catch(() => undefined);
+              failed += 1;
+              continue;
+            }
+            removed = true;
+          }
+          if (!removed) continue;
         }
+        await confirmGitCredentialRevocation({ id: entry.id });
+        confirmed += 1;
         continue;
       }
       if (entry.revokedAt.getTime() < staleBefore) {
@@ -169,7 +188,8 @@ async function settleUnconfirmed(limit: number): Promise<{
       );
       if (!current) {
         await confirmGitRepositoryDeletion({
-          forgejoRepoId: entry.forgejoRepoId,
+          id: entry.id,
+          intentId: entry.intentId,
         });
         confirmed += 1;
         continue;
@@ -177,12 +197,15 @@ async function settleUnconfirmed(limit: number): Promise<{
       if (entry.deletedAt.getTime() < staleBefore) {
         // 残ったまま猶予を過ぎた = 削除は行われなかった。**消し直さない。**
         // やり直すかどうかは利用者に委ねる。
-        await dropGitRepositoryDeletion({ forgejoRepoId: entry.forgejoRepoId });
+        await dropGitRepositoryDeletion({
+          id: entry.id,
+          intentId: entry.intentId,
+        });
         dropped += 1;
       }
     } catch (error) {
       await recordGitRepositoryDeletionAttempt({
-        forgejoRepoId: entry.forgejoRepoId,
+        id: entry.id,
         error: error instanceof Error ? error.message : String(error),
       }).catch(() => undefined);
       failed += 1;
@@ -298,7 +321,7 @@ export async function reconcileGitResurrectionTombstones({
           const outcome = await deleteResurrectedRepository(entry);
           if (outcome === "moved") {
             await markGitRepositoryDeletionNeedsReview({
-              forgejoRepoId: entry.forgejoRepoId,
+              id: entry.id,
               reason:
                 `id ${entry.forgejoRepoId} no longer matches ` +
                 `${entry.ownerUsername}/${entry.name}`,
@@ -312,15 +335,12 @@ export async function reconcileGitResurrectionTombstones({
             continue;
           }
           if (outcome === "deleted") deleted += 1;
-          await markGitRepositoryDeletionChecked({
-            forgejoRepoId: entry.forgejoRepoId,
-            generation,
-          });
+          await markGitRepositoryDeletionChecked({ id: entry.id, generation });
           checked += 1;
           progressed += 1;
         } catch (error) {
           await recordGitRepositoryDeletionAttempt({
-            forgejoRepoId: entry.forgejoRepoId,
+            id: entry.id,
             error: error instanceof Error ? error.message : String(error),
           }).catch(() => undefined);
           failed += 1;

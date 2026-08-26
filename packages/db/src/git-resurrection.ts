@@ -79,7 +79,7 @@ export async function listUnconfirmedGitCredentialRevocations({
 }: { limit?: number; prisma?: PrismaTransaction } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitCredentialRevocation.findMany({
-    where: { confirmed: false },
+    where: { confirmed: false, baseline: false },
     orderBy: [{ revokedAt: "asc" }, { id: "asc" }],
     take: limit,
   });
@@ -96,42 +96,39 @@ export async function recordGitRepositoryDeletion({
   ownerUsername: string;
   name: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<{ id: string; intentId: string }> {
   const db = prisma ?? (await getDb());
-  // 同じ id を消し直すことがある (前の消去が曖昧に終わった場合や、復元で id が
-  // 使い回された場合)。上書きでよいが、**前の行の状態は 1 つも引き継がない。**
-  // 引き継ぐと、前の相手に付いた人の確認待ちや失敗の記録が、別の相手のものとして
-  // 残る。確認済みの印も同じで、残すと新しい消去を確かめないまま通してしまう。
-  await db.gitRepositoryDeletion.upsert({
-    where: { forgejoRepoId },
-    create: { forgejoRepoId, ownerUsername, name },
-    update: {
-      ownerUsername,
-      name,
-      deletedAt: new Date(),
-      confirmed: false,
-      checkedGeneration: null,
-      needsReview: false,
-      attempts: 0,
-      lastAttemptAt: null,
-      lastError: null,
-    },
+  // **上書きしない。消去 1 回につき 1 行を積む。**
+  //
+  // 復元で採番がやり直されると、同じ id を別のリポジトリが持つ。上書きすると
+  // 前の相手の「確かめ済み」の控えが消え、その相手が生き返っても追えなくなる。
+  const row = await db.gitRepositoryDeletion.create({
+    data: { intentId: crypto.randomUUID(), forgejoRepoId, ownerUsername, name },
   });
+  return { id: row.id, intentId: row.intentId };
 }
 
-/** Forgejo から消えたことを確かめた。ここから消し直しの対象になる。 */
+/**
+ * Forgejo から消えたことを確かめた。ここから消し直しの対象になる。
+ *
+ * **自分が積んだ行だけ**に効く。期限切れの処理が読んだ後に前面がやり直した場合、
+ * 古い方の書き込みは 1 件も通らない。
+ */
 export async function confirmGitRepositoryDeletion({
-  forgejoRepoId,
+  id,
+  intentId,
   prisma,
 }: {
-  forgejoRepoId: number;
+  id: string;
+  intentId: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitRepositoryDeletion.updateMany({
-    where: { forgejoRepoId },
+  const { count } = await db.gitRepositoryDeletion.updateMany({
+    where: { id, intentId, baseline: false },
     data: { confirmed: true },
   });
+  return count === 1;
 }
 
 /**
@@ -141,16 +138,21 @@ export async function confirmGitRepositoryDeletion({
  * 消してしまう。
  */
 export async function dropGitRepositoryDeletion({
-  forgejoRepoId,
+  id,
+  intentId,
   prisma,
 }: {
-  forgejoRepoId: number;
+  id: string;
+  intentId: string;
   prisma?: PrismaTransaction;
-}) {
+}): Promise<boolean> {
   const db = prisma ?? (await getDb());
-  await db.gitRepositoryDeletion.deleteMany({
-    where: { forgejoRepoId, confirmed: false },
+  const { count } = await db.gitRepositoryDeletion.deleteMany({
+    // **確かめていない、自分の行だけ。** 確かめた行を消すと、生き返っても
+    // 追えなくなる。仕組みが入る前の行 (baseline) も人が見るまで消さない。
+    where: { id, intentId, confirmed: false, baseline: false },
   });
+  return count === 1;
 }
 
 /** まだ確かめていない控え。 */
@@ -160,8 +162,9 @@ export async function listUnconfirmedGitRepositoryDeletions({
 }: { limit?: number; prisma?: PrismaTransaction } = {}) {
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryDeletion.findMany({
-    where: { confirmed: false },
-    orderBy: [{ deletedAt: "asc" }, { forgejoRepoId: "asc" }],
+    // 仕組みが入る前の行は自動では触らない。人が Forgejo 側を確かめる。
+    where: { confirmed: false, baseline: false },
+    orderBy: [{ deletedAt: "asc" }, { id: "asc" }],
     take: limit,
   });
 }
@@ -185,7 +188,7 @@ export async function listGitCredentialRevocations({
   return await db.gitCredentialRevocation.findMany({
     // **確かめたものだけ。** 控えを書いただけのものを消しにいくと、断られた
     // 失効を後から実行することになる。
-    where: { confirmed: true, ...notCheckedIn(generation) },
+    where: { confirmed: true, baseline: false, ...notCheckedIn(generation) },
     orderBy: [{ revokedAt: "asc" }, { id: "asc" }],
     take: limit,
   });
@@ -203,7 +206,12 @@ export async function listGitRepositoryDeletions({
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryDeletion.findMany({
     // **確かめたものだけ。** 断られた削除を後から実行しないため。
-    where: { confirmed: true, needsReview: false, ...notCheckedIn(generation) },
+    where: {
+      confirmed: true,
+      needsReview: false,
+      baseline: false,
+      ...notCheckedIn(generation),
+    },
     orderBy: [{ deletedAt: "asc" }, { forgejoRepoId: "asc" }],
     take: limit,
   });
@@ -248,17 +256,17 @@ export async function markGitCredentialRevocationChecked({
 }
 
 export async function markGitRepositoryDeletionChecked({
-  forgejoRepoId,
+  id,
   generation,
   prisma,
 }: {
-  forgejoRepoId: number;
+  id: string;
   generation: string | null;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   await db.gitRepositoryDeletion.updateMany({
-    where: { forgejoRepoId },
+    where: { id },
     data: {
       checkedGeneration: generation,
       lastAttemptAt: new Date(),
@@ -289,17 +297,17 @@ export async function recordGitCredentialRevocationAttempt({
 }
 
 export async function recordGitRepositoryDeletionAttempt({
-  forgejoRepoId,
+  id,
   error,
   prisma,
 }: {
-  forgejoRepoId: number;
+  id: string;
   error: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   await db.gitRepositoryDeletion.updateMany({
-    where: { forgejoRepoId },
+    where: { id },
     data: {
       attempts: { increment: 1 },
       lastAttemptAt: new Date(),
@@ -310,17 +318,17 @@ export async function recordGitRepositoryDeletionAttempt({
 
 /** その id が別のリポジトリを指している。自動では決められないので人に回す。 */
 export async function markGitRepositoryDeletionNeedsReview({
-  forgejoRepoId,
+  id,
   reason,
   prisma,
 }: {
-  forgejoRepoId: number;
+  id: string;
   reason: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   await db.gitRepositoryDeletion.updateMany({
-    where: { forgejoRepoId },
+    where: { id },
     data: {
       needsReview: true,
       lastAttemptAt: new Date(),
@@ -345,11 +353,19 @@ export async function pruneGitResurrectionTombstones({
 }): Promise<{ credentials: number; repositories: number }> {
   const db = prisma ?? (await getDb());
   const credentials = await db.gitCredentialRevocation.deleteMany({
-    where: { revokedAt: { lt: before } },
+    where: { baseline: false, revokedAt: { lt: before } },
   });
   const repositories = await db.gitRepositoryDeletion.deleteMany({
     // 人の確認待ちは残す。消すと、何を見ればよかったのか分からなくなる。
-    where: { needsReview: false, deletedAt: { lt: before } },
+    // 仕組みが入る前の行も同じ (人が片付けるまで残す)。
+    where: { needsReview: false, baseline: false, deletedAt: { lt: before } },
+  });
+  // **どこまで刈ったかを残す。** 見張りを始めた後の控えでも、ここより古いものは
+  // もう無い。その時点から戻すと、対応する控えが無いまま生き返る。
+  await db.gitResurrectionWatch.upsert({
+    where: { id: "singleton" },
+    create: { id: "singleton", prunedBefore: before },
+    update: { prunedBefore: before },
   });
   return {
     credentials: credentials.count,

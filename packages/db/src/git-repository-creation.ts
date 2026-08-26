@@ -315,3 +315,34 @@ export async function countGitRepositoryCreations({
   const db = prisma ?? (await getDb());
   return await db.gitRepositoryCreation.count();
 }
+
+/**
+ * 片付けが次に読む位置。
+ *
+ * **Worker の記憶には置かない。** isolate が入れ替わるたびに消えるので、触らずに
+ * 飛ばす行が先頭に並んでいると、毎回同じところで止まって後ろへ届かない。
+ */
+export async function getGitReconcileCursor({
+  prisma,
+}: { prisma?: PrismaTransaction } = {}): Promise<string | null> {
+  const db = prisma ?? (await getDb());
+  const row = await db.gitReconcileCursor.findUnique({
+    where: { id: "singleton" },
+  });
+  return row?.after ?? null;
+}
+
+export async function setGitReconcileCursor({
+  after,
+  prisma,
+}: {
+  after: string | null;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  await db.gitReconcileCursor.upsert({
+    where: { id: "singleton" },
+    create: { id: "singleton", after },
+    update: { after },
+  });
+}

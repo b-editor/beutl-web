@@ -20,7 +20,12 @@
 //     あちらの .env を読める人でも証拠は作れない。
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
-import { createPrivateKey, createPublicKey, sign } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign,
+} from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 /**
@@ -163,16 +168,47 @@ export async function collectGitReconcileStatus(prisma, generation) {
  * 判定に使う項目を増やしたときに、古い署名側が作った証拠を受け取らないための
  * 目印。版を上げれば、古い側の署名は検証に通らなくなる。
  *
- * v1 -> v2: 失効させたトークンと消したリポジトリの控えを数に加えた。v1 の証拠は
- * それらを見ていないので、**受け取ってはいけない**。git-server 側も v2 だけを
- * 受ける。両側を同時に配ること (片方だけだと復旧が開けられなくなる)。
+ * v1 -> v2: 失効させたトークンと消したリポジトリの控えを数に加えた。
+ * v2 -> v3: 見張りの開始・戻した控えの時点と中身・決着していない予約と直しを
+ *   条件に加え、**これまでに登録した復元世代の指紋**を署名の中身へ入れた。
+ *
+ * **版を上げたのに中身が同じだと意味が無い。** 古い署名側は新しい条件を見ないまま
+ * 同じ 5 行に署名でき、受け取る側には見分けが付かない。条件を増やすときは版の
+ * 文字列と、できれば中身の形も変える。v3 は 6 行目に世代の指紋が付く。
+ *
+ * 古い版は**受け取ってはいけない**。git-server 側も v3 だけを受ける。両側を同時に
+ * 配ること (片方だけだと復旧が開けられなくなる)。
  */
-export const PROOF_PROTOCOL = "beutl-reopen-v2";
+export const PROOF_PROTOCOL = "beutl-reopen-v3";
 
-export function proofPayload({ nonce, environment, database, expiresAt }) {
-  return [PROOF_PROTOCOL, nonce, environment, database, String(expiresAt)].join(
-    "\n",
-  );
+export function proofPayload({
+  nonce,
+  environment,
+  database,
+  expiresAt,
+  generations,
+}) {
+  return [
+    PROOF_PROTOCOL,
+    nonce,
+    environment,
+    database,
+    String(expiresAt),
+    generations,
+  ].join("\n");
+}
+
+/**
+ * これまでに登録した復元世代の指紋。
+ *
+ * **接続先の名前だけでは、同じ相手が巻き戻されたことを見分けられない。**
+ * host:port/database は復元しても変わらない。git-server は自分が出した値を
+ * すべて覚えているので、その一覧から同じ指紋を作って突き合わせれば、片方でも
+ * 欠けている (= DB が過去へ戻っている) ことが分かる。
+ */
+export function generationsDigest(ids) {
+  const joined = [...ids].sort().join("\n");
+  return createHash("sha256").update(joined, "utf8").digest("hex");
 }
 
 /** host:port/database。接続先を一意に指す。 */
@@ -318,6 +354,36 @@ async function main() {
         process.exitCode = 1;
         return;
       }
+      // **刈った線より古い控えからも開けない。**
+      //
+      // 見張りを始めた後の控えでも、保持期間 (GIT_TOMBSTONE_TTL_DAYS) を過ぎた
+      // ものはもう刈ってある。その時点から戻すと、対応する控えが無いまま生き返る
+      // のに数はすべて 0 になる。開始時点だけを見ていると通ってしまう。
+      if (watch.prunedBefore && generation.backupAt < watch.prunedBefore) {
+        console.error(
+          `戻した控え (${generation.backupAt.toISOString()}) は、控えを刈った線` +
+            `(${watch.prunedBefore.toISOString()}) より前のものです。\n` +
+            "その時点の失効と削除の控えはもう残っていないので、生き返っていても\n" +
+            "数に出ません。**証拠は出せません。**\n" +
+            "この幅は GIT_TOMBSTONE_TTL_DAYS で決まります。バックアップの保持より\n" +
+            "長く取ってください (延ばしても、既に刈った分は戻りません)。",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      // **この世代を登録したときの版が今と違うなら通さない。** 版を上げた理由は
+      // 判定条件を増やしたことなので、古い版で登録した世代を使い回されると、
+      // 増やした条件を見ていない証拠が通る。
+      if (generation.protocol !== PROOF_PROTOCOL) {
+        console.error(
+          `世代 ${nonce} は ${generation.protocol ?? "版の記録なし"} で登録されて` +
+            `います。今の版は ${PROOF_PROTOCOL} です。\n` +
+            "登録し直してください (判定条件が増えているため、古い版で登録した\n" +
+            "世代はそのまま使えません)。",
+        );
+        process.exitCode = 1;
+        return;
+      }
     }
 
     // **様子見でも、判定は現在の世代で行う。**
@@ -388,6 +454,12 @@ async function main() {
     }
     const database = databaseIdentity(connectionString);
     const expiresAt = Math.floor(Date.now() / 1000) + PROOF_TTL_SECONDS;
+    // 登録済みの世代すべて。git-server が自分の控えから同じ指紋を作って比べる。
+    const generations = generationsDigest(
+      (
+        await prisma.gitRestoreGeneration.findMany({ select: { id: true } })
+      ).map((row) => row.id),
+    );
     console.log(`環境         ${environment}`);
     console.log(`接続先       ${database}`);
     console.log(
@@ -396,7 +468,7 @@ async function main() {
     console.log("\n消し直しは終わっています。次の値を渡して開けてください。\n");
     console.log(
       signProof(
-        proofPayload({ nonce, environment, database, expiresAt }),
+        proofPayload({ nonce, environment, database, expiresAt, generations }),
         key,
       ),
     );

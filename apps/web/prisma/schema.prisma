@@ -328,6 +328,8 @@ model GitCredentialRevocation {
   /// **id だけで消すと、復元後に採番し直された別のトークンを消しうる。**
   lastEight       String
   revokedAt       DateTime @default(now())
+  /// **確かめる仕組みが入る前に積まれた行。** 上と同じ理由で自動では触らない。
+  baseline        Boolean  @default(false)
   /// どの復元世代で確認し終えたか。時計ではなく世代で数える。
   checkedGeneration String?
   attempts        Int      @default(0)
@@ -342,7 +344,16 @@ model GitCredentialRevocation {
 ///
 /// **相手は Forgejo のリポジトリ id。** 名前は空いた後に別のリポジトリが取る。
 model GitRepositoryDeletion {
-  forgejoRepoId   Int      @id
+  /// **1 つのリポジトリ id に複数の行が並ぶ。**
+  ///
+  /// 復元で採番がやり直されると、同じ id を別のリポジトリが持つ。id を主キーに
+  /// して上書きすると、前の相手の「確かめ済み」の控えが消え、その相手が生き返って
+  /// も誰も追えなくなる。消去 1 回につき 1 行を積む。
+  id              String   @id @default(uuid())
+  /// この 1 回の消去を指す。確定も却下もこの印で条件付ける。付けないと、期限切れの
+  /// 処理が読んだ後に前面がやり直した行を、古い方が確定させたり消したりできる。
+  intentId        String
+  forgejoRepoId   Int
   /// 消した時点の持ち主と名前。消し直す前に、その id が今もこれを指すかを見る。
   ownerUsername   String
   name            String
@@ -355,10 +366,17 @@ model GitRepositoryDeletion {
   checkedGeneration String?
   /// その id が別のリポジトリを指している。自動では決められないので人が見る。
   needsReview     Boolean  @default(false)
+  /// **確かめる仕組みが入る前に積まれた行。**
+  ///
+  /// 消す前に書いてあるだけで、消えたかどうかは分からない。自動では確定も却下も
+  /// せず (却下すると、復元で生き返ったものを追えなくなる)、証拠も出させない。
+  /// 人が Forgejo 側を確かめて片付ける。
+  baseline        Boolean  @default(false)
   attempts        Int      @default(0)
   lastAttemptAt   DateTime?
   lastError       String?
 
+  @@index([forgejoRepoId])
   @@index([deletedAt])
   @@index([checkedGeneration])
 }
@@ -366,9 +384,16 @@ model GitRepositoryDeletion {
 model GitRestoreGeneration {
   id        String   @id
   createdAt DateTime @default(now())
-  /// 戻した控えの時点。**これが見張りの開始より古ければ証拠は出せない。**
+  /// 戻した控えの時点 (UTC)。**これが見張りの開始より古ければ証拠は出せない。**
   /// その時点の控えには、控えを取り始める前に消したものが入っているため。
   backupAt  DateTime?
+  /// 戻した 2 つの控えの中身の指紋。**名前ではなく中身で縛る。**
+  /// 名前だけで判断すると、古い控えを新しい名前に付け替えるだけで通ってしまう。
+  dbDigest    String?
+  dataDigest  String?
+  /// この世代を登録したときの証拠の版。版を上げた後に、古い版で登録した世代を
+  /// 使い回せないようにする。
+  protocol    String?
 }
 
 /// 生き返りの見張りを始めた時点。**1 行だけ。**
@@ -380,9 +405,25 @@ model GitRestoreGeneration {
 /// **書き込むのは配備の最後** (`scripts/release.mjs`)。マイグレーションを当てた
 /// 時点にすると、3 つの Worker を入れ替え終わるまでの間に古い Worker が控えを
 /// 書かずに消したものを、見張っているつもりになってしまう。
+/// 予約の片付けが、次にどこから読むか。**1 行だけ。**
+///
+/// 触らずに飛ばす行が走査の上限を超えて並ぶと、先頭から読み直す限りそこで
+/// 頭打ちになる。Worker の記憶に置くと、isolate が入れ替わるたびに消えて
+/// 同じ問題が戻るので、DB に置く。
+model GitReconcileCursor {
+  id    String  @id @default("singleton")
+  after String?
+}
+
 model GitResurrectionWatch {
   id        String   @id @default("singleton")
   startedAt DateTime?
+  /// **ここより古い控えはもう刈った。**
+  ///
+  /// 見張りを始めた後の控えでも、保持期間を過ぎたものは消してある。その時点より
+  /// 古い控えから戻すと、対応する控えが無いまま生き返る。見張りの開始だけを見て
+  /// いると通ってしまうので、刈った線も持つ。
+  prunedBefore DateTime?
 }
 
 model GitAccountDeletion {

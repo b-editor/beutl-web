@@ -136,17 +136,7 @@ for (const target of ["deploy:web", "deploy:api", "deploy:admin"]) {
   run("pnpm", ["run", target]);
 }
 
-// **生き返りの見張りは、3 つを配り終えてから始める。**
-//
-// 失効と削除の控えを書くのは Worker の側。マイグレーションを当てた時点を開始に
-// すると、入れ替え終わるまでの間に古い Worker が控えを書かずに消したものを、
-// 見張っているつもりになる。その控えを戻したときに、生き返りが数に出ない。
-//
-// 復元の証拠は、戻した控えの時点がここより後であることを求める。
-step("生き返りの見張りを始めています");
-if (!dryRun) {
-  run("pnpm", ["run", "git:start-resurrection-watch"]);
-}
+
 
 /** 確かめていないものを黙って通さない。最後に必ず出す。 */
 function reportUnverified() {
@@ -166,6 +156,12 @@ if (skipSmoke) {
   console.error(
     "\n警告: smoke test を飛ばしました。新しい schema を Worker が読めるかは" +
       "確かめていません。",
+  );
+  // **見張りは始めない。** 動いていることを確かめていないので、始めると
+  // 「見張っている」と言いながら 1 件も控えない期間ができる。
+  console.error(
+    "      生き返りの見張りも始めていません。確かめたうえで手で始めてください:\n" +
+      "        pnpm run git:start-resurrection-watch",
   );
   reportUnverified();
   process.exit(0);
@@ -240,9 +236,23 @@ if (!provisionCheck) {
 }
 
 if (!ok) {
+  // **確かめられていないなら見張りも始めない。** 始めると「見張っている」と
+  // 言いながら 1 件も控えない期間ができ、その控えから戻したときに生き返りが
+  // 数に出ない。
   reportUnverified();
   process.exit(1);
 }
+
+// **生き返りの見張りは、配って動くことを確かめてから始める。**
+//
+// 失効と削除の控えを書くのは Worker の側。マイグレーションを当てた時点を開始に
+// すると、入れ替え終わるまでの間に古い Worker が控えを書かずに消したものを、
+// 見張っているつもりになる。その控えを戻したときに、生き返りが数に出ない。
+//
+// 開始の時刻はデータベースの時計で入り、控えを 1 行書いて読み戻せることまで
+// 確かめてから確定する (git-start-resurrection-watch.mjs)。
+step("生き返りの見張りを始めています");
+run("pnpm", ["run", "git:start-resurrection-watch"]);
 
 console.log("\n配備と確認が終わりました。");
 reportUnverified();

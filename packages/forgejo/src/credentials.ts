@@ -398,7 +398,16 @@ export async function revokeGitCredential(
 
   // ここで初めて「消えた」と言える。消し直しの対象になるのはここから。
   await confirmGitCredentialRevocation({ id: tombstone });
-  await deleteGitCredential({ id: record.id });
+  // **こちらの行を消せなくても、失効そのものは終わっている。** ここで投げると
+  // 呼び出し元がやり直し、既に無いトークンを消しにいって混乱する。控えには
+  // どの行かを書いてあるので、定期実行が後から片付ける。
+  await deleteGitCredential({ id: record.id }).catch((error) => {
+    console.error(
+      `revoked ${record.forgejoTokenId} but could not remove credential ` +
+        `${record.id}; the cron will clear it`,
+      error,
+    );
+  });
   return {
     id: record.id,
     name: record.name,

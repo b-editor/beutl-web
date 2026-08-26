@@ -17,6 +17,8 @@ import {
   countGitRepositoryRepairsNeedingReview,
   findGitRepositoryRepair,
   findGitRepositoryReservationByName,
+  getGitReconcileCursor,
+  setGitReconcileCursor,
   markGitRepositoryRepairLocked,
   markGitRepositoryRepairNeedsReview,
   renewGitRepositoryRepairLease,
@@ -682,10 +684,15 @@ async function repairTemplates(
     // **掛けたことを控えに残す。** 遅れて着地したコミットで既定値が揃った場合、
     // 掛けたものを外してから片付ける必要がある。誰が掛けたか分からないと外せない。
     if (locked) {
-      await markGitRepositoryRepairLocked({
+      // **書けなかったことを握り潰さない。** 控えが無いと、遅れて着地した
+      // コミットで既定値が揃ったときに読み取り専用を外せず、利用者の
+      // リポジトリが止まったまま誰にも追われずに残る。掛けた事実そのものを
+      // 「結果が分からない」側へ倒し、次の周回にやり直させる。
+      const noted = await markGitRepositoryRepairLocked({
         forgejoRepoId: repository.id,
         intentId: epoch,
-      }).catch(() => undefined);
+      }).catch(() => false);
+      if (!noted) pending.value = true;
     }
     return locked
       ? { state: "locked", error, pending: pending.value }
@@ -820,6 +827,15 @@ const DELETE_LATE_GRACE_MS = 30 * 60 * 1000;
 const HOLD_LATE_GRACE_MS = 30 * 60 * 1000;
 
 /**
+ * 期限を延ばしてから、送った変更が終わるまでに経ちうる時間。
+ *
+ * 延ばした直後に id を確かめ (1 往復)、そのうえで本体を送る (もう 1 往復)。
+ * どちらも上限まで待つことがある。起点を「最後に延ばした時刻」に取ると、その分
+ * だけ猶予が短くなるので、足して数える。
+ */
+const HOLD_ANCHOR_SLACK_MS = 2 * HELD_REQUEST_TIMEOUT_MS;
+
+/**
  * その予約に最後に触れた時刻。
  *
  * **作った時刻から数えない。** 期限は各 mutation の直前に延ばしているので、
@@ -843,16 +859,6 @@ function lastTouched(entry: {
  * 届かない。飛ばした分は数えずに頁を進め、走査そのものにだけ上限を置く。
  */
 const RECONCILE_SCAN_FACTOR = 10;
-
-/**
- * 走査の上限に当たった位置。次の周回はここから読む。
- *
- * 触らずに飛ばす行が上限を超えて並ぶと、先頭から読み直す限りそこで頭打ちになり、
- * 後ろにある放置された作成・改名・削除へ永久に届かない。Worker は使い回されるので
- * 1 回の cron を越えて覚えておける。忘れても (別のインスタンスに当たっても)
- * 先頭から読み直すだけで、正しさは変わらない。
- */
-let reconcileResumeAfter: string | undefined;
 
 /**
  * 照合できない予約を諦めるまでの幅。
@@ -1131,7 +1137,9 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
   const scanLimit = limit * RECONCILE_SCAN_FACTOR;
   let handled = 0;
   let scanned = 0;
-  let after: string | undefined = reconcileResumeAfter;
+  // 走査の上限に当たった位置は DB に置く。Worker の記憶だと isolate が
+  // 入れ替わるたびに消え、飛ばす行が先頭に並んだままだと同じところで止まり続ける。
+  let after: string | undefined = (await getGitReconcileCursor()) ?? undefined;
 
   while (handled < limit && scanned < scanLimit) {
     const page = await listExpiredGitRepositoryCreations({ limit, after });
@@ -1169,7 +1177,10 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
         // **遅れて着地しうる幅は空ける。** 説明文の書き換えのように控えを積まない
         // 操作は、結果が分からないまま押さえたままここへ来る。期限切れで即座に
         // 手放すと、後から着地した PATCH がその名前を取った別のリポジトリに当たる。
-        if (Date.now() - lastTouched(entry) < HOLD_LATE_GRACE_MS) continue;
+        if (
+          Date.now() - lastTouched(entry) <
+          HOLD_LATE_GRACE_MS + HOLD_ANCHOR_SLACK_MS
+        ) continue;
       }
 
       // 既に控えに載っているなら、片付けは控え側の仕事。ここで触ると持ち主が
@@ -1411,14 +1422,14 @@ async function reconcileStaleCreations(limit: number): Promise<void> {
   if (scanned >= scanLimit && handled < limit) {
     // 次の周回はここから読む。先頭へ戻すと、飛ばす行が上限を超えて並んだときに
     // 毎回同じところで止まり、その後ろへ永久に届かない。
-    reconcileResumeAfter = after;
+    await setGitReconcileCursor({ after: after ?? null }).catch(() => undefined);
     console.warn(
       `reconcile stopped after scanning ${scanned} reservations and settling ` +
         `${handled}; the next run resumes after ${after ?? "the start"}`,
     );
   } else {
     // 最後まで読み切った。次は先頭から。
-    reconcileResumeAfter = undefined;
+    await setGitReconcileCursor({ after: null }).catch(() => undefined);
   }
 }
 
@@ -2095,6 +2106,8 @@ export async function deleteRepository(
     throw new RepairTakenOverError(current.id);
   }
 
+  // 積んだ控えの印。決着を付けるときに、自分が積んだ行だけへ効かせる。
+  let tombstone: { id: string; intentId: string } | null = null;
   try {
     await holdReservation(reservation, deleteEpoch);
     const stillThere = await forgejoRequestOrNull<ForgejoRepository>(
@@ -2126,7 +2139,7 @@ export async function deleteRepository(
     // **この時点ではまだ「消えた」ではない。** 控えを書いただけの状態で消し直しの
     // 対象にすると、この後 403 や 422 で断られた削除を、定期実行が後から実行して
     // しまう。確かめてから confirm する。
-    await recordGitRepositoryDeletion({
+    tombstone = await recordGitRepositoryDeletion({
       forgejoRepoId: current.id,
       ownerUsername: stillThere.owner.login,
       name: stillThere.name,
@@ -2141,18 +2154,27 @@ export async function deleteRepository(
         timeoutMs: HELD_REQUEST_TIMEOUT_MS,
       },
     );
-    await confirmGitRepositoryDeletion({ forgejoRepoId: current.id });
+    await confirmGitRepositoryDeletion(tombstone);
     await releaseGitRepositoryReservationsByIntent({
       intentId: deleteEpoch,
     }).catch(() => undefined);
   } catch (error) {
-    // 4xx は言い切れる。それ以外 (待ち時間切れ・5xx) は、消えたかどうか
+    // **404 は「消えた」。** 確かめてから送るまでの間に別の経路が消したなら、
+    // 目的は達している。控えを外すと、生き返っても誰も追えなくなる。
+    if (error instanceof ForgejoError && error.isNotFound) {
+      if (tombstone) await confirmGitRepositoryDeletion(tombstone);
+      await releaseGitRepositoryReservationsByIntent({
+        intentId: deleteEpoch,
+      }).catch(() => undefined);
+      return;
+    }
+    // それ以外の 4xx は言い切れる。待ち時間切れ・5xx は、消えたかどうか
     // 分からない。予約を残し、定期実行が id で引き直して決着を付ける。
     if (isDecided(error)) {
       // **控えも外す。** 断られた削除の控えを残すと、定期実行がそれを実行する。
-      await dropGitRepositoryDeletion({ forgejoRepoId: current.id }).catch(
-        () => undefined,
-      );
+      if (tombstone) {
+        await dropGitRepositoryDeletion(tombstone).catch(() => undefined);
+      }
       await releaseGitRepositoryReservationsByIntent({
         intentId: deleteEpoch,
       }).catch(() => undefined);

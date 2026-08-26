@@ -8,6 +8,7 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { pathToFileURL } from "node:url";
+import { PROOF_PROTOCOL } from "./git-reconcile-status.mjs";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -23,10 +24,22 @@ async function main() {
     return;
   }
   // **戻した控えの時点。** 生き返りの見張りを始める前に取った控えには、控えの
-  // 無い消去が入っている。それを戻した場合は証拠を出さない。判断できるように、
-  // ここで控えの時点を控える。
+  // 無い消去が入っている。それを戻した場合は証拠を出さない。
+  //
+  // **UTC で受け取る。** 時間帯の付いていない文字列は、実行するホストの設定で
+  // 別の時刻になる (同じ "2026-08-26T04:30:00" が UTC と Asia/Tokyo で 9 時間
+  // ずれる)。restore.sh は Z 付きで出す。
   let backupAt = null;
   if (stampRaw) {
+    if (!/Z$|[+-]\d{2}:?\d{2}$/.test(stampRaw)) {
+      console.error(
+        `--backup-at に時間帯がありません: ${stampRaw}\n` +
+          "末尾が Z か +09:00 のような形になっている必要があります " +
+          "(restore.sh が出力した値をそのまま渡してください)。",
+      );
+      process.exitCode = 2;
+      return;
+    }
     backupAt = new Date(stampRaw);
     if (Number.isNaN(backupAt.getTime())) {
       console.error(
@@ -36,7 +49,24 @@ async function main() {
       process.exitCode = 2;
       return;
     }
+    // **未来の時点は受け取らない。** 受け取ると、見張りの開始より後だと言い張れる。
+    if (backupAt.getTime() > Date.now() + 5 * 60 * 1000) {
+      console.error(
+        `--backup-at が未来です: ${backupAt.toISOString()}\n` +
+          "戻した控えの時点として受け取れません。",
+      );
+      process.exitCode = 2;
+      return;
+    }
   }
+  // 戻した 2 つの控えの中身の指紋。**名前ではなく中身で縛る。** 名前だけだと、
+  // 古い控えを新しい名前へ付け替えるだけで通る。
+  const digest = (flag) => {
+    const i = args.indexOf(flag);
+    return i === -1 ? null : (args[i + 1] ?? null);
+  };
+  const dbDigest = digest("--db-digest");
+  const dataDigest = digest("--data-digest");
 
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -45,12 +75,52 @@ async function main() {
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   try {
+    // **一度登録した世代の中身は書き換えない。** 後から時点だけ差し替えられると、
+    // 古い控えから戻した世代を「新しい控えから戻した」ことにできる。
+    const existing = await prisma.gitRestoreGeneration.findUnique({
+      where: { id: nonce },
+    });
+    if (existing) {
+      const same =
+        (existing.backupAt?.getTime() ?? null) ===
+          (backupAt?.getTime() ?? null) &&
+        (existing.dbDigest ?? null) === dbDigest &&
+        (existing.dataDigest ?? null) === dataDigest;
+      if (!same && (existing.backupAt || existing.dbDigest)) {
+        console.error(
+          `世代 ${nonce} は既に別の内容で登録されています。書き換えません。\n` +
+            `  登録済み: ${existing.backupAt?.toISOString() ?? "時点なし"} ` +
+            `${existing.dbDigest ?? ""}\n` +
+            "別の復元なら、その復元が出した値 (nonce) を使ってください。",
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
     await prisma.gitRestoreGeneration.upsert({
       where: { id: nonce },
-      create: { id: nonce, backupAt },
-      // 登録し直しても、控えの時点は後から足せるようにする。消しはしない。
-      update: backupAt ? { backupAt } : {},
+      create: {
+        id: nonce,
+        backupAt,
+        dbDigest,
+        dataDigest,
+        protocol: PROOF_PROTOCOL,
+      },
+      // 時点も指紋も後から足せるが、既にあるものは上で弾いてある。
+      update: {
+        ...(backupAt ? { backupAt } : {}),
+        ...(dbDigest ? { dbDigest } : {}),
+        ...(dataDigest ? { dataDigest } : {}),
+        protocol: PROOF_PROTOCOL,
+      },
     });
+    if (!dbDigest || !dataDigest) {
+      console.warn(
+        "\n警告: --db-digest / --data-digest を渡していません。戻した控えを" +
+          "\n      名前でしか identify できず、古い控えを新しい名前へ付け替えた" +
+          "\n      場合を見分けられません。restore.sh が出力した値を付けてください。",
+      );
+    }
     if (!backupAt) {
       console.warn(
         "\n警告: --backup-at を渡していません。戻した控えが、生き返りの見張りを" +

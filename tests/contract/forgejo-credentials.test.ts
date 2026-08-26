@@ -211,6 +211,12 @@ vi.mock("@beutl/db", () => ({
   }: {
     forgejoRepoId: number;
   }) => repairQueue.get(forgejoRepoId) ?? null,
+  // 片付けが次にどこから読むか。実物は DB に置く (Worker の記憶だと isolate が
+  // 入れ替わるたびに消える)。
+  getGitReconcileCursor: async () => reconcileCursor,
+  setGitReconcileCursor: async ({ after }: { after: string | null }) => {
+    reconcileCursor = after;
+  },
   findGitRepositoryReservationByName: async ({
     ownerUsername,
     name,
@@ -341,7 +347,11 @@ vi.mock("@beutl/db", () => ({
   },
   recordGitRepositoryDeletion: async (input: Record<string, unknown>) => {
     deletionTombstones.push(input);
+    const id = `del${deletionRows.length + 1}`;
+    const intentId = `intent${deletionRows.length + 1}`;
     deletionRows.push({
+      id,
+      intentId,
       forgejoRepoId: input.forgejoRepoId as number,
       ownerUsername: input.ownerUsername as string,
       name: input.name as string,
@@ -350,6 +360,7 @@ vi.mock("@beutl/db", () => ({
       checkedGeneration: null,
       deletedAt: new Date(),
     });
+    return { id, intentId };
   },
   confirmGitCredentialRevocation: async ({ id }: { id: string }) => {
     const row = revocationRows.find((entry) => entry.id === id);
@@ -361,25 +372,35 @@ vi.mock("@beutl/db", () => ({
     );
     droppedTombstones.push(id);
   },
+  // **1 回ごとの印で条件付ける。** 期限切れの処理が読んだ後に前面がやり直した
+  // 場合、古い方の書き込みは 1 件も通らない。
   confirmGitRepositoryDeletion: async ({
-    forgejoRepoId,
+    id,
+    intentId,
   }: {
-    forgejoRepoId: number;
+    id: string;
+    intentId: string;
   }) => {
     const row = deletionRows.find(
-      (entry) => entry.forgejoRepoId === forgejoRepoId,
+      (entry) => entry.id === id && entry.intentId === intentId,
     );
     if (row) row.confirmed = true;
+    return Boolean(row);
   },
   dropGitRepositoryDeletion: async ({
-    forgejoRepoId,
+    id,
+    intentId,
   }: {
-    forgejoRepoId: number;
+    id: string;
+    intentId: string;
   }) => {
+    const before = deletionRows.length;
     deletionRows = deletionRows.filter(
-      (entry) => entry.forgejoRepoId !== forgejoRepoId || entry.confirmed,
+      (entry) =>
+        entry.id !== id || entry.intentId !== intentId || entry.confirmed,
     );
-    droppedTombstones.push(String(forgejoRepoId));
+    droppedTombstones.push(id);
+    return deletionRows.length < before;
   },
   listUnconfirmedGitCredentialRevocations: async () =>
     revocationRows.filter((row) => !row.confirmed),
@@ -407,24 +428,12 @@ vi.mock("@beutl/db", () => ({
     const row = revocationRows.find((entry) => entry.id === id);
     if (row) row.checkedGeneration = restoreGeneration;
   },
-  markGitRepositoryDeletionChecked: async ({
-    forgejoRepoId,
-  }: {
-    forgejoRepoId: number;
-  }) => {
-    const row = deletionRows.find(
-      (entry) => entry.forgejoRepoId === forgejoRepoId,
-    );
+  markGitRepositoryDeletionChecked: async ({ id }: { id: string }) => {
+    const row = deletionRows.find((entry) => entry.id === id);
     if (row) row.checkedGeneration = restoreGeneration;
   },
-  markGitRepositoryDeletionNeedsReview: async ({
-    forgejoRepoId,
-  }: {
-    forgejoRepoId: number;
-  }) => {
-    const row = deletionRows.find(
-      (entry) => entry.forgejoRepoId === forgejoRepoId,
-    );
+  markGitRepositoryDeletionNeedsReview: async ({ id }: { id: string }) => {
+    const row = deletionRows.find((entry) => entry.id === id);
     if (row) row.needsReview = true;
   },
   recordGitCredentialRevocationAttempt: async () => undefined,
@@ -538,6 +547,8 @@ let revocationRows: {
   revokedAt: Date;
 }[] = [];
 let deletionRows: {
+  id: string;
+  intentId: string;
   forgejoRepoId: number;
   ownerUsername: string;
   name: string;
@@ -548,6 +559,7 @@ let deletionRows: {
 }[] = [];
 let droppedTombstones: string[] = [];
 let existingCredentialIds: string[] = ["c1"];
+let reconcileCursor: string | null = null;
 
 const {
   CredentialLimitReachedError,
@@ -611,6 +623,7 @@ beforeEach(() => {
   deletionRows = [];
   droppedTombstones = [];
   existingCredentialIds = ["c1"];
+  reconcileCursor = null;
   attachFailsFor = [];
   releasedIds = [];
   repairQueue = new Map();
@@ -3022,6 +3035,8 @@ describe("消し直しも名前を押さえてから送る", () => {
     restoreGeneration = "gen-2";
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
@@ -3226,6 +3241,42 @@ describe("断られた消去は、後から実行しない", () => {
     expect(deletionRows).toHaveLength(0);
   });
 
+  it("削除が 404 なら、消えたものとして控えを確定させる", async () => {
+    // 確かめてから送るまでの間に別の経路が消したなら、目的は達している。
+    // ここで控えを外すと、将来の復元で生き返っても誰も追えない。
+    const { deleteRepository } = await import("@beutl/forgejo");
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repos/someone/proj") && method === "GET") {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.endsWith("/repositories/5")) {
+        return json({
+          id: 5,
+          name: "proj",
+          default_branch: "main",
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (method === "DELETE") return json({ message: "not found" }, 404);
+      return new Response(null, { status: 204 });
+    });
+
+    await deleteRepository("someone", "someone", "proj");
+
+    expect(deletionRows).toHaveLength(1);
+    expect(deletionRows[0].confirmed).toBe(true);
+  });
+
   it("削除が 5xx で終わったら、控えは残すが確かめる前のまま", async () => {
     // 消えたかどうか分からない。消し直しの対象にはしないが、控えは残して
     // 定期実行が決着を付ける。
@@ -3266,6 +3317,8 @@ describe("断られた消去は、後から実行しない", () => {
     restoreGeneration = "gen-2";
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
@@ -3304,6 +3357,8 @@ describe("断られた消去は、後から実行しない", () => {
     const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
@@ -3444,6 +3499,8 @@ describe("復元で生き返ったものを消し直す", () => {
     restoreGeneration = "gen-2";
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
@@ -3483,6 +3540,8 @@ describe("復元で生き返ったものを消し直す", () => {
     restoreGeneration = "gen-2";
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
@@ -3520,6 +3579,8 @@ describe("復元で生き返ったものを消し直す", () => {
     restoreGeneration = "gen-2";
     deletionRows = [
       {
+        id: "del1",
+        intentId: "intent1",
         forgejoRepoId: 5,
         ownerUsername: "someone",
         name: "proj",
