@@ -2,7 +2,10 @@ import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 import { StorageCleanupBusyError } from "./ai-job";
 import { enqueueStorageMultipartCleanups } from "./storage-multipart-cleanup";
-import { freezeStorageUploadForAccountDeletion } from "./storage-upload";
+import {
+  freezeStorageUploadForAccountDeletion,
+  type StorageUploadCompletionFields,
+} from "./storage-upload";
 
 export async function findUserForLibrary({
   id: userId,
@@ -296,7 +299,7 @@ export async function enqueueUserStorageCleanups({
   // writes detached outboxes and deletes the User. A creator holding a null-id
   // snapshot then loses its attach CAS; once it observes the remote handle it
   // writes that handle to the same user-independent multipart outbox.
-  const uploads = await db.storageUpload.findMany({
+  const rawUploads = await db.storageUpload.findMany({
     where: { userId, NOT: { objectKey: "" } },
     select: {
       id: true,
@@ -313,10 +316,21 @@ export async function enqueueUserStorageCleanups({
       startState: true,
       creationLeaseUntil: true,
       creationLeaseToken: true,
+      completionState: true,
+      completionLeaseUntil: true,
+      completionLeaseToken: true,
+      completionAttempts: true,
+      completionLastError: true,
+      completionInterventionAt: true,
+      completionRetryNotBefore: true,
+      completionRevision: true,
       cleanupLeaseUntil: true,
       cleanupLeaseToken: true,
     },
-  });
+  } as never);
+  const uploads = rawUploads as Array<
+    (typeof rawUploads)[number] & StorageUploadCompletionFields
+  >;
   const frozenUploads: typeof uploads = [];
   for (const upload of uploads) {
     if (upload.completedFileId !== null) continue;
@@ -337,6 +351,11 @@ export async function enqueueUserStorageCleanups({
           startState: upload.startState,
           creationLeaseUntil: upload.creationLeaseUntil,
           creationLeaseToken: upload.creationLeaseToken,
+          completionState: upload.completionState,
+          completionLeaseUntil: upload.completionLeaseUntil,
+          completionLeaseToken: upload.completionLeaseToken,
+          completionRevision: upload.completionRevision,
+          completionRetryNotBefore: upload.completionRetryNotBefore,
           cleanupLeaseUntil: upload.cleanupLeaseUntil,
           cleanupLeaseToken: upload.cleanupLeaseToken,
         },

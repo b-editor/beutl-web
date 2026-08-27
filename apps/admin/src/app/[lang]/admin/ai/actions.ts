@@ -12,6 +12,8 @@ import {
   upsertAiSetting,
   resumeStorageMultipartIntervention,
   terminalizeStorageMultipartIntervention,
+  resumeStorageUploadIntervention,
+  terminalizeStorageUploadIntervention,
   terminalizeTopUpCheckoutResolutionOnly,
   claimTopUpCheckoutResolutionOperatorLease,
   recordTopUpCheckoutResolutionAbsenceObservation,
@@ -141,6 +143,46 @@ export async function terminalizeStorageMultipartCleanup(input: unknown): Promis
       return transition;
     });
     return result.status === "terminalized" ? { success: true, message: "Multipart cleanup terminalized" } : { success: false, message: "Resolution changed; reload and retry" };
+  });
+}
+
+function parseStorageUploadInterventionInput(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const value = input as Record<string, unknown>;
+  if (typeof value.id !== "string" || typeof value.userId !== "string" || typeof value.objectKey !== "string" || typeof value.expectedRevision !== "number" || typeof value.expectedInterventionAt !== "string") return null;
+  const expectedInterventionAt = new Date(value.expectedInterventionAt);
+  return Number.isSafeInteger(value.expectedRevision) && Number.isFinite(expectedInterventionAt.getTime()) ? { id: value.id, userId: value.userId, objectKey: value.objectKey, uploadId: typeof value.uploadId === "string" ? value.uploadId : null, expectedRevision: value.expectedRevision, expectedInterventionAt } : null;
+}
+
+export async function resumeStorageUploadInterventionAction(input: unknown): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    const parsed = parseStorageUploadInterventionInput(input);
+    const value = input as Record<string, unknown>;
+    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: "Operator reason and evidence (10+ characters each) are required" };
+    const operatorReason = value.operatorReason;
+    const operatorEvidence = value.operatorEvidence;
+    const result = await startRetryableTransaction(async (tx) => {
+      const transition = await resumeStorageUploadIntervention({ ...parsed, operatorUserId: session.user.id, operatorReason, operatorEvidence, now: new Date(), prisma: tx });
+      if (transition.status === "conflict") return transition;
+      await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageUploadInterventionResumed, details: `upload: ${parsed.id}, revision: ${parsed.expectedRevision}->${transition.revision}, reason: ${operatorReason}, evidence: ${operatorEvidence}`, prisma: tx });
+      return transition;
+    });
+    return result.status === "resumed" ? { success: true, message: "Storage upload resumed" } : { success: false, message: "Resolution changed; reload and retry" };
+  });
+}
+
+export async function terminalizeStorageUploadInterventionAction(input: unknown): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    const parsed = parseStorageUploadInterventionInput(input);
+    const value = input as Record<string, unknown>;
+    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: "Operator reason and evidence (10+ characters each) are required" };
+    const result = await startRetryableTransaction(async (tx) => {
+      const transition = await terminalizeStorageUploadIntervention({ ...parsed, now: new Date(), operatorUserId: session.user.id, operatorReason: value.operatorReason as string, operatorEvidence: value.operatorEvidence as string, prisma: tx });
+      if (transition.status === "conflict" || transition.status === "unsafe") return transition;
+      await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageUploadInterventionTerminalized, details: `upload: ${parsed.id}, revision: ${parsed.expectedRevision}, reason: ${value.operatorReason}, evidence: ${value.operatorEvidence}`, prisma: tx });
+      return transition;
+    });
+    return result.status === "terminalized" ? { success: true, message: "Storage upload terminalized" } : { success: false, message: "Resolution changed; reload and retry" };
   });
 }
 

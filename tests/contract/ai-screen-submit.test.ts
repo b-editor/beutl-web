@@ -194,6 +194,7 @@ describe("what an AI screen will send", () => {
       "aiRequestInterrupted",
       "aiRequestInProgress",
       "aiResultUnavailable",
+      "aiRequestChanged",
     ]) {
       expect(keepsIdempotencyKey(code)).toBe(true);
       expect(blocksSubmit("plan", keepsIdempotencyKey(code))).toBe(false);
@@ -285,6 +286,22 @@ describe("which names a screen holds", () => {
     names = settleAiRequestName(names, true);
 
     expect(aiRequestNameOf(names, "request")).toBe(sent);
+    expect(holdsAiRequestName(names, "request")).toBe(true);
+  });
+
+  it("does not rotate a key after a parallel body conflict", () => {
+    const next = mint();
+    let names = readyAiRequestNames(newAiRequestNames(), next);
+    const key = aiRequestNameOf(names, "request");
+    names = reduceAiRequestRecovery(names, {
+      type: "commit",
+      request: "request",
+    }, next);
+
+    // aiRequestChanged is recoverable: restore the original body and submit
+    // it again under the same key so the already-reserved job is replayed.
+    names = reduceAiRequestRecovery(names, { type: "settle", keeps: true });
+    expect(aiRequestNameOf(names, "request")).toBe(key);
     expect(holdsAiRequestName(names, "request")).toBe(true);
   });
 

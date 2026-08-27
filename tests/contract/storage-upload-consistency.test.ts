@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
+import { STORAGE_QUOTA_BYTES } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // What the bucket does with an upload that arrives in parts. The tests below
@@ -117,8 +118,10 @@ describe("storage upload consistency", () => {
 
     expect(outcome).toEqual({ ok: false, reason: "uploadFailed" });
     expect(createFile).not.toHaveBeenCalled();
-    // Nothing is left holding storage.
-    expect(state.storageUploads.size).toBe(0);
+    // The provider rejection is non-terminal. Keep the completion fence so a
+    // later retry can prove whether the object was committed.
+    expect(state.storageUploads.size).toBe(1);
+    expect([...state.storageUploads.values()][0]?.completionState).toBe("retry");
   });
 
   it("throws away the object when the file cannot be recorded", async () => {
@@ -233,5 +236,29 @@ describe("storage upload consistency", () => {
         "the database is unavailable",
         "the object could not be deleted",
       ]);
+  });
+
+  it("keeps tracking when object deletion is unavailable", async () => {
+    const uploadId = await begin();
+    createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
+    setR2BucketProvider(() => ({ ...bucket, delete: undefined }) as never);
+    await expect(finishUpload({ userId: USER_ID, uploadId, parts: [{ partNumber: 1, etag: "etag-1" }] })).rejects.toThrow("could not be cleaned up");
+    expect(state.storageUploads.size).toBe(1);
+  });
+
+  it("retains tracking when object deletion itself throws", async () => {
+    const uploadId = await begin();
+    createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
+    bucket.state.deleteFails = true;
+    await expect(finishUpload({ userId: USER_ID, uploadId, parts: [{ partNumber: 1, etag: "etag-1" }] })).rejects.toBeInstanceOf(AggregateError);
+    expect(state.storageUploads.size).toBe(1);
+  });
+
+  it("keeps an over-quota row when cleanup delete is unavailable", async () => {
+    const uploadId = await begin();
+    state.files.set("existing-large", { id: "existing-large", name: "large", size: STORAGE_QUOTA_BYTES, mimeType: "application/octet-stream", objectKey: "existing-large", userId: USER_ID, visibility: "PRIVATE", sha256: null, createdAt: new Date(), updatedAt: new Date() });
+    setR2BucketProvider(() => ({ ...bucket, delete: undefined }) as never);
+    await expect(finishUpload({ userId: USER_ID, uploadId, parts: [{ partNumber: 1, etag: "etag-1" }] })).resolves.toEqual({ ok: false, reason: "insufficientStorageSpace" });
+    expect(state.storageUploads.size).toBe(1);
   });
 });

@@ -36,6 +36,7 @@ import {
   retryJobAction,
   translateAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
+import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
   createReservedAiJob,
   generateImage,
@@ -149,6 +150,35 @@ describe("dashboard AI actions", () => {
     expect(result.message).toContain("aiPlanRequired");
   });
 
+  it.each([
+    "aiRequestChanged",
+    "aiRequestInProgress",
+    "aiResultUnavailable",
+    "aiRequestInterrupted",
+  ])("retains the idempotency key for recoverable reservation error %s", (errorCode) => {
+    const result = aiFailureResult(errorCode, (key) => key);
+    expect(result).toEqual({
+      success: false,
+      message: `api-errors:${errorCode}`,
+      keepIdempotencyKey: true,
+    });
+  });
+
+  it.each([
+    "doNotHavePermissions",
+    "aiPlanRequired",
+    "aiJobLimitReached",
+    "aiRequestWasDeleted",
+    "aiUsageLimitExceeded",
+    "aiProviderError",
+  ])("clears the idempotency key for terminal reservation error %s", (errorCode) => {
+    const result = aiFailureResult(errorCode, (key) => key);
+    expect(result).toEqual({
+      success: false,
+      message: `api-errors:${errorCode}`,
+    });
+  });
+
   it("returns the generated image URL on success", async () => {
     vi.mocked(createReservedAiJob).mockResolvedValue({
       ok: true,
@@ -212,6 +242,57 @@ describe("dashboard AI actions", () => {
     // Same key, different content: the reservation layer answers this with a
     // conflict rather than charging for the second prompt.
     expect(third.requestFingerprint).not.toBe(first.requestFingerprint);
+  });
+
+  it("retains a key after a parallel body conflict and replays without a second provider call", async () => {
+    vi.mocked(createReservedAiJob)
+      .mockResolvedValueOnce({
+        ok: true,
+        outcome: "reserved",
+        job: { id: "job-1", status: "running", resultFileId: null, resultFile: null },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        errorCode: "aiRequestChanged",
+        status: 409,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        outcome: "existing",
+        job: {
+          id: "job-1",
+          status: "succeeded",
+          resultFileId: "file-1",
+          resultFile: { name: "result.png", mimeType: "image/png" },
+        },
+      });
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      mediaType: "image/png",
+    });
+    vi.mocked(saveAiImage).mockResolvedValue({
+      id: "file-1",
+      name: "ai-image-job-1.png",
+      mimeType: "image/png",
+    });
+
+    const first = await generateImageAction({ success: false }, generateForm());
+    const conflict = await generateImageAction({ success: false }, generateForm("a dog"));
+    const replay = await generateImageAction({ success: false }, generateForm());
+
+    expect(first.success).toBe(true);
+    expect(conflict).toMatchObject({
+      success: false,
+      message: "api-errors:aiRequestChanged",
+      keepIdempotencyKey: true,
+    });
+    expect(replay).toMatchObject({ success: true, jobId: "job-1" });
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    const calls = vi.mocked(createReservedAiJob).mock.calls;
+    expect(calls[1]![0].idempotencyKeyHash).toBe(calls[0]![0].idempotencyKeyHash);
+    expect(calls[2]![0].idempotencyKeyHash).toBe(calls[0]![0].idempotencyKeyHash);
+    expect(calls[1]![0].requestFingerprint).not.toBe(calls[0]![0].requestFingerprint);
   });
 
   describe("a resubmission of a finished request", () => {

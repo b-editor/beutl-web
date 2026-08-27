@@ -357,6 +357,14 @@ type StorageUploadRecord = {
   startState: string;
   creationLeaseUntil: Date | null;
   creationLeaseToken: string | null;
+  completionState?: string | { not?: string };
+  completionLeaseUntil?: Date | null;
+  completionLeaseToken?: string | null;
+  completionAttempts: number;
+  completionLastError: string | null;
+  completionInterventionAt: Date | null;
+  completionRetryNotBefore: Date | null;
+  completionRevision: number;
   cleanupLeaseUntil: Date | null;
   cleanupLeaseToken: string | null;
 };
@@ -376,6 +384,14 @@ type StorageUploadWhere = {
   createdAt?: Date | { lt?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
+  completionState?: string;
+  completionLeaseUntil?: Date | null | { lte: Date };
+  completionLeaseToken?: string | null;
+  completionAttempts?: number;
+  completionLastError?: string | null;
+  completionRevision?: number;
+  completionInterventionAt?: Date | null | { lte: Date };
+  completionRetryNotBefore?: Date | null | { lte: Date };
   cleanupLeaseUntil?: Date | null | { lte: Date };
   cleanupLeaseToken?: string | null;
   AND?: StorageUploadWhere[];
@@ -414,6 +430,42 @@ function matchesStorageUploadWhere(
     } else if (
       item.creationLeaseUntil?.getTime() !== where.creationLeaseUntil?.getTime()
     ) return false;
+  }
+  if (where.completionState !== undefined) {
+    if (typeof where.completionState === "string") {
+      if (item.completionState !== where.completionState) return false;
+    } else if (where.completionState.not !== undefined && item.completionState === where.completionState.not) {
+      return false;
+    }
+  }
+  if (where.completionAttempts !== undefined && item.completionAttempts !== where.completionAttempts) return false;
+  if (where.completionLastError !== undefined && item.completionLastError !== where.completionLastError) return false;
+  if (where.completionLeaseToken !== undefined && item.completionLeaseToken !== where.completionLeaseToken) return false;
+  if (where.completionRevision !== undefined && item.completionRevision !== where.completionRevision) return false;
+  if (where.completionInterventionAt !== undefined) {
+    if (typeof where.completionInterventionAt === "object" && where.completionInterventionAt !== null && "lte" in where.completionInterventionAt) {
+      if (item.completionInterventionAt === null || item.completionInterventionAt > where.completionInterventionAt.lte) return false;
+    } else if (item.completionInterventionAt?.getTime() !== where.completionInterventionAt?.getTime()) return false;
+  }
+  if (where.completionRetryNotBefore !== undefined) {
+    if (typeof where.completionRetryNotBefore === "object" && where.completionRetryNotBefore !== null && "lte" in where.completionRetryNotBefore) {
+      if (item.completionRetryNotBefore === null || item.completionRetryNotBefore > where.completionRetryNotBefore.lte) return false;
+    } else if (item.completionRetryNotBefore?.getTime() !== where.completionRetryNotBefore?.getTime()) {
+      return false;
+    }
+  }
+  if (where.completionLeaseUntil !== undefined) {
+    if (
+      typeof where.completionLeaseUntil === "object" &&
+      where.completionLeaseUntil !== null &&
+      "lte" in where.completionLeaseUntil
+    ) {
+      if (item.completionLeaseUntil === null || item.completionLeaseUntil > where.completionLeaseUntil.lte) return false;
+    } else if (
+      item.completionLeaseUntil?.getTime() !== where.completionLeaseUntil?.getTime()
+    ) {
+      return false;
+    }
   }
   if (where.cleanupLeaseToken !== undefined && item.cleanupLeaseToken !== where.cleanupLeaseToken) return false;
   if (where.cleanupLeaseUntil !== undefined) {
@@ -3072,6 +3124,14 @@ export function createInMemoryPrisma() {
           startState: "active",
           creationLeaseUntil: null,
           creationLeaseToken: null,
+          completionState: "idle",
+          completionLeaseUntil: null,
+          completionLeaseToken: null,
+          completionAttempts: 0,
+          completionLastError: null,
+          completionInterventionAt: null,
+          completionRetryNotBefore: null,
+          completionRevision: 0,
           cleanupLeaseUntil: null,
           cleanupLeaseToken: null,
           ...data,
@@ -3090,13 +3150,9 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-        where: { id?: string; userId?: string };
+        where: StorageUploadWhere;
       }) => {
-        const found = [...state.storageUploads.values()].find(
-          (item) =>
-            (!where.id || item.id === where.id) &&
-            (!where.userId || item.userId === where.userId),
-        );
+        const found = [...state.storageUploads.values()].find((item) => matchesStorageUploadWhere(item, where));
         return found ? { ...found } : null;
       },
       findMany: async ({
@@ -3132,7 +3188,11 @@ export function createInMemoryPrisma() {
           matchesStorageUploadWhere(item, where),
         );
         for (const item of matched) {
-          state.storageUploads.set(item.id, { ...item, ...data });
+          const values = { ...data } as Record<string, unknown>;
+          for (const [key, value] of Object.entries(values)) {
+            if (value && typeof value === "object" && "increment" in value) values[key] = Number(item[key as keyof StorageUploadRecord] ?? 0) + Number((value as { increment: number }).increment);
+          }
+          state.storageUploads.set(item.id, { ...item, ...values });
         }
         return { count: matched.length };
       },

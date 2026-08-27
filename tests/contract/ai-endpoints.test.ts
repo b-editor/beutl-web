@@ -960,10 +960,54 @@ describe("v3 AI endpoints contract", () => {
 
       expect(first.status).toBe(200);
       expect(conflicting.status).toBe(409);
+      expect(await conflicting.json()).toMatchObject({
+        error_code: "aiRequestChanged",
+      });
       expect(state.aiJobs.size).toBe(1);
       expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
       expect(
         state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
+    });
+
+    it("returns one success and a typed conflict for parallel requests with different bodies", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const key = "image-parallel-conflict-key";
+      const request = async (prompt: string) =>
+        makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authHeaders(key)),
+          },
+          body: JSON.stringify({ prompt, size: "1024x1024" }),
+        });
+
+      const responses = await Promise.all([
+        request("first"),
+        request("second"),
+      ]);
+      const payloads = await Promise.all(
+        responses.map(async (response) => ({
+          status: response.status,
+          body: await response.json(),
+        })),
+      );
+
+      expect(payloads.map(({ status }) => status).sort()).toEqual([200, 409]);
+      expect(
+        payloads.find(({ status }) => status === 409)?.body,
+      ).toMatchObject({ error_code: "aiRequestChanged" });
+      expect(state.aiJobs.size).toBe(1);
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      expect(
+        state.creditTransactions.filter(
+          (transaction) => transaction.kind === "usage",
+        ),
       ).toHaveLength(1);
     });
 

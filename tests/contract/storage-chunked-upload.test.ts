@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
@@ -72,6 +72,10 @@ const bucket = vi.hoisted(() => {
 const bucketDeleted: string[] = [];
 let bucketDeleteFails = false;
 const bucketObjects = new Map<string, { key: string }>();
+const defaultCreateMultipartUpload = bucket.createMultipartUpload.getMockImplementation()!;
+const defaultResumeMultipartUpload = bucket.resumeMultipartUpload.getMockImplementation()!;
+const defaultDelete = bucket.delete.getMockImplementation()!;
+const defaultHead = bucket.head.getMockImplementation()!;
 
 import {
   cancelUpload,
@@ -101,7 +105,10 @@ describe("uploading a file too large for one request", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.clearAllMocks();
+    bucket.createMultipartUpload.mockReset().mockImplementation(defaultCreateMultipartUpload);
+    bucket.resumeMultipartUpload.mockReset().mockImplementation(defaultResumeMultipartUpload);
+    bucket.delete.mockReset().mockImplementation(defaultDelete);
+    bucket.head.mockReset().mockImplementation(defaultHead);
     bucket.uploads.clear();
     bucketDeleted.length = 0;
     bucketDeleteFails = false;
@@ -110,6 +117,40 @@ describe("uploading a file too large for one request", () => {
     state = memory.state;
     setDbProvider(async () => memory.prisma as never);
     setR2BucketProvider(() => bucket as never);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns at the completion deadline and records a retry while observing the provider promise", async () => {
+    vi.useFakeTimers();
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "deadline.bin", mimeType: "application/octet-stream", size: BigInt(1) });
+    if (!started.ok) throw new Error(started.reason);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: () => new Promise<{ size: number }>(() => undefined),
+      abort: vi.fn(),
+    }));
+    const pending = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("retry");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["false", "throw"] as const)("stops waiting when lease renewal returns %s", async (mode) => {
+    vi.useFakeTimers();
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: `renew-${mode}.bin`, mimeType: "application/octet-stream", size: BigInt(1) });
+    if (!started.ok) throw new Error(started.reason);
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({ uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }), complete: () => new Promise<{ size: number }>(() => undefined), abort: vi.fn() }));
+    if (mode === "false") vi.spyOn(storageDb, "renewStorageUploadCompletion").mockResolvedValueOnce(false);
+    else vi.spyOn(storageDb, "renewStorageUploadCompletion").mockRejectedValueOnce(new Error("renew unavailable"));
+    const pending = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(state.storageUploads.get(started.upload.id)).toMatchObject({ completionState: "completing", completedFileId: null });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("cuts a file into parts the platform will carry", () => {
@@ -317,8 +358,9 @@ describe("uploading a file too large for one request", () => {
       body: streamOf(STORAGE_UPLOAD_PART_BYTES),
     });
 
-    // The second part never arrived, so there is no file to make — and the
-    // parts that did arrive must not be left behind.
+    // The second part never arrived, so there is no file to make. The provider
+    // rejection is non-terminal, however: keep the completion fence and handle
+    // for a later retry instead of aborting on an unproven HEAD absence.
     const finished = await finishUpload({
       userId: USER_ID,
       uploadId: started.upload.id,
@@ -330,8 +372,8 @@ describe("uploading a file too large for one request", () => {
 
     expect(finished).toEqual({ ok: false, reason: "uploadFailed" });
     expect(state.files.size).toBe(0);
-    expect(state.storageUploads.size).toBe(0);
-    expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
+    expect(state.storageUploads.size).toBe(1);
+    expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(false);
   });
 
   it("gives up an upload the browser abandoned", async () => {
@@ -397,6 +439,55 @@ describe("uploading a file too large for one request", () => {
     expect(swept).toEqual({ abandoned: 1, failed: 0 });
     expect(state.storageUploads.size).toBe(0);
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
+  });
+
+  it("keeps active completion fenced, then escalates an expired lease", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "in-flight-completion.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    const activeLease = new Date(Date.now() + 5 * 60_000);
+    state.storageUploads.set(row.id, {
+      ...row,
+      createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      completionState: "completing",
+      completionLeaseUntil: activeLease,
+      completionLeaseToken: "completion-owner-a",
+    });
+
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+    await expect(storageDb.enqueueUserStorageCleanups({
+      userId: USER_ID,
+      now: new Date(),
+    })).rejects.toBeInstanceOf(storageDb.StorageCleanupBusyError);
+
+    expect(state.storageUploads.get(row.id)).toMatchObject({
+      completionLeaseToken: "completion-owner-a",
+      completionState: "completing",
+      abandonedAt: null,
+      cleanupLeaseToken: null,
+    });
+    state.storageUploads.set(row.id, {
+      ...state.storageUploads.get(row.id)!,
+      completionLeaseUntil: new Date(Date.now() - 1),
+    });
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({ abandoned: 0, failed: 0 });
+    expect(state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "intervention",
+      completionLeaseToken: null,
+      completionLeaseUntil: null,
+      abandonedAt: null,
+    });
+    await expect(storageDb.enqueueUserStorageCleanups({ userId: USER_ID, now: new Date() })).rejects.toBeInstanceOf(storageDb.StorageCleanupBusyError);
+    expect(bucketDeleted).toEqual([]);
   });
 
   it("keeps the row when an abort fails and nothing was there to clear", async () => {
@@ -694,9 +785,12 @@ describe("uploading a file too large for one request", () => {
       abort: vi.fn(),
     }));
     const concurrentFileId = "file-concurrent-completion";
-    const claim = storageDb.claimStorageUploadForAbandon;
-    vi.spyOn(storageDb, "claimStorageUploadForAbandon")
+    const recordFailure = storageDb.recordStorageUploadCompletionFailure;
+    vi.spyOn(storageDb, "recordStorageUploadCompletionFailure")
       .mockImplementationOnce(async (args) => {
+        // The concurrent receipt wins the generation CAS first. The failure
+        // recorder must then lose, and this caller must return that same File
+        // instead of changing the completed row back to retry.
         state.files.set(concurrentFileId, {
           id: concurrentFileId,
           objectKey: tracked.objectKey,
@@ -712,8 +806,11 @@ describe("uploading a file too large for one request", () => {
         state.storageUploads.set(tracked.id, {
           ...state.storageUploads.get(tracked.id)!,
           completedFileId: concurrentFileId,
+          completionState: "settled",
+          completionLeaseUntil: null,
+          completionLeaseToken: null,
         });
-        return await claim(args);
+        return await recordFailure(args);
       });
 
     const result = await finishUpload({
@@ -758,6 +855,11 @@ describe("uploading a file too large for one request", () => {
       parts: [{ partNumber: 1, etag: "etag-1" }],
     })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
 
+    state.storageUploads.set(tracked.id, {
+      ...state.storageUploads.get(tracked.id)!,
+      completionLeaseUntil: new Date(Date.now() - 1),
+    });
+
     expect(state.storageUploads.get(tracked.id)).toMatchObject({
       uploadId: tracked.uploadId,
       abandonedAt: null,
@@ -773,6 +875,177 @@ describe("uploading a file too large for one request", () => {
       uploadId: started.upload.id,
       parts: [{ partNumber: 1, etag: "etag-1" }],
     })).resolves.toMatchObject({ ok: true });
+    expect(state.files.size).toBe(1);
+  });
+
+  it("keeps terminal completion absence retryable without scheduling cleanup", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "complete-terminal-absent.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const tracked = state.storageUploads.get(started.upload.id)!;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), {
+          code: "NoSuchUpload",
+        });
+      },
+      abort: vi.fn(),
+    }));
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+
+    expect(state.storageUploads.has(tracked.id)).toBe(true);
+    expect(state.storageUploads.get(tracked.id)).toMatchObject({
+      completionState: "retry",
+      completedFileId: null,
+      abandonedAt: null,
+    });
+    expect(bucketDeleted).toEqual([]);
+    expect(state.aiStorageCleanups.has(tracked.objectKey)).toBe(false);
+    expect(bucketDeleted).toEqual([]);
+  });
+
+  it("does not clean up terminal absence after taking over an expired completion", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "takeover-terminal-absent.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    state.storageUploads.set(row.id, {
+      ...row,
+      completionState: "retry",
+      completionLeaseUntil: new Date(Date.now() - 1),
+      completionLeaseToken: "completion-owner-a",
+    });
+    const abort = vi.fn();
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+      abort,
+    }));
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+
+    expect(state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "retry",
+      abandonedAt: null,
+      completedFileId: null,
+      cleanupLeaseToken: null,
+    });
+    expect(state.aiStorageCleanups.has(row.objectKey)).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
+    expect(bucketDeleted).toEqual([]);
+  });
+
+  it("does not take over when the first completion claim loses", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "claim-race-terminal-absent.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    const originalClaim = storageDb.claimStorageUploadCompletion;
+    vi.spyOn(storageDb, "claimStorageUploadCompletion")
+      .mockImplementationOnce(async () => {
+        const current = state.storageUploads.get(row.id)!;
+        state.storageUploads.set(row.id, {
+          ...current,
+          completionState: "completing",
+          completionLeaseUntil: new Date(Date.now() - 1),
+          completionLeaseToken: "completion-owner-a",
+        });
+        return false;
+      })
+      .mockImplementation((args) => originalClaim(args));
+    const abort = vi.fn();
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+      },
+      abort,
+    }));
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+
+    expect(state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "completing",
+      abandonedAt: null,
+      completedFileId: null,
+      cleanupLeaseToken: null,
+    });
+    expect(state.aiStorageCleanups.has(row.objectKey)).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("fences cleanup while completion is in flight", async () => {
+    const started = await startUpload({
+      userId: USER_ID, id: crypto.randomUUID(), name: "fence.bin",
+      mimeType: "application/octet-stream", size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const part = await uploadPart({
+      userId: USER_ID, uploadId: started.upload.id, partNumber: 1,
+      contentLength: 4, body: streamOf(4),
+    });
+    if (!part.ok) throw new Error(part.reason);
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+    const tracked = state.storageUploads.get(started.upload.id)!;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        entered();
+        await releasePromise;
+        bucketObjects.set(tracked.objectKey, { key: tracked.objectKey });
+        return { size: 4 };
+      },
+      abort: vi.fn(),
+    }));
+    const a = finishUpload({ userId: USER_ID, uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: part.etag }] });
+    await enteredPromise;
+    const b = await finishUpload({ userId: USER_ID, uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: part.etag }] });
+    expect(b).toEqual({ ok: false, reason: "uploadFailed" });
+    await expect(storageDb.enqueueUserStorageCleanups({
+      userId: USER_ID,
+      now: new Date(),
+    })).rejects.toBeInstanceOf(storageDb.StorageCleanupBusyError);
+    expect(bucketDeleted).toEqual([]);
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("completing");
+    release();
+    await expect(a).resolves.toMatchObject({ ok: true });
     expect(state.files.size).toBe(1);
   });
 

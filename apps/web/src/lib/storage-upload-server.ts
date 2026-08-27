@@ -6,6 +6,9 @@ import {
 } from "@beutl/core";
 import {
   claimStorageUploadForAbandon,
+  claimStorageUploadCompletion,
+  recordStorageUploadCompletionFailure,
+  renewStorageUploadCompletion,
   claimStorageUploadCreation,
   attachStorageUploadRemote,
   countFilesByUserId,
@@ -44,6 +47,10 @@ import { getR2Bucket } from "@beutl/api";
 // 数本並行して送るには足り、放置された handle を積み上げるには足りない。
 const MAX_ACTIVE_UPLOADS = 16;
 const STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
+// Keep the lease longer than the provider deadline while allowing one
+// heartbeat in the bounded wait window.
+const STORAGE_UPLOAD_COMPLETION_LEASE_MILLISECONDS = 60 * 1000;
+const STORAGE_UPLOAD_COMPLETION_DEADLINE_MILLISECONDS = 30 * 1000;
 
 export type UploadFailure =
   | "fileNotFound"
@@ -394,67 +401,190 @@ export async function finishUpload({
   // 掃除がこの行を取っている。パートも、組み上がっていたオブジェクトも、もう
   // 掃除のもの。ここで仕上げると、消される予定のオブジェクトを File が指す。
   if (upload.abandonedAt) return { ok: false, reason: "uploadFailed" };
+  if (upload.completionState === "intervention") return { ok: false, reason: "uploadFailed" };
   if (!upload.uploadId) return { ok: false, reason: "uploadFailed" };
 
-  const multipart = bucket().resumeMultipartUpload(
-    upload.objectKey,
-    upload.uploadId,
-  );
-  let object: { size: number };
+  // Retry/completing rows may still have a provider-side commit in flight (or
+  // may have committed before its response was lost). Never issue a second
+  // complete call; recover only from a visible object or receipt.
+  if (!["idle", "resumed"].includes(upload.completionState)) {
+    const existing = await joinedObjectState(upload.objectKey);
+    if (existing.kind === "present") return await finalizeUpload(upload, userId, BigInt(existing.size));
+    return { ok: false, reason: "uploadFailed" };
+  }
+  if (upload.completionState === "resumed" || upload.completionAttempts > 0) {
+    const existing = await joinedObjectState(upload.objectKey);
+    if (existing.kind === "present") return await finalizeUpload(upload, userId, BigInt(existing.size));
+    if (existing.kind === "unknown") return { ok: false, reason: "uploadFailed" };
+    // An operator explicitly resumed this generation; an absent object is the
+    // only case in which a fresh provider completion is authorized.
+  }
+
+  // Publish the completion fence before touching R2. A competing completion
+  // or stale cleanup may observe a provider-side transient failure, but cannot
+  // claim this generation while this lease is unexpired.
+  let completing = upload;
+  let claimed = false;
+  let completionLeaseToken = "";
+  const now = new Date();
+  const leaseToken = crypto.randomUUID();
+  claimed = await claimStorageUploadCompletion({
+    id: completing.id,
+    userId,
+    now,
+    leaseUntil: new Date(now.getTime() + STORAGE_UPLOAD_COMPLETION_LEASE_MILLISECONDS),
+    leaseToken,
+    expected: storageUploadGenerationOf(completing),
+  });
+  if (claimed) {
+    const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId });
+    if (
+      !current ||
+      current.completionState !== "completing" ||
+      current.completionLeaseToken !== leaseToken
+    ) {
+      return { ok: false, reason: "uploadFailed" };
+    }
+    completing = current;
+    completionLeaseToken = leaseToken;
+  }
+  if (!claimed) {
+    const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId });
+    if (!current) return { ok: false, reason: "uploadNotFound" };
+    if (!sameStorageUploadGeneration(current, completing)) {
+      return { ok: false, reason: "uploadNotFound" };
+    }
+    if (current.completedFileId) {
+      const file = await findStorageFileByIdAndUserId({ id: current.completedFileId, userId });
+      return file
+        ? { ok: true, file: { id: file.id, name: file.name, size: BigInt(file.size) } }
+        : { ok: false, reason: "fileNotFound" };
+    }
+    const existing = await joinedObjectState(current.objectKey);
+    if (existing.kind === "present") return await finalizeUpload(current, userId, BigInt(existing.size));
+    return { ok: false, reason: "uploadFailed" };
+  }
+
+  const completionUploadId = completing.uploadId;
+  if (!completionUploadId) return { ok: false, reason: "uploadFailed" };
+
+  let multipart: ReturnType<NonNullable<ReturnType<typeof bucket>["resumeMultipartUpload"]>>;
   try {
-    object = await multipart.complete(parts);
-  } catch {
+    multipart = bucket().resumeMultipartUpload(
+      completing.objectKey,
+      completionUploadId,
+    );
+  } catch (error) {
+    await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: error instanceof Error ? error.message : String(error), now: new Date() }).catch(() => undefined);
+    return { ok: false, reason: "uploadFailed" };
+  }
+  let object: { size: number };
+  const providerCompletion = Promise.resolve().then(() => multipart.complete(parts)).then(
+    (value) => ({ kind: "completed" as const, value }),
+    (error: unknown) => ({ kind: "failed" as const, error }),
+  );
+  let providerOutcome: Awaited<typeof providerCompletion>;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<{ kind: "deadline" }>((resolve) => { deadlineTimer = setTimeout(() => resolve({ kind: "deadline" }), STORAGE_UPLOAD_COMPLETION_DEADLINE_MILLISECONDS); });
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const renewalTick = new Promise<{ kind: "renew" }>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ kind: "renew" }),
+        Math.max(1_000, Math.floor(STORAGE_UPLOAD_COMPLETION_LEASE_MILLISECONDS / 3)),
+      );
+    });
+    const outcome = await Promise.race([providerCompletion, renewalTick, deadline]);
+    if (outcome.kind === "deadline") {
+      if (timer) clearTimeout(timer);
+      deadlineTimer = undefined;
+      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Remote multipart completion exceeded deadline", now: new Date() }).catch(() => undefined);
+      return { ok: false, reason: "uploadFailed" };
+    }
+    if (outcome.kind !== "renew") {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (timer) clearTimeout(timer);
+      providerOutcome = outcome;
+      break;
+    }
+
+    const now = new Date();
+    const leaseUntil = new Date(
+      now.getTime() + STORAGE_UPLOAD_COMPLETION_LEASE_MILLISECONDS,
+    );
+    try {
+      const renewed = await renewStorageUploadCompletion({
+        id: completing.id,
+        userId,
+        now,
+        leaseUntil,
+        leaseToken: completionLeaseToken,
+        expected: storageUploadGenerationOf(completing),
+      });
+      if (!renewed) {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        void providerCompletion.then(() => undefined, () => undefined);
+        return { ok: false, reason: "uploadFailed" };
+      }
+      completing = { ...completing, completionLeaseUntil: leaseUntil };
+    } catch (error) {
+      console.error("Failed to renew a storage completion lease", completing.id, error);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      void providerCompletion.then(() => undefined, () => undefined);
+      return { ok: false, reason: "uploadFailed" };
+    }
+  }
+
+  // The remote call may already have committed, but without the durable fence
+  // this caller no longer owns either finalization or cleanup. Leave every
+  // remote and local artifact in place for the current database owner.
+  try {
+    if (providerOutcome.kind === "failed") throw providerOutcome.error;
+    object = providerOutcome.value;
+  } catch (error) {
     // Another completion of the same upload may have joined the parts already,
     // in which case the bucket no longer knows this upload id. Its file is the
     // answer, and neither the object nor the row is this call's to remove.
-    const settled = await completedFileOf(upload.id, userId, upload);
+    const settled = await completedFileOf(completing.id, userId, completing);
     if (settled.kind === "completed") return { ok: true, file: settled.file };
-    if (settled.kind === "unknown") return { ok: false, reason: "uploadFailed" };
+    if (settled.kind === "unknown") {
+      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Completion receipt lookup failed", now: new Date() }).catch(() => undefined);
+      return { ok: false, reason: "uploadFailed" };
+    }
 
     // 控えは無いのに、アップロード id は知られていない。組み上げは終わったのに
     // その直後に落ちた、という形がこれになる。R2 は結合済みのアップロードを
     // 忘れるので、中止も組み直しもできない——オブジェクトが在るかどうかだけが
-    // 見分けになる。在るならこの呼び出しが仕上げる。やり直すたびに同じところで
-    // 落ちて、24 時間後に掃除がそのオブジェクトを消すのでは、送った側は何度
-    // 送っても届かない。
-    const joined = await joinedObjectState(upload.objectKey);
+    // 見分けになる。在るならこの呼び出しが仕上げる。無いなら端末エラーを掃除へ
+    // 引き渡し、応答を失った完了が後から現れても遅延削除で回収できるようにする。
+    const joined = await joinedObjectState(completing.objectKey);
     if (joined.kind === "present") {
-      return await finalizeUpload(upload, userId, BigInt(joined.size));
+      return await finalizeUpload(completing, userId, BigInt(joined.size));
     }
     if (joined.kind === "unknown") {
       // complete() may have committed even though its response was lost. A
       // transient HEAD failure is not proof that the object is absent, so do
       // not claim cleanup, abort the handle, or schedule object deletion.
+      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Joined object lookup failed", now: new Date() }).catch(() => undefined);
       return { ok: false, reason: "uploadFailed" };
     }
 
-    // Claim the exact generation before any remote cleanup. A concurrent
-    // completion either commits its receipt first (and wins the claim) or loses
-    // its receipt CAS after this cleanup claim; there is no interval where a
-    // valid File can be committed and then have its object removed here.
-    const cleanupUpload = await claimForCleanup(upload, userId);
-    if (!cleanupUpload) {
-      const concurrent = await completedFileOf(upload.id, userId, upload);
-      return concurrent.kind === "completed"
-        ? { ok: true, file: concurrent.file }
-        : { ok: false, reason: "uploadFailed" };
-    }
-    if (cleanupUpload.uploadId && await stillOwnClaimedUpload(cleanupUpload, userId)) {
-      const abort = await abortTrackedMultipart(
-        cleanupUpload.objectKey,
-        cleanupUpload.uploadId,
-      );
-      if (abort.kind === "aborted") {
-        await deleteClaimedUpload(cleanupUpload, userId);
-      } else if (abort.kind === "terminal") {
-        await settleTerminalClaimedUpload(cleanupUpload, userId);
-      }
-    }
+    await recordStorageUploadCompletionFailure({
+      id: completing.id,
+      userId,
+      leaseToken: completionLeaseToken,
+      expected: storageUploadGenerationOf(completing),
+      error: error instanceof Error ? error.message : String(error),
+      now: new Date(),
+    }).catch(() => undefined);
+    const concurrent = await completedFileOf(completing.id, userId, completing);
+    if (concurrent.kind === "completed") return { ok: true, file: concurrent.file };
+    return { ok: false, reason: "uploadFailed" };
 
     return { ok: false, reason: "uploadFailed" };
   }
 
-  return await finalizeUpload(upload, userId, BigInt(object.size));
+  return await finalizeUpload(completing, userId, BigInt(object.size));
 }
 
 // The size the browser declared is what the quota was checked against; `actual`
@@ -548,7 +678,11 @@ async function finalizeUpload(
     // yet" would leave the file it is about to record pointing at nothing.
     // Claiming the row settles it — a claimed row can never take a receipt, so
     // whatever is in the bucket is this call's to remove.
-    const cleanupUpload = await claimForCleanup(upload, userId);
+    const cleanupUpload = await claimForCleanup(
+      upload,
+      userId,
+      upload.completionLeaseToken ?? undefined,
+    );
     if (!cleanupUpload) {
       const settled = await completedFileOf(upload.id, userId, upload);
       if (settled.kind === "completed") return { ok: true, file: settled.file };
@@ -564,7 +698,9 @@ async function finalizeUpload(
     // and paid for, without ever being seen again.
     if (!await stillOwnClaimedUpload(cleanupUpload, userId)) throw error;
     try {
-      await bucket().delete?.(cleanupUpload.objectKey);
+      const remove = bucket().delete;
+      if (!remove) throw new Error("The configured bucket cannot delete objects");
+      await remove(cleanupUpload.objectKey);
     } catch (cleanupError) {
       // 消せなかった。行は残す——sweeper がもう一度試せる唯一の手掛かりなので。
       throw new AggregateError(
@@ -599,11 +735,18 @@ async function finalizeUpload(
   if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
     // 断ったのはこの呼び出しだが、同じアップロードを仕上げようとしている別の
     // 呼び出しがいるかもしれない。行を取れたときだけ消す。
-    const cleanupUpload = await claimForCleanup(upload, userId);
+    const cleanupUpload = await claimForCleanup(
+      upload,
+      userId,
+      upload.completionLeaseToken ?? undefined,
+    );
     if (cleanupUpload) {
       if (await stillOwnClaimedUpload(cleanupUpload, userId)) {
-        await bucket().delete?.(cleanupUpload.objectKey);
-        await deleteClaimedUpload(cleanupUpload, userId);
+        const remove = bucket().delete;
+        if (remove) {
+          await remove(cleanupUpload.objectKey);
+          await deleteClaimedUpload(cleanupUpload, userId);
+        }
       }
     }
     return {
@@ -792,7 +935,10 @@ function sameStorageUploadGeneration(
     current.startState === expected.startState &&
     current.creationLeaseUntil?.getTime() ===
       expected.creationLeaseUntil?.getTime() &&
-    current.creationLeaseToken === expected.creationLeaseToken;
+    current.creationLeaseToken === expected.creationLeaseToken &&
+    current.completionRevision === expected.completionRevision &&
+    current.completionRetryNotBefore?.getTime() ===
+      expected.completionRetryNotBefore?.getTime();
 }
 
 function storageUploadGenerationOf(upload: TrackedUpload) {
@@ -807,6 +953,11 @@ function storageUploadGenerationOf(upload: TrackedUpload) {
     startState: upload.startState,
     creationLeaseUntil: upload.creationLeaseUntil,
     creationLeaseToken: upload.creationLeaseToken,
+    completionState: upload.completionState,
+    completionLeaseUntil: upload.completionLeaseUntil,
+    completionLeaseToken: upload.completionLeaseToken,
+    completionRevision: upload.completionRevision,
+    completionRetryNotBefore: upload.completionRetryNotBefore,
   };
 }
 
@@ -848,6 +999,7 @@ async function recordCancellation(
 async function claimForCleanup(
   expected: TrackedUpload,
   userId: string,
+  completionOwnerToken?: string,
 ): Promise<TrackedUpload | null> {
   const now = new Date();
   const cleanupLeaseToken = crypto.randomUUID();
@@ -860,6 +1012,7 @@ async function claimForCleanup(
       cleanupLeaseUntil: new Date(
         now.getTime() + STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS,
       ),
+      completionOwnerToken,
       expected: {
         ...storageUploadGenerationOf(expected),
         abandonedAt: expected.abandonedAt,

@@ -7,6 +7,7 @@ import {
   listDueStorageMultipartCleanups,
   recordStorageMultipartCleanupFailure,
   listStorageUploadsStartedBefore,
+  escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
 } from "@beutl/db";
@@ -124,6 +125,12 @@ export async function reconcileStorageMultipartCleanups(
 export async function abandonStaleStorageUploads(
   now: Date = new Date(),
 ): Promise<{ abandoned: number; failed: number }> {
+  // Retry rows get a bounded grace period for browser retries. Once it elapses,
+  // promote them to intervention without touching R2 so closed tabs remain
+  // operator-recoverable instead of fencing account deletion forever.
+  await escalateDueStorageUploadCompletions({ now, limit: MAX_PER_RUN }).catch((error) => {
+    console.error("Failed to escalate due storage completion retries", error);
+  });
   const stale = await listStorageUploadsStartedBefore({
     before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
     now,
@@ -158,6 +165,11 @@ export async function abandonStaleStorageUploads(
           startState: listed.startState,
           creationLeaseUntil: listed.creationLeaseUntil,
           creationLeaseToken: listed.creationLeaseToken,
+          completionState: listed.completionState,
+          completionLeaseUntil: listed.completionLeaseUntil,
+          completionLeaseToken: listed.completionLeaseToken,
+          completionRevision: listed.completionRevision,
+          completionRetryNotBefore: listed.completionRetryNotBefore,
           cleanupLeaseUntil: listed.cleanupLeaseUntil,
           cleanupLeaseToken: listed.cleanupLeaseToken,
         },
@@ -316,6 +328,11 @@ function claimedUploadExpectation(upload: ClaimedStorageUpload) {
     startState: upload.startState,
     creationLeaseUntil: upload.creationLeaseUntil,
     creationLeaseToken: upload.creationLeaseToken,
+    completionState: upload.completionState,
+    completionLeaseUntil: upload.completionLeaseUntil,
+    completionLeaseToken: upload.completionLeaseToken,
+    completionRevision: upload.completionRevision,
+    completionRetryNotBefore: upload.completionRetryNotBefore,
     cleanupLeaseUntil: upload.cleanupLeaseUntil,
     cleanupLeaseToken: upload.cleanupLeaseToken,
   };

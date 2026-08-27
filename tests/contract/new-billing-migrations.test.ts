@@ -20,6 +20,7 @@ const migrations = [
   "20260827000000_split_storage_multipart_cleanup/migration.sql",
   "20260827010000_harden_storage_multipart_cleanup/migration.sql",
   "20260827020000_harden_topup_intervention_audit/migration.sql",
+  "20260827030000_add_storage_upload_completion_lease/migration.sql",
 ];
 
 describe("new billing migrations", () => {
@@ -111,6 +112,18 @@ describe("new billing migrations", () => {
     expect(multipartHardeningSql).toContain('"attempts" INT4');
     expect(multipartHardeningSql).toContain('"revision" INT4');
     expect(multipartHardeningSql).toContain('StorageMultipartCleanup_status_notBefore_idx');
+    const completionLeaseSql = await readFile(new URL("../../apps/web/prisma/migrations/20260827030000_add_storage_upload_completion_lease/migration.sql", import.meta.url), "utf8");
+    expect(completionLeaseSql).toContain('"completionState" STRING NOT NULL DEFAULT \'idle\'');
+    expect(completionLeaseSql).toContain('StorageUpload_completionLease_pair_ck');
+    expect(completionLeaseSql).toContain('StorageUpload_completionState_ck');
+    expect(completionLeaseSql).toContain('StorageUpload_completionState_completionLeaseUntil_idx');
+    expect(completionLeaseSql).toContain('completionRetryNotBefore');
+    expect(completionLeaseSql).toContain('StorageUpload_completionRetryNotBefore_ck');
+    expect(completionLeaseSql).toContain("'resumed'");
+    expect(completionLeaseSql).toContain('StorageUpload_completionState_completionRetryNotBefore_idx');
+    expect(completionLeaseSql).toContain('DROP CONSTRAINT IF EXISTS "StorageUpload_completionState_ck"');
+    expect(completionLeaseSql.indexOf('DROP INDEX IF EXISTS "StorageUpload_completionState_completionLeaseUntil_idx"')).toBeLessThan(completionLeaseSql.indexOf('CREATE INDEX IF NOT EXISTS "StorageUpload_completionState_completionLeaseUntil_idx"'));
+    expect(schema).toContain('completionRetryNotBefore DateTime?');
     const resolutionSql = await readFile(new URL("../../apps/web/prisma/migrations/20260825210000_add_package_checkout_resolution/migration.sql", import.meta.url), "utf8");
     expect(resolutionSql).toContain("PackageCheckoutResolution_status_check");
     expect(resolutionSql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS");

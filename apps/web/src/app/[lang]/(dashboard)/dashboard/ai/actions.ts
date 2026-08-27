@@ -77,6 +77,7 @@ import {
 import { composePrompt } from "@/lib/ai-prompt";
 import { parseGlossary } from "@/lib/subtitle-format";
 import { getContentUrl } from "@/lib/content-url";
+import { aiFailureResult } from "@/lib/ai-screen";
 
 export type AiActionResult = {
   success: boolean;
@@ -189,6 +190,18 @@ function settledReplay(
     return { success: false, message: t("api-errors:aiRequestWasDeleted") };
   }
   return null;
+}
+
+// Reservation failures use the same recovery contract as replay and streaming
+// endpoints. In particular, an idempotency collision means the submitted body
+// must be restored and retried under the existing key; rotating it would turn a
+// paid request into an unrelated second charge. Keeping this mapping in one
+// place prevents the seven reservation call sites from drifting apart.
+function reservationFailure(
+  errorCode: string,
+  t: (key: string) => string,
+): AiActionResult {
+  return aiFailureResult(errorCode, t);
 }
 
 // 文字起こしと翻訳は保存した JSON を読み直して返す。
@@ -661,7 +674,7 @@ export async function generateImageAction(
     ...identity,
   });
   if (!reservation.ok) {
-    return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+    return reservationFailure(reservation.errorCode, t);
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
@@ -818,7 +831,7 @@ export async function editImageAction(
     ...identity,
   });
   if (!reservation.ok) {
-    return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+    return reservationFailure(reservation.errorCode, t);
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
@@ -932,7 +945,7 @@ export async function transcribeAction(
     ...identity,
   });
   if (!reservation.ok) {
-    return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+    return reservationFailure(reservation.errorCode, t);
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
@@ -1091,7 +1104,7 @@ export async function translateAction(
     ...identity,
   });
   if (!reservation.ok) {
-    return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+    return reservationFailure(reservation.errorCode, t);
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
@@ -1321,7 +1334,7 @@ export async function createVideoAction(
     ...identity,
   });
   if (!reservation.ok) {
-    return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+    return reservationFailure(reservation.errorCode, t);
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
@@ -1480,7 +1493,7 @@ export async function retryJobAction(
       ...identity,
     });
     if (!reservation.ok) {
-      return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+      return reservationFailure(reservation.errorCode, t);
     }
     const { job: retried } = reservation;
     if (reservation.outcome === "existing") {
@@ -1610,7 +1623,7 @@ export async function retryJobAction(
       ...identity,
     });
     if (!reservation.ok) {
-      return { success: false, message: t(`api-errors:${reservation.errorCode}`) };
+      return reservationFailure(reservation.errorCode, t);
     }
     const { job: retried } = reservation;
     if (reservation.outcome === "existing") {

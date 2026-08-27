@@ -26,9 +26,10 @@ import {
   getUnusableImageModels,
   getUnusableVideoModels,
   getStorageMultipartInterventions,
+  getStorageUploadInterventions,
   getTopUpCheckoutInterventions,
 } from "./queries";
-import { StorageMultipartInterventions } from "./storage-interventions";
+import { StorageMultipartInterventions, StorageUploadInterventions } from "./storage-interventions";
 import { TopUpResolutionInterventions } from "./topup-resolution-interventions";
 
 // Show administrators the latest value immediately after a setting change.
@@ -40,13 +41,14 @@ export default async function Page(props: {
   await requireAdmin();
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, topUpInterventions] =
+  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, storageUploadInterventions, topUpInterventions] =
     await Promise.all([
       getAiSettings(),
       getAiOperationModels(),
       getAiModelCatalog(),
       getUnusableVideoModels(),
       getStorageMultipartInterventions(),
+      getStorageUploadInterventions(),
       getTopUpCheckoutInterventions(),
     ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
@@ -107,6 +109,10 @@ export default async function Page(props: {
       <section className="flex flex-col gap-3 rounded-lg border p-4">
         <div><h2 className="text-lg font-semibold">Storage multipart interventions</h2><p className="text-sm text-muted-foreground">Remote aborts that exhausted retries or cannot run because the R2 binding is unavailable. Terminalizing acknowledges the remote-handle risk and releases object cleanup only after every handle for the key is resolved.</p></div>
         <StorageMultipartInterventions rows={storageInterventions.map((row) => ({ ...row, interventionAt: row.interventionAt! }))} />
+      </section>
+      <section className="flex flex-col gap-3 rounded-lg border p-4">
+        <div><h2 className="text-lg font-semibold">Storage upload completion interventions</h2><p className="text-sm text-muted-foreground">Ambiguous multipart completions retained for operator review.</p></div>
+        <StorageUploadInterventions rows={storageUploadInterventions.map((row) => ({ ...row, completionInterventionAt: row.completionInterventionAt! }))} />
       </section>
       <section className="flex flex-col gap-3 rounded-lg border p-4">
         <div><h2 className="text-lg font-semibold">Top-up checkout interventions</h2><p className="text-sm text-muted-foreground">Includes orphaned resolution rows with no attempt record. Terminalization is allowed only after every known refund is settled and requires operator evidence.</p></div>

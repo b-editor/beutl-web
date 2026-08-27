@@ -228,7 +228,7 @@ export async function createReservedAiJob({
       case "idempotencyConflict":
         return {
           ok: false as const,
-          errorCode: "invalidRequestBody" as const,
+          errorCode: "aiRequestChanged" as const,
           status: 409 as const,
         };
       case "deleted":
@@ -266,15 +266,29 @@ export async function createReservedAiJob({
       "code" in err &&
       err.code === "P2002"
     ) {
+      // A unique-index conflict is the only possible P2002 from this
+      // reservation (the provider job id is not assigned yet). The winner
+      // can still be invisible to a follow-up read when the conflict was
+      // reported across a transaction boundary, so keep the request in the
+      // recoverable 409 state even when that read returns no row. Returning
+      // the raw P2002 would make the client rotate its key and strand the
+      // already-reserved request.
       const existing = await getAiJobByIdempotency({
         userId,
         idempotencyKeyHash,
+      }).catch((lookupError) => {
+        console.error(
+          "Failed to read the winning AI idempotency reservation after a unique conflict",
+          { userId, idempotencyKeyHash },
+          lookupError,
+        );
+        return null;
       });
       if (existing) {
         if (existing.requestFingerprint !== requestFingerprint) {
           return {
             ok: false as const,
-            errorCode: "invalidRequestBody" as const,
+            errorCode: "aiRequestChanged" as const,
             status: 409 as const,
           };
         }
@@ -291,6 +305,11 @@ export async function createReservedAiJob({
           job: existing,
         };
       }
+      return {
+        ok: false as const,
+        errorCode: "aiRequestChanged" as const,
+        status: 409 as const,
+      };
     }
     throw err;
   }

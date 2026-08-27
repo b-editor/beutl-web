@@ -61,6 +61,24 @@ export function keepsIdempotencyKey(errorCode: string): boolean {
   return RECOVERABLE_AI_ERROR_CODES.has(errorCode);
 }
 
+/** Build a failed AI response while preserving retry identity when recovery is possible. */
+export function aiFailureResult(
+  errorCode: string,
+  t: (key: string) => string,
+): {
+  success: false;
+  message: string;
+  keepIdempotencyKey?: boolean;
+} {
+  return {
+    success: false,
+    message: t(`api-errors:${errorCode}`),
+    ...(keepsIdempotencyKey(errorCode)
+      ? { keepIdempotencyKey: true }
+      : {}),
+  };
+}
+
 /**
  * Whether the screen should refuse to send.
  *

@@ -221,6 +221,17 @@ model StorageUpload {
   startState      String   @default("active")
   creationLeaseUntil DateTime?
   creationLeaseToken String?
+  // Durable fence published before the remote multipart complete call. Completing,
+  // retry, operator-resumed, and intervention states fence cleanup from claiming
+  // this generation while R2 may still be finalizing it.
+  completionState    String   @default("idle")
+  completionLeaseUntil DateTime?
+  completionLeaseToken String?
+  completionAttempts Int      @default(0)
+  completionLastError String?
+  completionInterventionAt DateTime?
+  completionRetryNotBefore DateTime?
+  completionRevision Int      @default(0)
   cleanupLeaseUntil DateTime?
   cleanupLeaseToken String?
   completedFile      File?    @relation("StorageUploadCompletedFile", fields: [completedFileId], references: [id], onDelete: Cascade)
@@ -229,6 +240,9 @@ model StorageUpload {
   @@index([userId])
   @@index([createdAt])
   @@index([startState, creationLeaseUntil])
+  @@index([completionState, completionLeaseUntil])
+  @@index([completionState, completionInterventionAt])
+  @@index([completionState, completionRetryNotBefore])
   @@index([abandonedAt, cleanupLeaseUntil])
 }
 

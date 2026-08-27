@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { getDb, listAiOperationModels, listStorageMultipartInterventions, listTopUpCheckoutInterventions } from "@beutl/db";
+import { getDb, listAiOperationModels, listStorageMultipartInterventions, listStorageUploadInterventions, listTopUpCheckoutInterventions } from "@beutl/db";
 import {
   aiCostEstimateKey,
   isImageModelUsable,
@@ -23,6 +23,7 @@ export const getAiOperationModels = cache(
   async () => await listAiOperationModels(),
 );
 export const getStorageMultipartInterventions = cache(async () => await listStorageMultipartInterventions());
+export const getStorageUploadInterventions = cache(async () => await listStorageUploadInterventions());
 export const getTopUpCheckoutInterventions = cache(async () => await listTopUpCheckoutInterventions());
 
 // The video models that cannot serve a single request this service can build.

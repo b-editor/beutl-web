@@ -11,6 +11,7 @@ const migrationFiles = [
   "20260825210000_add_package_checkout_resolution",
   "20260825220000_add_topup_duplicate_refund_attempt",
   "20260825230000_add_topup_checkout_resolution",
+  "20260827030000_add_storage_upload_completion_lease",
 ] as const;
 
 type TargetMigration = (typeof migrationFiles)[number];
@@ -22,7 +23,10 @@ const targetTables: Record<TargetMigration, string> = {
   "20260825220000_add_topup_duplicate_refund_attempt":
     "TopUpDuplicateRefundAttempt",
   "20260825230000_add_topup_checkout_resolution": "TopUpCheckoutResolution",
+  "20260827030000_add_storage_upload_completion_lease": "StorageUpload",
 };
+
+const resolutionMigrationFiles = migrationFiles.slice(1, 4);
 
 function splitSql(sql: string): string[] {
   const statements: string[] = [];
@@ -406,7 +410,7 @@ describeWithCockroach(
         resources.push(resource);
         await createReceiptBase(resource.prisma);
 
-        for (const name of migrationFiles.slice(1)) {
+        for (const name of resolutionMigrationFiles) {
           const table = targetTables[name];
           const statements = splitSql(await migrationSql(name));
           const create = statements.find((statement) =>
@@ -447,6 +451,111 @@ describeWithCockroach(
       },
       120_000,
     );
+
+    it("backfills and constrains durable storage completion leases idempotently", async () => {
+      const resource = await createDatabase();
+      resources.push(resource);
+      await createReceiptBase(resource.prisma);
+      await resource.prisma.$executeRawUnsafe(
+        'INSERT INTO "StorageUpload" ("id") VALUES (\'legacy-upload\')',
+      );
+
+      const name = "20260827030000_add_storage_upload_completion_lease";
+      await runSql(resource.prisma, await migrationSql(name));
+      await runSql(resource.prisma, await migrationSql(name));
+
+      const [legacy] = await resource.prisma.$queryRawUnsafe<Array<{
+        completionState: string;
+        completionLeaseUntil: Date | null;
+        completionLeaseToken: string | null;
+      }>>(`
+        SELECT "completionState", "completionLeaseUntil", "completionLeaseToken"
+        FROM "StorageUpload"
+        WHERE "id" = 'legacy-upload'
+      `);
+      expect(legacy).toEqual({
+        completionState: "idle",
+        completionLeaseUntil: null,
+        completionLeaseToken: null,
+      });
+
+      const columns = await resource.prisma.$queryRawUnsafe<Array<{
+        column_name: string;
+        column_default: string | null;
+        is_nullable: string;
+      }>>(`
+        SELECT column_name, column_default, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'StorageUpload'
+          AND column_name IN ('completionState', 'completionLeaseUntil', 'completionLeaseToken')
+        ORDER BY column_name
+      `);
+      expect(columns.map((column) => column.column_name)).toEqual([
+        "completionLeaseToken",
+        "completionLeaseUntil",
+        "completionState",
+      ]);
+      expect(columns.find((column) => column.column_name === "completionState"))
+        .toMatchObject({ is_nullable: "NO" });
+
+      const constraints = await resource.prisma.$queryRawUnsafe<Array<{
+        constraint_name: string;
+      }>>(`
+        SELECT constraint_name
+        FROM information_schema.table_constraints
+        WHERE constraint_schema = 'public'
+          AND table_name = 'StorageUpload'
+          AND constraint_name IN (
+            'StorageUpload_completionLease_pair_ck',
+            'StorageUpload_completionState_ck'
+          )
+        ORDER BY constraint_name
+      `);
+      expect(constraints.map((constraint) => constraint.constraint_name)).toEqual([
+        "StorageUpload_completionLease_pair_ck",
+        "StorageUpload_completionState_ck",
+      ]);
+
+      const indexes = await resource.prisma.$queryRawUnsafe<Array<{
+        index_name: string;
+      }>>(`
+        SELECT DISTINCT index_name
+        FROM information_schema.statistics
+        WHERE table_schema = 'public'
+          AND table_name = 'StorageUpload'
+          AND index_name = 'StorageUpload_completionState_completionLeaseUntil_idx'
+      `);
+      expect(indexes).toEqual([{
+        index_name: "StorageUpload_completionState_completionLeaseUntil_idx",
+      }]);
+
+      await resource.prisma.$executeRawUnsafe(
+        'INSERT INTO "StorageUpload" ("id", "completionState") VALUES (\'valid-completion\', \'idle\')',
+      );
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "completionState", "completionRetryNotBefore"
+        ) VALUES (
+          'valid-resumed', 'resumed', current_timestamp() + INTERVAL '15 minutes'
+        )
+      `);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionRetryNotBefore" = NULL
+        WHERE "id" = 'valid-resumed'
+      `)).rejects.toThrow();
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionState" = 'completing'
+        WHERE "id" = 'valid-completion'
+      `)).rejects.toThrow();
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionLeaseToken" = 'orphan-token'
+        WHERE "id" = 'valid-completion'
+      `)).rejects.toThrow();
+    }, 120_000);
 
     it("repairs wrong same-name receipt index and foreign key definitions", async () => {
       const resource = await createDatabase();

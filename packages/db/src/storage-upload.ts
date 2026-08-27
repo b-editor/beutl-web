@@ -4,6 +4,23 @@ import {
   type PrismaTransaction,
 } from "./transaction";
 
+export type StorageUploadCompletionFields = {
+  completionState: string;
+  completionLeaseUntil: Date | null;
+  completionLeaseToken: string | null;
+  completionAttempts: number;
+  completionLastError: string | null;
+  completionInterventionAt: Date | null;
+  completionRetryNotBefore: Date | null;
+  completionRevision: number;
+};
+
+function withCompletionFields<T extends object>(
+  value: T | null,
+): (T & StorageUploadCompletionFields) | null {
+  return value as (T & StorageUploadCompletionFields) | null;
+}
+
 async function insertStorageUpload({
   userId,
   id,
@@ -17,6 +34,14 @@ async function insertStorageUpload({
   startState = "active",
   creationLeaseUntil,
   creationLeaseToken,
+  completionState = "idle",
+  completionLeaseUntil,
+  completionLeaseToken,
+  completionAttempts = 0,
+  completionLastError = null,
+  completionInterventionAt = null,
+  completionRetryNotBefore = null,
+  completionRevision = 0,
   prisma,
 }: {
   userId: string;
@@ -33,10 +58,18 @@ async function insertStorageUpload({
   startState?: "intent" | "creating" | "active";
   creationLeaseUntil?: Date | null;
   creationLeaseToken?: string | null;
+  completionState?: "idle" | "retry" | "resumed" | "completing" | "settled" | "intervention";
+  completionLeaseUntil?: Date | null;
+  completionLeaseToken?: string | null;
+  completionAttempts?: number;
+  completionLastError?: string | null;
+  completionInterventionAt?: Date | null;
+  completionRetryNotBefore?: Date | null;
+  completionRevision?: number;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  return await db.storageUpload.create({
+  const created = await db.storageUpload.create({
     data: {
       id,
       userId,
@@ -50,8 +83,17 @@ async function insertStorageUpload({
       startState,
       creationLeaseUntil: creationLeaseUntil ?? null,
       creationLeaseToken: creationLeaseToken ?? null,
+      completionState,
+      completionLeaseUntil: completionLeaseUntil ?? null,
+      completionLeaseToken: completionLeaseToken ?? null,
+      completionAttempts,
+      completionLastError,
+      completionInterventionAt,
+      completionRetryNotBefore,
+      completionRevision,
     },
-  });
+  } as never);
+  return withCompletionFields(created)!;
 }
 
 /** Reserve quota and persist a start intent before contacting the bucket. */
@@ -155,6 +197,302 @@ export async function attachStorageUploadRemote({
   return result.count > 0;
 }
 
+/** Publish a durable completion fence before calling the remote provider. */
+export async function claimStorageUploadCompletion({
+  id,
+  userId,
+  now,
+  leaseUntil,
+  leaseToken,
+  expected,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now: Date;
+  leaseUntil: Date;
+  leaseToken: string;
+  expected: StorageUploadGenerationExpectation;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  if (leaseToken.length === 0 || leaseUntil.getTime() <= now.getTime()) {
+    throw new RangeError("Storage completion lease must expire in the future");
+  }
+  if (!["idle", "resumed"].includes(expected.completionState)) {
+    return false;
+  }
+  if (
+    expected.completionState === "resumed" &&
+    (
+      expected.completionRetryNotBefore === null ||
+      expected.completionRetryNotBefore.getTime() <= now.getTime()
+    )
+  ) {
+    return false;
+  }
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+      completionRevision: expected.completionRevision,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    },
+    data: {
+      completionState: "completing",
+      completionLeaseUntil: leaseUntil,
+      completionLeaseToken: leaseToken,
+      completionRetryNotBefore: null,
+    },
+  } as never);
+  return result.count === 1;
+}
+
+/** Extend an in-flight completion fence while the provider call is running. */
+export async function renewStorageUploadCompletion({
+  id,
+  userId,
+  now,
+  leaseUntil,
+  leaseToken,
+  expected,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now: Date;
+  leaseUntil: Date;
+  leaseToken: string;
+  expected: StorageUploadGenerationExpectation;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  if (leaseUntil.getTime() <= now.getTime()) {
+    throw new RangeError("Storage completion lease must expire in the future");
+  }
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      completionState: "completing",
+      completionLeaseToken: leaseToken,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
+    },
+    data: { completionLeaseUntil: leaseUntil },
+  } as never);
+  return result.count === 1;
+}
+
+/** Release a completion fence only for a known, pre-provider validation error. */
+export async function releaseStorageUploadCompletion({
+  id,
+  userId,
+  leaseToken,
+  expected,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  leaseToken: string;
+  expected: StorageUploadGenerationExpectation;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const result = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      completionState: "completing",
+      completionLeaseToken: leaseToken,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
+    },
+    data: {
+      completionState: "idle",
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+      completionRetryNotBefore: null,
+    },
+  } as never);
+  return result.count === 1;
+}
+
+export const STORAGE_UPLOAD_COMPLETION_MAX_ATTEMPTS = 3;
+
+/** Persist an ambiguous provider outcome; after a bounded number of attempts stop automatic retries. */
+export async function recordStorageUploadCompletionFailure({
+  id, userId, leaseToken, expected, error, now,
+  maxAttempts = STORAGE_UPLOAD_COMPLETION_MAX_ATTEMPTS, prisma,
+}: { id: string; userId: string; leaseToken: string; expected: StorageUploadGenerationExpectation; error: string; now: Date; maxAttempts?: number; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  const generation = {
+    id,
+    userId,
+    completedFileId: null,
+    abandonedAt: null,
+    createdAt: expected.createdAt,
+    objectKey: expected.objectKey,
+    uploadId: expected.uploadId,
+    name: expected.name,
+    mimeType: expected.mimeType,
+    size: expected.size,
+    partSize: expected.partSize,
+    startState: expected.startState,
+    creationLeaseUntil: expected.creationLeaseUntil,
+    creationLeaseToken: expected.creationLeaseToken,
+    completionState: "completing",
+    completionLeaseToken: leaseToken,
+    completionLeaseUntil: expected.completionLeaseUntil,
+    completionRevision: expected.completionRevision,
+    completionRetryNotBefore: expected.completionRetryNotBefore,
+  } as const;
+  const current = await db.storageUpload.findFirst({ where: generation } as never);
+  if (!current) return { status: "lost" as const };
+  const attempts = (current as typeof current & { completionAttempts?: number }).completionAttempts ?? 0;
+  const nextAttempts = attempts + 1;
+  const intervene = nextAttempts >= maxAttempts;
+  const updated = await db.storageUpload.updateMany({
+    where: generation,
+    data: {
+      completionAttempts: nextAttempts,
+      completionLastError: error.slice(0, 2000),
+      completionState: intervene ? "intervention" : "retry",
+      completionInterventionAt: intervene ? now : null,
+      completionRetryNotBefore: intervene ? null : new Date(now.getTime() + 15 * 60_000),
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+      completionRevision: { increment: 1 },
+    },
+  } as never);
+  return updated.count === 1 ? { status: intervene ? "intervention" as const : "retry" as const, attempts: nextAttempts } : { status: "lost" as const };
+}
+
+export async function listStorageUploadInterventions({ limit = 100, prisma }: { limit?: number; prisma?: PrismaTransaction } = {}) {
+  const db = prisma ?? await getDb();
+  return db.storageUpload.findMany({ where: { completionState: "intervention" }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: limit } as never);
+}
+
+/** Promote retry rows whose grace period elapsed into operator intervention. */
+export async function escalateDueStorageUploadCompletions({ now, limit = 100, prisma }: { now: Date; limit?: number; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  const due = await db.storageUpload.findMany({ where: { OR: [{ completionState: "retry", completionRetryNotBefore: { lte: now } }, { completionState: "resumed", completionRetryNotBefore: { lte: now } }, { completionState: "completing", completionLeaseUntil: { lte: now } }] }, orderBy: [{ completionRetryNotBefore: "asc" }, { createdAt: "asc" }], take: limit } as never);
+  let escalated = 0;
+  for (const row of due as unknown as Array<{ id: string; userId: string; objectKey: string; uploadId: string | null; completionState: string; completionRetryNotBefore: Date | null; completionLeaseToken: string | null; completionLeaseUntil: Date | null; completionRevision: number; completionAttempts: number; completionLastError: string | null }>) {
+    const completing = row.completionState === "completing";
+    const resumed = row.completionState === "resumed";
+    const updated = await db.storageUpload.updateMany({
+      where: { id: row.id, userId: row.userId, objectKey: row.objectKey, uploadId: row.uploadId, completionState: row.completionState, completionRetryNotBefore: row.completionRetryNotBefore, completionLeaseToken: row.completionLeaseToken, completionLeaseUntil: row.completionLeaseUntil, completionRevision: row.completionRevision, completionAttempts: row.completionAttempts, completionLastError: row.completionLastError, completionInterventionAt: null },
+      data: { completionState: "intervention", completionInterventionAt: now, completionRetryNotBefore: null, completionLeaseToken: null, completionLeaseUntil: null, completionLastError: completing ? "Completion lease expired without a recorded outcome" : resumed ? "Operator resume expired before a provider attempt" : row.completionLastError, completionAttempts: completing ? row.completionAttempts + 1 : row.completionAttempts, completionRevision: { increment: 1 } },
+    } as never);
+    if (updated.count === 1) escalated++;
+  }
+  return escalated;
+}
+
+type StorageUploadInterventionIdentity = { id: string; userId: string; objectKey: string; uploadId: string | null; expectedRevision: number; expectedInterventionAt: Date };
+
+export async function resumeStorageUploadIntervention({ id, userId, objectKey, uploadId, expectedRevision, expectedInterventionAt, now, operatorUserId, operatorReason, operatorEvidence, prisma }: StorageUploadInterventionIdentity & { now: Date; operatorUserId: string; operatorReason: string; operatorEvidence: string; prisma?: PrismaTransaction }) {
+  if (!operatorUserId.trim() || operatorReason.trim().length < 10 || operatorEvidence.trim().length < 10) return { status: "unsafe" as const, reason: "Operator identity, reason, and evidence are required" };
+  const db = prisma ?? await getDb();
+  const updated = await db.storageUpload.updateMany({ where: { id, userId, objectKey, uploadId, completionState: "intervention", completionRevision: expectedRevision, completionInterventionAt: expectedInterventionAt }, data: { completionState: "resumed", completionInterventionAt: null, completionRetryNotBefore: new Date(now.getTime() + 15 * 60_000), completionLeaseToken: null, completionLeaseUntil: null, completionRevision: { increment: 1 }, } } as never);
+  return updated.count === 1 ? { status: "resumed" as const, revision: expectedRevision + 1 } : { status: "conflict" as const };
+}
+
+export async function terminalizeStorageUploadIntervention({ id, userId, objectKey, uploadId, expectedRevision, expectedInterventionAt, now, operatorUserId, operatorReason, operatorEvidence, prisma }: StorageUploadInterventionIdentity & { now: Date; operatorUserId: string; operatorReason: string; operatorEvidence: string; prisma?: PrismaTransaction }) {
+  if (!operatorUserId.trim() || operatorReason.trim().length < 10 || operatorEvidence.trim().length < 10) return { status: "unsafe" as const, reason: "Operator identity, reason, and evidence are required" };
+  const run = async (tx: PrismaTransaction) => {
+    const row = await tx.storageUpload.findFirst({ where: { id, userId, objectKey, uploadId, completionState: "intervention", completionRevision: expectedRevision, completionInterventionAt: expectedInterventionAt } } as never);
+    if (!row) return { status: "conflict" as const };
+    if (row.uploadId) {
+      const delayedUntil = new Date(now.getTime() + 15 * 60_000);
+      const existingMultipart = await tx.storageMultipartCleanup.findFirst({ where: { objectKey: row.objectKey, uploadId: row.uploadId } } as never);
+      if (existingMultipart?.leaseToken && existingMultipart.notBefore.getTime() > now.getTime()) throw new Error("Multipart cleanup is currently leased");
+      if (existingMultipart?.status === "terminal") {
+        // An operator-terminalized handle is already settled; never resurrect
+        // its multipart outbox. The object cleanup below still gets a grace
+        // period so a late provider commit can be collected safely.
+      } else if (existingMultipart?.status === "intervention") {
+        throw new Error("Multipart cleanup requires operator intervention");
+      } else if (existingMultipart) {
+        const adjusted = await tx.storageMultipartCleanup.updateMany({ where: { objectKey: row.objectKey, uploadId: row.uploadId, revision: existingMultipart.revision, leaseToken: existingMultipart.leaseToken, notBefore: existingMultipart.notBefore, status: existingMultipart.status }, data: { leaseToken: null, status: "pending", notBefore: existingMultipart.notBefore.getTime() > delayedUntil.getTime() ? existingMultipart.notBefore : delayedUntil, revision: { increment: 1 } } } as never);
+        if (adjusted.count !== 1) throw new Error("Multipart cleanup changed during terminalization");
+      } else {
+        const createdMultipart = await tx.storageMultipartCleanup.createMany({ data: [{ objectKey: row.objectKey, uploadId: row.uploadId, leaseToken: null, notBefore: delayedUntil, attempts: 0, lastError: null, interventionAt: null, status: "pending", revision: 0 }], skipDuplicates: true } as never);
+        const persistedMultipart = await tx.storageMultipartCleanup.findFirst({ where: { objectKey: row.objectKey, uploadId: row.uploadId } } as never);
+        if (!persistedMultipart) throw new Error("Multipart cleanup was not durably persisted");
+        if (createdMultipart.count === 0 && persistedMultipart.status !== "terminal" && (persistedMultipart.leaseToken !== null || !["pending", "retry"].includes(persistedMultipart.status) || persistedMultipart.notBefore.getTime() < delayedUntil.getTime())) throw new Error("Multipart cleanup changed during terminalization");
+      }
+      const existing = await tx.aiStorageCleanup.findFirst({ where: { objectKey: row.objectKey }, select: { leaseToken: true, notBefore: true } });
+      if (existing) {
+        if (existing.leaseToken && existing.notBefore.getTime() > now.getTime()) {
+          throw new Error("Object cleanup is currently leased");
+        }
+        const adjustedObject = await tx.aiStorageCleanup.updateMany({ where: { objectKey: row.objectKey, leaseToken: existing.leaseToken, notBefore: existing.notBefore }, data: { leaseToken: null, state: "cleanup", notBefore: existing.notBefore.getTime() > delayedUntil.getTime() ? existing.notBefore : delayedUntil } });
+        if (adjustedObject.count !== 1) throw new Error("Object cleanup changed during terminalization");
+      } else {
+        const createdObject = await tx.aiStorageCleanup.createMany({ data: [{ objectKey: row.objectKey, aiJobId: null, leaseToken: null, state: "cleanup", notBefore: delayedUntil }], skipDuplicates: true });
+        const persisted = await tx.aiStorageCleanup.findFirst({ where: { objectKey: row.objectKey } });
+        if (!persisted || persisted.notBefore.getTime() < delayedUntil.getTime() || (createdObject.count === 0 && (persisted.leaseToken !== null || persisted.state !== "cleanup"))) throw new Error("Object cleanup changed during terminalization");
+      }
+      const persistedObjectCleanup = await tx.aiStorageCleanup.findFirst({ where: { objectKey: row.objectKey } });
+      if (!persistedObjectCleanup || persistedObjectCleanup.notBefore.getTime() < delayedUntil.getTime()) throw new Error("Object cleanup was not durably persisted");
+    } else {
+      const delayedUntil = new Date(now.getTime() + 15 * 60_000);
+      const createdObject = await tx.aiStorageCleanup.createMany({ data: [{ objectKey: row.objectKey, aiJobId: null, leaseToken: null, state: "cleanup", notBefore: delayedUntil }], skipDuplicates: true });
+      const persisted = await tx.aiStorageCleanup.findFirst({ where: { objectKey: row.objectKey } });
+      if (!persisted || persisted.notBefore.getTime() < delayedUntil.getTime() || (createdObject.count === 0 && (persisted.leaseToken !== null || persisted.state !== "cleanup"))) throw new Error("Object cleanup changed during terminalization");
+    }
+    const removed = await tx.storageUpload.deleteMany({ where: { id, userId, objectKey, uploadId, completionState: "intervention", completionRevision: expectedRevision, completionInterventionAt: expectedInterventionAt } } as never);
+    if (removed.count !== 1) throw new Error("Storage upload changed during terminalization");
+    return { status: "terminalized" as const, revision: expectedRevision + 1 };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
 /** Record a remote handle after the creator's leased attach did not return success. */
 export async function recordStorageUploadRemoteAfterAttachFailure({
   id,
@@ -189,6 +527,11 @@ export async function recordStorageUploadRemoteAfterAttachFailure({
       startState: "creating",
       creationLeaseUntil: expected.creationLeaseUntil,
       creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionLeaseToken: expected.completionLeaseToken,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
     },
@@ -198,7 +541,7 @@ export async function recordStorageUploadRemoteAfterAttachFailure({
       creationLeaseUntil: null,
       creationLeaseToken: null,
     },
-  });
+  } as never);
   return result.count > 0;
 }
 
@@ -241,7 +584,9 @@ export async function findStorageUploadByIdAndUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  return await db.storageUpload.findFirst({ where: { id, userId } });
+  return withCompletionFields(
+    await db.storageUpload.findFirst({ where: { id, userId } }),
+  );
 }
 
 export async function deleteStorageUpload({
@@ -284,10 +629,15 @@ export async function deleteClaimedStorageUpload({
       startState: expected.startState,
       creationLeaseUntil: expected.creationLeaseUntil,
       creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionLeaseToken: expected.completionLeaseToken,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: expected.cleanupLeaseUntil,
       cleanupLeaseToken: expected.cleanupLeaseToken,
     },
-  });
+  } as never);
   return deleted.count === 1;
 }
 
@@ -384,10 +734,15 @@ export async function settleTerminalClaimedStorageUpload({
         startState: expected.startState,
         creationLeaseUntil: expected.creationLeaseUntil,
         creationLeaseToken: expected.creationLeaseToken,
+        completionState: expected.completionState,
+        completionLeaseUntil: expected.completionLeaseUntil,
+        completionLeaseToken: expected.completionLeaseToken,
+        completionRevision: expected.completionRevision,
+        completionRetryNotBefore: expected.completionRetryNotBefore,
         cleanupLeaseUntil: expected.cleanupLeaseUntil,
         cleanupLeaseToken: expected.cleanupLeaseToken,
       },
-    });
+    } as never);
     if (deleted.count !== 1) {
       // Roll back the newly-created cleanup as well. It may target a key now
       // owned by a replacement generation only in legacy deterministic rows.
@@ -436,11 +791,21 @@ export async function markStorageUploadCompleted({
       startState: expected.startState,
       creationLeaseUntil: expected.creationLeaseUntil,
       creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionLeaseToken: expected.completionLeaseToken,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
     },
-    data: { completedFileId: fileId },
-  });
+    data: {
+      completedFileId: fileId,
+      completionState: "settled",
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+    },
+  } as never);
   return result.count > 0;
 }
 
@@ -455,6 +820,11 @@ export type StorageUploadGenerationExpectation = {
   startState: string;
   creationLeaseUntil: Date | null;
   creationLeaseToken: string | null;
+  completionState: string;
+  completionLeaseUntil: Date | null;
+  completionLeaseToken: string | null;
+  completionRevision: number;
+  completionRetryNotBefore: Date | null;
 };
 
 // 「この行のパートは自分が捨てる」と宣言する。完了済みでも、既に誰かが宣言して
@@ -474,6 +844,7 @@ export async function claimStorageUploadForAbandon({
   expected,
   cleanupLeaseToken,
   cleanupLeaseUntil,
+  completionOwnerToken,
   requireExpiredCreationLease = false,
   prisma,
 }: {
@@ -483,6 +854,7 @@ export async function claimStorageUploadForAbandon({
   expected: StorageUploadAbandonExpectation;
   cleanupLeaseToken: string;
   cleanupLeaseUntil: Date;
+  completionOwnerToken?: string;
   requireExpiredCreationLease?: boolean;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
@@ -491,6 +863,22 @@ export async function claimStorageUploadForAbandon({
     cleanupLeaseUntil.getTime() <= now.getTime()
   ) {
     throw new RangeError("Storage cleanup lease must expire in the future");
+  }
+  if (
+    completionOwnerToken !== undefined &&
+    (
+      completionOwnerToken.length === 0 ||
+      expected.completionState !== "completing" ||
+      expected.completionLeaseToken !== completionOwnerToken
+    )
+  ) {
+    throw new RangeError("Storage completion owner handoff is invalid");
+  }
+  // A stale sweep or account deletion can never take over an in-flight
+  // completion merely because its lease elapsed. Only the completion owner
+  // that observed a provider outcome may hand its fence to cleanup.
+  if (completionOwnerToken === undefined && ["completing", "retry", "resumed", "intervention"].includes(expected.completionState)) {
+    return false;
   }
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
@@ -509,6 +897,11 @@ export async function claimStorageUploadForAbandon({
       startState: expected.startState,
       creationLeaseUntil: expected.creationLeaseUntil,
       creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionLeaseToken: expected.completionLeaseToken,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: expected.cleanupLeaseUntil,
       cleanupLeaseToken: expected.cleanupLeaseToken,
       AND: [
@@ -518,6 +911,9 @@ export async function claimStorageUploadForAbandon({
             { cleanupLeaseUntil: { lte: now } },
           ],
         },
+        ...(completionOwnerToken === undefined
+          ? [{ completionState: { not: "completing" } }]
+          : []),
         ...(requireExpiredCreationLease
           ? [{
               OR: [
@@ -532,8 +928,16 @@ export async function claimStorageUploadForAbandon({
       abandonedAt: expected.abandonedAt ?? now,
       cleanupLeaseToken,
       cleanupLeaseUntil,
+      ...(completionOwnerToken === undefined
+        ? {}
+        : {
+            completionState: "idle",
+            completionLeaseUntil: null,
+            completionLeaseToken: null,
+            completionRetryNotBefore: null,
+          }),
     },
-  });
+  } as never);
   return result.count > 0;
 }
 
@@ -551,6 +955,9 @@ export async function freezeStorageUploadForAccountDeletion({
   expected: StorageUploadAbandonExpectation & { abandonedAt: null };
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
+  if (["completing", "retry", "resumed", "intervention"].includes(expected.completionState)) {
+    return false;
+  }
   const db = prisma ?? await getDb();
   const frozen = await db.storageUpload.updateMany({
     where: {
@@ -568,11 +975,17 @@ export async function freezeStorageUploadForAccountDeletion({
       startState: expected.startState,
       creationLeaseUntil: expected.creationLeaseUntil,
       creationLeaseToken: expected.creationLeaseToken,
+      completionState: expected.completionState,
+      completionLeaseUntil: expected.completionLeaseUntil,
+      completionLeaseToken: expected.completionLeaseToken,
+      completionRevision: expected.completionRevision,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
+      NOT: { completionState: "completing" },
     },
     data: { abandonedAt: now },
-  });
+  } as never);
   return frozen.count === 1;
 }
 
@@ -629,7 +1042,7 @@ export async function listStorageUploadsStartedBefore({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  return await db.storageUpload.findMany({
+  const rows = await db.storageUpload.findMany({
     where: {
       AND: [
         {
@@ -650,11 +1063,16 @@ export async function listStorageUploadsStartedBefore({
             { creationLeaseUntil: { lte: now } },
           ],
         },
+        { completionState: { not: "completing" } },
+        { completionState: { not: "retry" } },
+        { completionState: { not: "resumed" } },
+        { completionState: { not: "intervention" } },
       ],
     },
     orderBy: { createdAt: "asc" },
     take: limit,
-  });
+  } as never);
+  return rows.map((row) => withCompletionFields(row)!);
 }
 
 // How much of the quota the uploads in progress have already spoken for. Two

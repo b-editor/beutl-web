@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimAiJobForFinalization,
+  createAiJob,
   getCreditAccount,
   getAiJobById,
   registerAiStorageCleanup,
@@ -101,6 +102,118 @@ describe("AI job reconciliation", () => {
     expect(
       store.state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(1);
+  });
+
+  it("returns one reservation and a typed conflict for parallel idempotent bodies", async () => {
+    const reserve = (requestFingerprint: string) =>
+      createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        usageUnits: 20,
+        idempotencyKeyHash: "parallel-idempotency-key",
+        requestFingerprint,
+      });
+
+    const results = await Promise.all([
+      reserve("first-body"),
+      reserve("second-body"),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      {
+        ok: false,
+        errorCode: "aiRequestChanged",
+        status: 409,
+      },
+    ]);
+    expect(store.state.aiJobs.size).toBe(1);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "usage"),
+    ).toHaveLength(1);
+  });
+
+  it("maps a unique idempotency reservation collision to a typed conflict", async () => {
+    const idempotencyKeyHash = "p2002-idempotency-key";
+    const originalFingerprint = "original-body";
+    await createAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      idempotencyKeyHash,
+      requestFingerprint: originalFingerprint,
+    });
+
+    const findFirst = store.prisma.aiJob.findFirst.bind(store.prisma.aiJob);
+    let lookupCount = 0;
+    vi.spyOn(store.prisma.aiJob, "findFirst").mockImplementation(
+      async (args) => {
+        // The transaction's snapshot misses the row, then the unique index
+        // rejects the insert. The fallback lookup sees the committed winner.
+        lookupCount++;
+        if (lookupCount === 1) return null;
+        return await findFirst(args);
+      },
+    );
+
+    const result = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      idempotencyKeyHash,
+      requestFingerprint: "conflicting-body",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: "aiRequestChanged",
+      status: 409,
+    });
+    expect(lookupCount).toBeGreaterThanOrEqual(2);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "usage"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps a unique idempotency collision recoverable when the winner is not yet readable", async () => {
+    const idempotencyKeyHash = "p2002-unreadable-winner-key";
+    await createAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      idempotencyKeyHash,
+      requestFingerprint: "original-body",
+    });
+
+    // Model a CockroachDB unique-index conflict whose follow-up read is still
+    // behind the committing winner. The client must retain the key and retry,
+    // rather than seeing a raw P2002 and rotating to a second charge.
+    vi.spyOn(store.prisma.aiJob, "findFirst").mockResolvedValue(null);
+
+    await expect(createReservedAiJob({
+      userId: USER_ID,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 20,
+      idempotencyKeyHash,
+      requestFingerprint: "conflicting-body",
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: "aiRequestChanged",
+      status: 409,
+    });
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "usage"),
+    ).toHaveLength(0);
   });
 
   it("refunds an unknown video submission after the provider job window", async () => {
