@@ -236,10 +236,20 @@ export async function reconcileGitResurrectionTombstones({
 
   // **入れ替え前の表に残った控えを先に移す。** migration を当てている最中に
   // 古い Worker が書いた行がここに残る。移すまでは証拠も出せない。
-  const migrated = await drainLegacyGitRepositoryDeletions().catch((error) => {
-    console.error("could not drain the legacy deletion tombstones", error);
-    return 0;
-  });
+  // **移せなかったことを握り潰さない。** 残った行はどの数にも出ないので、
+  // 黙って続けると「片付いている」と読める。証拠の側も legacyPending を数えるので
+  // 署名は止まるが、そこまで気付かないのは遅い。
+  let migrated = 0;
+  try {
+    migrated = await drainLegacyGitRepositoryDeletions();
+  } catch (error) {
+    console.error(
+      "could not drain the legacy deletion tombstones; they are not counted " +
+        "anywhere until they move, and the reopen proof will refuse to sign",
+      error,
+    );
+    throw error;
+  }
 
   // 確かめる前の控えは、復元の有無によらず毎回決着させる。
   const settled = await settleUnconfirmed(limit);

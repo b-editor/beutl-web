@@ -392,10 +392,35 @@ Forgejo 側を確かめて、
   利用者に委ねる)。
 
 ```sql
+-- 失効の控え
 UPDATE "GitCredentialRevocation" SET "baseline" = false, "confirmed" = true
 WHERE "id" = '...';
 DELETE FROM "GitCredentialRevocation" WHERE "id" = '...';
+
+-- 削除の控え (表は GitRepositoryDeletionRecord)
+UPDATE "GitRepositoryDeletionRecord" SET "baseline" = false, "confirmed" = true
+WHERE "id" = '...';
+DELETE FROM "GitRepositoryDeletionRecord" WHERE "id" = '...';
 ```
+
+入れ替え前の表 (`GitRepositoryDeletion`) に残った行は、定期実行が
+`GitRepositoryDeletionRecord` へ `baseline = true` として移す。移し切るまでは
+`legacyPending` として数えるので、証拠は出ない。空になったことを確かめてから、
+後の migration でその表を落とす。
+
+#### 証拠が示さないこと
+
+**成功して片付いた作業の巻き戻りは検出できない。**
+
+予約 (`GitRepositoryCreation`) と控え (`GitRepositoryRepair`) は、片付いた時点で
+行ごと消える。バックアップを取った時点で組み立て中だったリポジトリが、その後
+こちらで完成し、Forgejo だけをその時点へ戻すと、**未完成のリポジトリが生き返る
+のに数はすべて 0 になる**。証拠は署名されるし、開けてしまう。
+
+閉じるには「成功した変更」も残す append-only の記録が要る。復元の対象外に置く
+必要があるので、置き場所と耐久性の契約を決めてからでないと入れられない。
+**現時点では、この一点は証拠の保証範囲の外**として受け入れている
+(git-server の `docs/operations.md`「承知のうえで残している制限」と同じ内容)。
 
 なお、`bootstrap.sh --revoke-old` で失効させた**管理トークン**はここには入らない。
 Forgejo の中にしか無く、CockroachDB からは見えないため。復元の後、開ける前に

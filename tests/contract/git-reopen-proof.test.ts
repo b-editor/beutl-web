@@ -228,6 +228,7 @@ describe("開けてよいかの集計", () => {
       repositories?: Row[];
       reservations?: Row[];
       repairs?: Row[];
+      legacy?: Row[];
     } = {},
   ) {
     const queries: Row[] = [];
@@ -244,6 +245,8 @@ describe("開けてよいかの集計", () => {
       // 決着していない予約と直し。ここも 0 でなければ開けない。
       gitRepositoryCreation: counter(tombstones.reservations ?? []),
       gitRepositoryRepair: counter(tombstones.repairs ?? []),
+      // 入れ替え前の表。移し切るまではどの数にも出ないので、別に数える。
+      gitRepositoryDeletionPending: counter(tombstones.legacy ?? []),
       // **退会とは別の控え。** 生きている利用者が 1 本だけ失効させたトークンと、
       // 消したリポジトリ。退会の数には一切現れない。
       gitCredentialRevocation: counter(tombstones.credentials ?? []),
@@ -410,6 +413,28 @@ describe("開けてよいかの集計", () => {
     ).resolves.toMatchObject({ repairsNeedReview: 1, inflightRepairs: 0 });
   });
 
+  it("入れ替え前の表に残った控えも数える", async () => {
+    // 定期実行が新しい表へ移すまで、その行はどの数にも出ない。移し切れていない
+    // まま署名すると、消したのに控えの無いリポジトリを見落とす。
+    const prisma = fakePrisma([], { legacy: [{}] });
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ legacyPending: 1 });
+  });
+
+  it("入れ替え前の表が無い環境では 0 として扱う", async () => {
+    // 先に作り直した版を当てていた場合。表そのものが無い。
+    const prisma = fakePrisma([], {});
+    prisma.gitRepositoryDeletionPending = {
+      count: () => {
+        throw Object.assign(new Error("no such table"), { code: "P2021" });
+      },
+    };
+    await expect(
+      collectGitReconcileStatus(prisma, "gen-1"),
+    ).resolves.toMatchObject({ legacyPending: 0 });
+  });
+
   it("16 個を 1 つのトランザクションで数える", async () => {
     // 別々に数えると、数えている間に状態が動いて別の時点の数が混ざる。
     let batched = 0;
@@ -419,6 +444,7 @@ describe("開けてよいかの集計", () => {
       gitRepositoryDeletion: { count: () => 0 },
       gitRepositoryCreation: { count: () => 0 },
       gitRepositoryRepair: { count: () => 0 },
+      gitRepositoryDeletionPending: { count: () => 0 },
       $transaction: async (calls: number[]) => {
         batched = calls.length;
         return calls;

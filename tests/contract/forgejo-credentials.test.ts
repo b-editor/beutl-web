@@ -444,7 +444,10 @@ vi.mock("@beutl/db", () => ({
     repositories: 0,
   }),
   // 入れ替え前の表に残った控えを新しい表へ移す。既定では残っていない。
-  drainLegacyGitRepositoryDeletions: async () => 0,
+  drainLegacyGitRepositoryDeletions: async () => {
+    if (drainFails) throw new Error("legacy table is unreachable");
+    return 0;
+  },
   findGitCredential: async ({ id }: { id: string }) =>
     id === "c1"
       ? {
@@ -564,6 +567,7 @@ let droppedTombstones: string[] = [];
 let existingCredentialIds: string[] = ["c1"];
 let reconcileCursor: string | null = null;
 let lockedNoteFails = false;
+let drainFails = false;
 
 const {
   CredentialLimitReachedError,
@@ -629,6 +633,7 @@ beforeEach(() => {
   existingCredentialIds = ["c1"];
   reconcileCursor = null;
   lockedNoteFails = false;
+  drainFails = false;
   attachFailsFor = [];
   releasedIds = [];
   repairQueue = new Map();
@@ -3491,6 +3496,21 @@ describe("失効はこちらの行を消してから確定させる", () => {
     await revokeGitCredential("u1", "c1");
 
     expect(revocationRows[0].confirmed).toBe(true);
+  });
+});
+
+describe("入れ替え前の表を移せなければ止まる", () => {
+  it("移送に失敗したら投げる (黙って続けない)", async () => {
+    // 残った行はどの数にも出ない。黙って続けると「片付いている」と読める。
+    const { reconcileGitResurrectionTombstones } = await import("@beutl/forgejo");
+    drainFails = true;
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/user")) return json({ login: "beutl-admin" });
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(reconcileGitResurrectionTombstones()).rejects.toThrow();
   });
 });
 

@@ -164,6 +164,17 @@ export async function collectGitReconcileStatus(prisma, generation) {
       prisma.gitRepositoryDeletion.count({ where: { baseline: true } }),
     ]);
 
+  // **入れ替え前の表に残っている控え。** 定期実行が新しい表へ移すまで、その行は
+  // どの数にも出ない。移し切れていないまま署名すると、消したのに控えの無い
+  // リポジトリを見落とす。表そのものが無い環境 (先に作り直した版を当てていた
+  // 場合) では 0。
+  let legacyPending = 0;
+  try {
+    legacyPending = await prisma.gitRepositoryDeletionPending.count();
+  } catch (error) {
+    if (error?.code !== "P2021" && error?.code !== "P2010") throw error;
+  }
+
   return {
     remaining,
     failed,
@@ -181,6 +192,7 @@ export async function collectGitReconcileStatus(prisma, generation) {
     repairsNeedReview,
     // 2 つ足して 1 つの数として出す。どちらも「人が確かめるまで開けない」。
     unverifiedBaseline: unverifiedBaseline + unverifiedBaselineRepos,
+    legacyPending,
   };
 }
 

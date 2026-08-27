@@ -420,28 +420,48 @@ export async function drainLegacyGitRepositoryDeletions({
   }
   if (pending.length === 0) return 0;
 
+  const client = await getDb();
   let moved = 0;
   for (const row of pending) {
-    await db.gitRepositoryDeletion.create({
-      data: {
-        intentId: crypto.randomUUID(),
-        forgejoRepoId: row.forgejoRepoId,
-        ownerUsername: row.ownerUsername,
-        name: row.name,
-        deletedAt: row.deletedAt,
-        needsReview: row.needsReview,
-        attempts: row.attempts,
-        lastAttemptAt: row.lastAttemptAt,
-        lastError: row.lastError,
-        // **確かめた印は引き継がない。** 前の仕組みは消す前に書いていたので、
-        // 控えがあること自体は「消えた」を意味しない。
-        baseline: true,
-      },
+    // **1 行ずつ、1 つのトランザクションで移す。**
+    //
+    // 読んでから消すまでの間に、入れ替え前の Worker が同じリポジトリ id を
+    // 上書きすることがある (あちらは id を主キーに upsert する)。別々の操作に
+    // すると、そこで書かれた**新しい消去の控えを消してしまう**。Forgejo からは
+    // 消えているのに、追う手掛かりが無くなる。
+    //
+    // 消す方を先にして、**読んだときの姿と変わっていないときだけ**通す。
+    // 変わっていれば 0 件になるので、その行は次の周回に回す。
+    const done = await client.$transaction(async (tx) => {
+      const { count } = await tx.gitRepositoryDeletionPending.deleteMany({
+        where: {
+          forgejoRepoId: row.forgejoRepoId,
+          deletedAt: row.deletedAt,
+          confirmed: row.confirmed,
+          name: row.name,
+          ownerUsername: row.ownerUsername,
+        },
+      });
+      if (count !== 1) return false;
+      await tx.gitRepositoryDeletion.create({
+        data: {
+          intentId: crypto.randomUUID(),
+          forgejoRepoId: row.forgejoRepoId,
+          ownerUsername: row.ownerUsername,
+          name: row.name,
+          deletedAt: row.deletedAt,
+          needsReview: row.needsReview,
+          attempts: row.attempts,
+          lastAttemptAt: row.lastAttemptAt,
+          lastError: row.lastError,
+          // **確かめた印は引き継がない。** 前の仕組みは消す前に書いていたので、
+          // 控えがあること自体は「消えた」を意味しない。
+          baseline: true,
+        },
+      });
+      return true;
     });
-    await db.gitRepositoryDeletionPending.delete({
-      where: { forgejoRepoId: row.forgejoRepoId },
-    });
-    moved += 1;
+    if (done) moved += 1;
   }
   return moved;
 }
