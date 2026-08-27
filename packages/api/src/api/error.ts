@@ -92,6 +92,13 @@ export async function apiErrorResponse(
   };
 }
 
+/** Canonical outer-boundary response for a request body over its route cap. */
+export async function fileTooLargeApiResponse(): Promise<Response> {
+  return Response.json(await apiErrorResponse("fileIsTooLarge"), {
+    status: 413,
+  });
+}
+
 export const apiOnErrorHandler: ErrorHandler = async (err, c) => {
   if (err instanceof RequestBodyLimitExceededError) {
     return c.json(await apiErrorResponse("fileIsTooLarge"), {

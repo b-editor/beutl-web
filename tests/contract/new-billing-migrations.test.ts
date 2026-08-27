@@ -16,9 +16,19 @@ const migrations = [
   "20260825210000_add_package_checkout_resolution/migration.sql",
   "20260825220000_add_topup_duplicate_refund_attempt/migration.sql",
   "20260825230000_add_topup_checkout_resolution/migration.sql",
+  "20260826050000_harden_topup_checkout_recovery/migration.sql",
+  "20260827000000_split_storage_multipart_cleanup/migration.sql",
+  "20260827010000_harden_storage_multipart_cleanup/migration.sql",
+  "20260827020000_harden_topup_intervention_audit/migration.sql",
 ];
 
 describe("new billing migrations", () => {
+  it("keeps the Wrangler lifecycle config in the lowercase rules shape", async () => {
+    const lifecycle = JSON.parse(await readFile(new URL("../../apps/web/r2-lifecycle.json", import.meta.url), "utf8")) as { rules?: Array<Record<string, unknown>> };
+    expect(Array.isArray(lifecycle.rules)).toBe(true);
+    expect(lifecycle.rules).toHaveLength(1);
+    expect(lifecycle.rules?.[0]).toMatchObject({ id: "abort-incomplete-multipart-uploads", enabled: true, conditions: {}, abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 7 * 24 * 60 * 60 } } });
+  });
   it.each(migrations)("uses Cockroach schema unlock/relock for %s", async (relativePath) => {
     const sql = await readFile(new URL(`../../apps/web/prisma/migrations/${relativePath}`, import.meta.url), "utf8");
     const unlock = sql.indexOf("schema_locked = false");
@@ -85,6 +95,22 @@ describe("new billing migrations", () => {
     expect(uploadSql).toContain("uploadId");
     const storageLeaseSql = await readFile(new URL("../../apps/web/prisma/migrations/20260825140000_add_ai_storage_cleanup_lease_token/migration.sql", import.meta.url), "utf8");
     expect(storageLeaseSql).toContain("leaseToken");
+    const multipartCleanupSql = await readFile(new URL("../../apps/web/prisma/migrations/20260827000000_split_storage_multipart_cleanup/migration.sql", import.meta.url), "utf8");
+    expect(multipartCleanupSql).toContain('CREATE TABLE IF NOT EXISTS "StorageMultipartCleanup"');
+    expect(multipartCleanupSql).toContain('PRIMARY KEY ("objectKey", "uploadId")');
+    expect(multipartCleanupSql).toContain('FROM "AiStorageCleanup"');
+    expect(multipartCleanupSql).toContain('FROM "StorageUpload"');
+    expect(multipartCleanupSql).toContain('AiStorageCleanup_uploadId_retired_ck');
+    expect(multipartCleanupSql).toContain('SET "uploadId" = NULL');
+    expect(multipartCleanupSql).toContain('"cleanupLeaseToken" STRING');
+    expect(multipartCleanupSql).toContain('StorageUpload_cleanupLease_pair_ck');
+    expect(multipartCleanupSql).toContain('StorageUpload_abandonedAt_cleanupLeaseUntil_idx');
+    const multipartHardeningSql = await readFile(new URL("../../apps/web/prisma/migrations/20260827010000_harden_storage_multipart_cleanup/migration.sql", import.meta.url), "utf8");
+    expect(multipartHardeningSql).toContain('operatorReason');
+    expect(multipartHardeningSql).toContain('terminalizedAt');
+    expect(multipartHardeningSql).toContain('"attempts" INT4');
+    expect(multipartHardeningSql).toContain('"revision" INT4');
+    expect(multipartHardeningSql).toContain('StorageMultipartCleanup_status_notBefore_idx');
     const resolutionSql = await readFile(new URL("../../apps/web/prisma/migrations/20260825210000_add_package_checkout_resolution/migration.sql", import.meta.url), "utf8");
     expect(resolutionSql).toContain("PackageCheckoutResolution_status_check");
     expect(resolutionSql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS");
@@ -99,5 +125,22 @@ describe("new billing migrations", () => {
       expect(sql).toContain(`${name}_attempts_check`);
       expect(sql).toContain(`${name}_lease_pair_check`);
     }
+  });
+
+  it("backfills every legacy top-up intervention marker into an auditable resolution", async () => {
+    const sql = await readFile(new URL("../../apps/web/prisma/migrations/20260827020000_harden_topup_intervention_audit/migration.sql", import.meta.url), "utf8");
+    expect(sql).toContain('a."recoveryInterventionAt" IS NOT NULL');
+    expect(sql).toContain('LEFT JOIN "TopUpCheckoutResolution"');
+    expect(sql).toContain("expectedPaymentIntentIds");
+    expect(sql).toContain('a."stripePaymentIntentId", \'[]\'');
+    expect(sql).toContain("'intervention'");
+    expect(sql).toContain("TopUpDuplicateRefundAttempt_refunded_amount_check");
+    expect(sql).toContain('"refundedAmount" <> "amount"');
+    expect(sql).toContain("TopUpCheckoutAttempt_refunded_amount_check");
+    expect(sql).toContain('"status" = \'refund_failed\'');
+    expect(sql).toContain('"operatorLeaseToken" STRING');
+    expect(sql).toContain('"operatorLeaseExpiresAt" TIMESTAMP(3)');
+    expect(sql).toContain('"operatorAbsenceObservedAt" TIMESTAMP(3)');
+    expect(sql).toContain("TopUpCheckoutResolution_operator_lease_pair_check");
   });
 });

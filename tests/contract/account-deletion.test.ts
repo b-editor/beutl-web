@@ -92,6 +92,9 @@ describe("resumable account deletion", () => {
       prisma: { transaction: true },
     });
     expect(
+      mocks.enqueueUserStorageCleanups.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.deleteUserById.mock.invocationCallOrder[0]);
+    expect(
       mocks.prepareAccountDeletionOutboxes.mock.invocationCallOrder[0],
     ).toBeLessThan(mocks.deleteUserById.mock.invocationCallOrder[0]);
     expect(mocks.deleteUserById).toHaveBeenCalledWith({

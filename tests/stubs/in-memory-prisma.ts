@@ -37,6 +37,7 @@ type CreditTransaction = {
   stripeReversalKind: string | null;
   stripeReversalId: string | null;
   stripeReversalRevision: number | null;
+  topUpCheckoutAttemptId?: string | null;
   adminAdjustmentKey: string | null;
   createdAt: Date;
 };
@@ -84,10 +85,27 @@ type AiJob = {
 type AiStorageCleanup = {
   objectKey: string;
   aiJobId: string | null;
-  uploadId: string | null;
   leaseToken: string | null;
   state: string;
   notBefore: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type StorageMultipartCleanupRecord = {
+  objectKey: string;
+  uploadId: string;
+  leaseToken: string | null;
+  notBefore: Date;
+  attempts: number;
+  lastError: string | null;
+  operatorUserId?: string | null;
+  operatorReason?: string | null;
+  operatorEvidence?: string | null;
+  terminalizedAt?: Date | null;
+  interventionAt: Date | null;
+  status: string;
+  revision: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -163,11 +181,15 @@ type ProCheckoutAttempt = {
 type TopUpCheckoutAttempt = {
   id: string;
   ownerUserId: string;
+  activeOwnerKey?: string | null;
+  checkoutKey?: string;
   stripeCustomerId: string;
   billingOfferId: string;
   stripeCheckoutSessionId: string | null;
   stripePaymentIntentId: string | null;
   paramsJson?: string | null;
+  createLeaseToken?: string | null;
+  createLeaseExpiresAt?: Date | null;
   recoveryLeaseToken?: string | null;
   recoveryLeaseExpiresAt?: Date | null;
   recoveryAttempts?: number;
@@ -212,6 +234,8 @@ type TopUpDuplicateRefundAttempt = {
   refundId: string | null;
   refundedAmount: number;
   lastError: string | null;
+  interventionAt?: Date | null;
+  lastCanonicalCheckAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -223,10 +247,18 @@ type TopUpCheckoutResolution = {
   stripeCustomerId: string;
   billingOfferId: string;
   canonicalSessionId: string | null;
+  canonicalPaymentIntentId?: string | null;
   expectedPaymentIntentIds: string;
   status: string;
   revision: number;
   lastError: string | null;
+  operatorUserId?: string | null;
+  operatorReason?: string | null;
+  operatorEvidence?: string | null;
+  operatorActionAt?: Date | null;
+  operatorLeaseToken?: string | null;
+  operatorLeaseExpiresAt?: Date | null;
+  operatorAbsenceObservedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -295,6 +327,7 @@ export type InMemoryPrismaState = {
   stripeCreditReversals: Map<string, StripeCreditReversal>;
   aiJobs: Map<string, AiJob>;
   aiStorageCleanups: Map<string, AiStorageCleanup>;
+  storageMultipartCleanups: Map<string, StorageMultipartCleanupRecord>;
   aiSettings: Map<string, AiSetting>;
   accountDeletionIntents: Map<string, AccountDeletionIntent>;
   aiRemoteJobCleanups: Map<string, AiRemoteJobCleanup>;
@@ -324,17 +357,29 @@ type StorageUploadRecord = {
   startState: string;
   creationLeaseUntil: Date | null;
   creationLeaseToken: string | null;
+  cleanupLeaseUntil: Date | null;
+  cleanupLeaseToken: string | null;
 };
 
 type StorageUploadWhere = {
   id?: string;
   userId?: string;
+  objectKey?: string;
   uploadId?: string | null;
+  name?: string;
+  mimeType?: string;
+  size?: bigint;
+  partSize?: number;
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
   startState?: string;
+  createdAt?: Date | { lt?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
+  cleanupLeaseUntil?: Date | null | { lte: Date };
+  cleanupLeaseToken?: string | null;
+  AND?: StorageUploadWhere[];
+  NOT?: StorageUploadWhere;
   OR?: StorageUploadWhere[];
 };
 
@@ -345,13 +390,45 @@ function matchesStorageUploadWhere(
   if (!where) return true;
   if (where.id !== undefined && item.id !== where.id) return false;
   if (where.userId !== undefined && item.userId !== where.userId) return false;
+  if (where.objectKey !== undefined && item.objectKey !== where.objectKey) return false;
   if (where.uploadId !== undefined && item.uploadId !== where.uploadId) return false;
+  if (where.name !== undefined && item.name !== where.name) return false;
+  if (where.mimeType !== undefined && item.mimeType !== where.mimeType) return false;
+  if (where.size !== undefined && item.size !== where.size) return false;
+  if (where.partSize !== undefined && item.partSize !== where.partSize) return false;
   if (where.startState !== undefined && item.startState !== where.startState) return false;
+  if (where.createdAt instanceof Date) {
+    if (item.createdAt.getTime() !== where.createdAt.getTime()) return false;
+  } else if (
+    where.createdAt?.lt &&
+    item.createdAt.getTime() >= where.createdAt.lt.getTime()
+  ) return false;
   if (where.creationLeaseToken !== undefined && item.creationLeaseToken !== where.creationLeaseToken) return false;
   if (where.creationLeaseUntil !== undefined) {
-    if (typeof where.creationLeaseUntil === "object" && "lte" in where.creationLeaseUntil) {
+    if (
+      typeof where.creationLeaseUntil === "object" &&
+      where.creationLeaseUntil !== null &&
+      "lte" in where.creationLeaseUntil
+    ) {
       if (item.creationLeaseUntil === null || item.creationLeaseUntil > where.creationLeaseUntil.lte) return false;
-    } else if (item.creationLeaseUntil !== where.creationLeaseUntil) return false;
+    } else if (
+      item.creationLeaseUntil?.getTime() !== where.creationLeaseUntil?.getTime()
+    ) return false;
+  }
+  if (where.cleanupLeaseToken !== undefined && item.cleanupLeaseToken !== where.cleanupLeaseToken) return false;
+  if (where.cleanupLeaseUntil !== undefined) {
+    if (
+      typeof where.cleanupLeaseUntil === "object" &&
+      where.cleanupLeaseUntil !== null &&
+      "lte" in where.cleanupLeaseUntil
+    ) {
+      if (
+        item.cleanupLeaseUntil === null ||
+        item.cleanupLeaseUntil > where.cleanupLeaseUntil.lte
+      ) return false;
+    } else if (
+      item.cleanupLeaseUntil?.getTime() !== where.cleanupLeaseUntil?.getTime()
+    ) return false;
   }
   if (where.completedFileId === null && item.completedFileId !== null) {
     return false;
@@ -360,7 +437,9 @@ function matchesStorageUploadWhere(
     if (where.completedFileId.not === null && item.completedFileId === null) return false;
   }
   if (where.abandonedAt === null && item.abandonedAt !== null) return false;
-  if (
+  if (where.abandonedAt instanceof Date) {
+    if (item.abandonedAt?.getTime() !== where.abandonedAt.getTime()) return false;
+  } else if (
     where.abandonedAt !== null &&
     typeof where.abandonedAt === "object" &&
     item.abandonedAt === null
@@ -370,6 +449,10 @@ function matchesStorageUploadWhere(
   if (where.OR && !where.OR.some((candidate) => matchesStorageUploadWhere(item, candidate))) {
     return false;
   }
+  if (where.AND && !where.AND.every((candidate) => matchesStorageUploadWhere(item, candidate))) {
+    return false;
+  }
+  if (where.NOT && matchesStorageUploadWhere(item, where.NOT)) return false;
   return true;
 }
 
@@ -470,6 +553,7 @@ export function createInMemoryPrisma() {
     stripeCreditReversals: new Map(),
     aiJobs: new Map(),
     aiStorageCleanups: new Map(),
+    storageMultipartCleanups: new Map(),
     aiSettings: new Map(),
     accountDeletionIntents: new Map(),
     aiRemoteJobCleanups: new Map(),
@@ -568,6 +652,10 @@ export function createInMemoryPrisma() {
   type TopUpCheckoutAttemptWhere = {
     id?: string;
     ownerUserId?: string;
+    stripeCustomerId?: string;
+    billingOfferId?: string;
+    activeOwnerKey?: string | null;
+    checkoutKey?: string;
     status?: string | { in?: string[]; notIn?: string[]; not?: string };
     stripeCheckoutSessionId?: string | null;
     stripePaymentIntentId?: string | null;
@@ -580,7 +668,9 @@ export function createInMemoryPrisma() {
     recoveryLeaseToken?: string | null;
     recoveryLeaseExpiresAt?: null | { lte: Date };
     recoveryNotBefore?: null | { lte: Date };
-    recoveryInterventionAt?: null;
+    recoveryInterventionAt?: null | Date | { not: null };
+    createLeaseToken?: string | null;
+    createLeaseExpiresAt?: null | { lte: Date };
     updatedAt?: Date;
     OR?: TopUpCheckoutAttemptWhere[];
     AND?: TopUpCheckoutAttemptWhere[];
@@ -627,12 +717,28 @@ export function createInMemoryPrisma() {
       where.recoveryNotBefore === undefined ||
       (where.recoveryNotBefore === null
         ? attempt.recoveryNotBefore === null
-        : attempt.recoveryNotBefore !== null &&
+          : attempt.recoveryNotBefore !== null &&
           attempt.recoveryNotBefore.getTime() <= where.recoveryNotBefore.lte.getTime());
+    const createLeaseExpiresAtMatches =
+      where.createLeaseExpiresAt === undefined ||
+      (where.createLeaseExpiresAt === null
+        ? (attempt.createLeaseExpiresAt ?? null) === null
+        : attempt.createLeaseExpiresAt !== null &&
+          attempt.createLeaseExpiresAt !== undefined &&
+          attempt.createLeaseExpiresAt.getTime() <=
+            where.createLeaseExpiresAt.lte.getTime());
     return (
       (where.id === undefined || attempt.id === where.id) &&
       (where.ownerUserId === undefined ||
         attempt.ownerUserId === where.ownerUserId) &&
+      (where.stripeCustomerId === undefined ||
+        attempt.stripeCustomerId === where.stripeCustomerId) &&
+      (where.billingOfferId === undefined ||
+        attempt.billingOfferId === where.billingOfferId) &&
+      (where.activeOwnerKey === undefined ||
+        (attempt.activeOwnerKey ?? null) === where.activeOwnerKey) &&
+      (where.checkoutKey === undefined ||
+        attempt.checkoutKey === where.checkoutKey) &&
       statusMatches &&
       (where.stripeCheckoutSessionId === undefined ||
         attempt.stripeCheckoutSessionId === where.stripeCheckoutSessionId) &&
@@ -651,10 +757,17 @@ export function createInMemoryPrisma() {
       (where.recoveryLeaseToken === undefined || attempt.recoveryLeaseToken === where.recoveryLeaseToken) &&
       recoveryLeaseExpiresAtMatches &&
       recoveryNotBeforeMatches &&
+      (where.createLeaseToken === undefined ||
+        (attempt.createLeaseToken ?? null) === where.createLeaseToken) &&
+      createLeaseExpiresAtMatches &&
       (where.recoveryInterventionAt === undefined ||
         (where.recoveryInterventionAt === null
           ? attempt.recoveryInterventionAt === null
-          : attempt.recoveryInterventionAt !== null)) &&
+          : where.recoveryInterventionAt instanceof Date
+            ? attempt.recoveryInterventionAt?.getTime() ===
+              where.recoveryInterventionAt.getTime()
+            : attempt.recoveryInterventionAt !== null &&
+              attempt.recoveryInterventionAt !== undefined)) &&
       (where.updatedAt === undefined ||
         attempt.updatedAt.getTime() === where.updatedAt.getTime()) &&
       (!where.AND ||
@@ -781,6 +894,9 @@ export function createInMemoryPrisma() {
     aiJobs: new Map([...state.aiJobs].map(([k, v]) => [k, { ...v }])),
     aiStorageCleanups: new Map(
       [...state.aiStorageCleanups].map(([k, v]) => [k, { ...v }]),
+    ),
+    storageMultipartCleanups: new Map(
+      [...state.storageMultipartCleanups].map(([k, v]) => [k, { ...v }]),
     ),
     aiSettings: new Map([...state.aiSettings].map(([k, v]) => [k, { ...v }])),
     aiOperationModels: new Map(
@@ -963,6 +1079,7 @@ export function createInMemoryPrisma() {
           stripeReversalId?: string;
           stripeReversalRevision?: number;
           adminAdjustmentKey?: string;
+          topUpCheckoutAttemptId?: string;
         };
       }) => {
         if (
@@ -1032,6 +1149,7 @@ export function createInMemoryPrisma() {
           stripeReversalId: data.stripeReversalId ?? null,
           stripeReversalRevision: data.stripeReversalRevision ?? null,
           adminAdjustmentKey: data.adminAdjustmentKey ?? null,
+          topUpCheckoutAttemptId: data.topUpCheckoutAttemptId ?? null,
           createdAt: now(),
         };
         state.creditTransactions.push(transaction);
@@ -1149,13 +1267,15 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-        where: { userId?: string; aiJobId?: string; kind?: string };
+          where: { userId?: string; aiJobId?: string; kind?: string; topUpCheckoutAttemptId?: string; stripePaymentId?: string };
       }) => {
         const item = state.creditTransactions.find(
           (transaction) =>
             (!where.userId || transaction.userId === where.userId) &&
             (!where.aiJobId || transaction.aiJobId === where.aiJobId) &&
-            (!where.kind || transaction.kind === where.kind),
+            (!where.kind || transaction.kind === where.kind) &&
+            (!where.topUpCheckoutAttemptId || transaction.topUpCheckoutAttemptId === where.topUpCheckoutAttemptId) &&
+            (!where.stripePaymentId || transaction.stripePaymentId === where.stripePaymentId),
         );
         return item ? { ...item } : null;
       },
@@ -1918,15 +2038,25 @@ export function createInMemoryPrisma() {
           | "billingOfferId"
           | "status"
           | "expiresAt"
-        >;
+        > & Partial<Pick<TopUpCheckoutAttempt,
+          | "id"
+          | "activeOwnerKey"
+          | "checkoutKey"
+          | "paramsJson"
+        >>;
       }) => {
         const timestamp = now();
+        const generatedId = data.id ?? crypto.randomUUID();
         const attempt: TopUpCheckoutAttempt = {
-          id: crypto.randomUUID(),
           ...data,
+          id: generatedId,
+          activeOwnerKey: data.activeOwnerKey ?? null,
+          checkoutKey: data.checkoutKey ?? `ai-top-up-checkout:${generatedId}`,
           stripeCheckoutSessionId: null,
           stripePaymentIntentId: null,
-          paramsJson: null,
+          paramsJson: data.paramsJson ?? null,
+          createLeaseToken: null,
+          createLeaseExpiresAt: null,
           recoveryLeaseToken: null,
           recoveryLeaseExpiresAt: null,
           recoveryAttempts: 0,
@@ -1959,6 +2089,8 @@ export function createInMemoryPrisma() {
       }: {
         where: {
           id?: string;
+          activeOwnerKey?: string;
+          checkoutKey?: string;
           stripeCheckoutSessionId?: string;
           stripePaymentIntentId?: string;
         };
@@ -1968,6 +2100,10 @@ export function createInMemoryPrisma() {
         const attempt = [...state.topUpCheckoutAttempts.values()].find(
           (item) =>
             (where.id !== undefined && item.id === where.id) ||
+            (where.activeOwnerKey !== undefined &&
+              item.activeOwnerKey === where.activeOwnerKey) ||
+            (where.checkoutKey !== undefined &&
+              item.checkoutKey === where.checkoutKey) ||
             (where.stripeCheckoutSessionId !== undefined &&
               item.stripeCheckoutSessionId === where.stripeCheckoutSessionId) ||
             (where.stripePaymentIntentId !== undefined &&
@@ -2018,6 +2154,9 @@ export function createInMemoryPrisma() {
           (attempt) => ({ ...attempt }),
         );
       },
+      count: async ({ where }: { where: TopUpCheckoutAttemptWhere }) =>
+        [...state.topUpCheckoutAttempts.values()].filter((attempt) =>
+          matchesTopUpCheckoutAttemptWhere(attempt, where)).length,
       updateMany: async ({
         where,
         data,
@@ -2056,48 +2195,87 @@ export function createInMemoryPrisma() {
           (where.stripePaymentIntentId !== undefined && item.stripePaymentIntentId === where.stripePaymentIntentId));
         return row ? { ...row } : null;
       },
-      create: async ({ data }: { data: Omit<TopUpDuplicateRefundAttempt, "id" | "notBefore" | "leaseToken" | "leaseExpiresAt" | "attempts" | "refundId" | "refundedAmount" | "lastError" | "createdAt" | "updatedAt"> & Partial<Pick<TopUpDuplicateRefundAttempt, "notBefore">> }) => {
+      create: async ({ data }: { data: Omit<TopUpDuplicateRefundAttempt, "id" | "notBefore" | "leaseToken" | "leaseExpiresAt" | "attempts" | "refundId" | "refundedAmount" | "lastError" | "interventionAt" | "lastCanonicalCheckAt" | "createdAt" | "updatedAt"> & Partial<Pick<TopUpDuplicateRefundAttempt, "notBefore">> }) => {
         if ([...state.topUpDuplicateRefundAttempts.values()].some((item) => item.stripePaymentIntentId === data.stripePaymentIntentId)) throw Object.assign(new Error("Unique constraint"), { code: "P2002" });
         const timestamp = now();
-        const row: TopUpDuplicateRefundAttempt = { ...data, id: crypto.randomUUID(), notBefore: data.notBefore ?? timestamp, leaseToken: null, leaseExpiresAt: null, attempts: 0, refundId: null, refundedAmount: 0, lastError: null, createdAt: timestamp, updatedAt: timestamp };
+        const row: TopUpDuplicateRefundAttempt = { ...data, id: crypto.randomUUID(), notBefore: data.notBefore ?? timestamp, leaseToken: null, leaseExpiresAt: null, attempts: 0, refundId: null, refundedAmount: 0, lastError: null, interventionAt: null, lastCanonicalCheckAt: null, createdAt: timestamp, updatedAt: timestamp };
         state.topUpDuplicateRefundAttempts.set(row.id, row);
         return { ...row };
       },
-      findMany: async ({ where, select, take }: { where?: { status?: { in?: string[] }; notBefore?: { lte: Date }; OR?: Array<{ leaseExpiresAt: null | { lte: Date } }> }; select?: Record<string, boolean>; take?: number }) => {
+      findMany: async ({ where, select, orderBy, take }: { where?: { topUpAttemptId?: string; status?: string | { in?: string[] }; stripePaymentIntentId?: { in: string[] }; notBefore?: { lte: Date }; OR?: Array<{ leaseExpiresAt: null | { lte: Date } }> }; select?: Record<string, boolean>; orderBy?: Array<{ notBefore?: "asc" | "desc"; createdAt?: "asc" | "desc" }>; take?: number }) => {
         const rows = [...state.topUpDuplicateRefundAttempts.values()].filter((row) =>
-          (!where?.status?.in || where.status.in.includes(row.status)) &&
+          (!where?.topUpAttemptId || row.topUpAttemptId === where.topUpAttemptId) &&
+          (where?.status === undefined ||
+            (typeof where.status === "string"
+              ? row.status === where.status
+              : !where.status.in || where.status.in.includes(row.status))) &&
+          (!where?.stripePaymentIntentId?.in ||
+            where.stripePaymentIntentId.in.includes(row.stripePaymentIntentId)) &&
           (!where?.notBefore || row.notBefore.getTime() <= where.notBefore.lte.getTime()) &&
-          (!where?.OR || where.OR.some((condition) => condition.leaseExpiresAt === null ? row.leaseExpiresAt === null : row.leaseExpiresAt !== null && row.leaseExpiresAt.getTime() <= condition.leaseExpiresAt.lte.getTime()))).slice(0, take ?? Number.MAX_SAFE_INTEGER);
+          (!where?.OR || where.OR.some((condition) => condition.leaseExpiresAt === null ? row.leaseExpiresAt === null : row.leaseExpiresAt !== null && row.leaseExpiresAt.getTime() <= condition.leaseExpiresAt.lte.getTime())))
+          .sort((left, right) => {
+            for (const ordering of orderBy ?? []) {
+              if (ordering.notBefore) {
+                const result = left.notBefore.getTime() - right.notBefore.getTime();
+                if (result !== 0) return ordering.notBefore === "asc" ? result : -result;
+              }
+              if (ordering.createdAt) {
+                const result = left.createdAt.getTime() - right.createdAt.getTime();
+                if (result !== 0) return ordering.createdAt === "asc" ? result : -result;
+              }
+            }
+            return 0;
+          })
+          .slice(0, take ?? Number.MAX_SAFE_INTEGER);
         return rows.map((row) => select ? Object.fromEntries(Object.entries(select).filter(([, value]) => value).map(([key]) => [key, row[key as keyof TopUpDuplicateRefundAttempt]])) : { ...row });
       },
-      updateMany: async ({ where, data }: { where: { id?: string; status?: string; leaseToken?: string; OR?: Array<{ leaseExpiresAt: null | { lte: Date } }> }; data: Partial<TopUpDuplicateRefundAttempt> & { attempts?: { increment: number } } }) => {
+      updateMany: async ({ where, data }: { where: { id?: string; status?: string; leaseToken?: string | null; updatedAt?: Date; amount?: number; OR?: Array<{ leaseExpiresAt: null | { lte: Date } }> }; data: Partial<Omit<TopUpDuplicateRefundAttempt, "attempts">> & { attempts?: number | { increment: number } } }) => {
         let count = 0;
         for (const [id, row] of state.topUpDuplicateRefundAttempts) {
-          if (where.id !== undefined && row.id !== where.id || where.status !== undefined && row.status !== where.status || where.leaseToken !== undefined && row.leaseToken !== where.leaseToken) continue;
+          if (where.id !== undefined && row.id !== where.id || where.status !== undefined && row.status !== where.status || where.leaseToken !== undefined && row.leaseToken !== where.leaseToken || where.updatedAt !== undefined && row.updatedAt.getTime() !== where.updatedAt.getTime() || where.amount !== undefined && row.amount !== where.amount) continue;
           if (where.OR && !where.OR.some((condition) => condition.leaseExpiresAt === null ? row.leaseExpiresAt === null : row.leaseExpiresAt !== null && row.leaseExpiresAt.getTime() <= condition.leaseExpiresAt.lte.getTime())) continue;
           const { attempts, ...values } = data;
-          state.topUpDuplicateRefundAttempts.set(id, { ...row, ...values, attempts: attempts ? row.attempts + attempts.increment : row.attempts, updatedAt: now() }); count++;
+          state.topUpDuplicateRefundAttempts.set(id, { ...row, ...values, attempts: typeof attempts === "number" ? attempts : row.attempts + (attempts?.increment ?? 0), updatedAt: now() }); count++;
         }
         return { count };
       },
+      count: async ({ where }: { where: { ownerUserId?: string; status?: { in: string[] } } }) =>
+        [...state.topUpDuplicateRefundAttempts.values()].filter((row) =>
+          (where.ownerUserId === undefined || row.ownerUserId === where.ownerUserId) &&
+          (where.status === undefined || where.status.in.includes(row.status))).length,
     },
     topUpCheckoutResolution: {
       findUnique: async ({ where }: { where: { id?: string; topUpAttemptId?: string } }) => {
         const row = [...state.topUpCheckoutResolutions.values()].find((item) => (where.id !== undefined && item.id === where.id) || (where.topUpAttemptId !== undefined && item.topUpAttemptId === where.topUpAttemptId));
         return row ? { ...row } : null;
       },
-      create: async ({ data }: { data: Omit<TopUpCheckoutResolution, "id" | "revision" | "lastError" | "createdAt" | "updatedAt"> & Partial<Pick<TopUpCheckoutResolution, "lastError">> }) => {
-        if ([...state.topUpCheckoutResolutions.values()].some((item) => item.topUpAttemptId === data.topUpAttemptId)) throw Object.assign(new Error("Unique constraint"), { code: "P2002" });
-        const timestamp = now(); const row: TopUpCheckoutResolution = { ...data, id: crypto.randomUUID(), revision: 0, lastError: data.lastError ?? null, createdAt: timestamp, updatedAt: timestamp }; state.topUpCheckoutResolutions.set(row.topUpAttemptId, row); return { ...row };
+      findMany: async ({ where, select, take }: { where?: { status?: string | { in: string[] }; ownerUserId?: string }; orderBy?: { updatedAt: "asc" | "desc" }; select?: Record<string, boolean>; take?: number }) => {
+        const rows = [...state.topUpCheckoutResolutions.values()]
+          .filter((row) => (where?.status === undefined || (typeof where.status === "string" ? row.status === where.status : where.status.in.includes(row.status))) && (where?.ownerUserId === undefined || row.ownerUserId === where.ownerUserId))
+          .sort((left, right) => left.updatedAt.getTime() - right.updatedAt.getTime())
+          .slice(0, take ?? Number.MAX_SAFE_INTEGER);
+        return rows.map((row) => select
+          ? Object.fromEntries(Object.entries(select).filter(([, value]) => value).map(([key]) => [key, row[key as keyof TopUpCheckoutResolution]]))
+          : { ...row });
       },
-      updateMany: async ({ where, data }: { where: { id?: string; topUpAttemptId?: string; revision?: number; status?: string }; data: Partial<TopUpCheckoutResolution> & { revision?: { increment: number } } }) => {
+      create: async ({ data }: { data: Omit<TopUpCheckoutResolution, "id" | "revision" | "lastError" | "operatorUserId" | "operatorReason" | "operatorEvidence" | "operatorActionAt" | "operatorLeaseToken" | "operatorLeaseExpiresAt" | "operatorAbsenceObservedAt" | "createdAt" | "updatedAt"> & Partial<Pick<TopUpCheckoutResolution, "lastError" | "operatorUserId" | "operatorReason" | "operatorEvidence" | "operatorActionAt" | "operatorLeaseToken" | "operatorLeaseExpiresAt" | "operatorAbsenceObservedAt">> }) => {
+        if ([...state.topUpCheckoutResolutions.values()].some((item) => item.topUpAttemptId === data.topUpAttemptId)) throw Object.assign(new Error("Unique constraint"), { code: "P2002" });
+        const timestamp = now(); const row: TopUpCheckoutResolution = { ...data, id: crypto.randomUUID(), revision: 0, lastError: data.lastError ?? null, operatorUserId: data.operatorUserId ?? null, operatorReason: data.operatorReason ?? null, operatorEvidence: data.operatorEvidence ?? null, operatorActionAt: data.operatorActionAt ?? null, operatorLeaseToken: data.operatorLeaseToken ?? null, operatorLeaseExpiresAt: data.operatorLeaseExpiresAt ?? null, operatorAbsenceObservedAt: data.operatorAbsenceObservedAt ?? null, createdAt: timestamp, updatedAt: timestamp }; state.topUpCheckoutResolutions.set(row.topUpAttemptId, row); return { ...row };
+      },
+      updateMany: async ({ where, data }: { where: { id?: string; topUpAttemptId?: string; revision?: number; status?: string | { in: string[] }; operatorLeaseToken?: string; operatorLeaseExpiresAt?: { gt?: Date }; OR?: Array<{ operatorLeaseExpiresAt: null | { lte: Date } }> }; data: Partial<TopUpCheckoutResolution> & { revision?: { increment: number } } }) => {
         let count = 0;
         for (const [key, row] of state.topUpCheckoutResolutions) {
-          if (where.id !== undefined && row.id !== where.id || where.topUpAttemptId !== undefined && row.topUpAttemptId !== where.topUpAttemptId || where.revision !== undefined && row.revision !== where.revision || where.status !== undefined && row.status !== where.status) continue;
+          if (where.id !== undefined && row.id !== where.id || where.topUpAttemptId !== undefined && row.topUpAttemptId !== where.topUpAttemptId || where.revision !== undefined && row.revision !== where.revision || where.status !== undefined && (typeof where.status === "string" ? row.status !== where.status : !where.status.in.includes(row.status)) || where.operatorLeaseToken !== undefined && row.operatorLeaseToken !== where.operatorLeaseToken) continue;
+          if (where.operatorLeaseExpiresAt?.gt && (!row.operatorLeaseExpiresAt || row.operatorLeaseExpiresAt.getTime() <= where.operatorLeaseExpiresAt.gt.getTime())) continue;
+          if (where.OR && !where.OR.some((condition) => condition.operatorLeaseExpiresAt === null ? row.operatorLeaseExpiresAt == null : row.operatorLeaseExpiresAt != null && row.operatorLeaseExpiresAt.getTime() <= condition.operatorLeaseExpiresAt.lte.getTime())) continue;
           const { revision, ...values } = data; state.topUpCheckoutResolutions.set(key, { ...row, ...values, revision: revision ? row.revision + revision.increment : row.revision, updatedAt: now() }); count++;
         }
         return { count };
       },
+      count: async ({ where }: { where: { ownerUserId?: string; status?: { in: string[] } } }) =>
+        [...state.topUpCheckoutResolutions.values()].filter((row) =>
+          (where.ownerUserId === undefined || row.ownerUserId === where.ownerUserId) &&
+          (where.status === undefined || where.status.in.includes(row.status))).length,
     },
     billingRefundAttempt: {
       upsert: async ({
@@ -2231,6 +2409,13 @@ export function createInMemoryPrisma() {
       },
     },
     billingOffer: {
+      findUnique: async ({ where }: { where: { id?: string; stripePriceId?: string } }) => {
+        const offer = [...state.billingOffers.values()].find((item) =>
+          (where.id !== undefined && item.id === where.id) ||
+          (where.stripePriceId !== undefined &&
+            item.stripePriceId === where.stripePriceId));
+        return offer ? { ...offer } : null;
+      },
       findFirst: async ({
         where,
       }: {
@@ -2346,13 +2531,47 @@ export function createInMemoryPrisma() {
       },
     },
     aiStorageCleanup: {
+      createMany: async ({
+        data,
+        skipDuplicates,
+      }: {
+        data: Array<{
+          objectKey: string;
+          aiJobId?: string | null;
+          leaseToken?: string | null;
+          state: string;
+          notBefore: Date;
+        }>;
+        skipDuplicates?: boolean;
+      }) => {
+        let count = 0;
+        for (const item of data) {
+          if (state.aiStorageCleanups.has(item.objectKey)) {
+            if (skipDuplicates) continue;
+            throw Object.assign(new Error("AI storage cleanup already exists"), {
+              code: "P2002",
+            });
+          }
+          const timestamp = now();
+          state.aiStorageCleanups.set(item.objectKey, {
+            objectKey: item.objectKey,
+            aiJobId: item.aiJobId ?? null,
+            leaseToken: item.leaseToken ?? null,
+            state: item.state,
+            notBefore: item.notBefore,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+          count++;
+        }
+        return { count };
+      },
       create: async ({
         data,
       }: {
         data: {
           objectKey: string;
           aiJobId?: string | null;
-          uploadId?: string | null;
           leaseToken?: string | null;
           state: string;
           notBefore: Date;
@@ -2366,7 +2585,6 @@ export function createInMemoryPrisma() {
         const record: AiStorageCleanup = {
           objectKey: data.objectKey,
           aiJobId: data.aiJobId ?? null,
-          uploadId: data.uploadId ?? null,
           leaseToken: data.leaseToken ?? null,
           state: data.state,
           notBefore: data.notBefore,
@@ -2385,14 +2603,12 @@ export function createInMemoryPrisma() {
         create: {
           objectKey: string;
           aiJobId?: string | null;
-          uploadId?: string | null;
           leaseToken?: string | null;
           state: string;
           notBefore: Date;
         };
         update: {
           aiJobId?: string | null;
-          uploadId?: string | null;
           leaseToken?: string | null;
           state?: string;
           notBefore?: Date;
@@ -2404,7 +2620,6 @@ export function createInMemoryPrisma() {
           : {
               objectKey: create.objectKey,
               aiJobId: create.aiJobId ?? null,
-              uploadId: create.uploadId ?? null,
               leaseToken: create.leaseToken ?? null,
               state: create.state,
               notBefore: create.notBefore,
@@ -2423,7 +2638,6 @@ export function createInMemoryPrisma() {
           state?: string;
           notBefore?: Date;
           leaseToken?: string | null;
-          uploadId?: string | null;
           OR?: {
             leaseToken?: string | null;
             notBefore?: { lte: Date };
@@ -2432,7 +2646,7 @@ export function createInMemoryPrisma() {
         data: Partial<
           Pick<
             AiStorageCleanup,
-            "notBefore" | "aiJobId" | "uploadId" | "leaseToken" | "state"
+            "notBefore" | "aiJobId" | "leaseToken" | "state"
           >
         >;
       }) => {
@@ -2448,8 +2662,7 @@ export function createInMemoryPrisma() {
               cleanup.notBefore.getTime() === where.notBefore.getTime()) &&
             (where.leaseToken === undefined ||
               cleanup.leaseToken === where.leaseToken) &&
-            (where.uploadId === undefined || cleanup.uploadId === where.uploadId)
-            && (!where.OR || where.OR.some((candidate) =>
+            (!where.OR || where.OR.some((candidate) =>
               (candidate.leaseToken !== undefined &&
                 cleanup.leaseToken === candidate.leaseToken) ||
               (candidate.notBefore?.lte !== undefined &&
@@ -2701,6 +2914,149 @@ export function createInMemoryPrisma() {
         return { count: 1 };
       },
     },
+    storageMultipartCleanup: {
+      createMany: async ({
+        data,
+        skipDuplicates,
+      }: {
+        data: Array<{
+          objectKey: string;
+          uploadId: string;
+          leaseToken?: string | null;
+          notBefore: Date;
+        }>;
+        skipDuplicates?: boolean;
+      }) => {
+        let count = 0;
+        for (const item of data) {
+          const key = `${item.objectKey}\0${item.uploadId}`;
+          if (state.storageMultipartCleanups.has(key)) {
+            if (skipDuplicates) continue;
+            throw Object.assign(new Error("Multipart cleanup already exists"), {
+              code: "P2002",
+            });
+          }
+          const timestamp = now();
+          state.storageMultipartCleanups.set(key, {
+            objectKey: item.objectKey,
+            uploadId: item.uploadId,
+            leaseToken: item.leaseToken ?? null,
+            notBefore: item.notBefore,
+            attempts: item.attempts ?? 0,
+            lastError: item.lastError ?? null,
+            interventionAt: item.interventionAt ?? null,
+            status: item.status ?? "pending",
+            revision: item.revision ?? 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+          count++;
+        }
+        return { count };
+      },
+      findFirst: async ({
+        where,
+      }: {
+        where: { objectKey?: string; uploadId?: string; status?: string | { in: string[] } };
+      }) => {
+        const row = [...state.storageMultipartCleanups.values()].find(
+          (item) =>
+            (where.objectKey === undefined || item.objectKey === where.objectKey) &&
+            (where.uploadId === undefined || item.uploadId === where.uploadId) &&
+            (where.status === undefined || (typeof where.status === "string" ? item.status === where.status : where.status.in.includes(item.status))),
+        );
+        return row ? { ...row } : null;
+      },
+      findMany: async ({
+        where,
+        take,
+      }: {
+        where?: { notBefore?: { lte: Date }; status?: string | { in: string[] } };
+        orderBy?: unknown;
+        take?: number;
+      } = {}) => {
+        const rows = [...state.storageMultipartCleanups.values()]
+          .filter((item) =>
+            !where?.notBefore ||
+            item.notBefore.getTime() <= where.notBefore.lte.getTime())
+          .filter((item) => !where?.status || (typeof where.status === "string" ? item.status === where.status : where.status.in.includes(item.status)))
+          .sort((left, right) =>
+            left.notBefore.getTime() - right.notBefore.getTime() ||
+            left.createdAt.getTime() - right.createdAt.getTime())
+          .slice(0, take ?? Number.MAX_SAFE_INTEGER);
+        return rows.map((row) => ({ ...row }));
+      },
+      count: async ({
+        where,
+      }: {
+        where?: { objectKey?: string; status?: string | { in: string[] } };
+      } = {}) => {
+        return [...state.storageMultipartCleanups.values()].filter((row) =>
+          (where?.objectKey === undefined || row.objectKey === where.objectKey) &&
+          (where?.status === undefined || (typeof where.status === "string" ? row.status === where.status : where.status.in.includes(row.status))))
+          .length;
+      },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: {
+          objectKey?: string;
+          uploadId?: string;
+          status?: string;
+          revision?: number;
+          leaseToken?: string | null;
+          notBefore?: Date;
+        };
+        data: Partial<Pick<StorageMultipartCleanupRecord, "leaseToken" | "notBefore" | "attempts" | "lastError" | "interventionAt" | "status" | "revision" | "operatorUserId" | "operatorReason" | "operatorEvidence" | "terminalizedAt">> & { revision?: { increment: number } };
+      }) => {
+        let count = 0;
+        for (const [key, row] of state.storageMultipartCleanups) {
+          if (
+            (where.objectKey !== undefined && row.objectKey !== where.objectKey) ||
+            (where.uploadId !== undefined && row.uploadId !== where.uploadId) ||
+            (where.status !== undefined && (typeof where.status === "string" ? row.status !== where.status : !where.status.in.includes(row.status))) ||
+            (where.revision !== undefined && row.revision !== where.revision) ||
+            (where.leaseToken !== undefined && row.leaseToken !== where.leaseToken) ||
+            (where.notBefore !== undefined &&
+              row.notBefore.getTime() !== where.notBefore.getTime())
+          ) continue;
+          state.storageMultipartCleanups.set(key, {
+            ...row,
+            ...data,
+            ...(data.revision && typeof data.revision === "object" ? { revision: row.revision + data.revision.increment } : {}),
+            updatedAt: now(),
+          });
+          count++;
+        }
+        return { count };
+      },
+      deleteMany: async ({
+        where,
+      }: {
+        where: {
+          objectKey?: string;
+          uploadId?: string;
+          leaseToken?: string | null;
+          status?: string;
+          revision?: number;
+        };
+      }) => {
+        let count = 0;
+        for (const [key, row] of state.storageMultipartCleanups) {
+          if (
+            (where.objectKey !== undefined && row.objectKey !== where.objectKey) ||
+            (where.uploadId !== undefined && row.uploadId !== where.uploadId) ||
+            (where.leaseToken !== undefined && row.leaseToken !== where.leaseToken) ||
+            (where.status !== undefined && row.status !== where.status) ||
+            (where.revision !== undefined && row.revision !== where.revision)
+          ) continue;
+          state.storageMultipartCleanups.delete(key);
+          count++;
+        }
+        return { count };
+      },
+    },
     storageUpload: {
       create: async ({
         data,
@@ -2716,6 +3072,8 @@ export function createInMemoryPrisma() {
           startState: "active",
           creationLeaseUntil: null,
           creationLeaseToken: null,
+          cleanupLeaseUntil: null,
+          cleanupLeaseToken: null,
           ...data,
           id: data.id ?? crypto.randomUUID(),
           createdAt: data.createdAt ?? now(),
@@ -2745,28 +3103,12 @@ export function createInMemoryPrisma() {
         where,
         take,
       }: {
-        where?: {
-          createdAt?: { lt?: Date };
-          OR?: {
-            createdAt?: { lt?: Date };
-            abandonedAt?: { not: null };
-          }[];
-        };
+        where?: StorageUploadWhere;
         orderBy?: unknown;
         take?: number;
       } = {}) => {
-        const matches = (item: StorageUploadRecord) => {
-          if (where?.OR) {
-            return where.OR.some((clause) => {
-              if (clause.abandonedAt) return item.abandonedAt !== null;
-              if (clause.completedFileId && item.completedFileId === null) return false;
-              return clause.createdAt?.lt ? item.createdAt < clause.createdAt.lt : true;
-            });
-          }
-          return where?.createdAt?.lt ? item.createdAt < where.createdAt.lt : true;
-        };
         const rows = [...state.storageUploads.values()]
-          .filter(matches)
+          .filter((item) => matchesStorageUploadWhere(item, where))
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },
@@ -2794,9 +3136,9 @@ export function createInMemoryPrisma() {
         }
         return { count: matched.length };
       },
-      deleteMany: async ({ where }: { where: { id?: string } }) => {
+      deleteMany: async ({ where }: { where: StorageUploadWhere }) => {
         const removed = [...state.storageUploads.values()].filter(
-          (item) => !where.id || item.id === where.id,
+          (item) => matchesStorageUploadWhere(item, where),
         );
         for (const item of removed) state.storageUploads.delete(item.id);
         return { count: removed.length };

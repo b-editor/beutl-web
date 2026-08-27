@@ -221,12 +221,15 @@ model StorageUpload {
   startState      String   @default("active")
   creationLeaseUntil DateTime?
   creationLeaseToken String?
+  cleanupLeaseUntil DateTime?
+  cleanupLeaseToken String?
   completedFile      File?    @relation("StorageUploadCompletedFile", fields: [completedFileId], references: [id], onDelete: Cascade)
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])
   @@index([startState, creationLeaseUntil])
+  @@index([abandonedAt, cleanupLeaseUntil])
 }
 
 model Package {
@@ -512,7 +515,6 @@ model AiJob {
 model AiStorageCleanup {
   objectKey String   @id
   aiJobId   String?
-  uploadId  String?
   leaseToken String?
   state     String
   notBefore DateTime
@@ -521,6 +523,32 @@ model AiStorageCleanup {
   aiJob     AiJob?   @relation(fields: [aiJobId], references: [id], onDelete: SetNull)
 
   @@index([notBefore])
+}
+
+// Multipart handles outlive both a User row and any one object at objectKey.
+// They are aborted independently from object deletion so a delayed cleanup
+// can never delete an object completed by a newer winning upload.
+model StorageMultipartCleanup {
+  objectKey  String
+  uploadId   String
+  leaseToken String?
+  notBefore  DateTime
+  attempts   Int      @default(0)
+  lastError  String?
+  interventionAt DateTime?
+  status     String   @default("pending")
+  revision   Int      @default(0)
+  operatorUserId String?
+  operatorReason String?
+  operatorEvidence String?
+  terminalizedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([objectKey, uploadId])
+  @@index([status, notBefore], map: "StorageMultipartCleanup_status_notBefore_idx")
+  @@index([status, interventionAt], map: "StorageMultipartCleanup_intervention_idx")
+  @@index([objectKey, status], map: "StorageMultipartCleanup_objectKey_status_idx")
 }
 
 model Subscription {
@@ -595,6 +623,8 @@ model BillingOffer {
 model TopUpCheckoutAttempt {
   id                      String             @id @default(uuid())
   ownerUserId             String
+  activeOwnerKey          String?            @unique
+  checkoutKey             String             @unique
   stripeCustomerId        String
   billingOfferId          String
   stripeCheckoutSessionId String?            @unique
@@ -603,6 +633,8 @@ model TopUpCheckoutAttempt {
   expiresAt               DateTime
   accountDeletionAt       DateTime?
   paramsJson              String?
+  createLeaseToken        String?
+  createLeaseExpiresAt    DateTime?
   recoveryLeaseToken      String?
   recoveryLeaseExpiresAt  DateTime?
   recoveryAttempts        Int                @default(0)
@@ -632,6 +664,7 @@ model TopUpCheckoutAttempt {
   @@index([billingOfferId])
   @@index([status, refundNotBefore, refundLeaseExpiresAt])
   @@index([accountDeletionAt, stripeCheckoutSessionId, recoveryNotBefore, recoveryLeaseExpiresAt, recoveryInterventionAt], map: "TopUpCheckoutAttempt_recovery_idx")
+  @@index([status, stripeCheckoutSessionId, recoveryNotBefore, recoveryLeaseExpiresAt, createLeaseExpiresAt, recoveryInterventionAt], map: "TopUpCheckoutAttempt_unbound_recovery_idx")
 }
 
 model TopUpDuplicateRefundAttempt {
@@ -651,10 +684,13 @@ model TopUpDuplicateRefundAttempt {
   refundId           String?
   refundedAmount     Int      @default(0)
   lastError          String?
+  interventionAt    DateTime?
+  lastCanonicalCheckAt DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   @@index([topUpAttemptId, status, notBefore, leaseExpiresAt], map: "TopUpDuplicateRefundAttempt_topUpAttemptId_status_idx")
+  @@index([status, notBefore, leaseExpiresAt], map: "TopUpDuplicateRefundAttempt_due_idx")
 }
 
 model TopUpCheckoutResolution {
@@ -664,10 +700,18 @@ model TopUpCheckoutResolution {
   stripeCustomerId   String
   billingOfferId     String
   canonicalSessionId String?
+  canonicalPaymentIntentId String?
   expectedPaymentIntentIds String
   status             String   @default("refund_pending")
   revision           Int      @default(0)
   lastError          String?
+  operatorUserId     String?
+  operatorReason     String?
+  operatorEvidence   String?
+  operatorActionAt   DateTime?
+  operatorLeaseToken String?
+  operatorLeaseExpiresAt DateTime?
+  operatorAbsenceObservedAt DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }

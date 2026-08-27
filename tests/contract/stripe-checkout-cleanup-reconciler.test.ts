@@ -56,7 +56,7 @@ vi.mock("@beutl/db", () => ({
   bindDetachedPackageCheckoutRecoveryAndScheduleCleanup: mocks.bindDetachedAtomic,
   rescheduleDetachedPackageCheckoutRecovery: mocks.rescheduleDetached,
   markDetachedPackageCheckoutRecoveryIntervention: mocks.interventionDetached,
-  claimDetachedTopUpCheckoutAttempts: mocks.detachedTopUps,
+  claimUnboundTopUpCheckoutRecoveries: mocks.detachedTopUps,
   clearDetachedTopUpCheckoutRecovery: mocks.clearDetachedTopUp,
   markDetachedTopUpCheckoutRecoveryIntervention: mocks.topUpIntervention,
   setTopUpCheckoutSession: mocks.setTopUpSession,

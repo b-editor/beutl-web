@@ -23,7 +23,8 @@
     "upload:api": "pnpm --filter @beutl/api upload",
     "upload:admin": "pnpm --filter @beutl/admin upload",
     "preview": "pnpm --filter @beutl/web preview",
-    "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach"
+    "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach",
+    "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
   },
   "devDependencies": {
     "fflate": "^0.8.3",

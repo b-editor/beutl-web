@@ -46,10 +46,6 @@ export async function deleteUser(token: string, identifier: string) {
     ) {
       throw new Error("Account deletion intent changed unexpectedly");
     }
-    await enqueueUserStorageCleanups({
-      userId: intent.userId,
-      prisma,
-    });
     // Re-snapshot billing attempts and provider jobs in the same serializable
     // transaction that performs the User cascade. This closes the interval
     // between durable authorization and final local deletion.
@@ -60,6 +56,10 @@ export async function deleteUser(token: string, identifier: string) {
     if (prepared.unboundCheckoutRecoveries > 0) {
       throw new Error("Checkout recovery is pending before account deletion");
     }
+    await enqueueUserStorageCleanups({
+      userId: intent.userId,
+      prisma,
+    });
     await addAuditLog({
       userId: null,
       action: auditLogActions.account.accountDeleted,

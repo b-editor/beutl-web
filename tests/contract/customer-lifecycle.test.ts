@@ -595,11 +595,23 @@ describe("application-owned Stripe customer lifecycle", () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
     mocks.findStripeCustomerOwnershipByStripeId.mockResolvedValue(legacyOwnership("cus_existing"));
     mocks.retrieveCustomer.mockResolvedValue({ id: "cus_existing", deleted: false, metadata: ownerMetadata() });
-    mocks.listCheckoutSessions.mockResolvedValue({
-      data: [{ id: "cs_topup", metadata: { ...ownerMetadata(), billingOfferId: "offer_topup", topUpAttemptId: "topup-1" } }],
+    let checkoutOpen = true;
+    mocks.listCheckoutSessions.mockImplementation(async ({ status }: any) => ({
+      data: status === "open" && checkoutOpen
+        ? [{ id: "cs_topup", metadata: { ...ownerMetadata(), billingOfferId: "offer_topup", topUpAttemptId: "topup-1" } }]
+        : [],
       has_more: false,
+    }));
+    mocks.expireCheckoutSession.mockImplementation(async () => {
+      checkoutOpen = false;
+      return { status: "expired" };
     });
-    await closeStripeCustomerForAccountDeletion({ userId: "user-1", stripeCustomerId: "cus_existing", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
+    mocks.setTopUpCheckoutSession.mockResolvedValue("already-bound");
+    await expect(closeStripeCustomerForAccountDeletion({ userId: "user-1", stripeCustomerId: "cus_existing", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") })).resolves.toMatchObject({ status: "closed" });
+    expect(mocks.setTopUpCheckoutSession).toHaveBeenCalledWith(expect.objectContaining({
+      attemptId: "topup-1",
+      stripeCheckoutSessionId: "cs_topup",
+    }));
     expect(mocks.expireCheckoutSession).toHaveBeenCalledWith("cs_topup");
   });
 

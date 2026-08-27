@@ -101,6 +101,7 @@ describe("account deletion intent authorization", () => {
           where.userId === "user-1" ? { stripeId: "cus_legacy" } : null,
       },
       topUpCheckoutAttempt: {
+        findUnique: async () => null,
         updateMany: async () => {
           topUpRefundRequired = true;
           return { count: 1 };
@@ -135,7 +136,12 @@ describe("account deletion intent authorization", () => {
         count: async () => 0,
       },
       topUpDuplicateRefundAttempt: { count: async () => 0 },
-      topUpCheckoutResolution: { count: async () => 0 },
+      topUpCheckoutResolution: {
+        findMany: async () => [],
+        updateMany: async () => ({ count: 0 }),
+        count: async () => 0,
+      },
+      creditTransaction: { findFirst: async () => null },
       user: { findUnique: async () => ({ id: "user-1" }) },
       package: { findMany: async () => [] },
       stripeCustomerProvisioning: { updateMany: async () => ({ count: 0 }) },

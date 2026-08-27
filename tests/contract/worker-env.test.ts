@@ -6,10 +6,10 @@ import worker, {
 } from "../../packages/api/src/worker";
 import {
   MAX_API_JSON_REQUEST_BYTES,
+  MAX_OPENROUTER_CALLBACK_BODY_BYTES,
   aiScreenUploadLimit,
 } from "@beutl/core";
 import { aiApiMultipartBodyLimit } from "../../packages/api/src/ai/upload-limits";
-import { MAX_OPENROUTER_CALLBACK_BODY_BYTES } from "../../packages/api/src/worker";
 
 // The test must reach the multipart parser through the real Worker route. Keep
 // the pre-parse database lookups local so the body-limit assertion is not tied
@@ -41,6 +41,17 @@ vi.mock("../../packages/api/src/ai/entitlements", async (importOriginal) => {
 // DB に依存しない v2/identity/signInWith (リダイレクトのみ) を経由して検証する。
 
 const originalEnv = { ...process.env };
+
+async function expectFileTooLarge(response: Response): Promise<void> {
+  expect(response.status).toBe(413);
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  expect(await response.json()).toEqual({
+    error_code: "fileIsTooLarge",
+    message: expect.any(String),
+    documentation_url: null,
+  });
+}
 
 describe("worker.ts env → process.env コピー", () => {
   afterEach(() => {
@@ -161,18 +172,21 @@ describe("worker request body route limits", () => {
   it("keeps small JSON routes small and AI uploads at their endpoint limits", () => {
     expect(
       requestBodyLimitForWorker(
+        "POST",
         "/api/v1/account/createAuthUri",
         "application/json",
       ),
     ).toBe(MAX_API_JSON_REQUEST_BYTES);
     expect(
       requestBodyLimitForWorker(
+        "POST",
         "/api/v3/ai/transcriptions",
         "multipart/form-data; boundary=x",
       ),
     ).toBe(aiApiMultipartBodyLimit("/api/v3/ai/transcriptions"));
     expect(
       requestBodyLimitForWorker(
+        "POST",
         "/api/v3/ai/images/edit",
         "multipart/form-data; boundary=x",
       ),
@@ -183,22 +197,23 @@ describe("worker request body route limits", () => {
       "/api/v3/account/library",
       "/api/v3/user/ai-availability",
     ]) {
-      expect(requestBodyLimitForWorker(pathname, null)).toBe(
+      expect(requestBodyLimitForWorker("POST", pathname, null)).toBe(
         MAX_API_JSON_REQUEST_BYTES,
       );
-      expect(requestBodyLimitForWorker(pathname, "text/plain")).toBe(
+      expect(requestBodyLimitForWorker("POST", pathname, "text/plain")).toBe(
         MAX_API_JSON_REQUEST_BYTES,
       );
     }
     expect(
       requestBodyLimitForWorker(
+        "POST",
         "/api/v3/ai/videos/123/openrouter-callback",
         "text/plain",
       ),
     ).toBe(MAX_OPENROUTER_CALLBACK_BODY_BYTES);
-    expect(requestBodyLimitForWorker("/api/v3/unknown", "application/json"))
+    expect(requestBodyLimitForWorker("POST", "/api/v3/unknown", "application/json"))
       .toBe(MAX_API_JSON_REQUEST_BYTES);
-    expect(requestBodyLimitForWorker("/api/v3/unknown", "text/plain"))
+    expect(requestBodyLimitForWorker("POST", "/api/v3/unknown", "text/plain"))
       .toBe(MAX_API_JSON_REQUEST_BYTES);
   });
 
@@ -240,7 +255,7 @@ describe("worker request body route limits", () => {
         JWT_SECRET: "worker-upload-limit-secret",
       } satisfies Env,
     );
-    expect(over.status).toBe(413);
+    await expectFileTooLarge(over);
   });
 
   it("keeps the standalone transcription cap below the dashboard action-state cap", () => {
@@ -270,8 +285,28 @@ describe("worker request body route limits", () => {
       env,
     );
 
-    expect(response.status).toBe(413);
+    await expectFileTooLarge(response);
   });
+
+  it.each(["-1", "1.5", "not-a-number"])(
+    "rejects invalid declared Content-Length %s at the standalone boundary",
+    async (contentLength) => {
+      const response = await worker.fetch(
+        new Request("https://beutl.beditor.net/api/v1/account/createAuthUri", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": contentLength,
+          },
+          body: "{}",
+        }),
+        {
+          BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://test" },
+        } satisfies Env,
+      );
+      await expectFileTooLarge(response);
+    },
+  );
 
   it("ignores a forged low Content-Length while API downstream consumes the body", async () => {
     const body = new ReadableStream<Uint8Array>({
@@ -292,7 +327,7 @@ describe("worker request body route limits", () => {
       } as RequestInit & { duplex: "half" }),
       { BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://test" } } as Env,
     );
-    expect(response.status).toBe(413);
+    await expectFileTooLarge(response);
   });
 
   it.each([
@@ -322,7 +357,7 @@ describe("worker request body route limits", () => {
         } satisfies Env,
       );
 
-      expect(response.status).toBe(413);
+      await expectFileTooLarge(response);
     },
   );
 
@@ -366,6 +401,6 @@ describe("worker request body route limits", () => {
       ),
       env,
     );
-    expect(response.status).toBe(413);
+    await expectFileTooLarge(response);
   });
 });

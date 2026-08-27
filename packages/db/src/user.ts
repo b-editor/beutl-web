@@ -1,6 +1,8 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 import { StorageCleanupBusyError } from "./ai-job";
+import { enqueueStorageMultipartCleanups } from "./storage-multipart-cleanup";
+import { freezeStorageUploadForAccountDeletion } from "./storage-upload";
 
 export async function findUserForLibrary({
   id: userId,
@@ -290,25 +292,81 @@ export async function enqueueUserStorageCleanups({
     where: { userId },
     select: { objectKey: true },
   });
-  // 途中のアップロードも。完了の控えを書く前に落ちたものは、R2 には出来上がった
-  // オブジェクトがあるのに File が無い——行ごと消してしまうと、そのオブジェクト
-  // を指す手掛かりはどこにも残らない。墓標には抱えているものが無いので飛ばす。
-  // Preserve uploadId as well; aborting a multipart upload requires that id.
+  // Freeze every unfinished upload in the same serializable transaction that
+  // writes detached outboxes and deletes the User. A creator holding a null-id
+  // snapshot then loses its attach CAS; once it observes the remote handle it
+  // writes that handle to the same user-independent multipart outbox.
   const uploads = await db.storageUpload.findMany({
     where: { userId, NOT: { objectKey: "" } },
-    select: { objectKey: true, uploadId: true, completedFileId: true },
+    select: {
+      id: true,
+      userId: true,
+      objectKey: true,
+      uploadId: true,
+      name: true,
+      mimeType: true,
+      size: true,
+      partSize: true,
+      completedFileId: true,
+      abandonedAt: true,
+      createdAt: true,
+      startState: true,
+      creationLeaseUntil: true,
+      creationLeaseToken: true,
+      cleanupLeaseUntil: true,
+      cleanupLeaseToken: true,
+    },
   });
-  const byKey = new Map<string, string | null>();
-  for (const file of files) byKey.set(file.objectKey, null);
+  const frozenUploads: typeof uploads = [];
   for (const upload of uploads) {
-    // Completed receipts are represented by their File row; only unfinished
-    // uploads still own a remote multipart operation.
-    const uploadId = upload.completedFileId === null ? upload.uploadId : null;
-    if (!byKey.has(upload.objectKey) || byKey.get(upload.objectKey) === null) {
-      byKey.set(upload.objectKey, uploadId);
+    if (upload.completedFileId !== null) continue;
+    if (upload.abandonedAt === null) {
+      const claimed = await freezeStorageUploadForAccountDeletion({
+        id: upload.id,
+        userId,
+        now,
+        expected: {
+          createdAt: upload.createdAt,
+          objectKey: upload.objectKey,
+          uploadId: upload.uploadId,
+          name: upload.name,
+          mimeType: upload.mimeType,
+          size: upload.size,
+          partSize: upload.partSize,
+          abandonedAt: upload.abandonedAt,
+          startState: upload.startState,
+          creationLeaseUntil: upload.creationLeaseUntil,
+          creationLeaseToken: upload.creationLeaseToken,
+          cleanupLeaseUntil: upload.cleanupLeaseUntil,
+          cleanupLeaseToken: upload.cleanupLeaseToken,
+        },
+        prisma: db,
+      });
+      if (!claimed) {
+        throw new StorageCleanupBusyError([upload.objectKey]);
+      }
     }
+    frozenUploads.push(upload);
   }
-  const keys = [...byKey.keys()];
+
+  await enqueueStorageMultipartCleanups({
+    handles: frozenUploads.flatMap((upload) =>
+      upload.uploadId && upload.uploadId.length > 0
+        ? [{ objectKey: upload.objectKey, uploadId: upload.uploadId }]
+        : []),
+    notBefore: now,
+    prisma: db,
+  });
+
+  // Object deletion is intentionally independent from multipart abort. A File
+  // owns an object, and an unfinished upload may have joined its object before
+  // its completion receipt committed. Neither case puts uploadId in this row.
+  const keys = [
+    ...new Set([
+      ...files.map((file) => file.objectKey),
+      ...uploads.map((upload) => upload.objectKey),
+    ]),
+  ];
   // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
   // 1 万回の往復になり、その全部がカスケードと同じトランザクションの中に入る
   // ——期限に間に合わなければ、削除そのものが最後まで通らない。
@@ -318,7 +376,6 @@ export async function enqueueUserStorageCleanups({
       where: { objectKey: { in: batch } },
       select: {
         objectKey: true,
-        uploadId: true,
         leaseToken: true,
         state: true,
         notBefore: true,
@@ -331,21 +388,10 @@ export async function enqueueUserStorageCleanups({
     if (busy.length > 0) {
       throw new StorageCleanupBusyError(busy.map((row) => row.objectKey));
     }
-    const existingByKey = new Map(
-      existing.map((row) => [row.objectKey, row]),
-    );
-    for (const objectKey of batch) {
-      const row = existingByKey.get(objectKey);
-      const uploadId = byKey.get(objectKey);
-      if (row?.uploadId && uploadId && row.uploadId !== uploadId) {
-        throw new StorageCleanupBusyError([objectKey]);
-      }
-    }
     await db.aiStorageCleanup.createMany({
       data: batch.map((objectKey) => ({
         objectKey,
         aiJobId: null,
-        uploadId: byKey.get(objectKey) ?? null,
         leaseToken: null,
         state: "cleanup",
         notBefore: now,
@@ -362,21 +408,6 @@ export async function enqueueUserStorageCleanups({
         },
         data: { aiJobId: null, state: "cleanup", notBefore: now },
       });
-    }
-    // Only pre-existing rows lacking an unfinished upload id need an
-    // individual merge; newly-created rows already received it in createMany.
-    for (const row of existing) {
-      const uploadId = byKey.get(row.objectKey);
-      if (row.uploadId === null && uploadId !== null && uploadId !== undefined) {
-        await db.aiStorageCleanup.updateMany({
-          where: {
-            objectKey: row.objectKey,
-            uploadId: null,
-            leaseToken: row.leaseToken,
-          },
-          data: { uploadId },
-        });
-      }
     }
   }
   return keys.length;

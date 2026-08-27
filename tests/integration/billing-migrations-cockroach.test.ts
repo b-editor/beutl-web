@@ -166,6 +166,93 @@ describeWithCockroach(
       ]);
     }, 120_000);
 
+    it("repairs top-up active slots and recovery leases idempotently", async () => {
+      const resource = await createDatabase();
+      resources.push(resource);
+      await resource.prisma.$executeRawUnsafe(`
+        CREATE TABLE "TopUpCheckoutAttempt" (
+          "id" STRING PRIMARY KEY,
+          "ownerUserId" STRING NOT NULL,
+          "status" STRING NOT NULL,
+          "stripeCheckoutSessionId" STRING,
+          "recoveryNotBefore" TIMESTAMP(3),
+          "recoveryLeaseExpiresAt" TIMESTAMP(3),
+          "recoveryInterventionAt" TIMESTAMP(3),
+          "updatedAt" TIMESTAMP(3) NOT NULL
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        CREATE TABLE "TopUpDuplicateRefundAttempt" (
+          "id" STRING PRIMARY KEY,
+          "status" STRING NOT NULL,
+          "notBefore" TIMESTAMP(3) NOT NULL,
+          "leaseExpiresAt" TIMESTAMP(3)
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        CREATE TABLE "TopUpCheckoutResolution" (
+          "id" STRING PRIMARY KEY,
+          "topUpAttemptId" STRING NOT NULL UNIQUE
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "TopUpCheckoutAttempt"
+          ("id", "ownerUserId", "status", "updatedAt")
+        VALUES
+          ('single', 'owner-single', 'open', CURRENT_TIMESTAMP),
+          ('multiple-a', 'owner-multiple', 'open', CURRENT_TIMESTAMP),
+          ('multiple-b', 'owner-multiple', 'payment_pending', CURRENT_TIMESTAMP),
+          ('terminal', 'owner-terminal', 'fulfilled', CURRENT_TIMESTAMP)
+      `);
+      const migration = await readFile(
+        new URL(
+          "../../apps/web/prisma/migrations/20260826050000_harden_topup_checkout_recovery/migration.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+
+      await runSql(resource.prisma, migration);
+      await runSql(resource.prisma, migration);
+      const rows = await resource.prisma.$queryRawUnsafe<Array<{
+        id: string;
+        activeOwnerKey: string | null;
+        checkoutKey: string;
+      }>>(`
+        SELECT "id", "activeOwnerKey", "checkoutKey"
+        FROM "TopUpCheckoutAttempt"
+        ORDER BY "id"
+      `);
+      expect(rows).toEqual([
+        { id: "multiple-a", activeOwnerKey: null, checkoutKey: "ai-top-up-checkout:multiple-a" },
+        { id: "multiple-b", activeOwnerKey: null, checkoutKey: "ai-top-up-checkout:multiple-b" },
+        { id: "single", activeOwnerKey: "owner-single", checkoutKey: "ai-top-up-checkout:single" },
+        { id: "terminal", activeOwnerKey: null, checkoutKey: "ai-top-up-checkout:terminal" },
+      ]);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "TopUpCheckoutAttempt"
+        SET "activeOwnerKey" = 'owner-single'
+        WHERE "id" = 'multiple-a'
+      `)).rejects.toThrow();
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "TopUpCheckoutAttempt"
+        SET "createLeaseToken" = 'half-lease'
+        WHERE "id" = 'single'
+      `)).rejects.toThrow();
+      const indexes = await resource.prisma.$queryRawUnsafe<Array<{ index_name: string }>>(`
+        SELECT index_name
+        FROM information_schema.statistics
+        WHERE table_schema = 'public'
+          AND table_name IN ('TopUpCheckoutAttempt', 'TopUpDuplicateRefundAttempt')
+      `);
+      expect(indexes.map((row) => row.index_name)).toEqual(
+        expect.arrayContaining([
+          "TopUpCheckoutAttempt_unbound_recovery_idx",
+          "TopUpDuplicateRefundAttempt_due_idx",
+        ]),
+      );
+    }, 120_000);
+
     it("blocks old writers until maintenance repair, then accepts them", async () => {
       const resource = await createDatabase();
       resources.push(resource);
@@ -204,6 +291,112 @@ describeWithCockroach(
         Array<{ startState: string }>
       >('SELECT "startState" FROM "StorageUpload" WHERE "id" = \'old-writer-2\'');
       expect(afterRepair?.startState).toBe("active");
+    }, 120_000);
+
+    it("backfills detached multipart handles without retaining a User foreign key", async () => {
+      const resource = await createDatabase();
+      resources.push(resource);
+      await resource.prisma.$executeRawUnsafe(`
+        CREATE TABLE "AiStorageCleanup" (
+          "objectKey" STRING PRIMARY KEY,
+          "uploadId" STRING,
+          "notBefore" TIMESTAMP(3) NOT NULL
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        CREATE TABLE "StorageUpload" (
+          "id" STRING PRIMARY KEY,
+          "objectKey" STRING NOT NULL,
+          "uploadId" STRING,
+          "size" INT8 NOT NULL,
+          "completedFileId" STRING,
+          "abandonedAt" TIMESTAMP(3)
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "AiStorageCleanup" ("objectKey", "uploadId", "notBefore")
+        VALUES ('storage/shared', 'multipart-from-ai', CURRENT_TIMESTAMP)
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload"
+          ("id", "objectKey", "uploadId", "size", "completedFileId", "abandonedAt")
+        VALUES
+          ('legacy-orphan', 'storage/shared', 'multipart-orphan', 0, NULL, CURRENT_TIMESTAMP),
+          ('live-upload', 'storage/shared', 'multipart-live', 10, NULL, NULL)
+      `);
+      const migration = await readFile(
+        new URL(
+          "../../apps/web/prisma/migrations/20260827000000_split_storage_multipart_cleanup/migration.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+
+      await runSql(resource.prisma, migration);
+      await runSql(resource.prisma, migration);
+      const hardeningMigration = await readFile(
+        new URL(
+          "../../apps/web/prisma/migrations/20260827010000_harden_storage_multipart_cleanup/migration.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+      await runSql(resource.prisma, hardeningMigration);
+      await runSql(resource.prisma, hardeningMigration);
+
+      const handles = await resource.prisma.$queryRawUnsafe<Array<{
+        objectKey: string;
+        uploadId: string;
+      }>>(`
+        SELECT "objectKey", "uploadId"
+        FROM "StorageMultipartCleanup"
+        ORDER BY "uploadId"
+      `);
+      expect(handles).toEqual([
+        { objectKey: "storage/shared", uploadId: "multipart-from-ai" },
+        { objectKey: "storage/shared", uploadId: "multipart-orphan" },
+      ]);
+      const legacyColumns = await resource.prisma.$queryRawUnsafe<
+        Array<{ column_name: string }>
+      >(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'AiStorageCleanup'
+          AND column_name = 'uploadId'
+      `);
+      expect(legacyColumns).toEqual([{ column_name: "uploadId" }]);
+      const legacyHandles = await resource.prisma.$queryRawUnsafe<
+        Array<{ uploadId: string | null }>
+      >('SELECT "uploadId" FROM "AiStorageCleanup"');
+      expect(legacyHandles).toEqual([{ uploadId: null }]);
+      const remainingUploads = await resource.prisma.$queryRawUnsafe<
+        Array<{ id: string }>
+      >('SELECT "id" FROM "StorageUpload" ORDER BY "id"');
+      expect(remainingUploads).toEqual([{ id: "live-upload" }]);
+      const foreignKeys = await resource.prisma.$queryRawUnsafe<
+        Array<{ constraint_name: string }>
+      >(`
+        SELECT constraint_name
+        FROM information_schema.table_constraints
+        WHERE table_schema = 'public'
+          AND table_name = 'StorageMultipartCleanup'
+          AND constraint_type = 'FOREIGN KEY'
+      `);
+      expect(foreignKeys).toEqual([]);
+      const columns = await resource.prisma.$queryRawUnsafe<Array<{ column_name: string }>>(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'StorageMultipartCleanup'
+          AND column_name IN ('operatorUserId', 'operatorReason', 'operatorEvidence', 'terminalizedAt')
+        ORDER BY column_name
+      `);
+      expect(columns.map((row) => row.column_name)).toEqual([
+        "operatorEvidence",
+        "operatorReason",
+        "operatorUserId",
+        "terminalizedAt",
+      ]);
     }, 120_000);
 
     it.each(["table-only", "index-only", "constraint-only"] as const)(

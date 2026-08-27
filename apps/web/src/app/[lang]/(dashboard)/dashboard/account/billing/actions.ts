@@ -21,24 +21,30 @@ import {
   hasStripeOwnerMetadata,
   stripeOwnerMetadata,
 } from "@/lib/stripe/ownership";
-import { AI_TOP_UP, isActiveProSubscription, PRO_PLAN } from "@beutl/api";
 import {
+  discoverTopUpCheckoutAttempt,
+  isActiveProSubscription,
+  PRO_PLAN,
+} from "@beutl/api";
+import {
+  bindTopUpCheckoutCreation,
   bindProCheckoutSession,
+  claimTopUpCheckoutCreation,
   deleteBoundProCheckoutAttempt,
-  createTopUpCheckoutAttempt,
+  expireTopUpCheckoutAttempt,
   findBillingOfferById,
   findCustomerByUserId,
   findProCheckoutAttemptBySessionId,
   findStripeCustomerOwnershipByStripeId,
   findTopUpCheckoutAttemptBySessionId,
+  getOrCreateTopUpCheckoutAttempt,
   getOrCreateProCheckoutAttempt,
   getSubscriptionByUserId,
   reconcileSubscriptionObservation,
   recordBillingRefundCancellation,
+  releaseTopUpCheckoutCreation,
   requireTopUpRefund,
   scheduleBillingRefundAttempt,
-  setTopUpCheckoutSession,
-  setTopUpCheckoutParams,
   startRetryableTransaction,
 } from "@beutl/db";
 import { redirect } from "next/navigation";
@@ -58,6 +64,7 @@ type PersistedBillingOffer = Pick<
   | "stripeProductId"
   | "unitAmount"
   | "currency"
+  | "creditAmount"
   | "recurringInterval"
   | "recurringIntervalCount"
 >;
@@ -684,77 +691,334 @@ export async function createProCheckout(): Promise<void> {
   redirect("/dashboard/account/billing");
 }
 
-// Create a Checkout Session for a credit top-up.
-// Configure the price through STRIPE_CREDIT_PRICE_ID.
+const TOP_UP_CHECKOUT_RETENTION_MS = 24 * 60 * 60_000;
+const TOP_UP_CHECKOUT_CREATE_LEASE_MS = 2 * 60_000;
+
+function buildTopUpCheckoutParams({
+  attemptId,
+  customerId,
+  offer,
+  userId,
+}: {
+  attemptId: string;
+  customerId: string;
+  offer: PersistedBillingOffer;
+  userId: string;
+}): Stripe.Checkout.SessionCreateParams {
+  return {
+    customer: customerId,
+    mode: "payment",
+    line_items: [{ price: offer.stripePriceId, quantity: 1 }],
+    metadata: {
+      ...stripeOwnerMetadata(userId),
+      creditAmount: String(offer.creditAmount),
+      billingOfferId: offer.id,
+      topUpAttemptId: attemptId,
+    },
+    payment_intent_data: {
+      metadata: {
+        ...stripeOwnerMetadata(userId),
+        creditAmount: String(offer.creditAmount),
+        billingOfferId: offer.id,
+        topUpAttemptId: attemptId,
+      },
+    },
+    invoice_creation: { enabled: true },
+    success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing`,
+  };
+}
+
+function topUpParamsMatchAttempt({
+  params,
+  attemptId,
+  customerId,
+  offer,
+  userId,
+}: {
+  params: Stripe.Checkout.SessionCreateParams;
+  attemptId: string;
+  customerId: string;
+  offer: PersistedBillingOffer;
+  userId: string;
+}): boolean {
+  const line = params.line_items?.[0];
+  return params.mode === "payment" &&
+    params.customer === customerId &&
+    params.line_items?.length === 1 &&
+    line?.quantity === 1 &&
+    line !== undefined && "price" in line && line.price === offer.stripePriceId &&
+    params.metadata?.beutlApplication === "beutl-web" &&
+    params.metadata?.beutlUserId === userId &&
+    params.metadata?.topUpAttemptId === attemptId &&
+    params.metadata?.billingOfferId === offer.id &&
+    params.metadata?.creditAmount === String(offer.creditAmount) &&
+    params.payment_intent_data?.metadata?.beutlUserId === userId &&
+    params.payment_intent_data.metadata.topUpAttemptId === attemptId &&
+    params.payment_intent_data.metadata.billingOfferId === offer.id &&
+    params.payment_intent_data.metadata.creditAmount ===
+      String(offer.creditAmount);
+}
+
+function topUpSessionMatchesAttempt({
+  checkoutSession,
+  attemptId,
+  customerId,
+  offer,
+  userId,
+  requireLineItems,
+}: {
+  checkoutSession: Stripe.Checkout.Session;
+  attemptId: string;
+  customerId: string;
+  offer: PersistedBillingOffer;
+  userId: string;
+  requireLineItems: boolean;
+}): boolean {
+  const lines = checkoutSession.line_items?.data;
+  const lineMatches = lines === undefined
+    ? !requireLineItems
+    : lines.length === 1 && lines[0]?.quantity === 1 &&
+      expandableId(lines[0].price) === offer.stripePriceId;
+  return checkoutSession.mode === "payment" &&
+    expandableId(checkoutSession.customer) === customerId &&
+    checkoutSession.metadata?.beutlApplication === "beutl-web" &&
+    checkoutSession.metadata?.beutlUserId === userId &&
+    checkoutSession.metadata?.topUpAttemptId === attemptId &&
+    checkoutSession.metadata?.billingOfferId === offer.id &&
+    checkoutSession.metadata?.creditAmount === String(offer.creditAmount) &&
+    (checkoutSession.amount_total === null ||
+      checkoutSession.amount_total === offer.unitAmount) &&
+    (checkoutSession.currency === null ||
+      checkoutSession.currency.toLowerCase() === offer.currency.toLowerCase()) &&
+    lineMatches;
+}
+
 export async function createCreditCheckout(): Promise<void> {
-  const session = await throwIfUnauth();
-  if (!(await hasActiveProSubscription(session.user.id))) {
+  const authSession = await throwIfUnauth();
+  if (!(await hasActiveProSubscription(authSession.user.id))) {
     redirect("/dashboard/account/billing");
   }
   const customerId = await createOrRetrieveOwnedCustomerId({
-    email: session.user.email as string,
-    userId: session.user.id,
+    email: authSession.user.email as string,
+    userId: authSession.user.id,
   });
   const stripe = createStripe();
-  const offer = await activateConfiguredTopUpOffer(stripe);
-  const now = new Date();
-  const attempt = await createTopUpCheckoutAttempt({
-    ownerUserId: session.user.id,
-    stripeCustomerId: customerId,
-    billingOfferId: offer.id,
-    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-  });
-  const topUpCheckoutParams: Stripe.Checkout.SessionCreateParams = {
-      customer: customerId,
-      mode: "payment",
-      line_items: [
-        {
-          price: offer.stripePriceId,
-          quantity: 1,
-        },
-      ],
-      metadata: {
-        ...stripeOwnerMetadata(session.user.id),
-        creditAmount: String(AI_TOP_UP.credits),
-        billingOfferId: offer.id,
-        topUpAttemptId: attempt.id,
-      },
-      payment_intent_data: {
-        metadata: {
-          ...stripeOwnerMetadata(session.user.id),
-          creditAmount: String(AI_TOP_UP.credits),
-          billingOfferId: offer.id,
-          topUpAttemptId: attempt.id,
-        },
-      },
-      // 支払いごとに Stripe の請求書を残す。支払い履歴はここから請求書のリンクを引く。
-      invoice_creation: { enabled: true },
-      success_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.PUBLIC_ORIGIN || "https://beutl.beditor.net"}/dashboard/account/billing`,
-    };
-  const persistedTopUpParams = await setTopUpCheckoutParams({ attemptId: attempt.id, paramsJson: JSON.stringify(topUpCheckoutParams) });
-  if (persistedTopUpParams.count !== 1) throw new Error("Top-up checkout attempt changed before Stripe create");
-  const session_ = await stripe.checkout.sessions.create(
-    topUpCheckoutParams,
-    { idempotencyKey: `ai-top-up-checkout:${attempt.id}` },
-  );
+  const configuredOffer = await activateConfiguredTopUpOffer(stripe);
 
-  const stored = await setTopUpCheckoutSession({
-    attemptId: attempt.id,
-    stripeCheckoutSessionId: session_.id,
-    expiresAt: session_.expires_at
-      ? new Date(session_.expires_at * 1000)
-      : attempt.expiresAt,
-  });
-  if (stored !== "stored-for-checkout") {
-    throw new Error("Top-up checkout attempt changed before session persistence");
+  for (let generation = 0; generation < 4; generation++) {
+    const now = new Date();
+    const proposedAttemptId = crypto.randomUUID();
+    const proposedParams = buildTopUpCheckoutParams({
+      attemptId: proposedAttemptId,
+      customerId,
+      offer: configuredOffer,
+      userId: authSession.user.id,
+    });
+    const attempt = await getOrCreateTopUpCheckoutAttempt({
+      proposedAttemptId,
+      ownerUserId: authSession.user.id,
+      stripeCustomerId: customerId,
+      billingOfferId: configuredOffer.id,
+      checkoutKey: `ai-top-up-checkout:${proposedAttemptId}`,
+      paramsJson: JSON.stringify(proposedParams),
+      expiresAt: new Date(now.getTime() + TOP_UP_CHECKOUT_RETENTION_MS),
+      now,
+    });
+    if (attempt.stripeCustomerId !== customerId) {
+      throw new Error("Unresolved top-up Checkout belongs to another Stripe Customer");
+    }
+    const offer = await findBillingOfferById({ id: attempt.billingOfferId });
+    if (
+      !offer ||
+      offer.kind !== "top_up" ||
+      !Number.isSafeInteger(offer.creditAmount) ||
+      (offer.creditAmount ?? 0) <= 0
+    ) {
+      throw new Error("Unresolved top-up Checkout has an invalid billing offer");
+    }
+
+    if (attempt.stripeCheckoutSessionId) {
+      const existing = await stripe.checkout.sessions.retrieve(
+        attempt.stripeCheckoutSessionId,
+        { expand: ["line_items.data.price"] },
+      );
+      if (!topUpSessionMatchesAttempt({
+        checkoutSession: existing,
+        attemptId: attempt.id,
+        customerId: attempt.stripeCustomerId,
+        offer,
+        userId: authSession.user.id,
+        requireLineItems: true,
+      })) {
+        throw new Error("Bound top-up Checkout failed canonical validation");
+      }
+      if (existing.status === "expired") {
+        const expired = await expireTopUpCheckoutAttempt({
+          attemptId: attempt.id,
+          ownerUserId: authSession.user.id,
+          stripeCheckoutSessionId: existing.id,
+        });
+        if (expired.count !== 1) {
+          throw new Error("Expired top-up Checkout changed during rotation");
+        }
+        continue;
+      }
+      if (existing.status === "open" && existing.url) redirect(existing.url);
+      redirect("/dashboard/account/billing");
+    }
+
+    const leaseToken = crypto.randomUUID();
+    const claim = await claimTopUpCheckoutCreation({
+      attemptId: attempt.id,
+      ownerUserId: authSession.user.id,
+      now,
+      leaseToken,
+      leaseExpiresAt: new Date(now.getTime() + TOP_UP_CHECKOUT_CREATE_LEASE_MS),
+    });
+    if (claim.status === "busy") {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 50 * (generation + 1)));
+      continue;
+    }
+
+    try {
+      if (!claim.attempt.paramsJson) {
+        throw new Error("Unbound legacy top-up Checkout has no durable parameters");
+      }
+      const params = JSON.parse(
+        claim.attempt.paramsJson,
+      ) as Stripe.Checkout.SessionCreateParams;
+      if (!topUpParamsMatchAttempt({
+        params,
+        attemptId: claim.attempt.id,
+        customerId: claim.attempt.stripeCustomerId,
+        offer,
+        userId: authSession.user.id,
+      })) {
+        throw new Error("Persisted top-up Checkout parameters failed validation");
+      }
+
+      const discovery = await discoverTopUpCheckoutAttempt({
+        stripe,
+        customerId: claim.attempt.stripeCustomerId,
+        userId: authSession.user.id,
+        attemptId: claim.attempt.id,
+        billingOfferId: claim.attempt.billingOfferId,
+        createdAt: claim.attempt.createdAt,
+      });
+      if (discovery.status === "multiple") {
+        throw new Error(
+          `Multiple Stripe Checkout Sessions match top-up attempt ${claim.attempt.id}`,
+        );
+      }
+
+      let checkoutSession: Stripe.Checkout.Session;
+      if (discovery.status === "single") {
+        checkoutSession = await stripe.checkout.sessions.retrieve(
+          discovery.session.id,
+          { expand: ["line_items.data.price"] },
+        );
+        if (!topUpSessionMatchesAttempt({
+          checkoutSession,
+          attemptId: claim.attempt.id,
+          customerId: claim.attempt.stripeCustomerId,
+          offer,
+          userId: authSession.user.id,
+          requireLineItems: true,
+        })) {
+          throw new Error("Discovered top-up Checkout failed canonical validation");
+        }
+      } else {
+        if (now.getTime() - claim.attempt.createdAt.getTime() >=
+          TOP_UP_CHECKOUT_RETENTION_MS) {
+          const markerPrefix = `absence:${claim.attempt.id}:`;
+          const previous = claim.attempt.recoveryLastError?.startsWith(
+            markerPrefix,
+          )
+            ? Date.parse(claim.attempt.recoveryLastError.slice(markerPrefix.length))
+            : Number.NaN;
+          if (
+            Number.isFinite(previous) &&
+            now.getTime() - previous >= 5 * 60_000
+          ) {
+            const expired = await expireTopUpCheckoutAttempt({
+              attemptId: claim.attempt.id,
+              ownerUserId: authSession.user.id,
+              stripeCheckoutSessionId: null,
+              leaseToken,
+            });
+            if (expired.count !== 1) {
+              throw new Error("Top-up Checkout absence rotation lease was lost");
+            }
+            continue;
+          }
+          const observedAt = Number.isFinite(previous)
+            ? previous
+            : now.getTime();
+          await releaseTopUpCheckoutCreation({
+            attemptId: claim.attempt.id,
+            leaseToken,
+            lastError: `${markerPrefix}${new Date(observedAt).toISOString()}`,
+            notBefore: new Date(observedAt + 5 * 60_000),
+          });
+          redirect("/dashboard/account/billing");
+        }
+        checkoutSession = await stripe.checkout.sessions.create(params, {
+          idempotencyKey: claim.attempt.checkoutKey,
+          timeout: 20_000,
+          maxNetworkRetries: 2,
+        });
+        if (!topUpSessionMatchesAttempt({
+          checkoutSession,
+          attemptId: claim.attempt.id,
+          customerId: claim.attempt.stripeCustomerId,
+          offer,
+          userId: authSession.user.id,
+          requireLineItems: false,
+        })) {
+          throw new Error("Created top-up Checkout failed canonical validation");
+        }
+      }
+
+      if (checkoutSession.status === "expired") {
+        const expired = await expireTopUpCheckoutAttempt({
+          attemptId: claim.attempt.id,
+          ownerUserId: authSession.user.id,
+          stripeCheckoutSessionId: null,
+          leaseToken,
+        });
+        if (expired.count !== 1) {
+          throw new Error("Expired top-up Checkout creation lease was lost");
+        }
+        continue;
+      }
+      const stored = await bindTopUpCheckoutCreation({
+        attemptId: claim.attempt.id,
+        leaseToken,
+        stripeCheckoutSessionId: checkoutSession.id,
+        expiresAt: checkoutSession.expires_at
+          ? new Date(checkoutSession.expires_at * 1_000)
+          : claim.attempt.expiresAt,
+      });
+      if (stored !== "stored-for-checkout") {
+        redirect("/dashboard/account/billing");
+      }
+      if (checkoutSession.status === "open" && checkoutSession.url) {
+        redirect(checkoutSession.url);
+      }
+      redirect("/dashboard/account/billing");
+    } catch (error) {
+      await releaseTopUpCheckoutCreation({
+        attemptId: claim.attempt.id,
+        leaseToken,
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
-  if (!session_.url) {
-    console.error("Checkout session URL is missing");
-    redirect("/dashboard/account/billing");
-  }
-  redirect(session_.url);
+  throw new Error("Top-up Checkout creation is still in progress");
 }
 
 export async function reconcileAiCheckoutSuccess(

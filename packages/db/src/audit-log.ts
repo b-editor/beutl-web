@@ -54,6 +54,10 @@ export const auditLogActions = {
     aiCreditsAdjusted: "admin.aiCreditsAdjusted",
     aiMonthlyUsageAdjusted: "admin.aiMonthlyUsageAdjusted",
     packageCheckoutResolution: "admin.packageCheckoutResolution",
+    topUpCheckoutInterventionResumed: "admin.topUpCheckoutInterventionResumed",
+    topUpCheckoutInterventionTerminalized: "admin.topUpCheckoutInterventionTerminalized",
+    storageMultipartInterventionResumed: "admin.storageMultipartInterventionResumed",
+    storageMultipartInterventionTerminalized: "admin.storageMultipartInterventionTerminalized",
   },
 } as const;
 

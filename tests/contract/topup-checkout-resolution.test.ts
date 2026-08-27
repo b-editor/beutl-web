@@ -9,7 +9,7 @@ describe("TopUp checkout resolution", () => {
 
   it("atomically binds the canonical Session and resolves the row", async () => {
     const updateMany = vi.fn().mockResolvedValue({ count: 1 });
-    const tx = { topUpCheckoutResolution: { findUnique: vi.fn().mockResolvedValue({ id: "r1", status: "refund_pending", revision: 0 }), updateMany }, topUpDuplicateRefundAttempt: { findMany: vi.fn().mockResolvedValue([]) }, topUpCheckoutAttempt: { findUnique: vi.fn().mockResolvedValue({ recoveryLeaseToken: "lease", stripeCheckoutSessionId: null }), updateMany } };
+    const tx = { topUpCheckoutResolution: { findUnique: vi.fn().mockResolvedValue({ id: "r1", status: "refund_pending", revision: 0 }), updateMany }, topUpDuplicateRefundAttempt: { findMany: vi.fn().mockResolvedValue([]) }, topUpCheckoutAttempt: { findUnique: vi.fn().mockResolvedValue({ recoveryLeaseToken: "lease", createLeaseToken: "lease", stripeCheckoutSessionId: null, accountDeletionAt: null, status: "open", updatedAt: new Date() }), updateMany } };
     await expect(finalizeTopUpCheckoutResolutionAtomically({ topUpAttemptId: "a1", recoveryLeaseToken: "lease", finalization: { outcome: "bind", sessionId: "cs1", expiresAt: new Date() }, prisma: tx as never })).resolves.toBe(true);
     expect(updateMany).toHaveBeenCalledTimes(2);
   });

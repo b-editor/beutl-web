@@ -19,6 +19,8 @@ import {
   reserveAdminAccountDeletion,
   setMonthlyUsageUsedByAdmin,
   startRetryableTransaction,
+  resumeTopUpCheckoutIntervention,
+  terminalizeTopUpCheckoutIntervention,
 } from "@beutl/db";
 import {
   closeStripeCustomerForAdminAccountDeletion,
@@ -51,6 +53,58 @@ export async function resolvePackageCheckoutMultiple(input: unknown): Promise<Ac
       await reschedulePackageCheckoutIntervention({ id: attempt.id, discoveryToken, leaseToken, notBefore: new Date(), lastError: error instanceof Error ? error.message : "Resolution failed" });
       return { success: false, message: error instanceof Error ? error.message : "Resolution failed" };
     }
+  });
+}
+
+function parseTopUpInterventionInput(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const value = input as Record<string, unknown>;
+  if (typeof value.topUpAttemptId !== "string" ||
+      typeof value.ownerUserId !== "string" ||
+      typeof value.stripeCustomerId !== "string" ||
+      typeof value.billingOfferId !== "string" ||
+      typeof value.expectedRevision !== "number" ||
+      !Number.isSafeInteger(value.expectedRevision) ||
+      typeof value.expectedInterventionAt !== "string") return null;
+  const expectedInterventionAt = new Date(value.expectedInterventionAt);
+  if (!Number.isFinite(expectedInterventionAt.getTime())) return null;
+  return { topUpAttemptId: value.topUpAttemptId, ownerUserId: value.ownerUserId, stripeCustomerId: value.stripeCustomerId, billingOfferId: value.billingOfferId, expectedRevision: value.expectedRevision, expectedInterventionAt };
+}
+
+export async function resumeTopUpCheckoutRecovery(input: unknown): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    const parsed = parseTopUpInterventionInput(input);
+    if (!parsed) return { success: false, message: "Invalid resolver input" };
+    const result = await startRetryableTransaction(async (tx) => {
+      const transition = await resumeTopUpCheckoutIntervention({ ...parsed, prisma: tx });
+      if (transition.status === "conflict" || transition.status === "unsafe") return transition;
+      await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.topUpCheckoutInterventionResumed, details: `attemptId: ${parsed.topUpAttemptId}, revision: ${parsed.expectedRevision}->${transition.revision}`, prisma: tx });
+      return transition;
+    });
+    return result.status === "resumed"
+      ? { success: true, message: "Top-up recovery resumed" }
+      : { success: false, message: result.status === "unsafe" ? result.reason : "Resolution changed; reload and retry" };
+  });
+}
+
+export async function terminalizeTopUpCheckoutRecovery(input: unknown): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    const parsed = parseTopUpInterventionInput(input);
+    if (!parsed) return { success: false, message: "Invalid resolver input" };
+    const value = input as Record<string, unknown>;
+    if (typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) {
+      return { success: false, message: "A detailed operator reason and evidence are required" };
+    }
+    const result = await startRetryableTransaction(async (tx) => {
+      const transition = await terminalizeTopUpCheckoutIntervention({ ...parsed, operatorUserId: session.user.id, operatorReason: value.operatorReason as string, operatorEvidence: value.operatorEvidence as string, prisma: tx });
+      if (transition.status === "conflict") return transition;
+      if (transition.status === "unsafe") return transition;
+      await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.topUpCheckoutInterventionTerminalized, details: `attemptId: ${parsed.topUpAttemptId}, revision: ${parsed.expectedRevision}->${transition.revision}`, prisma: tx });
+      return transition;
+    });
+    return result.status === "terminalized"
+      ? { success: true, message: "Top-up recovery terminalized" }
+      : { success: false, message: result.status === "unsafe" ? result.reason : "Resolution changed; reload and retry" };
   });
 }
 
@@ -146,11 +200,11 @@ export async function deleteUser({
       // 本人が消すときと同じ後始末を、同じトランザクションで。行が消えたあとに
       // 外の持ちものを指す手掛かりは残らないので、消す前に控えを取る——R2 の
       // オブジェクトと、走っている provider の job がそれ。
-      await enqueueUserStorageCleanups({ userId, prisma: tx });
       const prepared = await prepareAccountDeletionOutboxes({ userId, prisma: tx });
       if (prepared.unboundCheckoutRecoveries > 0) {
         return { status: "blocked" as const, reason: "checkout" as const };
       }
+      await enqueueUserStorageCleanups({ userId, prisma: tx });
       await deleteUserById({ userId, prisma: tx });
       await addAuditLog({
         userId: session.user.id,

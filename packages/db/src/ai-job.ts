@@ -5,6 +5,7 @@ import {
   startTransaction,
   type PrismaTransaction,
 } from "./transaction";
+import { STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS } from "./storage-multipart-cleanup";
 
 const ACTIVE_AI_JOB_STATUSES = ["queued", "running", "finalizing"];
 const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
@@ -828,7 +829,6 @@ export async function prepareAiJobDeletionByUserId({
         select: {
           objectKey: true,
           aiJobId: true,
-          uploadId: true,
           leaseToken: true,
           state: true,
           notBefore: true,
@@ -1045,7 +1045,6 @@ export const AI_STORAGE_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 export type AiStorageCleanupClaim = {
   objectKey: string;
   aiJobId: string | null;
-  uploadId: string | null;
   leaseToken: string;
   notBefore: Date;
 };
@@ -1066,6 +1065,28 @@ export async function claimAiStorageCleanupForDeletion({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    const multipartPending = await tx.storageMultipartCleanup.findFirst({
+      where: { objectKey, status: { in: ["pending", "processing", "retry", "intervention"] } },
+      orderBy: { notBefore: "desc" },
+      select: { notBefore: true },
+    });
+    if (multipartPending) {
+      const deferredUntil = new Date(Math.max(
+        notBefore.getTime(),
+        now.getTime() + STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+        multipartPending.notBefore.getTime() +
+          STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+      ));
+      await tx.aiStorageCleanup.updateMany({
+        where: { objectKey, state, notBefore, leaseToken },
+        data: {
+          state: "cleanup",
+          leaseToken: null,
+          notBefore: deferredUntil,
+        },
+      });
+      return { claimed: false as const, shouldDeleteObject: false as const };
+    }
     const nextLeaseToken = crypto.randomUUID();
     const result = await tx.aiStorageCleanup.updateMany({
       where: {
@@ -1091,7 +1112,6 @@ export async function claimAiStorageCleanupForDeletion({
       select: {
         objectKey: true,
         aiJobId: true,
-        uploadId: true,
         leaseToken: true,
         notBefore: true,
       },
@@ -1102,7 +1122,6 @@ export async function claimAiStorageCleanupForDeletion({
     const claimedCleanup: AiStorageCleanupClaim = {
       objectKey: cleanup.objectKey,
       aiJobId: cleanup.aiJobId,
-      uploadId: cleanup.uploadId,
       leaseToken: nextLeaseToken,
       notBefore: cleanup.notBefore,
     };

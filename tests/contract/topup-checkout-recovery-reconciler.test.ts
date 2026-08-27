@@ -57,6 +57,20 @@ function session(id: string, paymentIntentId: string): any {
 }
 
 function seedAttempt(database: ReturnType<typeof createInMemoryPrisma>, overrides: Record<string, unknown> = {}) {
+  database.state.billingOffers.set("offer-topup", {
+    id: "offer-topup",
+    kind: "top_up",
+    stripePriceId: "price-topup",
+    stripeProductId: "product-topup",
+    unitAmount: 1000,
+    currency: "usd",
+    creditAmount: 500,
+    recurringInterval: null,
+    recurringIntervalCount: null,
+    checkoutEnabled: true,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   const attempt: any = {
     id: "attempt-topup",
     ownerUserId: "deleted-user",
@@ -97,6 +111,7 @@ function seedAttempt(database: ReturnType<typeof createInMemoryPrisma>, override
 }
 
 function stripeFor(sessions: any[], chargeCreated: Record<string, number>, refunded = new Map<string, any[]>()) {
+  const ownerUserId = sessions[0]?.metadata?.beutlUserId ?? "deleted-user";
   const refundList = vi.fn(async ({ payment_intent: paymentIntentId, starting_after }: any) => {
     const rows = refunded.get(paymentIntentId) ?? [];
     return starting_after ? { data: [], has_more: false } : { data: rows, has_more: false };
@@ -122,7 +137,7 @@ function stripeFor(sessions: any[], chargeCreated: Record<string, number>, refun
         amount_received: 1000,
         currency: "usd",
         customer: "cus_topup",
-        metadata: { topUpAttemptId: "attempt-topup", beutlUserId: "deleted-user", billingOfferId: "offer-topup" },
+        metadata: { topUpAttemptId: "attempt-topup", beutlUserId: ownerUserId, billingOfferId: "offer-topup", creditAmount: "500" },
         latest_charge: { id: `ch-${id}`, created: chargeCreated[id] },
       })),
     },
@@ -180,6 +195,257 @@ describe("top-up account-deletion recovery reconciliation", () => {
     expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({ status: "refund_not_required", recoveryLeaseToken: null });
   });
 
+  it("binds a normal recovered open Session without expiring or refunding it", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      refundNotBefore: null,
+    });
+    const open = {
+      ...session("cs-normal-open", "pi-unused"),
+      status: "open",
+      metadata: {
+        ...session("unused", "unused").metadata,
+        beutlUserId: "active-user",
+      },
+    };
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async ({ status }: any) => ({
+          data: status === "open" ? [open] : [],
+          has_more: false,
+        })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: vi.fn() },
+      refunds: { list: vi.fn(), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(stripe.checkout.sessions.expire).not.toHaveBeenCalled();
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      status: "open",
+      stripeCheckoutSessionId: "cs-normal-open",
+      activeOwnerKey: "active-user",
+      recoveryLeaseToken: null,
+      createLeaseToken: null,
+    });
+  });
+
+  it("terminalizes a normal completed Session whose payment is already fully refunded", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      refundNotBefore: null,
+    });
+    const completed = {
+      ...session("cs-normal-refunded", "pi-refunded"),
+      metadata: {
+        ...session("unused", "unused").metadata,
+        beutlUserId: "active-user",
+      },
+    };
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async ({ status }: any) => ({
+          data: status === "complete" ? [completed] : [],
+          has_more: false,
+        })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: vi.fn(async () => ({
+        id: "pi-refunded",
+        status: "succeeded",
+        amount: 1000,
+        amount_received: 1000,
+        currency: "usd",
+        customer: "cus_topup",
+        metadata: {
+          topUpAttemptId: "attempt-topup",
+          beutlUserId: "active-user",
+          billingOfferId: "offer-topup",
+          creditAmount: "500",
+        },
+        latest_charge: { id: "ch-refunded", created: 1 },
+      })) },
+      refunds: { list: vi.fn(async () => ({
+        data: [{ id: "re-full", amount: 1000, currency: "usd", status: "succeeded" }],
+        has_more: false,
+      })), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      status: "expired",
+      stripeCheckoutSessionId: null,
+      activeOwnerKey: null,
+    });
+    expect(database.state.topUpCheckoutResolutions.size).toBe(0);
+  });
+
+  it("schedules only the remaining refund for a partially refunded normal Session", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      refundNotBefore: null,
+    });
+    const completed = {
+      ...session("cs-normal-partial", "pi-partial"),
+      metadata: {
+        ...session("unused", "unused").metadata,
+        beutlUserId: "active-user",
+      },
+    };
+    const refunds = new Map<string, any[]>([["pi-partial", [{
+      id: "re-partial",
+      amount: 400,
+      currency: "usd",
+      status: "succeeded",
+    }]]]);
+    const stripe = stripeFor(
+      [completed],
+      { "pi-partial": 1 },
+      refunds,
+    );
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutResolutions.get("attempt-topup")).toMatchObject({
+      canonicalSessionId: null,
+      canonicalPaymentIntentId: null,
+      expectedPaymentIntentIds: '["pi-partial"]',
+      status: "refund_pending",
+    });
+    expect([...database.state.topUpDuplicateRefundAttempts.values()]).toEqual([
+      expect.objectContaining({
+        stripePaymentIntentId: "pi-partial",
+        amount: 1000,
+        status: "required",
+      }),
+    ]);
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      stripeCheckoutSessionId: null,
+      activeOwnerKey: "active-user",
+      recoveryNotBefore: expect.any(Date),
+    });
+  });
+
+  it.each([
+    ["amount", { amount: 999, amount_received: 999 }],
+    ["currency", { currency: "eur" }],
+    ["credit metadata", { metadata: { creditAmount: "999" } }],
+  ])("fails closed when canonical top-up %s differs from the BillingOffer", async (_case, paymentOverride) => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      refundNotBefore: null,
+    });
+    const completed = {
+      ...session("cs-invalid-offer", "pi-invalid-offer"),
+      metadata: {
+        ...session("unused", "unused").metadata,
+        beutlUserId: "active-user",
+      },
+    };
+    const metadata = {
+      topUpAttemptId: "attempt-topup",
+      beutlUserId: "active-user",
+      billingOfferId: "offer-topup",
+      creditAmount: "500",
+      ...((paymentOverride as any).metadata ?? {}),
+    };
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async ({ status }: any) => ({
+          data: status === "complete" ? [completed] : [],
+          has_more: false,
+        })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: vi.fn(async () => ({
+        id: "pi-invalid-offer",
+        status: "succeeded",
+        amount: 1000,
+        amount_received: 1000,
+        currency: "usd",
+        customer: "cus_topup",
+        metadata,
+        latest_charge: { id: "ch-invalid", created: 1 },
+        ...paymentOverride,
+        metadata,
+      })) },
+      refunds: { list: vi.fn(async () => ({ data: [], has_more: false })), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      status: "open",
+      stripeCheckoutSessionId: null,
+      recoveryNotBefore: expect.any(Date),
+    });
+    expect(database.state.topUpCheckoutResolutions.size).toBe(0);
+  });
+
+  it("terminalizes a params-less normal legacy attempt after repeated exhaustive absence", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      refundNotBefore: null,
+      createdAt: new Date(NOW.getTime() - 24 * 60 * 60_000 - 1),
+    });
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async () => ({ data: [], has_more: false })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: vi.fn() },
+      refunds: { list: vi.fn(), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+    const confirmAt = new Date(NOW.getTime() + 5 * 60_000);
+    await reconcileStripeCheckoutCleanups(confirmAt, "sk_test", stripe);
+
+    expect(stripe.checkout.sessions.list).toHaveBeenCalledTimes(6);
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      status: "expired",
+      activeOwnerKey: null,
+      recoveryLeaseToken: null,
+    });
+  });
+
   it("preserves an expire race that completes a Session", async () => {
     const database = createInMemoryPrisma();
     setDbProvider(async () => database.prisma as any);
@@ -200,7 +466,7 @@ describe("top-up account-deletion recovery reconciliation", () => {
     expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({ status: "refund_required", stripeCheckoutSessionId: "cs-race-complete", recoveryLeaseToken: null });
   });
 
-  it("intervenes when a multiple-session expiry race remains open", async () => {
+  it("retries when a multiple-session expiry race remains open", async () => {
     const database = createInMemoryPrisma();
     setDbProvider(async () => database.prisma as any);
     seedAttempt(database);
@@ -215,7 +481,12 @@ describe("top-up account-deletion recovery reconciliation", () => {
       refunds: { list: vi.fn(), create: vi.fn() },
     };
     await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
-    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({ recoveryInterventionAt: expect.any(Date), recoveryLeaseToken: null });
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup")).toMatchObject({
+      recoveryInterventionAt: null,
+      recoveryLeaseToken: null,
+      recoveryNotBefore: expect.any(Date),
+      recoveryAttempts: 1,
+    });
   });
 
   it("persists duplicate resolution, settles its outbox, and binds the canonical Session on the next claim tick", async () => {
@@ -281,7 +552,7 @@ describe("top-up account-deletion recovery reconciliation", () => {
       id: "refund-page", topUpAttemptId: "attempt-topup", stripePaymentIntentId: "pi-page", stripeCustomerId: "cus_topup", ownerUserId: "deleted-user", billingOfferId: "offer-topup", amount: 1000, currency: "usd", status: "required", notBefore: NOW, leaseToken: null, leaseExpiresAt: null, attempts: 0, refundId: null, refundedAmount: 0, lastError: null, createdAt: NOW, updatedAt: NOW,
     });
     const stripe = stripeFor([], { "pi-page": 1 });
-    stripe.paymentIntents.retrieve = vi.fn(async () => ({ id: "pi-page", status: "succeeded", amount: 1000, amount_received: 1000, currency: "usd", customer: "cus_topup", metadata: { topUpAttemptId: "attempt-topup", beutlUserId: "deleted-user", billingOfferId: "offer-topup" }, latest_charge: { id: "ch-page", created: 1 } }));
+    stripe.paymentIntents.retrieve = vi.fn(async () => ({ id: "pi-page", status: "succeeded", amount: 1000, amount_received: 1000, currency: "usd", customer: "cus_topup", metadata: { topUpAttemptId: "attempt-topup", beutlUserId: "deleted-user", billingOfferId: "offer-topup", creditAmount: "500" }, latest_charge: { id: "ch-page", created: 1 } }));
     stripe.refunds.list = vi.fn()
       .mockResolvedValueOnce({ data: [{ id: "re-failed", amount: 100, status: "failed" }], has_more: true })
       .mockResolvedValueOnce({ data: [{ id: "re-succeeded", amount: 1000, status: "succeeded" }], has_more: false });

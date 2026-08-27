@@ -89,38 +89,6 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
   await bucket.delete(objectKey);
 }
 
-// Unassembled multipart parts require the upload ID for abort; object deletion
-// alone cannot remove them. Without an upload ID, object deletion is sufficient.
-export function isTerminalMultipartAbortError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const record = error as Record<string, unknown>;
-  const code = String(record.code ?? record.name ?? "").toLowerCase();
-  if (code === "nosuchupload") return true;
-  const message = String(record.message ?? "");
-  // Workers bindings may expose only the numeric R2 code in the message.
-  return /(?:\(\s*10024\s*\)|\b10024)\s*$/u.test(message);
-}
-
-async function abortMultipartIfPresent(
-  objectKey: string,
-  uploadId: string | null,
-): Promise<void> {
-  if (!uploadId) return;
-  const bucket = getR2Bucket();
-  if (!bucket.resumeMultipartUpload) {
-    throw new Error("The configured R2 bucket cannot abort a multipart upload.");
-  }
-  try {
-    await bucket.resumeMultipartUpload(objectKey, uploadId).abort();
-  } catch (error) {
-    // A completed, already-aborted, or unknown upload is terminal: deleting the
-    // object (if one exists) is safe. Transient failures must escape so the
-    // claimed cleanup row and uploadId remain for the next reconciliation.
-    if (isTerminalMultipartAbortError(error)) return;
-    throw error;
-  }
-}
-
 export async function readAiJsonResult({
   objectKey,
   maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
@@ -413,14 +381,9 @@ export async function reconcileAiStorageCleanups(now = new Date()) {
       if (!claim.claimed) continue;
       if (!claim.shouldDeleteObject) continue;
       const claimedCleanup = claim.cleanup;
-      // Abort a tracked multipart before deleting its object; otherwise its
-      // parts survive after the only durable upload handle is removed.
-      if (claimedCleanup.uploadId) {
-        await abortMultipartIfPresent(
-          claimedCleanup.objectKey,
-          claimedCleanup.uploadId,
-        );
-      }
+      // Multipart handles have their own detached abort-only outbox. This row
+      // owns only object deletion, so it cannot erase a newer winner that reused
+      // the same key while an older handle waited for retry.
       await deleteAiOutputObject(claimedCleanup.objectKey);
       const finalized = await finalizeReconciledAiStorageCleanup({
         objectKey: claimedCleanup.objectKey,

@@ -1,5 +1,8 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import {
+  startRetryableTransaction,
+  type PrismaTransaction,
+} from "./transaction";
 
 async function insertStorageUpload({
   userId,
@@ -152,21 +155,43 @@ export async function attachStorageUploadRemote({
   return result.count > 0;
 }
 
-/** Record a remote handle after the creator lost its attach CAS. */
-export async function recordStorageUploadRemoteForCleanup({
+/** Record a remote handle after the creator's leased attach did not return success. */
+export async function recordStorageUploadRemoteAfterAttachFailure({
   id,
   userId,
   uploadId,
+  expected,
   prisma,
 }: {
   id: string;
   userId: string;
   uploadId: string;
+  expected: StorageUploadGenerationExpectation & {
+    uploadId: null;
+    startState: "creating";
+  };
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
-    where: { id, userId, uploadId: null, completedFileId: null },
+    where: {
+      id,
+      userId,
+      uploadId: null,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: "creating",
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    },
     data: {
       uploadId,
       startState: "active",
@@ -203,16 +228,6 @@ export async function releaseStorageUploadCreation({
   return result.count > 0;
 }
 
-/** Persist a remote multipart handle whose local row was lost, for cleanup. */
-export async function createStorageUploadOrphanedMultipart({
-  userId, id, objectKey, uploadId, name, mimeType, now, prisma,
-}: { userId: string; id: string; objectKey: string; uploadId: string; name: string; mimeType: string; now: Date; prisma?: PrismaTransaction }) {
-  return insertStorageUpload({
-    userId, id, objectKey, uploadId, name, mimeType, size: BigInt(0),
-    partSize: 5 * 1024 * 1024, abandonedAt: now, startState: "active", prisma,
-  });
-}
-
 // An upload is only ever reached through its own id together with the user it
 // belongs to: the bucket would take parts from anyone who knew the key and the
 // upload id, so those are never what a request is trusted on.
@@ -240,6 +255,150 @@ export async function deleteStorageUpload({
   await db.storageUpload.deleteMany({ where: { id } });
 }
 
+/** Delete only the exact row snapshot already frozen for remote cleanup. */
+export async function deleteClaimedStorageUpload({
+  id,
+  userId,
+  expected,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  expected: StorageUploadAbandonExpectation & { abandonedAt: Date };
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? await getDb();
+  const deleted = await db.storageUpload.deleteMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: expected.abandonedAt,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      cleanupLeaseUntil: expected.cleanupLeaseUntil,
+      cleanupLeaseToken: expected.cleanupLeaseToken,
+    },
+  });
+  return deleted.count === 1;
+}
+
+/**
+ * Replace a terminal multipart handle with a delayed object cleanup, then drop
+ * only that claimed upload generation. The transaction closes the interval in
+ * which an in-flight complete could otherwise publish after all tracking was
+ * removed.
+ */
+export async function settleTerminalClaimedStorageUpload({
+  id,
+  userId,
+  expected,
+  now,
+  objectCleanupNotBefore,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  expected: StorageUploadAbandonExpectation & { abandonedAt: Date };
+  now: Date;
+  objectCleanupNotBefore: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  if (objectCleanupNotBefore.getTime() <= now.getTime()) {
+    throw new RangeError("Terminal multipart object cleanup must be delayed");
+  }
+
+  const run = async (tx: PrismaTransaction): Promise<boolean> => {
+    await tx.aiStorageCleanup.createMany({
+      data: [{
+        objectKey: expected.objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "cleanup",
+        notBefore: objectCleanupNotBefore,
+      }],
+      skipDuplicates: true,
+    });
+    const cleanup = await tx.aiStorageCleanup.findFirst({
+      where: { objectKey: expected.objectKey },
+      select: {
+        objectKey: true,
+        leaseToken: true,
+        notBefore: true,
+      },
+    });
+    if (!cleanup) {
+      throw new Error(
+        `Object cleanup ${expected.objectKey} was not persisted`,
+      );
+    }
+    if (
+      cleanup.leaseToken &&
+      cleanup.notBefore.getTime() > now.getTime()
+    ) return false;
+
+    const delayedUntil = cleanup.notBefore.getTime() >
+        objectCleanupNotBefore.getTime()
+      ? cleanup.notBefore
+      : objectCleanupNotBefore;
+    const delayed = await tx.aiStorageCleanup.updateMany({
+      where: {
+        objectKey: expected.objectKey,
+        leaseToken: cleanup.leaseToken,
+        notBefore: cleanup.notBefore,
+      },
+      data: {
+        aiJobId: null,
+        leaseToken: null,
+        state: "cleanup",
+        notBefore: delayedUntil,
+      },
+    });
+    if (delayed.count !== 1) {
+      throw new Error(
+        `Object cleanup ${expected.objectKey} changed before it was delayed`,
+      );
+    }
+
+    const deleted = await tx.storageUpload.deleteMany({
+      where: {
+        id,
+        userId,
+        completedFileId: null,
+        abandonedAt: expected.abandonedAt,
+        createdAt: expected.createdAt,
+        objectKey: expected.objectKey,
+        uploadId: expected.uploadId,
+        name: expected.name,
+        mimeType: expected.mimeType,
+        size: expected.size,
+        partSize: expected.partSize,
+        startState: expected.startState,
+        creationLeaseUntil: expected.creationLeaseUntil,
+        creationLeaseToken: expected.creationLeaseToken,
+        cleanupLeaseUntil: expected.cleanupLeaseUntil,
+        cleanupLeaseToken: expected.cleanupLeaseToken,
+      },
+    });
+    if (deleted.count !== 1) {
+      // Roll back the newly-created cleanup as well. It may target a key now
+      // owned by a replacement generation only in legacy deterministic rows.
+      throw new Error(`Claimed storage upload ${id} changed before settlement`);
+    }
+    return true;
+  };
+
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
+}
+
 // 完了したアップロードの控えを残す。行ごと消すと、完了応答だけが失われたときに
 // 同じ id で結果を取り直せず、やり直しが二重ファイルになる。
 //
@@ -249,41 +408,172 @@ export async function deleteStorageUpload({
 // られる。
 export async function markStorageUploadCompleted({
   id,
+  userId,
   fileId,
+  expected,
   prisma,
 }: {
   id: string;
+  userId: string;
   fileId: string;
+  expected: StorageUploadGenerationExpectation;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
-    where: { id, completedFileId: null, abandonedAt: null },
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    },
     data: { completedFileId: fileId },
   });
   return result.count > 0;
 }
 
+export type StorageUploadGenerationExpectation = {
+  createdAt: Date;
+  objectKey: string;
+  uploadId: string | null;
+  name: string;
+  mimeType: string;
+  size: bigint;
+  partSize: number;
+  startState: string;
+  creationLeaseUntil: Date | null;
+  creationLeaseToken: string | null;
+};
+
 // 「この行のパートは自分が捨てる」と宣言する。完了済みでも、既に誰かが宣言して
 // いても取れない。取れた行にはもう控えを書けないので、そのあとで中止しても
 // オブジェクトを消しても、File がそれを指すことはない。
+export type StorageUploadAbandonExpectation =
+  StorageUploadGenerationExpectation & {
+    abandonedAt: Date | null;
+    cleanupLeaseUntil: Date | null;
+    cleanupLeaseToken: string | null;
+  };
+
 export async function claimStorageUploadForAbandon({
   id,
   userId,
   now,
+  expected,
+  cleanupLeaseToken,
+  cleanupLeaseUntil,
+  requireExpiredCreationLease = false,
   prisma,
 }: {
   id: string;
   userId: string;
   now: Date;
+  expected: StorageUploadAbandonExpectation;
+  cleanupLeaseToken: string;
+  cleanupLeaseUntil: Date;
+  requireExpiredCreationLease?: boolean;
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
+  if (
+    cleanupLeaseToken.length === 0 ||
+    cleanupLeaseUntil.getTime() <= now.getTime()
+  ) {
+    throw new RangeError("Storage cleanup lease must expire in the future");
+  }
   const db = prisma ?? (await getDb());
   const result = await db.storageUpload.updateMany({
-    where: { id, userId, completedFileId: null, abandonedAt: null },
-    data: { abandonedAt: now },
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: expected.abandonedAt,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      cleanupLeaseUntil: expected.cleanupLeaseUntil,
+      cleanupLeaseToken: expected.cleanupLeaseToken,
+      AND: [
+        {
+          OR: [
+            { cleanupLeaseToken: null, cleanupLeaseUntil: null },
+            { cleanupLeaseUntil: { lte: now } },
+          ],
+        },
+        ...(requireExpiredCreationLease
+          ? [{
+              OR: [
+                { creationLeaseUntil: null },
+                { creationLeaseUntil: { lte: now } },
+              ],
+            }]
+          : []),
+      ],
+    },
+    data: {
+      abandonedAt: expected.abandonedAt ?? now,
+      cleanupLeaseToken,
+      cleanupLeaseUntil,
+    },
   });
   return result.count > 0;
+}
+
+/** Freeze an upload for an account cascade without claiming remote cleanup. */
+export async function freezeStorageUploadForAccountDeletion({
+  id,
+  userId,
+  now,
+  expected,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now: Date;
+  expected: StorageUploadAbandonExpectation & { abandonedAt: null };
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? await getDb();
+  const frozen = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    },
+    data: { abandonedAt: now },
+  });
+  return frozen.count === 1;
 }
 
 // 取り消しの墓標の数。まだ現れていない名前の取り消しを書き留めたもので、
@@ -329,17 +619,38 @@ export async function countStorageUploadsByUserId({
 // quota spent, for no reason: it is due now.
 export async function listStorageUploadsStartedBefore({
   before,
+  now,
   limit,
   prisma,
 }: {
   before: Date;
+  now: Date;
   limit: number;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   return await db.storageUpload.findMany({
     where: {
-      OR: [{ completedFileId: null, createdAt: { lt: before } }, { abandonedAt: { not: null } }],
+      AND: [
+        {
+          OR: [
+            { completedFileId: null, createdAt: { lt: before } },
+            { abandonedAt: { not: null } },
+          ],
+        },
+        {
+          OR: [
+            { cleanupLeaseUntil: null },
+            { cleanupLeaseUntil: { lte: now } },
+          ],
+        },
+        {
+          OR: [
+            { creationLeaseUntil: null },
+            { creationLeaseUntil: { lte: now } },
+          ],
+        },
+      ],
     },
     orderBy: { createdAt: "asc" },
     take: limit,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
+import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -42,10 +43,9 @@ const bucket = vi.hoisted(() => {
 });
 
 const createFile = vi.hoisted(() => vi.fn());
-const claimStorageUploadForAbandon = vi.hoisted(() => vi.fn());
 vi.mock("@beutl/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/db")>();
-  return { ...actual, createFile, claimStorageUploadForAbandon };
+  return { ...actual, createFile };
 });
 
 import { finishUpload, startUpload } from "../../apps/web/src/lib/storage-upload-server";
@@ -81,7 +81,6 @@ describe("storage upload consistency", () => {
       id: "file-1",
       name: "clip.mp4",
     }));
-    claimStorageUploadForAbandon.mockImplementation(async () => true);
   });
 
   it("waits for the bucket to join the parts before recording the file", async () => {
@@ -199,7 +198,8 @@ describe("storage upload consistency", () => {
     // ではない。消すと、直後に記録される File が消えたものを指すことになる。
     const uploadId = await begin();
     createFile.mockRejectedValueOnce(new Error("the database is unavailable"));
-    claimStorageUploadForAbandon.mockResolvedValueOnce(false);
+    vi.spyOn(storageDb, "claimStorageUploadForAbandon")
+      .mockResolvedValueOnce(false);
 
     await expect(
       finishUpload({

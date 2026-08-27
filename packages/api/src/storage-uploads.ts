@@ -1,9 +1,14 @@
 import {
+  claimStorageMultipartCleanup,
   claimStorageUploadForAbandon,
-  deleteStorageUpload,
+  deleteClaimedStorageUpload,
+  finalizeStorageMultipartCleanup,
   findStorageUploadByIdAndUserId,
+  listDueStorageMultipartCleanups,
+  recordStorageMultipartCleanupFailure,
   listStorageUploadsStartedBefore,
-  releaseStorageUploadCreation,
+  settleTerminalClaimedStorageUpload,
+  STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
 
@@ -27,9 +32,10 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
+const STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 const MAX_PER_RUN = 100;
 
-function isTerminalMultipartAbortError(error: unknown): boolean {
+export function isTerminalMultipartAbortError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const record = error as Record<string, unknown>;
   const code = String(record.code ?? record.name ?? "").toLowerCase();
@@ -39,17 +45,80 @@ function isTerminalMultipartAbortError(error: unknown): boolean {
   );
 }
 
-async function deleteObjectAfterTerminalAbort(objectKey: string): Promise<boolean> {
-  try {
-    const bucket = getR2Bucket();
-    if (!bucket.head || !bucket.delete) return false;
-    if (!await bucket.head(objectKey)) return true;
-    await bucket.delete(objectKey);
-    return true;
-  } catch (error) {
-    console.error("Failed to clear object after terminal multipart abort", objectKey, error);
-    return false;
+export async function reconcileStorageMultipartCleanups(
+  now: Date = new Date(),
+): Promise<{ inspected: number; settled: number; errors: number }> {
+  const cleanups = await listDueStorageMultipartCleanups({
+    now,
+    limit: MAX_PER_RUN,
+  });
+  let settled = 0;
+  let errors = 0;
+
+  for (const cleanup of cleanups) {
+    const claim = await claimStorageMultipartCleanup({
+      expected: {
+        objectKey: cleanup.objectKey,
+        uploadId: cleanup.uploadId,
+        leaseToken: cleanup.leaseToken,
+        notBefore: cleanup.notBefore,
+      },
+      now,
+    }).catch((error) => {
+      errors++;
+      console.error(
+        "Failed to claim a multipart cleanup",
+        cleanup.objectKey,
+        cleanup.uploadId,
+        error,
+      );
+      return null;
+    });
+    if (!claim) continue;
+
+    try {
+      const bucket = getR2Bucket();
+      if (!bucket.resumeMultipartUpload) {
+        throw new Error("The configured R2 bucket cannot abort a multipart upload.");
+      }
+      try {
+        await bucket.resumeMultipartUpload(claim.objectKey, claim.uploadId).abort();
+      } catch (error) {
+        if (!isTerminalMultipartAbortError(error)) throw error;
+      }
+
+      const settlementAt = new Date();
+      if (!await finalizeStorageMultipartCleanup({
+        objectKey: claim.objectKey,
+        uploadId: claim.uploadId,
+        leaseToken: claim.leaseToken,
+        now: settlementAt,
+      })) {
+        throw new Error(
+          `Multipart cleanup ${claim.objectKey} ${claim.uploadId} lost its lease`,
+        );
+      }
+      settled++;
+    } catch (error) {
+      errors++;
+      await recordStorageMultipartCleanupFailure({
+        objectKey: claim.objectKey,
+        uploadId: claim.uploadId,
+        leaseToken: claim.leaseToken,
+        now,
+        error: error instanceof Error ? error.message : String(error),
+        maxAttempts: String(error instanceof Error ? error.message : error).includes("cannot abort") ? 1 : undefined,
+      }).catch((failureError) => console.error("Failed to persist multipart cleanup failure", failureError));
+      console.error(
+        "Failed to reconcile a multipart cleanup",
+        claim.objectKey,
+        claim.uploadId,
+        error,
+      );
+    }
   }
+
+  return { inspected: cleanups.length, settled, errors };
 }
 
 export async function abandonStaleStorageUploads(
@@ -57,49 +126,86 @@ export async function abandonStaleStorageUploads(
 ): Promise<{ abandoned: number; failed: number }> {
   const stale = await listStorageUploadsStartedBefore({
     before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
+    now,
     limit: MAX_PER_RUN,
   });
 
   let abandoned = 0;
   let failed = 0;
-  for (const upload of stale) {
+  for (const listed of stale) {
     // 一覧を引いてから順番が回ってくるまでの間に、そのアップロードが完了して
     // いることがある。行を取れなければ、それは完了したか、既に誰かが取ったか。
-    const claimed = await claimStorageUploadForAbandon({
-      id: upload.id,
-      userId: upload.userId,
-      now,
-    }).catch(() => false);
-    if (!claimed) {
-      // 取れなかった理由を確かめる。完了していたなら控えを片付けるだけ。前の回で
-      // 自分が取ったまま中止に失敗した行なら、そのまま捨てにかかってよい——
-      // 取られた行にはもう控えが書けないので、消して困るものは残っていない。
-      const current = await findStorageUploadByIdAndUserId({
-        id: upload.id,
-        userId: upload.userId,
-      }).catch(() => null);
-      if (!current) continue;
-      if (current.completedFileId) {
-        // Completion receipts are bounded by the user's file-count limit and
-        // cascade with their File row; they are never multipart sweep state.
-        continue;
-      }
-      if (!current.abandonedAt) continue;
+    const cleanupLeaseToken = crypto.randomUUID();
+    try {
+      await claimStorageUploadForAbandon({
+        id: listed.id,
+        userId: listed.userId,
+        now,
+        cleanupLeaseToken,
+        cleanupLeaseUntil: new Date(
+          now.getTime() + STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS,
+        ),
+        requireExpiredCreationLease: true,
+        expected: {
+          createdAt: listed.createdAt,
+          objectKey: listed.objectKey,
+          uploadId: listed.uploadId,
+          name: listed.name,
+          mimeType: listed.mimeType,
+          size: listed.size,
+          partSize: listed.partSize,
+          abandonedAt: listed.abandonedAt,
+          startState: listed.startState,
+          creationLeaseUntil: listed.creationLeaseUntil,
+          creationLeaseToken: listed.creationLeaseToken,
+          cleanupLeaseUntil: listed.cleanupLeaseUntil,
+          cleanupLeaseToken: listed.cleanupLeaseToken,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to claim a stale storage upload", listed.id, error);
+      failed++;
+      continue;
+    }
+    // Always reload after the claim. Even when the claim failed because another
+    // cleanup already owns the row, this is the only safe source of its current
+    // uploadId. Acting on the list snapshot can lose a handle attached between
+    // list and claim.
+    let upload;
+    try {
+      upload = await findStorageUploadByIdAndUserId({
+        id: listed.id,
+        userId: listed.userId,
+      });
+    } catch (error) {
+      console.error("Failed to reload a stale storage upload", listed.id, error);
+      failed++;
+      continue;
+    }
+    if (!upload) continue;
+    if (upload.completedFileId) {
+      // Completion receipts are bounded by the user's file-count limit and
+      // cascade with their File row; they are never multipart sweep state.
+      continue;
+    }
+    if (
+      !upload.abandonedAt ||
+      upload.cleanupLeaseToken !== cleanupLeaseToken
+    ) {
+      // The exact list snapshot was not claimed. A creator may have attached or
+      // renewed a remote handle since the list query, so leave the current row
+      // for a later sweep.
+      continue;
     }
 
-    // A pre-create intent has no remote handle to abort. Expired creating leases
-    // are returned to the retryable intent state; they keep their quota
-    // reservation until a later start either attaches the handle or cancellation
-    // claims the row. This avoids dropping the only durable request identity.
+    // A pre-create intent has no observed remote handle to abort. A live creator
+    // lease was excluded by the claim. Once an expired lease is claimed, delete
+    // the row instead of leaving abandonedAt set on a nominally retryable intent.
+    // A late creator that eventually observes a handle will fail its attach CAS
+    // and compensate that handle before returning.
     if (upload.uploadId === null) {
-      if (upload.startState === "creating") {
-        await releaseStorageUploadCreation({ id: upload.id, now, leaseToken: (upload as { creationLeaseToken?: string | null }).creationLeaseToken ?? null }).catch(() => undefined);
-      } else {
-        // An intent has never contacted R2, so dropping it after the normal
-        // abandonment window is safe and releases its quota reservation.
-        await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-        abandoned++;
-      }
+      if (await deleteClaimedUpload(upload)) abandoned++;
+      else failed++;
       continue;
     }
 
@@ -114,12 +220,13 @@ export async function abandonStaleStorageUploads(
         continue;
       }
 
-      await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-      abandoned++;
+      if (await deleteClaimedUpload(upload)) abandoned++;
+      else failed++;
       continue;
     }
 
     try {
+      if (!await stillOwnCleanupLease(upload)) continue;
       const bucket = getR2Bucket();
       // A bucket that cannot abandon an upload would leave the row behind for
       // every later run to trip over, so say so once rather than silently.
@@ -128,8 +235,8 @@ export async function abandonStaleStorageUploads(
       }
       await bucket.resumeMultipartUpload(upload.objectKey, upload.uploadId).abort();
       // 中止できたということは、まだパートのままだった。オブジェクトは無い。
-      await deleteStorageUpload({ id: upload.id });
-      abandoned++;
+      if (await deleteClaimedUpload(upload)) abandoned++;
+      else failed++;
     } catch (error) {
       console.error("Failed to abandon a stale storage upload", upload.id, error);
       // An abort failure is not proof that the multipart or a joined object is
@@ -137,15 +244,22 @@ export async function abandonStaleStorageUploads(
       // deleting the object or declaring success here could destroy a file that
       // completed just before the receipt was committed.
       if (isTerminalMultipartAbortError(error)) {
-        // NoSuchUpload is terminal for the multipart handle, but the object may
-        // already have been joined before its receipt was written. Only drop
-        // the row after confirming that object is absent or deleting it.
-        if (await deleteObjectAfterTerminalAbort(upload.objectKey)) {
-          await deleteStorageUpload({ id: upload.id }).catch(() => undefined);
-          abandoned++;
-        } else {
-          failed++;
-        }
+        // Complete may still be publishing after R2 forgets the multipart id.
+        // The generation-specific key makes a delayed object deletion safe;
+        // persist it atomically before dropping the upload row.
+        const settlementAt = new Date();
+        const settled = await settleTerminalClaimedStorageUpload({
+          id: upload.id,
+          userId: upload.userId,
+          expected: claimedUploadExpectation(upload),
+          now: settlementAt,
+          objectCleanupNotBefore: new Date(
+            settlementAt.getTime() +
+              STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+          ),
+        }).catch(() => false);
+        if (settled) abandoned++;
+        else failed++;
         continue;
       }
       failed++;
@@ -153,4 +267,56 @@ export async function abandonStaleStorageUploads(
   }
 
   return { abandoned, failed };
+}
+
+type ClaimedStorageUpload = NonNullable<
+  Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
+>;
+
+async function stillOwnCleanupLease(
+  expected: ClaimedStorageUpload,
+): Promise<boolean> {
+  const current = await findStorageUploadByIdAndUserId({
+    id: expected.id,
+    userId: expected.userId,
+  }).catch(() => null);
+  return Boolean(
+    current &&
+    current.createdAt.getTime() === expected.createdAt.getTime() &&
+    current.uploadId === expected.uploadId &&
+    current.abandonedAt?.getTime() === expected.abandonedAt?.getTime() &&
+    current.cleanupLeaseToken === expected.cleanupLeaseToken,
+  );
+}
+
+async function deleteClaimedUpload(
+  upload: ClaimedStorageUpload,
+): Promise<boolean> {
+  if (!upload.abandonedAt) return false;
+  return await deleteClaimedStorageUpload({
+    id: upload.id,
+    userId: upload.userId,
+    expected: claimedUploadExpectation(upload),
+  });
+}
+
+function claimedUploadExpectation(upload: ClaimedStorageUpload) {
+  if (!upload.abandonedAt) {
+    throw new Error(`Storage upload ${upload.id} is not claimed for cleanup`);
+  }
+  return {
+    createdAt: upload.createdAt,
+    objectKey: upload.objectKey,
+    uploadId: upload.uploadId,
+    name: upload.name,
+    mimeType: upload.mimeType,
+    size: upload.size,
+    partSize: upload.partSize,
+    abandonedAt: upload.abandonedAt,
+    startState: upload.startState,
+    creationLeaseUntil: upload.creationLeaseUntil,
+    creationLeaseToken: upload.creationLeaseToken,
+    cleanupLeaseUntil: upload.cleanupLeaseUntil,
+    cleanupLeaseToken: upload.cleanupLeaseToken,
+  };
 }

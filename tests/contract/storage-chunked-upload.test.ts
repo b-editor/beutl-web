@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
+import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
 import {
   STORAGE_FILE_COUNT_LIMIT,
@@ -61,6 +62,7 @@ const bucket = vi.hoisted(() => {
     delete: vi.fn(async (key: string) => {
       if (bucketDeleteFails) throw new Error("delete unavailable");
       bucketDeleted.push(key);
+      bucketObjects.delete(key);
     }),
     // 組み上がる前の multipart はオブジェクトを持たない。掃除がそれを
     // 「もう何も無い」と読むかどうかが、この一覧の分かれ目になる。
@@ -78,7 +80,10 @@ import {
   startUpload,
 } from "../../apps/web/src/lib/storage-upload-server";
 import { uploadPart } from "../../apps/web/src/lib/storage-upload-server";
-import { abandonStaleStorageUploads } from "../../packages/api/src/storage-uploads";
+import {
+  abandonStaleStorageUploads,
+} from "../../packages/api/src/storage-uploads";
+import { reconcileAiStorageCleanups } from "../../packages/api/src/ai/storage";
 
 const USER_ID = "user-storage";
 
@@ -95,6 +100,7 @@ describe("uploading a file too large for one request", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     bucket.uploads.clear();
     bucketDeleted.length = 0;
@@ -206,6 +212,47 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(1);
   });
 
+  it("keeps a completion receipt across cancel and returns the same File", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "completed-before-cancel.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const part = await uploadPart({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      partNumber: 1,
+      contentLength: 4,
+      body: streamOf(4),
+    });
+    if (!part.ok) throw new Error(part.reason);
+    const parts = [{ partNumber: 1, etag: part.etag }];
+    const completed = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts,
+    });
+    if (!completed.ok) throw new Error(completed.reason);
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
+      .toBe("cancelled");
+    const retried = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts,
+    });
+
+    expect(retried).toMatchObject({ ok: true });
+    if (!retried.ok) return;
+    expect(retried.file.id).toBe(completed.file.id);
+    expect(state.files.size).toBe(1);
+    expect(state.storageUploads.get(started.upload.id)?.completedFileId)
+      .toBe(completed.file.id);
+  });
+
   it("refuses a part for an upload that is not the caller's", async () => {
     const started = await startUpload({
       userId: USER_ID,
@@ -303,6 +350,35 @@ describe("uploading a file too large for one request", () => {
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
   });
 
+  it("uses a new object generation when the same client id is reused", async () => {
+    const id = crypto.randomUUID();
+    const first = await startUpload({
+      userId: USER_ID,
+      id,
+      name: "first.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!first.ok) throw new Error(first.reason);
+    const firstKey = state.storageUploads.get(id)!.objectKey;
+    expect(await cancelUpload({ userId: USER_ID, uploadId: id }))
+      .toBe("cancelled");
+
+    const second = await startUpload({
+      userId: USER_ID,
+      id,
+      name: "second.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!second.ok) throw new Error(second.reason);
+    const secondKey = state.storageUploads.get(id)!.objectKey;
+
+    expect(firstKey).not.toBe(secondKey);
+    expect(firstKey).toMatch(new RegExp(`^storage-upload/${USER_ID}/${id}/`));
+    expect(secondKey).toMatch(new RegExp(`^storage-upload/${USER_ID}/${id}/`));
+  });
+
   it("sweeps up what was left behind a day later", async () => {
     const started = await startUpload({
       userId: USER_ID,
@@ -351,7 +427,7 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(1);
   });
 
-  it("deletes a joined object before dropping a terminal NoSuchUpload row", async () => {
+  it("deletes an object that appears after a terminal stale-sweep abort", async () => {
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -361,7 +437,6 @@ describe("uploading a file too large for one request", () => {
     });
     if (!started.ok) throw new Error(started.reason);
     const [tracked] = [...state.storageUploads.values()];
-    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
     bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
       uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
       complete: async () => ({ size: 0 }),
@@ -370,14 +445,28 @@ describe("uploading a file too large for one request", () => {
       },
     }));
 
-    await expect(abandonStaleStorageUploads(
-      new Date(Date.now() + 25 * 60 * 60 * 1000),
-    )).resolves.toEqual({ abandoned: 1, failed: 0 });
-    expect(bucketDeleted).toEqual([tracked!.objectKey]);
+    const settlementStartedAt = Date.now();
+    const sweepNow = new Date(settlementStartedAt + 25 * 60 * 60 * 1000);
+    await expect(abandonStaleStorageUploads(sweepNow))
+      .resolves.toEqual({ abandoned: 1, failed: 0 });
+    expect(bucketDeleted).toEqual([]);
     expect(state.storageUploads.size).toBe(0);
+    const cleanup = state.aiStorageCleanups.get(tracked!.objectKey)!;
+    expect(cleanup.notBefore.getTime()).toBeGreaterThanOrEqual(
+      settlementStartedAt +
+        storageDb.STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+    );
+    bucketObjects.set(tracked!.objectKey, { key: tracked!.objectKey });
+
+    await expect(reconcileAiStorageCleanups(cleanup.notBefore)).resolves.toEqual({
+      inspected: 1,
+      deleted: 1,
+      errors: 0,
+    });
+    expect(bucketDeleted).toEqual([tracked!.objectKey]);
   });
 
-  it("retains a terminal row when deleting its joined object fails", async () => {
+  it("retains delayed object cleanup when deletion fails", async () => {
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -397,11 +486,17 @@ describe("uploading a file too large for one request", () => {
       },
     }));
 
-    await expect(abandonStaleStorageUploads(
-      new Date(Date.now() + 25 * 60 * 60 * 1000),
-    )).resolves.toEqual({ abandoned: 0, failed: 1 });
-    expect(state.storageUploads.size).toBe(1);
-    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    const sweepNow = new Date(Date.now() + 25 * 60 * 60 * 1000);
+    await expect(abandonStaleStorageUploads(sweepNow))
+      .resolves.toEqual({ abandoned: 1, failed: 0 });
+    expect(state.storageUploads.size).toBe(0);
+    const cleanup = state.aiStorageCleanups.get(tracked!.objectKey)!;
+    await expect(reconcileAiStorageCleanups(cleanup.notBefore)).resolves.toEqual({
+      inspected: 1,
+      deleted: 0,
+      errors: 1,
+    });
+    expect(state.aiStorageCleanups.has(tracked!.objectKey)).toBe(true);
   });
 
   it("keeps the cleanup row and object when abort failure sees a joined object", async () => {
@@ -432,6 +527,55 @@ describe("uploading a file too large for one request", () => {
     expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
     expect(bucketDeleted).toHaveLength(0);
     expect(bucketObjects.has(tracked!.objectKey)).toBe(true);
+  });
+
+  it("does not let an overlapping stale sweep delete a same-id winner", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "aba-winner.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const original = state.storageUploads.get(started.upload.id)!;
+    original.createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    let aborts = 0;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => ({ size: 0 }),
+      abort: async () => {
+        aborts++;
+        state.storageUploads.delete(original.id);
+        state.storageUploads.set(original.id, {
+          ...original,
+          uploadId: "multipart-winner",
+          createdAt: new Date(original.createdAt.getTime() + 1),
+          abandonedAt: null,
+          cleanupLeaseToken: null,
+          cleanupLeaseUntil: null,
+        });
+        bucketObjects.set(original.objectKey, { key: original.objectKey });
+        throw Object.assign(new Error("NoSuchUpload"), {
+          code: "NoSuchUpload",
+        });
+      },
+    }));
+    const now = new Date();
+
+    const results = await Promise.all([
+      abandonStaleStorageUploads(now),
+      abandonStaleStorageUploads(now),
+    ]);
+
+    expect(aborts).toBe(1);
+    expect(results.reduce((sum, result) => sum + result.abandoned, 0)).toBe(0);
+    expect(bucketDeleted).toEqual([]);
+    expect(bucketObjects.has(original.objectKey)).toBe(true);
+    expect(state.storageUploads.get(original.id)).toMatchObject({
+      uploadId: "multipart-winner",
+      abandonedAt: null,
+    });
   });
 
   it("leaves the object of an upload that finished while the sweep ran", async () => {
@@ -530,6 +674,209 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(0);
   });
 
+  it("returns a concurrent completion instead of cleaning its object", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "concurrent-complete.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const tracked = state.storageUploads.get(started.upload.id)!;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        throw Object.assign(new Error("NoSuchUpload"), {
+          code: "NoSuchUpload",
+        });
+      },
+      abort: vi.fn(),
+    }));
+    const concurrentFileId = "file-concurrent-completion";
+    const claim = storageDb.claimStorageUploadForAbandon;
+    vi.spyOn(storageDb, "claimStorageUploadForAbandon")
+      .mockImplementationOnce(async (args) => {
+        state.files.set(concurrentFileId, {
+          id: concurrentFileId,
+          objectKey: tracked.objectKey,
+          name: tracked.name,
+          size: 4,
+          mimeType: tracked.mimeType,
+          userId: USER_ID,
+          visibility: "PRIVATE",
+          sha256: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never);
+        state.storageUploads.set(tracked.id, {
+          ...state.storageUploads.get(tracked.id)!,
+          completedFileId: concurrentFileId,
+        });
+        return await claim(args);
+      });
+
+    const result = await finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      file: { id: concurrentFileId },
+    });
+    expect(bucketDeleted).toEqual([]);
+    expect(state.storageUploads.get(tracked.id)?.completedFileId)
+      .toBe(concurrentFileId);
+  });
+
+  it("fails closed when complete and HEAD outcomes are both unknown", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "complete-head-unknown.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const tracked = state.storageUploads.get(started.upload.id)!;
+    const abort = vi.fn();
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        bucketObjects.set(tracked.objectKey, { key: tracked.objectKey });
+        throw new Error("complete response lost after commit");
+      },
+      abort,
+    }));
+    bucket.head.mockRejectedValueOnce(new Error("temporary HEAD outage"));
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+
+    expect(state.storageUploads.get(tracked.id)).toMatchObject({
+      uploadId: tracked.uploadId,
+      abandonedAt: null,
+      completedFileId: null,
+    });
+    expect(state.aiStorageCleanups.has(tracked.objectKey)).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
+    expect(bucketDeleted).toEqual([]);
+
+    bucket.head.mockResolvedValueOnce({ size: 4 } as never);
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toMatchObject({ ok: true });
+    expect(state.files.size).toBe(1);
+  });
+
+  it("does not finalize an old completion into a same-id replacement", async () => {
+    const id = crypto.randomUUID();
+    const started = await startUpload({
+      userId: USER_ID,
+      id,
+      name: "old-generation.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const old = state.storageUploads.get(id)!;
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        state.storageUploads.delete(id);
+        state.storageUploads.set(id, {
+          ...old,
+          objectKey: `${old.objectKey}-replacement`,
+          uploadId: "multipart-replacement",
+          name: "replacement.bin",
+          createdAt: new Date(old.createdAt.getTime() + 1),
+          completedFileId: null,
+          abandonedAt: null,
+          cleanupLeaseToken: null,
+          cleanupLeaseUntil: null,
+        });
+        return { size: 4 };
+      },
+      abort: vi.fn(),
+    }));
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadNotFound" });
+
+    expect(state.files.size).toBe(0);
+    expect(state.storageUploads.get(id)).toMatchObject({
+      objectKey: `${old.objectKey}-replacement`,
+      uploadId: "multipart-replacement",
+      completedFileId: null,
+    });
+  });
+
+  it("does not return a replacement generation's completion receipt", async () => {
+    const id = crypto.randomUUID();
+    const started = await startUpload({
+      userId: USER_ID,
+      id,
+      name: "lost-old-receipt.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const old = state.storageUploads.get(id)!;
+    const replacementFileId = "replacement-file";
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete: async () => {
+        state.files.set(replacementFileId, {
+          id: replacementFileId,
+          objectKey: `${old.objectKey}-replacement`,
+          name: "replacement.bin",
+          size: 4,
+          mimeType: old.mimeType,
+          userId: USER_ID,
+          visibility: "PRIVATE",
+          sha256: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never);
+        state.storageUploads.set(id, {
+          ...old,
+          objectKey: `${old.objectKey}-replacement`,
+          uploadId: "multipart-replacement",
+          createdAt: new Date(old.createdAt.getTime() + 1),
+          completedFileId: replacementFileId,
+        });
+        throw Object.assign(new Error("NoSuchUpload"), {
+          code: "NoSuchUpload",
+        });
+      },
+      abort: vi.fn(),
+    }));
+
+    const result = await finishUpload({
+      userId: USER_ID,
+      uploadId: id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+
+    expect(result).not.toMatchObject({
+      ok: true,
+      file: { id: replacementFileId },
+    });
+    expect(state.storageUploads.get(id)?.completedFileId)
+      .toBe(replacementFileId);
+    expect(bucketDeleted).toEqual([]);
+  });
+
   it("tries the abort again when a cancel finds the row already claimed", async () => {
     // 前の取り消しがここまで来て中止に失敗していると、行は掃除のものになって
     // いる。そこで「もう済んでいる」と答えると、パートはバケットに残ったまま
@@ -580,7 +927,53 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(1);
   });
 
-  it("cleans a joined object before cancel drops a terminal upload row", async () => {
+  it("reloads after an intent gains its handle during cancellation", async () => {
+    const id = crypto.randomUUID();
+    const objectKey = `storage-upload/${USER_ID}/${id}`;
+    await storageDb.createStorageUploadIntent({
+      userId: USER_ID,
+      id,
+      objectKey,
+      name: "cancel-attach-race.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+      partSize: STORAGE_UPLOAD_PART_BYTES,
+    });
+    const now = new Date();
+    expect(await storageDb.claimStorageUploadCreation({
+      id,
+      userId: USER_ID,
+      now,
+      leaseUntil: new Date(now.getTime() + 60_000),
+      leaseToken: "creator",
+    })).toBe(true);
+    const multipart = await bucket.createMultipartUpload(objectKey);
+    const originalClaim = storageDb.claimStorageUploadForAbandon;
+    vi.spyOn(storageDb, "claimStorageUploadForAbandon")
+      .mockImplementationOnce(async (args) => {
+        expect(await storageDb.attachStorageUploadRemote({
+          id,
+          userId: USER_ID,
+          uploadId: multipart.uploadId,
+          leaseToken: "creator",
+        })).toBe(true);
+        return await originalClaim(args);
+      });
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: id }))
+      .toBe("pending");
+    expect(state.storageUploads.get(id)).toMatchObject({
+      uploadId: multipart.uploadId,
+      abandonedAt: null,
+    });
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: id }))
+      .toBe("cancelled");
+    expect(bucket.uploads.get(multipart.uploadId)?.aborted).toBe(true);
+    expect(state.storageUploads.has(id)).toBe(false);
+  });
+
+  it("delays joined object cleanup before cancel drops a terminal row", async () => {
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -601,11 +994,18 @@ describe("uploading a file too large for one request", () => {
 
     await expect(cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
       .resolves.toBe("cancelled");
-    expect(bucketDeleted).toEqual([tracked!.objectKey]);
+    expect(bucketDeleted).toEqual([]);
     expect(state.storageUploads.size).toBe(0);
+    const cleanup = state.aiStorageCleanups.get(tracked!.objectKey)!;
+    await expect(reconcileAiStorageCleanups(cleanup.notBefore)).resolves.toEqual({
+      inspected: 1,
+      deleted: 1,
+      errors: 0,
+    });
+    expect(bucketDeleted).toEqual([tracked!.objectKey]);
   });
 
-  it("keeps cancel retryable when terminal object cleanup fails", async () => {
+  it("keeps terminal cancel object cleanup retryable after delete failure", async () => {
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -626,9 +1026,15 @@ describe("uploading a file too large for one request", () => {
     }));
 
     await expect(cancelUpload({ userId: USER_ID, uploadId: started.upload.id }))
-      .resolves.toBe("pending");
-    expect(state.storageUploads.size).toBe(1);
-    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+      .resolves.toBe("cancelled");
+    expect(state.storageUploads.size).toBe(0);
+    const cleanup = state.aiStorageCleanups.get(tracked!.objectKey)!;
+    await expect(reconcileAiStorageCleanups(cleanup.notBefore)).resolves.toEqual({
+      inspected: 1,
+      deleted: 0,
+      errors: 1,
+    });
+    expect(state.aiStorageCleanups.has(tracked!.objectKey)).toBe(true);
   });
 
   it("sweeps a claimed upload without waiting out the day", async () => {
@@ -825,15 +1231,198 @@ describe("uploading a file too large for one request", () => {
     expect(bucket.createMultipartUpload).not.toHaveBeenCalled();
   });
 
+  it("recovers attach commit-then-throw as an active start", async () => {
+    const attach = storageDb.attachStorageUploadRemote;
+    vi.spyOn(storageDb, "attachStorageUploadRemote")
+      .mockImplementation(async (args) => {
+        const committed = await attach(args);
+        if (committed) throw new Error("attach response lost after commit");
+        return false;
+      });
+
+    const result = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "attach-commit.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+
+    expect(result.ok).toBe(true);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    expect(state.storageMultipartCleanups.size).toBe(0);
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("recovers fallback record commit-then-throw as an active start", async () => {
+    const record = storageDb.recordStorageUploadRemoteAfterAttachFailure;
+    vi.spyOn(storageDb, "attachStorageUploadRemote").mockResolvedValue(false);
+    vi.spyOn(storageDb, "recordStorageUploadRemoteAfterAttachFailure")
+      .mockImplementation(async (args) => {
+        const committed = await record(args);
+        if (committed) throw new Error("record response lost after commit");
+        return false;
+      });
+
+    const result = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "record-commit.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+
+    expect(result.ok).toBe(true);
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    expect(state.storageMultipartCleanups.size).toBe(0);
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue or abort when a committed attach cannot be reloaded", async () => {
+    const attach = storageDb.attachStorageUploadRemote;
+    const find = storageDb.findStorageUploadByIdAndUserId;
+    const findSpy = vi.spyOn(storageDb, "findStorageUploadByIdAndUserId")
+      .mockImplementation(find);
+    vi.spyOn(storageDb, "attachStorageUploadRemote")
+      .mockImplementation(async (args) => {
+        const committed = await attach(args);
+        if (committed) {
+          findSpy.mockRejectedValue(new Error("database read unavailable"));
+          throw new Error("attach response lost after commit");
+        }
+        return false;
+      });
+
+    await expect(startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "unknown-commit.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    })).rejects.toThrow("outcome could not be verified");
+
+    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    expect(state.storageMultipartCleanups.size).toBe(0);
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("detaches a handle recorded after account deletion froze its row", async () => {
+    const record = storageDb.recordStorageUploadRemoteAfterAttachFailure;
+    vi.spyOn(storageDb, "attachStorageUploadRemote").mockResolvedValue(false);
+    vi.spyOn(storageDb, "recordStorageUploadRemoteAfterAttachFailure")
+      .mockImplementation(async (args) => {
+        const committed = await record(args);
+        const row = state.storageUploads.get(args.id);
+        if (row) {
+          state.storageUploads.set(args.id, {
+            ...row,
+            abandonedAt: new Date(),
+          });
+        }
+        if (committed) throw new Error("record response lost after commit");
+        return false;
+      });
+
+    await expect(startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "deleted-account.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    })).rejects.toThrow("recorded for cleanup");
+
+    const [row] = [...state.storageUploads.values()];
+    expect(row?.uploadId).toBeTruthy();
+    expect(row?.abandonedAt).not.toBeNull();
+    expect([...state.storageMultipartCleanups.values()]).toEqual([
+      expect.objectContaining({
+        objectKey: row!.objectKey,
+        uploadId: row!.uploadId,
+      }),
+    ]);
+  });
+
+  it("detaches a late handle after account deletion cascades its null-id row", async () => {
+    vi.spyOn(storageDb, "attachStorageUploadRemote")
+      .mockImplementation(async ({ id }) => {
+        state.storageUploads.delete(id);
+        return false;
+      });
+
+    await expect(startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "late-after-cascade.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    })).rejects.toThrow("recorded for cleanup");
+
+    expect(state.storageUploads.size).toBe(0);
+    expect(state.storageMultipartCleanups.size).toBe(1);
+  });
+
+  it("does not write an old creator's handle into a same-id replacement", async () => {
+    const id = crypto.randomUUID();
+    let oldObjectKey = "";
+    let replaced = false;
+    vi.spyOn(storageDb, "attachStorageUploadRemote")
+      .mockImplementation(async () => {
+        if (!replaced) {
+          const old = state.storageUploads.get(id)!;
+          oldObjectKey = old.objectKey;
+          state.storageUploads.set(id, {
+            ...old,
+            objectKey: `${old.objectKey}-replacement`,
+            name: "replacement.bin",
+            createdAt: new Date(old.createdAt.getTime() + 1),
+            uploadId: null,
+            startState: "creating",
+            creationLeaseToken: "replacement-creator",
+            creationLeaseUntil: new Date(Date.now() + 60_000),
+          });
+          replaced = true;
+        }
+        return false;
+      });
+
+    await expect(startUpload({
+      userId: USER_ID,
+      id,
+      name: "old-creator.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    })).rejects.toThrow("recorded for cleanup");
+
+    expect(state.storageUploads.get(id)).toMatchObject({
+      objectKey: `${oldObjectKey}-replacement`,
+      uploadId: null,
+      name: "replacement.bin",
+      creationLeaseToken: "replacement-creator",
+    });
+    expect([...state.storageMultipartCleanups.values()]).toEqual([
+      expect.objectContaining({
+        objectKey: oldObjectKey,
+        uploadId: expect.stringMatching(/^upload-/),
+      }),
+    ]);
+  });
+
   it("converges duplicate starts on one remote multipart", async () => {
     const id = crypto.randomUUID();
     const outcomes = await Promise.all([
       startUpload({ userId: USER_ID, id, name: "same.bin", mimeType: "application/octet-stream", size: BigInt(1_000) }),
-      startUpload({ userId: USER_ID, id, name: "same.bin", mimeType: "application/octet-stream", size: BigInt(1_000) }),
+      startUpload({ userId: USER_ID, id, name: "loser.mp4", mimeType: "video/mp4", size: BigInt(1_000) }),
     ]);
     expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(1);
     expect([...state.storageUploads.values()]).toHaveLength(1);
-    expect([...state.storageUploads.values()][0]?.uploadId).toBeTruthy();
+    const winner = [...state.storageUploads.values()][0]!;
+    expect(winner.uploadId).toBeTruthy();
+    expect(bucket.createMultipartUpload.mock.calls[0]?.[0]).toBe(
+      winner.objectKey,
+    );
+    expect(bucket.createMultipartUpload.mock.calls[0]?.[1]).toEqual({
+      httpMetadata: { contentType: winner.mimeType },
+    });
     expect(outcomes.some((outcome) => outcome.ok)).toBe(true);
   });
 

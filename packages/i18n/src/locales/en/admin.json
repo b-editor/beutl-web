@@ -77,7 +77,20 @@
     "aiResetMonthlyUsageConfirmTitle": "Reset the usage this period?",
     "aiResetMonthlyUsageConfirmDescription": "This returns the consumed amount to 0, making the full monthly allowance available again. The action is recorded in the audit log.",
     "aiAdjustSuccess": "AI subscription updated",
-    "aiAdjustFailed": "Failed to update the AI subscription"
+    "aiAdjustFailed": "Failed to update the AI subscription",
+    "aiTopUpInterventionTitle": "Top-up recovery requires operator action",
+    "aiTopUpInterventionHint": "Automatic recovery is paused. Verify the evidence before choosing an action.",
+    "aiTopUpInterventionResume": "Resume recovery",
+    "aiTopUpInterventionTerminalize": "Terminalize",
+    "aiTopUpInterventionTerminalizeTitle": "Terminalize this top-up recovery?",
+    "aiTopUpInterventionTerminalizeDescription": "Only continue after confirming that no payment was captured and no refund is owed. This permanently closes the recovery row.",
+    "aiTopUpInterventionTerminalizeConfirm": "Confirm terminalization",
+    "aiTopUpInterventionRevision": "Recovery revision",
+    "aiTopUpInterventionStatus": "Attempt status",
+    "aiTopUpInterventionEvidence": "Payment evidence",
+    "aiTopUpInterventionError": "Last error",
+    "aiTopUpInterventionSuccess": "Top-up recovery updated",
+    "aiTopUpInterventionFailed": "Failed to update top-up recovery"
   },
   "feedback": {
     "title": "Feedback",

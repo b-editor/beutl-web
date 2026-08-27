@@ -77,7 +77,20 @@
     "aiResetMonthlyUsageConfirmTitle": "今月の使用量をリセットしますか?",
     "aiResetMonthlyUsageConfirmDescription": "消費済みの量を 0 に戻し、月間割当を全額使える状態にします。操作は監査ログに記録されます。",
     "aiAdjustSuccess": "AI サブスクリプションを更新しました",
-    "aiAdjustFailed": "AI サブスクリプションの更新に失敗しました"
+    "aiAdjustFailed": "AI サブスクリプションの更新に失敗しました",
+    "aiTopUpInterventionTitle": "トップアップの復旧に管理者の対応が必要です",
+    "aiTopUpInterventionHint": "自動復旧は停止中です。証跡を確認して操作を選択してください。",
+    "aiTopUpInterventionResume": "復旧を再開",
+    "aiTopUpInterventionTerminalize": "終端化",
+    "aiTopUpInterventionTerminalizeTitle": "このトップアップ復旧を終端化しますか？",
+    "aiTopUpInterventionTerminalizeDescription": "支払いが成立しておらず、返金も不要であることを確認した場合のみ続行してください。この復旧行は完全に閉じられます。",
+    "aiTopUpInterventionTerminalizeConfirm": "終端化を確定",
+    "aiTopUpInterventionRevision": "復旧リビジョン",
+    "aiTopUpInterventionStatus": "試行ステータス",
+    "aiTopUpInterventionEvidence": "支払い証跡",
+    "aiTopUpInterventionError": "最後のエラー",
+    "aiTopUpInterventionSuccess": "トップアップ復旧を更新しました",
+    "aiTopUpInterventionFailed": "トップアップ復旧の更新に失敗しました"
   },
   "feedback": {
     "title": "フィードバック",

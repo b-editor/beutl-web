@@ -1,5 +1,6 @@
 import {
   findCreditAccount,
+  findTopUpCheckoutIntervention,
   getDb,
   getSubscriptionByUserId,
   listRecentAiJobsByUserId,
@@ -30,6 +31,7 @@ import {
   formatTimestamp,
 } from "@/lib/format";
 import { AiPlanAdjustmentForm } from "./ai-plan-form";
+import { TopUpInterventionPanel } from "./topup-intervention-panel";
 
 const RECENT_LIMIT = 10;
 
@@ -44,7 +46,7 @@ export async function AiPlanSection({
   // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
   // このセクションのクエリで 1 つのクライアントを共有する。
   const prisma = await getDb();
-  const [account, subscription, jobs, transactions, settings] =
+  const [account, subscription, jobs, transactions, settings, intervention] =
     await Promise.all([
       findCreditAccount({ userId, prisma }),
       getSubscriptionByUserId({ userId, prisma }),
@@ -55,6 +57,7 @@ export async function AiPlanSection({
         prisma,
       }),
       loadAiSettings({ prisma }),
+      findTopUpCheckoutIntervention({ ownerUserId: userId, prisma }),
     ]);
 
   const isActive = isActiveProSubscription(subscription);
@@ -171,6 +174,12 @@ export async function AiPlanSection({
           monthlyUsageLimit={balance.monthlyUsage.limit}
         />
       </div>
+
+      {intervention && (
+        <div className="mt-6 border-t pt-6">
+          <TopUpInterventionPanel lang={lang} intervention={intervention} />
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <div>

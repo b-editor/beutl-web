@@ -341,6 +341,11 @@ export async function fulfillOrRefundTopUpPayment(
     return { status: "unrecognized" as const };
   }
 
+  let canonical = await getCanonicalPaymentRefundState({
+    stripe,
+    stripePaymentIntentId: paymentIntent.id,
+  });
+
   if (resolution?.status === "recognized") {
     const fulfillment = await fulfillTopUpCheckoutAttempt({
       attemptId: resolution.attempt.id,
@@ -349,6 +354,10 @@ export async function fulfillOrRefundTopUpPayment(
         amount: paymentIntent.amount_received,
         currency: paymentIntent.currency,
       },
+      stripeRefundState: {
+        succeededAmount: canonical.succeededAmount,
+        pendingAmount: canonical.pendingAmount,
+      },
     });
     if (
       fulfillment.status === "fulfilled" ||
@@ -356,15 +365,17 @@ export async function fulfillOrRefundTopUpPayment(
     ) {
       return fulfillment;
     }
+    if (fulfillment.status === "recovery-pending") {
+      return { status: "pending" as const };
+    }
+    if (fulfillment.status === "duplicate-refund-required") {
+      return { status: "refund-requested" as const, refundId: null };
+    }
   }
 
   const attempt = resolution.attempt;
   await requireTopUpRefund({
     attemptId: attempt.id,
-    stripePaymentIntentId: paymentIntent.id,
-  });
-  let canonical = await getCanonicalPaymentRefundState({
-    stripe,
     stripePaymentIntentId: paymentIntent.id,
   });
   const managedRefund = canonical.refunds.find(

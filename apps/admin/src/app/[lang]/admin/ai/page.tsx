@@ -25,7 +25,11 @@ import {
   getAiSettings,
   getUnusableImageModels,
   getUnusableVideoModels,
+  getStorageMultipartInterventions,
+  getTopUpCheckoutInterventions,
 } from "./queries";
+import { StorageMultipartInterventions } from "./storage-interventions";
+import { TopUpResolutionInterventions } from "./topup-resolution-interventions";
 
 // Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
@@ -36,12 +40,14 @@ export default async function Page(props: {
   await requireAdmin();
   const { lang } = await props.params;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog, unusableVideoModels] =
+  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, topUpInterventions] =
     await Promise.all([
       getAiSettings(),
       getAiOperationModels(),
       getAiModelCatalog(),
       getUnusableVideoModels(),
+      getStorageMultipartInterventions(),
+      getTopUpCheckoutInterventions(),
     ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
   // An operation with nothing registered still offers the built-in model, and
@@ -97,6 +103,15 @@ export default async function Page(props: {
       </div>
 
       <AiTabs lang={lang} />
+
+      <section className="flex flex-col gap-3 rounded-lg border p-4">
+        <div><h2 className="text-lg font-semibold">Storage multipart interventions</h2><p className="text-sm text-muted-foreground">Remote aborts that exhausted retries or cannot run because the R2 binding is unavailable. Terminalizing acknowledges the remote-handle risk and releases object cleanup only after every handle for the key is resolved.</p></div>
+        <StorageMultipartInterventions rows={storageInterventions.map((row) => ({ ...row, interventionAt: row.interventionAt! }))} />
+      </section>
+      <section className="flex flex-col gap-3 rounded-lg border p-4">
+        <div><h2 className="text-lg font-semibold">Top-up checkout interventions</h2><p className="text-sm text-muted-foreground">Includes orphaned resolution rows with no attempt record. Terminalization is allowed only after every known refund is settled and requires operator evidence.</p></div>
+        <TopUpResolutionInterventions rows={topUpInterventions} />
+      </section>
 
       {/* The allowance and every operation's models are committed together by
           one save bar: saving an allowance before the model it was raised for

@@ -4,6 +4,7 @@ import {
   startRetryableTransaction,
   type PrismaTransaction,
 } from "./transaction";
+import { scheduleTopUpDuplicateRefundAttempt } from "./topup-duplicate-refund-attempt";
 
 export const TOP_UP_REFUND_PROCESSING_STATUSES = [
   "refund_required",
@@ -11,7 +12,14 @@ export const TOP_UP_REFUND_PROCESSING_STATUSES = [
   "refund_failed",
 ] as const;
 
-const TERMINAL_ATTEMPT_STATUSES = new Set([
+const CHECKOUT_SLOT_TERMINAL_STATUSES = new Set([
+  "fulfilled",
+  "refunded",
+  "refund_not_required",
+  "expired",
+]);
+
+const NON_REOPENABLE_REFUND_STATUSES = new Set([
   "fulfilled",
   "refunded",
 ]);
@@ -20,38 +28,322 @@ function isRefundProcessingStatus(status: string): boolean {
   return TOP_UP_REFUND_PROCESSING_STATUSES.some((item) => item === status);
 }
 
-export async function createTopUpCheckoutAttempt({
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "code" in error && error.code === "P2002";
+}
+
+async function expectedDuplicateRefundsAreSettled(
+  tx: PrismaTransaction,
+  encodedPaymentIntentIds: string,
+): Promise<boolean> {
+  const ids = JSON.parse(encodedPaymentIntentIds || "[]") as string[];
+  if (ids.length === 0) return true;
+  const rows = await tx.topUpDuplicateRefundAttempt.findMany({
+    where: { stripePaymentIntentId: { in: ids } },
+    select: {
+      stripePaymentIntentId: true,
+      status: true,
+      amount: true,
+      refundedAmount: true,
+    },
+  });
+  return ids.every((id) => rows.some((row) =>
+    row.stripePaymentIntentId === id &&
+    row.status === "refunded" &&
+    row.refundedAmount === row.amount));
+}
+
+export async function getOrCreateTopUpCheckoutAttempt({
+  proposedAttemptId,
   ownerUserId,
   stripeCustomerId,
   billingOfferId,
+  checkoutKey,
+  paramsJson,
   expiresAt,
+  now = new Date(),
   prisma,
 }: {
+  proposedAttemptId: string;
   ownerUserId: string;
   stripeCustomerId: string;
   billingOfferId: string;
+  checkoutKey: string;
+  paramsJson: string;
   expiresAt: Date;
+  now?: Date;
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
     const deletionIntent = await tx.accountDeletionIntent.findFirst({
-      where: { userId: ownerUserId, expiresAt: { gt: new Date() } },
+      where: { userId: ownerUserId, expiresAt: { gt: now } },
       select: { userId: true },
     });
     if (deletionIntent) {
       throw new Error("Account deletion is already authorized");
     }
+
+    const active = await tx.topUpCheckoutAttempt.findUnique({
+      where: { activeOwnerKey: ownerUserId },
+    });
+    if (active) {
+      if (active.recoveryInterventionAt !== null) {
+        throw new Error("Top-up checkout requires operator recovery");
+      }
+      if (CHECKOUT_SLOT_TERMINAL_STATUSES.has(active.status)) {
+        const released = await tx.topUpCheckoutAttempt.updateMany({
+          where: {
+            id: active.id,
+            activeOwnerKey: ownerUserId,
+            status: active.status,
+            updatedAt: active.updatedAt,
+          },
+          data: { activeOwnerKey: null },
+        });
+        if (released.count !== 1) {
+          throw new Error("Top-up active slot changed while releasing a terminal attempt");
+        }
+      } else {
+        if (active.accountDeletionAt !== null) {
+          throw new Error("Top-up checkout is being compensated for account deletion");
+        }
+        const competing = await tx.topUpCheckoutAttempt.findMany({
+          where: {
+            ownerUserId,
+            status: { notIn: [...CHECKOUT_SLOT_TERMINAL_STATUSES] },
+          },
+          orderBy: [{ createdAt: "asc" }],
+          take: 2,
+        });
+        if (competing.some((attempt) => attempt.id !== active.id)) {
+          throw new Error(
+            "Multiple unresolved legacy top-up attempts require reconciliation",
+          );
+        }
+        return active;
+      }
+    }
+
+    const unresolved = await tx.topUpCheckoutAttempt.findMany({
+      where: {
+        ownerUserId,
+        activeOwnerKey: null,
+        status: { notIn: [...CHECKOUT_SLOT_TERMINAL_STATUSES] },
+      },
+      orderBy: [{ createdAt: "asc" }],
+      take: 2,
+    });
+    if (unresolved.length > 1) {
+      throw new Error(
+        "Multiple unresolved legacy top-up attempts require reconciliation",
+      );
+    }
+    if (unresolved.length === 1) {
+      const legacy = unresolved[0]!;
+      if (legacy.recoveryInterventionAt !== null) {
+        throw new Error("Top-up checkout requires operator recovery");
+      }
+      if (legacy.accountDeletionAt !== null) {
+        throw new Error("Top-up checkout is being compensated for account deletion");
+      }
+      const claimed = await tx.topUpCheckoutAttempt.updateMany({
+        where: {
+          id: legacy.id,
+          activeOwnerKey: null,
+          status: legacy.status,
+          updatedAt: legacy.updatedAt,
+        },
+        data: { activeOwnerKey: ownerUserId },
+      });
+      if (claimed.count !== 1) {
+        throw new Error("Top-up legacy active-slot claim lost");
+      }
+      return { ...legacy, activeOwnerKey: ownerUserId };
+    }
+
     return await tx.topUpCheckoutAttempt.create({
       data: {
+        id: proposedAttemptId,
         ownerUserId,
+        activeOwnerKey: ownerUserId,
+        checkoutKey,
         stripeCustomerId,
         billingOfferId,
         status: "open",
         expiresAt,
+        paramsJson,
       },
     });
   };
+  if (prisma) return await run(prisma);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await startRetryableTransaction(run);
+    } catch (error) {
+      if (!isUniqueViolation(error) || attempt >= 4) throw error;
+    }
+  }
+}
+
+export type TopUpCheckoutCreationClaim =
+  | { status: "claimed"; attempt: NonNullable<Awaited<ReturnType<typeof findTopUpCheckoutAttempt>>> }
+  | { status: "busy" };
+
+export async function claimTopUpCheckoutCreation({
+  attemptId,
+  ownerUserId,
+  now,
+  leaseToken,
+  leaseExpiresAt,
+  prisma,
+}: {
+  attemptId: string;
+  ownerUserId: string;
+  now: Date;
+  leaseToken: string;
+  leaseExpiresAt: Date;
+  prisma?: PrismaTransaction;
+}): Promise<TopUpCheckoutCreationClaim> {
+  const db = prisma ?? await getDb();
+  const claimed = await db.topUpCheckoutAttempt.updateMany({
+    where: {
+      id: attemptId,
+      ownerUserId,
+      activeOwnerKey: ownerUserId,
+      accountDeletionAt: null,
+      recoveryInterventionAt: null,
+      stripeCheckoutSessionId: null,
+      status: { in: ["open", "payment_pending"] },
+      OR: [
+        { createLeaseExpiresAt: null },
+        { createLeaseExpiresAt: { lte: now } },
+      ],
+    },
+    data: { createLeaseToken: leaseToken, createLeaseExpiresAt: leaseExpiresAt },
+  });
+  if (claimed.count !== 1) return { status: "busy" };
+  const attempt = await findTopUpCheckoutAttempt({ attemptId, prisma: db });
+  if (!attempt) throw new Error("Claimed top-up checkout attempt disappeared");
+  return { status: "claimed", attempt };
+}
+
+export async function releaseTopUpCheckoutCreation({
+  attemptId,
+  leaseToken,
+  lastError,
+  notBefore,
+  prisma,
+}: {
+  attemptId: string;
+  leaseToken: string;
+  lastError?: string;
+  notBefore?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({
+    where: { id: attemptId, createLeaseToken: leaseToken },
+    data: {
+      createLeaseToken: null,
+      createLeaseExpiresAt: null,
+      recoveryLeaseToken: null,
+      recoveryLeaseExpiresAt: null,
+      recoveryNotBefore: notBefore ?? null,
+      recoveryLastError: lastError ?? null,
+    },
+  });
+}
+
+export async function bindTopUpCheckoutCreation({
+  attemptId,
+  leaseToken,
+  stripeCheckoutSessionId,
+  expiresAt,
+  prisma,
+}: {
+  attemptId: string;
+  leaseToken: string;
+  stripeCheckoutSessionId: string;
+  expiresAt: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const normal = await tx.topUpCheckoutAttempt.updateMany({
+      where: {
+        id: attemptId,
+        status: { in: ["open", "payment_pending"] },
+        accountDeletionAt: null,
+        stripeCheckoutSessionId: null,
+        createLeaseToken: leaseToken,
+      },
+      data: {
+        stripeCheckoutSessionId,
+        expiresAt,
+        createLeaseToken: null,
+        createLeaseExpiresAt: null,
+        recoveryLastError: null,
+      },
+    });
+    if (normal.count === 1) return "stored-for-checkout" as const;
+
+    const refund = await tx.topUpCheckoutAttempt.updateMany({
+      where: {
+        id: attemptId,
+        status: "refund_required",
+        accountDeletionAt: { not: null },
+        stripeCheckoutSessionId: null,
+        createLeaseToken: leaseToken,
+      },
+      data: {
+        stripeCheckoutSessionId,
+        expiresAt,
+        createLeaseToken: null,
+        createLeaseExpiresAt: null,
+        refundNotBefore: new Date(),
+      },
+    });
+    return refund.count === 1 ? "stored-for-refund" as const : "not-stored" as const;
+  };
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
+}
+
+export async function expireTopUpCheckoutAttempt({
+  attemptId,
+  ownerUserId,
+  stripeCheckoutSessionId,
+  leaseToken,
+  prisma,
+}: {
+  attemptId: string;
+  ownerUserId: string;
+  stripeCheckoutSessionId?: string | null;
+  leaseToken?: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.topUpCheckoutAttempt.updateMany({
+    where: {
+      id: attemptId,
+      ownerUserId,
+      activeOwnerKey: ownerUserId,
+      accountDeletionAt: null,
+      status: { in: ["open", "payment_pending"] },
+      ...(stripeCheckoutSessionId === undefined
+        ? {}
+        : { stripeCheckoutSessionId }),
+      ...(leaseToken === undefined ? {} : { createLeaseToken: leaseToken }),
+    },
+    data: {
+      status: "expired",
+      activeOwnerKey: null,
+      createLeaseToken: null,
+      createLeaseExpiresAt: null,
+      recoveryLeaseToken: null,
+      recoveryLeaseExpiresAt: null,
+      recoveryNotBefore: null,
+    },
+  });
 }
 
 export async function setTopUpCheckoutSession({
@@ -68,7 +360,15 @@ export async function setTopUpCheckoutSession({
   const db = prisma ?? (await getDb());
   const open = await db.topUpCheckoutAttempt.updateMany({
     where: { id: attemptId, status: "open", stripeCheckoutSessionId: null },
-    data: { stripeCheckoutSessionId, expiresAt },
+    data: {
+      stripeCheckoutSessionId,
+      expiresAt,
+      createLeaseToken: null,
+      createLeaseExpiresAt: null,
+      recoveryLeaseToken: null,
+      recoveryLeaseExpiresAt: null,
+      recoveryNotBefore: null,
+    },
   });
   if (open.count === 1) {
     return "stored-for-checkout" as const;
@@ -83,45 +383,95 @@ export async function setTopUpCheckoutSession({
       accountDeletionAt: { not: null },
       stripeCheckoutSessionId: null,
     },
-    data: { stripeCheckoutSessionId, expiresAt },
+    data: {
+      stripeCheckoutSessionId,
+      expiresAt,
+      createLeaseToken: null,
+      createLeaseExpiresAt: null,
+      recoveryLeaseToken: null,
+      recoveryLeaseExpiresAt: null,
+      recoveryNotBefore: null,
+    },
   });
-  return refund.count === 1 ? "stored-for-refund" as const : "not-stored" as const;
+  if (refund.count === 1) return "stored-for-refund" as const;
+
+  const current = await db.topUpCheckoutAttempt.findUnique({
+    where: { id: attemptId },
+    select: { stripeCheckoutSessionId: true },
+  });
+  return current?.stripeCheckoutSessionId === stripeCheckoutSessionId
+    ? "already-bound" as const
+    : "not-stored" as const;
 }
 
-export async function setTopUpCheckoutParams({ attemptId, paramsJson, prisma }: { attemptId: string; paramsJson: string; prisma?: PrismaTransaction }) {
+export async function claimUnboundTopUpCheckoutRecoveries({ now, leaseToken, leaseExpiresAt, limit = 50, prisma }: { now: Date; leaseToken: string; leaseExpiresAt: Date; limit?: number; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, stripeCheckoutSessionId: null, accountDeletionAt: null }, data: { paramsJson } });
-}
-
-export async function claimDetachedTopUpCheckoutAttempts({ now, leaseToken, leaseExpiresAt, limit = 50, prisma }: { now: Date; leaseToken: string; leaseExpiresAt: Date; limit?: number; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  const rows = await db.topUpCheckoutAttempt.findMany({ where: { accountDeletionAt: { not: null }, recoveryInterventionAt: null, stripeCheckoutSessionId: null, status: { notIn: ["fulfilled", "refunded", "refund_not_required"] }, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }], AND: [{ OR: [{ recoveryNotBefore: null }, { recoveryNotBefore: { lte: now } }] }] }, take: limit });
+  const rows = await db.topUpCheckoutAttempt.findMany({ where: { recoveryInterventionAt: null, stripeCheckoutSessionId: null, status: { notIn: ["fulfilled", "refunded", "refund_not_required", "expired"] }, AND: [{ OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, { OR: [{ recoveryNotBefore: null }, { recoveryNotBefore: { lte: now } }] }, { OR: [{ createLeaseExpiresAt: null }, { createLeaseExpiresAt: { lte: now } }] }] }, take: limit });
   const claimed = [];
   for (const row of rows) {
-    const updated = await db.topUpCheckoutAttempt.updateMany({ where: { id: row.id, status: row.status, stripeCheckoutSessionId: null, recoveryLeaseToken: row.recoveryLeaseToken, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, data: { recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: { increment: 1 } } });
-    if (updated.count === 1) claimed.push({ ...row, recoveryLeaseToken: leaseToken });
+    const updated = await db.topUpCheckoutAttempt.updateMany({ where: { id: row.id, status: row.status, recoveryInterventionAt: null, stripeCheckoutSessionId: null, recoveryLeaseToken: row.recoveryLeaseToken, createLeaseToken: row.createLeaseToken, AND: [{ OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, { OR: [{ createLeaseExpiresAt: null }, { createLeaseExpiresAt: { lte: now } }] }] }, data: { recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, createLeaseToken: leaseToken, createLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: { increment: 1 } } });
+    if (updated.count === 1) claimed.push({ ...row, recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, createLeaseToken: leaseToken, createLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: row.recoveryAttempts + 1 });
   }
   return claimed;
 }
 
 export async function clearDetachedTopUpCheckoutRecovery({ attemptId, leaseToken, lastError, notBefore, prisma }: { attemptId: string; leaseToken: string; lastError?: string; notBefore?: Date; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryLastError: lastError ?? null, recoveryNotBefore: lastError ? (notBefore ?? new Date()) : null } });
+  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, createLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, createLeaseToken: null, createLeaseExpiresAt: null, recoveryLastError: lastError ?? null, recoveryNotBefore: lastError ? (notBefore ?? new Date()) : null } });
 }
 
 export async function completeDetachedTopUpCheckoutRecovery({ attemptId, leaseToken, stripeCheckoutSessionId, expiresAt, prisma }: { attemptId: string; leaseToken: string; stripeCheckoutSessionId: string; expiresAt: Date; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null, accountDeletionAt: { not: null } }, data: { stripeCheckoutSessionId, expiresAt, status: "refund_required", refundNotBefore: new Date(), recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
+  const run = async (tx: PrismaTransaction) => {
+    const attempt = await tx.topUpCheckoutAttempt.findUnique({ where: { id: attemptId } });
+    if (!attempt || attempt.recoveryLeaseToken !== leaseToken || attempt.createLeaseToken !== leaseToken || attempt.stripeCheckoutSessionId !== null) return "not-stored" as const;
+    const stored = await tx.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, createLeaseToken: leaseToken, stripeCheckoutSessionId: null, updatedAt: attempt.updatedAt }, data: { stripeCheckoutSessionId, expiresAt, status: attempt.accountDeletionAt === null ? attempt.status : "refund_required", ...(attempt.accountDeletionAt === null ? {} : { refundNotBefore: new Date() }), recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, createLeaseToken: null, createLeaseExpiresAt: null, recoveryNotBefore: null, recoveryLastError: null } });
+    if (stored.count !== 1) return "not-stored" as const;
+    return attempt.accountDeletionAt === null ? "stored-for-checkout" as const : "stored-for-refund" as const;
+  };
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
 export async function markDetachedTopUpCheckoutRecoveryIntervention({ attemptId, leaseToken, lastError, prisma }: { attemptId: string; leaseToken: string; lastError: string; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken }, data: { recoveryInterventionAt: new Date(), recoveryLastError: lastError, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
+  const run = async (tx: PrismaTransaction) => {
+    const attempt = await tx.topUpCheckoutAttempt.findUnique({ where: { id: attemptId } });
+    if (!attempt || attempt.recoveryLeaseToken !== leaseToken || attempt.createLeaseToken !== leaseToken) return { count: 0 };
+    const interventionAt = new Date();
+    const updated = await tx.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, createLeaseToken: leaseToken, updatedAt: attempt.updatedAt }, data: { recoveryInterventionAt: interventionAt, recoveryLastError: lastError, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, createLeaseToken: null, createLeaseExpiresAt: null } });
+    if (updated.count !== 1) return { count: 0 };
+    const existing = await tx.topUpCheckoutResolution.findUnique({ where: { topUpAttemptId: attemptId } });
+    if (!existing) {
+      await tx.topUpCheckoutResolution.create({ data: {
+        topUpAttemptId: attemptId,
+        ownerUserId: attempt.ownerUserId,
+        stripeCustomerId: attempt.stripeCustomerId,
+        billingOfferId: attempt.billingOfferId,
+        canonicalSessionId: null,
+        canonicalPaymentIntentId: attempt.stripePaymentIntentId,
+        expectedPaymentIntentIds: "[]",
+        status: "intervention",
+        lastError,
+      } });
+    } else {
+      const resolutionUpdated = await tx.topUpCheckoutResolution.updateMany({
+        where: { id: existing.id, topUpAttemptId: attemptId, revision: existing.revision },
+        data: { status: "intervention", lastError, revision: { increment: 1 } },
+      });
+      if (resolutionUpdated.count !== 1) {
+        throw new Error("Top-up detached intervention resolution CAS lost");
+      }
+    }
+    return { count: 1 };
+  };
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
 export async function markDetachedTopUpCheckoutRecoveryTerminal({ attemptId, leaseToken, prisma }: { attemptId: string; leaseToken: string; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  return await db.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { status: "refund_not_required", recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: null } });
+  const run = async (tx: PrismaTransaction) => {
+    const attempt = await tx.topUpCheckoutAttempt.findUnique({ where: { id: attemptId } });
+    if (!attempt || attempt.recoveryLeaseToken !== leaseToken || attempt.createLeaseToken !== leaseToken || attempt.stripeCheckoutSessionId !== null) return { count: 0 };
+    return await tx.topUpCheckoutAttempt.updateMany({ where: { id: attemptId, recoveryLeaseToken: leaseToken, createLeaseToken: leaseToken, stripeCheckoutSessionId: null, updatedAt: attempt.updatedAt }, data: { status: attempt.accountDeletionAt === null ? "expired" : "refund_not_required", activeOwnerKey: null, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, createLeaseToken: null, createLeaseExpiresAt: null, recoveryNotBefore: null } });
+  };
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
 export async function findTopUpCheckoutAttempt({
@@ -170,17 +520,24 @@ export async function fulfillTopUpCheckoutAttempt({
   attemptId,
   stripePaymentIntentId,
   stripePayment,
+  stripeRefundState,
   now = new Date(),
   prisma,
 }: {
   attemptId: string;
   stripePaymentIntentId: string;
   stripePayment: StripePaymentDetails;
+  stripeRefundState: {
+    succeededAmount: number;
+    pendingAmount: number;
+  };
   now?: Date;
   prisma?: PrismaTransaction;
 }): Promise<
   | { status: "fulfilled" | "already-fulfilled"; userId: string; creditAmount: number }
   | { status: "refund-required" }
+  | { status: "duplicate-refund-required" }
+  | { status: "recovery-pending" }
   | { status: "invalid" }
 > {
   const run = async (tx: PrismaTransaction) => {
@@ -192,10 +549,39 @@ export async function fulfillTopUpCheckoutAttempt({
       return { status: "invalid" as const };
     }
     if (
+      attempt.billingOffer.unitAmount !== stripePayment.amount ||
+      attempt.billingOffer.currency.toLowerCase() !==
+        stripePayment.currency.toLowerCase() ||
+      !Number.isSafeInteger(attempt.billingOffer.creditAmount) ||
+      (attempt.billingOffer.creditAmount ?? 0) <= 0
+    ) {
+      return { status: "invalid" as const };
+    }
+    if (
+      !Number.isSafeInteger(stripeRefundState.succeededAmount) ||
+      !Number.isSafeInteger(stripeRefundState.pendingAmount) ||
+      stripeRefundState.succeededAmount < 0 ||
+      stripeRefundState.pendingAmount < 0 ||
+      stripeRefundState.succeededAmount + stripeRefundState.pendingAmount >
+        stripePayment.amount
+    ) {
+      return { status: "invalid" as const };
+    }
+    if (
       attempt.stripePaymentIntentId !== null &&
       attempt.stripePaymentIntentId !== stripePaymentIntentId
     ) {
-      return { status: "invalid" as const };
+      await scheduleTopUpDuplicateRefundAttempt({
+        topUpAttemptId: attempt.id,
+        stripePaymentIntentId,
+        stripeCustomerId: attempt.stripeCustomerId,
+        ownerUserId: attempt.ownerUserId,
+        billingOfferId: attempt.billingOfferId,
+        amount: stripePayment.amount,
+        currency: stripePayment.currency,
+        prisma: tx,
+      });
+      return { status: "duplicate-refund-required" as const };
     }
     if (attempt.status === "fulfilled") {
       return {
@@ -210,7 +596,42 @@ export async function fulfillTopUpCheckoutAttempt({
       attempt.status === "refund_pending" ||
       attempt.status === "refunded" ||
       attempt.status === "refund_failed" ||
-      attempt.status === "refund_not_required"
+      attempt.status === "refund_not_required" ||
+      attempt.status === "expired"
+    ) {
+      return { status: "refund-required" as const };
+    }
+
+    const resolution = await tx.topUpCheckoutResolution.findUnique({
+      where: { topUpAttemptId: attempt.id },
+    });
+    if (resolution) {
+      if (resolution.canonicalPaymentIntentId !== stripePaymentIntentId) {
+        await scheduleTopUpDuplicateRefundAttempt({
+          topUpAttemptId: attempt.id,
+          stripePaymentIntentId,
+          stripeCustomerId: attempt.stripeCustomerId,
+          ownerUserId: attempt.ownerUserId,
+          billingOfferId: attempt.billingOfferId,
+          amount: stripePayment.amount,
+          currency: stripePayment.currency,
+          prisma: tx,
+        });
+        return { status: "duplicate-refund-required" as const };
+      }
+      if (resolution.status !== "resolved") {
+        return { status: "recovery-pending" as const };
+      }
+    }
+    if (
+      attempt.createLeaseToken !== null ||
+      attempt.recoveryLeaseToken !== null
+    ) {
+      return { status: "recovery-pending" as const };
+    }
+    if (
+      stripeRefundState.succeededAmount > 0 ||
+      stripeRefundState.pendingAmount > 0
     ) {
       return { status: "refund-required" as const };
     }
@@ -230,6 +651,7 @@ export async function fulfillTopUpCheckoutAttempt({
         where: {
           id: attempt.id,
           status: { in: ["open", "payment_pending"] },
+          updatedAt: attempt.updatedAt,
           OR: [
             { stripePaymentIntentId: null },
             { stripePaymentIntentId },
@@ -240,6 +662,11 @@ export async function fulfillTopUpCheckoutAttempt({
           status: "refund_required",
           accountDeletionAt: attempt.accountDeletionAt ?? now,
           refundNotBefore: now,
+          createLeaseToken: null,
+          createLeaseExpiresAt: null,
+          recoveryLeaseToken: null,
+          recoveryLeaseExpiresAt: null,
+          recoveryNotBefore: null,
         },
       });
       if (updated.count !== 1) {
@@ -272,11 +699,18 @@ export async function fulfillTopUpCheckoutAttempt({
         id: attempt.id,
         status: { in: ["open", "payment_pending"] },
         accountDeletionAt: null,
+        updatedAt: attempt.updatedAt,
       },
       data: {
         stripePaymentIntentId,
         status: "fulfilled",
         fulfilledAt: now,
+        activeOwnerKey: null,
+        createLeaseToken: null,
+        createLeaseExpiresAt: null,
+        recoveryLeaseToken: null,
+        recoveryLeaseExpiresAt: null,
+        recoveryNotBefore: null,
       },
     });
     if (updated.count !== 1) {
@@ -308,7 +742,7 @@ export async function requireTopUpRefund({
     });
     if (
       !attempt ||
-      TERMINAL_ATTEMPT_STATUSES.has(attempt.status) ||
+      NON_REOPENABLE_REFUND_STATUSES.has(attempt.status) ||
       (attempt.stripePaymentIntentId !== null &&
         attempt.stripePaymentIntentId !== stripePaymentIntentId)
     ) {
@@ -335,8 +769,9 @@ export async function requireTopUpRefund({
         refundNotBefore: attempt.refundInterventionAt === null
           ? now
           : attempt.refundNotBefore,
-        ...(attempt.status === "refund_not_required"
+        ...(attempt.status === "refund_not_required" || attempt.status === "expired"
           ? {
+              refundId: null,
               refundStatus: null,
               refundStatusObservedAt: null,
               refundTargetAmount: null,
@@ -345,6 +780,9 @@ export async function requireTopUpRefund({
               refundCurrency: null,
               refundAttempts: 0,
               refundLastError: null,
+              refundInterventionAt: null,
+              refundLeaseToken: null,
+              refundLeaseExpiresAt: null,
             }
           : {}),
       },
@@ -402,7 +840,6 @@ export async function recordTopUpRefund({
       if (
         !attempt ||
         attempt.status === "fulfilled" ||
-        attempt.status === "refund_not_required" ||
         (refundLeaseToken !== undefined &&
           attempt.refundLeaseToken !== refundLeaseToken)
       ) {
@@ -419,6 +856,8 @@ export async function recordTopUpRefund({
         throw new Error(`Top-up refund ${attemptId} conflicts with Stripe`);
       }
 
+      const reopening = attempt.status === "refund_not_required" ||
+        attempt.status === "expired";
       const fullyRefunded = refundSucceededAmount === refundTargetAmount;
       if (attempt.status === "refunded") {
         return { count: 0 };
@@ -439,7 +878,7 @@ export async function recordTopUpRefund({
 
       const status = fullyRefunded
         ? "refunded"
-        : attempt.refundInterventionAt !== null
+        : attempt.refundInterventionAt !== null && !reopening
           ? attempt.status
           : refundStatus === "failed" || refundStatus === "canceled"
             ? "refund_failed"
@@ -455,10 +894,23 @@ export async function recordTopUpRefund({
         },
         data: {
           stripePaymentIntentId,
+          accountDeletionAt: attempt.accountDeletionAt ?? now,
           refundTargetAmount,
           refundSucceededAmount,
           refundPendingAmount,
           refundCurrency: normalizedCurrency,
+          ...(reopening
+            ? {
+                refundId: null,
+                refundStatus: null,
+                refundStatusObservedAt: null,
+                refundAttempts: 0,
+                refundLastError: null,
+                refundInterventionAt: null,
+                refundLeaseToken: null,
+                refundLeaseExpiresAt: null,
+              }
+            : {}),
           ...(refundId === null
             ? {}
             : {
@@ -469,18 +921,60 @@ export async function recordTopUpRefund({
           status,
           ...(fullyRefunded
             ? {
+                activeOwnerKey: null,
+                recoveryInterventionAt: null,
+                recoveryAttempts: 0,
+                recoveryLastError: null,
+                recoveryNotBefore: null,
                 refundNotBefore: null,
                 refundLeaseToken: null,
                 refundLeaseExpiresAt: null,
                 refundLastError: null,
                 refundInterventionAt: null,
               }
-            : attempt.refundInterventionAt === null
+            : attempt.refundInterventionAt === null || reopening
               ? { refundNotBefore: now }
               : {}),
         },
       });
       if (updated.count === 1) {
+        if (fullyRefunded) {
+          const resolution = await tx.topUpCheckoutResolution.findUnique({
+            where: { topUpAttemptId: attempt.id },
+          });
+          if (
+            resolution &&
+            ["refund_pending", "intervention"].includes(resolution.status) &&
+            await expectedDuplicateRefundsAreSettled(
+              tx,
+              resolution.expectedPaymentIntentIds,
+            )
+          ) {
+            const canonicalMatches =
+              (!resolution.canonicalSessionId ||
+                resolution.canonicalSessionId === attempt.stripeCheckoutSessionId) &&
+              (!resolution.canonicalPaymentIntentId ||
+                resolution.canonicalPaymentIntentId === stripePaymentIntentId);
+            const settled = await tx.topUpCheckoutResolution.updateMany({
+              where: {
+                id: resolution.id,
+                topUpAttemptId: attempt.id,
+                revision: resolution.revision,
+                status: resolution.status,
+              },
+              data: {
+                status: canonicalMatches ? "terminal" : "intervention",
+                lastError: canonicalMatches
+                  ? null
+                  : "Main refund settled a different canonical Stripe identity",
+                revision: { increment: 1 },
+              },
+            });
+            if (settled.count !== 1) {
+              throw new Error("Top-up main refund resolution CAS lost");
+            }
+          }
+        }
         return updated;
       }
     }
@@ -756,6 +1250,7 @@ export async function markTopUpRefundNotRequired({
     },
     data: {
       status: "refund_not_required",
+      activeOwnerKey: null,
       refundStatus: "not_required",
       refundStatusObservedAt: now,
       refundNotBefore: null,
@@ -798,5 +1293,149 @@ export async function prepareTopUpsForAccountDeletion({
       refundNotBefore: now,
     },
   });
+  // Operator interventions are intentionally retained through account
+  // deletion. They represent an unresolved remote-money question and must
+  // remain actionable; clearing the marker would make the deletion worker
+  // silently skip the row and could strand a refundable PaymentIntent.
+  const resolutions = await prisma.topUpCheckoutResolution.findMany({
+    where: { ownerUserId, status: { in: ["refund_pending", "intervention"] } },
+    select: {
+      id: true,
+      topUpAttemptId: true,
+      revision: true,
+      status: true,
+      canonicalSessionId: true,
+      canonicalPaymentIntentId: true,
+      expectedPaymentIntentIds: true,
+    },
+  });
+  for (const resolution of resolutions) {
+    const attempt = await prisma.topUpCheckoutAttempt.findUnique({
+      where: { id: resolution.topUpAttemptId },
+      select: {
+        id: true,
+        ownerUserId: true,
+        stripeCheckoutSessionId: true,
+        stripePaymentIntentId: true,
+        status: true,
+        fulfilledAt: true,
+        refundTargetAmount: true,
+        refundSucceededAmount: true,
+        refundPendingAmount: true,
+        recoveryInterventionAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!attempt || attempt.ownerUserId !== ownerUserId) {
+      if (resolution.status !== "intervention") {
+        const held = await prisma.topUpCheckoutResolution.updateMany({
+          where: { id: resolution.id, topUpAttemptId: resolution.topUpAttemptId, ownerUserId, revision: resolution.revision, status: "refund_pending" },
+          data: { status: "intervention", lastError: "Orphaned top-up resolution requires operator Stripe evidence", revision: { increment: 1 } },
+        });
+        if (held.count !== 1) throw new Error("Top-up deletion orphan intervention CAS lost");
+      }
+    } else if (
+      ["refund_pending", "intervention"].includes(resolution.status) &&
+      await expectedDuplicateRefundsAreSettled(
+        prisma,
+        resolution.expectedPaymentIntentIds,
+      )
+    ) {
+      let nextStatus: "resolved" | "terminal" | null = null;
+      const canonicalMatches =
+        (!resolution.canonicalSessionId ||
+          resolution.canonicalSessionId === attempt.stripeCheckoutSessionId) &&
+        (!resolution.canonicalPaymentIntentId ||
+          resolution.canonicalPaymentIntentId === attempt.stripePaymentIntentId);
+      const mainRefundIsFull = attempt.status === "refunded" &&
+        (attempt.refundTargetAmount ?? 0) > 0 &&
+        attempt.refundSucceededAmount === attempt.refundTargetAmount &&
+        attempt.refundPendingAmount === 0;
+      if (mainRefundIsFull && canonicalMatches) {
+        nextStatus = "terminal";
+      } else if (
+        attempt.status === "fulfilled" &&
+        attempt.fulfilledAt !== null &&
+        attempt.stripePaymentIntentId !== null &&
+        (!resolution.canonicalSessionId ||
+          resolution.canonicalSessionId === attempt.stripeCheckoutSessionId) &&
+        (!resolution.canonicalPaymentIntentId ||
+          resolution.canonicalPaymentIntentId === attempt.stripePaymentIntentId)
+      ) {
+        const purchase = await prisma.creditTransaction.findFirst({
+          where: {
+            topUpCheckoutAttemptId: attempt.id,
+            stripePaymentId: attempt.stripePaymentIntentId,
+          },
+          select: { id: true },
+        });
+        if (purchase) nextStatus = "resolved";
+      }
+      if (
+        attempt.status === "refunded" &&
+        nextStatus === null &&
+        resolution.status !== "intervention"
+      ) {
+        const held = await prisma.topUpCheckoutResolution.updateMany({
+          where: {
+            id: resolution.id,
+            topUpAttemptId: resolution.topUpAttemptId,
+            ownerUserId,
+            revision: resolution.revision,
+            status: resolution.status,
+          },
+          data: {
+            status: "intervention",
+            lastError: "Refunded attempt does not prove the resolution's canonical Stripe identity",
+            revision: { increment: 1 },
+          },
+        });
+        if (held.count !== 1) {
+          throw new Error("Top-up deletion refunded identity CAS lost");
+        }
+        continue;
+      }
+      if (nextStatus) {
+        if (attempt.recoveryInterventionAt !== null) {
+          const cleared = await prisma.topUpCheckoutAttempt.updateMany({
+            where: {
+              id: attempt.id,
+              updatedAt: attempt.updatedAt,
+              recoveryInterventionAt: attempt.recoveryInterventionAt,
+            },
+            data: {
+              recoveryInterventionAt: null,
+              recoveryAttempts: 0,
+              recoveryLastError: null,
+              recoveryNotBefore: null,
+            },
+          });
+          if (cleared.count !== 1) {
+            throw new Error("Top-up deletion final attempt CAS lost");
+          }
+        }
+        const settled = await prisma.topUpCheckoutResolution.updateMany({
+          where: {
+            id: resolution.id,
+            topUpAttemptId: resolution.topUpAttemptId,
+            ownerUserId,
+            revision: resolution.revision,
+            status: resolution.status,
+          },
+          data: {
+            status: nextStatus,
+            lastError: null,
+            revision: { increment: 1 },
+          },
+        });
+        if (settled.count !== 1) {
+          throw new Error("Top-up deletion final resolution CAS lost");
+        }
+      }
+    } else if (attempt.stripeCheckoutSessionId !== null && resolution.status === "refund_pending") {
+      // A bound Session is handled by the refund saga; do not rewrite it here.
+      continue;
+    }
+  }
   return { count: newlyRequired.count + alreadyRequired.count };
 }

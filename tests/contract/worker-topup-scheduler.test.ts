@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   packageRefunds: vi.fn(),
   cleanup: vi.fn(),
   storage: vi.fn(),
+  multipartStorage: vi.fn(),
   jobs: vi.fn(),
   deletedJobs: vi.fn(),
   topUpRefunds: vi.fn(),
@@ -25,7 +26,10 @@ vi.mock("@beutl/api", async (importOriginal) => {
     setR2BucketProvider: mocks.setR2,
   };
 });
-vi.mock("../../packages/api/src/storage-uploads", () => ({ abandonStaleStorageUploads: mocks.storage }));
+vi.mock("../../packages/api/src/storage-uploads", () => ({
+  abandonStaleStorageUploads: mocks.storage,
+  reconcileStorageMultipartCleanups: mocks.multipartStorage,
+}));
 vi.mock("../../packages/api/src/ai/remote-job-cleanup", () => ({ reconcileDeletedAccountRemoteJobs: mocks.deletedJobs }));
 vi.mock("../../packages/api/src/ai/billing-refunds", () => ({ reconcileBillingRefunds: mocks.billing }));
 vi.mock("../../packages/api/src/ai/top-up-refunds", () => ({ reconcileTopUpRefunds: mocks.topUpRefunds }));
@@ -57,7 +61,7 @@ describe("worker scheduled refund/cleanup dependency", () => {
     mocks.events.length = 0;
     mocks.callOrder.length = 0;
     mocks.tick = 0;
-    for (const fn of [mocks.storage, mocks.jobs, mocks.deletedJobs, mocks.topUpRefunds, mocks.customer, mocks.billing]) {
+    for (const fn of [mocks.storage, mocks.multipartStorage, mocks.jobs, mocks.deletedJobs, mocks.topUpRefunds, mocks.customer, mocks.billing]) {
       fn.mockResolvedValue({ inspected: 0, interventionRequired: 0 });
     }
     mocks.packageRefunds.mockImplementation(async () => {

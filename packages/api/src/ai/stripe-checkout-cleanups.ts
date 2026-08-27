@@ -16,7 +16,7 @@ import {
   rescheduleDetachedPackageCheckoutRecovery,
   markDetachedPackageCheckoutRecoveryIntervention,
   scheduleStripeCheckoutCleanup,
-  claimDetachedTopUpCheckoutAttempts,
+  claimUnboundTopUpCheckoutRecoveries,
   setTopUpCheckoutSession,
   clearDetachedTopUpCheckoutRecovery,
   markDetachedTopUpCheckoutRecoveryIntervention,
@@ -105,6 +105,112 @@ type HydratedPackagePayment = {
   activeFulfilled: boolean;
   unrefunded: boolean;
 };
+
+type HydratedTopUpPayment = {
+  session: Stripe.Checkout.Session;
+  paymentIntentId: string;
+  amount: number;
+  currency: string;
+  chargeCreated: number;
+  refunded: number;
+};
+
+async function hydrateTopUpPayments(
+  stripe: Pick<Stripe, "paymentIntents" | "refunds">,
+  sessions: Stripe.Checkout.Session[],
+  attempt: {
+    id: string;
+    ownerUserId: string;
+    stripeCustomerId: string;
+    billingOfferId: string;
+  },
+): Promise<HydratedTopUpPayment[]> {
+  const offer = await findBillingOfferById({ id: attempt.billingOfferId });
+  if (
+    !offer ||
+    offer.kind !== "top_up" ||
+    !Number.isSafeInteger(offer.unitAmount) ||
+    offer.unitAmount <= 0 ||
+    !Number.isSafeInteger(offer.creditAmount) ||
+    (offer.creditAmount ?? 0) <= 0
+  ) {
+    throw new Error("Top-up recovery billing offer is invalid");
+  }
+  const hydrated: HydratedTopUpPayment[] = [];
+  for (const session of sessions) {
+    const paymentIntentId = typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id;
+    if (!paymentIntentId) {
+      throw new Error(`Completed top-up Session ${session.id} has no PaymentIntent`);
+    }
+    const paymentIntent = await stripe.paymentIntents.retrieve(
+      paymentIntentId,
+      { expand: ["latest_charge"] },
+    );
+    const customer = typeof paymentIntent.customer === "string"
+      ? paymentIntent.customer
+      : paymentIntent.customer?.id;
+    if (
+      paymentIntent.status !== "succeeded" ||
+      paymentIntent.amount_received !== paymentIntent.amount ||
+      customer !== attempt.stripeCustomerId ||
+      paymentIntent.metadata?.topUpAttemptId !== attempt.id ||
+      paymentIntent.metadata?.beutlUserId !== attempt.ownerUserId ||
+      paymentIntent.metadata?.billingOfferId !== attempt.billingOfferId ||
+      paymentIntent.metadata?.creditAmount !== String(offer.creditAmount) ||
+      paymentIntent.amount !== offer.unitAmount ||
+      paymentIntent.currency.toLowerCase() !== offer.currency.toLowerCase() ||
+      (session.amount_total !== null &&
+        session.amount_total !== offer.unitAmount) ||
+      (session.currency !== null &&
+        session.currency.toLowerCase() !== offer.currency.toLowerCase()) ||
+      !paymentIntent.latest_charge ||
+      typeof paymentIntent.latest_charge === "string"
+    ) {
+      throw new Error(`PaymentIntent ${paymentIntentId} failed top-up validation`);
+    }
+    const refunds: Stripe.Refund[] = [];
+    let refundCursor: string | undefined;
+    for (;;) {
+      const page = await stripe.refunds.list({
+        payment_intent: paymentIntentId,
+        limit: 100,
+        ...(refundCursor ? { starting_after: refundCursor } : {}),
+      });
+      refunds.push(...page.data);
+      if (!page.has_more) break;
+      refundCursor = page.data.at(-1)?.id;
+      if (!refundCursor) {
+        throw new Error("Stripe returned an empty top-up refund page with has_more");
+      }
+    }
+    if (refunds.some((refund) =>
+      refund.status !== "succeeded" &&
+      refund.status !== "failed" &&
+      refund.status !== "canceled")) {
+      throw new Error(`PaymentIntent ${paymentIntentId} has a nonterminal refund`);
+    }
+    if (refunds.some((refund) =>
+      refund.currency.toLowerCase() !== offer.currency.toLowerCase())) {
+      throw new Error(`PaymentIntent ${paymentIntentId} has a refund currency mismatch`);
+    }
+    const refunded = refunds.filter((refund) => refund.status === "succeeded")
+      .reduce((sum, refund) => sum + refund.amount, 0);
+    if (refunded > paymentIntent.amount) {
+      throw new Error(`PaymentIntent ${paymentIntentId} is over-refunded`);
+    }
+    hydrated.push({
+      session,
+      paymentIntentId,
+      amount: paymentIntent.amount,
+      currency: paymentIntent.currency,
+      chargeCreated: paymentIntent.latest_charge.created,
+      refunded,
+    });
+  }
+  return hydrated;
+}
 
 async function hydrateCompletedPackagePayments(
   stripe: Pick<Stripe, "paymentIntents" | "refunds">,
@@ -338,7 +444,7 @@ export async function reconcileStripeCheckoutCleanups(
   let detachedRecovered = 0;
   let detachedPending = 0;
   let detachedIntervention = 0;
-  const detachedTopUps = await claimDetachedTopUpCheckoutAttempts({ now, leaseToken: recoveryLeaseToken, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) });
+  const detachedTopUps = await claimUnboundTopUpCheckoutRecoveries({ now, leaseToken: recoveryLeaseToken, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) });
   for (const attempt of detachedTopUps) {
     try {
       const topUpResolution = await getTopUpCheckoutResolution({ topUpAttemptId: attempt.id });
@@ -360,77 +466,221 @@ export async function reconcileStripeCheckoutCleanups(
         const resolution = await getTopUpCheckoutResolution({ topUpAttemptId: attempt.id });
         const canonical = resolution?.canonicalSessionId;
         if (!canonical) { await finalizeTopUpCheckoutResolutionAtomically({ topUpAttemptId: attempt.id, recoveryLeaseToken, finalization: { outcome: "terminal" } }); continue; }
-        const finalized = await finalizeTopUpCheckoutResolutionAtomically({ topUpAttemptId: attempt.id, recoveryLeaseToken, finalization: { outcome: "bind", sessionId: canonical, expiresAt: attempt.expiresAt } });
+        let finalization: Parameters<typeof finalizeTopUpCheckoutResolutionAtomically>[0]["finalization"] = {
+          outcome: "bind",
+          sessionId: canonical,
+          expiresAt: attempt.expiresAt,
+        };
+        if (attempt.accountDeletionAt === null) {
+          const canonicalSession = await stripe.checkout.sessions.retrieve(canonical);
+          const [payment] = await hydrateTopUpPayments(
+            stripe,
+            [canonicalSession],
+            attempt,
+          );
+          if (
+            !payment ||
+            payment.paymentIntentId !== resolution?.canonicalPaymentIntentId ||
+            payment.refunded !== 0
+          ) {
+            throw new Error("Top-up canonical payment changed before fulfillment");
+          }
+          finalization = {
+            outcome: "fulfill",
+            sessionId: canonical,
+            expiresAt: canonicalSession.expires_at
+              ? new Date(canonicalSession.expires_at * 1_000)
+              : attempt.expiresAt,
+            paymentIntentId: payment.paymentIntentId,
+            stripePayment: {
+              amount: payment.amount,
+              currency: payment.currency,
+            },
+          };
+        }
+        const finalized = await finalizeTopUpCheckoutResolutionAtomically({ topUpAttemptId: attempt.id, recoveryLeaseToken, finalization });
         if (!finalized) throw new Error("Top-up resolution finalization lease lost");
         continue;
       }
       const topUpDiscovery = await discoverTopUpCheckoutAttempt({ stripe, customerId: attempt.stripeCustomerId, userId: attempt.ownerUserId, attemptId: attempt.id, billingOfferId: attempt.billingOfferId, createdAt: attempt.createdAt });
-      if (topUpDiscovery.status === "multiple") {
-        let unresolved = false;
-        const complete = [];
-        for (const session of topUpDiscovery.sessions) {
-          if (session.status === "open") {
-            try { const expired = await stripe.checkout.sessions.expire(session.id); if (expired.status === "complete") complete.push(expired); } catch { const current = await stripe.checkout.sessions.retrieve(session.id); if (current.status === "complete") complete.push(current); else if (current.status === "open") unresolved = true; }
-          } else if (session.status === "complete") complete.push(session);
-        }
-        if (complete.length > 1) {
-          const orderedComplete = [...complete].sort((a, b) => a.id.localeCompare(b.id));
-          const hydrated = [] as Array<{ session: Stripe.Checkout.Session; paymentIntentId: string; amount: number; currency: string; chargeCreated: number; refunded: number }>;
-          for (const session of orderedComplete) {
-            const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
-            if (!paymentIntentId) { unresolved = true; continue; }
-            const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["latest_charge"] });
-            const customer = typeof paymentIntent.customer === "string" ? paymentIntent.customer : paymentIntent.customer?.id;
-            if (paymentIntent.status !== "succeeded" || paymentIntent.amount_received !== paymentIntent.amount || customer !== attempt.stripeCustomerId || paymentIntent.metadata?.topUpAttemptId !== attempt.id || paymentIntent.metadata?.beutlUserId !== attempt.ownerUserId || paymentIntent.metadata?.billingOfferId !== attempt.billingOfferId || !paymentIntent.latest_charge || typeof paymentIntent.latest_charge === "string") { unresolved = true; continue; }
-            const refunds: Stripe.Refund[] = [];
-            let refundCursor: string | undefined;
-            for (;;) {
-              const page = await stripe.refunds.list({ payment_intent: paymentIntentId, limit: 100, ...(refundCursor ? { starting_after: refundCursor } : {}) });
-              refunds.push(...page.data);
-              if (!page.has_more) break;
-              refundCursor = page.data.at(-1)?.id;
-              if (!refundCursor) throw new Error("Stripe returned an empty top-up refund page");
-            }
-            hydrated.push({ session, paymentIntentId, amount: paymentIntent.amount, currency: paymentIntent.currency, chargeCreated: paymentIntent.latest_charge.created, refunded: refunds.filter((refund) => refund.status === "succeeded").reduce((sum, refund) => sum + refund.amount, 0) });
+      const inactiveLegacy = attempt.accountDeletionAt === null &&
+        attempt.activeOwnerKey === null;
+      const expireOpenSessions = attempt.accountDeletionAt !== null ||
+        inactiveLegacy;
+      const resolveCompleted = async (completed: Stripe.Checkout.Session[]) => {
+        if (attempt.accountDeletionAt !== null && completed.length === 1) {
+          const [canonical] = completed;
+          const stored = await completeDetachedTopUpCheckoutRecovery({
+            attemptId: attempt.id,
+            leaseToken: recoveryLeaseToken,
+            stripeCheckoutSessionId: canonical!.id,
+            expiresAt: canonical!.expires_at
+              ? new Date(canonical!.expires_at * 1_000)
+              : attempt.expiresAt,
+          });
+          if (stored === "not-stored") {
+            throw new Error("Top-up deletion recovery binding lease lost");
           }
-          const preferred = attempt.stripePaymentIntentId ? hydrated.find((payment) => payment.paymentIntentId === attempt.stripePaymentIntentId) : undefined;
-          const canonical = preferred ?? hydrated.sort((a, b) => a.chargeCreated - b.chargeCreated || a.paymentIntentId.localeCompare(b.paymentIntentId))[0];
-          const duplicates = hydrated.filter((payment) => payment.paymentIntentId !== canonical?.paymentIntentId && payment.refunded < payment.amount).map((payment) => ({ paymentIntentId: payment.paymentIntentId, amount: payment.amount, currency: payment.currency }));
-          if (canonical) await scheduleTopUpCheckoutResolution({ topUpAttemptId: attempt.id, recoveryLeaseToken, ownerUserId: attempt.ownerUserId, stripeCustomerId: attempt.stripeCustomerId, billingOfferId: attempt.billingOfferId, canonicalSessionId: canonical.session.id, expectedPaymentIntents: duplicates });
-          if (canonical && !unresolved) await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: "Top-up duplicate refunds scheduled", notBefore: new Date(now.getTime() + 5 * 60_000) });
+          return;
         }
-        if (complete.length === 1 && !unresolved) {
-          const singleComplete = complete[0]!;
-          const stored = await setTopUpCheckoutSession({ attemptId: attempt.id, stripeCheckoutSessionId: singleComplete.id, expiresAt: singleComplete.expires_at ? new Date(singleComplete.expires_at * 1000) : attempt.expiresAt });
-          if (stored === "not-stored") unresolved = true;
-          else await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
+        const hydrated = await hydrateTopUpPayments(stripe, completed, attempt);
+        const preferred = attempt.stripePaymentIntentId
+          ? hydrated.find((payment) =>
+              payment.paymentIntentId === attempt.stripePaymentIntentId &&
+              payment.refunded === 0)
+          : undefined;
+        const canonical = inactiveLegacy
+          ? undefined
+          : preferred ?? [...hydrated].filter((payment) =>
+              payment.refunded === 0).sort((left, right) =>
+                left.chargeCreated - right.chargeCreated ||
+                left.paymentIntentId.localeCompare(right.paymentIntentId))[0];
+        const refunds = hydrated.filter((payment) =>
+          payment.paymentIntentId !== canonical?.paymentIntentId &&
+          payment.refunded < payment.amount).map((payment) => ({
+            paymentIntentId: payment.paymentIntentId,
+            amount: payment.amount,
+            currency: payment.currency,
+          }));
+        if (refunds.length === 0) {
+          if (canonical) {
+            await scheduleTopUpCheckoutResolution({
+              topUpAttemptId: attempt.id,
+              recoveryLeaseToken,
+              ownerUserId: attempt.ownerUserId,
+              stripeCustomerId: attempt.stripeCustomerId,
+              billingOfferId: attempt.billingOfferId,
+              canonicalSessionId: canonical.session.id,
+              canonicalPaymentIntentId: canonical.paymentIntentId,
+              expectedPaymentIntents: [],
+            });
+            const finalized = await finalizeTopUpCheckoutResolutionAtomically({
+              topUpAttemptId: attempt.id,
+              recoveryLeaseToken,
+              finalization: {
+                outcome: "fulfill",
+                sessionId: canonical.session.id,
+                expiresAt: canonical.session.expires_at
+                  ? new Date(canonical.session.expires_at * 1_000)
+                  : attempt.expiresAt,
+                paymentIntentId: canonical.paymentIntentId,
+                stripePayment: {
+                  amount: canonical.amount,
+                  currency: canonical.currency,
+                },
+              },
+            });
+            if (!finalized) {
+              throw new Error("Top-up canonical fulfillment lease lost");
+            }
+          } else if ((await markDetachedTopUpCheckoutRecoveryTerminal({
+            attemptId: attempt.id,
+            leaseToken: recoveryLeaseToken,
+          })).count !== 1) {
+            throw new Error("Top-up terminalization lease lost");
+          }
+          return;
         }
-        // Every discovered Session was expired and none completed. The
-        // detached attempt can be terminalized under the recovery lease; do
-        // not leave a leased row spinning forever in the multiple branch.
-        if (complete.length === 0 && !unresolved) {
-          if ((await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken })).count !== 1) throw new Error("Detached top-up terminalization lease lost");
+        await scheduleTopUpCheckoutResolution({
+          topUpAttemptId: attempt.id,
+          recoveryLeaseToken,
+          ownerUserId: attempt.ownerUserId,
+          stripeCustomerId: attempt.stripeCustomerId,
+          billingOfferId: attempt.billingOfferId,
+          canonicalSessionId: canonical?.session.id ?? null,
+          canonicalPaymentIntentId: canonical?.paymentIntentId ?? null,
+          expectedPaymentIntents: refunds,
+        });
+        await clearDetachedTopUpCheckoutRecovery({
+          attemptId: attempt.id,
+          leaseToken: recoveryLeaseToken,
+          lastError: "Waiting for top-up duplicate refunds",
+          notBefore: new Date(now.getTime() + 5 * 60_000),
+        });
+      };
+
+      if (topUpDiscovery.status === "multiple") {
+        const complete = new Map(
+          topUpDiscovery.sessions.filter((item) => item.status === "complete")
+            .map((item) => [item.id, item]),
+        );
+        const open = topUpDiscovery.sessions.filter((item) =>
+          item.status === "open").sort((left, right) =>
+            (left.created ?? 0) - (right.created ?? 0) ||
+            left.id.localeCompare(right.id));
+        let preservedOpen = !expireOpenSessions && complete.size === 0
+          ? open.shift()
+          : undefined;
+        let unresolved = false;
+        const expireOpen = async (session: Stripe.Checkout.Session) => {
+          try {
+            const expired = await stripe.checkout.sessions.expire(session.id);
+            if (expired.status === "complete") complete.set(expired.id, expired);
+            else if (expired.status === "open") unresolved = true;
+          } catch {
+            const current = await stripe.checkout.sessions.retrieve(session.id);
+            if (current.status === "complete") complete.set(current.id, current);
+            else if (current.status === "open") unresolved = true;
+          }
+        };
+        for (const duplicate of open) await expireOpen(duplicate);
+        if (preservedOpen && complete.size > 0) {
+          await expireOpen(preservedOpen);
+          preservedOpen = undefined;
         }
-        if (unresolved) await markDetachedTopUpCheckoutRecoveryIntervention({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: `Multiple top-up Sessions require durable duplicate refund resolution: ${topUpDiscovery.sessions.map((s) => `${s.id}:${s.status}`).sort().join(",")}` });
+        if (unresolved) {
+          throw new Error(
+            `Multiple top-up Sessions remain open: ${topUpDiscovery.sessions
+              .map((item) => `${item.id}:${item.status}`).sort().join(",")}`,
+          );
+        }
+        if (complete.size > 0) {
+          await resolveCompleted([...complete.values()]);
+        } else if (preservedOpen) {
+          const stored = await completeDetachedTopUpCheckoutRecovery({
+            attemptId: attempt.id,
+            leaseToken: recoveryLeaseToken,
+            stripeCheckoutSessionId: preservedOpen.id,
+            expiresAt: preservedOpen.expires_at
+              ? new Date(preservedOpen.expires_at * 1_000)
+              : attempt.expiresAt,
+          });
+          if (stored === "not-stored") {
+            throw new Error("Top-up open canonical binding lease lost");
+          }
+        } else if ((await markDetachedTopUpCheckoutRecoveryTerminal({
+          attemptId: attempt.id,
+          leaseToken: recoveryLeaseToken,
+        })).count !== 1) {
+          throw new Error("Top-up multiple-session terminalization lease lost");
+        }
         continue;
       }
       if (topUpDiscovery.status === "single") {
-        const discovered = topUpDiscovery.session;
-        if (discovered.status === "expired") {
-          await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
-          continue;
-        }
-        if (!(await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: discovered.id, expiresAt: discovered.expires_at ? new Date(discovered.expires_at * 1000) : attempt.expiresAt }))) throw new Error("Detached top-up discovery lease lost");
-        if (discovered.status === "open") {
-          try { await stripe.checkout.sessions.expire(discovered.id); } catch (error) {
-            const resolved = await stripe.checkout.sessions.retrieve(discovered.id);
-            if (resolved.status !== "complete" && resolved.status !== "expired") throw error;
+        let discovered = topUpDiscovery.session;
+        if (discovered.status === "open" && expireOpenSessions) {
+          try {
+            discovered = await stripe.checkout.sessions.expire(discovered.id);
+          } catch {
+            discovered = await stripe.checkout.sessions.retrieve(discovered.id);
           }
         }
-        await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
+        if (discovered.status === "expired") {
+          await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
+        } else if (
+          discovered.status === "complete" &&
+          attempt.accountDeletionAt === null
+        ) {
+          await resolveCompleted([discovered]);
+        } else if (discovered.status === "open" || discovered.status === "complete") {
+          const stored = await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: discovered.id, expiresAt: discovered.expires_at ? new Date(discovered.expires_at * 1000) : attempt.expiresAt });
+          if (stored === "not-stored") throw new Error("Top-up discovery lease lost");
+        } else {
+          throw new Error(`Top-up Session remains ${discovered.status ?? "unknown"}`);
+        }
         continue;
       }
-      if (attempt.accountDeletionAt && now.getTime() - attempt.createdAt.getTime() >= STRIPE_IDEMPOTENCY_RETENTION_MS) {
+      if (now.getTime() - attempt.createdAt.getTime() >= STRIPE_IDEMPOTENCY_RETENTION_MS) {
         const marker = `absence:${attempt.id}:`;
         const previous = typeof attempt.recoveryLastError === "string" && attempt.recoveryLastError.startsWith(marker) ? Date.parse(attempt.recoveryLastError.slice(marker.length)) : NaN;
         if (Number.isFinite(previous) && now.getTime() - previous >= 5 * 60_000) await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
@@ -438,14 +688,18 @@ export async function reconcileStripeCheckoutCleanups(
         continue;
       }
       if (!attempt.paramsJson) { await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: `absence:${attempt.id}:${now.toISOString()}`, notBefore: new Date(now.getTime() + 5 * 60_000) }); continue; }
-      const session = await stripe.checkout.sessions.create(JSON.parse(attempt.paramsJson) as Stripe.Checkout.SessionCreateParams, { idempotencyKey: `ai-top-up-checkout:${attempt.id}` });
+      if (attempt.accountDeletionAt === null && attempt.activeOwnerKey === null) {
+        await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: "Legacy inactive top-up attempt awaits Stripe retention expiry", notBefore: new Date(now.getTime() + 5 * 60_000) });
+        continue;
+      }
+      const session = await stripe.checkout.sessions.create(JSON.parse(attempt.paramsJson) as Stripe.Checkout.SessionCreateParams, { idempotencyKey: attempt.checkoutKey });
       if (session.status === "expired") {
         await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
         continue;
       }
       if (session.mode !== "payment" || (typeof session.customer === "string" ? session.customer : session.customer?.id) !== attempt.stripeCustomerId || session.metadata?.beutlApplication !== "beutl-web" || session.metadata?.beutlUserId !== attempt.ownerUserId || session.metadata?.topUpAttemptId !== attempt.id || session.metadata?.billingOfferId !== attempt.billingOfferId) throw new Error("Detached top-up replay failed canonical validation");
-      await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : attempt.expiresAt });
-      await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
+      const stored = await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : attempt.expiresAt });
+      if (stored === "not-stored") throw new Error("Top-up replay binding lease lost");
     } catch (error) {
       if (attempt.recoveryAttempts >= 12) await markDetachedTopUpCheckoutRecoveryIntervention({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: error instanceof Error ? error.message : String(error) });
       else await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: error instanceof Error ? error.message : String(error), notBefore: new Date(now.getTime() + 5 * 60_000) });

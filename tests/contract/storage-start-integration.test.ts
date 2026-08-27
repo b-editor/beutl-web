@@ -45,17 +45,17 @@ describe("startUpload remote attach saga", () => {
     expect(attach).toHaveBeenCalledTimes(2);
   });
 
-  it("retains the exact remote handle when attach loses the CAS", async () => {
+  it("recovers the exact remote handle when attach loses the CAS", async () => {
     attach.mockResolvedValue(false);
-    await expect(request()).rejects.toThrow("could not be durably attached");
+    await expect(request()).resolves.toMatchObject({ ok: true });
     expect(abort).not.toHaveBeenCalled();
     expect([...state.storageUploads.values()][0]?.uploadId).toBe("remote-1");
   });
 
-  it("surfaces an attach and abort failure without false success", async () => {
+  it("does not abort a handle recovered from the authoritative row", async () => {
     attach.mockResolvedValue(false);
     abort.mockRejectedValue(new Error("bucket unavailable"));
-    await expect(request()).rejects.toThrow("could not be durably attached");
+    await expect(request()).resolves.toMatchObject({ ok: true });
     expect(abort).not.toHaveBeenCalled();
     expect([...state.storageUploads.values()][0]?.uploadId).toBe("remote-1");
   });

@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   boundedBody,
+  MAX_API_JSON_REQUEST_BYTES,
+  MAX_AUTH_REQUEST_BODY_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES,
+  MAX_INTERNAL_STORAGE_START_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
+  MAX_STRIPE_WEBHOOK_BODY_BYTES,
   RequestBodyLimitExceededError,
+  STORAGE_UPLOAD_PART_BYTES,
+  aiApiMultipartBodyLimit,
   requestBodyLimit,
 } from "@beutl/core";
 
@@ -40,6 +47,62 @@ describe("what one request body may come to", () => {
     // Server Action は URL では選ばれないので、AI の Action はここへも送れる
     // ——そちらは全体の上限で受ける。
     expect(requestBodyLimit("/ja/dashboard")).toBe(MAX_REQUEST_BODY_BYTES);
+  });
+
+  it("uses an explicit method and path matrix before OpenNext buffering", () => {
+    expect(requestBodyLimit(
+      "/api/auth/sign-in/email",
+      "POST",
+      "application/json",
+    )).toBe(MAX_AUTH_REQUEST_BODY_BYTES);
+    expect(requestBodyLimit(
+      "/api/stripe/webhook",
+      "POST",
+      "application/json",
+    )).toBe(MAX_STRIPE_WEBHOOK_BODY_BYTES);
+    expect(requestBodyLimit(
+      "/api/internal/storage/uploads",
+      "POST",
+      "application/json",
+    )).toBe(MAX_INTERNAL_STORAGE_START_BODY_BYTES);
+    expect(requestBodyLimit(
+      "/api/internal/storage/uploads/upload-1",
+      "POST",
+      "application/json",
+    )).toBe(MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES);
+    expect(requestBodyLimit(
+      "/api/internal/storage/uploads/upload-1/parts/1",
+      "PUT",
+      "application/octet-stream",
+    )).toBe(STORAGE_UPLOAD_PART_BYTES);
+
+    const transcriptionPath = "/api/v3/ai/transcriptions";
+    const transcriptionCap = aiApiMultipartBodyLimit(transcriptionPath);
+    expect(requestBodyLimit(
+      "/api/internal/ai/transcriptions",
+      "POST",
+      "multipart/form-data; boundary=x",
+    )).toBe(transcriptionCap);
+    expect(requestBodyLimit(
+      transcriptionPath,
+      "POST",
+      "multipart/form-data; boundary=x",
+    )).toBe(transcriptionCap);
+    expect(requestBodyLimit(
+      "/api/v1/account/createAuthUri",
+      "POST",
+      "application/json",
+    )).toBe(MAX_API_JSON_REQUEST_BYTES);
+    expect(requestBodyLimit(
+      "/api/internal/storage/uploads/upload-1/parts/1",
+      "POST",
+      "application/octet-stream",
+    )).toBe(MAX_API_JSON_REQUEST_BYTES);
+    expect(requestBodyLimit(
+      "/api/unknown",
+      "POST",
+      "application/octet-stream",
+    )).toBe(MAX_API_JSON_REQUEST_BYTES);
   });
 });
 

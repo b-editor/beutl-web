@@ -42,9 +42,18 @@ function transaction(overrides: {
       update: vi.fn(),
     },
     package: { findMany: vi.fn().mockResolvedValue([]) },
-    topUpCheckoutAttempt: { updateMany: vi.fn().mockResolvedValue({ count: 0 }), count: vi.fn().mockResolvedValue(0) },
+    topUpCheckoutAttempt: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      count: vi.fn().mockResolvedValue(0),
+    },
     topUpDuplicateRefundAttempt: { count: vi.fn().mockResolvedValue(0) },
-    topUpCheckoutResolution: { count: vi.fn().mockResolvedValue(0) },
+    topUpCheckoutResolution: {
+      findMany: vi.fn().mockResolvedValue([]),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    creditTransaction: { findFirst: vi.fn().mockResolvedValue(null) },
     aiJob: { findMany: vi.fn().mockResolvedValue([]) },
     aiRemoteJobCleanup: { upsert: vi.fn().mockResolvedValue(undefined) },
     customer: {

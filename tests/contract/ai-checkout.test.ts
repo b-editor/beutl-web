@@ -3,29 +3,34 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   checkoutCreate: vi.fn(),
   checkoutExpire: vi.fn(),
+  checkoutList: vi.fn(),
   checkoutRetrieve: vi.fn(),
   pricesRetrieve: vi.fn(),
   activateBillingOffer: vi.fn(),
+  bindTopUpCheckoutCreation: vi.fn(),
   bindProCheckoutSession: vi.fn(),
-  createTopUpCheckoutAttempt: vi.fn(),
+  claimTopUpCheckoutCreation: vi.fn(),
+  expireTopUpCheckoutAttempt: vi.fn(),
   createOrRetrieveOwnedCustomerId: vi.fn(),
   deleteBoundProCheckoutAttempt: vi.fn(),
   findBillingOfferById: vi.fn(),
+  getOrCreateTopUpCheckoutAttempt: vi.fn(),
   getOrCreateProCheckoutAttempt: vi.fn(),
   getSubscriptionByUserId: vi.fn(),
   setTopUpCheckoutSession: vi.fn(),
   setProCheckoutAttemptParams: vi.fn(),
-  setTopUpCheckoutParams: vi.fn(),
   portalCreate: vi.fn(),
   portalConfigurationRetrieve: vi.fn(),
   invoicePaymentList: vi.fn(),
   recordBillingRefundCancellation: vi.fn(),
+  releaseTopUpCheckoutCreation: vi.fn(),
   scheduleBillingRefundAttempt: vi.fn(),
   startRetryableTransaction: vi.fn(),
   subscriptionCancel: vi.fn(),
   subscriptionList: vi.fn(),
   subscriptionRetrieve: vi.fn(),
   throwIfUnauth: vi.fn(),
+  topUpAttempt: null as Record<string, unknown> | null,
 }));
 
 vi.mock("@/lib/auth-guard", () => ({
@@ -41,6 +46,7 @@ vi.mock("@/lib/stripe/config", () => ({
       sessions: {
         create: mocks.checkoutCreate,
         expire: mocks.checkoutExpire,
+        list: mocks.checkoutList,
         retrieve: mocks.checkoutRetrieve,
       },
     },
@@ -59,17 +65,20 @@ vi.mock("@/lib/stripe/config", () => ({
 }));
 vi.mock("@beutl/db", () => ({
   activateBillingOffer: mocks.activateBillingOffer,
+  bindTopUpCheckoutCreation: mocks.bindTopUpCheckoutCreation,
   bindProCheckoutSession: mocks.bindProCheckoutSession,
-  createTopUpCheckoutAttempt: mocks.createTopUpCheckoutAttempt,
+  claimTopUpCheckoutCreation: mocks.claimTopUpCheckoutCreation,
   deleteBoundProCheckoutAttempt: mocks.deleteBoundProCheckoutAttempt,
+  expireTopUpCheckoutAttempt: mocks.expireTopUpCheckoutAttempt,
   findBillingOfferById: mocks.findBillingOfferById,
+  getOrCreateTopUpCheckoutAttempt: mocks.getOrCreateTopUpCheckoutAttempt,
   getOrCreateProCheckoutAttempt: mocks.getOrCreateProCheckoutAttempt,
   getSubscriptionByUserId: mocks.getSubscriptionByUserId,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
+  releaseTopUpCheckoutCreation: mocks.releaseTopUpCheckoutCreation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
   setTopUpCheckoutSession: mocks.setTopUpCheckoutSession,
   setProCheckoutAttemptParams: mocks.setProCheckoutAttemptParams,
-  setTopUpCheckoutParams: mocks.setTopUpCheckoutParams,
   startRetryableTransaction: mocks.startRetryableTransaction,
 }));
 import {
@@ -79,11 +88,36 @@ import {
   createProCheckout,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/billing/actions";
 
+function topUpCheckoutSession(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "cs_topup",
+    mode: "payment",
+    status: "open",
+    customer: "cus_1",
+    amount_total: 1_000,
+    currency: "usd",
+    expires_at: Math.floor(Date.now() / 1_000) + 86_400,
+    url: "https://checkout.stripe.com/topup",
+    metadata: {
+      beutlApplication: "beutl-web",
+      beutlUserId: "user-1",
+      creditAmount: "500",
+      billingOfferId: "offer_top_up",
+      topUpAttemptId: "topup-attempt-1",
+    },
+    line_items: {
+      data: [{ quantity: 1, price: { id: "price_credits" } }],
+    },
+    ...overrides,
+  };
+}
+
 describe("AI checkout actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.setProCheckoutAttemptParams.mockResolvedValue({ count: 1 });
-    mocks.setTopUpCheckoutParams.mockResolvedValue({ count: 1 });
     process.env.PUBLIC_ORIGIN = "https://beutl.example";
     process.env.STRIPE_CREDIT_PRICE_ID = "price_credits";
     process.env.STRIPE_PRO_PRICE_ID = "price_pro";
@@ -134,14 +168,18 @@ describe("AI checkout actions", () => {
     }));
     mocks.findBillingOfferById.mockImplementation(async ({ id }) => ({
       id,
-      kind: "pro",
-      stripePriceId: id === "offer_pro" ? "price_pro" : "price_old",
-      stripeProductId: id === "offer_pro" ? "prod_pro" : "prod_old",
-      unitAmount: 2_000,
+      kind: id === "offer_top_up" ? "top_up" : "pro",
+      stripePriceId: id === "offer_pro"
+        ? "price_pro"
+        : id === "offer_top_up" ? "price_credits" : "price_old",
+      stripeProductId: id === "offer_pro"
+        ? "prod_pro"
+        : id === "offer_top_up" ? "prod_top_up" : "prod_old",
+      unitAmount: id === "offer_top_up" ? 1_000 : 2_000,
       currency: "usd",
-      creditAmount: null,
-      recurringInterval: "month",
-      recurringIntervalCount: 1,
+      creditAmount: id === "offer_top_up" ? 500 : null,
+      recurringInterval: id === "offer_top_up" ? null : "month",
+      recurringIntervalCount: id === "offer_top_up" ? null : 1,
       checkoutEnabled: id === "offer_pro",
     }));
     mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
@@ -151,19 +189,73 @@ describe("AI checkout actions", () => {
       stripeCheckoutSessionId: null,
       expiresAt: new Date(Date.now() + 86_400_000),
     });
-    mocks.createTopUpCheckoutAttempt.mockResolvedValue({
+    const topUpParams = {
+      customer: "cus_1",
+      mode: "payment",
+      line_items: [{ price: "price_credits", quantity: 1 }],
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+        creditAmount: "500",
+        billingOfferId: "offer_top_up",
+        topUpAttemptId: "topup-attempt-1",
+      },
+      payment_intent_data: {
+        metadata: {
+          beutlApplication: "beutl-web",
+          beutlUserId: "user-1",
+          creditAmount: "500",
+          billingOfferId: "offer_top_up",
+          topUpAttemptId: "topup-attempt-1",
+        },
+      },
+      invoice_creation: { enabled: true },
+      success_url: "https://beutl.example/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://beutl.example/dashboard/account/billing",
+    };
+    const topUpAttempt = {
       id: "topup-attempt-1",
       ownerUserId: "user-1",
+      activeOwnerKey: "user-1",
+      checkoutKey: "ai-top-up-checkout:topup-attempt-1",
       stripeCustomerId: "cus_1",
       billingOfferId: "offer_top_up",
+      stripeCheckoutSessionId: null,
+      status: "open",
+      paramsJson: JSON.stringify(topUpParams),
+      createdAt: new Date(),
       expiresAt: new Date(Date.now() + 86_400_000),
-    });
+    };
+    mocks.topUpAttempt = topUpAttempt;
+    mocks.getOrCreateTopUpCheckoutAttempt.mockImplementation(
+      async () => mocks.topUpAttempt,
+    );
+    mocks.claimTopUpCheckoutCreation.mockImplementation(async () => ({
+      status: "claimed",
+      attempt: mocks.topUpAttempt,
+    }));
+    mocks.bindTopUpCheckoutCreation.mockImplementation(
+      async ({ stripeCheckoutSessionId }: { stripeCheckoutSessionId: string }) => {
+        if (mocks.topUpAttempt) {
+          mocks.topUpAttempt.stripeCheckoutSessionId = stripeCheckoutSessionId;
+        }
+        return "stored-for-checkout";
+      },
+    );
+    mocks.releaseTopUpCheckoutCreation.mockResolvedValue({ count: 0 });
+    mocks.expireTopUpCheckoutAttempt.mockResolvedValue({ count: 1 });
+    mocks.checkoutList.mockResolvedValue({ data: [], has_more: false });
     mocks.setTopUpCheckoutSession.mockResolvedValue("stored-for-checkout");
     mocks.bindProCheckoutSession.mockResolvedValue("bound");
     mocks.deleteBoundProCheckoutAttempt.mockResolvedValue(true);
     mocks.checkoutCreate.mockResolvedValue({
       id: "cs_1",
+      mode: "payment",
       status: "open",
+      customer: "cus_1",
+      amount_total: 1_000,
+      currency: "usd",
+      metadata: topUpParams.metadata,
       expires_at: Math.floor(Date.now() / 1000) + 86_400,
       url: "https://checkout.stripe.com/session",
     });
@@ -234,7 +326,200 @@ describe("AI checkout actions", () => {
           },
         },
       }),
-      { idempotencyKey: "ai-top-up-checkout:topup-attempt-1" },
+      {
+        idempotencyKey: "ai-top-up-checkout:topup-attempt-1",
+        timeout: 20_000,
+        maxNetworkRetries: 2,
+      },
+    );
+  });
+
+  it("recovers a normal top-up after Stripe committed but the response was lost", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const remote = topUpCheckoutSession();
+    let remoteVisible = false;
+    mocks.checkoutList.mockImplementation(async ({ status }) => ({
+      data: remoteVisible && status === "open" ? [remote] : [],
+      has_more: false,
+    }));
+    mocks.checkoutCreate.mockImplementationOnce(async () => {
+      remoteVisible = true;
+      throw new Error("connection closed after Stripe committed");
+    });
+    mocks.checkoutRetrieve.mockResolvedValue(remote);
+
+    await expect(createCreditCheckout()).rejects.toThrow(
+      "connection closed after Stripe committed",
+    );
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.bindTopUpCheckoutCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: "topup-attempt-1",
+        stripeCheckoutSessionId: "cs_topup",
+      }),
+    );
+  });
+
+  it("serializes concurrent first creates through the durable create lease", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    let leased = false;
+    mocks.claimTopUpCheckoutCreation.mockImplementation(async () => {
+      if (leased) return { status: "busy" };
+      leased = true;
+      return { status: "claimed", attempt: mocks.topUpAttempt };
+    });
+    mocks.checkoutCreate.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return topUpCheckoutSession({ id: "cs_concurrent" });
+    });
+    mocks.bindTopUpCheckoutCreation.mockImplementation(async ({
+      stripeCheckoutSessionId,
+    }) => {
+      mocks.topUpAttempt!.stripeCheckoutSessionId = stripeCheckoutSessionId;
+      return "stored-for-checkout";
+    });
+    mocks.checkoutRetrieve.mockResolvedValue(
+      topUpCheckoutSession({ id: "cs_concurrent" }),
+    );
+
+    const results = await Promise.allSettled([
+      createCreditCheckout(),
+      createCreditCheckout(),
+    ]);
+
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.claimTopUpCheckoutCreation).toHaveBeenCalledTimes(2);
+  });
+
+  it("discovers every page before rotating an attempt past retention", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const old = {
+      ...mocks.topUpAttempt!,
+      id: "topup-old",
+      checkoutKey: "ai-top-up-checkout:topup-old",
+      paramsJson: (mocks.topUpAttempt!.paramsJson as string)
+        .replaceAll("topup-attempt-1", "topup-old"),
+      createdAt: new Date(Date.now() - 24 * 60 * 60_000 - 1),
+      recoveryLastError: `absence:topup-old:${new Date(
+        Date.now() - 5 * 60_000 - 1,
+      ).toISOString()}`,
+    };
+    const current = mocks.topUpAttempt!;
+    mocks.getOrCreateTopUpCheckoutAttempt
+      .mockResolvedValueOnce(old)
+      .mockResolvedValue(current);
+    mocks.claimTopUpCheckoutCreation.mockImplementation(async ({ attemptId }) => ({
+      status: "claimed",
+      attempt: attemptId === "topup-old" ? old : current,
+    }));
+    mocks.checkoutList.mockImplementation(async ({ status, starting_after }) => {
+      if (status === "open" && !starting_after) {
+        return {
+          data: [topUpCheckoutSession({
+            id: "cs_unrelated",
+            metadata: { topUpAttemptId: "another-attempt" },
+          })],
+          has_more: true,
+        };
+      }
+      return { data: [], has_more: false };
+    });
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutList).toHaveBeenCalledWith(
+      expect.objectContaining({ starting_after: "cs_unrelated" }),
+    );
+    expect(mocks.expireTopUpCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptId: "topup-old", leaseToken: expect.any(String) }),
+    );
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.checkoutCreate.mock.calls[0]?.[1]?.idempotencyKey).toBe(
+      "ai-top-up-checkout:topup-attempt-1",
+    );
+  });
+
+  it("requires two exhaustive absence observations after retention", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const old = {
+      ...mocks.topUpAttempt!,
+      id: "topup-unconfirmed-absence",
+      checkoutKey: "ai-top-up-checkout:topup-unconfirmed-absence",
+      paramsJson: (mocks.topUpAttempt!.paramsJson as string)
+        .replaceAll("topup-attempt-1", "topup-unconfirmed-absence"),
+      createdAt: new Date(Date.now() - 24 * 60 * 60_000 - 1),
+      recoveryLastError: null,
+    };
+    mocks.getOrCreateTopUpCheckoutAttempt.mockResolvedValue(old);
+    mocks.claimTopUpCheckoutCreation.mockResolvedValue({
+      status: "claimed",
+      attempt: old,
+    });
+    mocks.checkoutList.mockResolvedValue({ data: [], has_more: false });
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.expireTopUpCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+    expect(mocks.releaseTopUpCheckoutCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: "topup-unconfirmed-absence",
+        lastError: expect.stringMatching(/^absence:topup-unconfirmed-absence:/),
+        notBefore: expect.any(Date),
+      }),
+    );
+  });
+
+  it("fails closed when exhaustive discovery finds multiple remote Sessions", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    mocks.checkoutList.mockImplementation(async ({ status }) => ({
+      data: status === "open"
+        ? [
+            topUpCheckoutSession({ id: "cs_duplicate_a" }),
+            topUpCheckoutSession({ id: "cs_duplicate_b" }),
+          ]
+        : [],
+      has_more: false,
+    }));
+
+    await expect(createCreditCheckout()).rejects.toThrow(
+      "Multiple Stripe Checkout Sessions",
+    );
+
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+    expect(mocks.releaseTopUpCheckoutCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: "topup-attempt-1",
+        lastError: expect.stringContaining("Multiple Stripe Checkout Sessions"),
+      }),
     );
   });
 

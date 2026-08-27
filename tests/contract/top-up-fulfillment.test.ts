@@ -61,6 +61,12 @@ describe("durable top-up fulfillment", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    createRefund.mockReset();
+    listRefunds.mockReset();
+    retrievePaymentIntent.mockReset();
+    mocks.fulfillTopUpCheckoutAttempt.mockReset().mockResolvedValue({
+      status: "refund-required",
+    });
     mocks.findTopUpCheckoutAttempt.mockResolvedValue(attempt);
     retrievePaymentIntent.mockResolvedValue(paymentIntent);
     const succeededRefund = {
@@ -87,6 +93,77 @@ describe("durable top-up fulfillment", () => {
     await expect(
       fulfillOrRefundTopUpPayment(stripe, paymentIntent),
     ).resolves.toMatchObject({ status: "fulfilled", creditAmount: 500 });
+    expect(createRefund).not.toHaveBeenCalled();
+  });
+
+  it("waits for canonical recovery instead of refunding its in-flight payment", async () => {
+    mocks.fulfillTopUpCheckoutAttempt.mockResolvedValue({
+      status: "recovery-pending",
+    });
+
+    await expect(
+      fulfillOrRefundTopUpPayment(stripe, paymentIntent),
+    ).resolves.toEqual({ status: "pending" });
+    expect(createRefund).not.toHaveBeenCalled();
+    expect(mocks.requireTopUpRefund).not.toHaveBeenCalled();
+  });
+
+  it("never grants credits for an already-refunded recognized payment", async () => {
+    const succeededRefund = {
+      id: "re_existing",
+      payment_intent: "pi_delayed",
+      amount: 1_000,
+      currency: "usd",
+      status: "succeeded",
+      metadata: { topUpAttemptId: "attempt-1" },
+    };
+    listRefunds.mockReset().mockResolvedValue({
+      data: [succeededRefund],
+      has_more: false,
+    });
+
+    await expect(
+      fulfillOrRefundTopUpPayment(stripe, paymentIntent),
+    ).resolves.toEqual({
+      status: "refund-requested",
+      refundId: "re_existing",
+    });
+    expect(mocks.fulfillTopUpCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeRefundState: {
+          succeededAmount: 1_000,
+          pendingAmount: 0,
+        },
+      }),
+    );
+    expect(createRefund).not.toHaveBeenCalled();
+  });
+
+  it("leaves a recognized duplicate payment to its dedicated refund outbox", async () => {
+    mocks.fulfillTopUpCheckoutAttempt.mockResolvedValue({
+      status: "duplicate-refund-required",
+    });
+    listRefunds.mockReset().mockResolvedValue({
+      data: [{
+        id: "re_partial_duplicate",
+        payment_intent: "pi_delayed",
+        amount: 400,
+        currency: "usd",
+        status: "succeeded",
+        metadata: {},
+      }],
+      has_more: false,
+    });
+
+    await expect(
+      fulfillOrRefundTopUpPayment(stripe, paymentIntent),
+    ).resolves.toEqual({ status: "refund-requested", refundId: null });
+    expect(mocks.fulfillTopUpCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeRefundState: { succeededAmount: 400, pendingAmount: 0 },
+      }),
+    );
+    expect(mocks.requireTopUpRefund).not.toHaveBeenCalled();
     expect(createRefund).not.toHaveBeenCalled();
   });
 

@@ -193,6 +193,7 @@ SHOW CREATE TABLE "PackageCheckoutResolution";
 SHOW CREATE TABLE "TopUpDuplicateRefundAttempt";
 SHOW CREATE TABLE "TopUpCheckoutResolution";
 SHOW CREATE TABLE "StorageUpload";
+SHOW CREATE TABLE "StorageMultipartCleanup";
 ```
 
 Each result must include `WITH (schema_locked = true)`. Repeat `SHOW CREATE
@@ -205,7 +206,7 @@ The durable storage-upload start migration requires a maintenance cutover.
 `StorageUpload.startState` to `intent` while enforcing that only `active` rows
 have a non-null `uploadId`; an old writer that omits `startState` therefore
 cannot write during this transition. Quiesce storage-upload starts before
-running `prisma migrate deploy` through `20260826000000_repair_storage_upload_start_default`.
+running `prisma migrate deploy` through `20260827000000_split_storage_multipart_cleanup`.
 Verify that the repaired default is `active`, the three start-state checks are
 present, and `SHOW CREATE TABLE "StorageUpload"` reports
 `schema_locked = true`. Deploy the new runtime (which writes `intent`
@@ -213,12 +214,69 @@ explicitly), then resume storage traffic. Do not edit or resolve the 1600
 migration to change its checksum; the 2600 migration is the forward repair for
 databases where 1600 was already applied.
 
+The 2700 migration separates object deletion from multipart abort. It backfills
+legacy handles from `AiStorageCleanup.uploadId` and zero-sized abandoned
+`StorageUpload` orphan rows into `StorageMultipartCleanup`, then removes the
+orphan rows and constrains the retired cleanup column to `NULL`. This outbox
+deliberately has no User foreign key and
+uses `(objectKey, uploadId)` as its identity, so every handle survives an
+account cascade and a delayed abort cannot delete an object produced later at
+the same key. Use this cutover order: stop storage starts, both the Web and
+admin account-deletion surfaces, and scheduled storage cleanup; apply the
+migration; deploy the new Web, admin, and standalone API runtimes; verify the
+new table is schema-locked; only then resume traffic and schedules. An old
+runtime can still try to write the retired combined `uploadId` field and must
+not overlap the new `CHECK` constraint.
+
+The 2701 storage-cleanup hardening migration adds durable `attempts`,
+`lastError`, `interventionAt`, `status`, and a CAS `revision` to every detached
+multipart handle. Transient aborts retry with bounded exponential backoff;
+after five attempts, or immediately when the R2 binding has no abort capability,
+the row becomes `intervention` and appears in Admin → AI settings. Operators
+must use the exact revision and intervention timestamp shown there to Resume or
+Terminalize. Terminalize is an explicit risk acknowledgement (the remote handle
+may still exist), records an audit log, and releases object-key cleanup only
+after every handle for that key is resolved. It never deletes a winner object.
+
+Configure and verify the R2 safety net during every release:
+
+```bash
+apps/web/node_modules/.bin/wrangler r2 bucket lifecycle set beutl-dev --file apps/web/r2-lifecycle.json
+BEUTL_R2_BUCKET_NAME=beutl-dev vp run verify:r2-lifecycle
+```
+
+The live output must report `Abort incomplete multipart uploads` after `7 days`.
+Cloudflare's default is seven days; the release is No-Go if the
+lifecycle cannot be read or does not contain this exact rule. Keep the command
+output with the deployment record.
+
 The receipt-retention migration preflights orphaned and duplicate receipts,
 then drops and recreates its named index and foreign key because Cockroach does
 not support conditional dynamic DDL in a migration block. Run it during the
 maintenance window with no concurrent storage-upload writes. If any migration
 fails after its temporary unlock, do not resume traffic: retry the migration
 and confirm `SHOW CREATE TABLE` reports `schema_locked = true` before release.
+
+## Durable top-up Checkout recovery
+
+`20260826050000_harden_topup_checkout_recovery` gives each user one nullable,
+unique active top-up slot. It also persists the exact Checkout parameters and
+Stripe idempotency key before the first remote call. A request that loses the
+create response therefore reuses the same attempt, enumerates every open,
+complete, and expired Checkout Session page, and binds the discovered Session.
+It does not rotate the attempt until exhaustive discovery proves absence after
+Stripe's 24-hour idempotency retention boundary. Multiple matching Sessions
+fail closed in the request path; the recovery worker expires extra open
+Sessions, selects one completed canonical payment, and refunds completed
+duplicates before the active slot can be reused.
+
+Duplicate-refund processing reclaims expired worker leases. Every automatic
+non-success consumes the bounded attempt budget, including a pre-existing
+nonterminal Refund and a newly returned `pending`, `requires_action`, `failed`,
+or `canceled` Refund. Exhausted rows retain their first intervention timestamp
+and are re-read canonically from Stripe every six hours. A later successful
+Refund atomically reopens the Checkout resolution and account-deletion recovery
+instead of leaving deletion permanently blocked.
 
 ## Resumable account deletion
 

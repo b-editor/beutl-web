@@ -13,7 +13,7 @@ import {
   setR2BucketProvider,
 } from "@beutl/api";
 
-describe("AI storage multipart cleanup", () => {
+describe("AI storage object cleanup", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -66,6 +66,7 @@ describe("AI storage multipart cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findFirst: async () => row,
         updateMany: async ({
@@ -138,6 +139,7 @@ describe("AI storage multipart cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findFirst: async ({ where }: { where: { leaseToken?: string } }) =>
           where.leaseToken === "active-token" ? { aiJobId: null } : null,
@@ -154,21 +156,20 @@ describe("AI storage multipart cleanup", () => {
     ).resolves.toBe(false);
   });
 
-  it("keeps the cleanup row and uploadId after a transient abort failure", async () => {
+  it("deletes an object without touching multipart handles", async () => {
     const now = new Date("2026-08-25T00:00:00.000Z");
     const row = {
       objectKey: "ai/image/job-1/partial",
       aiJobId: null,
-      uploadId: "upload-1",
       leaseToken: null as string | null,
       state: "cleanup",
       notBefore: now,
     };
-    let abortAttempts = 0;
     const deleted: string[] = [];
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findMany: async ({ where }: { where: { notBefore: { lte: Date } } }) =>
           row.objectKey && row.notBefore <= where.notBefore.lte ? [row] : [],
@@ -202,56 +203,16 @@ describe("AI storage multipart cleanup", () => {
       delete: async (key: string) => {
         deleted.push(key);
       },
-      resumeMultipartUpload: () => ({
-        uploadPart: vi.fn(),
-        complete: vi.fn(),
-        abort: async () => {
-          abortAttempts++;
-          if (abortAttempts === 1) throw new Error("temporary R2 outage");
-          if (abortAttempts === 2) {
-            throw new Error("cannot abort upload: service unavailable");
-          }
-        },
+      resumeMultipartUpload: vi.fn(() => {
+        throw new Error("Object cleanup must not inspect multipart handles");
       }),
     }));
 
     await expect(reconcileAiStorageCleanups(now)).resolves.toMatchObject({
       inspected: 1,
-      deleted: 0,
-      errors: 1,
-    });
-    expect(row.objectKey).toBe("ai/image/job-1/partial");
-    expect(row.uploadId).toBe("upload-1");
-    const leaseUntil = new Date(
-      now.getTime() + AI_STORAGE_CLEANUP_LEASE_MILLISECONDS,
-    );
-    expect(row.notBefore).toEqual(leaseUntil);
-    expect(deleted).toEqual([]);
-
-    await expect(
-      reconcileAiStorageCleanups(new Date(leaseUntil.getTime() - 1)),
-    ).resolves.toMatchObject({
-      inspected: 0,
-      deleted: 0,
-      errors: 0,
-    });
-    await expect(reconcileAiStorageCleanups(leaseUntil)).resolves.toMatchObject({
-      inspected: 1,
-      deleted: 0,
-      errors: 1,
-    });
-    const secondLeaseUntil = new Date(
-      leaseUntil.getTime() + AI_STORAGE_CLEANUP_LEASE_MILLISECONDS,
-    );
-    await expect(
-      reconcileAiStorageCleanups(new Date(secondLeaseUntil.getTime() - 1)),
-    ).resolves.toMatchObject({ inspected: 0, deleted: 0, errors: 0 });
-    await expect(reconcileAiStorageCleanups(secondLeaseUntil)).resolves.toMatchObject({
-      inspected: 1,
       deleted: 1,
       errors: 0,
     });
-    expect(abortAttempts).toBe(3);
     expect(deleted).toEqual(["ai/image/job-1/partial"]);
     expect(row.objectKey).toBe("");
   });
@@ -261,7 +222,6 @@ describe("AI storage multipart cleanup", () => {
     const row = {
       objectKey: "ai/image/job-2/partial",
       aiJobId: null,
-      uploadId: "upload-2",
       leaseToken: null as string | null,
       state: "cleanup",
       notBefore: now,
@@ -269,6 +229,7 @@ describe("AI storage multipart cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         updateMany: async ({
           where,

@@ -5,13 +5,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { setDbProvider } from "@beutl/db";
 import {
   boundedBody,
-  MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
-  MAX_API_JSON_REQUEST_BYTES,
-  MULTIPART_OVERHEAD_BYTES,
-  STORAGE_UPLOAD_PART_BYTES,
+  apiRequestBodyLimit,
 } from "@beutl/core";
-import { aiApiMultipartBodyLimit } from "./ai/upload-limits";
 import { api } from "@beutl/api";
+import { fileTooLargeApiResponse } from "./api/error";
 import {
   reconcileAiJobs,
   setR2BucketProvider,
@@ -24,7 +21,10 @@ import { reconcileTopUpRefunds } from "./ai/top-up-refunds";
 import { reconcilePackagePaymentRefunds } from "./ai/package-payment-refunds";
 import { reconcileTopUpDuplicateRefunds } from "./ai/topup-duplicate-refunds";
 import { reconcileStripeCheckoutCleanups } from "./ai/stripe-checkout-cleanups";
-import { abandonStaleStorageUploads } from "./storage-uploads";
+import {
+  abandonStaleStorageUploads,
+  reconcileStorageMultipartCleanups,
+} from "./storage-uploads";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -87,57 +87,17 @@ function configureRuntime(env: Env): void {
 // Only GET and HEAD are bodyless. Other methods may carry a body that the
 // downstream handler reads.
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
-export const MAX_OPENROUTER_CALLBACK_BODY_BYTES = 64 * 1024;
-const JSON_ROUTES = new Set([
-  "/api/v1/account/createAuthUri",
-  "/api/v1/account/refresh",
-  "/api/v1/account/code2jwt",
-  "/api/v3/account/library",
-  "/api/v3/user/ai-availability",
-  "/api/v3/ai/images",
-  "/api/v3/ai/videos",
-  "/api/v3/ai/translations",
-]);
 /**
  * Keep the outer Worker cap aligned with the parser used by each route. The
  * outer cap is a memory guard, while the endpoint parser remains the source
  * of the precise multipart error response.
  */
 export function requestBodyLimitForWorker(
+  method: string,
   pathname: string,
   contentType: string | null,
 ): number {
-  const multipart = contentType?.toLowerCase().startsWith("multipart/form-data")
-    === true;
-  const aiLimit = aiApiMultipartBodyLimit(pathname);
-  if (aiLimit !== null) {
-    if (multipart) return aiLimit;
-    if (contentType?.toLowerCase().startsWith("application/json") === true) {
-      return MAX_API_JSON_REQUEST_BYTES;
-    }
-    return aiLimit;
-  }
-  if (JSON_ROUTES.has(pathname)) {
-    if (pathname === "/api/v3/ai/translations") {
-      return MAX_AI_TRANSLATION_JSON_REQUEST_BYTES;
-    }
-    return MAX_API_JSON_REQUEST_BYTES;
-  }
-  if (/^\/api\/v3\/ai\/videos\/[^/]+\/openrouter-callback$/u.test(pathname)) {
-    return MAX_OPENROUTER_CALLBACK_BODY_BYTES;
-  }
-  // The standalone API does not expose the Web's internal upload routes, but
-  // retaining this classifier keeps the shared route contract explicit if the
-  // route is mounted here in a deployment.
-  if (/^\/api\/internal\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(pathname)) {
-    return STORAGE_UPLOAD_PART_BYTES + MULTIPART_OVERHEAD_BYTES;
-  }
-  if (contentType?.toLowerCase().startsWith("application/json") === true) {
-    return MAX_API_JSON_REQUEST_BYTES;
-  }
-  // Unknown routes are not upload routes. Keep their guard conservative until
-  // a concrete binary/multipart endpoint is added to the allowlist above.
-  return MAX_API_JSON_REQUEST_BYTES;
+  return apiRequestBodyLimit(method, pathname, contentType);
 }
 
 function withBoundedBody(
@@ -147,6 +107,7 @@ function withBoundedBody(
   if (BODYLESS_METHODS.has(request.method) || !request.body) return request;
 
   const limit = requestBodyLimitForWorker(
+    request.method,
     new URL(request.url).pathname,
     request.headers.get("content-type"),
   );
@@ -154,7 +115,7 @@ function withBoundedBody(
   const declared = request.headers.get("content-length");
   if (declared !== null) {
     const length = Number(declared);
-    if (!Number.isFinite(length) || length > limit) {
+    if (!Number.isSafeInteger(length) || length < 0 || length > limit) {
       return null;
     }
   }
@@ -179,7 +140,7 @@ export default {
       bodyLimitExceeded = true;
     });
     if (bounded === null) {
-      return new Response(null, { status: 413 });
+      return await fileTooLargeApiResponse();
     }
 
     // workerd は vars/secrets を process.env に自動投入しない。
@@ -193,10 +154,10 @@ export default {
       // the endpoint sees it. The outer stream marker still gives the Worker
       // an unambiguous 413 response for chunked bodies.
       return bodyLimitExceeded
-        ? new Response(null, { status: 413 })
+        ? await fileTooLargeApiResponse()
         : response;
     } catch (error) {
-      if (bodyLimitExceeded) return new Response(null, { status: 413 });
+      if (bodyLimitExceeded) return await fileTooLargeApiResponse();
       throw error;
     }
   },
@@ -227,6 +188,7 @@ export default {
     context.waitUntil(
       Promise.all([
         abandonStaleStorageUploads(scheduledAt),
+        reconcileStorageMultipartCleanups(scheduledAt),
         reconcileAiJobs(scheduledAt),
         reconcileDeletedAccountRemoteJobs(scheduledAt),
         reconcileTopUpRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
@@ -237,6 +199,7 @@ export default {
         reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
       ]).then(([
         storageUploads,
+        storageMultipartCleanups,
         jobs,
         deletedAccountJobs,
         topUpRefunds,
@@ -248,6 +211,7 @@ export default {
       ]) => {
         console.log("Scheduled reconciliation completed", {
           storageUploads,
+          storageMultipartCleanups,
           jobs,
           deletedAccountJobs,
           topUpRefunds,

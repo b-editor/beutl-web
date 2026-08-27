@@ -146,6 +146,111 @@ describe("durable top-up refund processing", () => {
     });
   });
 
+  it("accepts an exact terminal Checkout binding during deletion retry", async () => {
+    seedAttempt({
+      status: "refunded",
+      stripeCheckoutSessionId: "cs_terminal",
+      refundId: "re_terminal",
+      refundStatus: "succeeded",
+      refundTargetAmount: 1_000,
+      refundSucceededAmount: 1_000,
+      refundNotBefore: null,
+    });
+
+    await expect(setTopUpCheckoutSession({
+      attemptId: "attempt-1",
+      stripeCheckoutSessionId: "cs_terminal",
+      expiresAt: new Date("2026-08-12T14:00:00.000Z"),
+    })).resolves.toBe("already-bound");
+    await expect(setTopUpCheckoutSession({
+      attemptId: "attempt-1",
+      stripeCheckoutSessionId: "cs_other",
+      expiresAt: new Date("2026-08-12T14:00:00.000Z"),
+    })).resolves.toBe("not-stored");
+  });
+
+  it.each(["refund_not_required", "expired"])(
+    "reopens %s when a delayed PaymentIntent arrives",
+    async (status) => {
+      seedAttempt({
+        status,
+        stripeCheckoutSessionId: null,
+        accountDeletionAt: status === "expired" ? null : now,
+        refundStatus: status === "refund_not_required" ? "not_required" : null,
+        refundNotBefore: null,
+      });
+
+      await expect(requireTopUpRefund({
+        attemptId: "attempt-1",
+        stripePaymentIntentId: "pi_late",
+        now,
+      })).resolves.toEqual({ count: 1 });
+      expect(database.state.topUpCheckoutAttempts.get("attempt-1")).toMatchObject({
+        status: "refund_required",
+        stripePaymentIntentId: "pi_late",
+        accountDeletionAt: now,
+        refundNotBefore: now,
+        refundAttempts: 0,
+        refundInterventionAt: null,
+      });
+    },
+  );
+
+  it("records a pending late refund directly from refund_not_required", async () => {
+    seedAttempt({
+      status: "refund_not_required",
+      stripeCheckoutSessionId: null,
+      refundStatus: "not_required",
+      refundNotBefore: null,
+    });
+
+    await expect(recordTopUpRefund({
+      attemptId: "attempt-1",
+      stripePaymentIntentId: "pi_late_pending",
+      refundId: "re_late_pending",
+      refundStatus: "pending",
+      refundTargetAmount: 1_000,
+      refundSucceededAmount: 0,
+      refundPendingAmount: 1_000,
+      refundCurrency: "usd",
+      now,
+    })).resolves.toEqual({ count: 1 });
+    expect(database.state.topUpCheckoutAttempts.get("attempt-1")).toMatchObject({
+      status: "refund_pending",
+      stripePaymentIntentId: "pi_late_pending",
+      refundId: "re_late_pending",
+      refundNotBefore: now,
+    });
+  });
+
+  it("records a failed late refund directly from an expired attempt", async () => {
+    seedAttempt({
+      status: "expired",
+      stripeCheckoutSessionId: null,
+      accountDeletionAt: null,
+      refundNotBefore: null,
+    });
+
+    await expect(recordTopUpRefund({
+      attemptId: "attempt-1",
+      stripePaymentIntentId: "pi_late_failed",
+      refundId: "re_late_failed",
+      refundStatus: "failed",
+      refundTargetAmount: 1_000,
+      refundSucceededAmount: 0,
+      refundPendingAmount: 0,
+      refundCurrency: "usd",
+      now,
+    })).resolves.toEqual({ count: 1 });
+    expect(database.state.topUpCheckoutAttempts.get("attempt-1")).toMatchObject({
+      status: "refund_failed",
+      stripePaymentIntentId: "pi_late_failed",
+      refundId: "re_late_failed",
+      accountDeletionAt: now,
+      refundNotBefore: now,
+    });
+  });
+
   it("never lets stale refund observations or refund requirements regress refunded", async () => {
     seedAttempt({ stripePaymentIntentId: "pi_1" });
 
