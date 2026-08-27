@@ -229,9 +229,17 @@ purge が通ったら phase を `PURGED` にして**行は残す**。
 意味する。
 
 ```sh
-pnpm run git:restore-generation --nonce '<復元時に出力された値>'   # 復元直後に 1 回
-pnpm run git:reconcile-status --proof '<同じ値>'                   # 一巡した後
+# 復元直後に 1 回。値・控えの時点・両方の指紋は restore.sh が出力する。
+pnpm run git:restore-generation --nonce '<値>' \
+  --backup-at '<控えの時点>' --db-digest '<...>' --data-digest '<...>'
+pnpm run git:reconcile-status --proof '<同じ値>'   # 一巡した後
 ```
+
+時点と指紋を渡すのは、**戻した控えを名前ではなく中身で縛る**ため。名前も
+ファイルの mtime も後から変わるので、それだけを見ていると古い控えを今日
+取り直しただけで新しく見える。控えを取った時点と指紋は `backup.sh` が
+`manifest-<時刻印>.txt` に書き、`restore.sh` が実際のファイルと突き合わせてから
+渡す。
 
 **判定は時刻ではなく世代で行う。** 復元のたびに `GitRestoreGeneration` に 1 行足し、
 確認した墓標には「どの世代で確認したか」を書く。時刻で比べると、VPS と Worker と
@@ -340,12 +348,54 @@ Forgejo をその操作より前へ戻すと、どちらも復活する。退会
 15 分ごとの定期実行が、退会の墓標と同じように復元世代ごとに見直す。相手が居れば
 消し直し、居なければその世代で確認済みとして印を書く。証拠の数にも入れてある
 (`credentials` / `repositories` / それぞれの失敗と人の確認待ち)。この 2 つを
-加えたことで証拠の版を `beutl-reopen-v1` から `beutl-reopen-v2` へ上げた。**v1 は
-受け付けない** (v1 の証拠はこの 2 つを見ていないため)。
+加えたことで証拠の版を上げた。現在は **`beutl-reopen-v4`**。
+
+- v1 — 退会の 6 つの数だけ
+- v2 — 失効させたトークンと消したリポジトリの控えを加えた
+- v3 — 見張りの開始・控えの時点・決着していない予約と直しを条件に加え、登録済みの
+  復元世代の指紋を署名の中身へ入れた (**配っていない**)
+- v4 — 戻した控えそのものの指紋を署名の中身へ入れた
+
+**古い版は受け付けない。** 判定条件を増やすときは版の文字列と**中身の形の両方**を
+変える。形が同じままだと、古い署名側が新しい条件を見ないまま同じものに署名でき、
+受け取る側に見分けが付かない。
+
+版は git-server 側の `restore.sh` と対になっている。**両側を同時に配ること。**
+片側だけ新しい状態は fail-closed (証拠が通らない) だが、復旧の最中に踏むと
+開けられない。
 
 保持は退会の墓標と同じ理屈で、**復元しうる最も古い控えより長く**。こちらは
-`reconcileGitResurrectionTombstones` が自動で刈る (既定 90 日)。バックアップの
-保持を延ばすなら、この幅も一緒に延ばすこと。
+`reconcileGitResurrectionTombstones` が自動で刈る (既定 90 日。`GIT_TOMBSTONE_TTL_DAYS`
+で変えられる)。バックアップの保持を延ばすなら、この幅も一緒に延ばすこと。刈った線は
+`GitResurrectionWatch.prunedBefore` に残り、それより古い控えからは証拠を出さない。
+
+#### 確かめる仕組みが入る前の控え (baseline)
+
+`confirmed` を持つ前に積まれた控えには `baseline = true` が付いている。消す前に
+書いてあるだけなので、**消えたかどうかが分からない**。自動では確定も却下もせず
+(却下すると、復元で生き返ったものを追えなくなる)、`unverifiedBaseline` として
+数えるので証拠も出ない。人が Forgejo 側を見て片付ける。
+
+```sql
+-- 何が残っているか
+SELECT "id", "forgejoUsername", "forgejoTokenId", "lastEight", "revokedAt"
+FROM "GitCredentialRevocation" WHERE "baseline" = true;
+SELECT "id", "forgejoRepoId", "ownerUsername", "name", "deletedAt"
+FROM "GitRepositoryDeletionRecord" WHERE "baseline" = true;
+```
+
+Forgejo 側を確かめて、
+
+- **消えている** — 控えとして正しい。`baseline = false, confirmed = true` にする
+  (以後は復元のたびに見直す対象になる)。
+- **残っている** — その消去は通っていなかった。行ごと消す (やり直すかどうかは
+  利用者に委ねる)。
+
+```sql
+UPDATE "GitCredentialRevocation" SET "baseline" = false, "confirmed" = true
+WHERE "id" = '...';
+DELETE FROM "GitCredentialRevocation" WHERE "id" = '...';
+```
 
 なお、`bootstrap.sh --revoke-old` で失効させた**管理トークン**はここには入らない。
 Forgejo の中にしか無く、CockroachDB からは見えないため。復元の後、開ける前に

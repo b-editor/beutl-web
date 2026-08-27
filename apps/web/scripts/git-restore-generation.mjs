@@ -67,6 +67,30 @@ async function main() {
   };
   const dbDigest = digest("--db-digest");
   const dataDigest = digest("--data-digest");
+  // **指紋は必須。** 無くても登録できると、証拠を出す側で弾くまで気付けない。
+  // 形も見る (64 桁の 16 進)。
+  const hex = /^[0-9a-f]{64}$/;
+  for (const [flag, value] of [
+    ["--db-digest", dbDigest],
+    ["--data-digest", dataDigest],
+  ]) {
+    if (!value || !hex.test(value)) {
+      console.error(
+        `${flag} が要ります (64 桁の 16 進)。restore.sh が出力した値を` +
+          "そのまま渡してください。\n" +
+          "名前も時点も後から変えられるので、戻した控えは**中身**で縛ります。",
+      );
+      process.exitCode = 2;
+      return;
+    }
+  }
+  if (!backupAt) {
+    console.error(
+      "--backup-at が要ります。restore.sh が出力した値をそのまま渡してください。",
+    );
+    process.exitCode = 2;
+    return;
+  }
 
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -114,20 +138,7 @@ async function main() {
         protocol: PROOF_PROTOCOL,
       },
     });
-    if (!dbDigest || !dataDigest) {
-      console.warn(
-        "\n警告: --db-digest / --data-digest を渡していません。戻した控えを" +
-          "\n      名前でしか identify できず、古い控えを新しい名前へ付け替えた" +
-          "\n      場合を見分けられません。restore.sh が出力した値を付けてください。",
-      );
-    }
-    if (!backupAt) {
-      console.warn(
-        "\n警告: --backup-at を渡していません。戻した控えが、生き返りの見張りを" +
-          "\n      始めるより前のものかどうかを判断できないため、証拠は出せません。" +
-          "\n      restore.sh が出力した時点を付けて、もう一度実行してください。",
-      );
-    }
+
     console.log(`世代 ${nonce} を登録しました (${new URL(connectionString).hostname})。`);
     console.log(
       "**この接続先が本番であることを確かめてください。** 証拠にはこの相手が" +

@@ -675,24 +675,30 @@ async function repairTemplates(
     await renewNameHold();
     await holdRepair(repository.id, epoch);
     await assertStillNamed(sudo, repository);
-    const locked = await lockRepository(
-      sudo,
-      repository,
-      error instanceof Error ? error.message : String(error),
-      pending,
-    );
-    // **掛けたことを控えに残す。** 遅れて着地したコミットで既定値が揃った場合、
-    // 掛けたものを外してから片付ける必要がある。誰が掛けたか分からないと外せない。
-    if (locked) {
-      // **書けなかったことを握り潰さない。** 控えが無いと、遅れて着地した
-      // コミットで既定値が揃ったときに読み取り専用を外せず、利用者の
-      // リポジトリが止まったまま誰にも追われずに残る。掛けた事実そのものを
-      // 「結果が分からない」側へ倒し、次の周回にやり直させる。
-      const noted = await markGitRepositoryRepairLocked({
-        forgejoRepoId: repository.id,
-        intentId: epoch,
-      }).catch(() => false);
-      if (!noted) pending.value = true;
+    // **掛ける前に控える。** 掛けてから控えると、控えを書けなかったときに
+    // 「読み取り専用だが、誰が掛けたか分からない」状態が残る。次の周回は
+    // locked=false を読むので外せず、利用者のリポジトリが止まったまま
+    // 控えだけ消える。先に控えておけば、書けなければ掛けない。
+    //
+    // 逆に「控えたが掛からなかった」場合は害が無い。外す側は archived かどうかを
+    // 見てから動くので、掛かっていなければ何もしない。
+    const noted = await markGitRepositoryRepairLocked({
+      forgejoRepoId: repository.id,
+      intentId: epoch,
+    }).catch(() => false);
+    const locked = noted
+      ? await lockRepository(
+          sudo,
+          repository,
+          error instanceof Error ? error.message : String(error),
+          pending,
+        )
+      : false;
+    if (!noted) {
+      console.error(
+        `could not record that ${sudo}/${repository.name} is being locked; ` +
+          "leaving it writable and retrying next round",
+      );
     }
     return locked
       ? { state: "locked", error, pending: pending.value }

@@ -343,6 +343,27 @@ model GitCredentialRevocation {
 /// 消したリポジトリの墓標。理由は上と同じで、Forgejo を戻すと復活する。
 ///
 /// **相手は Forgejo のリポジトリ id。** 名前は空いた後に別のリポジトリが取る。
+/// **入れ替え前の表。** 新しい形へ移し切るまで残す。
+///
+/// 表を作り直して古い方を落とすと、migration を当てている最中に古い Worker が
+/// 書いた行が消える。消えた行の相手は「消したのに控えの無いリポジトリ」になり、
+/// 復元で生き返っても誰も追えない。落とさずに残し、定期実行が拾って新しい表へ
+/// 移す。空になったことを確かめてから、後の migration で落とす。
+model GitRepositoryDeletionPending {
+  forgejoRepoId   Int      @id
+  ownerUsername   String
+  name            String
+  confirmed       Boolean  @default(false)
+  deletedAt       DateTime @default(now())
+  checkedGeneration String?
+  needsReview     Boolean  @default(false)
+  attempts        Int      @default(0)
+  lastAttemptAt   DateTime?
+  lastError       String?
+
+  @@map("GitRepositoryDeletion")
+}
+
 model GitRepositoryDeletion {
   /// **1 つのリポジトリ id に複数の行が並ぶ。**
   ///
@@ -376,6 +397,7 @@ model GitRepositoryDeletion {
   lastAttemptAt   DateTime?
   lastError       String?
 
+  @@map("GitRepositoryDeletionRecord")
   @@index([forgejoRepoId])
   @@index([deletedAt])
   @@index([checkedGeneration])

@@ -37,9 +37,11 @@ describe("証拠の中身", () => {
       database: "db.example:26257/beutl",
       expiresAt: 1787536940,
       generations: "abc123",
+      dbDigest: "d".repeat(64),
+      dataDigest: "e".repeat(64),
     });
 
-    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v3");
+    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v4");
     expect(payload.split("\n")).toEqual([
       PROOF_PROTOCOL,
       "1787536325:c9a7",
@@ -47,6 +49,8 @@ describe("証拠の中身", () => {
       "db.example:26257/beutl",
       "1787536940",
       "abc123",
+      "d".repeat(64),
+      "e".repeat(64),
     ]);
   });
 
@@ -70,6 +74,24 @@ describe("証拠の中身", () => {
     };
     expect(proofPayload({ ...base, nonce: "a" })).not.toBe(
       proofPayload({ ...base, nonce: "b" }),
+    );
+  });
+});
+
+describe("戻した控えの指紋", () => {
+  // 名前も時点も後から変えられる。証拠が「どの控えから戻したか」まで示せないと、
+  // 別の控えで作った証拠が通ってしまう。
+  it("指紋が違えば中身も違う", () => {
+    const base = {
+      nonce: "n",
+      environment: "e",
+      database: "d",
+      expiresAt: 1,
+      generations: "g",
+      dataDigest: "e".repeat(64),
+    };
+    expect(proofPayload({ ...base, dbDigest: "a".repeat(64) })).not.toBe(
+      proofPayload({ ...base, dbDigest: "b".repeat(64) }),
     );
   });
 });
@@ -388,7 +410,7 @@ describe("開けてよいかの集計", () => {
     ).resolves.toMatchObject({ repairsNeedReview: 1, inflightRepairs: 0 });
   });
 
-  it("14 個を 1 つのトランザクションで数える", async () => {
+  it("16 個を 1 つのトランザクションで数える", async () => {
     // 別々に数えると、数えている間に状態が動いて別の時点の数が混ざる。
     let batched = 0;
     const prisma = {
@@ -403,6 +425,6 @@ describe("開けてよいかの集計", () => {
       },
     };
     await collectGitReconcileStatus(prisma, "gen-1");
-    expect(batched).toBe(14);
+    expect(batched).toBe(16);
   });
 });

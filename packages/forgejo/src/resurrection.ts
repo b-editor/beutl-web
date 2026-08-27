@@ -5,6 +5,7 @@ import {
   deleteGitCredential,
   dropGitCredentialRevocation,
   dropGitRepositoryDeletion,
+  drainLegacyGitRepositoryDeletions,
   listGitCredentialRevocations,
   listGitRepositoryDeletions,
   listUnconfirmedGitCredentialRevocations,
@@ -229,8 +230,16 @@ export async function reconcileGitResurrectionTombstones({
   confirmed: number;
   dropped: number;
   repaired: number;
+  migrated: number;
 }> {
   const generation = await currentGitRestoreGeneration();
+
+  // **入れ替え前の表に残った控えを先に移す。** migration を当てている最中に
+  // 古い Worker が書いた行がここに残る。移すまでは証拠も出せない。
+  const migrated = await drainLegacyGitRepositoryDeletions().catch((error) => {
+    console.error("could not drain the legacy deletion tombstones", error);
+    return 0;
+  });
 
   // 確かめる前の控えは、復元の有無によらず毎回決着させる。
   const settled = await settleUnconfirmed(limit);
@@ -365,5 +374,6 @@ export async function reconcileGitResurrectionTombstones({
     confirmed: settled.confirmed,
     dropped: settled.dropped,
     repaired: settled.repaired,
+    migrated,
   };
 }

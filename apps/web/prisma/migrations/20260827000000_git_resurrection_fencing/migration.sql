@@ -5,15 +5,16 @@
 -- も誰も追えない。加えて、期限切れの処理が行を読んだ後に前面がやり直すと、古い方が
 -- 新しい行を確定させたり消したりできてしまう。1 回ごとの印 (intentId) で条件付ける。
 --
--- **表を作り直す。** 主キーが変わるので列を足すだけでは済まない。行は移す。
--- 移した行には「確かめる仕組みが入る前のもの」という印を付ける (消す前に書いて
--- あるだけで、消えたかどうかは分からない)。自動では確定も却下もせず、証拠も
--- 出させない。人が Forgejo 側を確かめて片付ける。
+-- **古い表は落とさない。**
 --
--- **この migration を当ててから Worker を入れ替えるまでの間、古い Worker の
--- 削除は失敗する** (forgejoRepoId の一意制約がもう無いため)。失敗する側に倒れる
--- ので、控えの無い削除が起きることはない。
-CREATE TABLE "GitRepositoryDeletionNew" (
+-- 新しい表へ写して古い方を落とすと、この migration を当てている最中に古い Worker が
+-- 書いた行が消える。消えた行の相手は「消したのに控えの無いリポジトリ」になり、
+-- 復元で生き返っても誰も追えない。migration を当てた後に古い Worker の削除が失敗
+-- するようにしても、当てている最中の窓は閉じない。
+--
+-- そこで表を増やすだけにする。定期実行が古い表に残った行を拾って新しい表へ移し、
+-- 空になったことを確かめてから、後の migration で落とす。
+CREATE TABLE "GitRepositoryDeletionRecord" (
     "id" TEXT NOT NULL,
     "intentId" TEXT NOT NULL,
     "forgejoRepoId" INTEGER NOT NULL,
@@ -28,32 +29,18 @@ CREATE TABLE "GitRepositoryDeletionNew" (
     "lastAttemptAt" TIMESTAMP(3),
     "lastError" TEXT,
 
-    CONSTRAINT "GitRepositoryDeletionNew_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "GitRepositoryDeletionRecord_pkey" PRIMARY KEY ("id")
 );
 
-INSERT INTO "GitRepositoryDeletionNew" (
-    "id", "intentId", "forgejoRepoId", "ownerUsername", "name",
-    "confirmed", "deletedAt", "checkedGeneration", "needsReview", "baseline",
-    "attempts", "lastAttemptAt", "lastError"
-)
-SELECT
-    gen_random_uuid()::text,
-    gen_random_uuid()::text,
-    "forgejoRepoId", "ownerUsername", "name",
-    "confirmed", "deletedAt", "checkedGeneration", "needsReview",
-    -- 移した行はすべて「確かめる仕組みが入る前のもの」。
-    true,
-    "attempts", "lastAttemptAt", "lastError"
-FROM "GitRepositoryDeletion";
-
-DROP TABLE "GitRepositoryDeletion";
-ALTER TABLE "GitRepositoryDeletionNew" RENAME TO "GitRepositoryDeletion";
-
-CREATE INDEX "GitRepositoryDeletion_forgejoRepoId_idx" ON "GitRepositoryDeletion"("forgejoRepoId");
-CREATE INDEX "GitRepositoryDeletion_deletedAt_idx" ON "GitRepositoryDeletion"("deletedAt");
-CREATE INDEX "GitRepositoryDeletion_checkedGeneration_idx" ON "GitRepositoryDeletion"("checkedGeneration");
+CREATE INDEX "GitRepositoryDeletionRecord_forgejoRepoId_idx" ON "GitRepositoryDeletionRecord"("forgejoRepoId");
+CREATE INDEX "GitRepositoryDeletionRecord_deletedAt_idx" ON "GitRepositoryDeletionRecord"("deletedAt");
+CREATE INDEX "GitRepositoryDeletionRecord_checkedGeneration_idx" ON "GitRepositoryDeletionRecord"("checkedGeneration");
 
 -- 失効の控えも同じ扱い。こちらは主キーが既に 1 回ごとなので、印を足すだけ。
+--
+-- 確かめる仕組みが入る前の行は、消す前に書いてあるだけで、消えたかどうかは
+-- 分からない。自動では確定も却下もせず (却下すると、復元で生き返ったものを
+-- 追えなくなる)、証拠も出させない。人が Forgejo 側を確かめて片付ける。
 ALTER TABLE "GitCredentialRevocation" ADD COLUMN "baseline" BOOLEAN NOT NULL DEFAULT false;
 UPDATE "GitCredentialRevocation" SET "baseline" = true;
 

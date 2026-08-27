@@ -411,6 +411,7 @@ vi.mock("@beutl/db", () => ({
   }: {
     forgejoRepoId: number;
   }) => {
+    if (lockedNoteFails) return false;
     const entry = repairQueue.get(forgejoRepoId);
     if (entry) entry.locked = true;
     return true;
@@ -442,6 +443,8 @@ vi.mock("@beutl/db", () => ({
     credentials: 0,
     repositories: 0,
   }),
+  // 入れ替え前の表に残った控えを新しい表へ移す。既定では残っていない。
+  drainLegacyGitRepositoryDeletions: async () => 0,
   findGitCredential: async ({ id }: { id: string }) =>
     id === "c1"
       ? {
@@ -560,6 +563,7 @@ let deletionRows: {
 let droppedTombstones: string[] = [];
 let existingCredentialIds: string[] = ["c1"];
 let reconcileCursor: string | null = null;
+let lockedNoteFails = false;
 
 const {
   CredentialLimitReachedError,
@@ -624,6 +628,7 @@ beforeEach(() => {
   droppedTombstones = [];
   existingCredentialIds = ["c1"];
   reconcileCursor = null;
+  lockedNoteFails = false;
   attachFailsFor = [];
   releasedIds = [];
   repairQueue = new Map();
@@ -3415,6 +3420,76 @@ describe("断られた消去は、後から実行しない", () => {
     await expect(
       reconcileGitResurrectionTombstones(),
     ).resolves.toMatchObject({ confirmed: 1, repaired: 1 });
+    expect(revocationRows[0].confirmed).toBe(true);
+  });
+});
+
+describe("控えを書けなければ、読み取り専用も掛けない", () => {
+  it("控えに書けなかったら archive を送らない", async () => {
+    // 掛けてから控えると、控えを書けなかったときに「読み取り専用だが誰が掛けたか
+    // 分からない」状態が残る。次の周回は外せず、控えだけ消えて利用者の
+    // リポジトリが止まったままになる。
+    const { retryGitRepositoryRepairs } = await import("@beutl/forgejo");
+    repairQueue.set(9, {
+      forgejoRepoId: 9,
+      ownerUsername: "someone",
+      name: "proj",
+    });
+    lockedNoteFails = true;
+    let archivedTo: boolean | null = null;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "GET" && path.endsWith("/user")) {
+        return json({ login: "beutl-admin" });
+      }
+      if (path.endsWith("/repositories/9")) {
+        return json({
+          id: 9,
+          name: "proj",
+          default_branch: "main",
+          archived: false,
+          owner: { id: 2, login: "someone" },
+        });
+      }
+      if (path.includes("/contents/.git")) return json({ message: "no" }, 404);
+      if (method === "POST" && path.endsWith("/contents")) {
+        return json({ message: "refused" }, 422);
+      }
+      if (method === "PATCH") {
+        archivedTo = JSON.parse(String(init?.body)).archived ?? null;
+        return json({ id: 9, name: "proj" });
+      }
+      return new Response(null, { status: 204 });
+    });
+
+    await retryGitRepositoryRepairs();
+
+    // 掛けていない。控えは残るので次の周回でやり直す。
+    expect(archivedTo).toBeNull();
+    expect([...repairQueue.keys()]).toEqual([9]);
+  });
+});
+
+describe("失効はこちらの行を消してから確定させる", () => {
+  it("行を消せなければ確定させない (次の周回が拾えるように)", async () => {
+    // 先に確定させると、定期実行が見るのは確定していない控えなので、消し損ねた
+    // 行は誰も片付けない。使えないトークンが一覧と上限件数に残り続ける。
+    const { revokeGitCredential } = await import("@beutl/forgejo");
+    // こちらの行が既に無い = 消せない状況。
+    existingCredentialIds = [];
+
+    await revokeGitCredential("u1", "c1");
+
+    expect(revocationRows).toHaveLength(1);
+    expect(revocationRows[0].confirmed).toBe(false);
+  });
+
+  it("行を消せたら確定させる", async () => {
+    const { revokeGitCredential } = await import("@beutl/forgejo");
+
+    await revokeGitCredential("u1", "c1");
+
     expect(revocationRows[0].confirmed).toBe(true);
   });
 });

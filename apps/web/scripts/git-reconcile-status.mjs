@@ -41,6 +41,35 @@ import { pathToFileURL } from "node:url";
  *     一切現れない。** これを見ないと、端末に平文の残る失効済みトークンが復元で
  *     生き返っていても、6 つの数はすべて 0 のまま証拠が作れてしまう。
  */
+/**
+ * 証拠に必要なものを**同じスナップショットで**すべて読む。
+ *
+ * 数え上げ・世代・見張り・刈った線・世代の一覧を別々に読むと、その間に定期実行の
+ * 刈り込みが入る。古い刈り線を通した後、刈った後の 0 を見て署名できてしまう。
+ * 刈り込み側を原子的にするだけでは閉じない (読む側が跨いでいるため)。
+ */
+export async function collectGitReopenSnapshot(prisma, nonce) {
+  return await prisma.$transaction(
+    async (tx) => {
+      const generation = nonce
+        ? await tx.gitRestoreGeneration.findUnique({ where: { id: nonce } })
+        : null;
+      const latest = await tx.gitRestoreGeneration.findFirst({
+        orderBy: { createdAt: "desc" },
+      });
+      const watch = await tx.gitResurrectionWatch.findUnique({
+        where: { id: "singleton" },
+      });
+      const ids = (
+        await tx.gitRestoreGeneration.findMany({ select: { id: true } })
+      ).map((row) => row.id);
+      const status = await collectGitReconcileStatus(tx, nonce ?? latest?.id);
+      return { generation, latest: latest?.id ?? null, watch, ids, status };
+    },
+    { isolationLevel: "Serializable" },
+  );
+}
+
 export async function collectGitReconcileStatus(prisma, generation) {
   const purged = { phase: "PURGED" };
   const tracked = { ...purged, forgejoUsername: { not: null } };
@@ -80,6 +109,8 @@ export async function collectGitReconcileStatus(prisma, generation) {
     inflightReservations,
     inflightRepairs,
     repairsNeedReview,
+    unverifiedBaseline,
+    unverifiedBaselineRepos,
   ] = await prisma.$transaction([
       prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
       prisma.gitAccountDeletion.count({
@@ -127,6 +158,10 @@ export async function collectGitReconcileStatus(prisma, generation) {
       // **渡し切れていない預かりものと、直せていないリポジトリ。**
       prisma.gitRepositoryRepair.count({ where: { needsReview: false } }),
       prisma.gitRepositoryRepair.count({ where: { needsReview: true } }),
+      // **仕組みが入る前に積まれた控え。** 消えたかどうかが分からないので、
+      // 人が Forgejo 側を確かめるまで開けない (世代とは関係なく数える)。
+      prisma.gitCredentialRevocation.count({ where: { baseline: true } }),
+      prisma.gitRepositoryDeletion.count({ where: { baseline: true } }),
     ]);
 
   return {
@@ -144,6 +179,8 @@ export async function collectGitReconcileStatus(prisma, generation) {
     inflightReservations,
     inflightRepairs,
     repairsNeedReview,
+    // 2 つ足して 1 つの数として出す。どちらも「人が確かめるまで開けない」。
+    unverifiedBaseline: unverifiedBaseline + unverifiedBaselineRepos,
   };
 }
 
@@ -169,17 +206,20 @@ export async function collectGitReconcileStatus(prisma, generation) {
  * 目印。版を上げれば、古い側の署名は検証に通らなくなる。
  *
  * v1 -> v2: 失効させたトークンと消したリポジトリの控えを数に加えた。
- * v2 -> v3: 見張りの開始・戻した控えの時点と中身・決着していない予約と直しを
- *   条件に加え、**これまでに登録した復元世代の指紋**を署名の中身へ入れた。
+ * v2 -> v3: 見張りの開始・戻した控えの時点・決着していない予約と直しを条件に
+ *   加え、これまでに登録した復元世代の指紋を署名の中身へ入れた。**配っていない。**
+ * v3 -> v4: 戻した控えそのものの指紋 (DB dump と tar) を署名の中身へ入れた。
+ *   これで、証拠が「どの控えから戻したか」まで示す。git-server 側は自分が実際に
+ *   戻したファイルの指紋と突き合わせるので、別の控えで作った証拠は通らない。
  *
  * **版を上げたのに中身が同じだと意味が無い。** 古い署名側は新しい条件を見ないまま
- * 同じ 5 行に署名でき、受け取る側には見分けが付かない。条件を増やすときは版の
- * 文字列と、できれば中身の形も変える。v3 は 6 行目に世代の指紋が付く。
+ * 同じ行に署名でき、受け取る側には見分けが付かない。条件を増やすときは版の文字列と
+ * **中身の形の両方**を変える。v4 は 8 行。
  *
- * 古い版は**受け取ってはいけない**。git-server 側も v3 だけを受ける。両側を同時に
+ * 古い版は**受け取ってはいけない**。git-server 側も v4 だけを受ける。両側を同時に
  * 配ること (片方だけだと復旧が開けられなくなる)。
  */
-export const PROOF_PROTOCOL = "beutl-reopen-v3";
+export const PROOF_PROTOCOL = "beutl-reopen-v4";
 
 export function proofPayload({
   nonce,
@@ -187,6 +227,8 @@ export function proofPayload({
   database,
   expiresAt,
   generations,
+  dbDigest,
+  dataDigest,
 }) {
   return [
     PROOF_PROTOCOL,
@@ -195,6 +237,8 @@ export function proofPayload({
     database,
     String(expiresAt),
     generations,
+    dbDigest,
+    dataDigest,
   ].join("\n");
 }
 
@@ -286,6 +330,31 @@ async function main() {
     return;
   }
 
+  // 登録済みの復元の値を並べる。git-server 側の一覧と突き合わせるため。
+  if (args.includes("--list-generations")) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) throw new Error("DATABASE_URL is required");
+    const adapter = new PrismaPg({ connectionString });
+    const prisma = new PrismaClient({ adapter });
+    try {
+      const rows = await prisma.gitRestoreGeneration.findMany({
+        orderBy: { createdAt: "asc" },
+      });
+      for (const row of rows) {
+        console.log(
+          `${row.id}\t${row.createdAt.toISOString()}\t${row.protocol ?? "-"}`,
+        );
+      }
+      console.log(
+        `\n${rows.length} 件。git-server の restore-generations にある` +
+          " registered の行と、過不足なく一致している必要があります。",
+      );
+    } finally {
+      await prisma.$disconnect();
+    }
+    return;
+  }
+
   const proofIndex = args.indexOf("--proof");
   const nonce = proofIndex === -1 ? null : args[proofIndex + 1];
   if (proofIndex !== -1 && !nonce) {
@@ -301,35 +370,45 @@ async function main() {
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   try {
+    // **必要なものを 1 つのスナップショットで読む。** 別々に読むと、その間に
+    // 定期実行の刈り込みが入り、古い刈り線を通した後で刈った後の 0 を見て
+    // 署名できてしまう。
+    let snapshot;
+    try {
+      snapshot = await collectGitReopenSnapshot(prisma, nonce);
+    } catch (error) {
+      if (error?.code === "P2021") {
+        console.error(
+          "必要な表がありません (GitAccountDeletion / GitCredentialRevocation " +
+            "/ GitRepositoryDeletionRecord / GitResurrectionWatch)。" +
+            "マイグレーションが当たっていないデータベースです " +
+            "(pnpm run migrate:status で確認してください)。",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
+    const status = snapshot.status;
+
     if (nonce) {
-      const generation = await prisma.gitRestoreGeneration.findUnique({
-        where: { id: nonce },
-      });
+      const generation = snapshot.generation;
       if (!generation) {
         console.error(
           `この世代はこのデータベースに登録されていません: ${nonce}\n` +
-            "復元の直後に次を実行してから、定期実行を待ってください。\n" +
-            `  pnpm run git:restore-generation --nonce '${nonce}' --backup-at '<控えの時点>'`,
+            "復元の直後に、restore.sh が出した値をそのまま渡して登録してください。",
         );
         process.exitCode = 1;
         return;
       }
 
-      // **見張りを始める前の控えからは開けない。**
-      //
-      // 失効と削除の控え (GitCredentialRevocation / GitRepositoryDeletion) は、
-      // 見張りを始めてからの消去しか持っていない。それより前に取った控えを戻すと、
-      // 控えの無い消去が生き返る。数はすべて 0 になるので、そのままでは証拠が
-      // 出てしまう。
-      const watch = await prisma.gitResurrectionWatch.findUnique({
-        where: { id: "singleton" },
-      });
+      const watch = snapshot.watch;
       if (!watch?.startedAt) {
         console.error(
           "生き返りの見張りがまだ始まっていません。\n" +
-            "3 つの Worker を配り終えると `pnpm run release` が記録します。\n" +
-            "配備の途中では証拠を出せません (古い Worker が控えを書かずに" +
-            "消したものを、見張っているつもりになるため)。",
+            "3 つの Worker を配り、smoke test が通ると `pnpm run release` が\n" +
+            "記録します。配備の途中では証拠を出せません (古い Worker が控えを\n" +
+            "書かずに消したものを、見張っているつもりになるため)。",
         );
         process.exitCode = 1;
         return;
@@ -337,8 +416,23 @@ async function main() {
       if (!generation.backupAt) {
         console.error(
           `世代 ${nonce} に、戻した控えの時点が記録されていません。\n` +
-            "見張りを始めた時点より前の控えかどうかを判断できません。\n" +
-            `  pnpm run git:restore-generation --nonce '${nonce}' --backup-at '<控えの時点>'`,
+            "見張りを始めた時点より前の控えかどうかを判断できません。",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      // **戻した控えの指紋が要る。** 名前も時点も後から変えられる。中身の指紋を
+      // 世代へ結び付け、git-server 側が実際に戻したものと突き合わせる。
+      const hex = /^[0-9a-f]{64}$/;
+      if (
+        !hex.test(generation.dbDigest ?? "") ||
+        !hex.test(generation.dataDigest ?? "")
+      ) {
+        console.error(
+          `世代 ${nonce} に、戻した控えの指紋が記録されていません` +
+            " (64 桁の 16 進が 2 つ要ります)。\n" +
+            "restore.sh が出力した --db-digest / --data-digest を付けて" +
+            "登録し直してください。",
         );
         process.exitCode = 1;
         return;
@@ -348,21 +442,15 @@ async function main() {
           `戻した控え (${generation.backupAt.toISOString()}) は、生き返りの` +
             `見張りを始めた時点 (${watch.startedAt.toISOString()}) より前のものです。\n` +
             "その時点より前に失効させたトークンと消したリポジトリには控えが無いので、\n" +
-            "生き返っていても数に出ません。**証拠は出せません。**\n" +
-            "beutl-web 側も対で戻すか、人の手で Forgejo 側を確かめてください。",
+            "生き返っていても数に出ません。**証拠は出せません。**",
         );
         process.exitCode = 1;
         return;
       }
-      // **刈った線より古い控えからも開けない。**
-      //
-      // 見張りを始めた後の控えでも、保持期間 (GIT_TOMBSTONE_TTL_DAYS) を過ぎた
-      // ものはもう刈ってある。その時点から戻すと、対応する控えが無いまま生き返る
-      // のに数はすべて 0 になる。開始時点だけを見ていると通ってしまう。
       if (watch.prunedBefore && generation.backupAt < watch.prunedBefore) {
         console.error(
           `戻した控え (${generation.backupAt.toISOString()}) は、控えを刈った線` +
-            `(${watch.prunedBefore.toISOString()}) より前のものです。\n` +
+            ` (${watch.prunedBefore.toISOString()}) より前のものです。\n` +
             "その時点の失効と削除の控えはもう残っていないので、生き返っていても\n" +
             "数に出ません。**証拠は出せません。**\n" +
             "この幅は GIT_TOMBSTONE_TTL_DAYS で決まります。バックアップの保持より\n" +
@@ -371,9 +459,6 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      // **この世代を登録したときの版が今と違うなら通さない。** 版を上げた理由は
-      // 判定条件を増やしたことなので、古い版で登録した世代を使い回されると、
-      // 増やした条件を見ていない証拠が通る。
       if (generation.protocol !== PROOF_PROTOCOL) {
         console.error(
           `世代 ${nonce} は ${generation.protocol ?? "版の記録なし"} で登録されて` +
@@ -386,32 +471,9 @@ async function main() {
       }
     }
 
-    // **様子見でも、判定は現在の世代で行う。**
-    //
-    // null で数えると「一度も確認していない」ものしか数えない。前の世代で確認
-    // 済みのものは今の世代では未確認なのに 0 と出て、「終わっています」と読める。
-    const generation = nonce ?? (await currentGeneration(prisma));
+    const generationId = nonce ?? snapshot.latest;
 
-    let status;
-    try {
-      status = await collectGitReconcileStatus(prisma, generation);
-    } catch (error) {
-      // 表そのものが無い = マイグレーションが当たっていない。Prisma の生の
-      // 例外を出すより、何をすればよいかを言う。
-      if (error?.code === "P2021") {
-        console.error(
-          "必要な表がありません (GitAccountDeletion / GitCredentialRevocation " +
-            "/ GitRepositoryDeletion / GitResurrectionWatch)。マイグレーションが" +
-            "当たっていないデータベースです " +
-            "(pnpm run migrate:status で確認してください)。",
-        );
-        process.exitCode = 1;
-        return;
-      }
-      throw error;
-    }
-
-    if (generation) console.log(`${"世代".padEnd(19)} ${generation}`);
+    if (generationId) console.log(`${"世代".padEnd(19)} ${generationId}`);
     for (const [key, value] of Object.entries(status)) {
       console.log(`${key.padEnd(20)} ${value}`);
     }
@@ -455,11 +517,8 @@ async function main() {
     const database = databaseIdentity(connectionString);
     const expiresAt = Math.floor(Date.now() / 1000) + PROOF_TTL_SECONDS;
     // 登録済みの世代すべて。git-server が自分の控えから同じ指紋を作って比べる。
-    const generations = generationsDigest(
-      (
-        await prisma.gitRestoreGeneration.findMany({ select: { id: true } })
-      ).map((row) => row.id),
-    );
+    // **スナップショットの中で読んだものを使う** (後から読み直さない)。
+    const generations = generationsDigest(snapshot.ids);
     console.log(`環境         ${environment}`);
     console.log(`接続先       ${database}`);
     console.log(
@@ -468,7 +527,15 @@ async function main() {
     console.log("\n消し直しは終わっています。次の値を渡して開けてください。\n");
     console.log(
       signProof(
-        proofPayload({ nonce, environment, database, expiresAt, generations }),
+        proofPayload({
+          nonce,
+          environment,
+          database,
+          expiresAt,
+          generations,
+          dbDigest: snapshot.generation.dbDigest,
+          dataDigest: snapshot.generation.dataDigest,
+        }),
         key,
       ),
     );

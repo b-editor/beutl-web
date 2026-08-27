@@ -352,23 +352,114 @@ export async function pruneGitResurrectionTombstones({
   prisma?: PrismaTransaction;
 }): Promise<{ credentials: number; repositories: number }> {
   const db = prisma ?? (await getDb());
-  const credentials = await db.gitCredentialRevocation.deleteMany({
-    where: { baseline: false, revokedAt: { lt: before } },
-  });
-  const repositories = await db.gitRepositoryDeletion.deleteMany({
-    // 人の確認待ちは残す。消すと、何を見ればよかったのか分からなくなる。
-    // 仕組みが入る前の行も同じ (人が片付けるまで残す)。
-    where: { needsReview: false, baseline: false, deletedAt: { lt: before } },
-  });
-  // **どこまで刈ったかを残す。** 見張りを始めた後の控えでも、ここより古いものは
-  // もう無い。その時点から戻すと、対応する控えが無いまま生き返る。
-  await db.gitResurrectionWatch.upsert({
-    where: { id: "singleton" },
-    create: { id: "singleton", prunedBefore: before },
-    update: { prunedBefore: before },
-  });
-  return {
-    credentials: credentials.count,
-    repositories: repositories.count,
+
+  const run = async (tx: PrismaTransaction) => {
+    // **刈った線を先に進めてから消す。** 逆にすると、消した後・線を進める前に
+    // 落ちたときに「控えは無いのに線は古いまま」になり、その時点の控えから
+    // 戻せると誤って判断してしまう。線が先なら、落ちても「線は進んだが控えは
+    // 残っている」で済む (安全側)。
+    //
+    // **線は前へしか動かさない。** 保持期間を延ばすと `before` は過去へ戻るが、
+    // 既に消した控えは戻らない。線まで戻すと、前に断った控えをまた受け入れる。
+    const watch = await tx.gitResurrectionWatch.findUnique({
+      where: { id: "singleton" },
+    });
+    const next =
+      watch?.prunedBefore && watch.prunedBefore > before
+        ? watch.prunedBefore
+        : before;
+    await tx.gitResurrectionWatch.upsert({
+      where: { id: "singleton" },
+      create: { id: "singleton", prunedBefore: next },
+      update: { prunedBefore: next },
+    });
+
+    const credentials = await tx.gitCredentialRevocation.deleteMany({
+      where: { baseline: false, revokedAt: { lt: before } },
+    });
+    const repositories = await tx.gitRepositoryDeletion.deleteMany({
+      // 人の確認待ちは残す。消すと、何を見ればよかったのか分からなくなる。
+      // 仕組みが入る前の行も同じ (人が片付けるまで残す)。
+      where: { needsReview: false, baseline: false, deletedAt: { lt: before } },
+    });
+    return {
+      credentials: credentials.count,
+      repositories: repositories.count,
+    };
   };
+
+  // 既にトランザクションの中なら、そのまま使う。
+  if (prisma) return await run(prisma);
+  const client = await getDb();
+  return await client.$transaction(run, { isolationLevel: "Serializable" });
+}
+
+/**
+ * 入れ替え前の表に残っている控えを、新しい表へ移す。
+ *
+ * migration を当てている最中に古い Worker が書いた行がここに残る。放っておくと、
+ * 消したのに控えの無いリポジトリになる。**確かめる仕組みが入る前のものとして**
+ * 移す (消えたかどうかは分からないため)。
+ *
+ * 移す先が無い環境 (先に作り直した版を当てていた場合) では何もしない。
+ *
+ * @returns 移した件数。
+ */
+export async function drainLegacyGitRepositoryDeletions({
+  limit = 100,
+  prisma,
+}: { limit?: number; prisma?: PrismaTransaction } = {}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  let pending;
+  try {
+    pending = await db.gitRepositoryDeletionPending.findMany({ take: limit });
+  } catch (error) {
+    // 表そのものが無い。移すものは無い。
+    if (isMissingTable(error)) return 0;
+    throw error;
+  }
+  if (pending.length === 0) return 0;
+
+  let moved = 0;
+  for (const row of pending) {
+    await db.gitRepositoryDeletion.create({
+      data: {
+        intentId: crypto.randomUUID(),
+        forgejoRepoId: row.forgejoRepoId,
+        ownerUsername: row.ownerUsername,
+        name: row.name,
+        deletedAt: row.deletedAt,
+        needsReview: row.needsReview,
+        attempts: row.attempts,
+        lastAttemptAt: row.lastAttemptAt,
+        lastError: row.lastError,
+        // **確かめた印は引き継がない。** 前の仕組みは消す前に書いていたので、
+        // 控えがあること自体は「消えた」を意味しない。
+        baseline: true,
+      },
+    });
+    await db.gitRepositoryDeletionPending.delete({
+      where: { forgejoRepoId: row.forgejoRepoId },
+    });
+    moved += 1;
+  }
+  return moved;
+}
+
+/** 入れ替え前の表に残っている件数。0 になるまで証拠は出せない。 */
+export async function countLegacyGitRepositoryDeletions({
+  prisma,
+}: { prisma?: PrismaTransaction } = {}): Promise<number> {
+  const db = prisma ?? (await getDb());
+  try {
+    return await db.gitRepositoryDeletionPending.count();
+  } catch (error) {
+    if (isMissingTable(error)) return 0;
+    throw error;
+  }
+}
+
+function isMissingTable(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "P2021" || code === "P2010";
 }

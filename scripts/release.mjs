@@ -145,10 +145,8 @@ function reportUnverified() {
       "  - Web / Admin Worker の Forgejo 用 secret (セッションが要るため)\n" +
       "  - 管理画面からの削除経路 (リポジトリの削除・資格情報の失効)\n" +
       "  - beutl-web-api の定期実行 (cron は外から起動できない)\n" +
-      "  - 失効と削除の控えが実際に書かれること\n" +
-      "    ↑ ここが黙って壊れると、復元の証拠が「終わっている」と言い続ける。\n" +
-      "      配備の後に 1 度、資格情報を 1 本発行して失効させ、\n" +
-      "      GitCredentialRevocation に confirmed=true の行が増えることを見ること。",
+      "  - リポジトリの削除の控え (実際に消してしまうので smoke では試せない)\n" +
+      "  - BEUTL_SMOKE_PROVISION=1 でないときは、失効の控えの経路も未確認",
   );
 }
 
@@ -228,6 +226,54 @@ for (const path of paths) {
   console.log(`OK  GET ${path}`);
 }
 
+// **控えが実際に書かれることを、配備済みの Worker を通して確かめる。**
+//
+// 見張りを始めるということは「ここから先の失効と削除は控えてある」と言うこと。
+// 控える側が黙って壊れていると、復元の証拠が「終わっている」と言い続ける。
+// release の checkout から Prisma を直接叩いても、それは確かめたことにならない
+// (配った Worker・その Forgejo の secret・実際に控えを書く経路を通らない)。
+//
+// 資格情報を 1 本発行して、すぐ失効させる。副作用はその 1 本だけで、失効まで
+// 済ませるので残らない。
+if (provisionCheck) {
+  const label = `release-canary-${Date.now()}`;
+  const issued = await fetch(`${origin}/api/v3/git/credentials`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ deviceName: label }),
+  });
+  if (!issued.ok) {
+    console.error(
+      `error: 控えの経路を確かめられません。POST /api/v3/git/credentials が ` +
+        `${issued.status} を返しました: ${(await issued.text()).slice(0, 300)}`,
+    );
+    ok = false;
+  } else {
+    const { id } = await issued.json();
+    const revoked = await fetch(`${origin}/api/v3/git/credentials/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    if (!revoked.ok) {
+      console.error(
+        `error: canary の資格情報を失効できませんでした (${revoked.status})。` +
+          `手で消してください: ${label}`,
+      );
+      ok = false;
+    } else {
+      console.log("OK  資格情報の発行と失効 (控えの経路)");
+    }
+  }
+} else {
+  console.log(
+    "    控えの経路は確かめていません (発行と失効を行うため、専用の smoke\n" +
+      "    アカウントが要ります)。BEUTL_SMOKE_PROVISION=1 で有効になります。",
+  );
+}
+
 if (!provisionCheck) {
   console.log(
     "    /api/v3/git/account は叩いていません (無ければ Forgejo ユーザーを" +
@@ -251,6 +297,17 @@ if (!ok) {
 //
 // 開始の時刻はデータベースの時計で入り、控えを 1 行書いて読み戻せることまで
 // 確かめてから確定する (git-start-resurrection-watch.mjs)。
+if (!provisionCheck) {
+  console.error(
+    "\n警告: 控えの経路を確かめていないので、生き返りの見張りは始めません。\n" +
+      "      始めると「見張っている」と言いながら 1 件も控えない期間ができます。\n" +
+      "      BEUTL_SMOKE_PROVISION=1 で確かめたうえで、次を実行してください:\n" +
+      "        pnpm run git:start-resurrection-watch",
+  );
+  reportUnverified();
+  process.exit(0);
+}
+
 step("生き返りの見張りを始めています");
 run("pnpm", ["run", "git:start-resurrection-watch"]);
 
