@@ -94,75 +94,85 @@ export async function collectGitReconcileStatus(prisma, generation) {
       }
     : { checkedGeneration: null };
 
-  const [
-    remaining,
-    failed,
-    needsReview,
-    unresolved,
-    pendingPurge,
-    blocking,
-    credentials,
-    credentialsFailed,
-    repositories,
-    repositoriesFailed,
-    repositoriesReview,
-    inflightReservations,
-    inflightRepairs,
-    repairsNeedReview,
-    unverifiedBaseline,
-    unverifiedBaselineRepos,
-  ] = await prisma.$transaction([
-      prisma.gitAccountDeletion.count({ where: { ...tracked, ...notChecked } }),
-      prisma.gitAccountDeletion.count({
-        where: { ...tracked, ...notChecked, lastError: { not: null } },
-      }),
-      prisma.gitAccountDeletion.count({ where: { phase: "NEEDS_REVIEW" } }),
-      // **名前を控えていない墓標。** 相手の名前が分からなくても、合成メールは
-      // userId から決まるので引ける。だから「確認できない」ではなく「この世代で
-      // まだ確認していない」を数える。確認済みまで数えると、Git を使わずに退会した
-      // 人がいるだけで復旧が開けられなくなる。
-      prisma.gitAccountDeletion.count({
-        where: { ...purged, forgejoUsername: null, ...notChecked },
-      }),
-      // **消し切れていない退会。** Forgejo 側の purge が失敗した行はここに残る。
-      // 数えないと、退会したはずのアカウントと端末のトークンが生きたまま
-      // 「終わっている」と読める。
-      prisma.gitAccountDeletion.count({ where: { phase: "READY_TO_PURGE" } }),
-      // 退会を始めたまま進んでいないもの。掃除役が拾うが、残っている間は
-      // 「どうなっているか分からない」ので開けない。
-      prisma.gitAccountDeletion.count({ where: { phase: "BLOCKING" } }),
-      // **失効させたトークン。** 生きている利用者のものなので退会には現れない。
-      // 端末には平文が残っている。復元で生き返ったまま開けると、失効したはずの
-      // トークンで git と LFS が通る。
-      prisma.gitCredentialRevocation.count({ where: notCheckedTombstone }),
-      prisma.gitCredentialRevocation.count({
-        where: { ...notCheckedTombstone, lastError: { not: null } },
-      }),
-      // **消したリポジトリ。** 同じく退会には現れない。
-      prisma.gitRepositoryDeletion.count({
-        where: { needsReview: false, ...notCheckedTombstone },
-      }),
-      prisma.gitRepositoryDeletion.count({
-        where: {
-          needsReview: false,
-          ...notCheckedTombstone,
-          lastError: { not: null },
-        },
-      }),
-      // その id が別のリポジトリを指している。人が見るまで自動では決められない。
-      prisma.gitRepositoryDeletion.count({ where: { needsReview: true } }),
-      // **決着していない予約。** 曖昧に終わった改名や削除がここに残る。
-      // 残っている間は「Forgejo 側がどうなったか分からない」ということなので、
-      // 開けてよいとは言えない。放っておけば 30 分ほどで片が付く。
-      prisma.gitRepositoryCreation.count(),
-      // **渡し切れていない預かりものと、直せていないリポジトリ。**
-      prisma.gitRepositoryRepair.count({ where: { needsReview: false } }),
-      prisma.gitRepositoryRepair.count({ where: { needsReview: true } }),
-      // **仕組みが入る前に積まれた控え。** 消えたかどうかが分からないので、
-      // 人が Forgejo 側を確かめるまで開けない (世代とは関係なく数える)。
-      prisma.gitCredentialRevocation.count({ where: { baseline: true } }),
-      prisma.gitRepositoryDeletion.count({ where: { baseline: true } }),
-    ]);
+  // **1 つずつ順に数える。渡された client の上で。**
+  //
+  // ここで `$transaction([...])` を開くと、呼び出し元が既にトランザクションの中に
+  // いても、その外側で別のトランザクションが始まる (実測: 中の now() が外側と
+  // 違う)。すると「古い刈り線を通した後、刈った後の 0 を数える」という順序が
+  // 起こりうる。トランザクションを開くのは collectGitReopenSnapshot だけにする。
+  const count = (model, where) =>
+    where === undefined ? model.count() : model.count({ where });
+
+  const remaining = await count(prisma.gitAccountDeletion, {
+    ...tracked,
+    ...notChecked,
+  });
+  const failed = await count(prisma.gitAccountDeletion, {
+    ...tracked,
+    ...notChecked,
+    lastError: { not: null },
+  });
+  const needsReview = await count(prisma.gitAccountDeletion, {
+    phase: "NEEDS_REVIEW",
+  });
+  // **名前を控えていない墓標。** 相手の名前が分からなくても、合成メールは
+  // userId から決まるので引ける。だから「確認できない」ではなく「この世代で
+  // まだ確認していない」を数える。確認済みまで数えると、Git を使わずに退会した
+  // 人がいるだけで復旧が開けられなくなる。
+  const unresolved = await count(prisma.gitAccountDeletion, {
+    ...purged,
+    forgejoUsername: null,
+    ...notChecked,
+  });
+  // **消し切れていない退会。** Forgejo 側の purge が失敗した行はここに残る。
+  const pendingPurge = await count(prisma.gitAccountDeletion, {
+    phase: "READY_TO_PURGE",
+  });
+  // 退会を始めたまま進んでいないもの。
+  const blocking = await count(prisma.gitAccountDeletion, {
+    phase: "BLOCKING",
+  });
+  // **失効させたトークン。** 生きている利用者のものなので退会には現れない。
+  // 端末には平文が残っている。
+  const credentials = await count(
+    prisma.gitCredentialRevocation,
+    notCheckedTombstone,
+  );
+  const credentialsFailed = await count(prisma.gitCredentialRevocation, {
+    ...notCheckedTombstone,
+    lastError: { not: null },
+  });
+  // **消したリポジトリ。** 同じく退会には現れない。
+  const repositories = await count(prisma.gitRepositoryDeletion, {
+    needsReview: false,
+    ...notCheckedTombstone,
+  });
+  const repositoriesFailed = await count(prisma.gitRepositoryDeletion, {
+    needsReview: false,
+    ...notCheckedTombstone,
+    lastError: { not: null },
+  });
+  // その id が別のリポジトリを指している。人が見るまで自動では決められない。
+  const repositoriesReview = await count(prisma.gitRepositoryDeletion, {
+    needsReview: true,
+  });
+  // **決着していない予約。** 曖昧に終わった改名や削除がここに残る。
+  const inflightReservations = await count(prisma.gitRepositoryCreation);
+  // **渡し切れていない預かりものと、直せていないリポジトリ。**
+  const inflightRepairs = await count(prisma.gitRepositoryRepair, {
+    needsReview: false,
+  });
+  const repairsNeedReview = await count(prisma.gitRepositoryRepair, {
+    needsReview: true,
+  });
+  // **仕組みが入る前に積まれた控え。** 消えたかどうかが分からないので、
+  // 人が Forgejo 側を確かめるまで開けない (世代とは関係なく数える)。
+  const unverifiedBaseline = await count(prisma.gitCredentialRevocation, {
+    baseline: true,
+  });
+  const unverifiedBaselineRepos = await count(prisma.gitRepositoryDeletion, {
+    baseline: true,
+  });
 
   // **入れ替え前の表に残っている控え。** 定期実行が新しい表へ移すまで、その行は
   // どの数にも出ない。移し切れていないまま署名すると、消したのに控えの無い
@@ -172,7 +182,10 @@ export async function collectGitReconcileStatus(prisma, generation) {
   try {
     legacyPending = await prisma.gitRepositoryDeletionPending.count();
   } catch (error) {
-    if (error?.code !== "P2021" && error?.code !== "P2010") throw error;
+    // **「表が無い」以外は握り潰さない。** P2010 は生のクエリが失敗したことしか
+    // 言わないので、接続断や権限不足まで 0 として通してしまう。相手の表の名前が
+    // 出ているものだけを「無い」と読む。
+    if (!isMissingLegacyTable(error)) throw error;
   }
 
   return {
@@ -288,6 +301,27 @@ export function signProof(payload, encodedKey) {
   return sign(null, Buffer.from(payload), createPrivateKey(pem)).toString(
     "base64",
   );
+}
+
+/**
+ * 入れ替え前の表が「無い」ことによる失敗か。
+ *
+ * P2021 は Prisma が表の不在として返すもの。P2010 は生のクエリの失敗で、接続断や
+ * 権限不足も同じ符号になる。相手の表の名前が出ているものだけを不在として扱う。
+ */
+function isMissingLegacyTable(error) {
+  if (error?.code === "P2021") {
+    const table = error?.meta?.table;
+    return table === undefined || String(table).includes("GitRepositoryDeletion");
+  }
+  if (error?.code === "P2010") {
+    const message = `${error?.meta?.message ?? ""} ${error?.message ?? ""}`;
+    return (
+      /GitRepositoryDeletion/i.test(message) &&
+      /(does not exist|undefined_table|relation .* not|42P01)/i.test(message)
+    );
+  }
+  return false;
 }
 
 /** 今の復元世代。まだ一度も復元していなければ null。 */

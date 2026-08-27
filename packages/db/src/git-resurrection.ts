@@ -479,7 +479,28 @@ export async function countLegacyGitRepositoryDeletions({
   }
 }
 
+/**
+ * 入れ替え前の表が「無い」ことによる失敗か。
+ *
+ * **P2010 を一律で不在扱いにしない。** あれは生のクエリが失敗したことしか言わない
+ * ので、接続断や権限不足まで「移すものは無い」として通してしまう。相手の表の名前が
+ * 出ているものだけを不在として読む。
+ */
 function isMissingTable(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code;
-  return code === "P2021" || code === "P2010";
+  const err = error as { code?: unknown; message?: unknown; meta?: unknown };
+  const meta = err?.meta as { table?: unknown; message?: unknown } | undefined;
+  if (err?.code === "P2021") {
+    const table = meta?.table;
+    return (
+      table === undefined || String(table).includes("GitRepositoryDeletion")
+    );
+  }
+  if (err?.code === "P2010") {
+    const message = `${meta?.message ?? ""} ${err?.message ?? ""}`;
+    return (
+      /GitRepositoryDeletion/i.test(message) &&
+      /(does not exist|undefined_table|relation .* not|42P01)/i.test(message)
+    );
+  }
+  return false;
 }

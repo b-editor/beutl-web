@@ -9,6 +9,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, verify } from "
 
 const {
   PROOF_PROTOCOL,
+  collectGitReopenSnapshot,
   generationsDigest,
   PROOF_TTL_SECONDS,
   SELFTEST_PAYLOAD,
@@ -435,22 +436,69 @@ describe("開けてよいかの集計", () => {
     ).resolves.toMatchObject({ legacyPending: 0 });
   });
 
-  it("16 個を 1 つのトランザクションで数える", async () => {
-    // 別々に数えると、数えている間に状態が動いて別の時点の数が混ざる。
-    let batched = 0;
+  it("数えるときに新しいトランザクションを開かない", async () => {
+    // **渡された client の上で数える。** ここで $transaction を開くと、呼び出し元が
+    // 既にトランザクションの中にいても、その外側で別のトランザクションが始まる。
+    // 「古い刈り線を通した後、刈った後の 0 を数える」という順序が起こりうる。
+    let opened = 0;
     const prisma = {
-      gitAccountDeletion: { count: () => 0 },
-      gitCredentialRevocation: { count: () => 0 },
-      gitRepositoryDeletion: { count: () => 0 },
-      gitRepositoryCreation: { count: () => 0 },
-      gitRepositoryRepair: { count: () => 0 },
-      gitRepositoryDeletionPending: { count: () => 0 },
-      $transaction: async (calls: number[]) => {
-        batched = calls.length;
-        return calls;
+      gitAccountDeletion: { count: async () => 0 },
+      gitCredentialRevocation: { count: async () => 0 },
+      gitRepositoryDeletion: { count: async () => 0 },
+      gitRepositoryCreation: { count: async () => 0 },
+      gitRepositoryRepair: { count: async () => 0 },
+      gitRepositoryDeletionPending: { count: async () => 0 },
+      $transaction: async () => {
+        opened += 1;
+        return [];
       },
     };
     await collectGitReconcileStatus(prisma, "gen-1");
-    expect(batched).toBe(16);
+    expect(opened).toBe(0);
+  });
+
+  it("証拠に要るものは 1 つのトランザクションで読む", async () => {
+    // 世代・見張り・刈った線・数え上げ・世代の一覧を別々に読むと、その間に
+    // 刈り込みが入る。すべて同じ client で読まれることを見る。
+    const seen = new Set<unknown>();
+    const model = (rows: Row[] = []) => ({
+      count: async () => rows.length,
+      findUnique: async () => null,
+      findFirst: async () => null,
+      findMany: async () => [],
+    });
+    const client = (tag: string) => {
+      const c: Record<string, unknown> = {
+        gitAccountDeletion: model(),
+        gitCredentialRevocation: model(),
+        gitRepositoryDeletion: model(),
+        gitRepositoryCreation: model(),
+        gitRepositoryRepair: model(),
+        gitRepositoryDeletionPending: model(),
+        gitRestoreGeneration: model(),
+        gitResurrectionWatch: model(),
+        __tag: tag,
+      };
+      return c;
+    };
+    const tx = client("tx");
+    const prisma = {
+      ...client("outer"),
+      $transaction: async (fn: (t: unknown) => Promise<unknown>) => {
+        // 中で使われた client を控える。
+        const wrapped = new Proxy(tx, {
+          get(target, key) {
+            seen.add("tx");
+            return Reflect.get(target, key);
+          },
+        });
+        return await fn(wrapped);
+      },
+    };
+
+    await collectGitReopenSnapshot(prisma, "gen-1");
+
+    // 外側の client には触れていない (すべて tx 経由)。
+    expect([...seen]).toEqual(["tx"]);
   });
 });
