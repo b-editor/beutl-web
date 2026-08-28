@@ -40,9 +40,10 @@ describe("証拠の中身", () => {
       generations: "abc123",
       dbDigest: "d".repeat(64),
       dataDigest: "e".repeat(64),
+      backupAt: "2026-08-01T02:00:00Z",
     });
 
-    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v4");
+    expect(PROOF_PROTOCOL).toBe("beutl-reopen-v5");
     expect(payload.split("\n")).toEqual([
       PROOF_PROTOCOL,
       "1787536325:c9a7",
@@ -52,6 +53,7 @@ describe("証拠の中身", () => {
       "abc123",
       "d".repeat(64),
       "e".repeat(64),
+      "2026-08-01T02:00:00Z",
     ]);
   });
 
@@ -90,10 +92,30 @@ describe("戻した控えの指紋", () => {
       expiresAt: 1,
       generations: "g",
       dataDigest: "e".repeat(64),
+      backupAt: "2026-08-01T02:00:00Z",
     };
     expect(proofPayload({ ...base, dbDigest: "a".repeat(64) })).not.toBe(
       proofPayload({ ...base, dbDigest: "b".repeat(64) }),
     );
+  });
+});
+
+describe("戻した控えの時点", () => {
+  // 開けてよいかの判定に直接使う値。署名で縛らないと、登録し直して時点だけを
+  // 差し替えられる。
+  it("時点が違えば中身も違う", () => {
+    const base = {
+      nonce: "n",
+      environment: "e",
+      database: "d",
+      expiresAt: 1,
+      generations: "g",
+      dbDigest: "a".repeat(64),
+      dataDigest: "b".repeat(64),
+    };
+    expect(
+      proofPayload({ ...base, backupAt: "2026-08-01T02:00:00Z" }),
+    ).not.toBe(proofPayload({ ...base, backupAt: "2026-08-02T02:00:00Z" }));
   });
 });
 

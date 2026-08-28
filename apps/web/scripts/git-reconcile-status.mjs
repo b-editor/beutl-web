@@ -234,17 +234,19 @@ export async function collectGitReconcileStatus(prisma, generation) {
  * v2 -> v3: 見張りの開始・戻した控えの時点・決着していない予約と直しを条件に
  *   加え、これまでに登録した復元世代の指紋を署名の中身へ入れた。**配っていない。**
  * v3 -> v4: 戻した控えそのものの指紋 (DB dump と tar) を署名の中身へ入れた。
- *   これで、証拠が「どの控えから戻したか」まで示す。git-server 側は自分が実際に
- *   戻したファイルの指紋と突き合わせるので、別の控えで作った証拠は通らない。
+ *   **配っていない。**
+ * v4 -> v5: 入れ替え前の表に残った控え (legacyPending) を数に加え、**戻した控えの
+ *   時点**を署名の中身へ入れた。時点は開けてよいかの判定に直接使うので、署名で
+ *   縛る (登録し直して時点だけ差し替えることができなくなる)。
  *
  * **版を上げたのに中身が同じだと意味が無い。** 古い署名側は新しい条件を見ないまま
  * 同じ行に署名でき、受け取る側には見分けが付かない。条件を増やすときは版の文字列と
- * **中身の形の両方**を変える。v4 は 8 行。
+ * **中身の形の両方**を変える。v5 は 9 行。
  *
- * 古い版は**受け取ってはいけない**。git-server 側も v4 だけを受ける。両側を同時に
+ * 古い版は**受け取ってはいけない**。git-server 側も v5 だけを受ける。両側を同時に
  * 配ること (片方だけだと復旧が開けられなくなる)。
  */
-export const PROOF_PROTOCOL = "beutl-reopen-v4";
+export const PROOF_PROTOCOL = "beutl-reopen-v5";
 
 export function proofPayload({
   nonce,
@@ -254,6 +256,7 @@ export function proofPayload({
   generations,
   dbDigest,
   dataDigest,
+  backupAt,
 }) {
   return [
     PROOF_PROTOCOL,
@@ -264,6 +267,7 @@ export function proofPayload({
     generations,
     dbDigest,
     dataDigest,
+    backupAt,
   ].join("\n");
 }
 
@@ -581,6 +585,13 @@ async function main() {
           generations,
           dbDigest: snapshot.generation.dbDigest,
           dataDigest: snapshot.generation.dataDigest,
+          // **時点も署名の中身に入れる。** 開けてよいかの判定に直接使う値なので、
+          // 登録し直して時点だけ差し替えられないようにする。git-server 側は
+          // 復元のときに印へ残した値と突き合わせる。
+          backupAt: snapshot.generation.backupAt.toISOString().replace(
+            /\.\d{3}Z$/,
+            "Z",
+          ),
         }),
         key,
       ),

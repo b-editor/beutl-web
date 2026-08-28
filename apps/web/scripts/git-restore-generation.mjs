@@ -49,15 +49,6 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    // **未来の時点は受け取らない。** 受け取ると、見張りの開始より後だと言い張れる。
-    if (backupAt.getTime() > Date.now() + 5 * 60 * 1000) {
-      console.error(
-        `--backup-at が未来です: ${backupAt.toISOString()}\n` +
-          "戻した控えの時点として受け取れません。",
-      );
-      process.exitCode = 2;
-      return;
-    }
   }
   // 戻した 2 つの控えの中身の指紋。**名前ではなく中身で縛る。** 名前だけだと、
   // 古い控えを新しい名前へ付け替えるだけで通る。
@@ -99,6 +90,26 @@ async function main() {
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
   try {
+    // **未来の時点は受け取らない。** 受け取ると、見張りの開始より後だと言い張れる。
+    //
+    // **比べる相手はデータベースの時計。** 見張りの開始も刈った線も、この時計で
+    // 付いている。実行するホストの時計と比べると、そちらが進んでいるだけで
+    // 境界の前の控えを後のものとして通せる。
+    const [{ now: dbNow }] = await prisma.$queryRaw`SELECT now() AS now`;
+    const skewMs = backupAt.getTime() - dbNow.getTime();
+    if (skewMs > 60 * 1000) {
+      console.error(
+        `--backup-at がデータベースの時計より先です ` +
+          `(${Math.round(skewMs / 1000)} 秒)。\n` +
+          `  控えの時点: ${backupAt.toISOString()}\n` +
+          `  データベース: ${dbNow.toISOString()}\n` +
+          "控えを取ったホストの時計がずれています。NTP を確かめてください " +
+          "(このずれは、開けてよいかの判定をそのまま狂わせます)。",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     // **一度登録した世代の中身は書き換えない。** 後から時点だけ差し替えられると、
     // 古い控えから戻した世代を「新しい控えから戻した」ことにできる。
     const existing = await prisma.gitRestoreGeneration.findUnique({
