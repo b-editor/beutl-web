@@ -12,6 +12,7 @@ const migrationFiles = [
   "20260825220000_add_topup_duplicate_refund_attempt",
   "20260825230000_add_topup_checkout_resolution",
   "20260827030000_add_storage_upload_completion_lease",
+  "20260828000000_harden_unknown_storage_completion",
 ] as const;
 
 type TargetMigration = (typeof migrationFiles)[number];
@@ -24,6 +25,7 @@ const targetTables: Record<TargetMigration, string> = {
     "TopUpDuplicateRefundAttempt",
   "20260825230000_add_topup_checkout_resolution": "TopUpCheckoutResolution",
   "20260827030000_add_storage_upload_completion_lease": "StorageUpload",
+  "20260828000000_harden_unknown_storage_completion": "StorageUpload",
 };
 
 const resolutionMigrationFiles = migrationFiles.slice(1, 4);
@@ -463,6 +465,8 @@ describeWithCockroach(
       const name = "20260827030000_add_storage_upload_completion_lease";
       await runSql(resource.prisma, await migrationSql(name));
       await runSql(resource.prisma, await migrationSql(name));
+      await runSql(resource.prisma, await migrationSql("20260828000000_harden_unknown_storage_completion"));
+      await runSql(resource.prisma, await migrationSql("20260828000000_harden_unknown_storage_completion"));
 
       const [legacy] = await resource.prisma.$queryRawUnsafe<Array<{
         completionState: string;
@@ -545,6 +549,23 @@ describeWithCockroach(
         SET "completionRetryNotBefore" = NULL
         WHERE "id" = 'valid-resumed'
       `)).rejects.toThrow();
+      await resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionState" = 'settled', "completionRetryNotBefore" = NULL
+        WHERE "id" = 'valid-resumed'
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "completionState", "completionInterventionAt"
+        ) VALUES (
+          'valid-unknown', 'unknown', current_timestamp()
+        )
+      `);
+      await resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionState" = 'settled', "completionInterventionAt" = NULL
+        WHERE "id" = 'valid-unknown'
+      `);
       await expect(resource.prisma.$executeRawUnsafe(`
         UPDATE "StorageUpload"
         SET "completionState" = 'completing'

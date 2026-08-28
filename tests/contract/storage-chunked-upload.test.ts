@@ -71,7 +71,7 @@ const bucket = vi.hoisted(() => {
 });
 const bucketDeleted: string[] = [];
 let bucketDeleteFails = false;
-const bucketObjects = new Map<string, { key: string }>();
+const bucketObjects = new Map<string, { key: string; size?: number }>();
 const defaultCreateMultipartUpload = bucket.createMultipartUpload.getMockImplementation()!;
 const defaultResumeMultipartUpload = bucket.resumeMultipartUpload.getMockImplementation()!;
 const defaultDelete = bucket.delete.getMockImplementation()!;
@@ -123,7 +123,7 @@ describe("uploading a file too large for one request", () => {
     vi.useRealTimers();
   });
 
-  it("returns at the completion deadline and records a retry while observing the provider promise", async () => {
+  it("returns at the completion deadline and durably records an unknown provider outcome", async () => {
     vi.useFakeTimers();
     const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "deadline.bin", mimeType: "application/octet-stream", size: BigInt(1) });
     if (!started.ok) throw new Error(started.reason);
@@ -135,8 +135,127 @@ describe("uploading a file too large for one request", () => {
     const pending = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
-    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("retry");
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("unknown");
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not re-complete after a timed-out provider call commits late", async () => {
+    vi.useFakeTimers();
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "late.bin", mimeType: "application/octet-stream", size: BigInt(4) });
+    if (!started.ok) throw new Error(started.reason);
+    let resolveComplete!: (value: { size: number }) => void;
+    const complete = vi.fn(() => new Promise<{ size: number }>((resolve) => { resolveComplete = resolve; }));
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete,
+      abort: vi.fn(),
+    }));
+
+    const pending = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    const unknown = state.storageUploads.get(started.upload.id)!;
+    expect(unknown.completionState).toBe("unknown");
+
+    const operator = await storageDb.resumeStorageUploadIntervention({
+      id: unknown.id,
+      userId: USER_ID,
+      objectKey: unknown.objectKey,
+      uploadId: unknown.uploadId,
+      expectedRevision: unknown.completionRevision,
+      expectedInterventionAt: unknown.completionInterventionAt!,
+      operatorUserId: "operator-1",
+      operatorReason: "Checked provider completion status",
+      operatorEvidence: "Incident INC-200 confirms delayed response",
+      now: new Date("2026-08-28T00:15:00.000Z"),
+    });
+    expect(operator.status).toBe("unsafe");
+    expect(complete).toHaveBeenCalledTimes(1);
+
+    bucketObjects.set(unknown.objectKey, { key: unknown.objectKey });
+    resolveComplete({ size: 4 });
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(state.files.size).toBe(1);
+    expect(state.storageUploads.get(unknown.id)?.completionState).toBe("settled");
+    expect(bucketDeleted).toEqual([]);
+  });
+
+  it("keeps a late provider rejection unknown without authorizing another provider call", async () => {
+    vi.useFakeTimers();
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "late-rejection.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    let rejectComplete!: (error: unknown) => void;
+    const complete = vi.fn(() => new Promise<{ size: number }>((_, reject) => {
+      rejectComplete = reject;
+    }));
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete,
+      abort: vi.fn(),
+    }));
+
+    const pending = finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    rejectComplete(new Error("provider response was lost"));
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(state.storageUploads.get(started.upload.id)).toMatchObject({
+      completionState: "unknown",
+      completionLastError: "provider response was lost",
+      abandonedAt: null,
+      completedFileId: null,
+    });
+  });
+
+  it("recovers a visible unknown completion after the originating runtime is gone", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "runtime-loss.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    state.storageUploads.set(row.id, {
+      ...row,
+      completionState: "unknown",
+      completionAttempts: 1,
+      completionLastError: "originating runtime ended",
+      completionInterventionAt: new Date(),
+      completionRevision: 1,
+    });
+    bucketObjects.set(row.objectKey, { key: row.objectKey, size: 4 });
+
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+    expect(state.files.size).toBe(1);
+    expect(state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "settled",
+      completionInterventionAt: null,
+      completionRetryNotBefore: null,
+      completedFileId: expect.any(String),
+    });
+    expect(bucketDeleted).toEqual([]);
   });
 
   it.each(["false", "throw"] as const)("stops waiting when lease renewal returns %s", async (mode) => {
@@ -481,7 +600,7 @@ describe("uploading a file too large for one request", () => {
     });
     await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({ abandoned: 0, failed: 0 });
     expect(state.storageUploads.get(row.id)).toMatchObject({
-      completionState: "intervention",
+      completionState: "unknown",
       completionLeaseToken: null,
       completionLeaseUntil: null,
       abandonedAt: null,
@@ -785,12 +904,12 @@ describe("uploading a file too large for one request", () => {
       abort: vi.fn(),
     }));
     const concurrentFileId = "file-concurrent-completion";
-    const recordFailure = storageDb.recordStorageUploadCompletionFailure;
-    vi.spyOn(storageDb, "recordStorageUploadCompletionFailure")
+    const recordUnknown = storageDb.recordStorageUploadCompletionUnknown;
+    vi.spyOn(storageDb, "recordStorageUploadCompletionUnknown")
       .mockImplementationOnce(async (args) => {
         // The concurrent receipt wins the generation CAS first. The failure
         // recorder must then lose, and this caller must return that same File
-        // instead of changing the completed row back to retry.
+        // instead of changing the completed row back to unknown.
         state.files.set(concurrentFileId, {
           id: concurrentFileId,
           objectKey: tracked.objectKey,
@@ -809,8 +928,10 @@ describe("uploading a file too large for one request", () => {
           completionState: "settled",
           completionLeaseUntil: null,
           completionLeaseToken: null,
+          completionInterventionAt: null,
+          completionRetryNotBefore: null,
         });
-        return await recordFailure(args);
+        return await recordUnknown(args);
       });
 
     const result = await finishUpload({
@@ -878,7 +999,7 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(1);
   });
 
-  it("keeps terminal completion absence retryable without scheduling cleanup", async () => {
+  it("keeps terminal completion absence unknown without scheduling cleanup", async () => {
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -906,13 +1027,19 @@ describe("uploading a file too large for one request", () => {
 
     expect(state.storageUploads.has(tracked.id)).toBe(true);
     expect(state.storageUploads.get(tracked.id)).toMatchObject({
-      completionState: "retry",
+      completionState: "unknown",
       completedFileId: null,
       abandonedAt: null,
     });
     expect(bucketDeleted).toEqual([]);
     expect(state.aiStorageCleanups.has(tracked.objectKey)).toBe(false);
     expect(bucketDeleted).toEqual([]);
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: "etag-1" }],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(bucket.resumeMultipartUpload).toHaveBeenCalledTimes(1);
   });
 
   it("does not clean up terminal absence after taking over an expired completion", async () => {

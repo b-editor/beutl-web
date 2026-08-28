@@ -1,16 +1,26 @@
 import {
   claimStorageMultipartCleanup,
   claimStorageUploadForAbandon,
+  countFilesByUserId,
+  createFile,
   deleteClaimedStorageUpload,
   finalizeStorageMultipartCleanup,
   findStorageUploadByIdAndUserId,
+  listUnknownStorageUploadCompletions,
   listDueStorageMultipartCleanups,
+  markStorageUploadCompleted,
   recordStorageMultipartCleanupFailure,
   listStorageUploadsStartedBefore,
   escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
+  startRetryableTransaction,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+  sumFileSizeByUserId,
 } from "@beutl/db";
+import {
+  STORAGE_FILE_COUNT_LIMIT,
+  STORAGE_QUOTA_BYTES,
+} from "@beutl/core";
 import { getR2Bucket } from "./ai/storage";
 
 // Giving up on uploads nobody finished.
@@ -122,6 +132,98 @@ export async function reconcileStorageMultipartCleanups(
   return { inspected: cleanups.length, settled, errors };
 }
 
+export async function reconcileUnknownStorageUploadCompletions(
+  limit: number = MAX_PER_RUN,
+): Promise<{ inspected: number; finalized: number; errors: number }> {
+  const uploads = await listUnknownStorageUploadCompletions({ limit });
+  let finalized = 0;
+  let errors = 0;
+
+  for (const listed of uploads) {
+    let object: { size?: number } | null;
+    try {
+      const head = getR2Bucket().head;
+      if (!head) throw new Error("The configured R2 bucket cannot inspect objects");
+      object = await head(listed.objectKey);
+    } catch (error) {
+      errors++;
+      console.error("Failed to reconcile an unknown storage completion", listed.id, error);
+      continue;
+    }
+    if (object === null) continue;
+    if (
+      typeof object.size !== "number" ||
+      !Number.isSafeInteger(object.size) ||
+      object.size < 0
+    ) {
+      errors++;
+      console.error("Unknown storage completion has an invalid object size", listed.id);
+      continue;
+    }
+
+    try {
+      const outcome = await startRetryableTransaction(async (prisma) => {
+        const current = await findStorageUploadByIdAndUserId({
+          id: listed.id,
+          userId: listed.userId,
+          prisma,
+        });
+        if (
+          !current ||
+          current.completedFileId !== null ||
+          current.abandonedAt !== null ||
+          current.completionState !== "unknown" ||
+          current.completionRevision !== listed.completionRevision ||
+          current.objectKey !== listed.objectKey ||
+          current.uploadId !== listed.uploadId ||
+          current.completionInterventionAt?.getTime() !==
+            listed.completionInterventionAt?.getTime()
+        ) {
+          return "changed" as const;
+        }
+
+        const actual = BigInt(object.size!);
+        const [stored, files] = await Promise.all([
+          sumFileSizeByUserId({ userId: current.userId, prisma }),
+          countFilesByUserId({ userId: current.userId, prisma }),
+        ]);
+        if (
+          stored + actual > BigInt(STORAGE_QUOTA_BYTES) ||
+          files >= STORAGE_FILE_COUNT_LIMIT
+        ) {
+          return "blocked" as const;
+        }
+
+        const created = await createFile({
+          objectKey: current.objectKey,
+          name: current.name,
+          size: object.size!,
+          mimeType: current.mimeType,
+          userId: current.userId,
+          visibility: "PRIVATE",
+          prisma,
+        });
+        if (!await markStorageUploadCompleted({
+          id: current.id,
+          userId: current.userId,
+          fileId: created.id,
+          expected: storageUploadGenerationOf(current),
+          prisma,
+        })) {
+          throw new Error(`Unknown storage completion ${current.id} changed before receipt`);
+        }
+        return "finalized" as const;
+      });
+      if (outcome === "finalized") finalized++;
+    } catch (error) {
+      errors++;
+      console.error("Failed to persist an unknown storage completion receipt", listed.id, error);
+    }
+  }
+
+  return { inspected: uploads.length, finalized, errors };
+}
+
 export async function abandonStaleStorageUploads(
   now: Date = new Date(),
 ): Promise<{ abandoned: number; failed: number }> {
@@ -131,6 +233,11 @@ export async function abandonStaleStorageUploads(
   await escalateDueStorageUploadCompletions({ now, limit: MAX_PER_RUN }).catch((error) => {
     console.error("Failed to escalate due storage completion retries", error);
   });
+  const unknownRecovery = await reconcileUnknownStorageUploadCompletions()
+    .catch((error) => {
+      console.error("Failed to reconcile unknown storage completions", error);
+      return { inspected: 0, finalized: 0, errors: 1 };
+    });
   const stale = await listStorageUploadsStartedBefore({
     before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
     now,
@@ -138,7 +245,7 @@ export async function abandonStaleStorageUploads(
   });
 
   let abandoned = 0;
-  let failed = 0;
+  let failed = unknownRecovery.errors;
   for (const listed of stale) {
     // 一覧を引いてから順番が回ってくるまでの間に、そのアップロードが完了して
     // いることがある。行を取れなければ、それは完了したか、既に誰かが取ったか。
@@ -284,6 +391,26 @@ export async function abandonStaleStorageUploads(
 type ClaimedStorageUpload = NonNullable<
   Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
 >;
+
+function storageUploadGenerationOf(upload: ClaimedStorageUpload) {
+  return {
+    createdAt: upload.createdAt,
+    objectKey: upload.objectKey,
+    uploadId: upload.uploadId,
+    name: upload.name,
+    mimeType: upload.mimeType,
+    size: upload.size,
+    partSize: upload.partSize,
+    startState: upload.startState,
+    creationLeaseUntil: upload.creationLeaseUntil,
+    creationLeaseToken: upload.creationLeaseToken,
+    completionState: upload.completionState,
+    completionLeaseUntil: upload.completionLeaseUntil,
+    completionLeaseToken: upload.completionLeaseToken,
+    completionRevision: upload.completionRevision,
+    completionRetryNotBefore: upload.completionRetryNotBefore,
+  };
+}
 
 async function stillOwnCleanupLease(
   expected: ClaimedStorageUpload,

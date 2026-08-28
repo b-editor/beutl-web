@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 const migrations = [
@@ -21,9 +22,17 @@ const migrations = [
   "20260827010000_harden_storage_multipart_cleanup/migration.sql",
   "20260827020000_harden_topup_intervention_audit/migration.sql",
   "20260827030000_add_storage_upload_completion_lease/migration.sql",
+  "20260828000000_harden_unknown_storage_completion/migration.sql",
 ];
 
 describe("new billing migrations", () => {
+  it("keeps the applied 2703 completion migration immutable", async () => {
+    const sql = await readFile(new URL("../../apps/web/prisma/migrations/20260827030000_add_storage_upload_completion_lease/migration.sql", import.meta.url), "utf8");
+    expect(createHash("sha256").update(sql).digest("hex")).toBe(
+      "1aded5ab73c74a41732d5a073acfe9dfd743e6d73aaca0df9d814a95757c89b5",
+    );
+  });
+
   it("keeps the Wrangler lifecycle config in the lowercase rules shape", async () => {
     const lifecycle = JSON.parse(await readFile(new URL("../../apps/web/r2-lifecycle.json", import.meta.url), "utf8")) as { rules?: Array<Record<string, unknown>> };
     expect(Array.isArray(lifecycle.rules)).toBe(true);
@@ -123,6 +132,9 @@ describe("new billing migrations", () => {
     expect(completionLeaseSql).toContain('StorageUpload_completionState_completionRetryNotBefore_idx');
     expect(completionLeaseSql).toContain('DROP CONSTRAINT IF EXISTS "StorageUpload_completionState_ck"');
     expect(completionLeaseSql.indexOf('DROP INDEX IF EXISTS "StorageUpload_completionState_completionLeaseUntil_idx"')).toBeLessThan(completionLeaseSql.indexOf('CREATE INDEX IF NOT EXISTS "StorageUpload_completionState_completionLeaseUntil_idx"'));
+    const unknownCompletionSql = await readFile(new URL("../../apps/web/prisma/migrations/20260828000000_harden_unknown_storage_completion/migration.sql", import.meta.url), "utf8");
+    expect(unknownCompletionSql).toContain("'unknown'");
+    expect(unknownCompletionSql).toContain('schema_locked = true');
     expect(schema).toContain('completionRetryNotBefore DateTime?');
     const resolutionSql = await readFile(new URL("../../apps/web/prisma/migrations/20260825210000_add_package_checkout_resolution/migration.sql", import.meta.url), "utf8");
     expect(resolutionSql).toContain("PackageCheckoutResolution_status_check");

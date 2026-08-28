@@ -138,7 +138,7 @@ export async function terminalizeStorageMultipartCleanup(input: unknown): Promis
     }
     const result = await startRetryableTransaction(async (tx) => {
       const transition = await terminalizeStorageMultipartIntervention({ ...parsed, now: new Date(), operatorUserId: session.user.id, operatorReason: value.operatorReason as string, operatorEvidence: value.operatorEvidence as string, prisma: tx });
-      if (transition.status === "conflict") return transition;
+      if (transition.status === "conflict" || transition.status === "unsafe") return transition;
       await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageMultipartInterventionTerminalized, details: `objectKey: ${parsed.objectKey}, uploadId: ${parsed.uploadId}, revision: ${parsed.expectedRevision}, reason: ${value.operatorReason}, evidence: ${value.operatorEvidence}`, prisma: tx });
       return transition;
     });
@@ -163,11 +163,18 @@ export async function resumeStorageUploadInterventionAction(input: unknown): Pro
     const operatorEvidence = value.operatorEvidence;
     const result = await startRetryableTransaction(async (tx) => {
       const transition = await resumeStorageUploadIntervention({ ...parsed, operatorUserId: session.user.id, operatorReason, operatorEvidence, now: new Date(), prisma: tx });
-      if (transition.status === "conflict") return transition;
+      if (transition.status === "conflict" || transition.status === "unsafe") return transition;
       await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageUploadInterventionResumed, details: `upload: ${parsed.id}, revision: ${parsed.expectedRevision}->${transition.revision}, reason: ${operatorReason}, evidence: ${operatorEvidence}`, prisma: tx });
       return transition;
     });
-    return result.status === "resumed" ? { success: true, message: "Storage upload resumed" } : { success: false, message: "Resolution changed; reload and retry" };
+    return result.status === "resumed"
+      ? { success: true, message: "Storage upload resumed" }
+      : {
+          success: false,
+          message: result.status === "unsafe"
+            ? result.reason
+            : "Resolution changed; reload and retry",
+        };
   });
 }
 

@@ -238,6 +238,30 @@ Terminalize. Terminalize is an explicit risk acknowledgement (the remote handle
 may still exist), records an audit log, and releases object-key cleanup only
 after every handle for that key is resolved. It never deletes a winner object.
 
+The `20260827030000_add_storage_upload_completion_lease` migration (followed
+immediately by the forward `20260828000000_harden_unknown_storage_completion`
+constraint repair) is a maintenance cutover, not a rolling application change.
+Before applying it,
+quiesce storage-upload start, part, finish, and cancel requests, account
+deletion, and all storage schedulers. Apply the migration, deploy every Web,
+admin, and standalone API runtime that understands the completion lease and
+the fail-closed `unknown` outcome, then verify `SHOW CREATE TABLE
+"StorageUpload"` reports `schema_locked = true` and includes the completion
+state, lease-pair, intervention, and retry-window constraints. Resume storage
+traffic, account deletion, and schedulers only after those checks pass. Do not
+run an old runtime across this window: an old finisher can turn an unknown
+provider result back into a second remote `complete` attempt.
+
+A completion that passes the local response deadline, or otherwise loses a
+definitive provider outcome after `complete()` was issued, remains `unknown`.
+The scheduler and a client retry may recover a visible object into its File
+receipt, but they never issue a second `complete`, abort the multipart, or
+release account deletion. Ordinary Resume and Terminalize are disabled for
+this state. There is no operator override from `unknown`: R2 exposes no
+completion-status API that can prove an old call has terminated, and a HEAD
+absence is only a point-in-time observation. The row intentionally remains
+fail-closed unless a receipt can be recovered from a visible object.
+
 Configure and verify the R2 safety net during every release:
 
 ```bash

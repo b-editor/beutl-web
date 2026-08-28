@@ -384,7 +384,7 @@ type StorageUploadWhere = {
   createdAt?: Date | { lt?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
-  completionState?: string;
+  completionState?: string | { in?: string[]; not?: string };
   completionLeaseUntil?: Date | null | { lte: Date };
   completionLeaseToken?: string | null;
   completionAttempts?: number;
@@ -434,8 +434,9 @@ function matchesStorageUploadWhere(
   if (where.completionState !== undefined) {
     if (typeof where.completionState === "string") {
       if (item.completionState !== where.completionState) return false;
-    } else if (where.completionState.not !== undefined && item.completionState === where.completionState.not) {
-      return false;
+    } else {
+      if (where.completionState.in && !where.completionState.in.includes(String(item.completionState))) return false;
+      if (where.completionState.not !== undefined && item.completionState === where.completionState.not) return false;
     }
   }
   if (where.completionAttempts !== undefined && item.completionAttempts !== where.completionAttempts) return false;

@@ -58,7 +58,7 @@ async function insertStorageUpload({
   startState?: "intent" | "creating" | "active";
   creationLeaseUntil?: Date | null;
   creationLeaseToken?: string | null;
-  completionState?: "idle" | "retry" | "resumed" | "completing" | "settled" | "intervention";
+  completionState?: "idle" | "retry" | "resumed" | "completing" | "settled" | "intervention" | "unknown";
   completionLeaseUntil?: Date | null;
   completionLeaseToken?: string | null;
   completionAttempts?: number;
@@ -411,9 +411,110 @@ export async function recordStorageUploadCompletionFailure({
   return updated.count === 1 ? { status: intervene ? "intervention" as const : "retry" as const, attempts: nextAttempts } : { status: "lost" as const };
 }
 
+/**
+ * Persist an outcome that cannot be retried because the provider call may
+ * still commit after this runtime stopped waiting (for example, a deadline
+ * timeout). The row remains operator-visible but never authorizes another
+ * provider completion.
+ */
+export async function recordStorageUploadCompletionUnknown({
+  id, userId, leaseToken, expected, error, now, prisma,
+}: { id: string; userId: string; leaseToken: string; expected: StorageUploadGenerationExpectation; error: string; now: Date; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  const generation = {
+    id,
+    userId,
+    completedFileId: null,
+    abandonedAt: null,
+    createdAt: expected.createdAt,
+    objectKey: expected.objectKey,
+    uploadId: expected.uploadId,
+    name: expected.name,
+    mimeType: expected.mimeType,
+    size: expected.size,
+    partSize: expected.partSize,
+    startState: expected.startState,
+    creationLeaseUntil: expected.creationLeaseUntil,
+    creationLeaseToken: expected.creationLeaseToken,
+    completionState: "completing",
+    completionLeaseToken: leaseToken,
+    completionLeaseUntil: expected.completionLeaseUntil,
+    completionRevision: expected.completionRevision,
+    completionRetryNotBefore: expected.completionRetryNotBefore,
+  } as const;
+  const current = await db.storageUpload.findFirst({ where: generation } as never);
+  if (!current) return { status: "lost" as const };
+  const attempts = (current as typeof current & { completionAttempts?: number }).completionAttempts ?? 0;
+  const updated = await db.storageUpload.updateMany({
+    where: generation,
+    data: {
+      completionAttempts: attempts + 1,
+      completionLastError: error.slice(0, 2000),
+      completionState: "unknown",
+      completionInterventionAt: now,
+      completionRetryNotBefore: null,
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+      completionRevision: { increment: 1 },
+    },
+  } as never);
+  return updated.count === 1 ? { status: "unknown" as const, attempts: attempts + 1 } : { status: "lost" as const };
+}
+
+export async function recordStorageUploadCompletionLateFailure({
+  id, userId, expected, expectedInterventionAt, error, prisma,
+}: { id: string; userId: string; expected: StorageUploadGenerationExpectation; expectedInterventionAt: Date; error: string; prisma?: PrismaTransaction }) {
+  const db = prisma ?? await getDb();
+  const updated = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      completedFileId: null,
+      abandonedAt: null,
+      createdAt: expected.createdAt,
+      objectKey: expected.objectKey,
+      uploadId: expected.uploadId,
+      name: expected.name,
+      mimeType: expected.mimeType,
+      size: expected.size,
+      partSize: expected.partSize,
+      startState: expected.startState,
+      creationLeaseUntil: expected.creationLeaseUntil,
+      creationLeaseToken: expected.creationLeaseToken,
+      completionState: "unknown",
+      completionInterventionAt: expectedInterventionAt,
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+      completionRetryNotBefore: expected.completionRetryNotBefore,
+      completionRevision: expected.completionRevision,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    },
+    data: {
+      completionLastError: error.slice(0, 2000),
+      completionRevision: { increment: 1 },
+    },
+  } as never);
+  return updated.count === 1 ? { status: "unknown" as const } : { status: "lost" as const };
+}
+
 export async function listStorageUploadInterventions({ limit = 100, prisma }: { limit?: number; prisma?: PrismaTransaction } = {}) {
   const db = prisma ?? await getDb();
-  return db.storageUpload.findMany({ where: { completionState: "intervention" }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: limit } as never);
+  return db.storageUpload.findMany({ where: { completionState: { in: ["intervention", "unknown"] } }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: limit } as never);
+}
+
+export async function listUnknownStorageUploadCompletions({ limit = 100, prisma }: { limit?: number; prisma?: PrismaTransaction } = {}) {
+  const db = prisma ?? await getDb();
+  const rows = await db.storageUpload.findMany({
+    where: {
+      completionState: "unknown",
+      completedFileId: null,
+      abandonedAt: null,
+    },
+    orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }],
+    take: limit,
+  } as never);
+  return rows.map((row) => withCompletionFields(row)!);
 }
 
 /** Promote retry rows whose grace period elapsed into operator intervention. */
@@ -426,7 +527,7 @@ export async function escalateDueStorageUploadCompletions({ now, limit = 100, pr
     const resumed = row.completionState === "resumed";
     const updated = await db.storageUpload.updateMany({
       where: { id: row.id, userId: row.userId, objectKey: row.objectKey, uploadId: row.uploadId, completionState: row.completionState, completionRetryNotBefore: row.completionRetryNotBefore, completionLeaseToken: row.completionLeaseToken, completionLeaseUntil: row.completionLeaseUntil, completionRevision: row.completionRevision, completionAttempts: row.completionAttempts, completionLastError: row.completionLastError, completionInterventionAt: null },
-      data: { completionState: "intervention", completionInterventionAt: now, completionRetryNotBefore: null, completionLeaseToken: null, completionLeaseUntil: null, completionLastError: completing ? "Completion lease expired without a recorded outcome" : resumed ? "Operator resume expired before a provider attempt" : row.completionLastError, completionAttempts: completing ? row.completionAttempts + 1 : row.completionAttempts, completionRevision: { increment: 1 } },
+      data: { completionState: completing ? "unknown" : "intervention", completionInterventionAt: now, completionRetryNotBefore: null, completionLeaseToken: null, completionLeaseUntil: null, completionLastError: completing ? "Completion lease expired without a recorded outcome" : resumed ? "Operator resume expired before a provider attempt" : row.completionLastError, completionAttempts: completing ? row.completionAttempts + 1 : row.completionAttempts, completionRevision: { increment: 1 } },
     } as never);
     if (updated.count === 1) escalated++;
   }
@@ -438,6 +539,8 @@ type StorageUploadInterventionIdentity = { id: string; userId: string; objectKey
 export async function resumeStorageUploadIntervention({ id, userId, objectKey, uploadId, expectedRevision, expectedInterventionAt, now, operatorUserId, operatorReason, operatorEvidence, prisma }: StorageUploadInterventionIdentity & { now: Date; operatorUserId: string; operatorReason: string; operatorEvidence: string; prisma?: PrismaTransaction }) {
   if (!operatorUserId.trim() || operatorReason.trim().length < 10 || operatorEvidence.trim().length < 10) return { status: "unsafe" as const, reason: "Operator identity, reason, and evidence are required" };
   const db = prisma ?? await getDb();
+  const current = await db.storageUpload.findFirst({ where: { id, userId, objectKey, uploadId, completionState: { in: ["unknown", "intervention"] }, completionRevision: expectedRevision, completionInterventionAt: expectedInterventionAt } } as never) as { completionState?: string } | null;
+  if (current?.completionState === "unknown") return { status: "unsafe" as const, reason: "Provider completion outcome is unknown; verify the receipt or object before any further action" };
   const updated = await db.storageUpload.updateMany({ where: { id, userId, objectKey, uploadId, completionState: "intervention", completionRevision: expectedRevision, completionInterventionAt: expectedInterventionAt }, data: { completionState: "resumed", completionInterventionAt: null, completionRetryNotBefore: new Date(now.getTime() + 15 * 60_000), completionLeaseToken: null, completionLeaseUntil: null, completionRevision: { increment: 1 }, } } as never);
   return updated.count === 1 ? { status: "resumed" as const, revision: expectedRevision + 1 } : { status: "conflict" as const };
 }
@@ -804,6 +907,8 @@ export async function markStorageUploadCompleted({
       completionState: "settled",
       completionLeaseUntil: null,
       completionLeaseToken: null,
+      completionInterventionAt: null,
+      completionRetryNotBefore: null,
     },
   } as never);
   return result.count > 0;
@@ -877,7 +982,7 @@ export async function claimStorageUploadForAbandon({
   // A stale sweep or account deletion can never take over an in-flight
   // completion merely because its lease elapsed. Only the completion owner
   // that observed a provider outcome may hand its fence to cleanup.
-  if (completionOwnerToken === undefined && ["completing", "retry", "resumed", "intervention"].includes(expected.completionState)) {
+  if (completionOwnerToken === undefined && ["completing", "retry", "resumed", "intervention", "unknown"].includes(expected.completionState)) {
     return false;
   }
   const db = prisma ?? (await getDb());
@@ -955,7 +1060,7 @@ export async function freezeStorageUploadForAccountDeletion({
   expected: StorageUploadAbandonExpectation & { abandonedAt: null };
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
-  if (["completing", "retry", "resumed", "intervention"].includes(expected.completionState)) {
+  if (["completing", "retry", "resumed", "intervention", "unknown"].includes(expected.completionState)) {
     return false;
   }
   const db = prisma ?? await getDb();
@@ -1067,6 +1172,7 @@ export async function listStorageUploadsStartedBefore({
         { completionState: { not: "retry" } },
         { completionState: { not: "resumed" } },
         { completionState: { not: "intervention" } },
+        { completionState: { not: "unknown" } },
       ],
     },
     orderBy: { createdAt: "asc" },

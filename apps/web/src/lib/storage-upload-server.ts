@@ -8,6 +8,8 @@ import {
   claimStorageUploadForAbandon,
   claimStorageUploadCompletion,
   recordStorageUploadCompletionFailure,
+  recordStorageUploadCompletionUnknown,
+  recordStorageUploadCompletionLateFailure,
   renewStorageUploadCompletion,
   claimStorageUploadCreation,
   attachStorageUploadRemote,
@@ -498,7 +500,20 @@ export async function finishUpload({
     if (outcome.kind === "deadline") {
       if (timer) clearTimeout(timer);
       deadlineTimer = undefined;
-      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Remote multipart completion exceeded deadline", now: new Date() }).catch(() => undefined);
+      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Remote multipart completion exceeded deadline", now: new Date() }).catch(() => undefined);
+      // Keep a continuation when the runtime survives the request deadline.
+      // It can only settle the same generation after reloading its durable
+      // unknown state; it never issues another provider complete call.
+      void providerCompletion.then(async (late) => {
+        const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch(() => null);
+        if (!current || current.completionState !== "unknown") return;
+        if (late.kind !== "completed") {
+          if (!current.completionInterventionAt) return;
+          await recordStorageUploadCompletionLateFailure({ id: completing.id, userId, expected: storageUploadGenerationOf(current), expectedInterventionAt: current.completionInterventionAt, error: late.error instanceof Error ? late.error.message : String(late.error) }).catch(() => undefined);
+          return;
+        }
+        await finalizeUpload(current, userId, BigInt(late.value.size)).catch((error) => console.error("Failed to finalize a late storage completion", completing.id, error));
+      }, () => undefined);
       return { ok: false, reason: "uploadFailed" };
     }
     if (outcome.kind !== "renew") {
@@ -548,15 +563,15 @@ export async function finishUpload({
     const settled = await completedFileOf(completing.id, userId, completing);
     if (settled.kind === "completed") return { ok: true, file: settled.file };
     if (settled.kind === "unknown") {
-      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Completion receipt lookup failed", now: new Date() }).catch(() => undefined);
+      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Completion receipt lookup failed", now: new Date() }).catch(() => undefined);
       return { ok: false, reason: "uploadFailed" };
     }
 
     // 控えは無いのに、アップロード id は知られていない。組み上げは終わったのに
     // その直後に落ちた、という形がこれになる。R2 は結合済みのアップロードを
     // 忘れるので、中止も組み直しもできない——オブジェクトが在るかどうかだけが
-    // 見分けになる。在るならこの呼び出しが仕上げる。無いなら端末エラーを掃除へ
-    // 引き渡し、応答を失った完了が後から現れても遅延削除で回収できるようにする。
+    // 見分けになる。在るならこの呼び出しが仕上げる。無いという一回の観測では、
+    // 応答を失った完了が後から現れないと証明できないので unknown のまま保持する。
     const joined = await joinedObjectState(completing.objectKey);
     if (joined.kind === "present") {
       return await finalizeUpload(completing, userId, BigInt(joined.size));
@@ -565,11 +580,11 @@ export async function finishUpload({
       // complete() may have committed even though its response was lost. A
       // transient HEAD failure is not proof that the object is absent, so do
       // not claim cleanup, abort the handle, or schedule object deletion.
-      await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Joined object lookup failed", now: new Date() }).catch(() => undefined);
+      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Joined object lookup failed", now: new Date() }).catch(() => undefined);
       return { ok: false, reason: "uploadFailed" };
     }
 
-    await recordStorageUploadCompletionFailure({
+    await recordStorageUploadCompletionUnknown({
       id: completing.id,
       userId,
       leaseToken: completionLeaseToken,
@@ -579,8 +594,6 @@ export async function finishUpload({
     }).catch(() => undefined);
     const concurrent = await completedFileOf(completing.id, userId, completing);
     if (concurrent.kind === "completed") return { ok: true, file: concurrent.file };
-    return { ok: false, reason: "uploadFailed" };
-
     return { ok: false, reason: "uploadFailed" };
   }
 

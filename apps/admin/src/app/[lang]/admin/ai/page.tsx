@@ -112,7 +112,7 @@ export default async function Page(props: {
       </section>
       <section className="flex flex-col gap-3 rounded-lg border p-4">
         <div><h2 className="text-lg font-semibold">Storage upload completion interventions</h2><p className="text-sm text-muted-foreground">Ambiguous multipart completions retained for operator review.</p></div>
-        <StorageUploadInterventions rows={storageUploadInterventions.map((row) => ({ ...row, completionInterventionAt: row.completionInterventionAt! }))} />
+        <StorageUploadInterventions rows={storageUploadInterventions.map((row) => ({ ...row, completionInterventionAt: row.completionInterventionAt!, completionState: row.completionState }))} />
       </section>
       <section className="flex flex-col gap-3 rounded-lg border p-4">
         <div><h2 className="text-lg font-semibold">Top-up checkout interventions</h2><p className="text-sm text-muted-foreground">Includes orphaned resolution rows with no attempt record. Terminalization is allowed only after every known refund is settled and requires operator evidence.</p></div>

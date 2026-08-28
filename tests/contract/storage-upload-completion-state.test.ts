@@ -161,6 +161,42 @@ describe("storage upload completion state machine", () => {
     expect(wrong.status).toBe("conflict");
   });
 
+  it("never makes an unknown completion resumable or terminalizable", async () => {
+    const row = addIntervention(memory, {
+      completionState: "unknown",
+      completionAttempts: 1,
+      completionRevision: 7,
+    });
+    await expect(resumeStorageUploadIntervention({
+      id: row.id,
+      userId: USER,
+      objectKey: row.objectKey,
+      uploadId: row.uploadId,
+      expectedRevision: row.completionRevision,
+      expectedInterventionAt: row.completionInterventionAt,
+      operatorUserId: "operator-1",
+      operatorReason: "Retry the provider completion",
+      operatorEvidence: "Incident INC-300 evidence",
+      now: NOW,
+    })).resolves.toMatchObject({ status: "unsafe" });
+    await expect(terminalizeStorageUploadIntervention({
+      id: row.id,
+      userId: USER,
+      objectKey: row.objectKey,
+      uploadId: row.uploadId,
+      expectedRevision: row.completionRevision,
+      expectedInterventionAt: row.completionInterventionAt,
+      operatorUserId: "operator-1",
+      operatorReason: "Discard the unresolved completion",
+      operatorEvidence: "Incident INC-300 evidence",
+      now: NOW,
+    })).resolves.toMatchObject({ status: "conflict" });
+    expect(memory.state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "unknown",
+      completionRevision: 7,
+    });
+  });
+
   it("escalates a due retry on the scheduler without remote cleanup", async () => {
     const row = addIntervention(memory, {
       createdAt: new Date(NOW.getTime() - 2 * 24 * 60 * 60_000),
@@ -183,7 +219,7 @@ describe("storage upload completion state machine", () => {
   it("escalates an expired completion lease without touching R2", async () => {
     const row = addIntervention(memory, { completionState: "completing", completionLeaseToken: "crashed", completionLeaseUntil: new Date(NOW.getTime() - 1), completionAttempts: 0, completionRevision: 0, completionInterventionAt: null });
     await expect(abandonStaleStorageUploads(NOW)).resolves.toMatchObject({ abandoned: 0 });
-    expect(memory.state.storageUploads.get(row.id)).toMatchObject({ completionState: "intervention", completionLeaseToken: null, completionLeaseUntil: null });
+    expect(memory.state.storageUploads.get(row.id)).toMatchObject({ completionState: "unknown", completionLeaseToken: null, completionLeaseUntil: null });
     expect(memory.state.storageUploads.get(row.id)?.completionAttempts).toBe(1);
   });
 

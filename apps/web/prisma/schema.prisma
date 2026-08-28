@@ -222,7 +222,7 @@ model StorageUpload {
   creationLeaseUntil DateTime?
   creationLeaseToken String?
   // Durable fence published before the remote multipart complete call. Completing,
-  // retry, operator-resumed, and intervention states fence cleanup from claiming
+  // retry, operator-resumed, unknown, and intervention states fence cleanup from claiming
   // this generation while R2 may still be finalizing it.
   completionState    String   @default("idle")
   completionLeaseUntil DateTime?

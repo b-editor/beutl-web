@@ -118,10 +118,10 @@ describe("storage upload consistency", () => {
 
     expect(outcome).toEqual({ ok: false, reason: "uploadFailed" });
     expect(createFile).not.toHaveBeenCalled();
-    // The provider rejection is non-terminal. Keep the completion fence so a
-    // later retry can prove whether the object was committed.
+    // The provider rejection is ambiguous. Keep the completion fence so no
+    // later call can issue another remote complete.
     expect(state.storageUploads.size).toBe(1);
-    expect([...state.storageUploads.values()][0]?.completionState).toBe("retry");
+    expect([...state.storageUploads.values()][0]?.completionState).toBe("unknown");
   });
 
   it("throws away the object when the file cannot be recorded", async () => {
