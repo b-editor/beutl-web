@@ -24,6 +24,10 @@ import {
   keepModelForHeldRequest,
   mergeHeldModelCapabilities,
   mergeHeldRequestCapabilities,
+  mergeAiRecoveryEntries,
+  removeAiRecoveryEntry,
+  serializeAiRecoveryTombstone,
+  isAiRecoveryTombstoned,
   modelsWithHeldRequests,
   readyAiRequestNames,
   requestSignature,
@@ -35,9 +39,43 @@ import {
   readAiRecoverySafely,
   restoreAiRecoveryEntries,
   serializeAiRecoveryEntries,
+  AI_RECOVERY_TTL_MS,
   type AiAccess,
   type AiScreenModel,
 } from "../../apps/web/src/lib/ai-screen";
+
+// The hook uses the same lock/persist primitive; exercising the helper directly
+// keeps this contract test independent of React's rendering environment.
+import { acquireAiRecoveryEntry as acquirePersistedEntry } from "../../apps/web/src/lib/ai-recovery-storage";
+
+function browserStorage() {
+  const values = new Map<string, string>();
+  return {
+    values,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  };
+}
+
+function serialLocks() {
+  let tail = Promise.resolve();
+  return {
+    request: async <T>(
+      _name: string,
+      _options: { mode: "exclusive" },
+      callback: () => T | Promise<T>,
+    ): Promise<T> => {
+      const previous = tail;
+      let release!: () => void;
+      tail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try { return await callback(); } finally { release(); }
+    },
+  };
+}
 
 const NOTHING_BLOCKS = {
   submitBlocked: false,
@@ -169,6 +207,165 @@ describe("what an AI screen will send", () => {
       .not.toBe(aiRecoveryStorageScope("user-b", "image.generate"));
     expect(aiRecoveryStorageScope("user-a", "image.generate"))
       .not.toBe(aiRecoveryStorageScope("user-a", "audio.transcribe"));
+  });
+
+  it("merges interleaved tab writes by digest without losing either key", () => {
+    const first = {
+      digest: "a".repeat(64), key: "key-a", model: "", capability: null,
+      updatedAt: 10,
+    };
+    const second = {
+      digest: "b".repeat(64), key: "key-b", model: "", capability: null,
+      updatedAt: 11,
+    };
+    const tabOne = mergeAiRecoveryEntries([], [first]);
+    const tabTwo = mergeAiRecoveryEntries(tabOne, [second]);
+    const staleTabOne = mergeAiRecoveryEntries(tabTwo, [first]);
+
+    expect(staleTabOne.map((entry) => entry.key).sort()).toEqual(["key-a", "key-b"]);
+  });
+
+  it("lets a newer same-digest mutation win while preserving unrelated entries", () => {
+    const original = {
+      digest: "c".repeat(64), key: "old-key", model: "", capability: null,
+      updatedAt: 20,
+    };
+    const unrelated = {
+      digest: "d".repeat(64), key: "other-key", model: "", capability: null,
+      updatedAt: 21,
+    };
+    const newer = { ...original, key: "new-key", updatedAt: 22 };
+
+    expect(mergeAiRecoveryEntries([original, unrelated], [newer])).toEqual([
+      newer,
+      unrelated,
+    ]);
+  });
+
+  it("removes one digest without erasing a concurrent tab's entry", () => {
+    const removed = {
+      digest: "e".repeat(64), key: "remove-me", model: "", capability: null,
+      updatedAt: 30,
+    };
+    const concurrent = {
+      digest: "f".repeat(64), key: "keep-me", model: "", capability: null,
+      updatedAt: 31,
+    };
+    const latest = mergeAiRecoveryEntries([removed], [concurrent]);
+    expect(removeAiRecoveryEntry(latest, removed.digest)).toEqual([concurrent]);
+  });
+
+  it("keeps a settled-key tombstone from suppressing a new generation", () => {
+    const tombstone = serializeAiRecoveryTombstone("settled-key");
+
+    expect(isAiRecoveryTombstoned(tombstone, "settled-key")).toBe(true);
+    expect(isAiRecoveryTombstoned(tombstone, "new-generation-key")).toBe(false);
+    expect(isAiRecoveryTombstoned("{broken", "settled-key")).toBe(false);
+  });
+
+  it("allocates one durable key for two mounted digesting forms", async () => {
+    const storage = browserStorage();
+    const locks = serialLocks();
+    const digest = "f".repeat(64);
+    let minted = 0;
+    const entries: Array<{ digest: string; key: string; model: string; capability: unknown; updatedAt: number }> = [];
+    const allocate = () => acquirePersistedEntry({
+      lockName: "beutl.ai.recovery.lock",
+      digest,
+      model: "model-a",
+      capability: null,
+      readEntries: () => entries,
+      writeEntry: (entry) => { entries.push(entry); storage.setItem(entry.digest, JSON.stringify(entry)); return true; },
+      createKey: () => `key-${++minted}`,
+      locks,
+    });
+    const [first, second] = await Promise.all([allocate(), allocate()]);
+      expect(first?.key).toBe("key-1");
+      expect(second?.key).toBe("key-1");
+      expect(minted).toBe(1);
+  });
+
+  it("fails closed for a new digest when persistence or locks are unavailable", async () => {
+    const storage = browserStorage();
+    const entries: Array<{ digest: string; key: string; model: string; capability: unknown; updatedAt: number }> = [];
+    await expect(acquirePersistedEntry({
+      lockName: "beutl.ai.recovery.lock",
+      digest: "e".repeat(64),
+      model: "model-a",
+      capability: null,
+      readEntries: () => entries,
+      writeEntry: (entry) => { entries.push(entry); storage.setItem(entry.digest, JSON.stringify(entry)); return true; },
+      createKey: () => "unsafe",
+      locks: undefined,
+    })).resolves.toBeNull();
+    expect(storage.values.size).toBe(0);
+  });
+
+  it("preserves all active identities and refuses a new one at capacity", async () => {
+    const storage = browserStorage();
+    const locks = serialLocks();
+    const entries = Array.from({ length: 64 }, (_, index) => ({
+      digest: index.toString(16).padStart(64, "0"),
+      key: `key-${index}`,
+      model: "model",
+      capability: null,
+      updatedAt: Date.now() - index,
+    }));
+    let minted = 0;
+    const result = await acquirePersistedEntry({
+      lockName: "beutl.ai.recovery.lock",
+      digest: "z".repeat(64),
+      model: "model",
+      capability: null,
+      readEntries: () => entries,
+      writeEntry: (entry) => { entries.push(entry); storage.setItem(entry.digest, JSON.stringify(entry)); return true; },
+      createKey: () => `key-${++minted}`,
+      locks,
+    });
+    expect(result).toBeNull();
+    expect(minted).toBe(0);
+    expect(entries).toHaveLength(64);
+  });
+
+  it("serializes different digests against the shared capacity", async () => {
+    const locks = serialLocks();
+    const entries = Array.from({ length: 63 }, (_, index) => ({
+      digest: index.toString(16).padStart(64, "0"),
+      key: `key-${index}`,
+      model: "model",
+      capability: null,
+      updatedAt: Date.now() - index,
+    }));
+    const allocate = (digest: string) => acquirePersistedEntry({
+      // Production uses one account/operation lock for every digest.
+      lockName: "beutl.ai.recovery.scope.lock",
+      digest,
+      model: "model",
+      capability: null,
+      readEntries: () => entries,
+      writeEntry: (entry) => { entries.push(entry); return true; },
+      createKey: () => `key-${digest[0]}`,
+      locks,
+    });
+
+    const outcomes = await Promise.all([
+      allocate("a".repeat(64)),
+      allocate("b".repeat(64)),
+    ]);
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+    expect(entries).toHaveLength(64);
+  });
+
+  it("keeps physical recovery records bounded after expired generations", () => {
+    const now = Date.now();
+    const expired = Array.from({ length: 80 }, (_, index) => ({
+      digest: index.toString(16).padStart(64, "0"),
+      key: `expired-${index}`,
+      model: "model",
+      capability: null,
+      updatedAt: now - AI_RECOVERY_TTL_MS - index - 1,
+    }));
+    expect(restoreAiRecoveryEntries(serializeAiRecoveryEntries(expired), now)).toEqual([]);
   });
 
   it("sends when nothing is in the way", () => {

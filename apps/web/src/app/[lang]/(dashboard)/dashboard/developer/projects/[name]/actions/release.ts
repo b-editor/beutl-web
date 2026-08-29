@@ -97,13 +97,9 @@ export async function updateRelease(
         // upload may have left so the store stops classifying it as a data package.
         packageType = "extension";
 
-        const deletedSize = release.file
-          ? BigInt(release.file.size)
-          : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
           uploaded[0],
-          deletedSize,
           t,
         );
         if (!result.success) {
@@ -135,11 +131,9 @@ export async function updateRelease(
 
         packageType = getPackageType(built.tags);
 
-        const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
         const result = await createDedicatedFile(
           session.user.id,
           built.file,
-          deletedSize,
           t,
         );
         if (!result.success) {

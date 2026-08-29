@@ -46,6 +46,7 @@ import {
 } from "@beutl/api";
 import {
   createAiJob,
+  getAiJobById,
   getAiJobResultFile,
   upsertAiOperationModel,
 } from "@beutl/db";
@@ -493,6 +494,34 @@ describe("dashboard AI actions", () => {
       );
     });
 
+    it("recovers a succeeded existing retry reservation instead of reporting provider error", async () => {
+      await registerImageModels(true);
+      const job = await seedFailedImageJob();
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "existing",
+        job: {
+          id: "job-existing-retry",
+          status: "succeeded",
+          resultFileId: "file-existing-retry",
+          resultFile: { name: "result.png", mimeType: "image/png" },
+        },
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000014",
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        jobId: "job-existing-retry",
+        fileName: "result.png",
+        contentType: "image/png",
+      });
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
     it("refuses when that model has since been disabled", async () => {
       await registerImageModels(false);
       const job = await seedFailedImageJob();
@@ -508,6 +537,66 @@ describe("dashboard AI actions", () => {
       expect(result.message).toContain("aiModelUnavailable");
       expect(createReservedAiJob).not.toHaveBeenCalled();
       expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { reference: { filename: "legacy.png" } },
+      {
+        references: [
+          { filename: "first.png" },
+          { filename: "second.png" },
+        ],
+      },
+    ])("refuses image retries that contain stored reference metadata (%j) before reserving", async (referenceFields) => {
+      await registerImageModels(true);
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: {
+          prompt: "a cat",
+          aspectRatio: "1:1",
+          ...referenceFields,
+        },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000012",
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("invalidRequestBody");
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it("rejects a retry when the confirmed job payload changed before reservation", async () => {
+      await registerImageModels(true);
+      const job = await seedFailedImageJob();
+      const expectedPayload = JSON.stringify({
+        kind: "image",
+        model: "dear/model",
+        inputParams: { prompt: "a cat", aspectRatio: "1:1" },
+      });
+      const stored = (await getAiJobById({ jobId: job.id })) as { inputParams: Record<string, unknown> };
+      stored.inputParams.prompt = "a dog";
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000013",
+        expectedPayload,
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiRequestChanged",
+        keepIdempotencyKey: true,
+      });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
     });
   });
 });

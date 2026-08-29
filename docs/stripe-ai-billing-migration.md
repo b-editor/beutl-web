@@ -281,6 +281,76 @@ maintenance window with no concurrent storage-upload writes. If any migration
 fails after its temporary unlock, do not resume traffic: retry the migration
 and confirm `SHOW CREATE TABLE` reports `schema_locked = true` before release.
 
+## Rolling cutover for the unknown-completion probe lease
+
+`20260829010000_add_unknown_probe_lease` adds the paired
+`unknownProbeLeaseToken`/`unknownProbeNotBefore` fields used to serialize
+recovery probes for `StorageUpload` rows in `unknown` state. It is a rolling
+cutover with a strict quiesce window because an old finisher does not know the
+pair: an old writer can clear or rewrite completion fields while the new
+constraint requires both probe columns to be null outside `unknown`. An old
+finisher can also issue a second remote `complete()` after a new worker has
+claimed the probe, so it must not overlap this deployment.
+
+Use the following order for every environment:
+
+1. Quiesce storage-upload start, part, finish, and cancel requests, account
+   deletion, and all storage cleanup/reconciliation schedulers. Return a
+   retryable response to new requests and let clients retry after the window.
+2. Apply `prisma migrate deploy` through
+   `20260829010000_add_unknown_probe_lease` (and the following dedicated
+   reservation migration, when enabled) to completion. Do not mark a partial
+   batch applied or resume traffic after a failed statement.
+3. Verify the schema before deploying application traffic:
+
+   ```sql
+   SHOW CREATE TABLE "StorageUpload";
+   SELECT column_name, is_nullable, column_default
+   FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND column_name IN (
+       'unknownProbeLeaseToken', 'unknownProbeNotBefore', 'reservationKind'
+     );
+   SELECT constraint_name
+   FROM information_schema.table_constraints
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND constraint_name IN (
+       'StorageUpload_unknownProbeLease_pair_ck',
+       'StorageUpload_reservationKind_ck',
+       'StorageUpload_startState_ck',
+       'StorageUpload_startState_uploadId_ck',
+       'StorageUpload_creationLease_ck',
+       'StorageUpload_completionLease_pair_ck',
+       'StorageUpload_completionIntervention_ck'
+     );
+   SELECT index_name
+   FROM information_schema.statistics
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND index_name IN (
+       'StorageUpload_completionState_unknownProbeNotBefore_idx',
+       'StorageUpload_userId_reservationKind_completedFileId_idx'
+     );
+   ```
+
+   `SHOW CREATE TABLE` must report `schema_locked = true`; both probe columns
+   must be nullable; `reservationKind` must be non-null with the literal
+   `multipart` default; all seven named constraints and both indexes must appear.
+   A dedicated active reservation must accept a paired creation lease and reject
+   either half of the pair; a settled or abandoned dedicated row must reject a
+   remaining creation lease. Multipart intent/creating/active rows must retain
+   their pre-2902 start-state and upload-ID rules.
+   Also verify that a row in `unknown` state accepts either both probe values or
+   neither, while an `idle`, `retry`, `resumed`, `settled`, or `intervention`
+   row rejects a non-null probe value.
+4. Deploy the Web, admin, and standalone API runtimes that understand the
+   probe pair and the fail-closed `unknown` state. Drain every old finisher
+   instance before enabling any new finish call; an old finisher is
+   incompatible with the non-null probe pair and can double-complete a remote
+   multipart upload.
+5. Resume storage traffic, account deletion, and schedulers only after all
+   runtimes report the new schema and the verification queries above have been
+   recorded in the deployment log.
+
 ## Durable top-up Checkout recovery
 
 `20260826050000_harden_topup_checkout_recovery` gives each user one nullable,

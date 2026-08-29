@@ -997,7 +997,7 @@ export async function registerAiStorageCleanup({
   prisma,
 }: {
   objectKey: string;
-  aiJobId: string;
+  aiJobId: string | null;
   state?: "writing" | "cleanup";
   notBefore: Date;
   prisma?: PrismaTransaction;
@@ -1065,6 +1065,77 @@ export async function claimAiStorageCleanupForDeletion({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    // A dedicated artifact reservation owns this object key while its R2 put
+    // is in flight. Do not claim the cleanup row during that interval: a slow
+    // provider call could otherwise be followed by a File commit pointing at
+    // an object the sweeper already deleted. Once the reservation is marked
+    // abandoned, the check no longer matches and cleanup may proceed.
+    const dedicatedReservation = await tx.storageUpload.findFirst({
+      where: {
+        objectKey,
+        reservationKind: "dedicated",
+        startState: "dedicated",
+        completedFileId: null,
+        abandonedAt: null,
+      },
+      select: {
+        id: true,
+        userId: true,
+        creationLeaseUntil: true,
+        creationLeaseToken: true,
+        completionState: true,
+        completionRevision: true,
+      },
+    } as never);
+    if (dedicatedReservation) {
+      if (
+        dedicatedReservation.creationLeaseUntil === null ||
+        dedicatedReservation.creationLeaseUntil.getTime() <= now.getTime()
+      ) {
+        const expired = await tx.storageUpload.updateMany({
+          where: {
+            id: dedicatedReservation.id,
+            userId: dedicatedReservation.userId,
+            objectKey,
+            reservationKind: "dedicated",
+            startState: "dedicated",
+            completedFileId: null,
+            abandonedAt: null,
+            creationLeaseUntil: dedicatedReservation.creationLeaseUntil,
+            creationLeaseToken: dedicatedReservation.creationLeaseToken,
+            completionState: dedicatedReservation.completionState,
+            completionRevision: dedicatedReservation.completionRevision,
+          },
+          data: {
+            abandonedAt: now,
+            completionState: "idle",
+            completionInterventionAt: null,
+            completionLeaseUntil: null,
+            completionLeaseToken: null,
+            creationLeaseUntil: null,
+            creationLeaseToken: null,
+            completionRevision: { increment: 1 },
+          },
+        } as never);
+        if (expired.count !== 1) {
+          return { claimed: false as const, shouldDeleteObject: false as const };
+        }
+        await tx.aiStorageCleanup.updateMany({
+          where: { objectKey, state, notBefore, leaseToken },
+          data: { aiJobId: null, state: "cleanup", leaseToken: null },
+        } as never);
+        return { claimed: false as const, shouldDeleteObject: false as const };
+      }
+      const deferredUntil = new Date(Math.max(
+        notBefore.getTime(),
+        now.getTime() + STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+      ));
+      await tx.aiStorageCleanup.updateMany({
+        where: { objectKey, state, notBefore, leaseToken },
+        data: { state: "writing", leaseToken: null, notBefore: deferredUntil },
+      } as never);
+      return { claimed: false as const, shouldDeleteObject: false as const };
+    }
     const multipartPending = await tx.storageMultipartCleanup.findFirst({
       where: { objectKey, status: { in: ["pending", "processing", "retry", "intervention"] } },
       orderBy: { notBefore: "desc" },
@@ -1126,6 +1197,11 @@ export async function claimAiStorageCleanupForDeletion({
       notBefore: cleanup.notBefore,
     };
     if (!cleanup?.aiJobId) {
+      const liveFile = await tx.file.findFirst({ where: { objectKey }, select: { id: true } });
+      if (liveFile) {
+        await tx.aiStorageCleanup.deleteMany({ where: { objectKey, leaseToken: nextLeaseToken } });
+        return { claimed: true as const, shouldDeleteObject: false as const };
+      }
       return {
         claimed: true as const,
         shouldDeleteObject: true as const,
@@ -1309,6 +1385,18 @@ export async function finalizeReconciledAiStorageCleanup({
     const finalized = await tx.aiStorageCleanup.deleteMany({
       where: { objectKey, leaseToken },
     });
+    // A failed dedicated artifact write leaves a tombstoned quota reservation
+    // beside this outbox. Once the remote delete is acknowledged, remove only
+    // that exact abandoned reservation so bytes and slots become available;
+    // an active reservation is never touched by object cleanup.
+    await tx.storageUpload.deleteMany({
+      where: {
+        objectKey,
+        reservationKind: "dedicated",
+        completedFileId: null,
+        abandonedAt: { not: null },
+      },
+    } as never);
     return finalized.count === 1;
   };
 

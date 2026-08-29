@@ -78,6 +78,7 @@ import { composePrompt } from "@/lib/ai-prompt";
 import { parseGlossary } from "@/lib/subtitle-format";
 import { getContentUrl } from "@/lib/content-url";
 import { aiFailureResult } from "@/lib/ai-screen";
+import { retryJobFingerprint } from "@/lib/ai-retry-attempt";
 
 export type AiActionResult = {
   success: boolean;
@@ -1386,6 +1387,7 @@ export async function listJobsAction(
       id: job.id,
       kind: job.kind,
       status: job.status,
+      model: job.model,
       createdAt: job.createdAt.toISOString(),
       url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
       fileName: job.resultFile?.name ?? null,
@@ -1409,6 +1411,7 @@ export async function listJobsAction(
 export async function retryJobAction(
   jobId: string,
   idempotencyKey: string,
+  expectedFingerprint?: string,
 ): Promise<AiActionResult> {
   const session = await throwIfUnauth();
   const lang = await getLanguage();
@@ -1424,6 +1427,31 @@ export async function retryJobAction(
   if (!input || typeof input.prompt !== "string") {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
+  // A retry confirmation owns an immutable snapshot of the original job. If
+  // the row was edited between opening the dialog and submitting it, refuse
+  // before reservation rather than silently retrying a different model/body.
+  if (expectedFingerprint !== undefined) {
+    const actualFingerprint = await retryJobFingerprint({
+      kind: job.kind,
+      model: job.model,
+      inputParams: job.inputParams,
+    });
+    // Accept the pre-fingerprint JSON token during the short rolling window,
+    // but all new browser confirmations carry only the bounded digest.
+    const legacyMatch = expectedFingerprint.startsWith("{") &&
+      JSON.stringify({
+        kind: job.kind,
+        model: job.model,
+        inputParams: job.inputParams,
+      }) === expectedFingerprint;
+    if (actualFingerprint !== expectedFingerprint && !legacyMatch) {
+      return {
+        success: false,
+        message: t("api-errors:aiRequestChanged"),
+        keepIdempotencyKey: true,
+      };
+    }
+  }
   // A rerun repeats the request, so it repeats the model too. If that model has
   // since been disabled the retry is refused rather than moved to the default:
   // silently running something else and charging the default's price is not a
@@ -1434,7 +1462,10 @@ export async function retryJobAction(
   if (job.kind === "image") {
     // The reference image was never stored, so this would generate something
     // else and charge for it.
-    if (input.reference) {
+    // Both spellings have existed in persisted jobs. Neither can be replayed
+    // because the uploaded bytes were never retained; accepting either would
+    // charge for a different, reference-free generation.
+    if (input.reference || input.references) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     // Required rather than defaulted: a generation always recorded its shape, so
@@ -1497,13 +1528,10 @@ export async function retryJobAction(
     }
     const { job: retried } = reservation;
     if (reservation.outcome === "existing") {
-      return stillRunning(retried.status)
-        ? {
-          success: false,
-          message: t("api-errors:aiRequestInProgress"),
-          keepIdempotencyKey: true,
-        }
-        : { success: false, message: t("api-errors:aiProviderError") };
+      // A lost response can arrive after the provider already finished the
+      // reserved retry. Recover its file instead of treating it as a generic
+      // provider failure (which would discard the only idempotency key).
+      return await answerFromExistingFileJob(retried, t);
     }
     try {
       const result = await generateImage({

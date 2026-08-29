@@ -36,7 +36,6 @@ export async function addScreenshot(formData: FormData): Promise<ActionResult> {
       const result = await createDedicatedFile(
         session.user.id,
         file,
-        BigInt(0),
         t,
       );
       if (!result.success) {

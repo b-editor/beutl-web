@@ -12,8 +12,14 @@ export type StorageUploadCompletionFields = {
   completionLastError: string | null;
   completionInterventionAt: Date | null;
   completionRetryNotBefore: Date | null;
+  unknownProbeNotBefore: Date | null;
+  unknownProbeLeaseToken: string | null;
   completionRevision: number;
+  reservationKind: "multipart" | "dedicated";
 };
+
+export const DEDICATED_STORAGE_WRITE_LEASE_MILLISECONDS = 60 * 1000;
+export const DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS = 15 * 60 * 1000;
 
 function withCompletionFields<T extends object>(
   value: T | null,
@@ -25,6 +31,7 @@ async function insertStorageUpload({
   userId,
   id,
   objectKey,
+  reservationKind = "multipart",
   uploadId,
   name,
   mimeType,
@@ -42,11 +49,14 @@ async function insertStorageUpload({
   completionInterventionAt = null,
   completionRetryNotBefore = null,
   completionRevision = 0,
+  unknownProbeNotBefore = null,
+  unknownProbeLeaseToken = null,
   prisma,
 }: {
   userId: string;
   id: string;
   objectKey: string;
+  reservationKind?: "multipart" | "dedicated";
   uploadId: string | null;
   name: string;
   mimeType: string;
@@ -55,7 +65,7 @@ async function insertStorageUpload({
   // 最初から掃除のものとして置く行。誰も知らないまま残ったマルチパートを、
   // 掃除が見つけられる場所に書き留めるために使う。
   abandonedAt?: Date;
-  startState?: "intent" | "creating" | "active";
+  startState?: "intent" | "creating" | "active" | "dedicated";
   creationLeaseUntil?: Date | null;
   creationLeaseToken?: string | null;
   completionState?: "idle" | "retry" | "resumed" | "completing" | "settled" | "intervention" | "unknown";
@@ -66,6 +76,8 @@ async function insertStorageUpload({
   completionInterventionAt?: Date | null;
   completionRetryNotBefore?: Date | null;
   completionRevision?: number;
+  unknownProbeNotBefore?: Date | null;
+  unknownProbeLeaseToken?: string | null;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
@@ -74,6 +86,7 @@ async function insertStorageUpload({
       id,
       userId,
       objectKey,
+      reservationKind,
       uploadId,
       name,
       mimeType,
@@ -91,6 +104,8 @@ async function insertStorageUpload({
       completionInterventionAt,
       completionRetryNotBefore,
       completionRevision,
+      unknownProbeNotBefore,
+      unknownProbeLeaseToken,
     },
   } as never);
   return withCompletionFields(created)!;
@@ -129,6 +144,364 @@ export async function createStorageUploadIntent({
     creationLeaseUntil: null,
     prisma,
   });
+}
+
+/** Reserve a dedicated artifact's bytes and file slot before its R2 put. */
+export async function createDedicatedStorageReservation({
+  userId,
+  id,
+  objectKey,
+  name,
+  mimeType,
+  size,
+  quotaBytes,
+  fileCountLimit,
+  prisma,
+}: {
+  userId: string;
+  id: string;
+  objectKey: string;
+  name: string;
+  mimeType: string;
+  size: bigint;
+  quotaBytes: bigint;
+  fileCountLimit: number;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const creationLeaseToken = crypto.randomUUID();
+    const creationLeaseUntil = new Date(
+      Date.now() + DEDICATED_STORAGE_WRITE_LEASE_MILLISECONDS,
+    );
+    const [stored, reserved, files, activeUploads] = await Promise.all([
+      tx.file.aggregate({ where: { userId, aiJobResult: null }, _sum: { size: true } } as never),
+      tx.storageUpload.aggregate({ where: { userId, completedFileId: null }, _sum: { size: true } } as never),
+      tx.file.count({ where: { userId, aiJobResult: null } } as never),
+      tx.storageUpload.count({ where: { userId, completedFileId: null, abandonedAt: null } } as never),
+    ]);
+    const total = BigInt(stored._sum?.size ?? 0) + BigInt(reserved._sum?.size ?? 0) + size;
+    if (total > quotaBytes) return { kind: "overQuota" as const };
+    if (files + activeUploads >= fileCountLimit) return { kind: "tooManyFiles" as const };
+    const reservation = await insertStorageUpload({
+      userId,
+      id,
+      objectKey,
+      reservationKind: "dedicated",
+      uploadId: null,
+      name,
+      mimeType,
+      size,
+      partSize: 0,
+      startState: "dedicated",
+      creationLeaseUntil,
+      creationLeaseToken,
+      completionState: "completing",
+      completionLeaseUntil: creationLeaseUntil,
+      completionLeaseToken: creationLeaseToken,
+      prisma: tx,
+    });
+    // Keep a physical cleanup receipt alongside the quota row. If the process
+    // dies after R2 accepts the put but before File commit, the reconciler can
+    // remove the object and the stale reservation can be collected safely.
+    await tx.aiStorageCleanup.create({
+      data: {
+        objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "writing",
+        notBefore: new Date(Date.now() + 15 * 60_000),
+      },
+    } as never);
+    return { kind: "reserved" as const, reservation };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+export async function renewDedicatedStorageReservation({
+  id,
+  userId,
+  objectKey,
+  leaseToken,
+  expectedLeaseUntil,
+  leaseUntil,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  leaseToken: string;
+  expectedLeaseUntil: Date;
+  leaseUntil: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  if (leaseUntil.getTime() <= now.getTime()) {
+    throw new RangeError("Dedicated storage write lease must expire in the future");
+  }
+  const db = prisma ?? await getDb();
+  const renewed = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      objectKey,
+      reservationKind: "dedicated",
+      startState: "dedicated",
+      completedFileId: null,
+      abandonedAt: null,
+      creationLeaseToken: leaseToken,
+      creationLeaseUntil: expectedLeaseUntil,
+      completionState: "completing",
+      completionLeaseToken: leaseToken,
+      completionLeaseUntil: expectedLeaseUntil,
+    },
+    data: {
+      creationLeaseUntil: leaseUntil,
+      completionLeaseUntil: leaseUntil,
+    },
+  } as never);
+  return renewed.count === 1;
+}
+
+export async function recordDedicatedStorageWriteUnknown({
+  id,
+  userId,
+  objectKey,
+  leaseToken,
+  expectedLeaseUntil,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  leaseToken: string;
+  expectedLeaseUntil: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const updated = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      objectKey,
+      reservationKind: "dedicated",
+      startState: "dedicated",
+      completedFileId: null,
+      abandonedAt: null,
+      creationLeaseToken: leaseToken,
+      creationLeaseUntil: expectedLeaseUntil,
+      completionState: "completing",
+      completionLeaseToken: leaseToken,
+      completionLeaseUntil: expectedLeaseUntil,
+    },
+    data: {
+      completionState: "unknown",
+      completionInterventionAt: now,
+      completionLastError: "Dedicated object write exceeded its local deadline",
+      completionAttempts: { increment: 1 },
+      completionRevision: { increment: 1 },
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+    },
+  } as never);
+  return updated.count === 1;
+}
+
+/** Consume a dedicated reservation and create its File in one transaction. */
+export async function commitDedicatedStorageReservation({
+  id,
+  userId,
+  objectKey,
+  fileId,
+  sha256,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  fileId?: string;
+  sha256?: string;
+  leaseToken?: string;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const reservation = await tx.storageUpload.findFirst({
+      where: { id, userId, objectKey, reservationKind: "dedicated", startState: "dedicated" },
+    } as never);
+    if (!reservation) {
+      const existing = await tx.file.findFirst({ where: { userId, objectKey, aiJobResult: null } } as never);
+      return existing ? { kind: "created" as const, record: existing } : { kind: "changed" as const };
+    }
+    if (reservation.completedFileId) {
+      const existing = await tx.file.findFirst({ where: { id: reservation.completedFileId, userId } } as never);
+      return existing ? { kind: "created" as const, record: existing } : { kind: "changed" as const };
+    }
+    if (
+      reservation.abandonedAt ||
+      (leaseToken !== undefined && reservation.creationLeaseToken !== leaseToken)
+    ) return { kind: "changed" as const };
+    const created = await tx.file.create({
+      data: {
+        id: fileId,
+        objectKey: reservation.objectKey,
+        name: reservation.name,
+        size: reservation.size,
+        mimeType: reservation.mimeType,
+        userId: reservation.userId,
+        visibility: "DEDICATED",
+        ...(sha256 ? { sha256 } : {}),
+      },
+    } as never);
+    const consumed = await tx.storageUpload.updateMany({
+      where: {
+        id,
+        userId,
+        objectKey,
+        reservationKind: "dedicated",
+        startState: "dedicated",
+        completedFileId: null,
+        abandonedAt: null,
+        ...(leaseToken === undefined ? {} : { creationLeaseToken: leaseToken }),
+      },
+      data: {
+        completedFileId: created.id,
+        completionState: "settled",
+        completionInterventionAt: null,
+        completionLastError: null,
+        creationLeaseUntil: null,
+        creationLeaseToken: null,
+        completionLeaseUntil: null,
+        completionLeaseToken: null,
+      },
+    } as never);
+    if (consumed.count !== 1) throw new Error("Dedicated storage reservation changed before commit");
+    await tx.aiStorageCleanup.deleteMany({
+      where: { objectKey, state: "writing", leaseToken: null },
+    } as never);
+    return { kind: "created" as const, record: created };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+/** Mark a failed dedicated write for durable remote cleanup and release its slot. */
+export async function releaseDedicatedStorageReservation({
+  id,
+  userId,
+  objectKey,
+  leaseToken,
+  expectedLeaseUntil,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  leaseToken?: string;
+  expectedLeaseUntil?: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const updated = await tx.storageUpload.updateMany({
+      where: {
+        id,
+        userId,
+        objectKey,
+        reservationKind: "dedicated",
+        startState: "dedicated",
+        completedFileId: null,
+        abandonedAt: null,
+        ...(leaseToken === undefined ? {} : { creationLeaseToken: leaseToken }),
+        ...(expectedLeaseUntil === undefined ? {} : { creationLeaseUntil: expectedLeaseUntil }),
+      },
+      data: {
+        abandonedAt: now,
+        completionState: "idle",
+        completionInterventionAt: null,
+        creationLeaseUntil: null,
+        creationLeaseToken: null,
+        completionLeaseUntil: null,
+        completionLeaseToken: null,
+      },
+    } as never);
+    if (updated.count === 0) return false;
+    await tx.aiStorageCleanup.createMany({
+      data: [{ objectKey, aiJobId: null, leaseToken: null, state: "cleanup", notBefore: now }],
+      skipDuplicates: true,
+    } as never);
+    await tx.aiStorageCleanup.updateMany({
+      where: { objectKey, leaseToken: null },
+      data: { state: "cleanup", notBefore: now },
+    } as never);
+    return true;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+/** A provider put that settles after the request stopped waiting must recreate
+ * the cleanup receipt even if account deletion already cascaded the user row. */
+export async function recordLateDedicatedStorageWriteResult({
+  id,
+  userId,
+  objectKey,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const liveFile = await tx.file.findFirst({
+      where: { userId, objectKey, aiJobResult: null },
+      select: { id: true },
+    } as never);
+    if (liveFile) return { kind: "settled" as const };
+
+    await tx.storageUpload.updateMany({
+      where: {
+        id,
+        userId,
+        objectKey,
+        reservationKind: "dedicated",
+        completedFileId: null,
+        abandonedAt: null,
+      },
+      data: {
+        abandonedAt: now,
+        completionState: "idle",
+        completionInterventionAt: null,
+        completionLeaseUntil: null,
+        completionLeaseToken: null,
+        creationLeaseUntil: null,
+        creationLeaseToken: null,
+      },
+    } as never);
+    await tx.aiStorageCleanup.createMany({
+      data: [{
+        objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "cleanup",
+        notBefore: now,
+      }],
+      skipDuplicates: true,
+    } as never);
+    const updated = await tx.aiStorageCleanup.updateMany({
+      where: { objectKey, leaseToken: null },
+      data: { aiJobId: null, state: "cleanup", notBefore: now },
+    } as never);
+    if (updated.count !== 1) {
+      throw new Error(`Dedicated late-write cleanup ${objectKey} is already leased`);
+    }
+    return { kind: "cleanup" as const };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 /** Persist a cancellation tombstone for an upload that never reached storage. */
@@ -235,6 +608,7 @@ export async function claimStorageUploadCompletion({
     where: {
       id,
       userId,
+      ...(expected.reservationKind !== undefined ? { reservationKind: expected.reservationKind } : {}),
       completedFileId: null,
       abandonedAt: null,
       createdAt: expected.createdAt,
@@ -249,6 +623,7 @@ export async function claimStorageUploadCompletion({
       creationLeaseToken: expected.creationLeaseToken,
       completionState: expected.completionState,
       completionRetryNotBefore: expected.completionRetryNotBefore,
+      ...(expected.unknownProbeLeaseToken !== undefined ? { unknownProbeLeaseToken: expected.unknownProbeLeaseToken, unknownProbeNotBefore: expected.unknownProbeNotBefore } : {}),
       completionLeaseUntil: null,
       completionLeaseToken: null,
       completionRevision: expected.completionRevision,
@@ -260,6 +635,8 @@ export async function claimStorageUploadCompletion({
       completionLeaseUntil: leaseUntil,
       completionLeaseToken: leaseToken,
       completionRetryNotBefore: null,
+      unknownProbeNotBefore: null,
+      unknownProbeLeaseToken: null,
     },
   } as never);
   return result.count === 1;
@@ -291,6 +668,7 @@ export async function renewStorageUploadCompletion({
     where: {
       id,
       userId,
+      ...(expected.reservationKind !== undefined ? { reservationKind: expected.reservationKind } : {}),
       completedFileId: null,
       abandonedAt: null,
       createdAt: expected.createdAt,
@@ -314,53 +692,6 @@ export async function renewStorageUploadCompletion({
   return result.count === 1;
 }
 
-/** Release a completion fence only for a known, pre-provider validation error. */
-export async function releaseStorageUploadCompletion({
-  id,
-  userId,
-  leaseToken,
-  expected,
-  prisma,
-}: {
-  id: string;
-  userId: string;
-  leaseToken: string;
-  expected: StorageUploadGenerationExpectation;
-  prisma?: PrismaTransaction;
-}): Promise<boolean> {
-  const db = prisma ?? (await getDb());
-  const result = await db.storageUpload.updateMany({
-    where: {
-      id,
-      userId,
-      completedFileId: null,
-      abandonedAt: null,
-      createdAt: expected.createdAt,
-      objectKey: expected.objectKey,
-      uploadId: expected.uploadId,
-      name: expected.name,
-      mimeType: expected.mimeType,
-      size: expected.size,
-      partSize: expected.partSize,
-      startState: expected.startState,
-      creationLeaseUntil: expected.creationLeaseUntil,
-      creationLeaseToken: expected.creationLeaseToken,
-      completionState: "completing",
-      completionLeaseToken: leaseToken,
-      completionLeaseUntil: expected.completionLeaseUntil,
-      completionRevision: expected.completionRevision,
-      completionRetryNotBefore: expected.completionRetryNotBefore,
-    },
-    data: {
-      completionState: "idle",
-      completionLeaseUntil: null,
-      completionLeaseToken: null,
-      completionRetryNotBefore: null,
-    },
-  } as never);
-  return result.count === 1;
-}
-
 export const STORAGE_UPLOAD_COMPLETION_MAX_ATTEMPTS = 3;
 
 /** Persist an ambiguous provider outcome; after a bounded number of attempts stop automatic retries. */
@@ -372,6 +703,7 @@ export async function recordStorageUploadCompletionFailure({
   const generation = {
     id,
     userId,
+    ...(expected.reservationKind !== undefined ? { reservationKind: expected.reservationKind } : {}),
     completedFileId: null,
     abandonedAt: null,
     createdAt: expected.createdAt,
@@ -389,6 +721,7 @@ export async function recordStorageUploadCompletionFailure({
     completionLeaseUntil: expected.completionLeaseUntil,
     completionRevision: expected.completionRevision,
     completionRetryNotBefore: expected.completionRetryNotBefore,
+    ...(expected.unknownProbeLeaseToken !== undefined ? { unknownProbeLeaseToken: expected.unknownProbeLeaseToken, unknownProbeNotBefore: expected.unknownProbeNotBefore } : {}),
   } as const;
   const current = await db.storageUpload.findFirst({ where: generation } as never);
   if (!current) return { status: "lost" as const };
@@ -441,6 +774,7 @@ export async function recordStorageUploadCompletionUnknown({
     completionLeaseUntil: expected.completionLeaseUntil,
     completionRevision: expected.completionRevision,
     completionRetryNotBefore: expected.completionRetryNotBefore,
+    ...(expected.unknownProbeLeaseToken !== undefined ? { unknownProbeLeaseToken: expected.unknownProbeLeaseToken, unknownProbeNotBefore: expected.unknownProbeNotBefore } : {}),
   } as const;
   const current = await db.storageUpload.findFirst({ where: generation } as never);
   if (!current) return { status: "lost" as const };
@@ -500,21 +834,99 @@ export async function recordStorageUploadCompletionLateFailure({
 
 export async function listStorageUploadInterventions({ limit = 100, prisma }: { limit?: number; prisma?: PrismaTransaction } = {}) {
   const db = prisma ?? await getDb();
-  return db.storageUpload.findMany({ where: { completionState: { in: ["intervention", "unknown"] } }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: limit } as never);
+  // Fetch all actionable interventions up to the requested limit before filling
+  // with unknowns, so unknown rows can never hide operator work.
+  const interventionLimit = limit;
+  const [interventions, unknowns] = await Promise.all([
+    db.storageUpload.findMany({ where: { completionState: "intervention" }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: interventionLimit } as never),
+    db.storageUpload.findMany({ where: { completionState: "unknown" }, orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }], take: limit } as never),
+  ]);
+  return [...interventions, ...unknowns].slice(0, limit);
 }
 
-export async function listUnknownStorageUploadCompletions({ limit = 100, prisma }: { limit?: number; prisma?: PrismaTransaction } = {}) {
+const UNKNOWN_RECOVERY_LEASE_MILLISECONDS = 5 * 60 * 1000;
+
+export async function listUnknownStorageUploadCompletions({ limit = 100, now = new Date(), prisma }: { limit?: number; now?: Date; prisma?: PrismaTransaction } = {}) {
   const db = prisma ?? await getDb();
-  const rows = await db.storageUpload.findMany({
+  if (limit <= 0) return [];
+  const base = {
+    completionState: "unknown",
+    reservationKind: "multipart",
+    completedFileId: null,
+    abandonedAt: null,
+  } as const;
+  // Never-probed rows have strict priority. At the five-minute scheduler tick,
+  // the previous batch becomes due at the same time as this worker runs again;
+  // relying on database-specific NULL ordering could let that old batch occupy
+  // every slot forever and starve rows beyond the first page.
+  const unprobed = await db.storageUpload.findMany({
     where: {
-      completionState: "unknown",
-      completedFileId: null,
-      abandonedAt: null,
+      ...base,
+      unknownProbeNotBefore: null,
     },
     orderBy: [{ completionInterventionAt: "asc" }, { createdAt: "asc" }],
     take: limit,
   } as never);
-  return rows.map((row) => withCompletionFields(row)!);
+  const remaining = limit - unprobed.length;
+  if (remaining === 0) {
+    return unprobed.map((row) => withCompletionFields(row)!);
+  }
+  const due = await db.storageUpload.findMany({
+    where: {
+      ...base,
+      unknownProbeNotBefore: { lte: now },
+      // `lte` excludes NULL in SQL, but spell the partition out so correctness
+      // does not depend on an ORM or test provider preserving that behavior.
+      NOT: { unknownProbeNotBefore: null },
+    },
+    orderBy: [{ unknownProbeNotBefore: "asc" }, { completionInterventionAt: "asc" }, { createdAt: "asc" }],
+    take: remaining,
+  } as never);
+  return [...unprobed, ...due].map((row) => withCompletionFields(row)!);
+}
+
+/** Claim one unknown row for a bounded recovery probe. The retry timestamp is
+ * both a durable lease and a fair-scheduling cursor: a crashed worker becomes
+ * eligible again, while concurrent workers cannot probe the same row. */
+export async function claimUnknownStorageUploadCompletion({
+  id,
+  userId,
+  objectKey,
+  uploadId,
+  expectedRevision,
+  expectedInterventionAt,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  uploadId: string | null;
+  expectedRevision: number;
+  expectedInterventionAt: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const leaseUntil = new Date(now.getTime() + UNKNOWN_RECOVERY_LEASE_MILLISECONDS);
+  const leaseToken = crypto.randomUUID();
+  const updated = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      objectKey,
+      uploadId,
+      completionState: "unknown",
+      completedFileId: null,
+      abandonedAt: null,
+      completionRevision: expectedRevision,
+      completionInterventionAt: expectedInterventionAt,
+      OR: [{ unknownProbeNotBefore: null }, { unknownProbeNotBefore: { lte: now } }],
+    },
+    data: { unknownProbeNotBefore: leaseUntil, unknownProbeLeaseToken: leaseToken, completionRevision: { increment: 1 } },
+  } as never);
+  if (updated.count !== 1) return null;
+  return await db.storageUpload.findFirst({ where: { id, userId, completionState: "unknown", completionRevision: expectedRevision + 1, unknownProbeLeaseToken: leaseToken } } as never).then((row) => withCompletionFields(row));
 }
 
 /** Promote retry rows whose grace period elapsed into operator intervention. */
@@ -635,6 +1047,12 @@ export async function recordStorageUploadRemoteAfterAttachFailure({
       completionLeaseToken: expected.completionLeaseToken,
       completionRevision: expected.completionRevision,
       completionRetryNotBefore: expected.completionRetryNotBefore,
+      ...(expected.unknownProbeLeaseToken !== undefined
+        ? {
+            unknownProbeNotBefore: expected.unknownProbeNotBefore,
+            unknownProbeLeaseToken: expected.unknownProbeLeaseToken,
+          }
+        : {}),
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
     },
@@ -899,6 +1317,12 @@ export async function markStorageUploadCompleted({
       completionLeaseToken: expected.completionLeaseToken,
       completionRevision: expected.completionRevision,
       completionRetryNotBefore: expected.completionRetryNotBefore,
+      ...(expected.unknownProbeLeaseToken !== undefined
+        ? {
+            unknownProbeNotBefore: expected.unknownProbeNotBefore,
+            unknownProbeLeaseToken: expected.unknownProbeLeaseToken,
+          }
+        : {}),
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
     },
@@ -909,6 +1333,8 @@ export async function markStorageUploadCompleted({
       completionLeaseToken: null,
       completionInterventionAt: null,
       completionRetryNotBefore: null,
+      unknownProbeNotBefore: null,
+      unknownProbeLeaseToken: null,
     },
   } as never);
   return result.count > 0;
@@ -930,6 +1356,9 @@ export type StorageUploadGenerationExpectation = {
   completionLeaseToken: string | null;
   completionRevision: number;
   completionRetryNotBefore: Date | null;
+  unknownProbeNotBefore?: Date | null;
+  unknownProbeLeaseToken?: string | null;
+  reservationKind?: "multipart" | "dedicated";
 };
 
 // 「この行のパートは自分が捨てる」と宣言する。完了済みでも、既に誰かが宣言して
@@ -982,6 +1411,7 @@ export async function claimStorageUploadForAbandon({
   // A stale sweep or account deletion can never take over an in-flight
   // completion merely because its lease elapsed. Only the completion owner
   // that observed a provider outcome may hand its fence to cleanup.
+  if (expected.reservationKind === "dedicated") return false;
   if (completionOwnerToken === undefined && ["completing", "retry", "resumed", "intervention", "unknown"].includes(expected.completionState)) {
     return false;
   }
@@ -1060,11 +1490,16 @@ export async function freezeStorageUploadForAccountDeletion({
   expected: StorageUploadAbandonExpectation & { abandonedAt: null };
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
-  if (["completing", "retry", "resumed", "intervention", "unknown"].includes(expected.completionState)) {
+  if (expected.reservationKind === "dedicated") {
+    if (
+      expected.creationLeaseUntil !== null &&
+      expected.creationLeaseUntil.getTime() > now.getTime()
+    ) return false;
+  } else if (["completing", "retry", "resumed", "intervention", "unknown"].includes(expected.completionState)) {
     return false;
   }
-  const db = prisma ?? await getDb();
-  const frozen = await db.storageUpload.updateMany({
+  const run = async (tx: PrismaTransaction) => {
+  const frozen = await tx.storageUpload.updateMany({
     where: {
       id,
       userId,
@@ -1085,13 +1520,74 @@ export async function freezeStorageUploadForAccountDeletion({
       completionLeaseToken: expected.completionLeaseToken,
       completionRevision: expected.completionRevision,
       completionRetryNotBefore: expected.completionRetryNotBefore,
+      ...(expected.reservationKind === undefined
+        ? {}
+        : { reservationKind: expected.reservationKind }),
       cleanupLeaseUntil: null,
       cleanupLeaseToken: null,
-      NOT: { completionState: "completing" },
+      ...(expected.reservationKind === "dedicated"
+        ? {}
+        : { NOT: { completionState: "completing" } }),
     },
-    data: { abandonedAt: now },
+    data: {
+      abandonedAt: now,
+      ...(expected.reservationKind === "dedicated"
+        ? {
+            completionState: "idle",
+            completionInterventionAt: null,
+            creationLeaseUntil: null,
+            creationLeaseToken: null,
+            completionLeaseUntil: null,
+            completionLeaseToken: null,
+          }
+        : {}),
+    },
   } as never);
-  return frozen.count === 1;
+  if (frozen.count !== 1) return false;
+  if (expected.reservationKind === "dedicated") {
+    const delayedUntil = new Date(
+      now.getTime() + DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
+    );
+    const existing = await tx.aiStorageCleanup.findFirst({
+      where: { objectKey: expected.objectKey },
+      select: { leaseToken: true, notBefore: true },
+    } as never);
+    if (existing?.leaseToken) {
+      throw new Error("Dedicated storage cleanup is currently leased");
+    }
+    if (existing) {
+      const adjusted = await tx.aiStorageCleanup.updateMany({
+        where: {
+          objectKey: expected.objectKey,
+          leaseToken: null,
+          notBefore: existing.notBefore,
+        },
+        data: {
+          aiJobId: null,
+          state: "cleanup",
+          notBefore: existing.notBefore.getTime() > delayedUntil.getTime()
+            ? existing.notBefore
+            : delayedUntil,
+        },
+      } as never);
+      if (adjusted.count !== 1) {
+        throw new Error("Dedicated storage cleanup changed during freeze");
+      }
+    } else {
+      await tx.aiStorageCleanup.create({
+        data: {
+          objectKey: expected.objectKey,
+          aiJobId: null,
+          leaseToken: null,
+          state: "cleanup",
+          notBefore: delayedUntil,
+        },
+      } as never);
+    }
+  }
+  return true;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 // 取り消しの墓標の数。まだ現れていない名前の取り消しを書き留めたもので、

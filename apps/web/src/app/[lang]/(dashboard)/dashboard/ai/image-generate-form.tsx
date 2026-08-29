@@ -303,13 +303,12 @@ export function ImageGenerateForm({
       return;
     }
 
-    const idempotencyKey = await names.ensureAndGet(signature);
-    if (!idempotencyKey) return;
-    names.commitWithModel(
+    const idempotencyKey = await names.acquireAndCommit(
       signature,
       model,
       names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
     );
+    if (!idempotencyKey) return;
     const body = new FormData(event.currentTarget);
     // What the form carries is what the endpoint reads, save for the model and
     // the shapes this screen settled from the model's own capabilities.

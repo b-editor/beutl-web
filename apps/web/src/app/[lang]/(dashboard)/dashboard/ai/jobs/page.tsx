@@ -22,7 +22,7 @@ export default async function Page(props: {
         description={t("dashboard:ai.jobHistoryDescription")}
         balance={balance}
       />
-      <JobHistory lang={lang} access={access} />
+      <JobHistory lang={lang} access={access} userId={session.user.id} />
     </div>
   );
 }

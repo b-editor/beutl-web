@@ -5,9 +5,8 @@ import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { deleteStorageFile } from "@/lib/storage";
 import {
-  deleteFile as deleteFileRecord,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
   updateFileVisibility,
@@ -35,12 +34,10 @@ export async function deleteFile(ids: string[]): Promise<ActionResult> {
     }
 
     const promises = files.map(async (file) => {
-      await deleteFileRecord({
+      await deleteStorageFile({
         fileId: file.id,
+        userId: session.user.id,
       });
-
-      const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
-      await bucket.delete(file.objectKey);
     });
     await Promise.all(promises);
 

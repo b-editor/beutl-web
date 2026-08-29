@@ -199,11 +199,9 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
     return await sameUser(id, session.user.id, t, async () => {
       const iconFile = await retrieveDevPackageIconFile({ packageId: id });
 
-      const deletedSize = iconFile ? BigInt(iconFile.size) : BigInt(0);
       const result = await createDedicatedFile(
         session.user.id,
         file,
-        deletedSize,
         t,
       );
       if (!result.success) {

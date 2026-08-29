@@ -346,6 +346,7 @@ type StorageUploadRecord = {
   id: string;
   userId: string;
   objectKey: string;
+  reservationKind?: "multipart" | "dedicated";
   uploadId: string | null;
   name: string;
   mimeType: string;
@@ -364,6 +365,8 @@ type StorageUploadRecord = {
   completionLastError: string | null;
   completionInterventionAt: Date | null;
   completionRetryNotBefore: Date | null;
+  unknownProbeNotBefore: Date | null;
+  unknownProbeLeaseToken: string | null;
   completionRevision: number;
   cleanupLeaseUntil: Date | null;
   cleanupLeaseToken: string | null;
@@ -373,6 +376,7 @@ type StorageUploadWhere = {
   id?: string;
   userId?: string;
   objectKey?: string;
+  reservationKind?: "multipart" | "dedicated";
   uploadId?: string | null;
   name?: string;
   mimeType?: string;
@@ -392,6 +396,8 @@ type StorageUploadWhere = {
   completionRevision?: number;
   completionInterventionAt?: Date | null | { lte: Date };
   completionRetryNotBefore?: Date | null | { lte: Date };
+  unknownProbeNotBefore?: Date | null | { lte: Date };
+  unknownProbeLeaseToken?: string | null;
   cleanupLeaseUntil?: Date | null | { lte: Date };
   cleanupLeaseToken?: string | null;
   AND?: StorageUploadWhere[];
@@ -407,6 +413,10 @@ function matchesStorageUploadWhere(
   if (where.id !== undefined && item.id !== where.id) return false;
   if (where.userId !== undefined && item.userId !== where.userId) return false;
   if (where.objectKey !== undefined && item.objectKey !== where.objectKey) return false;
+  if (
+    where.reservationKind !== undefined &&
+    (item.reservationKind ?? "multipart") !== where.reservationKind
+  ) return false;
   if (where.uploadId !== undefined && item.uploadId !== where.uploadId) return false;
   if (where.name !== undefined && item.name !== where.name) return false;
   if (where.mimeType !== undefined && item.mimeType !== where.mimeType) return false;
@@ -454,6 +464,12 @@ function matchesStorageUploadWhere(
     } else if (item.completionRetryNotBefore?.getTime() !== where.completionRetryNotBefore?.getTime()) {
       return false;
     }
+  }
+  if (where.unknownProbeLeaseToken !== undefined && item.unknownProbeLeaseToken !== where.unknownProbeLeaseToken) return false;
+  if (where.unknownProbeNotBefore !== undefined) {
+    if (typeof where.unknownProbeNotBefore === "object" && where.unknownProbeNotBefore !== null && "lte" in where.unknownProbeNotBefore) {
+      if (item.unknownProbeNotBefore === null || item.unknownProbeNotBefore > where.unknownProbeNotBefore.lte) return false;
+    } else if (item.unknownProbeNotBefore?.getTime() !== where.unknownProbeNotBefore?.getTime()) return false;
   }
   if (where.completionLeaseUntil !== undefined) {
     if (
@@ -3126,12 +3142,15 @@ export function createInMemoryPrisma() {
           creationLeaseUntil: null,
           creationLeaseToken: null,
           completionState: "idle",
+          reservationKind: "multipart",
           completionLeaseUntil: null,
           completionLeaseToken: null,
           completionAttempts: 0,
           completionLastError: null,
           completionInterventionAt: null,
           completionRetryNotBefore: null,
+          unknownProbeNotBefore: null,
+          unknownProbeLeaseToken: null,
           completionRevision: 0,
           cleanupLeaseUntil: null,
           cleanupLeaseToken: null,
@@ -3159,14 +3178,28 @@ export function createInMemoryPrisma() {
       findMany: async ({
         where,
         take,
+        orderBy,
       }: {
         where?: StorageUploadWhere;
-        orderBy?: unknown;
+        orderBy?: Array<Record<string, "asc" | "desc">>;
         take?: number;
       } = {}) => {
         const rows = [...state.storageUploads.values()]
           .filter((item) => matchesStorageUploadWhere(item, where))
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+        if (orderBy) {
+          rows.sort((left, right) => {
+            for (const order of orderBy) {
+              const [field, direction] = Object.entries(order)[0];
+              const lv = (left as unknown as Record<string, unknown>)[field];
+              const rv = (right as unknown as Record<string, unknown>)[field];
+              const lt = lv instanceof Date ? lv.getTime() : lv === null ? Number.NEGATIVE_INFINITY : Number(lv ?? 0);
+              const rt = rv instanceof Date ? rv.getTime() : rv === null ? Number.NEGATIVE_INFINITY : Number(rv ?? 0);
+              if (lt !== rt) return direction === "desc" ? rt - lt : lt - rt;
+            }
+            return 0;
+          });
+        }
         return (take ? rows.slice(0, take) : rows).map((item) => ({ ...item }));
       },
       count: async (
@@ -3290,6 +3323,7 @@ export function createInMemoryPrisma() {
         where: {
           id?: string;
           userId?: string;
+          objectKey?: string;
           visibility?: string;
           aiJobResult?: null;
         };
@@ -3299,6 +3333,7 @@ export function createInMemoryPrisma() {
           (item) =>
             (!where.id || item.id === where.id) &&
             (!where.userId || item.userId === where.userId) &&
+            (!where.objectKey || item.objectKey === where.objectKey) &&
             (!where.visibility || item.visibility === where.visibility) &&
             (where.aiJobResult !== null || !aiJobResultForFile(item.id)),
         );

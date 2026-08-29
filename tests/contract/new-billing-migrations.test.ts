@@ -23,6 +23,8 @@ const migrations = [
   "20260827020000_harden_topup_intervention_audit/migration.sql",
   "20260827030000_add_storage_upload_completion_lease/migration.sql",
   "20260828000000_harden_unknown_storage_completion/migration.sql",
+  "20260829010000_add_unknown_probe_lease/migration.sql",
+  "20260829020000_add_dedicated_storage_reservation/migration.sql",
 ];
 
 describe("new billing migrations", () => {
@@ -167,5 +169,43 @@ describe("new billing migrations", () => {
     expect(sql).toContain('"operatorLeaseExpiresAt" TIMESTAMP(3)');
     expect(sql).toContain('"operatorAbsenceObservedAt" TIMESTAMP(3)');
     expect(sql).toContain("TopUpCheckoutResolution_operator_lease_pair_check");
+  });
+
+  it("defines a paired unknown-probe lease constrained to unknown state", async () => {
+    const sql = await readFile(new URL("../../apps/web/prisma/migrations/20260829010000_add_unknown_probe_lease/migration.sql", import.meta.url), "utf8");
+    expect(sql).toContain('"unknownProbeNotBefore" TIMESTAMP(3)');
+    expect(sql).toContain('"unknownProbeLeaseToken" STRING');
+    expect(sql).toContain('"completionState" = \'unknown\'');
+    expect(sql).toContain("unknownProbeLease_pair_ck");
+    expect(sql).toContain("schema_locked = true");
+    expect(sql).toContain("unknownProbeLeaseToken\" IS NULL AND \"unknownProbeNotBefore\" IS NULL");
+    expect(sql).toContain("unknownProbeLeaseToken\" IS NOT NULL AND \"unknownProbeNotBefore\" IS NOT NULL");
+    expect(sql).toContain("completionState\" <> 'unknown'");
+  });
+
+  it("documents the dedicated storage reservation cutover", async () => {
+    const sql = await readFile(new URL("../../apps/web/prisma/migrations/20260829020000_add_dedicated_storage_reservation/migration.sql", import.meta.url), "utf8");
+    expect(sql).toContain('"reservationKind" STRING NOT NULL DEFAULT \'multipart\'');
+    expect(sql).toContain("reservationKind_ck");
+    expect(sql).toContain("schema_locked = false");
+    expect(sql).toContain("schema_locked = true");
+    const schema = await readFile(new URL("../../apps/web/prisma/schema.prisma", import.meta.url), "utf8");
+    expect(schema).toContain('reservationKind String   @default("multipart")');
+  });
+
+  it("keeps the unknown-probe rolling cutover contract in the runbook", async () => {
+    const docs = await readFile(new URL("../../docs/stripe-ai-billing-migration.md", import.meta.url), "utf8");
+    expect(docs).toContain("20260829010000_add_unknown_probe_lease");
+    expect(docs).toContain("Quiesce storage-upload start, part, finish, and cancel requests");
+    expect(docs).toContain("schema_locked = true");
+    expect(docs).toContain("unknownProbeLeaseToken");
+    expect(docs).toContain("old finisher");
+    expect(docs).toContain("non-null probe pair");
+    expect(docs).toContain("StorageUpload_reservationKind_ck");
+    expect(docs).toContain("StorageUpload_startState_uploadId_ck");
+    expect(docs).toContain("StorageUpload_creationLease_ck");
+    expect(docs).toContain("StorageUpload_userId_reservationKind_completedFileId_idx");
+    expect(docs).toContain("`multipart` default");
+    expect(docs).toContain("dedicated active reservation");
   });
 });

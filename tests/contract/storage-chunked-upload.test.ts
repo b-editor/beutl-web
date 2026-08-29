@@ -136,6 +136,9 @@ describe("uploading a file too large for one request", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
     expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("unknown");
+    // The bounded persistence race gets up to two seconds to publish the
+    // unknown marker after the provider deadline before its timer is cleared.
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -180,6 +183,28 @@ describe("uploading a file too large for one request", () => {
     expect(state.files.size).toBe(1);
     expect(state.storageUploads.get(unknown.id)?.completionState).toBe("settled");
     expect(bucketDeleted).toEqual([]);
+  });
+
+  it("bounds a deadline when lease renewal and unknown persistence both hang", async () => {
+    vi.useFakeTimers();
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "wedged-db.bin", mimeType: "application/octet-stream", size: BigInt(4) });
+    if (!started.ok) throw new Error(started.reason);
+    const complete = vi.fn(() => new Promise<{ size: number }>(() => undefined));
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
+      uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
+      complete,
+      abort: vi.fn(),
+    }));
+    const renew = vi.spyOn(storageDb, "renewStorageUploadCompletion").mockImplementation(() => new Promise<boolean>(() => undefined));
+    const persist = vi.spyOn(storageDb, "recordStorageUploadCompletionUnknown").mockImplementation(() => new Promise<never>(() => undefined));
+
+    const result = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
+    await vi.advanceTimersByTimeAsync(35_000);
+    await expect(result).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(renew).toHaveBeenCalled();
+    expect(persist).toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("completing");
   });
 
   it("keeps a late provider rejection unknown without authorizing another provider call", async () => {
@@ -270,6 +295,32 @@ describe("uploading a file too large for one request", () => {
     await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
     expect(state.storageUploads.get(started.upload.id)).toMatchObject({ completionState: "completing", completedFileId: null });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("records unknown at the deadline when renewal hangs", async () => {
+    vi.useFakeTimers();
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "renew-hang.bin", mimeType: "application/octet-stream", size: BigInt(1) });
+    if (!started.ok) throw new Error(started.reason);
+    const complete = vi.fn(() => new Promise<{ size: number }>(() => undefined));
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({ uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }), complete, abort: vi.fn() }));
+    vi.spyOn(storageDb, "renewStorageUploadCompletion").mockImplementation(() => new Promise<boolean>(() => undefined));
+    const pending = finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("unknown");
+  });
+
+  it("does not claim completion when local handle construction fails", async () => {
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "resume-retry.bin", mimeType: "application/octet-stream", size: BigInt(1) });
+    if (!started.ok) throw new Error(started.reason);
+    const complete = vi.fn(async () => ({ size: 1 }));
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => { throw new Error("constructor unavailable"); });
+    await expect(finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+    expect(state.storageUploads.get(started.upload.id)?.completionState).toBe("idle");
+    bucket.resumeMultipartUpload.mockImplementationOnce(() => ({ uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }), complete, abort: vi.fn() }));
+    await expect(finishUpload({ userId: USER_ID, uploadId: started.upload.id, parts: [{ partNumber: 1, etag: "etag-1" }] })).resolves.toMatchObject({ ok: true });
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it("cuts a file into parts the platform will carry", () => {
@@ -1059,11 +1110,12 @@ describe("uploading a file too large for one request", () => {
       completionLeaseToken: "completion-owner-a",
     });
     const abort = vi.fn();
+    const complete = vi.fn(async () => {
+      throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+    });
     bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
       uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
-      complete: async () => {
-        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
-      },
+      complete,
       abort,
     }));
 
@@ -1108,11 +1160,12 @@ describe("uploading a file too large for one request", () => {
       })
       .mockImplementation((args) => originalClaim(args));
     const abort = vi.fn();
+    const complete = vi.fn(async () => {
+      throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
+    });
     bucket.resumeMultipartUpload.mockImplementationOnce(() => ({
       uploadPart: async () => ({ partNumber: 1, etag: "etag-1" }),
-      complete: async () => {
-        throw Object.assign(new Error("NoSuchUpload"), { code: "NoSuchUpload" });
-      },
+      complete,
       abort,
     }));
 
@@ -1130,7 +1183,10 @@ describe("uploading a file too large for one request", () => {
     });
     expect(state.aiStorageCleanups.has(row.objectKey)).toBe(false);
     expect(abort).not.toHaveBeenCalled();
-    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+    // Constructing a local handle is deliberately pre-claim. Losing the CAS
+    // still prevents every provider-side operation.
+    expect(bucket.resumeMultipartUpload).toHaveBeenCalledTimes(1);
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("fences cleanup while completion is in flight", async () => {

@@ -388,7 +388,11 @@ export function VideoForm({
     // Enter を押したときにボタンが断っているはずの依頼が出ていく。
     if (!canSubmit || !names.ready) return;
 
-    const idempotencyKey = await names.ensureAndGet(signature);
+    const idempotencyKey = await names.acquireAndCommit(
+      signature,
+      model,
+      names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
+    );
     if (!idempotencyKey) return;
 
     const formData = new FormData(event.currentTarget);
@@ -398,11 +402,6 @@ export function VideoForm({
     if (sentFirstFrame) formData.set("firstFrame", sentFirstFrame);
     if (sentLastFrame) formData.set("lastFrame", sentLastFrame);
 
-    names.commitWithModel(
-      signature,
-      model,
-      names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
-    );
     dispatch(formData);
   }
 

@@ -3,6 +3,7 @@ import type { PrismaTransaction } from "./transaction";
 import { StorageCleanupBusyError } from "./ai-job";
 import { enqueueStorageMultipartCleanups } from "./storage-multipart-cleanup";
 import {
+  DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
   freezeStorageUploadForAccountDeletion,
   type StorageUploadCompletionFields,
 } from "./storage-upload";
@@ -323,6 +324,7 @@ export async function enqueueUserStorageCleanups({
       completionLastError: true,
       completionInterventionAt: true,
       completionRetryNotBefore: true,
+      reservationKind: true,
       completionRevision: true,
       cleanupLeaseUntil: true,
       cleanupLeaseToken: true,
@@ -356,6 +358,7 @@ export async function enqueueUserStorageCleanups({
           completionLeaseToken: upload.completionLeaseToken,
           completionRevision: upload.completionRevision,
           completionRetryNotBefore: upload.completionRetryNotBefore,
+          reservationKind: upload.reservationKind,
           cleanupLeaseUntil: upload.cleanupLeaseUntil,
           cleanupLeaseToken: upload.cleanupLeaseToken,
         },
@@ -386,6 +389,11 @@ export async function enqueueUserStorageCleanups({
       ...uploads.map((upload) => upload.objectKey),
     ]),
   ];
+  const dedicatedKeys = new Set(
+    uploads
+      .filter((upload) => upload.reservationKind === "dedicated")
+      .map((upload) => upload.objectKey),
+  );
   // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
   // 1 万回の往復になり、その全部がカスケードと同じトランザクションの中に入る
   // ——期限に間に合わなければ、削除そのものが最後まで通らない。
@@ -413,16 +421,25 @@ export async function enqueueUserStorageCleanups({
         aiJobId: null,
         leaseToken: null,
         state: "cleanup",
-        notBefore: now,
+        notBefore: dedicatedKeys.has(objectKey)
+          ? new Date(
+              now.getTime() + DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
+            )
+          : now,
       })),
       skipDuplicates: true,
     });
     // Existing rows are updated once per batch. Active leases were rejected
     // above, so this cannot move a claimed row backwards.
     if (existing.length > 0) {
+      const immediate = existing.filter((row) => !dedicatedKeys.has(row.objectKey));
+      // Dedicated writes already carry a delayed outbox established by the
+      // freeze CAS. Do not shorten it during the User cascade: an R2 put owned
+      // by the expired lease may still publish before that grace elapses.
+      if (immediate.length === 0) continue;
       await db.aiStorageCleanup.updateMany({
         where: {
-          objectKey: { in: existing.map((row) => row.objectKey) },
+          objectKey: { in: immediate.map((row) => row.objectKey) },
           OR: [{ leaseToken: null }, { notBefore: { lte: now } }],
         },
         data: { aiJobId: null, state: "cleanup", notBefore: now },

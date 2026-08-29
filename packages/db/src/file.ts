@@ -1,5 +1,5 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
 export async function findFileForContentAccess({
   id: fileId,
@@ -213,6 +213,34 @@ export async function deleteFile({
   return file;
 }
 
+/** Delete a user file while recording its object key in the cleanup outbox in
+ * the same transaction. The outbox is promoted to cleanup only after the row
+ * is gone, so a crash cannot lose the key or delete a live file. */
+export async function deleteFileWithStorageCleanup({
+  fileId,
+  userId,
+  prisma,
+}: {
+  fileId: string;
+  userId?: string;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const file = await tx.file.findFirst({
+      where: { id: fileId, ...(userId ? { userId } : {}), aiJobResult: null },
+    });
+    if (!file) throw new Error(`Storage file ${fileId} was not found`);
+    await tx.aiStorageCleanup.create({ data: { objectKey: file.objectKey, aiJobId: null, state: "writing", notBefore: new Date(), leaseToken: null } } as never);
+    const deleted = await tx.file.deleteMany({
+      where: { id: fileId, ...(userId ? { userId } : {}), aiJobResult: null },
+    });
+    if (deleted.count !== 1) throw new Error(`Storage file ${fileId} is owned by an AI job`);
+    await tx.aiStorageCleanup.updateMany({ where: { objectKey: file.objectKey, state: "writing", leaseToken: null }, data: { state: "cleanup", notBefore: new Date() } } as never);
+    return file;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
 export async function retrieveFilesByIdsAndUserId({
   ids,
   userId,
@@ -367,4 +395,79 @@ export async function sumFileSizeByUserId({
     },
   });
   return result._sum.size ?? BigInt(0);
+}
+
+/** Atomically enforce the file quota/count against committed files and active
+ * multipart reservations, then create a dedicated file record. */
+export async function createFileWithStorageQuota({
+  userId,
+  name,
+  objectKey,
+  size,
+  mimeType,
+  visibility,
+  sha256,
+  quotaBytes,
+  fileCountLimit,
+  prisma,
+}: {
+  userId: string;
+  name: string;
+  objectKey: string;
+  size: number;
+  mimeType: string;
+  visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
+  sha256?: string;
+  quotaBytes: bigint;
+  fileCountLimit: number;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const [stored, reserved, files, activeUploads] = await Promise.all([
+      sumFileSizeByUserId({ userId, prisma: tx }),
+      tx.storageUpload.aggregate({
+        // Claimed rows still reserve bytes until their multipart cleanup has
+        // actually succeeded; excluding them would let failed cleanup escape
+        // the same quota enforced by multipart start.
+        where: { userId, completedFileId: null },
+        _sum: { size: true },
+      } as never),
+      countFilesByUserId({ userId, prisma: tx }),
+      tx.storageUpload.count({ where: { userId, completedFileId: null, abandonedAt: null } } as never),
+    ]);
+    const total = stored + BigInt(reserved._sum?.size ?? 0) + BigInt(size);
+    const count = files + activeUploads;
+    if (total > quotaBytes) return { kind: "overQuota" as const };
+    if (count >= fileCountLimit) return { kind: "tooManyFiles" as const };
+    const created = await createFile({ userId, name, objectKey, size, mimeType, visibility, sha256, prisma: tx });
+    const settled = await tx.aiStorageCleanup.deleteMany({
+      where: { objectKey, state: "writing", leaseToken: null },
+    } as never);
+    if (settled.count !== 1) {
+      throw new Error(`Storage write outbox ${objectKey} changed before File commit`);
+    }
+    return { kind: "created" as const, record: created };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+/** Commit a File and acknowledge its pre-registered storage write outbox in a
+ * single transaction. */
+export async function createFileAndSettleStorageWrite({
+  userId, name, objectKey, size, mimeType, visibility, sha256, prisma,
+}: {
+  userId: string; name: string; objectKey: string; size: number; mimeType: string;
+  visibility: "PUBLIC" | "PRIVATE" | "DEDICATED"; sha256?: string; prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const created = await createFile({ userId, name, objectKey, size, mimeType, visibility, sha256, prisma: tx });
+    const settled = await tx.aiStorageCleanup.deleteMany({
+      where: { objectKey, state: "writing", leaseToken: null },
+    } as never);
+    if (settled.count !== 1) {
+      throw new Error(`Storage write outbox ${objectKey} changed before File commit`);
+    }
+    return created;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }

@@ -13,6 +13,8 @@ const migrationFiles = [
   "20260825230000_add_topup_checkout_resolution",
   "20260827030000_add_storage_upload_completion_lease",
   "20260828000000_harden_unknown_storage_completion",
+  "20260829010000_add_unknown_probe_lease",
+  "20260829020000_add_dedicated_storage_reservation",
 ] as const;
 
 type TargetMigration = (typeof migrationFiles)[number];
@@ -26,6 +28,8 @@ const targetTables: Record<TargetMigration, string> = {
   "20260825230000_add_topup_checkout_resolution": "TopUpCheckoutResolution",
   "20260827030000_add_storage_upload_completion_lease": "StorageUpload",
   "20260828000000_harden_unknown_storage_completion": "StorageUpload",
+  "20260829010000_add_unknown_probe_lease": "StorageUpload",
+  "20260829020000_add_dedicated_storage_reservation": "StorageUpload",
 };
 
 const resolutionMigrationFiles = migrationFiles.slice(1, 4);
@@ -134,7 +138,16 @@ async function createReceiptBase(prisma: PrismaClient): Promise<void> {
     'CREATE TABLE "File" ("id" STRING PRIMARY KEY)',
   );
   await prisma.$executeRawUnsafe(
-    'CREATE TABLE "StorageUpload" ("id" STRING PRIMARY KEY, "completedFileId" STRING)',
+    `CREATE TABLE "StorageUpload" (
+      "id" STRING PRIMARY KEY,
+      "userId" STRING NOT NULL DEFAULT 'migration-test-user',
+      "uploadId" STRING,
+      "startState" STRING NOT NULL DEFAULT 'active',
+      "creationLeaseUntil" TIMESTAMP(3),
+      "creationLeaseToken" STRING,
+      "abandonedAt" TIMESTAMP(3),
+      "completedFileId" STRING
+    )`,
   );
 }
 
@@ -467,6 +480,8 @@ describeWithCockroach(
       await runSql(resource.prisma, await migrationSql(name));
       await runSql(resource.prisma, await migrationSql("20260828000000_harden_unknown_storage_completion"));
       await runSql(resource.prisma, await migrationSql("20260828000000_harden_unknown_storage_completion"));
+      await runSql(resource.prisma, await migrationSql("20260829010000_add_unknown_probe_lease"));
+      await runSql(resource.prisma, await migrationSql("20260829010000_add_unknown_probe_lease"));
 
       const [legacy] = await resource.prisma.$queryRawUnsafe<Array<{
         completionState: string;
@@ -576,6 +591,114 @@ describeWithCockroach(
         SET "completionLeaseToken" = 'orphan-token'
         WHERE "id" = 'valid-completion'
       `)).rejects.toThrow();
+
+      const probeColumns = await resource.prisma.$queryRawUnsafe<Array<{ column_name: string }>>(`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+          AND column_name IN ('unknownProbeNotBefore', 'unknownProbeLeaseToken')
+        ORDER BY column_name
+      `);
+      expect(probeColumns.map((row) => row.column_name)).toEqual([
+        "unknownProbeLeaseToken",
+        "unknownProbeNotBefore",
+      ]);
+      const probeConstraints = await resource.prisma.$queryRawUnsafe<Array<{ constraint_name: string }>>(`
+        SELECT constraint_name FROM information_schema.table_constraints
+        WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+          AND constraint_name = 'StorageUpload_unknownProbeLease_pair_ck'
+      `);
+      expect(probeConstraints).toEqual([{ constraint_name: "StorageUpload_unknownProbeLease_pair_ck" }]);
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "completionState", "completionInterventionAt",
+          "unknownProbeLeaseToken", "unknownProbeNotBefore"
+        )
+        VALUES ('valid-probe', 'unknown', current_timestamp(), 'probe-token', current_timestamp())
+      `);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "completionState", "completionInterventionAt", "unknownProbeLeaseToken"
+        )
+        VALUES ('invalid-half-probe', 'unknown', current_timestamp(), 'probe-token')
+      `)).rejects.toThrow();
+      await expect(resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "completionState", "completionInterventionAt", "unknownProbeNotBefore"
+        )
+        VALUES ('invalid-half-probe-2', 'unknown', current_timestamp(), current_timestamp())
+      `)).rejects.toThrow();
+      await expect(resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" ("id", "completionState", "unknownProbeLeaseToken", "unknownProbeNotBefore")
+        VALUES ('invalid-non-unknown-probe', 'idle', 'probe-token', current_timestamp())
+      `)).rejects.toThrow();
+      await resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionState" = 'settled', "completionInterventionAt" = NULL,
+            "unknownProbeLeaseToken" = NULL, "unknownProbeNotBefore" = NULL
+        WHERE "id" = 'valid-probe'
+      `);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completionState" = 'settled', "unknownProbeLeaseToken" = 'stale-token'
+        WHERE "id" = 'valid-probe'
+      `)).rejects.toThrow();
+    }, 120_000);
+
+    it("enforces dedicated reservation and lease generations idempotently", async () => {
+      const resource = await createDatabase();
+      resources.push(resource);
+      await createReceiptBase(resource.prisma);
+      await runSql(resource.prisma, await migrationSql("20260827030000_add_storage_upload_completion_lease"));
+      await runSql(resource.prisma, await migrationSql("20260828000000_harden_unknown_storage_completion"));
+      await runSql(resource.prisma, await migrationSql("20260829010000_add_unknown_probe_lease"));
+      await runSql(resource.prisma, await migrationSql("20260829020000_add_dedicated_storage_reservation"));
+      await runSql(resource.prisma, await migrationSql("20260829020000_add_dedicated_storage_reservation"));
+
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "reservationKind", "startState", "uploadId",
+          "creationLeaseToken", "creationLeaseUntil", "completionState",
+          "completionLeaseToken", "completionLeaseUntil"
+        ) VALUES (
+          'dedicated-active', 'dedicated', 'dedicated', NULL,
+          'writer', current_timestamp() + INTERVAL '1 minute', 'completing',
+          'writer', current_timestamp() + INTERVAL '1 minute'
+        )
+      `);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" (
+          "id", "reservationKind", "startState", "uploadId",
+          "creationLeaseToken", "completionState",
+          "completionLeaseToken", "completionLeaseUntil"
+        ) VALUES (
+          'dedicated-half-lease', 'dedicated', 'dedicated', NULL,
+          'writer', 'completing', 'writer', current_timestamp() + INTERVAL '1 minute'
+        )
+      `)).rejects.toThrow();
+      await resource.prisma.$executeRawUnsafe(
+        'INSERT INTO "File" ("id") VALUES (\'dedicated-file\')',
+      );
+      await resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "completedFileId" = 'dedicated-file', "completionState" = 'settled',
+            "creationLeaseToken" = NULL, "creationLeaseUntil" = NULL,
+            "completionLeaseToken" = NULL, "completionLeaseUntil" = NULL
+        WHERE "id" = 'dedicated-active'
+      `);
+      await expect(resource.prisma.$executeRawUnsafe(`
+        UPDATE "StorageUpload"
+        SET "creationLeaseToken" = 'stale',
+            "creationLeaseUntil" = current_timestamp() + INTERVAL '1 minute'
+        WHERE "id" = 'dedicated-active'
+      `)).rejects.toThrow();
+      await resource.prisma.$executeRawUnsafe(`
+        INSERT INTO "StorageUpload" ("id", "uploadId")
+        VALUES ('old-multipart-writer', 'multipart-handle')
+      `);
+      const [legacy] = await resource.prisma.$queryRawUnsafe<Array<{
+        reservationKind: string;
+      }>>('SELECT "reservationKind" FROM "StorageUpload" WHERE "id" = \'old-multipart-writer\'');
+      expect(legacy.reservationKind).toBe("multipart");
     }, 120_000);
 
     it("repairs wrong same-name receipt index and foreign key definitions", async () => {

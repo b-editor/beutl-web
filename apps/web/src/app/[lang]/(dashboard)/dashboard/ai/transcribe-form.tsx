@@ -241,11 +241,10 @@ export function TranscribeForm({
       return;
     }
     if (!names.ready) return;
-    const idempotencyKey = await names.ensureAndGet(signature);
+    const idempotencyKey = await names.acquireAndCommit(signature, model, null);
     if (!idempotencyKey) return;
     const formData = new FormData(event.currentTarget);
     formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
-    names.commitWithModel(signature, model, null);
     dispatch(formData);
   }
 

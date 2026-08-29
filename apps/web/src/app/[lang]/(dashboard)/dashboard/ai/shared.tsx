@@ -53,8 +53,13 @@ export {
   modelsWithHeldRequests,
   mergeHeldModelCapabilities,
   mergeHeldRequestCapabilities,
+  mergeAiRecoveryEntries,
+  removeAiRecoveryEntry,
+  serializeAiRecoveryTombstone,
+  isAiRecoveryTombstoned,
   keepsIdempotencyKey,
   readAiRecoverySafely,
+  AI_RECOVERY_TTL_MS,
   requestSignature,
   seedValue,
   type AiAccess,
@@ -62,9 +67,13 @@ export {
   type AiBlockReason,
   type AiScreenModel,
   type HeldModelCapabilitySnapshots,
+  type PersistedAiRecoveryEntry,
 } from "@/lib/ai-screen";
 import {
-  aiRequestNameOf,
+  acquireAiRecoveryEntry,
+  type AiRecoveryLockManager,
+} from "@/lib/ai-recovery-storage";
+import {
   aiRecoveryStorageScope,
   digestAiRequestSignature,
   serializeAiRecoveryEntries,
@@ -78,16 +87,22 @@ import {
   IDEMPOTENCY_KEY_FIELD,
   mergeHeldModelCapabilities,
   mergeHeldRequestCapabilities,
+  mergeAiRecoveryEntries,
+  removeAiRecoveryEntry,
+  serializeAiRecoveryTombstone,
+  isAiRecoveryTombstoned,
   modelsWithHeldRequests,
   newAiRequestNames,
   readyAiRequestNames,
   reduceAiRequestRecovery,
   readAiRecoverySafely,
+  AI_RECOVERY_TTL_MS,
   type AiBalance,
   type AiBlockReason,
   type AiScreenModel,
   type HeldModelCapabilitySnapshots,
   type AiRequestNames,
+  type PersistedAiRecoveryEntry,
 } from "@/lib/ai-screen";
 
 export function billingHref(lang: string): string {
@@ -339,25 +354,290 @@ export function useFileFingerprints(
  * 送信ごとの名前を、依頼ごとに持っておく。どれを残しどれを手放すかは
  * {@link commitAiRequestName} と {@link settleAiRequestName} が決める。
  */
-type PersistedAiRecoveryEntry = import("@/lib/ai-screen").PersistedAiRecoveryEntry;
-
 function recoveryStorageKey(userId: string, operation: string): string {
   return aiRecoveryStorageScope(userId, operation);
 }
 
-function writePersistedRecovery(
+function recoveryEntryStoragePrefix(userId: string, operation: string): string {
+  return `${recoveryStorageKey(userId, operation)}.active.`;
+}
+
+function recoveryTombstoneStoragePrefix(userId: string, operation: string): string {
+  return `${recoveryStorageKey(userId, operation)}.settled.`;
+}
+
+function recoveryEntryStorageKey(
+  userId: string,
+  operation: string,
+  digest: string,
+  key: string,
+): string {
+  return `${recoveryEntryStoragePrefix(userId, operation)}${digest}.${encodeURIComponent(key)}`;
+}
+
+function recoveryTombstoneStorageKey(
+  userId: string,
+  operation: string,
+  digest: string,
+  key: string,
+): string {
+  return `${recoveryTombstoneStoragePrefix(userId, operation)}${digest}.${encodeURIComponent(key)}`;
+}
+
+function migratePersistedRecovery(
   userId: string,
   operation: string,
   entries: readonly PersistedAiRecoveryEntry[],
-): void {
+): boolean {
   try {
-    if (entries.length === 0) {
-      window.localStorage.removeItem(recoveryStorageKey(userId, operation));
-      return;
+    // Migration writes only the validated legacy digests. Normal mutations do
+    // not call this function and therefore never rewrite sibling records.
+    for (const entry of entries) {
+      window.localStorage.setItem(
+        recoveryEntryStorageKey(userId, operation, entry.digest, entry.key),
+        serializeAiRecoveryEntries([entry]),
+      );
     }
-    window.localStorage.setItem(recoveryStorageKey(userId, operation), serializeAiRecoveryEntries(entries));
+    window.localStorage.removeItem(recoveryStorageKey(userId, operation));
+    return true;
   } catch {
-    // Storage can be disabled or full. In-memory recovery remains valid.
+    return false;
+  }
+}
+
+function writePersistedRecoveryEntry(
+  userId: string,
+  operation: string,
+  entry: PersistedAiRecoveryEntry,
+): boolean {
+  try {
+    if (isAiRecoveryTombstoned(
+      window.localStorage.getItem(
+        recoveryTombstoneStorageKey(userId, operation, entry.digest, entry.key),
+      ),
+      entry.key,
+    )) return false;
+    window.localStorage.setItem(
+      recoveryEntryStorageKey(userId, operation, entry.digest, entry.key),
+      serializeAiRecoveryEntries([entry]),
+    );
+    const persisted = readAiRecoverySafely(
+      () => window.localStorage.getItem(
+        recoveryEntryStorageKey(userId, operation, entry.digest, entry.key),
+      ),
+    );
+    return persisted.some((candidate) =>
+      candidate.digest === entry.digest && candidate.key === entry.key,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function aiRecoveryLockName(
+  userId: string,
+  operation: string,
+): string {
+  // Allocate every digest in one account/operation scope behind the same
+  // lock. A per-digest lock prevents duplicate keys for one body, but two
+  // different bodies could both observe slot 63 and overrun the physical
+  // recovery capacity.
+  return `${recoveryStorageKey(userId, operation)}.lock`;
+}
+
+/**
+ * Allocate and durably publish one idempotency identity. The lock is scoped to
+ * the account and operation, so two mounted forms converge on the same key and
+ * different digests cannot race the shared active-entry capacity.
+ * A pre-existing durable entry remains usable without Web Locks; minting a new
+ * key without the lock is deliberately refused because two tabs could charge
+ * the same request independently.
+ */
+async function acquirePersistedRecoveryEntry({
+  userId,
+  operation,
+  digest,
+  model,
+  capability,
+  createKey,
+  locks,
+}: {
+  userId: string;
+  operation: string;
+  digest: string;
+  model: string;
+  capability: unknown | null;
+  createKey: () => string;
+  locks: AiRecoveryLockManager | undefined;
+}): Promise<PersistedAiRecoveryEntry | null> {
+  if (typeof window === "undefined" || !userId) return null;
+  return acquireAiRecoveryEntry({
+    lockName: aiRecoveryLockName(userId, operation),
+    digest,
+    model,
+    capability,
+    readEntries: () => readPersistedRecovery(userId, operation),
+    writeEntry: (entry) => writePersistedRecoveryEntry(userId, operation, entry),
+    createKey,
+    locks,
+    maxEntries: 64,
+  });
+}
+
+function removePersistedRecoveryEntry(
+  userId: string,
+  operation: string,
+  digest: string,
+  key: string,
+): boolean {
+  try {
+    // Keep an exact-key tombstone. A stale tab may write the old active item
+    // after this remove, but restore still ignores that settled generation;
+    // a legitimate new generation uses another key and remains recoverable.
+    window.localStorage.setItem(
+      recoveryTombstoneStorageKey(userId, operation, digest, key),
+      serializeAiRecoveryTombstone(key),
+    );
+    window.localStorage.removeItem(
+      recoveryEntryStorageKey(userId, operation, digest, key),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type RecoveryTombstone = { key: string; settledAt: number };
+
+function readRecoveryTombstone(
+  raw: string | null,
+  now: number,
+): RecoveryTombstone | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as {
+      version?: unknown;
+      key?: unknown;
+      settledAt?: unknown;
+    };
+    if (
+      value.version !== 1 ||
+      typeof value.key !== "string" ||
+      value.key.length === 0 ||
+      value.key.length > 255 ||
+      (value.settledAt !== undefined &&
+        (typeof value.settledAt !== "number" || !Number.isFinite(value.settledAt)))
+    ) {
+      return null;
+    }
+    const settledAt = value.settledAt === undefined ? now : value.settledAt;
+    if (settledAt > now || now - settledAt > AI_RECOVERY_TTL_MS) return null;
+    return { key: value.key, settledAt };
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedRecovery(
+  userId: string,
+  operation: string,
+): PersistedAiRecoveryEntry[] {
+  if (!userId || typeof window === "undefined") return [];
+  const now = Date.now();
+  const storage = window.localStorage;
+  const all: PersistedAiRecoveryEntry[] = [];
+  const activeKeys: string[] = [];
+  const tombstoneKeys: string[] = [];
+  try {
+    const legacyKey = recoveryStorageKey(userId, operation);
+    const legacyRaw = storage.getItem(legacyKey);
+    const legacy = readAiRecoverySafely(() => legacyRaw, now);
+    all.push(...legacy);
+    if (legacyRaw !== null && legacy.length === 0) {
+      // A malformed or fully expired aggregate is no longer useful and can
+      // otherwise consume quota forever.
+      storage.removeItem(legacyKey);
+    }
+
+    const activePrefix = recoveryEntryStoragePrefix(userId, operation);
+    const tombstonePrefix = recoveryTombstoneStoragePrefix(userId, operation);
+    // Snapshot keys before mutating localStorage; removing a key while walking
+    // its live index skips the following key in some browser implementations.
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+      .filter((key): key is string => key !== null);
+    for (const key of keys) {
+      if (key.startsWith(activePrefix)) activeKeys.push(key);
+      else if (key.startsWith(tombstonePrefix)) tombstoneKeys.push(key);
+    }
+
+    const tombstones = new Map<string, RecoveryTombstone>();
+    for (const key of tombstoneKeys) {
+      const tombstone = readRecoveryTombstone(storage.getItem(key), now);
+      if (!tombstone) {
+        storage.removeItem(key);
+        continue;
+      }
+      tombstones.set(key, tombstone);
+    }
+
+    for (const key of activeKeys) {
+      const entries = readAiRecoverySafely(() => storage.getItem(key), now);
+      if (entries.length === 0) {
+        storage.removeItem(key);
+        continue;
+      }
+      let kept = false;
+      for (const entry of entries) {
+        const tombstoneKey = recoveryTombstoneStorageKey(
+          userId,
+          operation,
+          entry.digest,
+          entry.key,
+        );
+        const tombstone = tombstones.get(tombstoneKey);
+        if (tombstone && tombstone.key === entry.key) {
+          storage.removeItem(key);
+          continue;
+        }
+        all.push(entry);
+        kept = true;
+      }
+      if (!kept) storage.removeItem(key);
+    }
+
+    const merged = mergeAiRecoveryEntries([], all);
+    const keepDigests = new Set(merged.map((entry) => `${entry.digest}\u0000${entry.key}`));
+    // Bound physical active records, not just the logical restored array. This
+    // removes duplicate generations and stale tab spillover after a long-lived
+    // session, while tombstones fence any late old-generation write.
+    for (const key of activeKeys) {
+      const entries = readAiRecoverySafely(() => storage.getItem(key), now);
+      if (entries.length === 0 || entries.every((entry) => !keepDigests.has(`${entry.digest}\u0000${entry.key}`))) {
+        try { storage.removeItem(key); } catch { /* best effort GC */ }
+      }
+    }
+    const keptTombstones = tombstoneKeys
+      .map((key) => ({ key, tombstone: tombstones.get(key) }))
+      .filter((value): value is { key: string; tombstone: RecoveryTombstone } => value.tombstone !== undefined)
+      .sort((left, right) => right.tombstone.settledAt - left.tombstone.settledAt)
+      .slice(0, 2 * 64);
+    const keepTombstones = new Set(keptTombstones.map((value) => value.key));
+    for (const key of tombstoneKeys) {
+      if (!keepTombstones.has(key)) {
+        try { storage.removeItem(key); } catch { /* best effort GC */ }
+      }
+    }
+
+    // Migrate the legacy aggregate only after the per-digest records have been
+    // merged. A stale mount can therefore never erase a sibling's key.
+    if (legacyRaw !== null && merged.length > 0) {
+      migratePersistedRecovery(userId, operation, merged);
+    }
+    return merged;
+  } catch {
+    // Privacy mode and quota errors must not make the form unusable. Callers
+    // still fail closed for new allocations when persistence cannot be proven.
+    return mergeAiRecoveryEntries([], all);
   }
 }
 
@@ -375,6 +655,12 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
   heldCapabilityFor: (request: string) => unknown | null | undefined;
   ensure: (request: string) => Promise<void>;
   ensureAndGet: (request: string) => Promise<string>;
+  /** Allocate, persist, and hold one key as a single operation. */
+  acquireAndCommit: (
+    request: string,
+    model?: string,
+    capability?: unknown | null,
+  ) => Promise<string>;
   modelsWithHeld: (models: readonly AiScreenModel[]) => AiScreenModel[];
   commit: (request: string) => void;
   commitWithModel: (request: string, model: string, capability?: unknown) => void;
@@ -386,8 +672,10 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
   const requestDigestsRef = useRef<Map<string, string>>(new Map());
   const entriesRef = useRef<PersistedAiRecoveryEntry[]>([]);
   const ensurePromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const acquirePromisesRef = useRef<Map<string, Promise<string>>>(new Map());
   const generationRef = useRef(0);
   const [ready, setReady] = useState(false);
+  const [storageVersion, setStorageVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -396,15 +684,22 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     namesRef.current = newAiRequestNames();
     requestDigestsRef.current = new Map();
     ensurePromisesRef.current.clear();
+    acquirePromisesRef.current.clear();
     const entries = typeof window === "undefined" || !userId
       ? []
       : readAiRecoverySafely(() => window.localStorage.getItem(recoveryStorageKey(userId, operation)));
+    let currentEntries = entries;
     if (typeof window !== "undefined" && userId) {
-      // Rewrite after validation so malformed and expired records are garbage-collected.
-      writePersistedRecovery(userId, operation, entries);
+      // A mount-time cleanup must merge with what is in storage now. Writing
+      // the array captured before another tab's update would erase that tab's
+      // recovery key.
+      currentEntries = mergeAiRecoveryEntries(
+        readPersistedRecovery(userId, operation),
+        entries,
+      );
     }
-    entriesRef.current = entries;
-    restoredRef.current = new Map(entries.map((entry) => [entry.digest, entry]));
+    entriesRef.current = currentEntries;
+    restoredRef.current = new Map(currentEntries.map((entry) => [entry.digest, entry]));
     const next = readyAiRequestNames(newAiRequestNames(), randomUuid);
     namesRef.current = next;
     if (active) {
@@ -414,7 +709,130 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     return () => { active = false; };
   }, [operation, userId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !userId) return;
+    const key = recoveryStorageKey(userId, operation);
+    const prefix = recoveryEntryStoragePrefix(userId, operation);
+    const tombstones = recoveryTombstoneStoragePrefix(userId, operation);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== key
+        && !event.key?.startsWith(prefix)
+        && !event.key?.startsWith(tombstones)) return;
+      const next = readPersistedRecovery(userId, operation);
+      entriesRef.current = next;
+      restoredRef.current = new Map(next.map((entry) => [entry.digest, entry]));
+      // A request may already have been digested while another tab allocated
+      // its key. Pull that durable identity into this instance immediately;
+      // waiting for a future ensure call would leave the hidden form field and
+      // the submit guard on a different generation.
+      let current = namesRef.current;
+      let changed = false;
+      for (const [request, digest] of requestDigestsRef.current) {
+        const entry = restoredRef.current.get(digest);
+        if (!entry) continue;
+        const heldKey = current.held[request];
+        if (heldKey === entry.key) continue;
+        if (heldKey !== undefined) {
+          // Never replace an in-flight key with a late storage event. The
+          // durable tombstone/active pair already fences old generations; the
+          // request that was actually sent must retain its original key.
+          continue;
+        }
+        current = {
+          ...current,
+          held: { ...current.held, [request]: entry.key },
+          heldModels: { ...current.heldModels, [request]: entry.model },
+          heldCapabilities: {
+            ...current.heldCapabilities,
+            [request]: entry.capability,
+          },
+        };
+        changed = true;
+      }
+      if (changed) {
+        namesRef.current = current;
+        setNames(current);
+      }
+      setStorageVersion((version) => version + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [operation, userId]);
+
   useEffect(() => { namesRef.current = names; }, [names]);
+
+  const acquireAndCommit = useCallback(async (
+    request: string,
+    model = "",
+    capability: unknown | null = null,
+  ): Promise<string> => {
+    if (!ready) return "";
+    const pending = acquirePromisesRef.current.get(request);
+    if (pending) return pending;
+    const requestGeneration = generationRef.current;
+    const task = (async () => {
+      const digest = await digestAiRequestSignature(request);
+      if (generationRef.current !== requestGeneration) return "";
+      requestDigestsRef.current.set(request, digest);
+
+      const currentlyHeld = namesRef.current.held[request];
+      if (currentlyHeld) {
+        namesRef.current = { ...namesRef.current, sent: request };
+        setNames(namesRef.current);
+        return currentlyHeld;
+      }
+
+      const locks = typeof navigator !== "undefined"
+        ? (navigator as Navigator & { locks?: AiRecoveryLockManager }).locks
+        : undefined;
+  const entry = await acquirePersistedRecoveryEntry({
+        userId,
+        operation,
+        digest,
+        model,
+        capability,
+        createKey: randomUuid,
+        locks,
+  });
+      if (!entry || generationRef.current !== requestGeneration) return "";
+
+      const current = namesRef.current;
+      if (current.held[request]) {
+        namesRef.current = { ...current, sent: request };
+        setNames(namesRef.current);
+        return current.held[request];
+      }
+      // The durable entry is written before this state becomes visible. A
+      // response-loss retry in another tab can therefore always discover the
+      // same identity, even if this render is torn down immediately.
+      const next: AiRequestNames = {
+        ...current,
+        held: { ...current.held, [request]: entry.key },
+        heldModels: { ...current.heldModels, [request]: entry.model },
+        heldCapabilities: {
+          ...current.heldCapabilities,
+          [request]: entry.capability,
+        },
+        sent: request,
+      };
+      namesRef.current = next;
+      setNames(next);
+      entriesRef.current = mergeAiRecoveryEntries(
+        readPersistedRecovery(userId, operation),
+        [entry],
+      );
+      restoredRef.current.set(digest, entry);
+      return entry.key;
+    })();
+    acquirePromisesRef.current.set(request, task);
+    try {
+      return await task;
+    } finally {
+      if (acquirePromisesRef.current.get(request) === task) {
+        acquirePromisesRef.current.delete(request);
+      }
+    }
+  }, [operation, ready, userId]);
 
   const ensure = useCallback(async (request: string): Promise<void> => {
     if (!ready) return;
@@ -450,7 +868,10 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     const generation = generationRef.current;
     await ensure(request);
     if (generationRef.current !== generation || !ready) return "";
-    return aiRequestNameOf(namesRef.current, request);
+    // This compatibility helper only returns a durable/held identity. It no
+    // longer exposes the private `next` UUID because that value has not gone
+    // through the lock-and-persist allocation protocol yet.
+    return namesRef.current.held[request] ?? "";
   }, [ensure, ready]);
 
   const persist = useCallback((request: string, key: string, model: string, capability: unknown | null): void => {
@@ -464,8 +885,13 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
       capability,
       updatedAt: Date.now(),
     };
-    entriesRef.current = [...entriesRef.current.filter((item) => item.digest !== digest), entry];
-    writePersistedRecovery(userId, operation, entriesRef.current);
+    // Read at mutation time. The mount snapshot may be stale because another
+    // tab can commit a different request between renders.
+    entriesRef.current = mergeAiRecoveryEntries(
+      readPersistedRecovery(userId, operation),
+      [entry],
+    );
+    writePersistedRecoveryEntry(userId, operation, entry);
   }, [operation, userId]);
 
   const commit = useCallback((request: string, model = "", capability: unknown | null = null): void => {
@@ -487,17 +913,22 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     setNames(next);
     if (!keeps && sent) {
       const digest = requestDigestsRef.current.get(sent);
-      if (digest) {
-        entriesRef.current = entriesRef.current.filter((entry) => entry.digest !== digest);
-        writePersistedRecovery(userId, operation, entriesRef.current);
+      const settledKey = current.held[sent];
+      if (digest && settledKey) {
+        const latest = readPersistedRecovery(userId, operation);
+        entriesRef.current = removeAiRecoveryEntry(latest, digest);
+        removePersistedRecoveryEntry(userId, operation, digest, settledKey);
       }
     }
   }, [operation, userId]);
 
-  const restoredModelsKey = [...new Set(entriesRef.current.map((entry) => entry.model))].join("\u001f");
+  const restoredModelsKey = `${storageVersion}:${[...new Set(entriesRef.current.map((entry) => entry.model))].join("\u001f")}`;
   return useMemo(() => ({
     ready,
-    nameFor: (request: string) => aiRequestNameOf(namesRef.current, request),
+    // Do not expose the private next UUID in a form field. A key becomes
+    // visible only after acquireAndCommit has durably persisted its digest
+    // record (or an existing record has been restored).
+    nameFor: (request: string) => namesRef.current.held[request] ?? "",
     holds: (request: string) => holdsAiRequestName(namesRef.current, request),
     holdsModel: (model: string) => holdsAiRequestModel(namesRef.current, model),
     hasRestoredModel: (model: string) =>
@@ -508,6 +939,7 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     heldRequestModels: () => heldAiRequestModelMap(namesRef.current),
     heldRequestCapabilities: () => heldAiRequestCapabilityMap(namesRef.current),
     heldCapabilityFor: (request: string) => heldAiRequestCapability(namesRef.current, request),
+    acquireAndCommit,
     ensureAndGet,
     modelsWithHeld: (models: readonly AiScreenModel[]) =>
       modelsWithHeldRequests(models, [
@@ -519,7 +951,7 @@ export function useAiRequestNames(userId = "", operation = "unknown"): {
     commitWithModel: (request: string, model: string, capability?: unknown) =>
       commit(request, model, capability ?? null),
     settle,
-  }), [commit, ensure, ensureAndGet, ready, restoredModelsKey, settle]);
+  }), [acquireAndCommit, commit, ensure, ensureAndGet, ready, restoredModelsKey, settle]);
 }
 
 /**

@@ -5,6 +5,8 @@ import {
   countStorageUploadsByUserId,
   freezeStorageUploadForAccountDeletion,
   listStorageUploadInterventions,
+  listUnknownStorageUploadCompletions,
+  claimUnknownStorageUploadCompletion,
   recordStorageUploadCompletionFailure,
   resumeStorageUploadIntervention,
   setDbProvider,
@@ -12,7 +14,9 @@ import {
   enqueueUserStorageCleanups,
   StorageCleanupBusyError,
 } from "@beutl/db";
-import { abandonStaleStorageUploads } from "@beutl/api";
+import { abandonStaleStorageUploads, setR2BucketProvider } from "@beutl/api";
+import { reconcileUnknownStorageUploadCompletions } from "../../packages/api/src/storage-uploads";
+import { finishUpload } from "../../apps/web/src/lib/storage-upload-server";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const NOW = new Date("2026-08-28T00:00:00.000Z");
@@ -41,6 +45,8 @@ function addIntervention(memory: ReturnType<typeof createInMemoryPrisma>, overri
     completionLastError: "provider outcome is unknown",
     completionInterventionAt: new Date(NOW.getTime() - 1_000),
     completionRevision: 4,
+    unknownProbeNotBefore: null,
+    unknownProbeLeaseToken: null,
     cleanupLeaseUntil: null,
     cleanupLeaseToken: null,
     ...overrides,
@@ -56,6 +62,7 @@ describe("storage upload completion state machine", () => {
     vi.restoreAllMocks();
     memory = createInMemoryPrisma();
     setDbProvider(async () => memory.prisma as never);
+    setR2BucketProvider(() => ({ head: async () => null }));
   });
 
   it("keeps attempts one and two retryable and fences stale cleanup, then lists attempt three for intervention", async () => {
@@ -108,6 +115,176 @@ describe("storage upload completion state machine", () => {
 
     expect(memory.state.storageUploads.get(row.id)?.completionAttempts).toBe(3);
     await expect(listStorageUploadInterventions()).resolves.toHaveLength(1);
+  });
+
+  it("leaves an idle row untouched when local handle construction fails, then completes once on retry", async () => {
+    const row = addIntervention(memory, {
+      id: "local-handle-failure",
+      objectKey: "storage/local-handle-failure",
+      uploadId: "multipart-local-handle-failure",
+      completionState: "idle",
+      completionRevision: 0,
+      completionAttempts: 0,
+      completionInterventionAt: null,
+    });
+    let failConstruction = true;
+    let completeCalls = 0;
+    setR2BucketProvider(() => ({
+      createMultipartUpload: async () => ({ uploadId: "unused" }),
+      resumeMultipartUpload: () => {
+        if (failConstruction) throw new Error("local SDK handle failure");
+        return {
+          complete: async () => {
+            completeCalls++;
+            return { size: 10 };
+          },
+        };
+      },
+      head: async () => null,
+    }));
+    const updateMany = vi.spyOn(memory.prisma.storageUpload, "updateMany").mockImplementation(async () => {
+      throw new Error("database unavailable");
+    });
+
+    await expect(finishUpload({
+      userId: USER,
+      uploadId: row.id,
+      parts: [],
+    })).resolves.toMatchObject({ ok: false, reason: "uploadFailed" });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(memory.state.storageUploads.get(row.id)).toMatchObject({
+      completionState: "idle",
+      completionAttempts: 0,
+      completionRevision: 0,
+    });
+    updateMany.mockRestore();
+
+    failConstruction = false;
+    await expect(finishUpload({
+      userId: USER,
+      uploadId: row.id,
+      parts: [],
+    })).resolves.toMatchObject({ ok: true });
+    expect(completeCalls).toBe(1);
+  });
+
+  it("advances unknown recovery fairly beyond the first hundred and claims once", async () => {
+    for (let i = 0; i < 105; i++) {
+      addIntervention(memory, { id: `unknown-${i}`, completionState: "unknown", completionInterventionAt: new Date(NOW.getTime() + i), completionRevision: 0 });
+    }
+    const first = await listUnknownStorageUploadCompletions({ limit: 100, now: NOW });
+    expect(first).toHaveLength(100);
+    const claimed = await claimUnknownStorageUploadCompletion({ id: first[0].id, userId: USER, objectKey: first[0].objectKey, uploadId: first[0].uploadId, expectedRevision: first[0].completionRevision, expectedInterventionAt: first[0].completionInterventionAt!, now: NOW });
+    expect(claimed?.unknownProbeLeaseToken).toBeTruthy();
+    const second = await listUnknownStorageUploadCompletions({ limit: 100, now: new Date(NOW.getTime() + 5 * 60_000 + 1) });
+    expect(second.some((row) => row.id === "unknown-100")).toBe(true);
+    const [a, b] = await Promise.all([
+      claimUnknownStorageUploadCompletion({ id: second[0].id, userId: USER, objectKey: second[0].objectKey, uploadId: second[0].uploadId, expectedRevision: second[0].completionRevision, expectedInterventionAt: second[0].completionInterventionAt!, now: new Date(NOW.getTime() + 5 * 60_000 + 1) }),
+      claimUnknownStorageUploadCompletion({ id: second[0].id, userId: USER, objectKey: second[0].objectKey, uploadId: second[0].uploadId, expectedRevision: second[0].completionRevision, expectedInterventionAt: second[0].completionInterventionAt!, now: new Date(NOW.getTime() + 5 * 60_000 + 1) }),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("lets the 101st unknown completion through on the next tick and HEADs a claim once", async () => {
+    for (let i = 0; i < 101; i++) {
+      addIntervention(memory, {
+        id: `reconcile-${i}`,
+        objectKey: `storage/reconcile-${i}`,
+        completionState: "unknown",
+        completionInterventionAt: new Date(NOW.getTime() + i),
+        completionRevision: 0,
+      });
+    }
+    let headCalls = 0;
+    setR2BucketProvider(() => ({
+      head: async (key: string) => {
+        headCalls++;
+        return key.endsWith("100") ? { size: 12 } : null;
+      },
+    }));
+
+    const first = await reconcileUnknownStorageUploadCompletions(100);
+    expect(first.inspected).toBe(100);
+    expect(first.finalized).toBe(0);
+    expect(headCalls).toBe(100);
+
+    const second = await reconcileUnknownStorageUploadCompletions(100);
+    expect(second.inspected).toBe(1);
+    expect(second.finalized).toBe(1);
+    expect(headCalls).toBe(101);
+    expect(memory.state.files.size).toBe(1);
+  });
+
+  it("probes every never-seen tranche before retrying due absent rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      for (let i = 0; i < 205; i++) {
+        addIntervention(memory, {
+          id: `scheduler-${i}`,
+          objectKey: `storage/scheduler-${i}`,
+          completionState: "unknown",
+          completionInterventionAt: new Date(NOW.getTime() + i),
+          completionRevision: 0,
+        });
+      }
+      const inspectedKeys: string[] = [];
+      setR2BucketProvider(() => ({
+        head: async (key: string) => {
+          inspectedKeys.push(key);
+          return key === "storage/scheduler-204" ? { size: 12 } : null;
+        },
+      }));
+
+      const first = await reconcileUnknownStorageUploadCompletions(100);
+      expect(first).toMatchObject({ inspected: 100, finalized: 0 });
+      expect(inspectedKeys.slice(0, 100)).toEqual(
+        Array.from({ length: 100 }, (_, i) => `storage/scheduler-${i}`),
+      );
+
+      vi.setSystemTime(new Date(NOW.getTime() + 5 * 60_000 + 1));
+      const second = await reconcileUnknownStorageUploadCompletions(100);
+      expect(second).toMatchObject({ inspected: 100, finalized: 0 });
+      expect(inspectedKeys.slice(100, 200)).toEqual(
+        Array.from({ length: 100 }, (_, i) => `storage/scheduler-${i + 100}`),
+      );
+
+      vi.setSystemTime(new Date(NOW.getTime() + 10 * 60_000 + 2));
+      const third = await reconcileUnknownStorageUploadCompletions(100);
+      expect(third).toMatchObject({ inspected: 100, finalized: 1 });
+      expect(inspectedKeys.slice(200, 205)).toEqual(
+        Array.from({ length: 5 }, (_, i) => `storage/scheduler-${i + 200}`),
+      );
+      expect([...memory.state.files.values()]).toEqual([
+        expect.objectContaining({ objectKey: "storage/scheduler-204" }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never HEADs the same unknown claim twice under concurrent reconcilers", async () => {
+    addIntervention(memory, { id: "concurrent", completionState: "unknown", completionRevision: 0 });
+    let headCalls = 0;
+    setR2BucketProvider(() => ({
+      head: async () => {
+        headCalls++;
+        return { size: 7 };
+      },
+    }));
+    const [first, second] = await Promise.all([
+      reconcileUnknownStorageUploadCompletions(100),
+      reconcileUnknownStorageUploadCompletions(100),
+    ]);
+    expect(first.finalized + second.finalized).toBe(1);
+    expect(headCalls).toBe(1);
+  });
+
+  it("does not hide actionable interventions behind unknown rows", async () => {
+    for (let i = 0; i < 100; i++) addIntervention(memory, { id: `u-${i}`, completionState: "unknown", completionInterventionAt: new Date(NOW.getTime() + i) });
+    addIntervention(memory, { id: "actionable", completionState: "intervention", completionInterventionAt: new Date(NOW.getTime() - 1) });
+    const rows = await listStorageUploadInterventions({ limit: 100 });
+    expect(rows.some((row) => row.id === "actionable")).toBe(true);
   });
 
   it("keeps an operator resume fenced until the next completion claim", async () => {

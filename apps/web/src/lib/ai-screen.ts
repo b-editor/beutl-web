@@ -210,7 +210,6 @@ export type PersistedAiRecoveryEntry = {
   updatedAt: number;
 };
 
-const MAX_AI_RECOVERY_ENTRIES = 64;
 const MAX_AI_RECOVERY_KEY_LENGTH = 255;
 const MAX_AI_RECOVERY_CAPABILITY_BYTES = 16 * 1024;
 const MAX_AI_RECOVERY_CAPABILITY_DEPTH = 6;
@@ -262,9 +261,12 @@ export function restoreAiRecoveryEntries(
         newestByDigest.set(entry.digest, entry);
       }
     }
+    // Valid active records are unresolved paid identities. Never evict one at
+    // restore time merely to satisfy a logical limit; doing so would make a
+    // response-loss retry indistinguishable from a new charge. Capacity is
+    // enforced by the allocator, which fails closed for a new digest.
     return [...newestByDigest.values()]
-      .sort((left, right) => right.updatedAt - left.updatedAt)
-      .slice(0, MAX_AI_RECOVERY_ENTRIES);
+      .sort((left, right) => right.updatedAt - left.updatedAt);
   } catch {
     return [];
   }
@@ -403,9 +405,67 @@ function normalizeRecoveryCapability(value: unknown): unknown | null {
 export function serializeAiRecoveryEntries(
   entries: readonly PersistedAiRecoveryEntry[],
 ): string {
-  const bounded = [...entries].sort((left, right) => right.updatedAt - left.updatedAt)
-    .slice(0, MAX_AI_RECOVERY_ENTRIES);
+  // Keep all active entries. This serializer is also used for the legacy
+  // aggregate migration, and truncating it could discard an unresolved paid
+  // key. New allocations are refused once the active capacity is full.
+  const bounded = [...entries].sort((left, right) => right.updatedAt - left.updatedAt);
   return JSON.stringify({ version: 1, entries: bounded });
+}
+
+/** Merge recovery records by their stable request digest without dropping keys
+ * written by another tab. The newest timestamp wins for a duplicate digest. */
+export function mergeAiRecoveryEntries(
+  current: readonly PersistedAiRecoveryEntry[],
+  incoming: readonly PersistedAiRecoveryEntry[],
+): PersistedAiRecoveryEntry[] {
+  const byDigest = new Map<string, PersistedAiRecoveryEntry>();
+  for (const entry of [...current, ...incoming]) {
+    const previous = byDigest.get(entry.digest);
+    if (!previous || entry.updatedAt >= previous.updatedAt) {
+      byDigest.set(entry.digest, entry);
+    }
+  }
+  return [...byDigest.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+/** Remove exactly one recovery identity from a current snapshot. */
+export function removeAiRecoveryEntry(
+  entries: readonly PersistedAiRecoveryEntry[],
+  digest: string,
+): PersistedAiRecoveryEntry[] {
+  return entries.filter((entry) => entry.digest !== digest);
+}
+
+export function serializeAiRecoveryTombstone(
+  key: string,
+  settledAt = Date.now(),
+): string {
+  return JSON.stringify({ version: 1, key, settledAt });
+}
+
+export function isAiRecoveryTombstoned(
+  serialized: string | null,
+  key: string,
+): boolean {
+  if (!serialized) return false;
+  try {
+    const value = JSON.parse(serialized) as {
+      version?: unknown;
+      key?: unknown;
+      settledAt?: unknown;
+    };
+    return value.version === 1
+      && value.key === key
+      && typeof value.key === "string"
+      && value.key.length > 0
+      && value.key.length <= MAX_AI_RECOVERY_KEY_LENGTH
+      && (value.settledAt === undefined || (
+        typeof value.settledAt === "number" && Number.isFinite(value.settledAt)
+      ));
+  } catch {
+    return false;
+  }
 }
 
 function field(kind: string, value: string): string {

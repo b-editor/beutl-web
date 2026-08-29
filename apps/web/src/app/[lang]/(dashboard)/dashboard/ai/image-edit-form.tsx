@@ -322,9 +322,12 @@ export function ImageEditForm({
             // 断られ続ける——その名前は残るので、送り直しても抜け出せない。
             await fileFingerprint(prepared, MAX_AI_IMAGE_UPLOAD_BYTES),
           ]);
-          const idempotencyKey = await names.ensureAndGet(preparedSignature);
+          const idempotencyKey = await names.acquireAndCommit(
+            preparedSignature,
+            selectedModel,
+            null,
+          );
           if (!idempotencyKey) return;
-          names.commitWithModel(preparedSignature, selectedModel, null);
           setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
           next.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
           dispatch(next);
@@ -337,9 +340,12 @@ export function ImageEditForm({
       return;
     }
 
-    const idempotencyKey = await names.ensureAndGet(signature);
+    const idempotencyKey = await names.acquireAndCommit(
+      signature,
+      selectedModel,
+      null,
+    );
     if (!idempotencyKey) return;
-    names.commitWithModel(signature, selectedModel, null);
     formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
     rememberSentModel(selectedModel);
     dispatch(formData);

@@ -2,10 +2,12 @@ import {
   claimStorageMultipartCleanup,
   claimStorageUploadForAbandon,
   countFilesByUserId,
+  claimUnknownStorageUploadCompletion,
   createFile,
   deleteClaimedStorageUpload,
   finalizeStorageMultipartCleanup,
   findStorageUploadByIdAndUserId,
+  freezeStorageUploadForAccountDeletion,
   listUnknownStorageUploadCompletions,
   listDueStorageMultipartCleanups,
   markStorageUploadCompleted,
@@ -135,19 +137,29 @@ export async function reconcileStorageMultipartCleanups(
 export async function reconcileUnknownStorageUploadCompletions(
   limit: number = MAX_PER_RUN,
 ): Promise<{ inspected: number; finalized: number; errors: number }> {
-  const uploads = await listUnknownStorageUploadCompletions({ limit });
+  const uploads = await listUnknownStorageUploadCompletions({ limit, now: new Date() });
   let finalized = 0;
   let errors = 0;
 
   for (const listed of uploads) {
+    const candidate = await claimUnknownStorageUploadCompletion({
+      id: listed.id,
+      userId: listed.userId,
+      objectKey: listed.objectKey,
+      uploadId: listed.uploadId,
+      expectedRevision: listed.completionRevision,
+      expectedInterventionAt: listed.completionInterventionAt!,
+      now: new Date(),
+    }).catch(() => null);
+    if (!candidate) continue;
     let object: { size?: number } | null;
     try {
       const head = getR2Bucket().head;
       if (!head) throw new Error("The configured R2 bucket cannot inspect objects");
-      object = await head(listed.objectKey);
+      object = await head(candidate.objectKey);
     } catch (error) {
       errors++;
-      console.error("Failed to reconcile an unknown storage completion", listed.id, error);
+      console.error("Failed to reconcile an unknown storage completion", candidate.id, error);
       continue;
     }
     if (object === null) continue;
@@ -157,15 +169,15 @@ export async function reconcileUnknownStorageUploadCompletions(
       object.size < 0
     ) {
       errors++;
-      console.error("Unknown storage completion has an invalid object size", listed.id);
+      console.error("Unknown storage completion has an invalid object size", candidate.id);
       continue;
     }
 
     try {
       const outcome = await startRetryableTransaction(async (prisma) => {
         const current = await findStorageUploadByIdAndUserId({
-          id: listed.id,
-          userId: listed.userId,
+          id: candidate.id,
+          userId: candidate.userId,
           prisma,
         });
         if (
@@ -173,11 +185,11 @@ export async function reconcileUnknownStorageUploadCompletions(
           current.completedFileId !== null ||
           current.abandonedAt !== null ||
           current.completionState !== "unknown" ||
-          current.completionRevision !== listed.completionRevision ||
-          current.objectKey !== listed.objectKey ||
-          current.uploadId !== listed.uploadId ||
+          current.completionRevision !== candidate.completionRevision ||
+          current.objectKey !== candidate.objectKey ||
+          current.uploadId !== candidate.uploadId ||
           current.completionInterventionAt?.getTime() !==
-            listed.completionInterventionAt?.getTime()
+            candidate.completionInterventionAt?.getTime()
         ) {
           return "changed" as const;
         }
@@ -217,7 +229,7 @@ export async function reconcileUnknownStorageUploadCompletions(
       if (outcome === "finalized") finalized++;
     } catch (error) {
       errors++;
-      console.error("Failed to persist an unknown storage completion receipt", listed.id, error);
+      console.error("Failed to persist an unknown storage completion receipt", candidate.id, error);
     }
   }
 
@@ -247,6 +259,46 @@ export async function abandonStaleStorageUploads(
   let abandoned = 0;
   let failed = unknownRecovery.errors;
   for (const listed of stale) {
+    // Dedicated artifacts have no multipart handle. Once their creation lease
+    // expires, freeze the exact generation and preserve its delayed object
+    // outbox. Never feed uploadId=null into the multipart pre-create path.
+    if (listed.reservationKind === "dedicated") {
+      if (listed.completedFileId || listed.abandonedAt) continue;
+      const frozen = await freezeStorageUploadForAccountDeletion({
+        id: listed.id,
+        userId: listed.userId,
+        now,
+        expected: {
+          reservationKind: "dedicated",
+          createdAt: listed.createdAt,
+          objectKey: listed.objectKey,
+          uploadId: listed.uploadId,
+          name: listed.name,
+          mimeType: listed.mimeType,
+          size: listed.size,
+          partSize: listed.partSize,
+          abandonedAt: null,
+          startState: listed.startState,
+          creationLeaseUntil: listed.creationLeaseUntil,
+          creationLeaseToken: listed.creationLeaseToken,
+          completionState: listed.completionState,
+          completionLeaseUntil: listed.completionLeaseUntil,
+          completionLeaseToken: listed.completionLeaseToken,
+          completionRevision: listed.completionRevision,
+          completionRetryNotBefore: listed.completionRetryNotBefore,
+          unknownProbeNotBefore: listed.unknownProbeNotBefore,
+          unknownProbeLeaseToken: listed.unknownProbeLeaseToken,
+          cleanupLeaseUntil: listed.cleanupLeaseUntil,
+          cleanupLeaseToken: listed.cleanupLeaseToken,
+        },
+      }).catch((error) => {
+        console.error("Failed to freeze an expired dedicated storage write", listed.id, error);
+        return false;
+      });
+      if (frozen) abandoned++;
+      else failed++;
+      continue;
+    }
     // 一覧を引いてから順番が回ってくるまでの間に、そのアップロードが完了して
     // いることがある。行を取れなければ、それは完了したか、既に誰かが取ったか。
     const cleanupLeaseToken = crypto.randomUUID();
@@ -277,6 +329,7 @@ export async function abandonStaleStorageUploads(
           completionLeaseToken: listed.completionLeaseToken,
           completionRevision: listed.completionRevision,
           completionRetryNotBefore: listed.completionRetryNotBefore,
+          reservationKind: listed.reservationKind,
           cleanupLeaseUntil: listed.cleanupLeaseUntil,
           cleanupLeaseToken: listed.cleanupLeaseToken,
         },
@@ -394,6 +447,7 @@ type ClaimedStorageUpload = NonNullable<
 
 function storageUploadGenerationOf(upload: ClaimedStorageUpload) {
   return {
+    reservationKind: upload.reservationKind,
     createdAt: upload.createdAt,
     objectKey: upload.objectKey,
     uploadId: upload.uploadId,
@@ -409,6 +463,8 @@ function storageUploadGenerationOf(upload: ClaimedStorageUpload) {
     completionLeaseToken: upload.completionLeaseToken,
     completionRevision: upload.completionRevision,
     completionRetryNotBefore: upload.completionRetryNotBefore,
+    unknownProbeNotBefore: upload.unknownProbeNotBefore,
+    unknownProbeLeaseToken: upload.unknownProbeLeaseToken,
   };
 }
 
@@ -444,6 +500,7 @@ function claimedUploadExpectation(upload: ClaimedStorageUpload) {
     throw new Error(`Storage upload ${upload.id} is not claimed for cleanup`);
   }
   return {
+    reservationKind: upload.reservationKind,
     createdAt: upload.createdAt,
     objectKey: upload.objectKey,
     uploadId: upload.uploadId,

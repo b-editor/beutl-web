@@ -143,7 +143,7 @@ export function TranslateForm({
       return;
     }
 
-    const idempotencyKey = await names.ensureAndGet(signature);
+    const idempotencyKey = await names.acquireAndCommit(signature, model, null);
     if (!idempotencyKey) return;
 
     const glossaryEntries = parseGlossary(glossary);
@@ -183,8 +183,6 @@ export function TranslateForm({
       ...(model ? { model } : {}),
     });
 
-    if (!idempotencyKey) return;
-    names.commitWithModel(signature, model, null);
     setIsPending(true);
     setMessage(null);
     setArriving([]);

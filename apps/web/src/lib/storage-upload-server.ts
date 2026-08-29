@@ -7,7 +7,6 @@ import {
 import {
   claimStorageUploadForAbandon,
   claimStorageUploadCompletion,
-  recordStorageUploadCompletionFailure,
   recordStorageUploadCompletionUnknown,
   recordStorageUploadCompletionLateFailure,
   renewStorageUploadCompletion,
@@ -422,6 +421,20 @@ export async function finishUpload({
     // only case in which a fresh provider completion is authorized.
   }
 
+  // resumeMultipartUpload only constructs a local handle; it does not invoke
+  // the provider. Construct it before publishing the durable completion fence
+  // so a synchronous SDK/configuration failure cannot strand a `completing`
+  // row that the scheduler would later (and incorrectly) classify as an
+  // unknown remote outcome.
+  let multipart: ReturnType<
+    NonNullable<ReturnType<typeof bucket>["resumeMultipartUpload"]>
+  >;
+  try {
+    multipart = bucket().resumeMultipartUpload(upload.objectKey, upload.uploadId);
+  } catch {
+    return { ok: false, reason: "uploadFailed" };
+  }
+
   // Publish the completion fence before touching R2. A competing completion
   // or stale cleanup may observe a provider-side transient failure, but cannot
   // claim this generation while this lease is unexpired.
@@ -467,19 +480,6 @@ export async function finishUpload({
     return { ok: false, reason: "uploadFailed" };
   }
 
-  const completionUploadId = completing.uploadId;
-  if (!completionUploadId) return { ok: false, reason: "uploadFailed" };
-
-  let multipart: ReturnType<NonNullable<ReturnType<typeof bucket>["resumeMultipartUpload"]>>;
-  try {
-    multipart = bucket().resumeMultipartUpload(
-      completing.objectKey,
-      completionUploadId,
-    );
-  } catch (error) {
-    await recordStorageUploadCompletionFailure({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: error instanceof Error ? error.message : String(error), now: new Date() }).catch(() => undefined);
-    return { ok: false, reason: "uploadFailed" };
-  }
   let object: { size: number };
   const providerCompletion = Promise.resolve().then(() => multipart.complete(parts)).then(
     (value) => ({ kind: "completed" as const, value }),
@@ -500,7 +500,7 @@ export async function finishUpload({
     if (outcome.kind === "deadline") {
       if (timer) clearTimeout(timer);
       deadlineTimer = undefined;
-      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Remote multipart completion exceeded deadline", now: new Date() }).catch(() => undefined);
+      await persistUnknownBounded(completing, userId, completionLeaseToken, "Remote multipart completion exceeded deadline");
       // Keep a continuation when the runtime survives the request deadline.
       // It can only settle the same generation after reloading its durable
       // unknown state; it never issues another provider complete call.
@@ -528,14 +528,32 @@ export async function finishUpload({
       now.getTime() + STORAGE_UPLOAD_COMPLETION_LEASE_MILLISECONDS,
     );
     try {
-      const renewed = await renewStorageUploadCompletion({
+      // Renewal is best-effort bookkeeping. A wedged database must not extend
+      // the request past the provider deadline: race it against the same
+      // deadline used for multipart.complete().
+      const renewal = renewStorageUploadCompletion({
         id: completing.id,
         userId,
         now,
         leaseUntil,
         leaseToken: completionLeaseToken,
         expected: storageUploadGenerationOf(completing),
-      });
+      }).then((renewed) => ({ kind: "renewed" as const, renewed }), (error) => ({ kind: "renewalFailed" as const, error }));
+      const renewalOutcome = await Promise.race([renewal, deadline]);
+      if (renewalOutcome.kind === "deadline") {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+        await persistUnknownBounded(completing, userId, completionLeaseToken, "Remote multipart completion exceeded deadline");
+        void providerCompletion.then(async (late) => {
+          const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch(() => null);
+          if (!current || current.completionState !== "unknown") return;
+          if (late.kind !== "completed") return;
+          await finalizeUpload(current, userId, BigInt(late.value.size)).catch((error) => console.error("Failed to finalize a late storage completion", completing.id, error));
+        }, () => undefined);
+        return { ok: false, reason: "uploadFailed" };
+      }
+      if (renewalOutcome.kind === "renewalFailed") throw renewalOutcome.error;
+      const renewed = renewalOutcome.renewed;
       if (!renewed) {
         if (deadlineTimer) clearTimeout(deadlineTimer);
         void providerCompletion.then(() => undefined, () => undefined);
@@ -790,6 +808,29 @@ type JoinedObjectState =
   | { kind: "absent" }
   | { kind: "unknown" };
 
+async function persistUnknownBounded(
+  upload: TrackedUpload,
+  userId: string,
+  leaseToken: string,
+  error: string,
+): Promise<void> {
+  const persistence = recordStorageUploadCompletionUnknown({
+    id: upload.id,
+    userId,
+    leaseToken,
+    expected: storageUploadGenerationOf(upload),
+    error,
+    now: new Date(),
+  }).catch(() => undefined);
+  await Promise.race([
+    persistence,
+    new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+  ]);
+  // Keep observing a late DB completion; its CAS generation fence prevents it
+  // from overwriting a newer settled/claimed state.
+  void persistence;
+}
+
 // R2 object visibility is strongly consistent after a successful multipart
 // complete, but a failed HEAD transport is not an "absent" observation.
 async function joinedObjectState(objectKey: string): Promise<JoinedObjectState> {
@@ -939,6 +980,7 @@ function sameStorageUploadGeneration(
   return current.id === expected.id &&
     current.userId === expected.userId &&
     current.createdAt.getTime() === expected.createdAt.getTime() &&
+    current.reservationKind === expected.reservationKind &&
     current.objectKey === expected.objectKey &&
     current.uploadId === expected.uploadId &&
     current.name === expected.name &&
@@ -951,11 +993,14 @@ function sameStorageUploadGeneration(
     current.creationLeaseToken === expected.creationLeaseToken &&
     current.completionRevision === expected.completionRevision &&
     current.completionRetryNotBefore?.getTime() ===
-      expected.completionRetryNotBefore?.getTime();
+      expected.completionRetryNotBefore?.getTime() &&
+    current.unknownProbeNotBefore?.getTime() === expected.unknownProbeNotBefore?.getTime() &&
+    current.unknownProbeLeaseToken === expected.unknownProbeLeaseToken;
 }
 
 function storageUploadGenerationOf(upload: TrackedUpload) {
   return {
+    reservationKind: upload.reservationKind,
     createdAt: upload.createdAt,
     objectKey: upload.objectKey,
     uploadId: upload.uploadId,
@@ -971,6 +1016,8 @@ function storageUploadGenerationOf(upload: TrackedUpload) {
     completionLeaseToken: upload.completionLeaseToken,
     completionRevision: upload.completionRevision,
     completionRetryNotBefore: upload.completionRetryNotBefore,
+    unknownProbeNotBefore: upload.unknownProbeNotBefore,
+    unknownProbeLeaseToken: upload.unknownProbeLeaseToken,
   };
 }
 

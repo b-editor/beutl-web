@@ -66,6 +66,11 @@ describe("AI storage object cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      file: { findFirst: async () => null },
+      storageUpload: {
+        findFirst: async () => null,
+        deleteMany: async () => ({ count: 0 }),
+      },
       storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findFirst: async () => row,
@@ -139,6 +144,11 @@ describe("AI storage object cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      file: { findFirst: async () => null },
+      storageUpload: {
+        findFirst: async () => null,
+        deleteMany: async () => ({ count: 0 }),
+      },
       storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findFirst: async ({ where }: { where: { leaseToken?: string } }) =>
@@ -169,6 +179,11 @@ describe("AI storage object cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      file: { findFirst: async () => null },
+      storageUpload: {
+        findFirst: async () => null,
+        deleteMany: async () => ({ count: 0 }),
+      },
       storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         findMany: async ({ where }: { where: { notBefore: { lte: Date } } }) =>
@@ -229,6 +244,11 @@ describe("AI storage object cleanup", () => {
     const db = {
       $transaction: async <T>(callback: (tx: typeof db) => Promise<T>) =>
         await callback(db),
+      file: { findFirst: async () => null },
+      storageUpload: {
+        findFirst: async () => null,
+        deleteMany: async () => ({ count: 0 }),
+      },
       storageMultipartCleanup: { findFirst: async () => null },
       aiStorageCleanup: {
         updateMany: async ({

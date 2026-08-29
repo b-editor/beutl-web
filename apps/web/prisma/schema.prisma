@@ -202,6 +202,10 @@ model StorageUpload {
   id              String   @id @default(uuid())
   userId          String
   objectKey       String
+  // `multipart` rows represent resumable uploads. `dedicated` rows are the
+  // durable pre-put quota reservation used by developer artifacts; both kinds
+  // participate in the same byte/count aggregate.
+  reservationKind String   @default("multipart")
   // Null until the remote multipart create has committed. The row itself is
   // the quota reservation and durable start intent.
   uploadId        String?
@@ -231,6 +235,8 @@ model StorageUpload {
   completionLastError String?
   completionInterventionAt DateTime?
   completionRetryNotBefore DateTime?
+  unknownProbeNotBefore DateTime?
+  unknownProbeLeaseToken String?
   completionRevision Int      @default(0)
   cleanupLeaseUntil DateTime?
   cleanupLeaseToken String?
@@ -240,9 +246,11 @@ model StorageUpload {
   @@index([userId])
   @@index([createdAt])
   @@index([startState, creationLeaseUntil])
+  @@index([userId, reservationKind, completedFileId])
   @@index([completionState, completionLeaseUntil])
   @@index([completionState, completionInterventionAt])
   @@index([completionState, completionRetryNotBefore])
+  @@index([completionState, unknownProbeNotBefore])
   @@index([abandonedAt, cleanupLeaseUntil])
 }
 

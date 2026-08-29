@@ -29,7 +29,7 @@ import {
   Trash2,
   WandSparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import {
   deleteJobAction,
   listJobsAction,
@@ -51,6 +51,13 @@ import {
   downloadTextFile,
   type AiAccess,
 } from "./shared";
+import {
+  getOrCreateStoredRetryAttempt,
+  removeStoredRetryAttempt,
+  retryJobFingerprint,
+  updateStoredRetryAttempt,
+  type StoredAiRetryAttempt,
+} from "@/lib/ai-retry-attempt";
 
 type Job = {
   id: string;
@@ -61,8 +68,11 @@ type Job = {
   fileName: string | null;
   contentType: string | null;
   inputParams: unknown;
+  model?: string | null;
   canRetry?: boolean;
 };
+
+type RetryAttempt = StoredAiRetryAttempt;
 
 // Kinds whose result is a stored JSON document rather than a media file.
 const SUBTITLE_KINDS = new Set(["stt", "translation"]);
@@ -129,9 +139,11 @@ function StatusBadge({ lang, status }: { lang: string; status: string }) {
 export function JobHistory({
   lang,
   access,
+  userId,
 }: {
   lang: string;
   access: AiAccess;
+  userId: string;
 }) {
   const { t } = useTranslation(lang);
   const [jobs, setJobs] = useState<Job[] | null>(null);
@@ -150,6 +162,62 @@ export function JobHistory({
     () => new Set(),
   );
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState<RetryAttempt | null>(null);
+  const [retryStorageReady, setRetryStorageReady] = useState(false);
+  const retryPersistedRef = useRef<RetryAttempt | null>(null);
+
+  useEffect(() => setRetryStorageReady(true), []);
+
+  useEffect(() => {
+    if (!retryStorageReady || typeof window === "undefined") return;
+    const previous = retryPersistedRef.current;
+    retryPersistedRef.current = retryAttempt;
+    const locks = (navigator as Navigator & {
+      locks?: Parameters<typeof updateStoredRetryAttempt>[0]["locks"];
+    }).locks;
+    if (retryAttempt === null) {
+      if (previous) {
+        void removeStoredRetryAttempt({
+          storage: window.localStorage,
+          locks,
+          userId,
+          jobId: previous.jobId,
+          expectedKey: previous.idempotencyKey,
+          expectedFingerprint: previous.expectedFingerprint,
+        });
+      }
+      return;
+    }
+    // Every mutation is an exact-key CAS under the per-job lock. A stale K1
+    // effect therefore cannot overwrite or delete a newer K2 generation.
+    void updateStoredRetryAttempt({
+      storage: window.localStorage,
+      locks,
+      userId,
+      attempt: retryAttempt,
+      expectedKey: previous?.idempotencyKey,
+    });
+  }, [retryAttempt, retryStorageReady, userId]);
+
+  useEffect(() => {
+    if (!retryAttempt || jobs === null) return;
+    const job = jobs.find((candidate) => candidate.id === retryAttempt.jobId);
+    if (job) {
+      void retryJobFingerprint({
+        kind: job.kind,
+        model: job.model ?? null,
+        inputParams: job.inputParams,
+      }).then((currentFingerprint) => {
+        if (retryAttempt.expectedFingerprint !== currentFingerprint &&
+            !retryAttempt.expectedPayload) {
+          // Discovery proved that this key no longer belongs to the same job/body
+          // (or the job was deleted). Do not let a stale confirmation rerun it.
+          setRetryAttempt(null);
+          setJobsMessage(t("api-errors:aiRequestChanged"));
+        }
+      });
+    }
+  }, [jobs, retryAttempt, t]);
   // A retry reserves and charges again, so it carries the key that makes one
   // confirmation land on one job however many times it reaches the server. The
   // key belongs to the confirmation, not to the click.
@@ -285,15 +353,66 @@ export function JobHistory({
     });
   }
 
-  function confirmRetry(jobId: string, idempotencyKey: string) {
+  function confirmRetry(attempt: RetryAttempt) {
+    setRetryAttempt((current) =>
+      current?.jobId === attempt.jobId
+        ? { ...current, state: "submitting" }
+        : attempt,
+    );
     startRetry(async () => {
-      const result = await retryJobAction(jobId, idempotencyKey);
-      if (result.success) {
-        setJobsMessage(null);
-        await loadJobs();
-      } else {
-        setJobsMessage(result.message ?? null);
+      try {
+        const result = await retryJobAction(
+          attempt.jobId,
+          attempt.idempotencyKey,
+          attempt.expectedFingerprint || attempt.expectedPayload,
+        );
+        if (result.success || !result.keepIdempotencyKey) {
+          setRetryAttempt(null);
+        } else {
+          setRetryAttempt((current) =>
+            current?.jobId === attempt.jobId
+              ? { ...current, state: "ambiguous" }
+              : current,
+          );
+        }
+        setJobsMessage(result.success ? null : (result.message ?? null));
+        if (result.success) await loadJobs();
+      } catch (error) {
+        console.error("AI retry response was lost", error);
+        setRetryAttempt((current) =>
+          current?.jobId === attempt.jobId
+            ? { ...current, state: "ambiguous" }
+            : current,
+        );
+        setJobsMessage(t("dashboard:ai.jobsLoadFailed"));
       }
+    });
+  }
+
+  async function beginRetry(job: Job) {
+    const expectedFingerprint = await retryJobFingerprint({
+      kind: job.kind,
+      model: job.model ?? null,
+      inputParams: job.inputParams,
+    });
+    const current = retryAttempt?.jobId === job.id ? retryAttempt : null;
+    const attempt = current ?? await getOrCreateStoredRetryAttempt({
+      storage: window.localStorage,
+      locks: navigator.locks,
+      userId,
+      jobId: job.id,
+      expectedFingerprint,
+      createKey: randomUuid,
+    });
+    if (!attempt) {
+      setJobsMessage(t("dashboard:ai.jobsLoadFailed"));
+      return;
+    }
+    setRetryAttempt(attempt);
+    setConfirmAction({
+      type: "retry",
+      jobId: attempt.jobId,
+      idempotencyKey: attempt.idempotencyKey,
     });
   }
 
@@ -331,14 +450,15 @@ export function JobHistory({
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
             <AlertDialogAction
+              disabled={isRetrying}
               onClick={() => {
                 if (confirmAction?.type === "delete") {
                   confirmDelete(confirmAction.jobId);
                 } else if (confirmAction?.type === "retry") {
-                  confirmRetry(
-                    confirmAction.jobId,
-                    confirmAction.idempotencyKey,
-                  );
+                  const attempt = retryAttempt;
+                  if (attempt?.jobId === confirmAction.jobId) {
+                    confirmRetry(attempt);
+                  }
                 }
                 setConfirmAction(null);
               }}
@@ -530,13 +650,7 @@ export function JobHistory({
                           aria-label={t("dashboard:ai.retry")}
                           title={t("dashboard:ai.retry")}
                           disabled={isRetrying}
-                          onClick={() =>
-                            setConfirmAction({
-                              type: "retry",
-                              jobId: job.id,
-                              idempotencyKey: randomUuid(),
-                            })
-                          }
+                          onClick={() => void beginRetry(job)}
                         >
                           <RotateCcw className="h-4 w-4" />
                         </Button>
