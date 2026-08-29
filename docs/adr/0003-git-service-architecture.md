@@ -810,6 +810,32 @@ cron がそれにあたる。だから当てるのが先。
 居ない行だった (元の名前と `operation` は同じ回のマイグレーションで入ったので、
 それ以前に積まれた行には元の名前が無い)。順序の安全は都度確かめる。
 
+### 既に Git の口を開けている版から上げるとき
+
+**`release` の前に、git-server 側の手順を通すこと。** `release` の最後で生き返りの
+見張りが始まるが、その瞬間に**古い Worker が処理中の消去は残っている**。控えを
+書かない古いコードがそれを完了させると、見張りの開始より後の消去なのに控えが無い、
+という行き違いが残る。**その後に取った控えから戻すと、生き返っても数に出ない。**
+
+流し切ったかどうかは、**この側からは見えない** (口を閉じるのは git-server 側の
+Caddy と画面の側で、確かめるのも向こうのホスト)。見えないものを済んだことには
+しないので、**利用者が既にいるなら明示させる**。
+
+1. 画面と API から、リポジトリの削除と資格情報の失効を止める
+2. `git-server/scripts/quiesce-canary.sh` で流し切ったことを確かめる (300 秒)
+3. `BEUTL_GIT_DRAINED=1 pnpm run release`
+4. 口を開け直す
+
+`git:start-resurrection-watch` は、`GitAccount` か `GitCredential` に行があって
+`BEUTL_GIT_DRAINED=1` が無ければ**見張りを始めずに止まる**。**初回の配備では
+黙って通る** (どちらも空なので、消去を呼ぶ利用者がまだいない)。
+
+止めるのは、開始時刻が一度入ると動かせないため (前へも後ろへも動かさない作りなので、
+間違って始めたものはそのまま残る)。手順の全文は
+`git-server/docs/operations.md`「Git の口を既に公開している版から上げるとき」。
+
+### `release` が踏む順序
+
 順序は `pnpm run release` に固定してある。
 
 1. 当てる前に食い違いを見る。相手のデータベースに入っているのにこの分岐に無い
@@ -833,7 +859,7 @@ stdout だけを見ると、見ているつもりで何も見ていないこと�
 
 ## この分岐を配備するときの前提
 
-この分岐は 18 本のマイグレーションを持ち込む。
+この分岐は 21 本のマイグレーションを持ち込む。
 
 ```
 20260816173000_add_git_account
@@ -854,6 +880,9 @@ stdout だけを見ると、見ているつもりで何も見ていないこと�
 20260824040000_git_repository_operation_kind
 20260824050000_git_repository_operation_delete
 20260824060000_drop_legacy_rename_reservations
+20260826000000_git_resurrection_tombstones
+20260826120000_git_resurrection_confirmation
+20260827000000_git_resurrection_fencing
 ```
 
 **このうち `20260824060000` だけが行を消す。** 消すのは、元の名前を控えていない
@@ -885,9 +914,44 @@ main に入るか、そのクラスタで整理されるのを待つことにな
 環境でも未適用の環境でも同じ結果になる。ただし途中の版を適用した環境があると、
 Prisma が持つ checksum と食い違う。
 
-適用済みの環境は無いことを確認済み: この分岐は push されておらず、development
-クラスタでも `prisma migrate status` が全て「未適用」と報告する。以後この分岐で
-マイグレーションを書き換えた場合は、配備前に同じ確認をすること。
+`20260827000000_git_resurrection_fencing` も一度書き直している (表を作り直す形から
+足すだけの形へ)。**こちらは前の版を当てた環境があると checksum で止まる**。前の版は
+`GitRepositoryDeletion` を落として新しい形の表を同じ名前に付け替えていたので、
+是正には表と索引に加えて**主キー制約の付け替え**が要る (付け替えでは制約名が
+変わらないため `GitRepositoryDeletionNew_pkey` のまま残る)。手順は
+`git-server/docs/operations.md`「前の版を当てた環境の直し方」。
+
+**「適用済みの環境は無い」とはまだ言えない。** 探した範囲では証跡が出ていない、
+というところまで。
+
+確かめたこと:
+
+- development クラスタの `_prisma_migrations` に `20260827000000` の行が無い
+- この分岐は GitHub の remote に存在せず、中間の版を含む branch も tag も無い
+- `origin/main` (f3bd252) に v3/v4 のコードが入っていない
+- GitHub Actions にこのコードを配った記録が無い。Deployments API にも 2026 年 8 月の
+  記録が無い
+- 手元の wrangler のログに配備成功の記録が無い
+- git-server 側に残っている `registered` の値は 2026-08-24 の 2 件だけで、v3/v4 より前
+
+確かめられていないこと:
+
+- **production と staging の `_prisma_migrations`** (接続 URL を持っていない)
+- Cloudflare の deployment / version の履歴 (wrangler の認証が期限切れ)
+- 別のホストからの手動配備
+- VPS 側の外部監査ログ (SSH 経路に届かない)
+
+**push していないことは、手動で配っていないことの証明にはならない。** 配備の前に、
+production と staging の両方で次が 0 行であることを確かめること。
+
+```sql
+SELECT migration_name, checksum, finished_at, rolled_back_at
+FROM _prisma_migrations
+WHERE migration_name = '20260827000000_git_resurrection_fencing';
+```
+
+行があれば、`git-server/docs/operations.md` の点検と是正 SQL を先に通す。以後この
+分岐でマイグレーションを書き換えた場合は、配備前に同じ確認をやり直すこと。
 
 ```
 pnpm run migrate:status
