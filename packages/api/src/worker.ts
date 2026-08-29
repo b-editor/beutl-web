@@ -242,6 +242,7 @@ export default {
         confirmed,
         dropped,
         repaired,
+        migrated,
       } = await reconcileGitResurrectionTombstones({ drain: true });
       // **決着させただけの回も黙らない。** 復元が無い間の cron はここしか動かない
       // ので、出さないと「何もしていない」のか「動いていない」のか分からない。
@@ -251,12 +252,24 @@ export default {
         pruned > 0 ||
         confirmed > 0 ||
         dropped > 0 ||
-        repaired > 0
+        repaired > 0 ||
+        migrated > 0
       ) {
         console.log(
           `git resurrection: confirmed ${confirmed}, dropped ${dropped}, ` +
             `repaired ${repaired}, checked ${checked}, revoked ${revoked}, ` +
-            `deleted ${deleted}, failed ${failed}, pruned ${pruned}`,
+            `deleted ${deleted}, failed ${failed}, pruned ${pruned}, ` +
+            `migrated ${migrated}`,
+        );
+      }
+      // **移した件数は別に出す。** 入れ替え前の表に行が残っていたということは、
+      // migration を当てている最中に古い Worker が書いたということ。証拠が
+      // 出なかった理由を後から辿れるように、通常の一行とは別に残す。
+      if (migrated > 0) {
+        console.error(
+          `git resurrection: moved ${migrated} deletion tombstones out of the ` +
+            "pre-swap table (they were written while the migration was being " +
+            "applied and were not being reconciled until now)",
         );
       }
       // 消えていなかったので控えを外した = 利用者の消去が通っていなかった。

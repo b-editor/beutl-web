@@ -235,17 +235,18 @@ export async function reconcileGitResurrectionTombstones({
   const generation = await currentGitRestoreGeneration();
 
   // **入れ替え前の表に残った控えを先に移す。** migration を当てている最中に
-  // 古い Worker が書いた行がここに残る。移すまでは証拠も出せない。
-  // **移せなかったことを握り潰さない。** 残った行はどの数にも出ないので、
-  // 黙って続けると「片付いている」と読める。証拠の側も legacyPending を数えるので
-  // 署名は止まるが、そこまで気付かないのは遅い。
+  // 古い Worker が書いた行がここに残る。移すまでは消し直しの対象にならない。
+  // **移せなかったことを握り潰さない。** 証拠の側は legacyPending としてこれを
+  // 数えるので署名は止まる (fail-closed) が、止まった理由がここに出ていないと、
+  // 「証拠が出ない」とだけ分かって原因に辿り着けない。
   let migrated = 0;
   try {
     migrated = await drainLegacyGitRepositoryDeletions();
   } catch (error) {
     console.error(
-      "could not drain the legacy deletion tombstones; they are not counted " +
-        "anywhere until they move, and the reopen proof will refuse to sign",
+      "could not drain the legacy deletion tombstones; they stay in the " +
+        "pre-swap table, where nothing reconciles them, and the reopen proof " +
+        "counts them as legacyPending and refuses to sign until they move",
       error,
     );
     throw error;
