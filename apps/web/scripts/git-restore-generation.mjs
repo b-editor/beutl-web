@@ -1,6 +1,11 @@
 // 復元の世代を登録する。**復元の直後に 1 回だけ**実行する。
 //
-//   pnpm run git:restore-generation --nonce '<復元時に出力された値>'
+//   pnpm run git:restore-generation --nonce '<復元時に出力された値>' \
+//     --backup-at '<戻した控えの時点>' \
+//     --db-digest '<DB の指紋>' --data-digest '<tar の指紋>'
+//
+// **4 つとも要る。** restore.sh が終わりに出す案内へ、そのまま貼れる形で 4 つとも
+// 入っている。1 つでも欠けると登録できない (証拠も出ない)。
 //
 // これを登録してからでないと、定期実行が墓標に世代を書けない。書けていない状態で
 // 証拠を作ろうとしても、全件が「その世代では未確認」になるので通らない。
@@ -18,7 +23,9 @@ async function main() {
   const stampRaw = stampIndex === -1 ? null : args[stampIndex + 1];
   if (!nonce) {
     console.error(
-      "usage: --nonce <復元時に出力された値> --backup-at <戻した控えの時点>",
+      "usage: --nonce <復元時に出力された値> --backup-at <戻した控えの時点>\n" +
+        "       --db-digest <64 桁の 16 進> --data-digest <64 桁の 16 進>\n" +
+        "       4 つとも要ります (restore.sh の案内にそのまま貼れる形で出ます)。",
     );
     process.exitCode = 2;
     return;
