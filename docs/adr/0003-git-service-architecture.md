@@ -822,17 +822,41 @@ Caddy と画面の側で、確かめるのも向こうのホスト)。見えな�
 しないので、**利用者が既にいるなら明示させる**。
 
 1. 画面と API から、リポジトリの削除と資格情報の失効を止める
-2. `git-server/scripts/quiesce-canary.sh` で流し切ったことを確かめる (300 秒)
-3. `BEUTL_GIT_DRAINED=1 pnpm run release`
+2. `git-server/scripts/quiesce-canary.sh` で流し切ったことを確かめる (600 秒)
+3. その出力が示す行で配る — `BEUTL_GIT_DRAINED=<窓の終わりの時刻> pnpm run release`
 4. 口を開け直す
+5. もう一度 `quiesce-canary.sh` を実行し、遅れて着地した削除が無いか見る
 
-`git:start-resurrection-watch` は、`GitAccount` か `GitCredential` に行があって
-`BEUTL_GIT_DRAINED=1` が無ければ**見張りを始めずに止まる**。**初回の配備では
-黙って通る** (どちらも空なので、消去を呼ぶ利用者がまだいない)。
+`release` は**最初の段でこれを見る** (`--check-only`)。断るなら migration を
+当てる前・Worker を配る前に断りたいため。
+
+判定は「今いる利用者」ではなく「**この配備より前からいた利用者**」。今の数を見ると、
+下の smoke test が `GET /api/v3/git/account` で作る `GitAccount` まで数えてしまい、
+**初回配備が自分の副作用で止まる**。境界は release が自分の開始時刻を渡し、単独で
+実行されたときは控えの表ができた時点 (`_prisma_migrations`) を使う。
+
+`BEUTL_GIT_DRAINED` は**時刻**を取る。固定値だと shell に残った古い値が別の配備を
+そのまま通してしまうので、2 時間で失効する。
 
 止めるのは、開始時刻が一度入ると動かせないため (前へも後ろへも動かさない作りなので、
 間違って始めたものはそのまま残る)。手順の全文は
 `git-server/docs/operations.md`「Git の口を既に公開している版から上げるとき」。
+
+#### 既に始まっている見張り
+
+**このゲートは、既に始まっている見張りを直せない。** `startedAt` が入っていれば
+`git:start-resurrection-watch` は何もせずに戻る (前へも後ろへも動かさない)。流し
+切らずに始めてしまった環境があったとしても、ここで気付くことも直すこともできない。
+
+そのため、**始まっている場合は必ずその時刻を出す**。配備の記録と突き合わせて、
+その時点で古い Worker が残っていなかったかを人が確かめること。
+
+```sql
+SELECT "startedAt", "prunedBefore" FROM "GitResurrectionWatch" WHERE "id" = 'singleton';
+```
+
+production と staging で、この時刻と Cloudflare の配備履歴を突き合わせる。開始が
+配り終える前なら、その間の消去には控えが無い。
 
 ### `release` が踏む順序
 

@@ -88,6 +88,35 @@ const DRIFT = "migration history and the migrations table from your database are
 // **通してよい唯一の非 0**。まだ当てていないものがあるのは、これから当てるのだから当然。
 const PENDING = "have not yet been applied";
 
+// **この配備が始まった時刻。** 見張りのゲートが「この配備より前から利用者が
+// いたか」を見るのに使う。今いる数を見ると、下の smoke test が作った行まで
+// 数えてしまい、初回配備が自分の副作用で止まる。
+process.env.BEUTL_GIT_DEPLOY_STARTED_AT = new Date().toISOString();
+
+// **止めるなら、何かを変える前に止める。**
+//
+// 既に Git を提供している版から上げる場合、見張りを始める前に古い Worker の
+// 消去を流し切っておく必要がある (流し切らないと、控えの無い消去が見張りの開始
+// より後に紛れ込む)。この判定は最後の段でもう一度通るが、**そこで断ると
+// migration も Worker の配備も済んだ後**になる。先に見る。
+step("見張りを始められるかを見ています");
+if (dryRun) {
+  console.log("    (dry-run) pnpm run git:start-resurrection-watch --check-only");
+} else {
+  const check = spawnSync(
+    "pnpm",
+    ["run", "git:start-resurrection-watch", "--check-only"],
+    { cwd: appRoot, encoding: "utf8", stdio: "inherit" },
+  );
+  if (check.status !== 0) {
+    console.error(
+      "\nerror: 見張りを始められないので、何も変えずに止めます。\n" +
+        "       上の案内のとおりに流し切ってから、やり直してください。",
+    );
+    process.exit(1);
+  }
+}
+
 step("当てる前に食い違いを見ています");
 if (!dryRun) {
   const before = migrateStatus();
