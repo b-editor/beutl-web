@@ -37,6 +37,7 @@ import {
   translateSegments,
   translationCharacterCount,
   validateAiInputImage,
+  parseReplayableAiJobInput,
   type TranslationStyle,
   validateTranscriptionResult,
   type AiInputImageMimeType,
@@ -416,23 +417,7 @@ function canRetryJob(job: {
 }): boolean {
   if (job.status !== "failed" && job.status !== "succeeded") return false;
   if (job.kind !== "image" && job.kind !== "video") return false;
-  if (job.inputParams === null || typeof job.inputParams !== "object") {
-    return false;
-  }
-  const input = job.inputParams as Record<string, unknown>;
-  if (typeof input.prompt !== "string") return false;
-  if (job.kind === "image") {
-    if (input.reference || input.references) return false;
-    // retryJobAction refuses a generation that recorded no shape, so offering
-    // the button for one only produces an error the user cannot act on.
-    return (
-      typeof input.aspectRatio === "string" || typeof input.size === "string"
-    );
-  }
-  if (job.kind === "video" && (input.firstFrame || input.lastFrame)) {
-    return false;
-  }
-  return true;
+  return parseReplayableAiJobInput(job.kind, job.inputParams).success;
 }
 
 // The cue timings the translate screen already holds, keyed by segment id.
@@ -1423,10 +1408,11 @@ export async function retryJobAction(
   if (job.status !== "failed" && job.status !== "succeeded") {
     return { success: false, message: t("api-errors:aiJobIsActive") };
   }
-  const input = job.inputParams as Record<string, unknown> | null;
-  if (!input || typeof input.prompt !== "string") {
+  const replayInput = parseReplayableAiJobInput(job.kind, job.inputParams);
+  if (!replayInput.success) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
+  const input = replayInput.data;
   // A retry confirmation owns an immutable snapshot of the original job. If
   // the row was edited between opening the dialog and submitting it, refuse
   // before reservation rather than silently retrying a different model/body.
@@ -1465,33 +1451,70 @@ export async function retryJobAction(
     // Both spellings have existed in persisted jobs. Neither can be replayed
     // because the uploaded bytes were never retained; accepting either would
     // charge for a different, reference-free generation.
-    if (input.reference || input.references) {
+    if (input.reference !== undefined || input.references !== undefined) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     // Required rather than defaulted: a generation always recorded its shape, so
     // a job without one is not a generation and must not be rerun as one. Jobs
     // predating aspect ratios carry the fixed size they were asked for.
     const aspectRatio =
-      typeof input.aspectRatio === "string"
-        ? (input.aspectRatio as AiImageAspectRatio)
+      input.aspectRatio !== undefined
+        ? typeof input.aspectRatio === "string"
+          ? (input.aspectRatio as AiImageAspectRatio)
+          : null
         : typeof input.size === "string"
           ? aspectRatioOfLegacyImageSize(input.size)
           : null;
     if (aspectRatio === null || !AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    // Whatever the run recorded, rerun with the same. A background it no longer
-    // recognizes is left off, which is what "auto" always meant.
-    const background =
-      typeof input.background === "string" &&
-      AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground) &&
-      input.background !== "auto"
-        ? (input.background as AiImageBackground)
-        : undefined;
-    const seed = isAiSeed(input.seed) ? input.seed : undefined;
+    // A missing background is the legacy "auto" request. A value that was
+    // persisted but is no longer recognized cannot be silently changed to
+    // auto: that would charge for a different request body.
+    let background: AiImageBackground | undefined;
+    if (input.background !== undefined) {
+      if (
+        typeof input.background !== "string" ||
+        !AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground)
+      ) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      background =
+        input.background === "auto"
+          ? undefined
+          : (input.background as AiImageBackground);
+    }
+    let seed: number | undefined;
+    if (input.seed !== undefined) {
+      if (!isAiSeed(input.seed)) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      seed = input.seed;
+    }
     const retryModel = catalog.resolve("image.generate", job.model);
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
+    }
+    // Capabilities may have narrowed since the original run. Validate the
+    // exact replay before reserving usage so a now-unsupported ratio,
+    // background, or seed never reaches the paid provider/refund path.
+    if (
+      unsupportedImageRequestReason(
+        (await loadAiImageModelCapabilities([retryModel.modelId])).get(
+          retryModel.modelId,
+        ),
+        {
+          aspectRatio,
+          background: background ?? "auto",
+          ...(seed === undefined ? {} : { seed }),
+          referenceImages: 0,
+        },
+      )
+    ) {
+      return {
+        success: false,
+        message: t("api-errors:aiModelDoesNotSupportRequest"),
+      };
     }
     const identity = await toAiRequestIdentity({
       idempotencyKey,
@@ -1570,25 +1593,37 @@ export async function retryJobAction(
   if (job.kind === "video") {
     // The frames are not stored, so this would submit a different video and
     // charge for it. The button is hidden for these, but the rule belongs here.
-    if (input.firstFrame || input.lastFrame) {
+    if (input.firstFrame !== undefined || input.lastFrame !== undefined) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const durationSeconds = Number(input.durationSeconds ?? 4);
-    const resolution = String(input.resolution ?? "720p") as AiVideoResolution;
+    const durationSeconds = input.durationSeconds === undefined
+      ? 4
+      : input.durationSeconds;
+    const resolution = input.resolution === undefined
+      ? "720p"
+      : input.resolution;
     // Jobs created before these existed carry neither; the defaults reproduce
     // what they were actually submitted with.
-    const retryAspectRatio = String(
-      input.aspectRatio ?? "16:9",
-    ) as AiVideoAspectRatio;
-    const retryGenerateAudio = input.generateAudio !== false;
-    const retrySeed = isAiSeed(input.seed) ? input.seed : undefined;
-    if (!isAiVideoDurationSeconds(durationSeconds)) {
+    const retryAspectRatio = input.aspectRatio === undefined
+      ? "16:9"
+      : input.aspectRatio;
+    const retryGenerateAudio = input.generateAudio === undefined
+      ? true
+      : input.generateAudio;
+    let retrySeed: number | undefined;
+    if (input.seed !== undefined) {
+      if (!isAiSeed(input.seed)) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      retrySeed = input.seed;
+    }
+    if (typeof durationSeconds !== "number" || !isAiVideoDurationSeconds(durationSeconds)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    if (!AI_VIDEO_RESOLUTIONS.includes(resolution)) {
+    if (typeof resolution !== "string" || !AI_VIDEO_RESOLUTIONS.includes(resolution as AiVideoResolution)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    if (!AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio)) {
+    if (typeof retryAspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio as AiVideoAspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     const retryModel = catalog.resolve("video.generate", job.model);
@@ -1597,12 +1632,17 @@ export async function retryJobAction(
     }
     // What the model accepts can have changed since the original run, and a
     // rerun that the provider now refuses would be charged for first.
+    if (typeof retryGenerateAudio !== "boolean") {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const validatedResolution = resolution as AiVideoResolution;
+    const validatedAspectRatio = retryAspectRatio as AiVideoAspectRatio;
     const retryUnsupported = unsupportedVideoRequestReason(
       (await loadAiVideoModelCapabilities()).get(retryModel.modelId),
       {
-        resolution,
+        resolution: validatedResolution,
         durationSeconds,
-        aspectRatio: retryAspectRatio,
+        aspectRatio: validatedAspectRatio,
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
       },
@@ -1620,8 +1660,8 @@ export async function retryJobAction(
         model: retryModel.modelId,
         prompt: input.prompt,
         durationSeconds,
-        resolution,
-        aspectRatio: retryAspectRatio,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
       },
@@ -1639,8 +1679,8 @@ export async function retryJobAction(
       inputParams: {
         prompt: input.prompt,
         durationSeconds,
-        resolution,
-        aspectRatio: retryAspectRatio,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
       },
@@ -1666,8 +1706,8 @@ export async function retryJobAction(
         jobId: retried.id,
         prompt: input.prompt,
         durationSeconds,
-        resolution,
-        aspectRatio: retryAspectRatio,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),

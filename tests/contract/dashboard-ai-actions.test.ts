@@ -51,6 +51,10 @@ import {
   upsertAiOperationModel,
 } from "@beutl/db";
 
+const loadAiImageModelCapabilities = vi.hoisted(() =>
+  vi.fn(async () => new Map()),
+);
+
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
   return {
@@ -61,6 +65,7 @@ vi.mock("@beutl/api", async (importOriginal) => {
     listAiJobsByUserId: vi.fn(),
     translateSegments: vi.fn(),
     readAiJsonResult: vi.fn(),
+    loadAiImageModelCapabilities,
   };
 });
 
@@ -85,6 +90,8 @@ describe("dashboard AI actions", () => {
       put: vi.fn(async () => ({})),
       delete: vi.fn(async () => undefined),
     }));
+    loadAiImageModelCapabilities.mockReset();
+    loadAiImageModelCapabilities.mockResolvedValue(new Map());
   });
 
   // Every submission carries the key that makes a resubmission land on the job
@@ -423,7 +430,33 @@ describe("dashboard AI actions", () => {
       id: "job-1",
       kind: "image",
       status: "succeeded",
+      canRetry: true,
     });
+  });
+
+  it("hides retry for invalid or unknown persisted fields", async () => {
+    const memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+    const base = {
+      userId: "user-1", provider: "openrouter", providerJobId: null,
+      idempotencyKeyHash: null, requestFingerprint: null, callbackNonceHash: null,
+      status: "failed", usageUnits: 20, error: null, resultFileId: null,
+      providerPollLeaseExpiresAt: null, finalizationToken: null,
+      finalizationLeaseExpiresAt: null, deletedAt: null,
+      createdAt: new Date("2026-08-16T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-16T00:00:00.000Z"),
+    } as const;
+    memory.state.aiJobs.set("invalid", {
+      ...base, id: "invalid", kind: "image",
+      inputParams: { prompt: "a cat", aspectRatio: "future", size: "1024x1024" },
+    });
+    memory.state.aiJobs.set("unknown", {
+      ...base, id: "unknown", kind: "video",
+      inputParams: { prompt: "a cat", durationSeconds: 4, unexpected: true },
+    });
+    const result = await listJobsAction();
+    expect(result.jobs?.find((job) => job.id === "invalid")).toMatchObject({ canRetry: false });
+    expect(result.jobs?.find((job) => job.id === "unknown")).toMatchObject({ canRetry: false });
   });
 
   describe("rerunning a job", () => {
@@ -444,6 +477,18 @@ describe("dashboard AI actions", () => {
         displayName: null,
         sortOrder: 1,
         enabled: dearIsEnabled,
+        updatedBy: "admin-1",
+      });
+    }
+
+    async function registerVideoModel() {
+      await upsertAiOperationModel({
+        operation: "video.generate",
+        modelId: "dear/video",
+        priceUnits: 8,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
         updatedBy: "admin-1",
       });
     }
@@ -494,6 +539,46 @@ describe("dashboard AI actions", () => {
       );
     });
 
+    it("validates without trimming the persisted retry prompt", async () => {
+      await registerImageModels(true);
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: { prompt: "  a cat  ", aspectRatio: "1:1" },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "reserved",
+        job: { id: "job-spaced", status: "running", resultFileId: null, resultFile: null },
+      });
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        mediaType: "image/png",
+      });
+      vi.mocked(saveAiImage).mockResolvedValue({
+        id: "file-spaced",
+        name: "spaced.png",
+        mimeType: "image/png",
+      });
+
+      const result = await retryJobAction(job.id, crypto.randomUUID());
+
+      expect(result.success).toBe(true);
+      expect(createReservedAiJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputParams: expect.objectContaining({ prompt: "  a cat  " }),
+        }),
+      );
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: "  a cat  " }),
+      );
+    });
+
     it("recovers a succeeded existing retry reservation instead of reporting provider error", async () => {
       await registerImageModels(true);
       const job = await seedFailedImageJob();
@@ -539,6 +624,147 @@ describe("dashboard AI actions", () => {
       expect(generateImage).not.toHaveBeenCalled();
     });
 
+    it("refuses a retry whose current image capability no longer supports its request", async () => {
+      await registerImageModels(true);
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: {
+          prompt: "a cat",
+          aspectRatio: "1:1",
+          background: "transparent",
+          seed: 7,
+        },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+      loadAiImageModelCapabilities.mockResolvedValue(new Map([
+        ["dear/model", {
+          modelId: "dear/model",
+          aspectRatios: ["2:3"],
+          backgrounds: ["auto", "opaque"],
+          seed: false,
+          inputReferences: false,
+          maxReferenceImages: 0,
+          resolution: false,
+        }],
+      ]));
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000015",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiModelDoesNotSupportRequest",
+      });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        request: { aspectRatio: "1:1" },
+        capabilities: {
+          aspectRatios: ["2:3"],
+          backgrounds: ["auto", "opaque", "transparent"],
+          seed: true,
+        },
+      },
+      {
+        request: { aspectRatio: "1:1", background: "transparent" },
+        capabilities: {
+          aspectRatios: ["1:1"],
+          backgrounds: ["auto", "opaque"],
+          seed: true,
+        },
+      },
+      {
+        request: { aspectRatio: "1:1", seed: 7 },
+        capabilities: {
+          aspectRatios: ["1:1"],
+          backgrounds: ["auto", "opaque", "transparent"],
+          seed: false,
+        },
+      },
+    ] as const)(
+      "rejects a retry when its current image capability is withdrawn (%j)",
+      async ({ request, capabilities }) => {
+        await registerImageModels(true);
+        const job = await createAiJob({
+          userId: "user-1",
+          kind: "image",
+          provider: "openrouter",
+          status: "failed",
+          inputParams: { prompt: "a cat", ...request },
+          usageUnits: 44,
+          model: "dear/model",
+        });
+        loadAiImageModelCapabilities.mockResolvedValue(new Map([
+          ["dear/model", {
+            modelId: "dear/model",
+            ...capabilities,
+            inputReferences: false,
+            maxReferenceImages: 0,
+            resolution: false,
+          }],
+        ]));
+
+        const result = await retryJobAction(job.id, crypto.randomUUID());
+
+        expect(result).toMatchObject({
+          success: false,
+          message: "api-errors:aiModelDoesNotSupportRequest",
+        });
+        expect(createReservedAiJob).not.toHaveBeenCalled();
+        expect(generateImage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not normalize an unknown persisted background into a paid auto retry", async () => {
+      await registerImageModels(true);
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: { prompt: "a cat", aspectRatio: "1:1", background: "future-mode" },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000016",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:invalidRequestBody",
+      });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it.each(["not-a-seed", -1, 1.5])(
+      "rejects an invalid persisted image seed (%s) before reserve/provider",
+      async (seed) => {
+        await registerImageModels(true);
+        const job = await createAiJob({
+          userId: "user-1", kind: "image", provider: "openrouter", status: "failed",
+          inputParams: { prompt: "a cat", aspectRatio: "1:1", seed },
+          usageUnits: 44, model: "dear/model",
+        });
+        const result = await retryJobAction(job.id, crypto.randomUUID());
+        expect(result).toMatchObject({ success: false, message: "api-errors:invalidRequestBody" });
+        expect(createReservedAiJob).not.toHaveBeenCalled();
+        expect(generateImage).not.toHaveBeenCalled();
+      },
+    );
+
     it.each([
       { reference: { filename: "legacy.png" } },
       {
@@ -572,6 +798,109 @@ describe("dashboard AI actions", () => {
       expect(result.message).toContain("invalidRequestBody");
       expect(createReservedAiJob).not.toHaveBeenCalled();
       expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["reference", null],
+      ["reference", false],
+      ["reference", ""],
+      ["references", null],
+      ["references", false],
+      ["references", ""],
+      ["references", 0],
+    ] as const)(
+      "rejects a present malformed image reference field (%s=%j) before reservation",
+      async (field, value) => {
+        await registerImageModels(true);
+        const inputParams: Record<string, unknown> = {
+          prompt: "a cat",
+          aspectRatio: "1:1",
+          [field]: value,
+        };
+        const job = await createAiJob({
+          userId: "user-1",
+          kind: "image",
+          provider: "openrouter",
+          status: "failed",
+          inputParams,
+          usageUnits: 44,
+          model: "dear/model",
+        });
+
+        const result = await retryJobAction(job.id, crypto.randomUUID());
+
+        expect(result).toMatchObject({
+          success: false,
+          message: "api-errors:invalidRequestBody",
+        });
+        expect(createReservedAiJob).not.toHaveBeenCalled();
+        expect(generateImage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not fall back to legacy size when aspectRatio is present but malformed", async () => {
+      await registerImageModels(true);
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "image",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: {
+          prompt: "a cat",
+          aspectRatio: null,
+          size: "1024x1024",
+        },
+        usageUnits: 44,
+        model: "dear/model",
+      });
+
+      const result = await retryJobAction(job.id, crypto.randomUUID());
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:invalidRequestBody",
+      });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it.each(["not-a-seed", -1, 1.5])(
+      "rejects an invalid persisted video seed (%s) before reserve/provider",
+      async (seed) => {
+        await registerVideoModel();
+        const job = await createAiJob({
+          userId: "user-1", kind: "video", provider: "openrouter", status: "failed",
+          inputParams: {
+            prompt: "a cat", durationSeconds: 4, resolution: "720p", aspectRatio: "16:9", seed,
+          },
+          usageUnits: 32, model: "dear/video",
+        });
+        const result = await retryJobAction(job.id, crypto.randomUUID());
+        expect(result).toMatchObject({ success: false, message: "api-errors:invalidRequestBody" });
+        expect(createReservedAiJob).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["durationSeconds", "4"], ["durationSeconds", 4.5], ["durationSeconds", null],
+      ["resolution", 123], ["resolution", null], ["resolution", "bad"],
+      ["aspectRatio", 123], ["aspectRatio", null], ["aspectRatio", "bad"],
+      ["generateAudio", "false"], ["generateAudio", 0], ["generateAudio", null],
+      ["firstFrame", null], ["firstFrame", false], ["firstFrame", {}],
+      ["lastFrame", null], ["lastFrame", false], ["lastFrame", {}],
+    ] as const)("rejects present malformed video field %s before reservation", async (field, value) => {
+      await registerVideoModel();
+      const inputParams: Record<string, unknown> = {
+        prompt: "a cat", durationSeconds: 4, resolution: "720p", aspectRatio: "16:9",
+      };
+      inputParams[field] = value;
+      const job = await createAiJob({
+        userId: "user-1", kind: "video", provider: "openrouter", status: "failed",
+        inputParams, usageUnits: 32, model: "dear/video",
+      });
+      const result = await retryJobAction(job.id, crypto.randomUUID());
+      expect(result).toMatchObject({ success: false, message: "api-errors:invalidRequestBody" });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
     });
 
     it("rejects a retry when the confirmed job payload changed before reservation", async () => {

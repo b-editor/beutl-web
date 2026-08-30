@@ -63,7 +63,7 @@ const cursorPayloadSchema = z
   .strict();
 
 // Jobs created before aspect ratios existed carry `size`; new ones carry
-// `aspectRatio`. Both have to render in the history, and both can be rerun.
+// `aspectRatio`. Exactly one is required so a retry has an unambiguous shape.
 const imageRetryInputSchema = z
   .object({
     prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
@@ -80,7 +80,8 @@ const imageRetryInputSchema = z
       .optional(),
   })
   .refine(
-    (value) => value.size !== undefined || value.aspectRatio !== undefined,
+    (value) =>
+      (value.size !== undefined) !== (value.aspectRatio !== undefined),
   );
 
 // A frame-conditioned video records which images it started from. The bytes are
@@ -93,9 +94,7 @@ const videoFrameHistorySchema = z.object({
 
 const videoHistoryInputSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z
-    .number()
-    .refine(isAiVideoDurationSeconds),
+  durationSeconds: z.number().refine(isAiVideoDurationSeconds),
   resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
   aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).optional(),
   generateAudio: z.boolean().optional(),
@@ -186,6 +185,53 @@ function decodeCursor(value: string): AiJobHistoryCursor | null {
   }
 }
 
+/** Validate the exact persisted input shape that the dashboard retry action can replay. */
+export function parseReplayableAiJobInput(
+  kind: string,
+  input: unknown,
+): { success: true; data: { prompt: string; [key: string]: unknown } } | { success: false } {
+  if (kind === "image") {
+    const parsed = imageRetryInputSchema.safeParse(input);
+    const keys = input && typeof input === "object" ? Object.keys(input) : [];
+    const allowed = new Set(["prompt", "size", "aspectRatio", "background", "seed", "reference", "references"]);
+    if (
+      !parsed.success ||
+      keys.some((key) => !allowed.has(key)) ||
+      keys.includes("reference") ||
+      keys.includes("references")
+    ) {
+      return { success: false };
+    }
+    return {
+      success: true,
+      data: input as { prompt: string; [key: string]: unknown },
+    };
+  }
+  if (kind === "video") {
+    const record = input && typeof input === "object" ? { ...(input as Record<string, unknown>) } : input;
+    if (record && typeof record === "object") {
+      if ((record as Record<string, unknown>).durationSeconds === undefined) (record as Record<string, unknown>).durationSeconds = 4;
+      if ((record as Record<string, unknown>).resolution === undefined) (record as Record<string, unknown>).resolution = "720p";
+    }
+    const parsed = videoHistoryInputSchema.safeParse(record);
+    const keys = input && typeof input === "object" ? Object.keys(input) : [];
+    const allowed = new Set(["prompt", "durationSeconds", "resolution", "aspectRatio", "generateAudio", "seed", "firstFrame", "lastFrame"]);
+    if (
+      !parsed.success ||
+      keys.some((key) => !allowed.has(key)) ||
+      keys.includes("firstFrame") ||
+      keys.includes("lastFrame")
+    ) {
+      return { success: false };
+    }
+    return {
+      success: true,
+      data: input as { prompt: string; [key: string]: unknown },
+    };
+  }
+  return { success: false };
+}
+
 function canRetry(job: AiJobRecord): boolean {
   if (
     job.status !== "succeeded" &&
@@ -193,20 +239,7 @@ function canRetry(job: AiJobRecord): boolean {
   ) {
     return false;
   }
-  if (job.kind === "image") {
-    const parsed = imageRetryInputSchema.safeParse(job.inputParams);
-    // Same rule as a frame-conditioned video: the reference image was not kept,
-    // so rerunning would produce something else and charge for it.
-    return parsed.success && !parsed.data.reference && !parsed.data.references;
-  }
-  if (job.kind === "video") {
-    const parsed = videoHistoryInputSchema.safeParse(job.inputParams);
-    // Rerunning a frame-conditioned video would silently drop the frames it was
-    // conditioned on and produce something else at full price. Until the frames
-    // themselves are retained, only text-to-video can be repeated.
-    return parsed.success && !parsed.data.firstFrame && !parsed.data.lastFrame;
-  }
-  return false;
+  return parseReplayableAiJobInput(job.kind, job.inputParams).success;
 }
 
 function sanitizedInputParams(job: AiJobRecord): Record<string, unknown> | null {

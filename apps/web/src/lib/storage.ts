@@ -9,6 +9,7 @@ import {
   deleteFileWithStorageCleanup,
   registerAiStorageCleanup,
   recordDedicatedStorageWriteUnknown,
+  recordDedicatedStorageWriteUnknownByLeaseToken,
   recordLateDedicatedStorageWriteResult,
   releaseDedicatedStorageReservation,
   renewDedicatedStorageReservation,
@@ -17,6 +18,43 @@ import {
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const DEDICATED_STORAGE_WRITE_DEADLINE_MILLISECONDS = 30 * 1000;
+const DEDICATED_STORAGE_UNKNOWN_PERSIST_MILLISECONDS = 2 * 1000;
+
+async function persistDedicatedStorageWriteUnknownBounded({
+  id,
+  userId,
+  objectKey,
+  leaseToken,
+  expectedLeaseUntil,
+  now,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  leaseToken: string;
+  expectedLeaseUntil: Date | null;
+  now: Date;
+}): Promise<void> {
+  const persistence = (expectedLeaseUntil
+    ? recordDedicatedStorageWriteUnknown({ id, userId, objectKey, leaseToken, expectedLeaseUntil, now })
+    : recordDedicatedStorageWriteUnknownByLeaseToken({ id, userId, objectKey, leaseToken, now })
+  ).catch((error) => {
+    console.error("Failed to persist an unknown dedicated storage write", objectKey, error);
+  });
+  const context = getCloudflareContext();
+  context.ctx?.waitUntil?.(persistence);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      persistence,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, DEDICATED_STORAGE_UNKNOWN_PERSIST_MILLISECONDS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function deleteStorageFile({
   fileId,
@@ -263,7 +301,7 @@ export async function createDedicatedStorageFile({
         deadlineTimer = undefined;
         providerOutcomeUnknown = true;
         observeLateProviderResult();
-        await recordDedicatedStorageWriteUnknown({
+        await persistDedicatedStorageWriteUnknownBounded({
           id: reservation.reservation.id,
           userId,
           objectKey,
@@ -298,16 +336,38 @@ export async function createDedicatedStorageFile({
         );
       const renewalOutcome = await Promise.race([renewal, deadline]);
       if (renewalOutcome.kind === "deadline") {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        if (renewalTimer) clearTimeout(renewalTimer);
         providerOutcomeUnknown = true;
+        // Observe a renewal already in flight for a short bounded grace. If it
+        // wins, use its lease as the authoritative CAS expectation; if it
+        // remains hung, fall back to the immutable lease token CAS.
+        const context = getCloudflareContext();
+        context.ctx?.waitUntil?.(renewal);
+        let lateRenewalTimer: ReturnType<typeof setTimeout> | undefined;
+        const lateRenewal = await Promise.race([
+          renewal,
+          new Promise<null>((resolve) => {
+            lateRenewalTimer = setTimeout(
+              () => resolve(null),
+              DEDICATED_STORAGE_UNKNOWN_PERSIST_MILLISECONDS,
+            );
+          }),
+        ]);
+        if (lateRenewalTimer) clearTimeout(lateRenewalTimer);
+        const authoritativeLease = lateRenewal?.kind === "renewed" && lateRenewal.renewed
+          ? nextLeaseUntil
+          : null;
+        if (authoritativeLease) leaseUntil = authoritativeLease;
         observeLateProviderResult();
-        await recordDedicatedStorageWriteUnknown({
+        await persistDedicatedStorageWriteUnknownBounded({
           id: reservation.reservation.id,
           userId,
           objectKey,
           leaseToken,
-          expectedLeaseUntil: leaseUntil,
+          expectedLeaseUntil: authoritativeLease,
           now: new Date(),
-        }).catch(() => undefined);
+        });
         throw new Error("Dedicated storage write exceeded its local deadline");
       }
       const renewed = renewalOutcome.kind === "renewed" && renewalOutcome.renewed;
@@ -320,16 +380,17 @@ export async function createDedicatedStorageFile({
       }
       if (!renewed) {
         if (deadlineTimer) clearTimeout(deadlineTimer);
+        if (renewalTimer) clearTimeout(renewalTimer);
         providerOutcomeUnknown = true;
         observeLateProviderResult();
-        await recordDedicatedStorageWriteUnknown({
+        await persistDedicatedStorageWriteUnknownBounded({
           id: reservation.reservation.id,
           userId,
           objectKey,
           leaseToken,
           expectedLeaseUntil: leaseUntil,
           now,
-        }).catch(() => undefined);
+        });
         throw new Error("Dedicated storage write lease was lost");
       }
       leaseUntil = nextLeaseUntil;

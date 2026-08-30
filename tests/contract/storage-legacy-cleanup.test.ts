@@ -271,6 +271,108 @@ describe("legacy storage cleanup contracts", () => {
     expect(bucket.delete).toHaveBeenCalledWith(unknown.objectKey);
   });
 
+  it("returns after the dedicated deadline even when recording unknown hangs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-29T00:00:00.000Z"));
+    bucket.put.mockImplementation(() => new Promise<void>(() => undefined));
+    const originalUpdateMany = memory.prisma.storageUpload.updateMany;
+    memory.prisma.storageUpload.updateMany = vi.fn(async (args: {
+      data?: { completionState?: string };
+    }) => {
+      if (args.data?.completionState === "unknown") {
+        return await new Promise<never>(() => undefined);
+      }
+      return originalUpdateMany(args as never);
+    }) as never;
+    const operation = createDedicatedStorageFile({
+      file: new File([new Uint8Array([1])], "db-hang.bin"),
+      userId: "u",
+      quotaBytes: BigInt(10),
+      fileCountLimit: 10,
+    });
+    const rejection = operation.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    for (let tick = 0; tick < 20 && bucket.put.mock.calls.length === 0; tick++) {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    const backgroundBefore = background.length;
+    await vi.advanceTimersByTimeAsync(30 * 1000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2 * 1000);
+
+    await expect(rejection).resolves.toMatchObject({
+      message: expect.stringContaining("exceeded its local deadline"),
+    });
+    expect(background.length).toBeGreaterThan(backgroundBefore);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("uses a renewal that settles after the deadline as the unknown CAS lease", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-29T00:00:00.000Z"));
+    bucket.put.mockImplementation(() => new Promise<void>(() => undefined));
+    const originalUpdateMany = memory.prisma.storageUpload.updateMany;
+    let renewalCalls = 0;
+    let resolveRenewal!: (value: unknown) => void;
+    memory.prisma.storageUpload.updateMany = vi.fn(async (args: any) => {
+      if (args.data?.completionLeaseUntil && args.data?.creationLeaseUntil) {
+        renewalCalls++;
+        if (renewalCalls === 2) {
+          return await new Promise((resolve) => {
+            resolveRenewal = () => resolve(originalUpdateMany(args));
+          });
+        }
+      }
+      return originalUpdateMany(args);
+    }) as never;
+    const operation = createDedicatedStorageFile({
+      file: new File([new Uint8Array([1])], "late-renewal.bin"),
+      userId: "u", quotaBytes: BigInt(10), fileCountLimit: 10,
+    });
+    const rejection = operation.then(() => null, (error: unknown) => error);
+    await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(30_000);
+    resolveRenewal();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(rejection).resolves.toMatchObject({
+      message: expect.stringContaining("exceeded its local deadline"),
+    });
+    expect([...memory.state.storageUploads.values()][0].completionState).toBe("unknown");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("falls back to the stable lease token when renewal never resolves", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-29T00:00:00.000Z"));
+    bucket.put.mockImplementation(() => new Promise<void>(() => undefined));
+    const originalUpdateMany = memory.prisma.storageUpload.updateMany;
+    let renewalCalls = 0;
+    memory.prisma.storageUpload.updateMany = vi.fn(async (args: any) => {
+      if (args.data?.completionLeaseUntil && args.data?.creationLeaseUntil) {
+        renewalCalls++;
+        if (renewalCalls === 2) return await new Promise<never>(() => undefined);
+      }
+      return originalUpdateMany(args);
+    }) as never;
+    const operation = createDedicatedStorageFile({
+      file: new File([new Uint8Array([1])], "hung-renewal.bin"),
+      userId: "u", quotaBytes: BigInt(10), fileCountLimit: 10,
+    });
+    const rejection = operation.then(() => null, (error: unknown) => error);
+    await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(rejection).resolves.toMatchObject({
+      message: expect.stringContaining("exceeded its local deadline"),
+    });
+    expect([...memory.state.storageUploads.values()][0].completionState).toBe("unknown");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("preserves cleanup grace across host loss and removes a late object", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-29T00:00:00.000Z"));

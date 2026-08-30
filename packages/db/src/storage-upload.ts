@@ -309,6 +309,50 @@ export async function recordDedicatedStorageWriteUnknown({
   return updated.count === 1;
 }
 
+/** Persist unknown completion using the immutable lease token when a renewal
+ * started before the deadline settles after the caller's lease snapshot. */
+export async function recordDedicatedStorageWriteUnknownByLeaseToken({
+  id,
+  userId,
+  objectKey,
+  leaseToken,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  leaseToken: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const updated = await db.storageUpload.updateMany({
+    where: {
+      id,
+      userId,
+      objectKey,
+      reservationKind: "dedicated",
+      startState: "dedicated",
+      completedFileId: null,
+      abandonedAt: null,
+      creationLeaseToken: leaseToken,
+      completionState: "completing",
+      completionLeaseToken: leaseToken,
+    },
+    data: {
+      completionState: "unknown",
+      completionInterventionAt: now,
+      completionLastError: "Dedicated object write exceeded its local deadline",
+      completionAttempts: { increment: 1 },
+      completionRevision: { increment: 1 },
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+    },
+  } as never);
+  return updated.count === 1;
+}
+
 /** Consume a dedicated reservation and create its File in one transaction. */
 export async function commitDedicatedStorageReservation({
   id,

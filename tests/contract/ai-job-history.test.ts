@@ -244,13 +244,64 @@ describe("v3 AI job history contract", () => {
           fileName: null,
           contentType: null,
           error: null,
-          canRetry: true,
+          canRetry: false,
           createdAt: oldest.createdAt.toISOString(),
           updatedAt: oldest.updatedAt.toISOString(),
         },
       ],
       nextCursor: null,
     });
+  });
+
+  it("uses replay validation for unknown fields, legacy video defaults, and image shape XOR", async () => {
+    const providerSecret = await seedJob({
+      kind: "image",
+      inputParams: {
+        prompt: "secret-bearing image",
+        size: "1024x1024",
+        providerSecret: "must-not-be-replayed",
+      },
+      createdAt: new Date("2026-08-07T00:00:00.000Z"),
+    });
+    const unknownVideoField = await seedJob({
+      kind: "video",
+      inputParams: {
+        prompt: "unknown video field",
+        durationSeconds: 4,
+        resolution: "720p",
+        unexpected: true,
+      },
+      createdAt: new Date("2026-08-08T00:00:00.000Z"),
+    });
+    const legacyVideo = await seedJob({
+      kind: "video",
+      inputParams: { prompt: "legacy video" },
+      createdAt: new Date("2026-08-09T00:00:00.000Z"),
+    });
+    const bothImageShapes = await seedJob({
+      kind: "image",
+      inputParams: {
+        prompt: "ambiguous image",
+        size: "1024x1024",
+        aspectRatio: "1:1",
+      },
+      createdAt: new Date("2026-08-10T00:00:00.000Z"),
+    });
+
+    const response = await makeApp().request(
+      "/api/v3/ai/jobs?limit=100",
+      { headers: await authHeaders() },
+    );
+    expect(response.status).toBe(200);
+    const { jobs } = await response.json();
+    const byId = new Map(jobs.map((job: { id: string }) => [job.id, job]));
+
+    expect(byId.get(providerSecret.id)).toMatchObject({ canRetry: false });
+    expect(byId.get(unknownVideoField.id)).toMatchObject({ canRetry: false });
+    // Rows from before duration/resolution were persisted still represent a
+    // replayable text-to-video request; the retry action supplies its defaults.
+    expect(byId.get(legacyVideo.id)).toMatchObject({ canRetry: true });
+    expect(byId.get(bothImageShapes.id)).toMatchObject({ canRetry: false });
   });
 
   it("uses the job id as a cursor tie-breaker for identical timestamps", async () => {
