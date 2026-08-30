@@ -53,11 +53,15 @@ export class CredentialLimitReachedError extends Error {
  * Forgejo は空白も日本語もスラッシュも受け付けるので、制御文字を落として長さを絞るだけ。
  */
 export function normalizeCredentialName(source: string): string {
-  return source
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .slice(0, CREDENTIAL_NAME_MAX_LENGTH)
-    .trim();
+  return (
+    source
+      // 制御文字を落とすのが目的なので、ここに現れるのは意図どおり。
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(0, CREDENTIAL_NAME_MAX_LENGTH)
+      .trim()
+  );
 }
 
 /**

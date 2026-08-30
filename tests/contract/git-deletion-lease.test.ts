@@ -144,6 +144,8 @@ const fakeDb = {
     },
     async deleteMany({ where }: { where: Filter }) {
       let count = 0;
+      // 回しながら消すので、写しを取ってから回す。
+      // eslint-disable-next-line unicorn/no-useless-spread
       for (const [key, row] of [...rows]) {
         if (!matches(row, where)) continue;
         rows.delete(key);

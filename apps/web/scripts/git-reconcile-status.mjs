@@ -328,14 +328,6 @@ function isMissingLegacyTable(error) {
   return false;
 }
 
-/** 今の復元世代。まだ一度も復元していなければ null。 */
-async function currentGeneration(prisma) {
-  const latest = await prisma.gitRestoreGeneration.findFirst({
-    orderBy: { createdAt: "desc" },
-  });
-  return latest?.id ?? null;
-}
-
 /**
  * 鍵が対になっていることを、秘密鍵を動かさずに確かめるための固定文字列。
  * git-server 側は公開鍵でこれを検証する。

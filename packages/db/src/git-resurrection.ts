@@ -351,8 +351,6 @@ export async function pruneGitResurrectionTombstones({
   before: Date;
   prisma?: PrismaTransaction;
 }): Promise<{ credentials: number; repositories: number }> {
-  const db = prisma ?? (await getDb());
-
   const run = async (tx: PrismaTransaction) => {
     // **刈った線を先に進めてから消す。** 逆にすると、消した後・線を進める前に
     // 落ちたときに「控えは無いのに線は古いまま」になり、その時点の控えから

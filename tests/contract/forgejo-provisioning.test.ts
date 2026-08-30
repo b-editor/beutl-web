@@ -19,7 +19,6 @@ vi.mock("@beutl/db", () => ({
     deletionIntentOwner === null || deletionIntentOwner === intentId,
   cancelPendingGitAccountDeletion: async () => {
     deletionIntentOwner = null;
-  purgedTombstone = false;
     pendingDeletion = null;
   },
   markGitAccountDeletionNeedsReview: async () => true,
@@ -34,7 +33,6 @@ vi.mock("@beutl/db", () => ({
   },
   // purge の成功時は行を消さず、消した相手を控えた墓標として残す。
   markGitAccountDeletionPurged: async () => {
-    purgedTombstone = true;
     pendingDeletion = null;
     return true;
   },
@@ -82,7 +80,6 @@ vi.mock("@beutl/db", () => ({
 
 let audited: string[] = [];
 
-let purgedTombstone = false;
 let deletionIntentOwner: string | null = null;
 let pendingDeletion: { userId: string; phase: string; forgejoUserId: number | null } | null =
   null;
