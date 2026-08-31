@@ -454,9 +454,19 @@ describe("dashboard AI actions", () => {
       ...base, id: "unknown", kind: "video",
       inputParams: { prompt: "a cat", durationSeconds: 4, unexpected: true },
     });
+    memory.state.aiJobs.set("secret", {
+      ...base, id: "secret", kind: "image",
+      inputParams: { prompt: "a cat", size: "1024x1024", providerSecret: "must-not-leak" },
+    });
     const result = await listJobsAction();
     expect(result.jobs?.find((job) => job.id === "invalid")).toMatchObject({ canRetry: false });
     expect(result.jobs?.find((job) => job.id === "unknown")).toMatchObject({ canRetry: false });
+    expect(result.jobs?.find((job) => job.id === "invalid")?.inputParams).toBeNull();
+    expect(result.jobs?.find((job) => job.id === "unknown")?.inputParams).toBeNull();
+    expect(result.jobs?.find((job) => job.id === "secret")?.inputParams).toEqual({
+      prompt: "a cat",
+      size: "1024x1024",
+    });
   });
 
   describe("rerunning a job", () => {
@@ -539,7 +549,7 @@ describe("dashboard AI actions", () => {
       );
     });
 
-    it("validates without trimming the persisted retry prompt", async () => {
+    it("rejects a persisted retry prompt that would require trimming", async () => {
       await registerImageModels(true);
       const job = await createAiJob({
         userId: "user-1",
@@ -550,33 +560,12 @@ describe("dashboard AI actions", () => {
         usageUnits: 44,
         model: "dear/model",
       });
-      vi.mocked(createReservedAiJob).mockResolvedValue({
-        ok: true,
-        outcome: "reserved",
-        job: { id: "job-spaced", status: "running", resultFileId: null, resultFile: null },
-      });
-      vi.mocked(generateImage).mockResolvedValue({
-        b64Json:
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-        mediaType: "image/png",
-      });
-      vi.mocked(saveAiImage).mockResolvedValue({
-        id: "file-spaced",
-        name: "spaced.png",
-        mimeType: "image/png",
-      });
 
       const result = await retryJobAction(job.id, crypto.randomUUID());
 
-      expect(result.success).toBe(true);
-      expect(createReservedAiJob).toHaveBeenCalledWith(
-        expect.objectContaining({
-          inputParams: expect.objectContaining({ prompt: "  a cat  " }),
-        }),
-      );
-      expect(generateImage).toHaveBeenCalledWith(
-        expect.objectContaining({ prompt: "  a cat  " }),
-      );
+      expect(result.success).toBe(false);
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
     });
 
     it("recovers a succeeded existing retry reservation instead of reporting provider error", async () => {

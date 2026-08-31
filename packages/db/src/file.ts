@@ -1,6 +1,33 @@
 import { getDb } from "./provider";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
+type FileReferenceSnapshot = {
+  Package?: { id: string }[];
+  PackageScreenshot?: { packageId: string }[];
+  Profile?: { userId: string }[];
+  Release?: { id: string }[];
+  aiJobResult?: { id: string } | null;
+};
+
+function hasLiveFileReference(references: FileReferenceSnapshot | null): boolean {
+  return Boolean(
+    references &&
+      ((references.Package?.length ?? 0) > 0 ||
+        (references.PackageScreenshot?.length ?? 0) > 0 ||
+        (references.Profile?.length ?? 0) > 0 ||
+        (references.Release?.length ?? 0) > 0 ||
+        references.aiJobResult),
+  );
+}
+
+const fileReferenceSelect = {
+  Package: { select: { id: true } },
+  PackageScreenshot: { select: { packageId: true } },
+  Profile: { select: { userId: true } },
+  Release: { select: { id: true } },
+  aiJobResult: { select: { id: true } },
+} as const;
+
 export async function findFileForContentAccess({
   id: fileId,
   prisma,
@@ -184,35 +211,6 @@ export async function createFile({
   });
 }
 
-export async function deleteFile({
-  fileId,
-  prisma,
-}: {
-  fileId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  const file = await db.file.findFirst({
-    where: {
-      id: fileId,
-      aiJobResult: null,
-    },
-  });
-  if (!file) {
-    throw new Error(`Storage file ${fileId} was not found`);
-  }
-  const deleted = await db.file.deleteMany({
-    where: {
-      id: fileId,
-      aiJobResult: null,
-    },
-  });
-  if (deleted.count !== 1) {
-    throw new Error(`Storage file ${fileId} is owned by an AI job`);
-  }
-  return file;
-}
-
 /** Delete a user file while recording its object key in the cleanup outbox in
  * the same transaction. The outbox is promoted to cleanup only after the row
  * is gone, so a crash cannot lose the key or delete a live file. */
@@ -230,6 +228,14 @@ export async function deleteFileWithStorageCleanup({
       where: { id: fileId, ...(userId ? { userId } : {}), aiJobResult: null },
     });
     if (!file) throw new Error(`Storage file ${fileId} was not found`);
+    const references = await tx.file.findFirst({
+      where: { id: fileId, ...(userId ? { userId } : {}) },
+      select: fileReferenceSelect,
+    });
+    if (hasLiveFileReference(references)) {
+      throw new Error(`Storage file ${fileId} is still in use`);
+    }
+
     await tx.aiStorageCleanup.create({ data: { objectKey: file.objectKey, aiJobId: null, state: "writing", notBefore: new Date(), leaseToken: null } } as never);
     const deleted = await tx.file.deleteMany({
       where: { id: fileId, ...(userId ? { userId } : {}), aiJobResult: null },
@@ -237,6 +243,81 @@ export async function deleteFileWithStorageCleanup({
     if (deleted.count !== 1) throw new Error(`Storage file ${fileId} is owned by an AI job`);
     await tx.aiStorageCleanup.updateMany({ where: { objectKey: file.objectKey, state: "writing", leaseToken: null }, data: { state: "cleanup", notBefore: new Date() } } as never);
     return file;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+/** Delete a dedicated artifact only after its owning pointer/relation was removed.
+ * Shared Files remain live, and callers can distinguish retention from deletion. */
+export async function deleteUnreferencedFileWithStorageCleanup({
+  fileId,
+  userId,
+  prisma,
+}: {
+  fileId: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const file = await tx.file.findFirst({
+      where: { id: fileId, userId, aiJobResult: null },
+    });
+    if (!file) throw new Error(`Storage file ${fileId} was not found`);
+
+    const references = await tx.file.findFirst({
+      where: { id: fileId, userId },
+      select: fileReferenceSelect,
+    });
+    if (hasLiveFileReference(references)) {
+      return { kind: "retained" as const, record: file };
+    }
+
+    const deleted = await deleteFileWithStorageCleanup({ fileId, userId, prisma: tx });
+    return { kind: "deleted" as const, record: deleted };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
+/** Atomically delete an exact user-selected set, or retain the whole set when
+ * any row is dedicated, missing, or still referenced. */
+export async function deleteUserFilesWithStorageCleanup({
+  fileIds,
+  userId,
+  prisma,
+}: {
+  fileIds: string[];
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const uniqueIds = [...new Set(fileIds)];
+  const run = async (tx: PrismaTransaction) => {
+    if (uniqueIds.length === 0) return { kind: "notFound" as const };
+    const files = await tx.file.findMany({
+      where: { id: { in: uniqueIds }, userId, aiJobResult: null },
+      select: {
+        id: true,
+        visibility: true,
+        ...fileReferenceSelect,
+      },
+    });
+    if (files.length !== uniqueIds.length) {
+      return { kind: "notFound" as const };
+    }
+    if (
+      files.some(
+        (file) => file.visibility === "DEDICATED" || hasLiveFileReference(file),
+      )
+    ) {
+      return { kind: "inUse" as const };
+    }
+
+    const records = [];
+    for (const fileId of uniqueIds) {
+      records.push(
+        await deleteFileWithStorageCleanup({ fileId, userId, prisma: tx }),
+      );
+    }
+    return { kind: "deleted" as const, records };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }

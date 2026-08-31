@@ -7,19 +7,15 @@ import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import { contentPath } from "@/lib/content-url";
 import {
   deleteDevPackage,
+  getPackageNameFromPackageId,
   getPackagePublishedByIdOrThrow,
   retrieveDevPackageByName,
-  retrieveDevPackageDependsFile,
-  retrieveDevPackageIconFile,
   updateDevPackageDescription,
   updateDevPackageDisplay,
-  updateDevPackageIconFile,
+  replaceDevPackageIconFile,
   updateDevPackagePublished,
   updateDevPackageTags,
 } from "@beutl/db";
-import {
-  deleteStorageFile,
-} from "@/lib/storage";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
@@ -132,15 +128,7 @@ export async function deletePackage(id: string): Promise<ActionResult> {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     return await sameUser(id, session.user.id, t, async () => {
-      const files = await retrieveDevPackageDependsFile({ packageId: id });
       await deleteDevPackage({ packageId: id });
-      const promises = files.map(async (file) => {
-        await deleteStorageFile({
-          fileId: file.id,
-        });
-      });
-
-      await Promise.all(promises);
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.deletePackage,
@@ -197,12 +185,17 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
     }
     const id = formData.get("id") as string;
     return await sameUser(id, session.user.id, t, async () => {
-      const iconFile = await retrieveDevPackageIconFile({ packageId: id });
-
       const result = await createDedicatedFile(
         session.user.id,
         file,
         t,
+        async (tx, record) => {
+          await replaceDevPackageIconFile({
+            packageId: id,
+            fileId: record.id,
+            prisma: tx,
+          });
+        },
       );
       if (!result.success) {
         return {
@@ -211,16 +204,10 @@ export async function uploadIcon(formData: FormData): Promise<ActionResult> {
         };
       }
 
-      if (iconFile) {
-        await deleteStorageFile({
-          fileId: iconFile.id,
-        });
+      const name = await getPackageNameFromPackageId({ packageId: id });
+      if (!name) {
+        return { success: false, message: t("developer:errors.idNotFound") };
       }
-
-      const { name } = await updateDevPackageIconFile({
-        packageId: id,
-        fileId: result.record!.id,
-      });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,

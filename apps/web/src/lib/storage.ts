@@ -178,11 +178,13 @@ export async function createDedicatedStorageFile({
   userId,
   quotaBytes,
   fileCountLimit,
+  publish,
 }: {
   file: File;
   userId: string;
   quotaBytes: bigint;
   fileCountLimit: number;
+  publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
   const files = await retrieveFilesByUserId({ userId });
   let filename = file.name;
@@ -401,6 +403,7 @@ export async function createDedicatedStorageFile({
       objectKey,
       sha256: hashHex,
       leaseToken,
+      publish,
     });
     if (outcome.kind !== "created") {
       throw new Error("Dedicated storage reservation changed before File commit");
@@ -418,6 +421,7 @@ export async function createDedicatedStorageFile({
         objectKey,
         sha256: hashHex,
         leaseToken,
+        publish,
       }).catch(() => null);
       if (recovered?.kind === "created") return recovered;
     }

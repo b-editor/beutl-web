@@ -38,6 +38,7 @@ import {
   translationCharacterCount,
   validateAiInputImage,
   parseReplayableAiJobInput,
+  sanitizeAiJobInputParams,
   type TranslationStyle,
   validateTranscriptionResult,
   type AiInputImageMimeType,
@@ -1377,7 +1378,7 @@ export async function listJobsAction(
       url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
       fileName: job.resultFile?.name ?? null,
       contentType: job.resultFile?.mimeType ?? null,
-      inputParams: job.inputParams,
+      inputParams: sanitizeAiJobInputParams(job.kind, job.inputParams),
       canRetry: canRetryJob(job),
     })),
   );

@@ -3,6 +3,7 @@ import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 import { startRetryableTransaction } from "./transaction";
 import { preparePackageDeletionOutboxes } from "./package-checkout-attempt";
+import { deleteUnreferencedFileWithStorageCleanup } from "./file";
 
 export async function findPackageIdById({
   id,
@@ -608,6 +609,38 @@ export async function updateDevPackageIconFile({
   });
 }
 
+/** Publish a newly-uploaded dedicated icon and retire the previous file atomically. */
+export async function replaceDevPackageIconFile({
+  packageId,
+  fileId,
+  prisma,
+}: { packageId: string; fileId: string; prisma?: PrismaTransaction }) {
+  const run = async (tx: PrismaTransaction) => {
+    const pkg = await tx.package.findUniqueOrThrow({
+      where: { id: packageId },
+      select: { name: true, userId: true, iconFileId: true },
+    });
+    if (pkg.iconFileId === fileId) return pkg;
+    const replacement = await tx.file.findUnique({ where: { id: fileId }, select: { userId: true } });
+    if (!replacement || replacement.userId !== pkg.userId) {
+      throw new Error("Dedicated icon file is not owned by the package user");
+    }
+    const old = pkg.iconFileId
+      ? await tx.file.findUnique({ where: { id: pkg.iconFileId }, select: { objectKey: true } })
+      : null;
+    await tx.package.update({ where: { id: packageId }, data: { iconFileId: fileId } });
+    if (old) {
+      await deleteUnreferencedFileWithStorageCleanup({
+        fileId: pkg.iconFileId!,
+        userId: pkg.userId,
+        prisma: tx,
+      });
+    }
+    return pkg;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
 export async function retrieveDevPackageDependsFile({
   packageId,
   prisma,
@@ -738,38 +771,63 @@ export async function createDevPackageScreenshot({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
-  return await db.packageScreenshot.create({
-    data: {
-      packageId: packageId,
-      fileId: fileId,
-      order: order,
-    },
+  const ownership = await Promise.all([
+    db.package.findUnique({ where: { id: packageId }, select: { userId: true } }),
+    db.file.findUnique({ where: { id: fileId }, select: { userId: true } }),
+  ]);
+  if (!ownership[0] || !ownership[1] || ownership[0].userId !== ownership[1].userId) {
+    throw new Error("Dedicated screenshot file is not owned by the package user");
+  }
+  return await db.packageScreenshot.upsert({
+    where: { packageId_fileId: { packageId, fileId } },
+    create: { packageId, fileId, order },
+    update: { order },
   });
 }
 
-export async function updateDevPackageScreenshotOrder({
+/** Replace one package's screenshot order without transiently violating its unique order. */
+export async function reorderDevPackageScreenshots({
   packageId,
-  fileId,
-  order,
+  orderedFileIds,
   prisma,
 }: {
   packageId: string;
-  fileId: string;
-  order: number;
+  orderedFileIds: string[];
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.packageScreenshot.update({
-    where: {
-      packageId_fileId: {
-        packageId: packageId,
-        fileId: fileId,
-      },
-    },
-    data: {
-      order: order,
-    },
-  });
+  const run = async (tx: PrismaTransaction) => {
+    await tx.package.update({
+      where: { id: packageId },
+      data: { updatedAt: new Date() },
+    });
+    const current = await tx.packageScreenshot.findMany({
+      where: { packageId },
+      select: { fileId: true },
+    });
+    const expected = new Set(current.map((item) => item.fileId));
+    if (
+      expected.size !== current.length ||
+      orderedFileIds.length !== current.length ||
+      new Set(orderedFileIds).size !== orderedFileIds.length ||
+      orderedFileIds.some((fileId) => !expected.has(fileId))
+    ) {
+      throw new Error("Package screenshot order changed before publication");
+    }
+
+    for (let index = 0; index < current.length; index++) {
+      await tx.packageScreenshot.update({
+        where: { packageId_fileId: { packageId, fileId: current[index]!.fileId } },
+        data: { order: -(index + 1) },
+      });
+    }
+    for (let index = 0; index < orderedFileIds.length; index++) {
+      await tx.packageScreenshot.update({
+        where: { packageId_fileId: { packageId, fileId: orderedFileIds[index]! } },
+        data: { order: index },
+      });
+    }
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 export async function updateDevPackageTags({
@@ -815,6 +873,36 @@ export async function deleteDevPackageScreenshot({
   });
 }
 
+/** Remove a screenshot relation and its file with a durable cleanup receipt. */
+export async function deleteDevPackageScreenshotAndFile({
+  packageId,
+  fileId,
+  prisma,
+}: { packageId: string; fileId: string; prisma?: PrismaTransaction }) {
+  const run = async (tx: PrismaTransaction) => {
+    const relation = await tx.packageScreenshot.findUnique({
+      where: { packageId_fileId: { packageId, fileId } },
+      select: {
+        package: { select: { userId: true } },
+        file: { select: { userId: true } },
+      },
+    });
+    if (!relation || relation.package.userId !== relation.file.userId) {
+      throw new Error("Package screenshot relation was not found");
+    }
+    const deleted = await tx.packageScreenshot.deleteMany({ where: { packageId, fileId } });
+    if (deleted.count !== 1) {
+      throw new Error("Package screenshot relation changed before deletion");
+    }
+    await deleteUnreferencedFileWithStorageCleanup({
+      fileId,
+      userId: relation.package.userId,
+      prisma: tx,
+    });
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
 export async function deleteDevPackage({
   packageId,
   prisma,
@@ -823,8 +911,37 @@ export async function deleteDevPackage({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    const pkg = await tx.package.findUniqueOrThrow({
+      where: { id: packageId },
+      select: {
+        userId: true,
+        iconFile: { select: { id: true, userId: true } },
+        PackageScreenshot: {
+          select: { file: { select: { id: true, userId: true } } },
+        },
+        Release: {
+          select: { file: { select: { id: true, userId: true } } },
+        },
+      },
+    });
+    const ownedFileIds = new Set<string>();
+    for (const file of [
+      pkg.iconFile,
+      ...pkg.PackageScreenshot.map((item) => item.file),
+      ...pkg.Release.map((item) => item.file),
+    ]) {
+      if (file?.userId === pkg.userId) ownedFileIds.add(file.id);
+    }
     await preparePackageDeletionOutboxes({ packageId, prisma: tx });
-    return await tx.package.delete({ where: { id: packageId } });
+    const deleted = await tx.package.delete({ where: { id: packageId } });
+    for (const fileId of ownedFileIds) {
+      await deleteUnreferencedFileWithStorageCleanup({
+        fileId,
+        userId: pkg.userId,
+        prisma: tx,
+      });
+    }
+    return deleted;
   };
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }

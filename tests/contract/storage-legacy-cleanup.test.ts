@@ -20,8 +20,13 @@ import {
   createDedicatedStorageReservation,
   DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
   deleteAiStorageCleanup,
+  deleteFileWithStorageCleanup,
+  deleteUserFilesWithStorageCleanup,
   findStorageCleanupForMutation,
   freezeStorageUploadForAccountDeletion,
+  deleteReleaseWithStorageCleanup,
+  deleteDevPackageScreenshotAndFile,
+  deleteUnreferencedFileWithStorageCleanup,
   setDbProvider,
 } from "@beutl/db";
 import { reconcileAiStorageCleanups, setR2BucketProvider } from "@beutl/api";
@@ -172,6 +177,427 @@ describe("legacy storage cleanup contracts", () => {
     expect(memory.state.storageUploads.size).toBe(1);
     expect([...memory.state.storageUploads.values()][0].completedFileId).toBe(result.record.id);
     memory.prisma.$transaction = originalTransaction;
+  });
+
+  it("replays publication after a lost commit response without duplicating the File or relation", async () => {
+    const source = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
+    const create = source.slice(
+      source.indexOf("export async function createDevPackageScreenshot"),
+      source.indexOf("export async function reorderDevPackageScreenshots"),
+    );
+    expect(create).toContain("upsert");
+    expect(create).toContain("packageId_fileId");
+    const originalTransaction = memory.prisma.$transaction;
+    let transactionCount = 0;
+    const relationIds = new Set<string>();
+    let publishCalls = 0;
+    memory.prisma.$transaction = vi.fn(async (callback: never) => {
+      const result = await originalTransaction(callback);
+      transactionCount++;
+      if (transactionCount === 2) throw new Error("commit response lost");
+      return result;
+    }) as never;
+    const result = await createDedicatedStorageFile({
+      file: new File([new Uint8Array([7])], "relation.bin"),
+      userId: "u",
+      quotaBytes: BigInt(10),
+      fileCountLimit: 10,
+      publish: async (_tx, record) => {
+        publishCalls++;
+        relationIds.add(record.id);
+      },
+    });
+    expect(result.kind).toBe("created");
+    expect(memory.state.files.size).toBe(1);
+    expect(publishCalls).toBe(2);
+    expect(relationIds.size).toBe(1);
+    expect(bucket.put).toHaveBeenCalledTimes(1);
+    memory.prisma.$transaction = originalTransaction;
+  });
+
+  it("publishes a dedicated relation inside the File commit and cleans up on publication failure", async () => {
+    const published: string[] = [];
+    const result = await createDedicatedStorageFile({
+      file: new File([new Uint8Array([1, 2])], "publish.bin"),
+      userId: "u",
+      quotaBytes: BigInt(10),
+      fileCountLimit: 10,
+      publish: async (_tx, record) => {
+        published.push(record.id);
+      },
+    });
+    expect(result.kind).toBe("created");
+    expect(published).toEqual([result.record.id]);
+
+    await expect(createDedicatedStorageFile({
+      file: new File([new Uint8Array([3])], "rollback.bin"),
+      userId: "u",
+      quotaBytes: BigInt(20),
+      fileCountLimit: 10,
+      publish: async () => { throw new Error("relation transaction failed"); },
+    })).rejects.toThrow("relation transaction failed");
+    expect([...memory.state.files.values()].some((file) => file.name === "rollback.bin")).toBe(false);
+    expect([...memory.state.aiStorageCleanups.values()].some((row) => row.objectKey)).toBe(true);
+  });
+
+  it("keeps icon replacement and screenshot deletion pointer-first and durable", async () => {
+    const source = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
+    const icon = source.slice(source.indexOf("export async function replaceDevPackageIconFile"), source.indexOf("export async function retrieveDevPackageDependsFile"));
+    expect(icon.indexOf("tx.package.update")).toBeLessThan(icon.indexOf("deleteUnreferencedFileWithStorageCleanup"));
+    expect(icon).toContain("deleteUnreferencedFileWithStorageCleanup");
+    const screenshot = source.slice(source.indexOf("export async function deleteDevPackageScreenshotAndFile"), source.indexOf("export async function deleteDevPackage({"));
+    expect(screenshot).toContain("packageScreenshot.deleteMany");
+    expect(screenshot).toContain("deleteUnreferencedFileWithStorageCleanup");
+    expect(screenshot.indexOf("packageScreenshot.deleteMany")).toBeLessThan(screenshot.indexOf("deleteUnreferencedFileWithStorageCleanup"));
+  });
+
+  it("rejects mismatched screenshot relation before touching the File", async () => {
+    const calls: string[] = [];
+    const tx = {
+      packageScreenshot: {
+        findUnique: async () => null,
+        deleteMany: async () => { calls.push("relation-delete"); return { count: 1 }; },
+      },
+      file: {
+        findFirst: async () => { calls.push("file-read"); return null; },
+        deleteMany: async () => { calls.push("file-delete"); return { count: 1 }; },
+      },
+      aiStorageCleanup: {
+        create: async () => { calls.push("outbox"); },
+        updateMany: async () => ({ count: 1 }),
+      },
+    } as never;
+    await expect(deleteDevPackageScreenshotAndFile({ packageId: "pkg", fileId: "file", prisma: tx })).rejects.toThrow("not found");
+    expect(calls).toEqual([]);
+
+    const crossUser = {
+      ...tx,
+      packageScreenshot: {
+        findUnique: async () => ({ package: { userId: "package-owner" }, file: { userId: "other-owner" } }),
+        deleteMany: async () => { calls.push("relation-delete"); return { count: 1 }; },
+      },
+    } as never;
+    await expect(deleteDevPackageScreenshotAndFile({ packageId: "pkg", fileId: "file", prisma: crossUser })).rejects.toThrow("not found");
+    expect(calls).toEqual([]);
+  });
+
+  it("deletes a valid screenshot relation and owned File exactly once with an outbox", async () => {
+    const calls: string[] = [];
+    const tx = {
+      packageScreenshot: {
+        findUnique: async () => ({ package: { userId: "u" }, file: { userId: "u" } }),
+        deleteMany: async () => { calls.push("relation-delete"); return { count: 1 }; },
+      },
+      file: {
+        findFirst: async () => ({ id: "file", objectKey: "obj", userId: "u", aiJobResult: null }),
+        deleteMany: async () => { calls.push("file-delete"); return { count: 1 }; },
+      },
+      aiStorageCleanup: {
+        create: async () => { calls.push("outbox-create"); },
+        updateMany: async () => { calls.push("outbox-promote"); return { count: 1 }; },
+      },
+    } as never;
+    await deleteDevPackageScreenshotAndFile({ packageId: "pkg", fileId: "file", prisma: tx });
+    expect(calls).toEqual(["relation-delete", "outbox-create", "file-delete", "outbox-promote"]);
+  });
+
+  it("keeps a shared File when another package relation still references it", async () => {
+    const calls: string[] = [];
+    let findCount = 0;
+    const tx = {
+      file: {
+        findFirst: async () => {
+          findCount++;
+          if (findCount === 1) return { id: "file", objectKey: "obj", userId: "u", aiJobResult: null };
+          return {
+            Package: [{ id: "other-package" }],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [],
+            aiJobResult: null,
+            storageUploadReceipt: null,
+          };
+        },
+        deleteMany: async () => { calls.push("file-delete"); return { count: 1 }; },
+      },
+      aiStorageCleanup: {
+        create: async () => { calls.push("outbox-create"); },
+        updateMany: async () => { calls.push("outbox-promote"); return { count: 1 }; },
+      },
+    } as never;
+    await deleteUnreferencedFileWithStorageCleanup({
+      fileId: "file",
+      userId: "u",
+      prisma: tx,
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("generic storage deletion refuses a legacy visible package artifact", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    const tx = {
+      file: {
+        findFirst: async () => {
+          reads++;
+          if (reads === 1) {
+            return {
+              id: "file",
+              userId: "u",
+              objectKey: "objects/legacy",
+              visibility: "PUBLIC",
+              aiJobResult: null,
+            };
+          }
+          return {
+            Package: [{ id: "package" }],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [],
+            aiJobResult: null,
+          };
+        },
+        deleteMany: async () => {
+          calls.push("file-delete");
+          return { count: 1 };
+        },
+      },
+      aiStorageCleanup: {
+        create: async () => {
+          calls.push("outbox-create");
+        },
+        updateMany: async () => ({ count: 1 }),
+      },
+    } as never;
+
+    await expect(
+      deleteFileWithStorageCleanup({ fileId: "file", userId: "u", prisma: tx }),
+    ).rejects.toThrow("still in use");
+    expect(calls).toEqual([]);
+  });
+
+  it("retains an entire user selection when any file is referenced", async () => {
+    const calls: string[] = [];
+    const tx = {
+      file: {
+        findMany: async () => [
+          {
+            id: "ordinary",
+            visibility: "PRIVATE",
+            Package: [],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [],
+            aiJobResult: null,
+          },
+          {
+            id: "shared",
+            visibility: "PUBLIC",
+            Package: [],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [{ id: "release" }],
+            aiJobResult: null,
+          },
+        ],
+        findFirst: async () => {
+          calls.push("file-read");
+          return null;
+        },
+        deleteMany: async () => {
+          calls.push("file-delete");
+          return { count: 1 };
+        },
+      },
+    } as never;
+
+    await expect(
+      deleteUserFilesWithStorageCleanup({
+        fileIds: ["ordinary", "shared"],
+        userId: "u",
+        prisma: tx,
+      }),
+    ).resolves.toMatchObject({ kind: "inUse" });
+    expect(calls).toEqual([]);
+  });
+
+  it("publishes release replacements inside the dedicated File commit", async () => {
+    const action = await readFile(
+      new URL(
+        "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/release.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const update = action.slice(
+      action.indexOf("export async function updateRelease"),
+      action.indexOf("export async function createRelease"),
+    );
+    expect(update).toContain("published = await publishRelease(tx, record.id)");
+    expect(update).not.toContain("uploadedFileId");
+    expect(update).not.toContain("deleteStorageFile");
+  });
+
+  it("deletes a release pointer before retiring its unreferenced File", async () => {
+    const calls: string[] = [];
+    let fileRead = 0;
+    const tx = {
+      release: {
+        findUnique: async () => ({
+          package: { userId: "u" },
+          file: { id: "file", userId: "u" },
+        }),
+        delete: async () => {
+          calls.push("release-delete");
+          return { id: "release" };
+        },
+      },
+      file: {
+        findFirst: async () => {
+          fileRead++;
+          if (fileRead === 1) {
+            return { id: "file", objectKey: "obj", userId: "u", aiJobResult: null };
+          }
+          return {
+            Package: [],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [],
+            aiJobResult: null,
+          };
+        },
+        deleteMany: async () => {
+          calls.push("file-delete");
+          return { count: 1 };
+        },
+      },
+      aiStorageCleanup: {
+        create: async () => {
+          calls.push("outbox-create");
+        },
+        updateMany: async () => {
+          calls.push("outbox-promote");
+          return { count: 1 };
+        },
+      },
+    } as never;
+
+    await deleteReleaseWithStorageCleanup({
+      id: "release",
+      userId: "u",
+      prisma: tx,
+    });
+    expect(calls).toEqual([
+      "release-delete",
+      "outbox-create",
+      "file-delete",
+      "outbox-promote",
+    ]);
+  });
+
+  it("keeps a release artifact while another reference remains", async () => {
+    const calls: string[] = [];
+    let fileRead = 0;
+    const tx = {
+      release: {
+        findUnique: async () => ({
+          package: { userId: "u" },
+          file: { id: "file", userId: "u" },
+        }),
+        delete: async () => {
+          calls.push("release-delete");
+          return { id: "release" };
+        },
+      },
+      file: {
+        findFirst: async () => {
+          fileRead++;
+          if (fileRead === 1) {
+            return { id: "file", objectKey: "obj", userId: "u", aiJobResult: null };
+          }
+          return {
+            Package: [{ id: "other-package" }],
+            PackageScreenshot: [],
+            Profile: [],
+            Release: [],
+            aiJobResult: null,
+          };
+        },
+        deleteMany: async () => {
+          calls.push("file-delete");
+          return { count: 1 };
+        },
+      },
+      aiStorageCleanup: {
+        create: async () => {
+          calls.push("outbox-create");
+        },
+        updateMany: async () => {
+          calls.push("outbox-promote");
+          return { count: 1 };
+        },
+      },
+    } as never;
+
+    await deleteReleaseWithStorageCleanup({
+      id: "release",
+      userId: "u",
+      prisma: tx,
+    });
+    expect(calls).toEqual(["release-delete"]);
+  });
+
+  it("uses reference-aware cleanup for package and release deletion actions", async () => {
+    const packageDb = await readFile(
+      new URL("../../packages/db/src/package.ts", import.meta.url),
+      "utf8",
+    );
+    const packageDelete = packageDb.slice(
+      packageDb.indexOf("export async function deleteDevPackage({"),
+      packageDb.indexOf("export async function upsertPackagePricings"),
+    );
+    expect(packageDelete.indexOf("tx.package.delete")).toBeLessThan(
+      packageDelete.indexOf("deleteUnreferencedFileWithStorageCleanup"),
+    );
+
+    const packageAction = await readFile(
+      new URL(
+        "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/package.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const releaseAction = await readFile(
+      new URL(
+        "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/release.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(packageAction).not.toContain("deleteStorageFile");
+    expect(releaseAction).not.toContain("deleteStorageFile");
+    expect(releaseAction).toContain("deleteReleaseWithStorageCleanup");
+  });
+
+  it("enforces a unique screenshot order per package", async () => {
+    const schema = await readFile(new URL("../../apps/web/prisma/schema.prisma", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../../apps/web/prisma/migrations/20260831010000_unique_package_screenshot_order/migration.sql", import.meta.url), "utf8");
+    const action = await readFile(new URL("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/screenshot.ts", import.meta.url), "utf8");
+    const packageDb = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
+    const reorder = packageDb.slice(
+      packageDb.indexOf("export async function reorderDevPackageScreenshots"),
+      packageDb.indexOf("export async function updateDevPackageTags"),
+    );
+    expect(schema).toContain("@@unique([packageId, order])");
+    expect(migration).toContain('"PackageScreenshot_packageId_order_key"');
+    expect(migration).toContain("ROW_NUMBER() OVER");
+    expect(action.indexOf("tx.package.update")).toBeLessThan(
+      action.lastIndexOf("retrieveDevPackageLastScreenshotOrder"),
+    );
+    expect(reorder.indexOf("tx.package.update")).toBeLessThan(
+      reorder.indexOf("packageScreenshot.findMany"),
+    );
+    expect(reorder).toContain("order: -(index + 1)");
   });
 
   it("defers object cleanup while a dedicated reservation is still active", async () => {

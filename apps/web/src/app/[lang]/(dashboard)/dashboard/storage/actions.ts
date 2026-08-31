@@ -5,8 +5,8 @@ import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
-import { deleteStorageFile } from "@/lib/storage";
 import {
+  deleteUserFilesWithStorageCleanup,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
   updateFileVisibility,
@@ -16,30 +16,22 @@ export async function deleteFile(ids: string[]): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    const files = await retrieveFilesByIdsAndUserId({
-      ids,
+    const outcome = await deleteUserFilesWithStorageCleanup({
+      fileIds: ids,
       userId: session.user.id,
     });
-    if (!files.length) {
+    if (outcome.kind === "notFound") {
       return {
         success: false,
         message: t("storage:fileNotFound"),
       };
     }
-    if (files.some((f) => f.visibility === "DEDICATED")) {
+    if (outcome.kind === "inUse") {
       return {
         success: false,
         message: t("storage:cannotDeleteFileInUse"),
       };
     }
-
-    const promises = files.map(async (file) => {
-      await deleteStorageFile({
-        fileId: file.id,
-        userId: session.user.id,
-      });
-    });
-    await Promise.all(promises);
 
     revalidatePath(`/${lang}/dashboard/storage`);
     return {

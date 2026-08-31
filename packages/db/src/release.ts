@@ -1,5 +1,6 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import { deleteUnreferencedFileWithStorageCleanup } from "./file";
+import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
 export async function findReleaseForLibrary({
   id: latestReleaseId,
@@ -97,6 +98,7 @@ export async function getReleaseWithFileById({
           id: true,
           objectKey: true,
           size: true,
+          userId: true,
         },
       },
     },
@@ -241,4 +243,39 @@ export async function deleteReleaseById({
       id,
     },
   });
+}
+
+/** Remove a release pointer and retire its artifact in one transaction. */
+export async function deleteReleaseWithStorageCleanup({
+  id,
+  userId,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const run = async (tx: PrismaTransaction) => {
+    const release = await tx.release.findUnique({
+      where: { id },
+      select: {
+        package: { select: { userId: true } },
+        file: { select: { id: true, userId: true } },
+      },
+    });
+    if (!release || release.package.userId !== userId) {
+      throw new Error(`Release ${id} was not found`);
+    }
+
+    const deleted = await tx.release.delete({ where: { id } });
+    if (release.file?.userId === userId) {
+      await deleteUnreferencedFileWithStorageCleanup({
+        fileId: release.file.id,
+        userId,
+        prisma: tx,
+      });
+    }
+    return deleted;
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }

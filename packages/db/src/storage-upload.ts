@@ -361,6 +361,7 @@ export async function commitDedicatedStorageReservation({
   fileId,
   sha256,
   leaseToken,
+  publish,
   prisma,
 }: {
   id: string;
@@ -369,6 +370,7 @@ export async function commitDedicatedStorageReservation({
   fileId?: string;
   sha256?: string;
   leaseToken?: string;
+  publish?: (tx: PrismaTransaction, file: { id: string; objectKey: string; size: bigint }) => Promise<void>;
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
@@ -377,10 +379,12 @@ export async function commitDedicatedStorageReservation({
     } as never);
     if (!reservation) {
       const existing = await tx.file.findFirst({ where: { userId, objectKey, aiJobResult: null } } as never);
+      if (existing && publish) await publish(tx, existing);
       return existing ? { kind: "created" as const, record: existing } : { kind: "changed" as const };
     }
     if (reservation.completedFileId) {
       const existing = await tx.file.findFirst({ where: { id: reservation.completedFileId, userId } } as never);
+      if (existing && publish) await publish(tx, existing);
       return existing ? { kind: "created" as const, record: existing } : { kind: "changed" as const };
     }
     if (
@@ -399,6 +403,7 @@ export async function commitDedicatedStorageReservation({
         ...(sha256 ? { sha256 } : {}),
       },
     } as never);
+    if (publish) await publish(tx, created);
     const consumed = await tx.storageUpload.updateMany({
       where: {
         id,

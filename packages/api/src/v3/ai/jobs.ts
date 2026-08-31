@@ -90,14 +90,14 @@ const imageRetryInputSchema = z
 const videoFrameHistorySchema = z.object({
   filename: z.string().min(1),
   mimeType: z.string().min(1),
-});
+}).strict();
 
 const videoHistoryInputSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z.number().refine(isAiVideoDurationSeconds),
+  durationSeconds: z.number().refine(isAiVideoDurationSeconds).default(4),
   resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
-  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).optional(),
-  generateAudio: z.boolean().optional(),
+  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
+  generateAudio: z.boolean().default(true),
   seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
   firstFrame: videoFrameHistorySchema.optional(),
   lastFrame: videoFrameHistorySchema.optional(),
@@ -119,6 +119,34 @@ const translationHistoryInputSchema = z.object({
   segmentCount: z.number().int().positive(),
   characterCount: z.number().int().positive(),
 });
+
+const VIDEO_REPLAY_KEYS = ["prompt", "durationSeconds", "resolution", "aspectRatio", "generateAudio", "seed"] as const;
+
+function canonicalVideoReplayInput(input: unknown, includeFrames = false): { success: true; data: Record<string, unknown> } | { success: false } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { success: false };
+  const source = input as Record<string, unknown>;
+  if (typeof source.prompt !== "string" || source.prompt.length === 0 || source.prompt.length > MAX_AI_PROMPT_LENGTH || source.prompt !== source.prompt.trim()) return { success: false };
+  const parsed = videoHistoryInputSchema.safeParse(input);
+  const keys = Object.keys(source);
+  const allowed = new Set([...VIDEO_REPLAY_KEYS, "firstFrame", "lastFrame"]);
+  if (!parsed.success || keys.some((key) => !allowed.has(key)) || (!includeFrames && (keys.includes("firstFrame") || keys.includes("lastFrame")))) {
+    return { success: false };
+  }
+  const data: Record<string, unknown> = {};
+  for (const key of VIDEO_REPLAY_KEYS) {
+    if (source[key] !== undefined) data[key] = source[key];
+  }
+  if (includeFrames) {
+    for (const key of ["firstFrame", "lastFrame"] as const) {
+      if (source[key] !== undefined) data[key] = parsed.data[key];
+    }
+  }
+  if (data.durationSeconds === undefined) data.durationSeconds = 4;
+  if (data.resolution === undefined) data.resolution = "720p";
+  if (data.aspectRatio === undefined) data.aspectRatio = "16:9";
+  if (data.generateAudio === undefined) data.generateAudio = true;
+  return { success: true, data };
+}
 
 type AiJobRecord = NonNullable<
   Awaited<ReturnType<typeof getAiJobByUserId>>
@@ -192,42 +220,24 @@ export function parseReplayableAiJobInput(
 ): { success: true; data: { prompt: string; [key: string]: unknown } } | { success: false } {
   if (kind === "image") {
     const parsed = imageRetryInputSchema.safeParse(input);
-    const keys = input && typeof input === "object" ? Object.keys(input) : [];
+    const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : null;
+    const keys = source ? Object.keys(source) : [];
     const allowed = new Set(["prompt", "size", "aspectRatio", "background", "seed", "reference", "references"]);
     if (
       !parsed.success ||
+      typeof source?.prompt !== "string" ||
+      source.prompt !== source.prompt.trim() ||
       keys.some((key) => !allowed.has(key)) ||
       keys.includes("reference") ||
       keys.includes("references")
     ) {
       return { success: false };
     }
-    return {
-      success: true,
-      data: input as { prompt: string; [key: string]: unknown },
-    };
+    return { success: true, data: input as { prompt: string; [key: string]: unknown } };
   }
   if (kind === "video") {
-    const record = input && typeof input === "object" ? { ...(input as Record<string, unknown>) } : input;
-    if (record && typeof record === "object") {
-      if ((record as Record<string, unknown>).durationSeconds === undefined) (record as Record<string, unknown>).durationSeconds = 4;
-      if ((record as Record<string, unknown>).resolution === undefined) (record as Record<string, unknown>).resolution = "720p";
-    }
-    const parsed = videoHistoryInputSchema.safeParse(record);
-    const keys = input && typeof input === "object" ? Object.keys(input) : [];
-    const allowed = new Set(["prompt", "durationSeconds", "resolution", "aspectRatio", "generateAudio", "seed", "firstFrame", "lastFrame"]);
-    if (
-      !parsed.success ||
-      keys.some((key) => !allowed.has(key)) ||
-      keys.includes("firstFrame") ||
-      keys.includes("lastFrame")
-    ) {
-      return { success: false };
-    }
-    return {
-      success: true,
-      data: input as { prompt: string; [key: string]: unknown },
-    };
+    const canonical = canonicalVideoReplayInput(input);
+    return canonical.success ? { success: true, data: canonical.data as { prompt: string; [key: string]: unknown } } : canonical;
   }
   return { success: false };
 }
@@ -243,23 +253,44 @@ function canRetry(job: AiJobRecord): boolean {
 }
 
 function sanitizedInputParams(job: AiJobRecord): Record<string, unknown> | null {
+  return sanitizeAiJobInputParams(job.kind, job.inputParams);
+}
+
+/** Return the same allow-listed, canonical history payload used by the API. */
+export function sanitizeAiJobInputParams(kind: string, input: unknown): Record<string, unknown> | null {
+  if (kind === "image" && input && typeof input === "object" && !Array.isArray(input)) {
+    const source = input as Record<string, unknown>;
+    const parsed = imageRetryInputSchema.safeParse(input);
+    if (
+      !parsed.success ||
+      typeof source.prompt !== "string" ||
+      source.prompt !== source.prompt.trim()
+    ) return null;
+    const result: Record<string, unknown> = { prompt: source.prompt };
+    for (const key of ["size", "aspectRatio", "background", "seed"] as const) {
+      if (source[key] !== undefined) result[key] = source[key];
+    }
+    if (parsed.data.reference !== undefined) result.reference = parsed.data.reference;
+    if (parsed.data.references !== undefined) result.references = parsed.data.references;
+    return result;
+  }
   const parsed = (() => {
-    switch (job.kind) {
-      case "image":
-        return imageRetryInputSchema.safeParse(job.inputParams);
-      case "image_edit":
-        return imageEditHistoryInputSchema.safeParse(job.inputParams);
-      case "video":
-        return videoHistoryInputSchema.safeParse(job.inputParams);
-      case "stt":
-        return transcriptionHistoryInputSchema.safeParse(job.inputParams);
-      case "translation":
-        return translationHistoryInputSchema.safeParse(job.inputParams);
-      default:
-        return null;
+    switch (kind) {
+      case "image": {
+        const result = imageRetryInputSchema.safeParse(input);
+        if (!result.success) return result;
+        return result;
+      }
+      case "image_edit": return imageEditHistoryInputSchema.safeParse(input);
+      case "video": {
+        const canonical = canonicalVideoReplayInput(input, true);
+        return canonical.success ? canonical : null;
+      }
+      case "stt": return transcriptionHistoryInputSchema.safeParse(input);
+      case "translation": return translationHistoryInputSchema.safeParse(input);
+      default: return null;
     }
   })();
-
   return parsed?.success ? parsed.data : null;
 }
 

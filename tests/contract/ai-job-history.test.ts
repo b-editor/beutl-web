@@ -4,7 +4,7 @@ import { sign } from "hono/jwt";
 import {
   createAiJob,
   createFile,
-  deleteFile,
+  deleteFileWithStorageCleanup,
   findFileForApi,
   findFileForContentAccess,
   retrieveFilesByIdsAndUserId,
@@ -18,6 +18,7 @@ import {
 import {
   createReservedAiJob,
   reconcileAiJobs,
+  parseReplayableAiJobInput,
   setR2BucketProvider,
   v3,
 } from "@beutl/api";
@@ -194,6 +195,8 @@ describe("v3 AI job history contract", () => {
             prompt: "newest",
             durationSeconds: 4,
             resolution: "720p",
+            aspectRatio: "16:9",
+            generateAudio: true,
           },
           fileId: file.id,
           url: `${PUBLIC_ORIGIN}/api/contents/${file.id}`,
@@ -300,8 +303,42 @@ describe("v3 AI job history contract", () => {
     expect(byId.get(unknownVideoField.id)).toMatchObject({ canRetry: false });
     // Rows from before duration/resolution were persisted still represent a
     // replayable text-to-video request; the retry action supplies its defaults.
-    expect(byId.get(legacyVideo.id)).toMatchObject({ canRetry: true });
+    expect(byId.get(legacyVideo.id)).toMatchObject({
+      canRetry: true,
+      inputParams: {
+        prompt: "legacy video",
+        durationSeconds: 4,
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+      },
+    });
     expect(byId.get(bothImageShapes.id)).toMatchObject({ canRetry: false });
+  });
+
+  it("preserves the persisted prompt and body values while adding only legacy video defaults", () => {
+    const result = parseReplayableAiJobInput("video", {
+      prompt: "keep  internal whitespace",
+      seed: 12,
+    });
+    expect(result).toEqual({
+      success: true,
+      data: {
+        prompt: "keep  internal whitespace",
+        seed: 12,
+        durationSeconds: 4,
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+      },
+    });
+    expect(parseReplayableAiJobInput("image", { prompt: "keep  internal", size: "1024x1024" })).toEqual({
+      success: true,
+      data: { prompt: "keep  internal", size: "1024x1024" },
+    });
+    expect(parseReplayableAiJobInput("image", { prompt: " raw ", size: "1024x1024" }))
+      .toEqual({ success: false });
+    expect(parseReplayableAiJobInput("video", { prompt: " raw " })).toEqual({ success: false });
   });
 
   it("uses the job id as a cursor tie-breaker for identical timestamps", async () => {
@@ -519,7 +556,7 @@ describe("v3 AI job history contract", () => {
     await expect(
       updateFileVisibility({ fileId: file.id, visibility: "PUBLIC" }),
     ).rejects.toThrow("owned by an AI job");
-    await expect(deleteFile({ fileId: file.id })).rejects.toThrow();
+    await expect(deleteFileWithStorageCleanup({ fileId: file.id })).rejects.toThrow();
     expect(state.files.has(file.id)).toBe(true);
 
     const anonymous = await makeApp().request(`/api/v3/files/${file.id}`);

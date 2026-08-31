@@ -859,6 +859,7 @@ model PackageScreenshot {
   package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@id([packageId, fileId])
+  @@unique([packageId, order])
 }
 
 model UserPackage {
