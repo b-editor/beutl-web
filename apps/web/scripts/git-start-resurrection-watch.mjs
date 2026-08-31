@@ -21,46 +21,27 @@ import { PrismaClient } from "@prisma/client";
 import { pathToFileURL } from "node:url";
 
 /**
- * 控えの表ができた時点。`_prisma_migrations` から読む。
- *
- * これより前に作られた利用者は、**控えを書く仕組みがまだ無かった版**のもの。
- * 単独で実行されたとき (release から呼ばれていないとき) の境界に使う。
- *
- * 読めなければ null。呼ぶ側は fail-closed に倒す。
- */
-async function tombstoneTablesAppliedAt(prisma) {
-  try {
-    const rows = await prisma.$queryRaw`
-      SELECT "finished_at" FROM "_prisma_migrations"
-      WHERE "migration_name" = '20260826000000_git_resurrection_tombstones'
-        AND "finished_at" IS NOT NULL
-        AND "rolled_back_at" IS NULL
-      LIMIT 1
-    `;
-    const finished = rows?.[0]?.finished_at;
-    return finished ? new Date(finished) : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * 流し切ったと明示されているか。
  *
- * **値は時刻**にしてある。`1` のような固定値だと、shell に残った古い値が別の配備を
- * そのまま通してしまう。`quiesce-canary.sh` が成功したときに、その窓の終わりの
- * 時刻を貼れる形で出す。
+ * **値は `quiesce-canary.sh` が出す receipt の nonce**にしてある。固定値だと
+ * shell に残った古い値が別の配備をそのまま通してしまう。nonce には窓の終わりの
+ * 時刻が入っているので、古すぎる申告もここで落とせる。
  *
- * 先の時刻と、古すぎる値は受け取らない。
+ * **一度きりの消費までは強制していない。** 同じ nonce を 2 回渡せば 2 回とも
+ * 通る。実害の入口は見張りの開始だけで、そこは `startedAt` が一度しか書かれない
+ * ので二重には始まらないが、**申告そのものを使い捨てにするには、消費済みの
+ * nonce を残す場所が要る** (この分岐には無い。docs の制限に挙げてある)。
  */
 const DRAIN_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 function drainDeclared() {
   const raw = process.env.BEUTL_GIT_DRAINED;
   if (!raw) return false;
-  const at = new Date(raw);
+  // receipt の nonce は "<epoch 秒>:<16 進>"。時刻だけの値も受ける。
+  const match = /^(\d+):[0-9a-f]{8,}$/.exec(raw);
+  const at = match ? new Date(Number(match[1]) * 1000) : new Date(raw);
   if (Number.isNaN(at.getTime())) {
     console.error(
-      `error: BEUTL_GIT_DRAINED を時刻として読めません: ${raw}\n` +
+      `error: BEUTL_GIT_DRAINED を読めません: ${raw}\n` +
         "       quiesce-canary.sh が成功したときに出す行をそのまま使ってください。",
     );
     return false;
@@ -91,59 +72,37 @@ function drainDeclared() {
  *
  * **その手順が済んだかどうかは、ここからは見えない。** 口を閉じるのは git-server
  * 側の Caddy と画面の側で、流し切ったことを確かめるのも向こうのホスト
- * (`quiesce-canary.sh`)。見えないものを済んだことにはしないので、**この配備が
- * 始まる前から利用者がいたなら、手順を通したと明示させる**。
+ * (`quiesce-canary.sh`)。見えないものを済んだことにはしないので、**利用者が
+ * いるなら、手順を通したと明示させる**。
  *
- * **「今いる利用者」ではなく「配備が始まる前からいた利用者」を数える。**
- * release は smoke test で `GET /api/v3/git/account` を叩き、そこで
- * `GitAccount` が 1 件できる。今の数を見ると、**初回配備が自分の smoke test で
- * 止まる** (実際にそうなっていた)。しかも止まるのは migration と Worker 配備の
- * 後で、残った smoke の行はやり直しでも「既存の利用者」に見える。
+ * **時刻では判定しない。**
  *
- * 境界は 2 通りで決める。
- *   - release から呼ばれたとき: release が自分の開始時刻を渡す
- *   - 単独で実行されたとき: 控えの表ができた時点 (`_prisma_migrations`)
- * どちらも「この配備より前から居たか」を見ていることに変わりはない。
+ * 以前はここで「この配備が始まった時刻より前の行」を数えていた。境界は実行ホスト
+ * の時計、`createdAt` はデータベースの時計で付くので、**ずれた分だけ判定が入れ替わる**。
+ * ホストが遅れていれば配備前からの利用者を「配備後」と読んで素通しし、進んで
+ * いれば今回の smoke の行を既存利用者と読んで初回配備を止める。やり直すたびに
+ * 境界が変わるので、前回の smoke の行が「古い利用者」に化ける。しかも
+ * 「境界より後」は smoke だけでなく、**配備の最中に現れた本物の利用者まで**
+ * 除外してしまう。
+ *
+ * 除くのは**この smoke test が作ったアカウント 1 つだけ**にした。release は
+ * `BEUTL_SMOKE_JWT` の持ち主を知っているので、その `userId` を渡す。時計は
+ * どこにも出てこないので、ずれても、やり直しても、同じ答えになる。
  *
  * 初回の配備では 0 件になるので黙って通る。
  */
 export async function requireDrain(prisma) {
-  let boundary = null;
-  const declared = process.env.BEUTL_GIT_DEPLOY_STARTED_AT;
-  if (declared) {
-    const at = new Date(declared);
-    if (Number.isNaN(at.getTime())) {
-      throw new Error(
-        `BEUTL_GIT_DEPLOY_STARTED_AT is not a timestamp: ${declared}`,
-      );
-    }
-    boundary = at;
-  } else {
-    boundary = await tombstoneTablesAppliedAt(prisma);
-    if (!boundary) {
-      // 境界が決まらない。**通さない。** 分からないものを「利用者はいない」と
-      // 読むと、この検査そのものが意味を失う。
-      if (drainDeclared()) return;
-      console.error(
-        "error: この配備が始まった時点を決められません " +
-          "(_prisma_migrations に 20260826000000_git_resurrection_tombstones の\n" +
-          "       適用記録がありません)。\n" +
-          "       流し切ったうえで BEUTL_GIT_DRAINED に時刻を渡してください。",
-      );
-      throw new Error(
-        "refusing to start the resurrection watch: cannot determine when this " +
-          "deployment began",
-      );
-    }
-  }
+  // smoke test の持ち主。release が渡す。**この 1 人だけを除く。**
+  const smokeUserId = process.env.BEUTL_GIT_SMOKE_USER_ID || null;
+  const where = smokeUserId ? { userId: { not: smokeUserId } } : {};
 
   // 表そのものが無ければ、Git を提供したことが無い = 初回配備。
   let accounts = 0;
   let credentials = 0;
   try {
     [accounts, credentials] = await Promise.all([
-      prisma.gitAccount.count({ where: { createdAt: { lt: boundary } } }),
-      prisma.gitCredential.count({ where: { createdAt: { lt: boundary } } }),
+      prisma.gitAccount.count({ where }),
+      prisma.gitCredential.count({ where }),
     ]);
   } catch (error) {
     if (isMissingTable(error)) return;
@@ -152,9 +111,9 @@ export async function requireDrain(prisma) {
   if (accounts === 0 && credentials === 0) return;
   if (drainDeclared()) return;
   console.error(
-    `error: この配備より前から Git を使っている利用者がいます ` +
-      `(${boundary.toISOString()} より前のアカウント ${accounts} 件 / ` +
-      `資格情報 ${credentials} 件)。\n` +
+    `error: Git を使っている利用者がいます ` +
+      `(アカウント ${accounts} 件 / 資格情報 ${credentials} 件` +
+      `${smokeUserId ? "、smoke の分は除く" : ""})。\n` +
       "       見張りを始める前に、古い Worker が処理中の消去を流し切って\n" +
       "       ください。流し切らずに始めると、控えの無い消去が見張りの開始より\n" +
       "       後に紛れ込み、**その後の控えから戻しても生き返りが数に出ません**。\n" +
@@ -162,8 +121,8 @@ export async function requireDrain(prisma) {
       "         1. 画面と API から、リポジトリの削除と資格情報の失効を止める\n" +
       "         2. git-server で ./scripts/quiesce-canary.sh\n" +
       "         3. その出力が示す行で release を実行する\n" +
-      "              BEUTL_GIT_DRAINED=<窓の終わりの時刻> pnpm run release\n" +
-      "         4. 口を開け直す\n" +
+      "              BEUTL_GIT_DRAINED=<receipt の nonce> pnpm run release\n" +
+      "         4. 口を開け直す前に、もう一度 quiesce-canary.sh --against <receipt>\n" +
       "\n" +
       "       手順の全文は git-server/docs/operations.md\n" +
       "       「Git の口を既に公開している版から上げるとき」。",

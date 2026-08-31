@@ -88,10 +88,44 @@ const DRIFT = "migration history and the migrations table from your database are
 // **通してよい唯一の非 0**。まだ当てていないものがあるのは、これから当てるのだから当然。
 const PENDING = "have not yet been applied";
 
-// **この配備が始まった時刻。** 見張りのゲートが「この配備より前から利用者が
-// いたか」を見るのに使う。今いる数を見ると、下の smoke test が作った行まで
-// 数えてしまい、初回配備が自分の副作用で止まる。
-process.env.BEUTL_GIT_DEPLOY_STARTED_AT = new Date().toISOString();
+// **smoke test の持ち主。** 見張りのゲートがこの 1 人だけを除いて数える。
+//
+// 下の smoke test は GET /api/v3/git/account を叩き、そこで GitAccount が
+// 1 件できる。今いる数をそのまま見ると、初回配備が自分の副作用で止まる。
+//
+// **時刻では切らない。** 「この配備が始まった時刻より前の行」で切っていたことが
+// あるが、境界は実行ホストの時計・createdAt はデータベースの時計なので、ずれた
+// 分だけ判定が入れ替わる。しかも「境界より後」は smoke だけでなく、配備の最中に
+// 現れた本物の利用者まで除いてしまう。除くのは smoke の 1 人だけにする。
+//
+// **署名は検証しない。** ここでやりたいのは「どのアカウントが自分のものか」を
+// 知ることだけ。BEUTL_SMOKE_JWT を置ける人は BEUTL_GIT_DRAINED も置けるので、
+// ここを厳しくしても守るものが増えない。
+function smokeUserIdFromJwt(token) {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    );
+    const claim =
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
+    const userId = payload[claim];
+    return typeof userId === "string" && userId.length > 0 ? userId : null;
+  } catch {
+    return null;
+  }
+}
+if (provisionCheck && process.env.BEUTL_SMOKE_JWT) {
+  const smokeUserId = smokeUserIdFromJwt(process.env.BEUTL_SMOKE_JWT);
+  if (smokeUserId) {
+    process.env.BEUTL_GIT_SMOKE_USER_ID = smokeUserId;
+  } else {
+    console.error(
+      "警告: BEUTL_SMOKE_JWT から利用者を読めませんでした。smoke が作る\n" +
+        "      アカウントを見張りのゲートから除けないので、初回配備でも\n" +
+        "      止まることがあります。",
+    );
+  }
+}
 
 // **止めるなら、何かを変える前に止める。**
 //
