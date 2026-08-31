@@ -50,9 +50,16 @@ import {
   getAiJobResultFile,
   upsertAiOperationModel,
 } from "@beutl/db";
+import { retryJobFingerprint } from "../../apps/web/src/lib/ai-retry-attempt";
 
 const loadAiImageModelCapabilities = vi.hoisted(() =>
   vi.fn(async () => new Map()),
+);
+const loadAiVideoModelCapabilities = vi.hoisted(() =>
+  vi.fn(async () => new Map()),
+);
+const createAndAttachVideoJob = vi.hoisted(() =>
+  vi.fn(async () => undefined),
 );
 
 vi.mock("@beutl/api", async (importOriginal) => {
@@ -66,6 +73,8 @@ vi.mock("@beutl/api", async (importOriginal) => {
     translateSegments: vi.fn(),
     readAiJsonResult: vi.fn(),
     loadAiImageModelCapabilities,
+    loadAiVideoModelCapabilities,
+    createAndAttachVideoJob,
   };
 });
 
@@ -92,6 +101,10 @@ describe("dashboard AI actions", () => {
     }));
     loadAiImageModelCapabilities.mockReset();
     loadAiImageModelCapabilities.mockResolvedValue(new Map());
+    loadAiVideoModelCapabilities.mockReset();
+    loadAiVideoModelCapabilities.mockResolvedValue(new Map());
+    createAndAttachVideoJob.mockReset();
+    createAndAttachVideoJob.mockResolvedValue(undefined);
   });
 
   // Every submission carries the key that makes a resubmission land on the job
@@ -514,6 +527,89 @@ describe("dashboard AI actions", () => {
         model: "dear/model",
       });
     }
+
+    it("retries a legacy video row with the canonical history fingerprint", async () => {
+      await registerVideoModel();
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "video",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: { prompt: "legacy video" },
+        usageUnits: 32,
+        model: "dear/video",
+      });
+
+      const listed = await listJobsAction();
+      const historyJob = listed.jobs?.find((candidate) => candidate.id === job.id);
+      expect(historyJob).toMatchObject({
+        inputParams: {
+          prompt: "legacy video",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+        },
+        canRetry: true,
+      });
+      const expectedFingerprint = await retryJobFingerprint({
+        kind: "video",
+        model: "dear/video",
+        inputParams: historyJob?.inputParams,
+      });
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "reserved",
+        job: {
+          id: "job-legacy-video-retry",
+          status: "queued",
+          resultFileId: null,
+          resultFile: null,
+        },
+      });
+
+      const previousOrigin = process.env.PUBLIC_ORIGIN;
+      process.env.PUBLIC_ORIGIN = "https://beutl.example";
+      let result: Awaited<ReturnType<typeof retryJobAction>>;
+      try {
+        result = await retryJobAction(
+          job.id,
+          "3f1a0d0e-0000-4000-8000-000000000017",
+          expectedFingerprint,
+        );
+      } finally {
+        if (previousOrigin === undefined) {
+          delete process.env.PUBLIC_ORIGIN;
+        } else {
+          process.env.PUBLIC_ORIGIN = previousOrigin;
+        }
+      }
+
+      expect(result).toMatchObject({
+        success: true,
+        jobId: "job-legacy-video-retry",
+      });
+      expect(createReservedAiJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputParams: {
+            prompt: "legacy video",
+            durationSeconds: 4,
+            resolution: "720p",
+            aspectRatio: "16:9",
+            generateAudio: true,
+          },
+        }),
+      );
+      expect(createAndAttachVideoJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "legacy video",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+        }),
+      );
+    });
 
     it("repeats the model the original ran on", async () => {
       await registerImageModels(true);

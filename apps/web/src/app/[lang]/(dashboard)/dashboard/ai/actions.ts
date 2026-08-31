@@ -1421,7 +1421,7 @@ export async function retryJobAction(
     const actualFingerprint = await retryJobFingerprint({
       kind: job.kind,
       model: job.model,
-      inputParams: job.inputParams,
+      inputParams: replayInput.data,
     });
     // Accept the pre-fingerprint JSON token during the short rolling window,
     // but all new browser confirmations carry only the bounded digest.
@@ -1429,7 +1429,7 @@ export async function retryJobAction(
       JSON.stringify({
         kind: job.kind,
         model: job.model,
-        inputParams: job.inputParams,
+        inputParams: replayInput.data,
       }) === expectedFingerprint;
     if (actualFingerprint !== expectedFingerprint && !legacyMatch) {
       return {
