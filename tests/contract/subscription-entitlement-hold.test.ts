@@ -4,7 +4,7 @@ import {
   reconcileSubscriptionEntitlementHold,
   setDbProvider,
 } from "@beutl/db";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const augustStart = new Date("2026-08-01T00:00:00.000Z");
 const septemberStart = new Date("2026-09-01T00:00:00.000Z");
@@ -45,6 +45,8 @@ describe("Pro entitlement reversal holds", () => {
   });
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-15T00:00:00.000Z"));
     hold = null;
     currentSubscriptionId = "sub_1";
     currentPeriodStart = augustStart;
@@ -107,6 +109,10 @@ describe("Pro entitlement reversal holds", () => {
         await callback(prisma),
     };
     setDbProvider(async () => prisma);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("does not trust an active subscription without a verified billing offer", () => {

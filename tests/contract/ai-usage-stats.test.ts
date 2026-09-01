@@ -26,8 +26,8 @@ import {
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const PERIOD = {
-  start: new Date("2026-08-01T00:00:00.000Z"),
-  end: new Date("2026-09-01T00:00:00.000Z"),
+  start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000),
+  end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
 };
 const MONTHLY_LIMIT = 500;
 // Everything the stub writes is stamped with the wall clock, so a window that

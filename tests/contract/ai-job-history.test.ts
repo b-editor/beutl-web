@@ -28,6 +28,10 @@ const USER_ID = "ai-history-user";
 const OTHER_USER_ID = "ai-history-other-user";
 const JWT_SECRET = "test-secret-for-ai-history";
 const PUBLIC_ORIGIN = "https://beutl.beditor.net";
+const ACTIVE_PERIOD = {
+  start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000),
+  end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+};
 
 function makeApp() {
   return new Hono().basePath("/api/v3").route("/", v3);
@@ -800,8 +804,8 @@ describe("v3 AI job history contract", () => {
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro_test",
-      currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
-      currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
     });
     const reservation = await createReservedAiJob({
       userId: USER_ID,
@@ -895,8 +899,8 @@ describe("v3 AI job history contract", () => {
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro_test",
-      currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
-      currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
     });
     const identity = {
       idempotencyKeyHash: "a".repeat(64),
