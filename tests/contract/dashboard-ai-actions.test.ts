@@ -43,6 +43,7 @@ import {
   readAiJsonResult,
   saveAiImage,
   translateSegments,
+  toAiRequestIdentity,
 } from "@beutl/api";
 import {
   createAiJob,
@@ -118,6 +119,20 @@ describe("dashboard AI actions", () => {
     formData.set("prompt", prompt);
     formData.set("size", "1024x1024");
     formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000001");
+    return formData;
+  }
+
+  function videoForm(
+    prompt = "Animate the scene",
+    idempotencyKey = "3f1a0d0e-0000-4000-8000-000000000101",
+  ): FormData {
+    const formData = new FormData();
+    formData.set("prompt", prompt);
+    formData.set("durationSeconds", "4");
+    formData.set("resolution", "720p");
+    formData.set("aspectRatio", "16:9");
+    formData.set("generateAudio", "true");
+    formData.set("idempotencyKey", idempotencyKey);
     return formData;
   }
 
@@ -528,6 +543,86 @@ describe("dashboard AI actions", () => {
       });
     }
 
+    it("reports a failed replay before model resolution instead of returning queued success", async () => {
+      const formData = videoForm();
+      const identity = await toAiRequestIdentity({
+        idempotencyKey: formData.get("idempotencyKey"),
+        operation: "video.generate",
+        input: {
+          prompt: "Animate the scene",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+        },
+      });
+      expect(identity).not.toBeNull();
+      await createAiJob({
+        userId: "user-1",
+        kind: "video",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: {
+          prompt: "Animate the scene",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+        },
+        usageUnits: 32,
+        model: "dear/video",
+        idempotencyKeyHash: identity!.idempotencyKeyHash,
+        requestFingerprint: identity!.requestFingerprint,
+      });
+
+      const result = await createVideoAction({ success: false }, formData);
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiProviderError",
+        status: "failed",
+      });
+      expect(result.keepIdempotencyKey).toBeUndefined();
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+    });
+
+    it.each(["failed", "succeeded", "queued"] as const)(
+      "honors the durable status for an existing video reservation (%s)",
+      async (status) => {
+        await registerVideoModel();
+        vi.mocked(createReservedAiJob).mockResolvedValue({
+          ok: true,
+          outcome: "existing",
+          job: {
+            id: `job-existing-video-${status}`,
+            status,
+            resultFileId: status === "succeeded" ? "file-video" : null,
+            resultFile: null,
+          },
+        });
+
+        const result = await createVideoAction(
+          { success: false },
+          videoForm("A different prompt", `3f1a0d0e-0000-4000-8000-00000000010${status === "failed" ? "2" : status === "succeeded" ? "3" : "4"}`),
+        );
+
+        if (status === "failed") {
+          expect(result).toMatchObject({
+            success: false,
+            message: "api-errors:aiProviderError",
+            status,
+          });
+        } else {
+          expect(result).toMatchObject({
+            success: true,
+            jobId: `job-existing-video-${status}`,
+            status,
+          });
+        }
+        expect(createAndAttachVideoJob).not.toHaveBeenCalled();
+      },
+    );
+
     it("retries a legacy video row with the canonical history fingerprint", async () => {
       await registerVideoModel();
       const job = await createAiJob({
@@ -690,6 +785,48 @@ describe("dashboard AI actions", () => {
         contentType: "image/png",
       });
       expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a failed existing video retry reservation after a lost response", async () => {
+      await registerVideoModel();
+      const job = await createAiJob({
+        userId: "user-1",
+        kind: "video",
+        provider: "openrouter",
+        status: "failed",
+        inputParams: {
+          prompt: "a cat",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+        },
+        usageUnits: 32,
+        model: "dear/video",
+      });
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "existing",
+        job: {
+          id: "job-failed-video-retry",
+          status: "failed",
+          resultFileId: null,
+          resultFile: null,
+        },
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000115",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiProviderError",
+        status: "failed",
+      });
+      expect(result.keepIdempotencyKey).toBeUndefined();
+      expect(createAndAttachVideoJob).not.toHaveBeenCalled();
     });
 
     it("refuses when that model has since been disabled", async () => {

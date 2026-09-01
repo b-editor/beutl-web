@@ -293,6 +293,42 @@ async function answerFromExistingFileJob(
     : { success: false, message: t("api-errors:aiProviderError") };
 }
 
+// Video submissions are asynchronous, but an idempotency replay still has to
+// respect the durable row's terminal outcome. Returning success unconditionally
+// makes a response-lost retry appear queued even after the provider failed and
+// usage was refunded. Keep active rows recoverable, return the stored result for
+// success, and surface terminal failure without retaining the key.
+async function answerFromExistingVideoJob(
+  job: {
+    id: string;
+    status: string;
+    resultFileId: string | null;
+  },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded") {
+    return {
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+    };
+  }
+  if (stillRunning(job.status)) {
+    return {
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+    };
+  }
+  return {
+    success: false,
+    message: t("api-errors:aiProviderError"),
+    status: job.status,
+  };
+}
+
 // Submitting a video is the one AI operation whose failure is not simply a
 // refund: OpenRouter may have accepted a job we lost track of. The shared
 // classifier decides, so this path and the v3 endpoints cannot drift apart.
@@ -1261,14 +1297,7 @@ export async function createVideoAction(
   const settled = settledReplay(replay, t);
   if (settled) return settled;
   if (replay?.outcome === "existing") {
-    // 動画は非同期なので job そのものが答え。
-    return {
-      success: true,
-      jobId: replay.job.id,
-      url: replay.job.resultFileId
-        ? await getContentUrl(replay.job.resultFileId)
-        : null,
-    };
+    return await answerFromExistingVideoJob(replay.job, t);
   }
 
   const selectedModel = await resolveModelOf(formData, "video.generate");
@@ -1325,11 +1354,7 @@ export async function createVideoAction(
   }
   const { job } = reservation;
   if (reservation.outcome === "existing") {
-    return {
-      success: true,
-      jobId: job.id,
-      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
-    };
+    return await answerFromExistingVideoJob(job, t);
   }
 
   const callbackUrl = await resolveVideoCallbackUrl(job.id, callbackNonce.nonce);
@@ -1696,7 +1721,7 @@ export async function retryJobAction(
     }
     const { job: retried } = reservation;
     if (reservation.outcome === "existing") {
-      return { success: true, jobId: retried.id };
+      return await answerFromExistingVideoJob(retried, t);
     }
     const callbackUrl = await resolveVideoCallbackUrl(
       retried.id,
