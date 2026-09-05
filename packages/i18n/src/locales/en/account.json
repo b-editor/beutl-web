@@ -88,7 +88,7 @@
     "viewInvoice": "Invoice",
     "viewReceipt": "Receipt",
     "paymentMethod": "Payment Method",
-    "paymentMethodDescription": "Add or update your card in the Stripe billing portal.",
+    "paymentMethodDescription": "You can add or update your card information.",
     "noPaymentMethodYet": "No payment method is saved yet.",
     "changePaymentMethod": "Change Payment Method",
     "stripeUnavailableNotice": "We could not reach Stripe, so this page may not reflect your latest changes. Reload in a moment."

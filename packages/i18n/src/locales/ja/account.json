@@ -88,7 +88,7 @@
     "viewInvoice": "請求書",
     "viewReceipt": "領収書",
     "paymentMethod": "支払い方法",
-    "paymentMethodDescription": "カード情報の変更や追加は Stripe の請求ポータルで行います。",
+    "paymentMethodDescription": "カード情報の変更や追加が行えます。",
     "noPaymentMethodYet": "お支払い方法はまだ登録されていません。",
     "changePaymentMethod": "支払い方法を変更",
     "stripeUnavailableNotice": "Stripe に接続できなかったため、最新の状態を反映できていない可能性があります。時間をおいて再読み込みしてください。"
