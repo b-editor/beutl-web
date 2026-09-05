@@ -72,6 +72,9 @@ describe("AI usage aggregates", () => {
     Object.assign(memory.prisma.subscriptionEntitlementHold, {
       findMany: async () => [],
     });
+    Object.assign(memory.prisma.accountDeletionIntent, {
+      findMany: async () => [],
+    });
     setDbProvider(async () => memory.prisma as never);
   });
 
@@ -447,6 +450,36 @@ describe("AI usage aggregates", () => {
         }),
       }),
     );
+  });
+
+  it("excludes subscriptions while an authorized deletion intent is active", async () => {
+    const now = new Date("2026-08-15T00:00:00.000Z");
+    for (const userId of ["user-active", "user-deleting"]) {
+      await upsertSubscription({
+        userId,
+        stripeSubscriptionId: `sub-${userId}`,
+        status: "active",
+        planId: "pro",
+        currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
+        currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+        billingOfferId: "offer-1",
+      });
+    }
+    const findMany = vi.fn().mockResolvedValue([{ userId: "user-deleting" }]);
+    Object.assign(memory.prisma.accountDeletionIntent, { findMany });
+
+    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        expiresAt: { gt: now },
+        user: {
+          Subscription: {
+            is: expect.objectContaining({ planId: "pro" }),
+          },
+        },
+      },
+      select: { userId: true },
+    });
   });
 });
 

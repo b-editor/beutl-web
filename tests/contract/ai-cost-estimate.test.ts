@@ -204,8 +204,8 @@ describe("AI provider cost estimates", () => {
     const edit = byOperation.get("image.edit.remove_background")?.estimate;
     expect(edit?.status).toBe("estimated");
     if (edit?.status === "estimated") {
-      // Costed alike: an edit sends the same input at the same price.
-      expect(edit.usdMin).toBeCloseTo(0.08448, 8);
+      // An edit sends one source image rather than generation's maximum four.
+      expect(edit.usdMin).toBeCloseTo(0.0528, 8);
     }
     // Priced per image rather than per token, so no assumption is needed.
     expect(byOperation.get("image.edit.upscale")?.estimate).toMatchObject({
@@ -356,6 +356,33 @@ describe("AI provider cost estimates", () => {
 
     expect(byOperation.get("video.generate")?.estimate.status).toBe("unknown");
     expect(byOperation.get("image.generate")?.estimate.status).toBe("estimated");
+  });
+
+  it("prices an audio-incapable video model with its silent SKU", async () => {
+    stubFetch((url) =>
+      url.endsWith("/videos/models")
+        ? jsonResponse({
+            data: [{
+              ...VIDEO_MODELS.data[0],
+              id: "vendor/silent-video",
+              canonical_slug: "vendor/silent-video",
+              name: "Silent video",
+              generate_audio: false,
+              pricing_skus: { duration_seconds_without_audio: "0.20" },
+            }],
+          })
+        : jsonResponse(routeFor(url) ?? {}),
+    );
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (operation) =>
+        operation === "video.generate" ? ["vendor/silent-video"] : [],
+    });
+
+    expect(result.entries[0]?.estimate).toMatchObject({
+      status: "estimated",
+      usdMin: 0.2,
+    });
   });
 });
 

@@ -44,8 +44,8 @@ const MAX_CACHE_ENTRIES = 64;
 // one the schema happens to default to. That differs per model now: one that
 // renders only at 2K is never asked for 1080p, and one that stops at 720p is
 // never asked for more. AI_VIDEO_RESOLUTIONS is ordered smallest first, so the
-// last one both sides offer is the dearest. The app never requests silent
-// video, so that shape stays out of the estimate.
+// last one both sides offer is the dearest. Models that cannot generate audio
+// are priced against the silent request shape the API forces for them.
 function dearestOfferedResolution(
   supported: readonly string[] | null | undefined,
 ): string {
@@ -54,7 +54,6 @@ function dearestOfferedResolution(
   );
   return offered[offered.length - 1] ?? AI_VIDEO_RESOLUTIONS[AI_VIDEO_RESOLUTIONS.length - 1]!;
 }
-const VIDEO_WITH_AUDIO = true;
 
 type CacheEntry = {
   expiresAt: number;
@@ -278,7 +277,7 @@ async function estimateVideoOperation(
   return estimateVideoCost({
     pricingSkus: entry.pricingSkus,
     resolution: dearestOfferedResolution(entry.supportedResolutions),
-    withAudio: VIDEO_WITH_AUDIO,
+    withAudio: entry.generateAudio ?? true,
   });
 }
 
@@ -356,11 +355,14 @@ async function estimateOperation(
     return await estimateVideoOperation(model, options);
   }
   if (operation.startsWith("image.")) {
-    // An edit always sends its source, and a generation may be guided by a
-    // reference at the same price, so both are costed with one input image:
-    // this figure exists to check that a price covers its cost, and the run
-    // that sends nothing is the cheap one.
-    return await estimateImageOperation(model, AI_MAX_IMAGE_REFERENCES, options);
+    // Every edit sends exactly one source image. Generation is costed with the
+    // maximum reference set because the configured unit price must cover its
+    // most expensive valid request shape.
+    return await estimateImageOperation(
+      model,
+      operation === "image.generate" ? AI_MAX_IMAGE_REFERENCES : 1,
+      options,
+    );
   }
 
   const pricing = await loadModelPricing(model, options);

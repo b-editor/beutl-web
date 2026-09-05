@@ -300,7 +300,7 @@ export async function countActiveProSubscriptions({
     // for weeks after it stopped being able to.
     OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
   };
-  const [activeCount, activeHolds] = await Promise.all([
+  const [activeCount, activeHolds, deletionIntents] = await Promise.all([
     db.subscription.count({ where: activeWhere }),
     db.subscriptionEntitlementHold.findMany({
       where: {
@@ -329,12 +329,23 @@ export async function countActiveProSubscriptions({
         },
       },
     }),
+    db.accountDeletionIntent.findMany({
+      where: {
+        expiresAt: { gt: now },
+        user: {
+          Subscription: {
+            is: activeWhere,
+          },
+        },
+      },
+      select: { userId: true },
+    }),
   ]);
 
   // Holds remain as audit records after a period or subscription replacement.
   // Mirror getSubscriptionByUserId's identity and overlap checks so only a hold
   // that currently denies the allowance is removed from the report.
-  const heldUsers = new Set<string>();
+  const ineligibleUsers = new Set<string>();
   for (const hold of activeHolds) {
     const subscription = hold.user.Subscription;
     if (
@@ -353,9 +364,12 @@ export async function countActiveProSubscriptions({
     ) {
       continue;
     }
-    heldUsers.add(hold.userId);
+    ineligibleUsers.add(hold.userId);
   }
-  return Math.max(0, activeCount - heldUsers.size);
+  for (const intent of deletionIntents) {
+    ineligibleUsers.add(intent.userId);
+  }
+  return Math.max(0, activeCount - ineligibleUsers.size);
 }
 
 // The account row as stored. Unlike getCreditAccount this never creates one,
