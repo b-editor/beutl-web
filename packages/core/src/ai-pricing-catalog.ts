@@ -1,3 +1,5 @@
+import { MIN_AI_VIDEO_DURATION_SECONDS } from "./ai-capabilities";
+
 // The billable operations and the input unit each one is metered by.
 //
 // Unit prices are NOT defined here: they are administrator-configurable and
@@ -10,10 +12,9 @@
 // @beutl/db, which cannot be imported from a browser bundle.
 // `minimumQuantity` is how many billing units the smallest request an entry
 // point will accept actually costs. It is one for everything metered by a
-// started minute or a started thousand characters, because a request rounds up
-// to one of those; video is the exception, since the shortest clip that can be
-// asked for is four seconds. Whether an operation can be started is decided
-// against this, not against a single unit nobody can buy.
+// started minute, a started thousand characters, or a valid one-second video;
+// whether an operation can be started is decided against this, not against a
+// unit nobody can buy.
 export const AI_PRICING_CATALOG = {
   "image.generate": { unit: "request", minimumQuantity: 1 },
   "image.edit.remove_background": { unit: "request", minimumQuantity: 1 },
@@ -23,7 +24,10 @@ export const AI_PRICING_CATALOG = {
   "image.edit.outpaint": { unit: "request", minimumQuantity: 1 },
   "audio.transcribe": { unit: "started_minute", minimumQuantity: 1 },
   "subtitle.translate": { unit: "started_1000_characters", minimumQuantity: 1 },
-  "video.generate": { unit: "second", minimumQuantity: 4 },
+  "video.generate": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
 } as const;
 
 export type AiBillingUnit =

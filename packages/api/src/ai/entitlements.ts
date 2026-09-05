@@ -192,12 +192,14 @@ export async function getEntitlements(
   userId: string,
 ): Promise<EntitlementsResponse> {
   return await startRetryableTransaction(async (prisma) => {
-    const subscription = await getSubscriptionByUserId({ userId, prisma });
-    const [settings, catalog] = await Promise.all([
+    const [subscription, deletionIntent, settings, catalog] = await Promise.all([
+      getSubscriptionByUserId({ userId, prisma }),
+      findAccountDeletionIntentByUserId({ userId, prisma }),
       loadAiSettings({ prisma }),
       loadAiModelCatalog({ prisma }),
     ]);
-    const isActive = isActiveProSubscription(subscription);
+    const isActive =
+      deletionIntent === null && isActiveProSubscription(subscription);
     const effectiveEnd = subscription
       ? getEffectiveSubscriptionEnd(subscription)
       : null;

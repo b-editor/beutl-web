@@ -94,23 +94,22 @@ describe("allowance equivalents", () => {
   });
 
   it("calls an operation affordable only at the smallest request it accepts", () => {
-    // The shortest clip the video endpoint takes is four seconds, so an
-    // allowance that buys three of them buys no video at all.
+    // A valid one-second clip is the smallest request the video endpoint takes.
     expect(
       describeAllowanceEquivalent({
         operation: "video.generate",
-        allowanceUnits: 120,
+        allowanceUnits: 39,
         price: 40,
       }),
-    ).toMatchObject({ billingUnits: 3, affordable: false });
+    ).toMatchObject({ billingUnits: 0, affordable: false });
 
     expect(
       describeAllowanceEquivalent({
         operation: "video.generate",
-        allowanceUnits: 160,
+        allowanceUnits: 40,
         price: 40,
       }),
-    ).toMatchObject({ billingUnits: 4, affordable: true });
+    ).toMatchObject({ billingUnits: 1, affordable: true });
   });
 
   it.each([

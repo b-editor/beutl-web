@@ -63,7 +63,13 @@ export async function getUserIdFromHeaders(headers: Headers) {
 }
 
 export async function tryGetUserIdFromHeaders(headers: Headers) {
-  return await getUserIdFromHeaders(headers);
+  try {
+    return await getUserIdFromHeaders(headers);
+  } catch {
+    // Optional identity lookups (for example, public content downloads) must
+    // remain anonymous when authentication is unavailable or misconfigured.
+    return null;
+  }
 }
 
 export function getUserIdFromToken(token: string) {

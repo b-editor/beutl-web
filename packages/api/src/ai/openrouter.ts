@@ -1046,6 +1046,9 @@ export async function translateSegments({
               content: JSON.stringify({
                 ...(sourceLanguage ? { sourceLanguage } : {}),
                 targetLanguage,
+                ...(style?.glossary && Object.keys(style.glossary).length > 0
+                  ? { glossary: style.glossary }
+                  : {}),
                 segments: promptSegments,
               }),
             },

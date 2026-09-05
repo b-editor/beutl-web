@@ -40,7 +40,7 @@ export type AiAllowanceEquivalent = {
     value: number;
   };
   // False when the smallest request the entry point accepts already costs more
-  // than the allowance, which for video is four seconds rather than one.
+  // than the allowance, which for video is the minimum supported duration.
   affordable: boolean;
 };
 

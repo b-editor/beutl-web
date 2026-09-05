@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { decode, verify, sign } from "hono/jwt";
-import { getUserIdFromHeaders } from "../../packages/api/src/api/auth";
+import {
+  getUserIdFromHeaders,
+  tryGetUserIdFromHeaders,
+} from "../../packages/api/src/api/auth";
 
 // v1/account が発行する JWT のワイヤ契約を固定する。
 // デスクトップアプリはクレーム名 http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier を
@@ -161,6 +164,16 @@ describe("v1 JWT 契約 (createJwtToken と同形)", () => {
         new Headers({ Authorization: "Bearer token with spaces" }),
       ),
     ).resolves.toBeNull();
+  });
+
+  it("keeps optional header identity anonymous when JWT configuration is missing", async () => {
+    delete process.env.JWT_SECRET;
+    const headers = new Headers({ Authorization: "Bearer token" });
+
+    await expect(tryGetUserIdFromHeaders(headers)).resolves.toBeNull();
+    await expect(getUserIdFromHeaders(headers)).rejects.toThrow(
+      "JWT_SECRET is not configured",
+    );
   });
 
   it("enforces issuer and audience only when configured", async () => {

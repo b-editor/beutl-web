@@ -12,10 +12,10 @@ const USER_ID = "entitlements-user";
 const PERIOD_START = new Date(Date.now() - 24 * 60 * 60 * 1_000);
 const PERIOD_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000);
 const MONTHLY_LIMIT = 500;
-// Defaults from @beutl/core: a second of video costs 40 units and the shortest
-// clip that can be requested is four seconds.
+// Defaults from @beutl/core: a second of video costs 40 units and one second is
+// the shortest clip that can be requested.
 const VIDEO_UNIT_PRICE = 40;
-const VIDEO_MINIMUM_SECONDS = 4;
+const VIDEO_MINIMUM_SECONDS = 1;
 
 describe("AI entitlements", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
@@ -51,10 +51,10 @@ describe("AI entitlements", () => {
 
   it("reports a video as startable only once the shortest clip is affordable", async () => {
     await activatePro();
-    // Two seconds of video left: enough for a unit, not for a request.
+    // Less than one second of allowance cannot start the shortest valid clip.
     await consumeUsage({
       userId: USER_ID,
-      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 2,
+      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE + 1,
       monthlyUsageLimit: MONTHLY_LIMIT,
       usagePeriod: { start: PERIOD_START, end: PERIOD_END },
       aiJobId: "entitlements-video-setup",
@@ -79,6 +79,24 @@ describe("AI entitlements", () => {
 
     const exact = await getEntitlements(USER_ID);
     expect(exact.availability["video.generate"]).toBe(true);
+  });
+
+  it("disables AI entitlements while account deletion is authorized", async () => {
+    await activatePro();
+    state.accountDeletionIntents.set("delete-intent", {
+      identifier: "entitlements-user@example.com",
+      tokenHash: "delete-token-hash",
+      userId: USER_ID,
+      stripeCustomerId: null,
+      authorizedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+    });
+
+    const entitlements = await getEntitlements(USER_ID);
+
+    expect(entitlements.canUseAi).toBe(false);
+    expect(entitlements.plan).toBeNull();
+    expect(entitlements.availability["image.generate"]).toBe(false);
   });
 
   it("says which models are affordable, and calls the operation available if any is", async () => {

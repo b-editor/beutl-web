@@ -7,15 +7,15 @@ const minimumChargeOf = (operation: string, priceUnits: number) =>
 
 describe("an allowance measured against the models on offer", () => {
   it("names the operations it would take offline", () => {
-    // A video is charged for at least four seconds, so 40 units a second needs
-    // 160 of the allowance.
+    // A valid video needs at least one second, so less than 40 units takes it
+    // offline.
     const offline = aiOperationsGoingOffline({
       minimumChargeOf,
       modelsByOperation: {
         "video.generate": [{ priceUnits: 40, enabled: true }],
         "image.generate": [{ priceUnits: 20, enabled: true }],
       },
-      allowance: 100,
+      allowance: 39,
     });
 
     expect(offline).toEqual(["video.generate"]);

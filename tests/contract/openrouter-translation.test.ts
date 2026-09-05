@@ -172,6 +172,32 @@ describe("OpenRouter subtitle translation contract", () => {
     });
   });
 
+  it("includes the caller glossary in the provider-visible payload", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        translationResponse([{ id: "line-1", text: "世界" }]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await translateSegments({
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      segments: [{ id: "line-1", text: "world" }],
+      style: { glossary: { world: "世界" } },
+      model: "openai/gpt-4.1-mini",
+    });
+
+    const payload = (await (
+      fetchMock.mock.calls[0][0] as Request
+    ).json()) as { messages: { content: string }[] };
+    expect(JSON.parse(payload.messages[1].content)).toMatchObject({
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      glossary: { world: "世界" },
+    });
+  });
+
   it.each([
     [
       "a missing ID",
