@@ -13,6 +13,8 @@ import {
   blocksSubmit,
   canSubmitModelRequest,
   canSubmitAiRequest,
+  effectiveImageReferences,
+  isAiPromptWithinLimit,
   commitAiRequestName,
   correctedModelId,
   heldAiRequestModels,
@@ -370,6 +372,17 @@ describe("what an AI screen will send", () => {
 
   it("sends when nothing is in the way", () => {
     expect(canSubmitAiRequest(NOTHING_BLOCKS)).toBe(true);
+  });
+
+  it("rejects composed prompts above the shared server limit", () => {
+    expect(isAiPromptWithinLimit(4_000)).toBe(true);
+    expect(isAiPromptWithinLimit(4_001)).toBe(false);
+  });
+
+  it("omits retained references for a text-only model", () => {
+    const references = ["one", "two"];
+    expect(effectiveImageReferences(references, 2)).toBe(references);
+    expect(effectiveImageReferences(references, 0)).toEqual([]);
   });
 
   it.each([

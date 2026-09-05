@@ -12,10 +12,9 @@ const USER_ID = "entitlements-user";
 const PERIOD_START = new Date(Date.now() - 24 * 60 * 60 * 1_000);
 const PERIOD_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000);
 const MONTHLY_LIMIT = 500;
-// Defaults from @beutl/core: a second of video costs 40 units and one second is
-// the shortest clip that can be requested.
+// The built-in Veo model costs 40 units a second and supports 4/6/8 seconds.
 const VIDEO_UNIT_PRICE = 40;
-const VIDEO_MINIMUM_SECONDS = 1;
+const VIDEO_MINIMUM_SECONDS = 4;
 
 describe("AI entitlements", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
@@ -25,6 +24,15 @@ describe("AI entitlements", () => {
     state = memory.state;
     setDbProvider(async () => memory.prisma as never);
   });
+
+  const videoCapabilities = new Map([
+    ["google/veo-3.1", { durations: [4, 6, 8] }],
+  ]);
+
+  const readEntitlements = (
+    capabilities: ReadonlyMap<string, { durations: readonly number[] }> =
+      videoCapabilities,
+  ) => getEntitlements(USER_ID, { videoCapabilities: capabilities });
 
   async function activatePro() {
     await upsertSubscription({
@@ -40,7 +48,7 @@ describe("AI entitlements", () => {
   }
 
   it("opens no ledger row for someone who only looked", async () => {
-    const entitlements = await getEntitlements(USER_ID);
+    const entitlements = await readEntitlements();
 
     expect(entitlements.canUseAi).toBe(false);
     expect(entitlements.balance.additionalCredits).toBe(0);
@@ -51,16 +59,16 @@ describe("AI entitlements", () => {
 
   it("reports a video as startable only once the shortest clip is affordable", async () => {
     await activatePro();
-    // Less than one second of allowance cannot start the shortest valid clip.
+    // Less than four seconds of allowance cannot start the shortest valid clip.
     await consumeUsage({
       userId: USER_ID,
-      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE + 1,
+      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * VIDEO_MINIMUM_SECONDS + 1,
       monthlyUsageLimit: MONTHLY_LIMIT,
       usagePeriod: { start: PERIOD_START, end: PERIOD_END },
       aiJobId: "entitlements-video-setup",
     });
 
-    const short = await getEntitlements(USER_ID);
+    const short = await readEntitlements();
     expect(short.availability["video.generate"]).toBe(false);
     // Operations billed per request are unaffected by the video minimum.
     expect(short.availability["image.edit.remove_background"]).toBe(true);
@@ -77,7 +85,7 @@ describe("AI entitlements", () => {
       aiJobId: "entitlements-video-setup",
     });
 
-    const exact = await getEntitlements(USER_ID);
+    const exact = await readEntitlements();
     expect(exact.availability["video.generate"]).toBe(true);
   });
 
@@ -92,11 +100,44 @@ describe("AI entitlements", () => {
       expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
     });
 
-    const entitlements = await getEntitlements(USER_ID);
+    const entitlements = await readEntitlements();
 
     expect(entitlements.canUseAi).toBe(false);
     expect(entitlements.plan).toBeNull();
     expect(entitlements.availability["image.generate"]).toBe(false);
+  });
+
+  it("uses each video model's shortest supported duration", async () => {
+    await activatePro();
+    for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
+      await upsertAiOperationModel({
+        operation: "video.generate",
+        modelId,
+        priceUnits: VIDEO_UNIT_PRICE,
+        displayName: null,
+        sortOrder,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+    }
+    await consumeUsage({
+      userId: USER_ID,
+      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 3,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "entitlements-video-model-minimum",
+    });
+
+    const entitlements = await readEntitlements(new Map([
+      ["video/short", { durations: [2, 4] }],
+      ["video/long", { durations: [5, 8] }],
+    ]));
+
+    expect(entitlements.modelAvailability["video.generate"]).toEqual({
+      "video/short": true,
+      "video/long": false,
+    });
+    expect(entitlements.availability["video.generate"]).toBe(true);
   });
 
   it("says which models are affordable, and calls the operation available if any is", async () => {
@@ -123,7 +164,7 @@ describe("AI entitlements", () => {
       aiJobId: "entitlements-model-setup",
     });
 
-    const entitlements = await getEntitlements(USER_ID);
+    const entitlements = await readEntitlements();
 
     expect(entitlements.modelAvailability["image.generate"]).toEqual({
       "cheap/model": true,
@@ -145,7 +186,7 @@ describe("AI entitlements", () => {
       updatedBy: "admin-1",
     });
 
-    const entitlements = await getEntitlements(USER_ID);
+    const entitlements = await readEntitlements();
 
     expect(entitlements.modelAvailability["image.generate"]).toEqual({
       "cheap/model": false,

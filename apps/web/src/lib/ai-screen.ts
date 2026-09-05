@@ -3,6 +3,7 @@
 
 import {
   AI_TEXT_RESULT_RETENTION_MILLISECONDS,
+  MAX_AI_PROMPT_LENGTH,
   MAX_MODEL_ID_LENGTH,
 } from "@beutl/core";
 
@@ -153,6 +154,19 @@ export function canSubmitAiRequest({
     !taskUnaffordable &&
     !taskHasNoModel &&
     !busy;
+}
+
+export function isAiPromptWithinLimit(composedLength: number): boolean {
+  return Number.isSafeInteger(composedLength) &&
+    composedLength >= 0 &&
+    composedLength <= MAX_AI_PROMPT_LENGTH;
+}
+
+export function effectiveImageReferences<T>(
+  references: readonly T[],
+  maxReferenceImages: number,
+): readonly T[] {
+  return maxReferenceImages > 0 ? references : [];
 }
 
 /**

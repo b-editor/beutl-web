@@ -7,6 +7,7 @@ import {
   createAudioExtractionSelectionController,
   maximumExtractableSeconds,
   maximumDecodedSeconds,
+  isDirectTranscriptionAudioFile,
 } from "../../apps/web/src/lib/audio-extract";
 
 function installBrowserAudio(
@@ -63,6 +64,28 @@ function installBrowserAudio(
 
 describe("video audio extraction memory bounds", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("accepts only audio containers parsed directly by the transcription API", () => {
+    for (const [name, type] of [
+      ["voice.mp3", "audio/mpeg"],
+      ["voice.wav", "audio/wav"],
+      ["voice.aac", "audio/aac"],
+      ["voice.adts", ""],
+    ]) {
+      expect(isDirectTranscriptionAudioFile(new File(["audio"], name, { type })))
+        .toBe(true);
+    }
+    for (const [name, type] of [
+      ["voice.flac", "audio/flac"],
+      ["voice.ogg", "audio/ogg"],
+      ["voice.m4a", "audio/mp4"],
+      ["voice.webm", "audio/webm"],
+      ["voice.mp3", "audio/flac"],
+    ]) {
+      expect(isDirectTranscriptionAudioFile(new File(["audio"], name, { type })))
+        .toBe(false);
+    }
+  });
 
   it("derives the displayed limit from the supported post-decode budget", () => {
     expect(maximumExtractableSeconds(25 * 1024 * 1024)).toBe(

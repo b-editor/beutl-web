@@ -35,6 +35,7 @@ import {
   maximumExtractableSeconds,
   createAudioExtractionSelectionController,
   type AudioExtractionFailure,
+  isDirectTranscriptionAudioFile,
 } from "@/lib/audio-extract";
 import {
   formatCueClock,
@@ -294,6 +295,16 @@ export function TranscribeForm({
   async function handleAudioChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
     const file = input.files?.[0];
+    if (file && !isVideoFile(file) && !isDirectTranscriptionAudioFile(file)) {
+      const invalidation = extraction.current.begin(null);
+      if (invalidation.accepted) extraction.current.finish();
+      input.value = "";
+      setExtractionError("unsupportedFormat");
+      setAudioFile(null);
+      setAudioName("transcription");
+      setExtracting(extraction.current.isBusy());
+      return;
+    }
     const { accepted } = extraction.current.begin(file ?? null);
     fileInput.current = input;
     // Advance the generation for every selection. Audio, removal, and video
@@ -436,7 +447,7 @@ export function TranscribeForm({
             id="transcribeFile"
             name="file"
             type="file"
-            accept="audio/*,video/*"
+            accept="audio/mpeg,audio/wav,audio/x-wav,audio/aac,.mp3,.wav,.wave,.aac,.adts,video/*"
             required
             ref={fileInput}
             onChange={handleAudioChange}

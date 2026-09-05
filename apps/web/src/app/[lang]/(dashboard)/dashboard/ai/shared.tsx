@@ -34,6 +34,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 export {
   canSubmitAiRequest,
+  effectiveImageReferences,
+  isAiPromptWithinLimit,
   canSubmitModelRequest,
   blockedReason,
   blocksSubmit,

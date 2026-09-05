@@ -116,6 +116,31 @@ export function isVideoFile(file: File): boolean {
   return file.type.startsWith("video/");
 }
 
+const DIRECT_TRANSCRIPTION_AUDIO_TYPES = new Set([
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/vnd.wave",
+  "audio/aac",
+]);
+const DIRECT_TRANSCRIPTION_AUDIO_EXTENSIONS = new Set([
+  ".mp3",
+  ".wav",
+  ".wave",
+  ".aac",
+  ".adts",
+]);
+
+export function isDirectTranscriptionAudioFile(file: File): boolean {
+  const mediaType = file.type.trim().toLowerCase();
+  if (mediaType) return DIRECT_TRANSCRIPTION_AUDIO_TYPES.has(mediaType);
+  const name = file.name.trim().toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && DIRECT_TRANSCRIPTION_AUDIO_EXTENSIONS.has(name.slice(dot));
+}
+
 // How long a clip may be before its WAV would exceed the upload cap. Measured
 // first, because decoding an hour of video only to refuse it would take the tab
 // down with it.

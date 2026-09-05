@@ -58,6 +58,7 @@ import {
   useAiRequestNames,
   useHeldModelCapabilities,
   defaultModelId,
+  isAiPromptWithinLimit,
   type AiAccess,
 } from "./shared";
 
@@ -377,6 +378,7 @@ export function VideoForm({
     motion: videoMotion,
     exclusions: videoExclusions,
   }).length;
+  const composedPromptTooLong = !isAiPromptWithinLimit(composedLength);
 
   // 送るものを、名乗ったものに合わせる。フレームの入力欄はモデルの都合で画面
   // から外れ、外れた時点で選ばれていたファイルは欄ごと消える——画面の状態だけ
@@ -386,7 +388,7 @@ export function VideoForm({
     event.preventDefault();
     // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
     // Enter を押したときにボタンが断っているはずの依頼が出ていく。
-    if (!canSubmit || !names.ready) return;
+    if (!canSubmit || composedPromptTooLong || !names.ready) return;
 
     const idempotencyKey = await names.acquireAndCommit(
       signature,
@@ -666,7 +668,12 @@ export function VideoForm({
           forceSpinner={isPending}
           // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
           // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
-          disabled={submitBlocked || isPending || readingFrames}
+          disabled={
+            submitBlocked ||
+            composedPromptTooLong ||
+            isPending ||
+            readingFrames
+          }
         >
           {t("dashboard:ai.generate")}
         </SubmitButton>

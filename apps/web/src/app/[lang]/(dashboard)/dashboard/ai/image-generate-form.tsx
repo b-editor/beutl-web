@@ -65,6 +65,8 @@ import {
   useAiRequestNames,
   useHeldModelCapabilities,
   defaultModelId,
+  effectiveImageReferences,
+  isAiPromptWithinLimit,
   downloadFromUrl,
   type AiAccess,
 } from "./shared";
@@ -188,18 +190,27 @@ export function ImageGenerateForm({
     ? background
     : "auto";
 
-  const tooManyReferences = references.length > options.maxReferenceImages;
+  // A text-only model hides reference controls. Keep the selection available if
+  // the user switches back, but omit it from this model's signature, validation,
+  // and request body.
+  const effectiveReferences = useMemo(
+    () => effectiveImageReferences(references, options.maxReferenceImages),
+    [options.maxReferenceImages, references],
+  );
+  const tooManyReferences =
+    effectiveReferences.length > options.maxReferenceImages;
   // 1 枚ごとの上限とは別に、合計にも上限がある。送ってから 413 になるより先に
   // 画面で言う。
   const referencesTooLarge =
-    references.reduce((total, file) => total + file.size, 0) >
+    effectiveReferences.reduce((total, file) => total + file.size, 0) >
       options.maxReferenceImagesTotalBytes;
   // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
   // 同じ依頼に見え、片方が走っている間もう片方を始められない。送れないと分かって
   // いる選び方のものは読まない——名前には要らず、合計の分だけ抱えるだけになる。
   const readableReferences = useMemo(
-    () => (tooManyReferences || referencesTooLarge ? [] : references),
-    [references, tooManyReferences, referencesTooLarge],
+    () =>
+      tooManyReferences || referencesTooLarge ? [] : effectiveReferences,
+    [effectiveReferences, tooManyReferences, referencesTooLarge],
   );
   const { contents: referenceContents, reading: readingReferences } =
     useFileFingerprints(readableReferences, MAX_AI_IMAGE_UPLOAD_BYTES);
@@ -221,7 +232,7 @@ export function ImageGenerateForm({
     // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
     // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
     options.seed ? seedValue(seed) : null,
-    ...references,
+    ...effectiveReferences,
     ...referenceContents,
   ]);
   useEffect(() => {
@@ -255,6 +266,7 @@ export function ImageGenerateForm({
     composition,
     exclusions,
   }).length;
+  const composedPromptTooLong = !isAiPromptWithinLimit(composedLength);
 
   // The input is what the form submits, so the list kept here is written back
   // into it. Without that, a second visit to the file dialog would replace the
@@ -297,6 +309,7 @@ export function ImageGenerateForm({
       || submitBlocked
       || tooManyReferences
       || referencesTooLarge
+      || composedPromptTooLong
       || readingReferences
       || !names.ready
     ) {
@@ -317,7 +330,9 @@ export function ImageGenerateForm({
     body.set("background", chosenBackground);
     if (model) body.set("model", model);
     body.delete("reference");
-    for (const reference of references) body.append("reference[]", reference);
+    for (const reference of effectiveReferences) {
+      body.append("reference[]", reference);
+    }
 
     setIsPending(true);
     setMessage(null);
@@ -606,6 +621,7 @@ export function ImageGenerateForm({
             submitBlocked ||
             tooManyReferences ||
             referencesTooLarge ||
+            composedPromptTooLong ||
             isPending ||
             readingReferences
           }

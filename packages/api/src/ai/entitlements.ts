@@ -8,6 +8,7 @@ import {
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
+import { loadAiVideoModelCapabilities } from "./video-model-capabilities";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -119,8 +120,19 @@ export function toAiBalancePresentation(
 // smallest request the operation's entry point accepts. Using one unit would
 // report a four-second video as startable on a quarter of what it costs, and
 // the reservation would then reject a prompt the user had already written.
-function minimumChargeFor(operation: string, priceUnits: number): number {
-  const minimumQuantity = aiMinimumQuantityOf(operation);
+function minimumChargeFor(
+  operation: string,
+  modelId: string,
+  priceUnits: number,
+  videoCapabilities: ReadonlyMap<string, { durations: readonly number[] }>,
+): number {
+  const videoCapability = operation === "video.generate"
+    ? videoCapabilities.get(modelId)
+    : undefined;
+  if (videoCapability && videoCapability.durations.length === 0) return 0;
+  const minimumQuantity = videoCapability
+    ? Math.min(...videoCapability.durations)
+    : aiMinimumQuantityOf(operation);
   if (minimumQuantity === null) {
     return 0;
   }
@@ -131,6 +143,10 @@ export function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
   catalog: AiModelCatalog,
+  videoCapabilities: ReadonlyMap<
+    string,
+    { durations: readonly number[] }
+  > = new Map(),
 ): { availability: AiOperationAvailability; modelAvailability: AiModelAvailability } {
   const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
   const availability: AiOperationAvailability = {};
@@ -138,7 +154,12 @@ export function toAiOperationAvailability(
   for (const operation of Object.keys(AI_PRICING_CATALOG)) {
     const models: Record<string, boolean> = {};
     for (const entry of catalog.list(operation)) {
-      const minimumCharge = minimumChargeFor(operation, entry.priceUnits);
+      const minimumCharge = minimumChargeFor(
+        operation,
+        entry.modelId,
+        entry.priceUnits,
+        videoCapabilities,
+      );
       models[entry.modelId] =
         canUseAi && minimumCharge > 0 && available >= minimumCharge;
     }
@@ -190,7 +211,15 @@ export function isActiveProSubscription(
 
 export async function getEntitlements(
   userId: string,
+  options: {
+    videoCapabilities?: ReadonlyMap<
+      string,
+      { durations: readonly number[] }
+    >;
+  } = {},
 ): Promise<EntitlementsResponse> {
+  const videoCapabilities = options.videoCapabilities ??
+    await loadAiVideoModelCapabilities();
   return await startRetryableTransaction(async (prisma) => {
     const [subscription, deletionIntent, settings, catalog] = await Promise.all([
       getSubscriptionByUserId({ userId, prisma }),
@@ -244,7 +273,12 @@ export async function getEntitlements(
       cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
       canUseAi: isActive,
       balance: toAiBalancePresentation(balance),
-      ...toAiOperationAvailability(balance, isActive, catalog),
+      ...toAiOperationAvailability(
+        balance,
+        isActive,
+        catalog,
+        videoCapabilities,
+      ),
     };
   });
 }
