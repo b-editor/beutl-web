@@ -135,9 +135,9 @@ describe("saving the AI configuration in one go", () => {
       },
     );
 
-    // The built-in video model is 40 units a second, so a four-second clip
-    // needs 160 of the 100 unit allowance.
-    expect(result).toMatchObject({ ok: false });
+    // The built-in video model is 40 units a second, so the minimum one-second
+    // request remains affordable within the 100 unit allowance.
+    expect(result).toMatchObject({ ok: true });
   });
 
   it("ignores models nobody can pick when judging the allowance", () => {
