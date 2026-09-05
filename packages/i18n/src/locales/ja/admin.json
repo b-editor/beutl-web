@@ -155,6 +155,66 @@
       "settings": "設定",
       "usage": "利用状況"
     },
+    "interventions": {
+      "common": {
+        "recordId": "レコード ID",
+        "objectKey": "オブジェクトキー",
+        "multipartUploadId": "マルチパートアップロード ID",
+        "attempts": "試行回数: {{count}}",
+        "unknownError": "不明なエラー",
+        "reasonPlaceholder": "理由を入力してください（10文字以上）",
+        "evidencePlaceholder": "証跡またはチケット番号を入力してください（10文字以上）",
+        "resume": "再開",
+        "terminalize": "終端化",
+        "saved": "保存しました",
+        "failed": "処理に失敗しました",
+        "unauthenticated": "もう一度ログインしてください。",
+        "forbidden": "この操作を実行する権限がありません。"
+      },
+      "multipart": {
+        "title": "マルチパートクリーンアップの管理者対応",
+        "description": "再試行回数の上限に達したか、R2 バインディングを利用できず中止できなかったリモートアップロードです。終端化するとリモートハンドルのリスクを承認し、同じキーのすべてのハンドルが解決した後にのみオブジェクトのクリーンアップを再開します。",
+        "empty": "対応が必要なマルチパートクリーンアップはありません。",
+        "terminalizeConfirm": "リモート側の証跡がないことを承認し、このハンドルを終端状態として保持します。続行しますか？",
+        "terminalize": "リスクを承認して終端化"
+      },
+      "upload": {
+        "title": "アップロード完了処理の管理者対応",
+        "description": "結果が不明なマルチパート完了処理を、管理者が確認できるよう保持しています。",
+        "empty": "対応が必要なアップロード完了処理はありません。",
+        "resumeConfirm": "完了処理を再開し、プロバイダーへの新しい試行を許可しますか？",
+        "terminalizeConfirm": "結果が不明なこのアップロード完了処理を終端化しますか？",
+        "unknownOutcome": "プロバイダー側の結果はまだ不明です。オブジェクトを確認できるようになると、レシートの復旧を自動的に続行します。オブジェクトが存在しないだけでは元の完了処理が終了したと証明できないため、再試行・中止・終端化・アカウント削除は利用できません。"
+      },
+      "topUp": {
+        "title": "トップアップ決済の管理者対応",
+        "description": "試行レコードが存在しない孤立した復旧行も含みます。既知の返金がすべて完了し、管理者の証跡がある場合のみ終端化できます。",
+        "empty": "対応が必要なトップアップ決済はありません。",
+        "attempt": "試行",
+        "owner": "所有者",
+        "attemptPresent": "試行レコードあり",
+        "orphanedAttempt": "孤立した試行",
+        "revision": "リビジョン: {{revision}}",
+        "expectedPaymentIntents": "想定される PaymentIntent ID: {{ids}}",
+        "operatorRequired": "管理者の対応が必要です",
+        "terminalizeAfterRefundProof": "返金証跡を確認して終端化"
+      },
+      "messages": {
+        "invalidInput": "管理者対応の入力が不正です。",
+        "reasonAndEvidenceRequired": "理由と証跡をそれぞれ10文字以上で入力してください。",
+        "resolutionChanged": "復旧状態が変更されました。ページを再読み込みして、もう一度お試しください。",
+        "multipartResumed": "マルチパートクリーンアップを再開しました。",
+        "multipartTerminalized": "マルチパートクリーンアップを終端化しました。",
+        "uploadResumed": "ストレージのアップロード完了処理を再開しました。",
+        "uploadTerminalized": "ストレージのアップロード完了処理を終端化しました。",
+        "resolutionIdentityAndEvidenceRequired": "復旧対象の識別情報と詳しい証跡が必要です。",
+        "stripeNotConfigured": "Stripe が設定されていません。",
+        "topUpAbsenceRecorded": "Stripe で見つからなかったことを初回記録しました。{{retryAt}} 以降にもう一度お試しください。",
+        "topUpTerminalized": "孤立したトップアップ復旧を終端化しました。",
+        "unsafe": "安全に処理できません: {{reason}}",
+        "stripeVerificationFailed": "Stripe の確認に失敗しました: {{reason}}"
+      }
+    },
     "plan": {
       "title": "サブスクリプション",
       "description": "Pro 契約 1 件あたりに毎月付与される使用ユニット数です。変更は以降に開始される処理と残量表示に適用され、消費済みの量はそのまま残ります。",

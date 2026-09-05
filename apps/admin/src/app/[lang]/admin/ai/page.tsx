@@ -107,16 +107,50 @@ export default async function Page(props: {
       <AiTabs lang={lang} />
 
       <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div><h2 className="text-lg font-semibold">Storage multipart interventions</h2><p className="text-sm text-muted-foreground">Remote aborts that exhausted retries or cannot run because the R2 binding is unavailable. Terminalizing acknowledges the remote-handle risk and releases object cleanup only after every handle for the key is resolved.</p></div>
-        <StorageMultipartInterventions rows={storageInterventions.map((row) => ({ ...row, interventionAt: row.interventionAt! }))} />
+        <div>
+          <h2 className="text-lg font-semibold">
+            {t("admin:ai.interventions.multipart.title")}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {t("admin:ai.interventions.multipart.description")}
+          </p>
+        </div>
+        <StorageMultipartInterventions
+          lang={lang}
+          rows={storageInterventions.map((row) => ({
+            ...row,
+            interventionAt: row.interventionAt!,
+          }))}
+        />
       </section>
       <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div><h2 className="text-lg font-semibold">Storage upload completion interventions</h2><p className="text-sm text-muted-foreground">Ambiguous multipart completions retained for operator review.</p></div>
-        <StorageUploadInterventions rows={storageUploadInterventions.map((row) => ({ ...row, completionInterventionAt: row.completionInterventionAt!, completionState: row.completionState }))} />
+        <div>
+          <h2 className="text-lg font-semibold">
+            {t("admin:ai.interventions.upload.title")}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {t("admin:ai.interventions.upload.description")}
+          </p>
+        </div>
+        <StorageUploadInterventions
+          lang={lang}
+          rows={storageUploadInterventions.map((row) => ({
+            ...row,
+            completionInterventionAt: row.completionInterventionAt!,
+            completionState: row.completionState,
+          }))}
+        />
       </section>
       <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div><h2 className="text-lg font-semibold">Top-up checkout interventions</h2><p className="text-sm text-muted-foreground">Includes orphaned resolution rows with no attempt record. Terminalization is allowed only after every known refund is settled and requires operator evidence.</p></div>
-        <TopUpResolutionInterventions rows={topUpInterventions} />
+        <div>
+          <h2 className="text-lg font-semibold">
+            {t("admin:ai.interventions.topUp.title")}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {t("admin:ai.interventions.topUp.description")}
+          </p>
+        </div>
+        <TopUpResolutionInterventions lang={lang} rows={topUpInterventions} />
       </section>
 
       {/* The allowance and every operation's models are committed together by

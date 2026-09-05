@@ -1,6 +1,7 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
+import { getTranslation } from "@beutl/i18n";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
 import {
@@ -115,26 +116,30 @@ function parseStorageInterventionInput(input: unknown) {
   return Number.isSafeInteger(value.expectedRevision) && Number.isFinite(expectedInterventionAt.getTime()) ? { objectKey: value.objectKey, uploadId: value.uploadId, expectedRevision: value.expectedRevision, expectedInterventionAt } : null;
 }
 
-export async function resumeStorageMultipartCleanup(input: unknown): Promise<ActionResult> {
+export async function resumeStorageMultipartCleanup(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     const parsed = parseStorageInterventionInput(input);
-    if (!parsed) return { success: false, message: "Invalid resolver input" };
+    if (!parsed) return { success: false, message: t("admin:ai.interventions.messages.invalidInput") };
     const result = await startRetryableTransaction(async (tx) => {
       const transition = await resumeStorageMultipartIntervention({ ...parsed, now: new Date(), prisma: tx });
       if (transition.status === "conflict") return transition;
       await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageMultipartInterventionResumed, details: `objectKey: ${parsed.objectKey}, uploadId: ${parsed.uploadId}, revision: ${parsed.expectedRevision}->${transition.revision}`, prisma: tx });
       return transition;
     });
-    return result.status === "resumed" ? { success: true, message: "Multipart cleanup resumed" } : { success: false, message: "Resolution changed; reload and retry" };
+    return result.status === "resumed"
+      ? { success: true, message: t("admin:ai.interventions.messages.multipartResumed") }
+      : { success: false, message: t("admin:ai.interventions.messages.resolutionChanged") };
   });
 }
 
-export async function terminalizeStorageMultipartCleanup(input: unknown): Promise<ActionResult> {
+export async function terminalizeStorageMultipartCleanup(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     const parsed = parseStorageInterventionInput(input);
     const value = input as Record<string, unknown>;
     if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) {
-      return { success: false, message: "Operator reason and evidence (10+ characters each) are required" };
+      return { success: false, message: t("admin:ai.interventions.messages.reasonAndEvidenceRequired") };
     }
     const result = await startRetryableTransaction(async (tx) => {
       const transition = await terminalizeStorageMultipartIntervention({ ...parsed, now: new Date(), operatorUserId: session.user.id, operatorReason: value.operatorReason as string, operatorEvidence: value.operatorEvidence as string, prisma: tx });
@@ -142,7 +147,9 @@ export async function terminalizeStorageMultipartCleanup(input: unknown): Promis
       await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageMultipartInterventionTerminalized, details: `objectKey: ${parsed.objectKey}, uploadId: ${parsed.uploadId}, revision: ${parsed.expectedRevision}, reason: ${value.operatorReason}, evidence: ${value.operatorEvidence}`, prisma: tx });
       return transition;
     });
-    return result.status === "terminalized" ? { success: true, message: "Multipart cleanup terminalized" } : { success: false, message: "Resolution changed; reload and retry" };
+    return result.status === "terminalized"
+      ? { success: true, message: t("admin:ai.interventions.messages.multipartTerminalized") }
+      : { success: false, message: t("admin:ai.interventions.messages.resolutionChanged") };
   });
 }
 
@@ -154,11 +161,12 @@ function parseStorageUploadInterventionInput(input: unknown) {
   return Number.isSafeInteger(value.expectedRevision) && Number.isFinite(expectedInterventionAt.getTime()) ? { id: value.id, userId: value.userId, objectKey: value.objectKey, uploadId: typeof value.uploadId === "string" ? value.uploadId : null, expectedRevision: value.expectedRevision, expectedInterventionAt } : null;
 }
 
-export async function resumeStorageUploadInterventionAction(input: unknown): Promise<ActionResult> {
+export async function resumeStorageUploadInterventionAction(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     const parsed = parseStorageUploadInterventionInput(input);
     const value = input as Record<string, unknown>;
-    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: "Operator reason and evidence (10+ characters each) are required" };
+    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: t("admin:ai.interventions.messages.reasonAndEvidenceRequired") };
     const operatorReason = value.operatorReason;
     const operatorEvidence = value.operatorEvidence;
     const result = await startRetryableTransaction(async (tx) => {
@@ -168,38 +176,42 @@ export async function resumeStorageUploadInterventionAction(input: unknown): Pro
       return transition;
     });
     return result.status === "resumed"
-      ? { success: true, message: "Storage upload resumed" }
+      ? { success: true, message: t("admin:ai.interventions.messages.uploadResumed") }
       : {
           success: false,
           message: result.status === "unsafe"
-            ? result.reason
-            : "Resolution changed; reload and retry",
+            ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason })
+            : t("admin:ai.interventions.messages.resolutionChanged"),
         };
   });
 }
 
-export async function terminalizeStorageUploadInterventionAction(input: unknown): Promise<ActionResult> {
+export async function terminalizeStorageUploadInterventionAction(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     const parsed = parseStorageUploadInterventionInput(input);
     const value = input as Record<string, unknown>;
-    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: "Operator reason and evidence (10+ characters each) are required" };
+    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: t("admin:ai.interventions.messages.reasonAndEvidenceRequired") };
     const result = await startRetryableTransaction(async (tx) => {
       const transition = await terminalizeStorageUploadIntervention({ ...parsed, now: new Date(), operatorUserId: session.user.id, operatorReason: value.operatorReason as string, operatorEvidence: value.operatorEvidence as string, prisma: tx });
       if (transition.status === "conflict" || transition.status === "unsafe") return transition;
       await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.storageUploadInterventionTerminalized, details: `upload: ${parsed.id}, revision: ${parsed.expectedRevision}, reason: ${value.operatorReason}, evidence: ${value.operatorEvidence}`, prisma: tx });
       return transition;
     });
-    return result.status === "terminalized" ? { success: true, message: "Storage upload terminalized" } : { success: false, message: "Resolution changed; reload and retry" };
+    return result.status === "terminalized"
+      ? { success: true, message: t("admin:ai.interventions.messages.uploadTerminalized") }
+      : { success: false, message: t("admin:ai.interventions.messages.resolutionChanged") };
   });
 }
 
-export async function terminalizeOrphanTopUpResolution(input: unknown): Promise<ActionResult> {
+export async function terminalizeOrphanTopUpResolution(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
-    if (!input || typeof input !== "object") return { success: false, message: "Invalid resolver input" };
+    if (!input || typeof input !== "object") return { success: false, message: t("admin:ai.interventions.messages.invalidInput") };
     const value = input as Record<string, unknown>;
-    if (typeof value.topUpAttemptId !== "string" || typeof value.ownerUserId !== "string" || typeof value.stripeCustomerId !== "string" || typeof value.billingOfferId !== "string" || typeof value.expectedRevision !== "number" || !Number.isSafeInteger(value.expectedRevision) || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: "Resolution identity and detailed evidence are required" };
+    if (typeof value.topUpAttemptId !== "string" || typeof value.ownerUserId !== "string" || typeof value.stripeCustomerId !== "string" || typeof value.billingOfferId !== "string" || typeof value.expectedRevision !== "number" || !Number.isSafeInteger(value.expectedRevision) || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: t("admin:ai.interventions.messages.resolutionIdentityAndEvidenceRequired") };
     const secret = process.env.STRIPE_SECRET_KEY;
-    if (!secret) return { success: false, message: "Stripe is not configured" };
+    if (!secret) return { success: false, message: t("admin:ai.interventions.messages.stripeNotConfigured") };
     const leaseToken = crypto.randomUUID();
     let current: Awaited<ReturnType<typeof claimTopUpCheckoutResolutionOperatorLease>> = null;
     let releaseLease = true;
@@ -215,7 +227,7 @@ export async function terminalizeOrphanTopUpResolution(input: unknown): Promise<
           now,
           prisma: tx,
         }));
-      if (!current) return { success: false, message: "Resolution changed; reload and retry" };
+      if (!current) return { success: false, message: t("admin:ai.interventions.messages.resolutionChanged") };
 
       let proof: import("@beutl/db").CanonicalResolutionProof;
       if (current.canonicalPaymentIntentId) {
@@ -274,7 +286,11 @@ export async function terminalizeOrphanTopUpResolution(input: unknown): Promise<
             releaseLease = false;
             return {
               success: true,
-              message: `First Stripe absence observation recorded; retry after ${new Date(observedAt.getTime() + TOP_UP_OPERATOR_ABSENCE_CONFIRMATION_MS).toISOString()}`,
+              message: t("admin:ai.interventions.messages.topUpAbsenceRecorded", {
+                retryAt: new Date(
+                  observedAt.getTime() + TOP_UP_OPERATOR_ABSENCE_CONFIRMATION_MS,
+                ).toISOString(),
+              }),
             };
           }
           proof = {
@@ -342,12 +358,23 @@ export async function terminalizeOrphanTopUpResolution(input: unknown): Promise<
         await releaseTopUpCheckoutResolutionOperatorLease({ topUpAttemptId: current.topUpAttemptId, leaseToken, expectedRevision: current.revision, absenceObservedAt: null });
         releaseLease = false;
       }
-      return result.status === "terminalized" ? { success: true, message: "Orphan top-up resolution terminalized" } : { success: false, message: result.status === "unsafe" ? result.reason : "Resolution changed; reload and retry" };
+      return result.status === "terminalized"
+        ? { success: true, message: t("admin:ai.interventions.messages.topUpTerminalized") }
+        : {
+            success: false,
+            message: result.status === "unsafe"
+              ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason })
+              : t("admin:ai.interventions.messages.resolutionChanged"),
+          };
     } catch (error) {
       if (current && releaseLease) await releaseTopUpCheckoutResolutionOperatorLease({ topUpAttemptId: current.topUpAttemptId, leaseToken, expectedRevision: current.revision, absenceObservedAt: null });
       return {
         success: false,
-        message: error instanceof Error ? error.message : "Stripe verification failed",
+        message: t("admin:ai.interventions.messages.stripeVerificationFailed", {
+          reason: error instanceof Error
+            ? error.message
+            : t("admin:ai.interventions.common.unknownError"),
+        }),
       };
     }
   });
