@@ -200,15 +200,22 @@ export function TranscribeForm({
   const { contents: audioContents, reading: readingAudio } =
     useFileFingerprints(audioFiles, MAX_AI_TRANSCRIPTION_UPLOAD_BYTES);
   const audioContent = audioContents[0] ?? "";
-  const signature = requestSignature([
-    model,
-    chosenLanguage,
-    audioFile,
-    audioContent,
-  ]);
+  const audioTooLarge = audioFile !== null &&
+    !isVideoFile(audioFile) &&
+    audioFile.size > MAX_AI_TRANSCRIPTION_UPLOAD_BYTES;
+  const signature = audioTooLarge
+    ? ""
+    : requestSignature([
+        model,
+        chosenLanguage,
+        audioFile,
+        audioContent,
+      ]);
   useEffect(() => {
-    if (names.ready && !readingAudio && !extracting) void names.ensure(signature);
-  }, [names.ready, names, readingAudio, extracting, signature]);
+    if (names.ready && !readingAudio && !extracting && !audioTooLarge) {
+      void names.ensure(signature);
+    }
+  }, [names.ready, names, readingAudio, extracting, audioTooLarge, signature]);
   const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
   useEffect(() => {
     if (readingAudio || extracting) return;
@@ -228,6 +235,7 @@ export function TranscribeForm({
   // 支払い済みの結果を取りに行く道が閉じる。
   const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName) ||
+    audioTooLarge ||
     !canSubmitModelRequest(
       transcribeModels,
       model,
@@ -238,7 +246,13 @@ export function TranscribeForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitBlocked || isPending || readingAudio || extracting) {
+    if (
+      submitBlocked ||
+      isPending ||
+      readingAudio ||
+      extracting ||
+      audioTooLarge
+    ) {
       return;
     }
     if (!names.ready) return;
@@ -309,7 +323,12 @@ export function TranscribeForm({
     fileInput.current = input;
     // Advance the generation for every selection. Audio, removal, and video
     // replacement must all invalidate an in-flight extraction.
-    setExtractionError(null);
+    setExtractionError(
+      file && !isVideoFile(file) &&
+          file.size > MAX_AI_TRANSCRIPTION_UPLOAD_BYTES
+        ? "tooLarge"
+        : null,
+    );
     setAudioFile(file ?? null);
     if (!file) {
       setAudioName("transcription");
@@ -518,7 +537,13 @@ export function TranscribeForm({
           forceSpinner={isPending}
           // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
           // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
-          disabled={submitBlocked || isPending || readingAudio || extracting}
+          disabled={
+            submitBlocked ||
+            isPending ||
+            readingAudio ||
+            extracting ||
+            audioTooLarge
+          }
         >
           {t("dashboard:ai.transcribe")}
         </SubmitButton>

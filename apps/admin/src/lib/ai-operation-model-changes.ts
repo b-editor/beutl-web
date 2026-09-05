@@ -105,8 +105,8 @@ export function aiOperationWouldGoOffline({
   models,
   allowance,
 }: {
-  minimumChargeOf: (priceUnits: number) => number;
-  models: { priceUnits: number; enabled: boolean }[];
+  minimumChargeOf: (modelId: string, priceUnits: number) => number;
+  models: { modelId: string; priceUnits: number; enabled: boolean }[];
   allowance: number;
 }): boolean {
   const enabled = models.filter((model) => model.enabled);
@@ -116,7 +116,10 @@ export function aiOperationWouldGoOffline({
     return false;
   }
   return enabled.every(
-    (model) => minimumChargeOf(model.priceUnits) > allowance,
+    (model) => {
+      const minimumCharge = minimumChargeOf(model.modelId, model.priceUnits);
+      return minimumCharge <= 0 || minimumCharge > allowance;
+    },
   );
 }
 
@@ -128,14 +131,22 @@ export function aiOperationsGoingOffline({
   modelsByOperation,
   allowance,
 }: {
-  minimumChargeOf: (operation: string, priceUnits: number) => number;
-  modelsByOperation: Record<string, { priceUnits: number; enabled: boolean }[]>;
+  minimumChargeOf: (
+    operation: string,
+    modelId: string,
+    priceUnits: number,
+  ) => number;
+  modelsByOperation: Record<
+    string,
+    { modelId: string; priceUnits: number; enabled: boolean }[]
+  >;
   allowance: number;
 }): string[] {
   return Object.entries(modelsByOperation)
     .filter(([operation, models]) =>
       aiOperationWouldGoOffline({
-        minimumChargeOf: (priceUnits) => minimumChargeOf(operation, priceUnits),
+        minimumChargeOf: (modelId, priceUnits) =>
+          minimumChargeOf(operation, modelId, priceUnits),
         models,
         allowance,
       }),

@@ -13,11 +13,15 @@ import {
   type AiOperationModelSnapshot,
 } from "../../apps/admin/src/lib/ai-configuration-changes";
 
+const defaultModels = AI_DEFAULT_OPERATION_MODELS as Record<
+  string,
+  { model: string; price: number }
+>;
+
 const builtInOf = (operation: string) => [
   {
-    priceUnits: (AI_DEFAULT_OPERATION_MODELS as Record<string, { price: number }>)[
-      operation
-    ]!.price,
+    modelId: defaultModels[operation]!.model,
+    priceUnits: defaultModels[operation]!.price,
     enabled: true,
   },
 ];
@@ -27,8 +31,13 @@ function validate(
   overrides: {
     storedModelsOf?: (
       operation: string,
-    ) => { priceUnits: number; enabled: boolean }[];
+    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
     currentSettingValueOf?: (key: string) => string;
+    minimumChargeOf?: (
+      operation: string,
+      modelId: string,
+      priceUnits: number,
+    ) => number;
   } = {},
 ) {
   const preparedInput = input && typeof input === "object" && !Array.isArray(input)
@@ -50,8 +59,10 @@ function validate(
       ((key) => AI_SETTINGS[key]?.fallback ?? ""),
     storedModelsOf: overrides.storedModelsOf ?? builtInOf,
     builtInModelsOf: builtInOf,
-    minimumChargeOf: (operation, priceUnits) =>
-      aiMinimumChargeOf(operation, priceUnits) ?? priceUnits,
+    minimumChargeOf:
+      overrides.minimumChargeOf ??
+      ((operation, _modelId, priceUnits) =>
+        aiMinimumChargeOf(operation, priceUnits) ?? priceUnits),
   });
 }
 
@@ -110,6 +121,8 @@ describe("saving the AI configuration in one go", () => {
     expect(formSource).toContain("serializeModelDrafts(modelDrafts)");
     expect(actionSource).toContain("matchesAiOperationModelSnapshot(actual, draft.expected)");
     expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
+    expect(actionSource).toContain("loadAiVideoModelCapabilities");
+    expect(actionSource).toContain("videoCapabilities.get(modelId)?.durations");
   });
 
   it("accepts an allowance and a model list together", () => {
@@ -173,7 +186,7 @@ describe("saving the AI configuration in one go", () => {
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ priceUnits: 200, enabled: true }]
+            ? [{ modelId: "expensive/video", priceUnits: 200, enabled: true }]
             : builtInOf(operation),
       },
     );
@@ -181,24 +194,51 @@ describe("saving the AI configuration in one go", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
+  it("uses each video model's minimum supported duration", () => {
+    const result = validate(
+      {
+        settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "100" }],
+        models: [
+          {
+            operation: "video.generate",
+            models: [model({ modelId: "google/veo-3.1", priceUnits: 40 })],
+          },
+        ],
+      },
+      {
+        minimumChargeOf: (operation, modelId, priceUnits) =>
+          operation === "video.generate" && modelId === "google/veo-3.1"
+            ? priceUnits * 4
+            : priceUnits,
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.message).toContain("video.generate");
+  });
+
   it("falls back to the built-in model when every row is removed", () => {
     // The stored rows are the ones going away, so they cannot answer what the
     // operation would then run on.
     const result = validate(
       {
-        settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "100" }],
+        settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "200" }],
         models: [{ operation: "video.generate", models: [] }],
       },
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ priceUnits: 1, enabled: true }]
+            ? [{ modelId: "stored/video", priceUnits: 1, enabled: true }]
             : builtInOf(operation),
+        minimumChargeOf: (operation, modelId, priceUnits) =>
+          operation === "video.generate" && modelId === "google/veo-3.1"
+            ? priceUnits * 4
+            : priceUnits,
       },
     );
 
-    // The built-in video model is 40 units a second, so the minimum one-second
-    // request remains affordable within the 100 unit allowance.
+    // The built-in video model is 40 units a second and starts at four seconds,
+    // so its minimum 160-unit request remains affordable within the allowance.
     expect(result).toMatchObject({ ok: true });
   });
 

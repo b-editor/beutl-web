@@ -384,7 +384,10 @@ export async function commitDedicatedStorageReservation({
     }
     if (reservation.completedFileId) {
       const existing = await tx.file.findFirst({ where: { id: reservation.completedFileId, userId } } as never);
-      if (existing && publish) await publish(tx, existing);
+      // completedFileId and publication commit in the same transaction below.
+      // A replay after a lost response must return that receipt only: invoking
+      // publish again could overwrite a newer icon/release pointer with this
+      // stale file and retire the newer publication.
       return existing ? { kind: "created" as const, record: existing } : { kind: "changed" as const };
     }
     if (

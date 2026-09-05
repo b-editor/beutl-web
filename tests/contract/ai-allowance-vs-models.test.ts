@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AI_DEFAULT_OPERATION_MODELS, aiMinimumChargeOf } from "@beutl/core";
 import { aiOperationsGoingOffline } from "../../apps/admin/src/lib/ai-operation-model-changes";
 
-const minimumChargeOf = (operation: string, priceUnits: number) =>
+const minimumChargeOf = (operation: string, _modelId: string, priceUnits: number) =>
   aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
 
 describe("an allowance measured against the models on offer", () => {
@@ -12,8 +12,8 @@ describe("an allowance measured against the models on offer", () => {
     const offline = aiOperationsGoingOffline({
       minimumChargeOf,
       modelsByOperation: {
-        "video.generate": [{ priceUnits: 40, enabled: true }],
-        "image.generate": [{ priceUnits: 20, enabled: true }],
+        "video.generate": [{ modelId: "video", priceUnits: 40, enabled: true }],
+        "image.generate": [{ modelId: "image", priceUnits: 20, enabled: true }],
       },
       allowance: 39,
     });
@@ -27,8 +27,8 @@ describe("an allowance measured against the models on offer", () => {
         minimumChargeOf,
         modelsByOperation: {
           "image.generate": [
-            { priceUnits: 20, enabled: true },
-            { priceUnits: 400, enabled: true },
+            { modelId: "affordable", priceUnits: 20, enabled: true },
+            { modelId: "expensive", priceUnits: 400, enabled: true },
           ],
         },
         allowance: 100,
@@ -42,8 +42,8 @@ describe("an allowance measured against the models on offer", () => {
         minimumChargeOf,
         modelsByOperation: {
           "image.generate": [
-            { priceUnits: 20, enabled: false },
-            { priceUnits: 400, enabled: true },
+            { modelId: "disabled", priceUnits: 20, enabled: false },
+            { modelId: "expensive", priceUnits: 400, enabled: true },
           ],
         },
         allowance: 100,
@@ -60,7 +60,7 @@ describe("an allowance measured against the models on offer", () => {
         Object.entries(AI_DEFAULT_OPERATION_MODELS).map(
           ([operation, defaults]) => [
             operation,
-            [{ priceUnits: defaults.price, enabled: true }],
+            [{ modelId: defaults.model, priceUnits: defaults.price, enabled: true }],
           ],
         ),
       ),

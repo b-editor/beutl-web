@@ -80,7 +80,7 @@ describe("registering a model for an operation", () => {
 });
 
 describe("keeping an operation startable", () => {
-  const minimumChargeOf = (priceUnits: number) => priceUnits * 4;
+  const minimumChargeOf = (_modelId: string, priceUnits: number) => priceUnits * 4;
 
   it("allows a model nobody can afford beside one they can", () => {
     // An expensive option is an offer, not a misconfiguration.
@@ -88,8 +88,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { priceUnits: 10, enabled: true },
-          { priceUnits: 400, enabled: true },
+          { modelId: "affordable", priceUnits: 10, enabled: true },
+          { modelId: "expensive", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -101,8 +101,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { priceUnits: 200, enabled: true },
-          { priceUnits: 400, enabled: true },
+          { modelId: "expensive", priceUnits: 200, enabled: true },
+          { modelId: "dearer", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -114,9 +114,19 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { priceUnits: 10, enabled: false },
-          { priceUnits: 400, enabled: true },
+          { modelId: "disabled", priceUnits: 10, enabled: false },
+          { modelId: "expensive", priceUnits: 400, enabled: true },
         ],
+        allowance: 500,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats a model with no valid request shape as offline", () => {
+    expect(
+      aiOperationWouldGoOffline({
+        minimumChargeOf: () => 0,
+        models: [{ modelId: "unsupported", priceUnits: 1, enabled: true }],
         allowance: 500,
       }),
     ).toBe(true);

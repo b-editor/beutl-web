@@ -260,6 +260,29 @@ describe("AI provider cost estimates", () => {
     }
   });
 
+  it("lets the SDK encode reserved model slug characters exactly once", async () => {
+    const modelId = "vendor/model:free";
+    const mock = stubFetch((url) =>
+      decodeURIComponent(new URL(url).pathname).endsWith(`/model/${modelId}`)
+        ? jsonResponse(modelPayload(modelId, {
+            prompt: "0.0000004",
+            completion: "0.0000016",
+          }))
+        : jsonResponse({ error: { code: 404, message: "Resource not found" } }, 404),
+    );
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (operation) =>
+        operation === "subtitle.translate" ? [modelId] : [],
+    });
+
+    expect(result.entries[0]?.estimate.status).toBe("estimated");
+    const requestUrl = (mock.mock.calls[0]![0] as Request).url;
+    expect(decodeURIComponent(new URL(requestUrl).pathname)).toContain(
+      `/model/${modelId}`,
+    );
+  });
+
   it("reuses a cached price list until it is forced to refetch", async () => {
     const mock = stubFetch();
     await estimatesByOperation();

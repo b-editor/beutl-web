@@ -34,7 +34,11 @@ export async function getOrCreateProCheckoutAttempt({
     const existing = await tx.proCheckoutAttempt.findUnique({
       where: { userId },
     });
-    if (existing?.accountDeletionAt) {
+    const settledDeletionTombstone = existing?.accountDeletionAt !== null &&
+      existing?.accountDeletionAt !== undefined &&
+      existing.recoveryCompletedAt !== null &&
+      existing.stripeCheckoutSessionId === null;
+    if (existing?.accountDeletionAt && !settledDeletionTombstone) {
       throw new Error("Account deletion is already authorized");
     }
     // A local expiry is only a lease for an unbound creation key. Once Stripe
@@ -42,6 +46,7 @@ export async function getOrCreateProCheckoutAttempt({
     // actual Stripe state has been resolved by the caller.
     if (
       existing &&
+      !settledDeletionTombstone &&
       (existing.stripeCheckoutSessionId !== null ||
         (existing.expiresAt.getTime() > now.getTime() &&
           existing.billingOfferId === billingOfferId))
@@ -66,6 +71,14 @@ export async function getOrCreateProCheckoutAttempt({
         ...(customerId ? { customerId } : {}),
         ...(paramsJson ? { paramsJson } : {}),
         expiresAt,
+        accountDeletionAt: null,
+        recoveryLeaseToken: null,
+        recoveryLeaseExpiresAt: null,
+        recoveryAttempts: 0,
+        recoveryLastError: null,
+        recoveryInterventionAt: null,
+        recoveryNotBefore: null,
+        recoveryCompletedAt: null,
       },
     });
   };

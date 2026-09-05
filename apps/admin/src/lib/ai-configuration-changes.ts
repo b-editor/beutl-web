@@ -80,13 +80,17 @@ export function validateAiConfigurationChanges(
     // no rows is already its built-in model.
     storedModelsOf: (
       operation: string,
-    ) => { priceUnits: number; enabled: boolean }[];
+    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
     // What one runs on once this save leaves it with no rows, which the stored
     // state cannot answer because those rows are the ones going away.
     builtInModelsOf: (
       operation: string,
-    ) => { priceUnits: number; enabled: boolean }[];
-    minimumChargeOf: (operation: string, priceUnits: number) => number;
+    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
+    minimumChargeOf: (
+      operation: string,
+      modelId: string,
+      priceUnits: number,
+    ) => number;
   },
 ): AiConfigurationValidation {
   if (typeof input !== "object" || input === null) {
@@ -207,6 +211,7 @@ export function validateAiConfigurationChanges(
         return [
           operation,
           draft.models.map((model) => ({
+            modelId: model.modelId,
             priceUnits: model.priceUnits,
             enabled: model.enabled,
           })),

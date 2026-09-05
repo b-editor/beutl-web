@@ -179,22 +179,34 @@ describe("legacy storage cleanup contracts", () => {
     memory.prisma.$transaction = originalTransaction;
   });
 
-  it("replays publication after a lost commit response without duplicating the File or relation", async () => {
-    const source = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
-    const create = source.slice(
-      source.indexOf("export async function createDevPackageScreenshot"),
-      source.indexOf("export async function reorderDevPackageScreenshots"),
-    );
-    expect(create).toContain("upsert");
-    expect(create).toContain("packageId_fileId");
+  it("does not replay stale publication after a lost completed-receipt response", async () => {
     const originalTransaction = memory.prisma.$transaction;
     let transactionCount = 0;
-    const relationIds = new Set<string>();
+    let publishedFileId: string | null = null;
+    const retiredFileIds: string[] = [];
     let publishCalls = 0;
     memory.prisma.$transaction = vi.fn(async (callback: never) => {
       const result = await originalTransaction(callback);
       transactionCount++;
-      if (transactionCount === 2) throw new Error("commit response lost");
+      if (transactionCount === 2) {
+        // The File, publication and completedFileId are committed, but their
+        // response is lost. A separate request then publishes a newer artifact
+        // before this caller retries its receipt.
+        memory.state.files.set("newer-file", {
+          id: "newer-file",
+          userId: "u",
+          objectKey: "newer-object",
+          name: "newer.bin",
+          size: 1,
+          mimeType: "application/octet-stream",
+          visibility: "DEDICATED",
+          sha256: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        publishedFileId = "newer-file";
+        throw new Error("commit response lost");
+      }
       return result;
     }) as never;
     const result = await createDedicatedStorageFile({
@@ -204,13 +216,19 @@ describe("legacy storage cleanup contracts", () => {
       fileCountLimit: 10,
       publish: async (_tx, record) => {
         publishCalls++;
-        relationIds.add(record.id);
+        if (publishedFileId && publishedFileId !== record.id) {
+          retiredFileIds.push(publishedFileId);
+          memory.state.files.delete(publishedFileId);
+        }
+        publishedFileId = record.id;
       },
     });
     expect(result.kind).toBe("created");
-    expect(memory.state.files.size).toBe(1);
-    expect(publishCalls).toBe(2);
-    expect(relationIds.size).toBe(1);
+    expect(memory.state.files.size).toBe(2);
+    expect(memory.state.files.has("newer-file")).toBe(true);
+    expect(publishCalls).toBe(1);
+    expect(publishedFileId).toBe("newer-file");
+    expect(retiredFileIds).toEqual([]);
     expect(bucket.put).toHaveBeenCalledTimes(1);
     memory.prisma.$transaction = originalTransaction;
   });

@@ -39,6 +39,72 @@ describe("Pro checkout attempts", () => {
     expect(transaction.proCheckoutAttempt.upsert).not.toHaveBeenCalled();
   });
 
+  it("restarts checkout after a settled deletion tombstone expires", async () => {
+    const now = new Date("2026-08-12T00:00:00.000Z");
+    const upsert = vi.fn().mockResolvedValue({ checkoutKey: "attempt-new" });
+    const transaction = {
+      accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
+      proCheckoutAttempt: {
+        findUnique: vi.fn().mockResolvedValue({
+          userId: "user-1",
+          checkoutKey: "attempt-old",
+          billingOfferId: "offer-current",
+          stripeCheckoutSessionId: null,
+          expiresAt: new Date("2026-08-13T00:00:00.000Z"),
+          accountDeletionAt: new Date("2026-08-10T00:00:00.000Z"),
+          recoveryCompletedAt: new Date("2026-08-10T00:01:00.000Z"),
+        }),
+        upsert,
+      },
+    };
+
+    await expect(getOrCreateProCheckoutAttempt({
+      userId: "user-1",
+      billingOfferId: "offer-current",
+      now,
+      customerId: "cus_1",
+      expiresAt: new Date("2026-08-13T00:00:00.000Z"),
+      prisma: transaction as never,
+    })).resolves.toEqual({ checkoutKey: "attempt-new" });
+
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({
+        accountDeletionAt: null,
+        recoveryCompletedAt: null,
+        recoveryAttempts: 0,
+      }),
+    }));
+  });
+
+  it("keeps an unsettled deletion tombstone fenced after intent expiry", async () => {
+    const upsert = vi.fn();
+    const transaction = {
+      accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
+      proCheckoutAttempt: {
+        findUnique: vi.fn().mockResolvedValue({
+          userId: "user-1",
+          checkoutKey: "attempt-old",
+          billingOfferId: "offer-current",
+          stripeCheckoutSessionId: null,
+          expiresAt: new Date("2026-08-13T00:00:00.000Z"),
+          accountDeletionAt: new Date("2026-08-10T00:00:00.000Z"),
+          recoveryCompletedAt: null,
+        }),
+        upsert,
+      },
+    };
+
+    await expect(getOrCreateProCheckoutAttempt({
+      userId: "user-1",
+      billingOfferId: "offer-current",
+      now: new Date("2026-08-12T00:00:00.000Z"),
+      customerId: "cus_1",
+      expiresAt: new Date("2026-08-13T00:00:00.000Z"),
+      prisma: transaction as never,
+    })).rejects.toThrow("Account deletion is already authorized");
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it("deletes only the Checkout Session named by the cleanup caller", async () => {
     const transaction = {
       proCheckoutAttempt: {

@@ -28,6 +28,7 @@ import {
   loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
+  loadAiVideoModelCapabilities,
   discoverTopUpCheckoutAttempt,
   reconcilePackagePaymentRefundAttempt,
 } from "@beutl/api";
@@ -458,6 +459,7 @@ export async function terminalizeOrphanTopUpResolution(
 export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<ActionResult> {
   const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
+    const videoCapabilities = await loadAiVideoModelCapabilities();
     // Validation reads inside the transaction because it is a cross-field rule
     // over state this save does not carry: the settings and operations it
     // leaves alone take part in it, so checking against a snapshot read
@@ -479,17 +481,37 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
         storedModelsOf: (operation) =>
           catalog
             .list(operation)
-            .map((entry) => ({ priceUnits: entry.priceUnits, enabled: true })),
+            .map((entry) => ({
+              modelId: entry.modelId,
+              priceUnits: entry.priceUnits,
+              enabled: true,
+            })),
         builtInModelsOf: (operation) => {
           const defaults = (
-            AI_DEFAULT_OPERATION_MODELS as Record<string, { price: number }>
+            AI_DEFAULT_OPERATION_MODELS as Record<
+              string,
+              { model: string; price: number }
+            >
           )[operation];
           return defaults
-            ? [{ priceUnits: defaults.price, enabled: true }]
+            ? [{
+                modelId: defaults.model,
+                priceUnits: defaults.price,
+                enabled: true,
+              }]
             : [];
         },
-        minimumChargeOf: (operation, priceUnits) =>
-          aiMinimumChargeOf(operation, priceUnits) ?? priceUnits,
+        minimumChargeOf: (operation, modelId, priceUnits) => {
+          const durations = operation === "video.generate"
+            ? videoCapabilities.get(modelId)?.durations
+            : undefined;
+          if (durations) {
+            return durations.length === 0
+              ? 0
+              : priceUnits * Math.min(...durations);
+          }
+          return aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
+        },
       });
       if (!validated.ok) {
         return { ok: false as const, message: validated.message };

@@ -185,8 +185,8 @@ function splitModelId(model: string): { author: string; slug: string } | null {
     return null;
   }
   return {
-    author: encodeURIComponent(model.slice(0, index)),
-    slug: encodeURIComponent(model.slice(index + 1)),
+    author: model.slice(0, index),
+    slug: model.slice(index + 1),
   };
 }
 

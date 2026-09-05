@@ -32,6 +32,13 @@ const imageEditFormSource = readFileSync(
   ),
   "utf8",
 );
+const transcribeFormSource = readFileSync(
+  new URL(
+    "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/transcribe-form.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("dashboard AI form input limits", () => {
   it("counts translation segments and glossary text against one shared limit", () => {
@@ -98,5 +105,14 @@ describe("dashboard AI form input limits", () => {
     expect(preparedImageEditSourceWithinLimit(oversized, limit)).toBe(false);
     expect(imageEditFormSource).toContain("rawImageEditSourceExceedsLimit");
     expect(imageEditFormSource).toContain("preparedImageEditSourceWithinLimit");
+  });
+
+  it("blocks oversized direct transcription audio before naming or dispatch", () => {
+    expect(transcribeFormSource).toContain("const audioTooLarge =");
+    expect(transcribeFormSource).toContain("const signature = audioTooLarge");
+    expect(transcribeFormSource).toContain("submitBlocked ||");
+    expect(transcribeFormSource).toContain("extracting ||\n      audioTooLarge");
+    expect(transcribeFormSource).toContain("extracting ||\n            audioTooLarge");
+    expect(transcribeFormSource).toContain('? "tooLarge"');
   });
 });
