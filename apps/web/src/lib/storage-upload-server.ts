@@ -67,6 +67,21 @@ export type StartedUpload = {
   partCount: number;
 };
 
+type StartUploadOutcome =
+  | { ok: true; upload: StartedUpload }
+  | { ok: false; reason: UploadFailure; conflict?: true };
+
+type StorageUploadIntent = {
+  userId: string;
+  id: string;
+  name: string;
+  mimeType: string;
+  size: bigint;
+};
+
+const INTENT_DIGEST_PREFIX = "intent-";
+const MAX_COMPLETION_ETAG_LENGTH = 256;
+
 // The one way anything here reaches the bucket, which is also what lets a test
 // stand in for it.
 function bucket() {
@@ -124,6 +139,76 @@ export function partCountOf(size: bigint): number {
   return Number(parts);
 }
 
+async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<string> {
+  const serialized = JSON.stringify({
+    version: 1,
+    userId: intent.userId,
+    id: intent.id,
+    name: intent.name,
+    mimeType: intent.mimeType,
+    size: intent.size.toString(),
+    partSize: STORAGE_UPLOAD_PART_BYTES,
+    reservationKind: "multipart",
+    visibility: "PRIVATE",
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(serialized),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
+function storageUploadIntentMatches(
+  upload: NonNullable<Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>>,
+  intent: StorageUploadIntent,
+  intentDigest: string,
+): boolean {
+  if (
+    upload.userId !== intent.userId ||
+    upload.id !== intent.id ||
+    upload.reservationKind !== "multipart" ||
+    upload.mimeType !== intent.mimeType ||
+    BigInt(upload.size) !== intent.size ||
+    upload.partSize !== STORAGE_UPLOAD_PART_BYTES
+  ) {
+    return false;
+  }
+
+  const prefix = `storage-upload/${intent.userId}/${intent.id}/`;
+  const generation = upload.objectKey.startsWith(prefix)
+    ? upload.objectKey.slice(prefix.length).split("/", 1)[0]
+    : "";
+  if (generation.startsWith(INTENT_DIGEST_PREFIX)) {
+    return generation === `${INTENT_DIGEST_PREFIX}${intentDigest}`;
+  }
+
+  // Rows written before intent digests existed can only be replayed when every
+  // directly persisted field agrees. This may conservatively reject a legacy
+  // row whose available name received a suffix, but never aliases a new intent.
+  return upload.name === intent.name;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "code" in error && error.code === "P2002";
+}
+
+function validCompletionParts(
+  size: bigint,
+  parts: readonly { partNumber: number; etag: string }[],
+): boolean {
+  const expected = partCountOf(size);
+  if (parts.length !== expected) return false;
+  return parts.every((part, index) =>
+    part.partNumber === index + 1 &&
+    typeof part.etag === "string" &&
+    part.etag.length > 0 &&
+    part.etag.length <= MAX_COMPLETION_ETAG_LENGTH
+  );
+}
+
 export async function startUpload({
   userId,
   id,
@@ -139,13 +224,18 @@ export async function startUpload({
   name: string;
   mimeType: string;
   size: bigint;
-}): Promise<{ ok: true; upload: StartedUpload } | { ok: false; reason: UploadFailure }> {
+}): Promise<StartUploadOutcome> {
+  const intent = { userId, id, name, mimeType, size };
+  const intentDigest = await storageUploadIntentDigest(intent);
   const existing = await findStorageUploadByIdAndUserId({ id, userId });
   if (existing) {
     // 完了しているか、掃除に取られているか。どちらもこの名前ではもう続けられ
     // ない——取られた行のパートはもう捨てられている。
     if (existing.completedFileId || existing.abandonedAt) {
       return { ok: false, reason: "uploadFailed" };
+    }
+    if (!storageUploadIntentMatches(existing, intent, intentDigest)) {
+      return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (existing.uploadId) {
       return {
@@ -164,13 +254,15 @@ export async function startUpload({
   // A client id is a retry identity, not an object generation. A fresh random
   // suffix keeps an expired cleaner for an old same-id row physically unable
   // to delete the object created by its replacement.
-  const proposedObjectKey = `storage-upload/${userId}/${id}/${crypto.randomUUID()}`;
+  const proposedObjectKey =
+    `storage-upload/${userId}/${id}/${INTENT_DIGEST_PREFIX}${intentDigest}/${crypto.randomUUID()}`;
   let upload:
     | Awaited<ReturnType<typeof createStorageUploadIntent>>
     | null
     | "tooMany"
     | "tooManyFiles"
-    | "cancelled";
+    | "cancelled"
+    | "conflict";
   try {
     // Reading the totals and writing the row that changes them is one
     // transaction. CockroachDB runs it serializably, so two uploads started at
@@ -183,6 +275,9 @@ export async function startUpload({
       const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
       // 取り消しの墓標。この名前は始まる前に取り消されているので、始めない。
       if (raced?.abandonedAt) return "cancelled";
+      if (raced && !storageUploadIntentMatches(raced, intent, intentDigest)) {
+        return "conflict";
+      }
       if (raced) return raced;
 
       // 小さなアップロードは枠をほとんど使わないので、大きさだけでは歯止めに
@@ -216,8 +311,26 @@ export async function startUpload({
       });
     });
   } catch (error) {
-    // No remote call happened: the durable intent is the retry handle.
-    throw error;
+    if (isUniqueConstraintError(error)) {
+      const raced = await findStorageUploadByIdAndUserId({ id, userId });
+      if (raced) {
+        upload = storageUploadIntentMatches(raced, intent, intentDigest)
+          ? raced
+          : "conflict";
+      } else {
+        // The id is globally unique. A row owned by another account is hidden
+        // by the ownership-scoped lookup but still makes this retry identity
+        // unusable; reject it without revealing or mutating that row.
+        upload = "conflict";
+      }
+    } else {
+      // No remote call happened: the durable intent is the retry handle.
+      throw error;
+    }
+  }
+
+  if (upload === "conflict") {
+    return { ok: false, reason: "uploadFailed", conflict: true };
   }
 
   if (upload === "tooMany") {
@@ -254,6 +367,9 @@ export async function startUpload({
   });
   if (!claimed) {
     const current = await findStorageUploadByIdAndUserId({ id, userId });
+    if (current && !storageUploadIntentMatches(current, intent, intentDigest)) {
+      return { ok: false, reason: "uploadFailed", conflict: true };
+    }
     if (current?.uploadId) {
       return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size) } };
     }
@@ -419,6 +535,13 @@ export async function finishUpload({
     if (existing.kind === "unknown") return { ok: false, reason: "uploadFailed" };
     // An operator explicitly resumed this generation; an absent object is the
     // only case in which a fresh provider completion is authorized.
+  }
+
+  // R2 joins exactly the submitted list. Require the complete, ordered 1..N
+  // set derived from the persisted reservation so a truncated, duplicated or
+  // reordered client list can never publish a different object generation.
+  if (!validCompletionParts(upload.size, parts)) {
+    return { ok: false, reason: "uploadFailed" };
   }
 
   // resumeMultipartUpload only constructs a local handle; it does not invoke

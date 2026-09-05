@@ -334,6 +334,55 @@ describe("uploading a file too large for one request", () => {
     );
   });
 
+  it.each([
+    ["a missing part", [{ partNumber: 1, etag: "etag-1" }]],
+    ["an extra part", [
+      { partNumber: 1, etag: "etag-1" },
+      { partNumber: 2, etag: "etag-2" },
+      { partNumber: 3, etag: "etag-3" },
+    ]],
+    ["a duplicate part", [
+      { partNumber: 1, etag: "etag-1" },
+      { partNumber: 1, etag: "etag-1-again" },
+    ]],
+    ["out-of-order parts", [
+      { partNumber: 2, etag: "etag-2" },
+      { partNumber: 1, etag: "etag-1" },
+    ]],
+    ["an empty ETag", [
+      { partNumber: 1, etag: "etag-1" },
+      { partNumber: 2, etag: "" },
+    ]],
+    ["an oversized ETag", [
+      { partNumber: 1, etag: "etag-1" },
+      { partNumber: 2, etag: "e".repeat(257) },
+    ]],
+  ] as const)("refuses completion with %s before touching R2", async (_, parts) => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "exact-parts.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(STORAGE_UPLOAD_PART_BYTES + 1),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    bucket.resumeMultipartUpload.mockClear();
+
+    await expect(finishUpload({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      parts: [...parts],
+    })).resolves.toEqual({ ok: false, reason: "uploadFailed" });
+
+    expect(bucket.resumeMultipartUpload).not.toHaveBeenCalled();
+    expect(state.storageUploads.get(started.upload.id)).toMatchObject({
+      completionState: "idle",
+      completionAttempts: 0,
+      completedFileId: null,
+    });
+    expect(state.files.size).toBe(0);
+  });
+
   it("refuses a part longer than the size the upload was admitted for", async () => {
     // Otherwise an upload declaring nothing still holds parts of any length in
     // the bucket for a day, and none of it was counted against the quota.
@@ -1879,8 +1928,104 @@ describe("uploading a file too large for one request", () => {
     expect(bucket.createMultipartUpload.mock.calls[0]?.[1]).toEqual({
       httpMetadata: { contentType: winner.mimeType },
     });
-    expect(outcomes.some((outcome) => outcome.ok)).toBe(true);
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+    expect(outcomes.filter((outcome) => !outcome.ok)).toEqual([
+      { ok: false, reason: "uploadFailed", conflict: true },
+    ]);
   });
+
+  it("replays a start only when the complete original intent matches", async () => {
+    state.files.set("taken-name", {
+      id: "taken-name",
+      objectKey: "taken-name-key",
+      name: "same.bin",
+      size: 1,
+      mimeType: "application/octet-stream",
+      userId: USER_ID,
+      visibility: "PRIVATE",
+      sha256: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    const id = crypto.randomUUID();
+    const request = {
+      userId: USER_ID,
+      id,
+      name: "same.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    };
+    const first = await startUpload(request);
+    if (!first.ok) throw new Error(first.reason);
+    const persisted = state.storageUploads.get(id)!;
+    expect(persisted.name).toBe("same (1).bin");
+    const remoteCalls = bucket.createMultipartUpload.mock.calls.length;
+
+    await expect(startUpload(request)).resolves.toEqual(first);
+    for (const changed of [
+      { ...request, name: "different.bin" },
+      { ...request, mimeType: "video/mp4" },
+      { ...request, size: BigInt(1_001) },
+    ]) {
+      await expect(startUpload(changed)).resolves.toEqual({
+        ok: false,
+        reason: "uploadFailed",
+        conflict: true,
+      });
+    }
+
+    expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(remoteCalls);
+    expect(state.storageUploads.get(id)).toEqual(persisted);
+  });
+
+  it.each([false, true])(
+    "applies the same intent comparison after a P2002 fallback (mismatch=%s)",
+    async (mismatch) => {
+      const id = crypto.randomUUID();
+      const request = {
+        userId: USER_ID,
+        id,
+        name: "seed.bin",
+        mimeType: "application/octet-stream",
+        size: BigInt(1_000),
+      };
+      const seeded = await startUpload(request);
+      if (!seeded.ok) throw new Error(seeded.reason);
+      const seedRow = state.storageUploads.get(id)!;
+      state.storageUploads.delete(id);
+      const raced = {
+        ...seedRow,
+        objectKey: mismatch
+          ? `storage-upload/${USER_ID}/${id}/intent-${"0".repeat(64)}/winner`
+          : seedRow.objectKey,
+        uploadId: "remote-winner",
+        name: mismatch ? "other.bin" : "seed.bin",
+      };
+      const find = vi.spyOn(storageDb, "findStorageUploadByIdAndUserId")
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(raced as never);
+      vi.spyOn(storageDb, "createStorageUploadIntent").mockRejectedValueOnce(
+        Object.assign(new Error("duplicate"), { code: "P2002" }),
+      );
+      const remoteCalls = bucket.createMultipartUpload.mock.calls.length;
+
+      const result = await startUpload(request);
+
+      expect(result).toEqual(mismatch
+        ? { ok: false, reason: "uploadFailed", conflict: true }
+        : {
+          ok: true,
+          upload: {
+            id,
+            partSize: STORAGE_UPLOAD_PART_BYTES,
+            partCount: 1,
+          },
+        });
+      expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(remoteCalls);
+      find.mockRestore();
+    },
+  );
 
   it("expires an intent without calling a nonexistent multipart", async () => {
     const started = await startUpload({

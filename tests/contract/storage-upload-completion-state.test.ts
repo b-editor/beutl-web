@@ -149,7 +149,7 @@ describe("storage upload completion state machine", () => {
     await expect(finishUpload({
       userId: USER,
       uploadId: row.id,
-      parts: [],
+      parts: [{ partNumber: 1, etag: "etag-1" }],
     })).resolves.toMatchObject({ ok: false, reason: "uploadFailed" });
     expect(updateMany).not.toHaveBeenCalled();
     expect(memory.state.storageUploads.get(row.id)).toMatchObject({
@@ -163,7 +163,7 @@ describe("storage upload completion state machine", () => {
     await expect(finishUpload({
       userId: USER,
       uploadId: row.id,
-      parts: [],
+      parts: [{ partNumber: 1, etag: "etag-1" }],
     })).resolves.toMatchObject({ ok: true });
     expect(completeCalls).toBe(1);
   });

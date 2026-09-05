@@ -62,7 +62,9 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(
       { error_code: outcome.reason },
       {
-        status: outcome.reason === "insufficientStorageSpace" ||
+        status: outcome.conflict === true
+          ? 409
+          : outcome.reason === "insufficientStorageSpace" ||
             outcome.reason === "tooManyFiles"
           ? 409
           : outcome.reason === "tooManyUploads"
