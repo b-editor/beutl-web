@@ -82,18 +82,18 @@ function TopUpResolutionRow({
       });
       let resultMessage =
         result.message ??
-        t(
-          result.success
-            ? "admin:ai.interventions.messages.topUpTerminalized"
-            : "admin:ai.interventions.common.failed",
-        );
+        (result.success
+          ? t("admin:ai.interventions.messages.topUpTerminalized")
+          : t("admin:ai.interventions.common.failed"));
       if (result.message === "Unauthenticated") {
         resultMessage = t("admin:ai.interventions.common.unauthenticated");
       } else if (result.message === "Forbidden") {
         resultMessage = t("admin:ai.interventions.common.forbidden");
       }
       setMessage(resultMessage);
-      if (result.success) window.location.reload();
+      if (result.terminalized) {
+        window.location.reload();
+      }
     });
 
   return (

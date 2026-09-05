@@ -204,7 +204,10 @@ export async function terminalizeStorageUploadInterventionAction(lang: string, i
   });
 }
 
-export async function terminalizeOrphanTopUpResolution(lang: string, input: unknown): Promise<ActionResult> {
+export async function terminalizeOrphanTopUpResolution(
+  lang: string,
+  input: unknown,
+): Promise<ActionResult & { terminalized?: boolean }> {
   const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     if (!input || typeof input !== "object") return { success: false, message: t("admin:ai.interventions.messages.invalidInput") };
@@ -359,7 +362,11 @@ export async function terminalizeOrphanTopUpResolution(lang: string, input: unkn
         releaseLease = false;
       }
       return result.status === "terminalized"
-        ? { success: true, message: t("admin:ai.interventions.messages.topUpTerminalized") }
+        ? {
+            success: true,
+            terminalized: true,
+            message: t("admin:ai.interventions.messages.topUpTerminalized"),
+          }
         : {
             success: false,
             message: result.status === "unsafe"

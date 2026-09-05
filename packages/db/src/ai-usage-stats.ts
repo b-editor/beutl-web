@@ -283,25 +283,79 @@ export async function countActiveProSubscriptions({
   prisma?: PrismaTransaction;
 }): Promise<number> {
   const db = prisma ?? await getDb();
-  return await db.subscription.count({
-    where: {
-      status: "active",
-      planId,
-      // A row with no offer was never matched to a Price and is granted
-      // nothing, the same way isActiveProSubscription reads it.
-      billingOfferId: {
-        not: null,
-      },
-      currentPeriodEnd: {
-        gt: now,
-      },
-      // A subscription cancelled mid-period stops being entitled at cancelAt,
-      // not at the end of the period it was paid through; counting by
-      // currentPeriodEnd alone reports it as spending against the allowance
-      // for weeks after it stopped being able to.
-      OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
+  const activeWhere = {
+    status: "active",
+    planId,
+    // A row with no offer was never matched to a Price and is granted
+    // nothing, the same way isActiveProSubscription reads it.
+    billingOfferId: {
+      not: null,
     },
-  });
+    currentPeriodEnd: {
+      gt: now,
+    },
+    // A subscription cancelled mid-period stops being entitled at cancelAt,
+    // not at the end of the period it was paid through; counting by
+    // currentPeriodEnd alone reports it as spending against the allowance
+    // for weeks after it stopped being able to.
+    OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
+  };
+  const [activeCount, activeHolds] = await Promise.all([
+    db.subscription.count({ where: activeWhere }),
+    db.subscriptionEntitlementHold.findMany({
+      where: {
+        active: true,
+        user: {
+          Subscription: {
+            is: activeWhere,
+          },
+        },
+      },
+      select: {
+        userId: true,
+        stripeSubscriptionId: true,
+        billingPeriodStart: true,
+        billingPeriodEnd: true,
+        user: {
+          select: {
+            Subscription: {
+              select: {
+                stripeSubscriptionId: true,
+                currentPeriodStart: true,
+                currentPeriodEnd: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
+  // Holds remain as audit records after a period or subscription replacement.
+  // Mirror getSubscriptionByUserId's identity and overlap checks so only a hold
+  // that currently denies the allowance is removed from the report.
+  const heldUsers = new Set<string>();
+  for (const hold of activeHolds) {
+    const subscription = hold.user.Subscription;
+    if (
+      !subscription ||
+      hold.stripeSubscriptionId !== subscription.stripeSubscriptionId
+    ) {
+      continue;
+    }
+    if (
+      subscription.currentPeriodStart !== null &&
+      subscription.currentPeriodEnd !== null &&
+      (hold.billingPeriodStart === null ||
+        hold.billingPeriodEnd === null ||
+        hold.billingPeriodStart >= subscription.currentPeriodEnd ||
+        hold.billingPeriodEnd <= subscription.currentPeriodStart)
+    ) {
+      continue;
+    }
+    heldUsers.add(hold.userId);
+  }
+  return Math.max(0, activeCount - heldUsers.size);
 }
 
 // The account row as stored. Unlike getCreditAccount this never creates one,

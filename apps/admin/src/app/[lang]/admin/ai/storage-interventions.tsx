@@ -38,12 +38,41 @@ export function StorageMultipartInterventions({
   rows: Row[];
 }) {
   const { t } = useTranslation(lang);
+  if (!rows.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("admin:ai.interventions.multipart.empty")}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {rows.map((row) => (
+        <StorageMultipartInterventionRow
+          key={`${row.objectKey}:${row.uploadId}`}
+          lang={lang}
+          row={row}
+        />
+      ))}
+    </div>
+  );
+}
+
+function StorageMultipartInterventionRow({
+  lang,
+  row,
+}: {
+  lang: string;
+  row: Row;
+}) {
+  const { t } = useTranslation(lang);
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
 
-  const run = (row: Row, terminalize: boolean) =>
+  const run = (terminalize: boolean) =>
     startTransition(async () => {
       if (terminalize && (!reason.trim() || !evidence.trim())) {
         setMessage(t("admin:ai.interventions.messages.reasonAndEvidenceRequired"));
@@ -85,61 +114,46 @@ export function StorageMultipartInterventions({
       if (result.success) window.location.reload();
     });
 
-  if (!rows.length) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        {t("admin:ai.interventions.multipart.empty")}
-      </p>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-3">
-      {message && <p className="text-sm text-muted-foreground">{message}</p>}
-      {rows.map((row) => (
-        <div
-          key={`${row.objectKey}:${row.uploadId}`}
-          className="rounded-lg border p-4 text-sm"
+    <div className="rounded-lg border p-4 text-sm">
+      {message && <p className="mb-2 text-muted-foreground">{message}</p>}
+      <p className="break-all font-medium">
+        {t("admin:ai.interventions.common.objectKey")}: {row.objectKey}
+      </p>
+      <p className="break-all">
+        {t("admin:ai.interventions.common.multipartUploadId")}: {row.uploadId}
+      </p>
+      <p className="text-muted-foreground">
+        {t("admin:ai.interventions.common.attempts", { count: row.attempts })};{" "}
+        {row.lastError ?? t("admin:ai.interventions.common.unknownError")}
+      </p>
+      <textarea
+        className="mt-2 min-h-16 w-full rounded border p-2"
+        aria-label={t("admin:ai.interventions.common.reasonPlaceholder")}
+        placeholder={t("admin:ai.interventions.common.reasonPlaceholder")}
+        value={reason}
+        onChange={(event) => setReason(event.target.value)}
+      />
+      <textarea
+        className="mt-2 min-h-16 w-full rounded border p-2"
+        aria-label={t("admin:ai.interventions.common.evidencePlaceholder")}
+        placeholder={t("admin:ai.interventions.common.evidencePlaceholder")}
+        value={evidence}
+        onChange={(event) => setEvidence(event.target.value)}
+      />
+      <div className="mt-2 flex gap-2">
+        <Button size="sm" disabled={pending} onClick={() => run(false)}>
+          {t("admin:ai.interventions.common.resume")}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => run(true)}
         >
-          <p className="break-all font-medium">
-            {t("admin:ai.interventions.common.objectKey")}: {row.objectKey}
-          </p>
-          <p className="break-all">
-            {t("admin:ai.interventions.common.multipartUploadId")}: {row.uploadId}
-          </p>
-          <p className="text-muted-foreground">
-            {t("admin:ai.interventions.common.attempts", { count: row.attempts })};{" "}
-            {row.lastError ?? t("admin:ai.interventions.common.unknownError")}
-          </p>
-          <textarea
-            className="mt-2 min-h-16 w-full rounded border p-2"
-            aria-label={t("admin:ai.interventions.common.reasonPlaceholder")}
-            placeholder={t("admin:ai.interventions.common.reasonPlaceholder")}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-          <textarea
-            className="mt-2 min-h-16 w-full rounded border p-2"
-            aria-label={t("admin:ai.interventions.common.evidencePlaceholder")}
-            placeholder={t("admin:ai.interventions.common.evidencePlaceholder")}
-            value={evidence}
-            onChange={(event) => setEvidence(event.target.value)}
-          />
-          <div className="mt-2 flex gap-2">
-            <Button size="sm" disabled={pending} onClick={() => run(row, false)}>
-              {t("admin:ai.interventions.common.resume")}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => run(row, true)}
-            >
-              {t("admin:ai.interventions.multipart.terminalize")}
-            </Button>
-          </div>
-        </div>
-      ))}
+          {t("admin:ai.interventions.multipart.terminalize")}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -164,12 +178,37 @@ export function StorageUploadInterventions({
   rows: UploadRow[];
 }) {
   const { t } = useTranslation(lang);
+  if (!rows.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("admin:ai.interventions.upload.empty")}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {rows.map((row) => (
+        <StorageUploadInterventionRow key={row.id} lang={lang} row={row} />
+      ))}
+    </div>
+  );
+}
+
+function StorageUploadInterventionRow({
+  lang,
+  row,
+}: {
+  lang: string;
+  row: UploadRow;
+}) {
+  const { t } = useTranslation(lang);
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
 
-  const run = (row: UploadRow, terminalize: boolean) =>
+  const run = (terminalize: boolean) =>
     startTransition(async () => {
       if (!reason.trim() || !evidence.trim()) {
         setMessage(t("admin:ai.interventions.messages.reasonAndEvidenceRequired"));
@@ -210,74 +249,61 @@ export function StorageUploadInterventions({
       if (result.success) window.location.reload();
     });
 
-  if (!rows.length) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        {t("admin:ai.interventions.upload.empty")}
-      </p>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-3">
-      {message && <p className="text-sm text-muted-foreground">{message}</p>}
-      {rows.map((row) => (
-        <div key={row.id} className="rounded-lg border p-4 text-sm">
-          <p className="break-all font-medium">
-            {t("admin:ai.interventions.common.recordId")}: {row.id}
-          </p>
-          <p className="break-all">
-            {t("admin:ai.interventions.common.objectKey")}: {row.objectKey}
-          </p>
-          {row.uploadId && (
-            <p className="break-all">
-              {t("admin:ai.interventions.common.multipartUploadId")}: {row.uploadId}
-            </p>
-          )}
-          <p className="text-muted-foreground">
-            {t("admin:ai.interventions.common.attempts", {
-              count: row.completionAttempts,
-            })};{" "}
-            {row.completionLastError ??
-              t("admin:ai.interventions.common.unknownError")}
-          </p>
-          {row.completionState === "unknown" ? (
-            <p className="mt-2 text-amber-700">
-              {t("admin:ai.interventions.upload.unknownOutcome")}
-            </p>
-          ) : (
-            <>
-              <textarea
-                className="mt-2 min-h-16 w-full rounded border p-2"
-                aria-label={t("admin:ai.interventions.common.reasonPlaceholder")}
-                placeholder={t("admin:ai.interventions.common.reasonPlaceholder")}
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-              />
-              <textarea
-                className="mt-2 min-h-16 w-full rounded border p-2"
-                aria-label={t("admin:ai.interventions.common.evidencePlaceholder")}
-                placeholder={t("admin:ai.interventions.common.evidencePlaceholder")}
-                value={evidence}
-                onChange={(event) => setEvidence(event.target.value)}
-              />
-              <div className="mt-2 flex gap-2">
-                <Button size="sm" disabled={pending} onClick={() => run(row, false)}>
-                  {t("admin:ai.interventions.common.resume")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={pending}
-                  onClick={() => run(row, true)}
-                >
-                  {t("admin:ai.interventions.common.terminalize")}
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      ))}
+    <div className="rounded-lg border p-4 text-sm">
+      {message && <p className="mb-2 text-muted-foreground">{message}</p>}
+      <p className="break-all font-medium">
+        {t("admin:ai.interventions.common.recordId")}: {row.id}
+      </p>
+      <p className="break-all">
+        {t("admin:ai.interventions.common.objectKey")}: {row.objectKey}
+      </p>
+      {row.uploadId && (
+        <p className="break-all">
+          {t("admin:ai.interventions.common.multipartUploadId")}: {row.uploadId}
+        </p>
+      )}
+      <p className="text-muted-foreground">
+        {t("admin:ai.interventions.common.attempts", {
+          count: row.completionAttempts,
+        })};{" "}
+        {row.completionLastError ?? t("admin:ai.interventions.common.unknownError")}
+      </p>
+      {row.completionState === "unknown" ? (
+        <p className="mt-2 text-amber-700">
+          {t("admin:ai.interventions.upload.unknownOutcome")}
+        </p>
+      ) : (
+        <>
+          <textarea
+            className="mt-2 min-h-16 w-full rounded border p-2"
+            aria-label={t("admin:ai.interventions.common.reasonPlaceholder")}
+            placeholder={t("admin:ai.interventions.common.reasonPlaceholder")}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <textarea
+            className="mt-2 min-h-16 w-full rounded border p-2"
+            aria-label={t("admin:ai.interventions.common.evidencePlaceholder")}
+            placeholder={t("admin:ai.interventions.common.evidencePlaceholder")}
+            value={evidence}
+            onChange={(event) => setEvidence(event.target.value)}
+          />
+          <div className="mt-2 flex gap-2">
+            <Button size="sm" disabled={pending} onClick={() => run(false)}>
+              {t("admin:ai.interventions.common.resume")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => run(true)}
+            >
+              {t("admin:ai.interventions.common.terminalize")}
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

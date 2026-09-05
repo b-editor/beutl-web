@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addPurchasedCredits,
   adjustPurchasedCreditsByAdmin,
@@ -65,8 +65,13 @@ async function reserve({
 }
 
 describe("AI usage aggregates", () => {
+  let memory: ReturnType<typeof createInMemoryPrisma>;
+
   beforeEach(() => {
-    const memory = createInMemoryPrisma();
+    memory = createInMemoryPrisma();
+    Object.assign(memory.prisma.subscriptionEntitlementHold, {
+      findMany: async () => [],
+    });
     setDbProvider(async () => memory.prisma as never);
   });
 
@@ -381,6 +386,67 @@ describe("AI usage aggregates", () => {
     });
 
     expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+  });
+
+  it("excludes only active entitlement holds for the current subscription period", async () => {
+    const now = new Date("2026-08-15T00:00:00.000Z");
+    const periodStart = new Date("2026-08-01T00:00:00.000Z");
+    const periodEnd = new Date("2026-09-01T00:00:00.000Z");
+    for (const userId of ["user-held", "user-historical"]) {
+      await upsertSubscription({
+        userId,
+        stripeSubscriptionId: `sub-${userId}`,
+        status: "active",
+        planId: "pro",
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
+        billingOfferId: "offer-1",
+      });
+    }
+
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        userId: "user-held",
+        stripeSubscriptionId: "sub-user-held",
+        billingPeriodStart: periodStart,
+        billingPeriodEnd: periodEnd,
+        user: {
+          Subscription: {
+            stripeSubscriptionId: "sub-user-held",
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+          },
+        },
+      },
+      {
+        userId: "user-historical",
+        stripeSubscriptionId: "sub-user-historical",
+        billingPeriodStart: new Date("2026-06-01T00:00:00.000Z"),
+        billingPeriodEnd: new Date("2026-07-01T00:00:00.000Z"),
+        user: {
+          Subscription: {
+            stripeSubscriptionId: "sub-user-historical",
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+          },
+        },
+      },
+    ]);
+    Object.assign(memory.prisma.subscriptionEntitlementHold, { findMany });
+
+    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          active: true,
+          user: {
+            Subscription: {
+              is: expect.objectContaining({ planId: "pro" }),
+            },
+          },
+        }),
+      }),
+    );
   });
 });
 
