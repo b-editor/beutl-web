@@ -99,6 +99,36 @@ describe("administrator account deletion guard", () => {
     await expect(reserveAdminAccountDeletion({ userId: "user-1", prisma: tx as never })).resolves.toEqual({ status: "blocked", reason: "provisioning" });
   });
 
+  it("keeps a provisioning intervention fenced while blocking deletion", async () => {
+    const tx = transaction({ provisioningCount: 1 });
+
+    await expect(
+      reserveAdminAccountDeletion({ userId: "user-1", prisma: tx as never }),
+    ).resolves.toEqual({ status: "blocked", reason: "provisioning" });
+    expect(tx.stripeCustomerProvisioning.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        status: {
+          in: ["pending", "mapping", "cleanup_required"],
+        },
+      },
+      data: {
+        status: "cleanup_required",
+        notBefore: expect.any(Date),
+        leaseToken: null,
+        leaseExpiresAt: null,
+      },
+    });
+    expect(tx.stripeCustomerProvisioning.count).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        status: {
+          in: ["pending", "mapping", "cleanup_required", "intervention"],
+        },
+      },
+    });
+  });
+
   it("rechecks blockers when an active deletion intent is resumed", async () => {
     const tx = transaction({ activeIntent: { identifier: "intent", tokenHash: "hash" }, blockerCount: 1 });
     await expect(reserveAdminAccountDeletion({ userId: "user-1", prisma: tx as never })).resolves.toEqual({ status: "blocked", reason: "checkout" });

@@ -32,6 +32,13 @@ const imageEditFormSource = readFileSync(
   ),
   "utf8",
 );
+const imageGenerateFormSource = readFileSync(
+  new URL(
+    "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/image-generate-form.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const transcribeFormSource = readFileSync(
   new URL(
     "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/transcribe-form.tsx",
@@ -94,6 +101,18 @@ describe("dashboard AI form input limits", () => {
     expect(imageEditFormSource).toContain("blocksSubmit(blocked, holdsName) || sourceTooLarge");
     expect(imageEditFormSource).toContain("readingSource || sourceTooLarge");
     expect(imageEditFormSource).toContain("preparedImageEditSourceWithinLimit");
+  });
+
+  it("fails closed when one generation reference exceeds its file limit", () => {
+    expect(imageGenerateFormSource).toContain("const referenceTooLarge =");
+    expect(imageGenerateFormSource).toContain(
+      "file.size > MAX_AI_IMAGE_UPLOAD_BYTES",
+    );
+    expect(imageGenerateFormSource).toContain(
+      "const signature = invalidReferenceSelection",
+    );
+    expect(imageGenerateFormSource).toContain("|| referenceTooLarge");
+    expect(imageGenerateFormSource).toContain("referenceImageTooLarge");
   });
 
   it("allows an oversized raw source only for outpaint preparation", () => {

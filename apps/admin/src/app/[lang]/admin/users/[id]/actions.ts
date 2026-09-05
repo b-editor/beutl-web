@@ -184,7 +184,10 @@ export async function deleteUser({
         return { status: "blocked" as const, reason: "subscription" as const };
       }
       const provisioning = await tx.stripeCustomerProvisioning.findFirst({
-        where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } },
+        where: {
+          userId,
+          status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+        },
         select: { id: true },
       });
       if (provisioning) {
@@ -203,6 +206,9 @@ export async function deleteUser({
       const prepared = await prepareAccountDeletionOutboxes({ userId, prisma: tx });
       if (prepared.unboundCheckoutRecoveries > 0) {
         return { status: "blocked" as const, reason: "checkout" as const };
+      }
+      if (prepared.customerProvisioningRecoveries > 0) {
+        return { status: "blocked" as const, reason: "provisioning" as const };
       }
       await enqueueUserStorageCleanups({ userId, prisma: tx });
       await deleteUserById({ userId, prisma: tx });

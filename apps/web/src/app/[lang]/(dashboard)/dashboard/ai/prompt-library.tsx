@@ -11,6 +11,7 @@ import {
 import { Input } from "@beutl/ui/ui/input";
 import { BookMarked, ChevronRight, Pin, PinOff, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { accountScopedAiStorageKey } from "@/lib/ai-browser-storage";
 
 export type PromptTemplate = {
   id: string;
@@ -25,7 +26,7 @@ export type PromptTemplate = {
 
 export type PromptDraft = Omit<PromptTemplate, "id" | "name" | "pinned">;
 
-const PROMPT_LIBRARY_KEY = "beutl:ai:prompt-library";
+const PROMPT_LIBRARY_NAMESPACE = "beutl:ai:prompt-library";
 
 // Storage written by an earlier build, or by hand, is not this shape by
 // assertion. Applying a template whose prompt is missing flips the controlled
@@ -60,10 +61,14 @@ function readTemplate(value: unknown): PromptTemplate | null {
   };
 }
 
-function loadPromptLibrary(): PromptTemplate[] {
+function promptLibraryKey(userId: string): string {
+  return accountScopedAiStorageKey(PROMPT_LIBRARY_NAMESPACE, userId);
+}
+
+function loadPromptLibrary(userId: string): PromptTemplate[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(PROMPT_LIBRARY_KEY);
+    const raw = window.localStorage.getItem(promptLibraryKey(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -76,10 +81,13 @@ function loadPromptLibrary(): PromptTemplate[] {
   }
 }
 
-function savePromptLibrary(templates: PromptTemplate[]) {
+function savePromptLibrary(userId: string, templates: PromptTemplate[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(PROMPT_LIBRARY_KEY, JSON.stringify(templates));
+    window.localStorage.setItem(
+      promptLibraryKey(userId),
+      JSON.stringify(templates),
+    );
   } catch {
     // ストレージが利用できない環境では保存を諦める。
   }
@@ -87,27 +95,37 @@ function savePromptLibrary(templates: PromptTemplate[]) {
 
 export function PromptLibrary({
   lang,
+  userId,
   onApply,
   currentDraft,
 }: {
   lang: string;
+  userId: string;
   onApply: (template: PromptTemplate) => void;
   // Read at save time rather than passed as a value, so the template captures
   // what is in the form at that moment.
   currentDraft: () => PromptDraft;
 }) {
   const { t } = useTranslation(lang);
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [library, setLibrary] = useState<{
+    owner: string | null;
+    templates: PromptTemplate[];
+  }>({ owner: null, templates: [] });
   const [name, setName] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setTemplates(loadPromptLibrary());
-  }, []);
+    setLibrary({ owner: userId, templates: loadPromptLibrary(userId) });
+  }, [userId]);
+
+  // A client-side account transition may reuse this component before its
+  // effect loads the new account. Never render the previous owner's drafts in
+  // that intervening render.
+  const templates = library.owner === userId ? library.templates : [];
 
   function persist(next: PromptTemplate[]) {
-    setTemplates(next);
-    savePromptLibrary(next);
+    setLibrary({ owner: userId, templates: next });
+    savePromptLibrary(userId, next);
   }
 
   function togglePin(id: string) {

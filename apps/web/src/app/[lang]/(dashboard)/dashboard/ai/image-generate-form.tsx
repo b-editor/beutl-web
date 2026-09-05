@@ -199,18 +199,23 @@ export function ImageGenerateForm({
   );
   const tooManyReferences =
     effectiveReferences.length > options.maxReferenceImages;
+  const referenceTooLarge = effectiveReferences.some(
+    (file) => file.size > MAX_AI_IMAGE_UPLOAD_BYTES,
+  );
   // 1 枚ごとの上限とは別に、合計にも上限がある。送ってから 413 になるより先に
   // 画面で言う。
   const referencesTooLarge =
     effectiveReferences.reduce((total, file) => total + file.size, 0) >
       options.maxReferenceImagesTotalBytes;
+  const invalidReferenceSelection =
+    tooManyReferences || referenceTooLarge || referencesTooLarge;
   // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
   // 同じ依頼に見え、片方が走っている間もう片方を始められない。送れないと分かって
   // いる選び方のものは読まない——名前には要らず、合計の分だけ抱えるだけになる。
   const readableReferences = useMemo(
     () =>
-      tooManyReferences || referencesTooLarge ? [] : effectiveReferences,
-    [effectiveReferences, tooManyReferences, referencesTooLarge],
+      invalidReferenceSelection ? [] : effectiveReferences,
+    [effectiveReferences, invalidReferenceSelection],
   );
   const { contents: referenceContents, reading: readingReferences } =
     useFileFingerprints(readableReferences, MAX_AI_IMAGE_UPLOAD_BYTES);
@@ -221,24 +226,29 @@ export function ImageGenerateForm({
     (access.models["image.generate"] ?? []).length === 0,
   );
   // サーバーが指紋を取るのと同じものから。
-  const signature = requestSignature([
-    model,
-    // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
-    // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
-    // される。
-    composePrompt({ main: prompt, style, composition, exclusions }),
-    ratio,
-    chosenBackground,
-    // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
-    // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
-    options.seed ? seedValue(seed) : null,
-    ...effectiveReferences,
-    ...referenceContents,
-  ]);
+  const signature = invalidReferenceSelection
+    ? ""
+    : requestSignature([
+        model,
+        // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
+        // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
+        // される。
+        composePrompt({ main: prompt, style, composition, exclusions }),
+        ratio,
+        chosenBackground,
+        // 欄に書かれたままではなく、サーバーが読み取るのと同じ数。"1"、"01"、
+        // "1.0" はどれも同じ種で、そのまま数えると同じ依頼が三つの名前に割れる。
+        options.seed ? seedValue(seed) : null,
+        ...effectiveReferences,
+        ...referenceContents,
+      ]);
   useEffect(() => {
-    if (names.ready && !readingReferences) void names.ensure(signature);
-  }, [names.ready, names, readingReferences, signature]);
-  const holdsCurrentRequest = names.holds(signature);
+    if (names.ready && !readingReferences && !invalidReferenceSelection) {
+      void names.ensure(signature);
+    }
+  }, [names.ready, names, readingReferences, invalidReferenceSelection, signature]);
+  const holdsCurrentRequest =
+    !invalidReferenceSelection && names.holds(signature);
   const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
   useEffect(() => {
     if (readingReferences) return;
@@ -308,6 +318,7 @@ export function ImageGenerateForm({
       isPending
       || submitBlocked
       || tooManyReferences
+      || referenceTooLarge
       || referencesTooLarge
       || composedPromptTooLong
       || readingReferences
@@ -389,6 +400,7 @@ export function ImageGenerateForm({
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
         <PromptLibrary
           lang={lang}
+          userId={userId}
           onApply={applyTemplate}
           currentDraft={() => ({ prompt, style, composition, exclusions })}
         />
@@ -502,7 +514,7 @@ export function ImageGenerateForm({
           )}
           <p
             className={
-              tooManyReferences || referencesTooLarge
+              invalidReferenceSelection
                 ? "text-xs text-destructive"
                 : "text-xs text-muted-foreground"
             }
@@ -511,6 +523,10 @@ export function ImageGenerateForm({
               ? t("dashboard:ai.referenceImageTooMany", {
                   maximum: options.maxReferenceImages,
                 })
+              : referenceTooLarge
+                ? t("dashboard:ai.referenceImageTooLarge", {
+                    maximum: formatBytes(MAX_AI_IMAGE_UPLOAD_BYTES),
+                  })
               : referencesTooLarge
                 ? t("dashboard:ai.referenceImagesTooLarge", {
                     maximum: formatBytes(options.maxReferenceImagesTotalBytes),
@@ -620,6 +636,7 @@ export function ImageGenerateForm({
           disabled={
             submitBlocked ||
             tooManyReferences ||
+            referenceTooLarge ||
             referencesTooLarge ||
             composedPromptTooLong ||
             isPending ||

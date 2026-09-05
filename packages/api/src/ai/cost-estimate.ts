@@ -173,12 +173,18 @@ function estimateImageEndpoint(
 export function estimateImageCost({
   endpoints,
   referenceImages,
+  referenceImagesByEndpoint,
 }: {
   endpoints: ImagePricingEntry[][];
   referenceImages: number;
+  referenceImagesByEndpoint?: readonly number[];
 }): AiCostEstimate {
   const results = endpoints
-    .map((entries) => estimateImageEndpoint(entries, { referenceImages }))
+    .map((entries, index) =>
+      estimateImageEndpoint(entries, {
+        referenceImages: referenceImagesByEndpoint?.[index] ?? referenceImages,
+      })
+    )
     .filter((result): result is NonNullable<typeof result> => result !== null);
   if (results.length === 0) {
     return unknown("unsupported_pricing_shape");

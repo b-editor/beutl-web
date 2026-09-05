@@ -131,12 +131,17 @@ export function TranslateForm({
   // Picking up where the transcription screen left off. Consumed once so a
   // later visit starts from an empty field rather than a stale transcript.
   useEffect(() => {
-    const handoff = loadSubtitleHandoff();
+    setSource("");
+    setImportedFrom(null);
+    setArriving([]);
+    setTranslated([]);
+    setTranslatedSource(null);
+    const handoff = loadSubtitleHandoff(userId);
     if (!handoff) return;
     setSource(toSrt(handoff.cues));
     setImportedFrom(handoff.sourceName);
-    clearSubtitleHandoff();
-  }, []);
+    clearSubtitleHandoff(userId);
+  }, [userId]);
 
   // Sent to the API rather than through a server action, because this screen
   // shows the translation as it arrives and a server action can only answer

@@ -563,9 +563,15 @@ const app = new Hono()
     // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前が取りに来る
     // 価値のある job を指しているなら別——契約中に課金された結果は、契約が終わった
     // あとでも取りに来られなければならない。名前は自分の job しか指せない。
+    const idempotencyKeyHash = await getAiIdempotencyKeyHash(c.req.raw);
+    if (!idempotencyKeyHash) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
     const keyState = await aiJobStateForIdempotencyKey({
       userId,
-      idempotencyKeyHash: await getAiIdempotencyKeyHash(c.req.raw),
+      idempotencyKeyHash,
     });
     // 指していた job が消えているなら、本文を読む必要はない。
     if (keyState === "deleted") {
@@ -574,11 +580,32 @@ const app = new Hono()
       });
     }
 
-    const entitlements = await getEntitlements(userId);
-    if (!entitlements.canUseAi && keyState !== "collectable") {
-      return c.json(await apiErrorResponse("aiPlanRequired"), {
-        status: 402,
-      });
+    const entitlements = await getEntitlements(userId, {
+      videoCapabilities: new Map(),
+    });
+    if (keyState !== "collectable") {
+      const recoverableDenial = async () =>
+        c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
+      if (!entitlements.canUseAi) {
+        return keyState === "none"
+          ? await recoverableDenial()
+          : c.json(await apiErrorResponse("aiPlanRequired"), { status: 402 });
+      }
+      const operations = editTasks.map((task) => `image.edit.${task}`);
+      const hasConfiguredModel = operations.some(
+        (operation) =>
+          Object.keys(entitlements.modelAvailability[operation] ?? {}).length > 0,
+      );
+      if (!hasConfiguredModel) {
+        return keyState === "none"
+          ? await recoverableDenial()
+          : c.json(await apiErrorResponse("aiModelUnavailable"), { status: 400 });
+      }
+      if (!operations.some((operation) => entitlements.availability[operation])) {
+        return keyState === "none"
+          ? await recoverableDenial()
+          : c.json(await apiErrorResponse("aiUsageLimitExceeded"), { status: 402 });
+      }
     }
     let body: Awaited<ReturnType<typeof c.req.parseBody>>;
     try {

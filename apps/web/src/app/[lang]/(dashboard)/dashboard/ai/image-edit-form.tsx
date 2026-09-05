@@ -478,6 +478,7 @@ export function ImageEditForm({
           <>
             <PromptLibrary
               lang={lang}
+              userId={userId}
               onApply={applyTemplate}
               currentDraft={() => ({ prompt: editPrompt })}
             />

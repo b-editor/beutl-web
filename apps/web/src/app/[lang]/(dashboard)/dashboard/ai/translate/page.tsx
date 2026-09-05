@@ -24,6 +24,7 @@ export default async function Page(props: {
         balance={balance}
       />
       <TranslateForm
+        key={session.user.id}
         lang={lang}
         userId={session.user.id}
         access={access}

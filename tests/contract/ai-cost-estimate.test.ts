@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearAiImageModelCapabilitiesCache,
   clearAiModelPricingCache,
   estimateTranslationCost,
   estimateVideoCost,
@@ -44,6 +45,7 @@ function modelPayload(id: string, pricing: Record<string, string>) {
 function imageEndpoints(
   id: string,
   pricing: { billable: string; unit: string; cost_usd: number }[],
+  supportedParameters: Record<string, unknown> = {},
 ) {
   const provider = id.split("/")[0];
   return {
@@ -53,7 +55,7 @@ function imageEndpoints(
         provider_name: provider,
         provider_slug: provider,
         provider_tag: provider,
-        supported_parameters: {},
+        supported_parameters: supportedParameters,
         allowed_passthrough_parameters: [],
         supports_streaming: false,
         pricing,
@@ -66,7 +68,9 @@ const GPT_IMAGE_ENDPOINTS = imageEndpoints("openai/gpt-image-1", [
   { billable: "input_image", unit: "token", cost_usd: 0.00001 },
   { billable: "input_text", unit: "token", cost_usd: 0.000005 },
   { billable: "output_image", unit: "token", cost_usd: 0.00004 },
-]);
+], {
+  input_references: { type: "range", min: 0, max: 16 },
+});
 
 const SEEDREAM_ENDPOINTS = imageEndpoints("bytedance-seed/seedream-4.5", [
   { billable: "output_image", unit: "image", cost_usd: 0.04 },
@@ -177,11 +181,13 @@ async function estimatesByOperation(force = false) {
 describe("AI provider cost estimates", () => {
   beforeEach(() => {
     clearAiModelPricingCache();
+    clearAiImageModelCapabilitiesCache();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     clearAiModelPricingCache();
+    clearAiImageModelCapabilitiesCache();
   });
 
   it("estimates every billable operation with the built-in models", async () => {
@@ -245,8 +251,123 @@ describe("AI provider cost estimates", () => {
       ),
     ).toBe(true);
     expect(urls.some((url) => url.endsWith("/videos/models"))).toBe(true);
-    // Five operations share gpt-image-1, and one lookup covers all of them.
-    expect(urls.length).toBe(5);
+    // Five operations share gpt-image-1. Pricing still uses one coalesced
+    // lookup, while generation loads the model's reference capability once.
+    expect(urls.length).toBe(6);
+  });
+
+  it.each([
+    [0, 0.04224],
+    [2, 0.06336],
+  ])("caps generation cost to a model limit of %i references", async (
+    maxReferenceImages,
+    expectedCost,
+  ) => {
+    const modelId = `vendor/reference-limit-${maxReferenceImages}`;
+    const supportedParameters = maxReferenceImages === 0
+      ? {}
+      : {
+          input_references: {
+            type: "range",
+            min: 0,
+            max: maxReferenceImages,
+          },
+        };
+    const endpoints = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.00001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+    ], supportedParameters);
+    stubFetch((url) =>
+      url.includes(`/images/models/vendor/reference-limit-${maxReferenceImages}/endpoints`)
+        ? jsonResponse(endpoints)
+        : jsonResponse({ error: { code: 404, message: "Resource not found" } }, 404)
+    );
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (operation) =>
+        operation === "image.generate" ? [modelId] : [],
+    });
+
+    const estimate = result.entries[0]?.estimate;
+    expect(estimate?.status).toBe("estimated");
+    if (estimate?.status === "estimated") {
+      expect(estimate.usdMin).toBeCloseTo(expectedCost, 8);
+      expect(estimate.usdMax).toBeCloseTo(expectedCost, 8);
+    }
+  });
+
+  it("correlates each image pricing endpoint with its own reference limit", async () => {
+    const modelId = "vendor/heterogeneous-reference-limits";
+    const cheapFour = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.00001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+    ], {
+      input_references: { type: "range", min: 0, max: 4 },
+    }).endpoints[0];
+    const expensiveOne = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.0001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+    ], {
+      input_references: { type: "range", min: 0, max: 1 },
+    }).endpoints[0];
+    const response = { id: modelId, endpoints: [cheapFour, expensiveOne] };
+    stubFetch((url) =>
+      url.includes("/images/models/vendor/heterogeneous-reference-limits/endpoints")
+        ? jsonResponse(response)
+        : jsonResponse({ error: { code: 404, message: "Resource not found" } }, 404)
+    );
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (operation) =>
+        operation === "image.generate" ? [modelId] : [],
+    });
+
+    const estimate = result.entries[0]?.estimate;
+    expect(estimate?.status).toBe("estimated");
+    if (estimate?.status === "estimated") {
+      // Four cheap references cost 0.08448. The expensive endpoint accepts
+      // only one and costs 0.14784; applying the model-wide maximum to it
+      // would incorrectly report 0.46464 for a request it cannot serve.
+      expect(estimate.usdMin).toBeCloseTo(0.08448, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.14784, 8);
+    }
+  });
+
+  it("keeps conservative reference pricing when capability lookup fails", async () => {
+    const modelId = "vendor/capability-outage";
+    const endpoints = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.00001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+    ], {
+      input_references: { type: "range", min: 0, max: 1 },
+    });
+    let endpointCalls = 0;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch((url) => {
+      if (!url.includes("/images/models/vendor/capability-outage/endpoints")) {
+        return jsonResponse(
+          { error: { code: 404, message: "Resource not found" } },
+          404,
+        );
+      }
+      endpointCalls++;
+      return endpointCalls === 1
+        ? jsonResponse({ error: "temporarily unavailable" }, 503)
+        : jsonResponse(endpoints);
+    });
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (operation) =>
+        operation === "image.generate" ? [modelId] : [],
+    });
+
+    expect(endpointCalls).toBe(2);
+    const estimate = result.entries[0]?.estimate;
+    expect(estimate?.status).toBe("estimated");
+    if (estimate?.status === "estimated") {
+      expect(estimate.usdMin).toBeCloseTo(0.08448, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.08448, 8);
+    }
   });
 
   it("sends no credentials, because the price endpoints are public", async () => {

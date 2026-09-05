@@ -95,9 +95,11 @@ function rangeMaximum(descriptor: unknown): number | null {
     "type" in descriptor &&
     descriptor.type === "range" &&
     "max" in descriptor &&
-    typeof descriptor.max === "number"
+    typeof descriptor.max === "number" &&
+    Number.isFinite(descriptor.max) &&
+    descriptor.max >= 0
   ) {
-    return descriptor.max;
+    return Math.floor(descriptor.max);
   }
   return null;
 }

@@ -288,6 +288,15 @@ describe("whether a registered image model can serve its operation", () => {
     ).toBe(true);
   });
 
+  it("rules out an edit model that cannot produce a transparent background", () => {
+    expect(
+      isImageModelUsable(
+        capabilities({ backgrounds: ["auto", "opaque"] }),
+        { referenceImages: true, background: "transparent" },
+      ),
+    ).toBe(false);
+  });
+
   it("keeps a model the provider does not describe", () => {
     expect(isImageModelUsable(undefined, { referenceImages: true })).toBe(true);
   });

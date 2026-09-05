@@ -985,6 +985,126 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ["transcription", "/api/v3/ai/transcriptions", () => {
+        const body = new FormData();
+        body.set("file", new File([new Uint8Array(8)], "voice.wav", {
+          type: "audio/wav",
+        }));
+        return body;
+      }],
+      ["image edit", "/api/v3/ai/images/edit", () => {
+        const body = new FormData();
+        body.set("task", "remove_background");
+        body.set("file", new File([PNG_BYTES], "source.png", {
+          type: "image/png",
+        }));
+        return body;
+      }],
+      ["framed video", "/api/v3/ai/videos/frames", () => {
+        const body = new FormData();
+        body.set("prompt", "a still frame");
+        body.set("durationSeconds", "4");
+        body.set("firstFrame", new File([PNG_BYTES], "frame.png", {
+          type: "image/png",
+        }));
+        return body;
+      }],
+    ] as const)(
+      "rejects a missing or malformed key before reading a %s upload",
+      async (_, path, bodyOf) => {
+        await activatePro();
+        const authorization = (await authHeaders()).Authorization;
+        const formDataRead = vi.spyOn(Request.prototype, "formData");
+        const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+        try {
+          for (const key of [null, "not a valid key"] as const) {
+            const response = await makeApp().request(path, {
+              method: "POST",
+              headers: {
+                Authorization: authorization,
+                ...(key === null ? {} : { "Idempotency-Key": key }),
+              },
+              body: bodyOf(),
+            });
+
+            expect(response.status).toBe(400);
+            expect(await response.json()).toMatchObject({
+              error_code: "invalidRequestBody",
+            });
+          }
+
+          expect(formDataRead).not.toHaveBeenCalled();
+          expect(fileRead).not.toHaveBeenCalled();
+          expect(state.aiJobs.size).toBe(0);
+        } finally {
+          formDataRead.mockRestore();
+          fileRead.mockRestore();
+        }
+      },
+    );
+
+    it.each([
+      ["transcription", "/api/v3/ai/transcriptions", () => {
+        const body = new FormData();
+        body.set("file", new File([new Uint8Array(8)], "voice.wav", {
+          type: "audio/wav",
+        }));
+        return body;
+      }],
+      ["image edit", "/api/v3/ai/images/edit", () => {
+        const body = new FormData();
+        body.set("task", "remove_background");
+        body.set("file", new File([PNG_BYTES], "source.png", {
+          type: "image/png",
+        }));
+        return body;
+      }],
+      ["framed video", "/api/v3/ai/videos/frames", () => {
+        const body = new FormData();
+        body.set("prompt", "a still frame");
+        body.set("durationSeconds", "4");
+        body.set("firstFrame", new File([PNG_BYTES], "frame.png", {
+          type: "image/png",
+        }));
+        return body;
+      }],
+    ] as const)(
+      "rejects an exhausted fresh-key %s request before reading its upload",
+      async (name, path, bodyOf) => {
+        await activatePro();
+        await consumeUsage({
+          userId: USER_ID,
+          amount: 500,
+          monthlyUsageLimit: 500,
+          usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+          aiJobId: `exhaust-${name}`,
+        });
+        const formDataRead = vi.spyOn(Request.prototype, "formData");
+        const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+        try {
+          const response = await makeApp().request(path, {
+            method: "POST",
+            headers: await authHeaders(
+              `fresh-exhausted-${name.replaceAll(" ", "-")}`,
+            ),
+            body: bodyOf(),
+          });
+
+          expect(response.status).toBe(409);
+          expect(await response.json()).toMatchObject({
+            error_code: "aiRequestInProgress",
+          });
+          expect(formDataRead).not.toHaveBeenCalled();
+          expect(fileRead).not.toHaveBeenCalled();
+          expect(state.aiJobs.size).toBe(0);
+        } finally {
+          formDataRead.mockRestore();
+          fileRead.mockRestore();
+        }
+      },
+    );
+
     it("replays a completed request without invoking the provider or charging twice", async () => {
       await activatePro();
       vi.mocked(generateImage).mockResolvedValue({
@@ -1929,7 +2049,7 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
-    it("returns 402 aiPlanRequired before parsing the file without Pro", async () => {
+    it("retains a fresh key before parsing the file without Pro", async () => {
       const form = new FormData();
       form.append("task", "remove_background");
       form.append("file", new File([new Uint8Array(8)], "invalid.bin"));
@@ -1939,8 +2059,10 @@ describe("v3 AI endpoints contract", () => {
         body: form,
       });
 
-      expect(res.status).toBe(402);
-      expect(await res.json()).toMatchObject({ error_code: "aiPlanRequired" });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: "aiRequestInProgress",
+      });
     });
 
     it("reads the body without Pro when the key already names a job", async () => {
@@ -2310,7 +2432,7 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
-    it("returns 402 aiPlanRequired before parsing audio without Pro", async () => {
+    it("retains a fresh key before parsing audio without Pro", async () => {
       const form = new FormData();
       form.append("file", new File([new Uint8Array(8)], "invalid.mp3"));
       const res = await makeApp().request("/api/v3/ai/transcriptions", {
@@ -2319,8 +2441,10 @@ describe("v3 AI endpoints contract", () => {
         body: form,
       });
 
-      expect(res.status).toBe(402);
-      expect(await res.json()).toMatchObject({ error_code: "aiPlanRequired" });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: "aiRequestInProgress",
+      });
     });
 
     it("returns 413 when Content-Length exceeds the audio upload limit", async () => {

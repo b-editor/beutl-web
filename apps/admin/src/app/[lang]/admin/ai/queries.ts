@@ -61,6 +61,9 @@ export const getUnusableImageModels = cache(
           !isImageModelUsable(capabilities.get(modelId), {
             referenceImages: isEdit,
             resolution: operation === "image.edit.upscale",
+            background: operation === "image.edit.remove_background"
+              ? "transparent"
+              : undefined,
           }),
       ),
     );

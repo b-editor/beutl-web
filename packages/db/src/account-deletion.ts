@@ -43,7 +43,10 @@ export async function prepareAccountDeletionOutboxes({
   userId: string;
   now?: Date;
   prisma: PrismaTransaction;
-}): Promise<{ unboundCheckoutRecoveries: number }> {
+}): Promise<{
+  unboundCheckoutRecoveries: number;
+  customerProvisioningRecoveries: number;
+}> {
   const customer = await prisma.customer.findUnique({
     where: { userId },
     select: { stripeId: true },
@@ -126,16 +129,36 @@ export async function prepareAccountDeletionOutboxes({
       }
     }
   }
-  {
-    await prisma.stripeCustomerProvisioning.updateMany({
-      where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } },
-      data: { status: "cleanup_required", notBefore: now, leaseToken: null, leaseExpiresAt: null },
+  await prisma.stripeCustomerProvisioning.updateMany({
+      where: {
+        userId,
+        status: { in: ["pending", "mapping", "cleanup_required"] },
+      },
+      data: {
+        status: "cleanup_required",
+        notBefore: now,
+        leaseToken: null,
+        leaseExpiresAt: null,
+      },
     });
-  }
+  // An intervention is an operator fence, not another retry state. Account
+  // deletion must keep the user and its ownership evidence alive without
+  // resetting that circuit breaker. Pending states are scheduled above;
+  // intervention remains visible here until an audited operator action.
+  const customerProvisioningRecoveries =
+    await prisma.stripeCustomerProvisioning.count({
+      where: {
+        userId,
+        status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+      },
+    });
   await prepareTopUpsForAccountDeletion({ ownerUserId: userId, now, prisma });
   await enqueueUserRemoteAiJobCleanups({ userId, now, prisma });
   const unboundCheckoutRecoveries = await countUnboundAccountDeletionCheckoutAttempts({ userId, prisma });
-  return { unboundCheckoutRecoveries };
+  return {
+    unboundCheckoutRecoveries,
+    customerProvisioningRecoveries,
+  };
 }
 
 export async function authorizeAccountDeletionIntent({
@@ -283,7 +306,12 @@ export async function countUnboundAccountDeletionCheckoutAttempts({ userId, pris
 
 export async function countActiveStripeCustomerProvisioning({ userId, prisma }: { userId: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.stripeCustomerProvisioning.count({ where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } } });
+  return await db.stripeCustomerProvisioning.count({
+    where: {
+      userId,
+      status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+    },
+  });
 }
 
 const ADMIN_ACCOUNT_DELETION_IDENTIFIER = "__admin_account_deletion__";
@@ -317,7 +345,12 @@ export async function reserveAdminAccountDeletion({
     });
     if (activeIntent) {
       await prepareAccountDeletionOutboxes({ userId, now, prisma: tx });
-      const pendingProvisioning = await tx.stripeCustomerProvisioning.count({ where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } } });
+      const pendingProvisioning = await tx.stripeCustomerProvisioning.count({
+        where: {
+          userId,
+          status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+        },
+      });
       if (pendingProvisioning > 0) return { status: "blocked", reason: "provisioning" } as const;
       const blockers = await inspectAccountDeletionBillingBlockers({ userId, prisma: tx });
       return Object.values(blockers).some((count) => count > 0)
@@ -360,7 +393,12 @@ export async function reserveAdminAccountDeletion({
       },
     });
     await prepareAccountDeletionOutboxes({ userId, now, prisma: tx });
-    const pendingProvisioning = await tx.stripeCustomerProvisioning.count({ where: { userId, status: { in: ["pending", "mapping", "cleanup_required"] } } });
+    const pendingProvisioning = await tx.stripeCustomerProvisioning.count({
+      where: {
+        userId,
+        status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+      },
+    });
     if (pendingProvisioning > 0) return { status: "blocked", reason: "provisioning" } as const;
     const blockers = await inspectAccountDeletionBillingBlockers({ userId, prisma: tx });
     if (Object.values(blockers).some((count) => count > 0)) return { status: "blocked", reason: "checkout" } as const;

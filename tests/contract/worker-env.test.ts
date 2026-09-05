@@ -31,9 +31,17 @@ vi.mock("../../packages/api/src/ai/entitlements", async (importOriginal) => {
     ...actual,
     getEntitlements: vi.fn().mockResolvedValue({
       canUseAi: true,
-      availability: { "image.generate": true },
+      availability: {
+        "image.generate": true,
+        "image.edit.remove_background": true,
+        "audio.transcribe": true,
+        "video.generate": true,
+      },
       modelAvailability: {
         "image.generate": { "openai/gpt-image-1": true },
+        "image.edit.remove_background": { "openai/gpt-image-1": true },
+        "audio.transcribe": { "openai/whisper-large-v3-turbo": true },
+        "video.generate": { "google/veo-3.1": true },
       },
     }),
   };
@@ -347,6 +355,7 @@ describe("worker request body route limits", () => {
       const headers = new Headers({
         authorization: await authorizationHeader(),
         "content-type": `multipart/form-data; boundary=${boundary}`,
+        "Idempotency-Key": "worker-upload-limit",
       });
       if (contentLength !== undefined) {
         headers.set("content-length", contentLength);

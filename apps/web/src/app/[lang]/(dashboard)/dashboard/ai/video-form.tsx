@@ -432,6 +432,7 @@ export function VideoForm({
         <IdempotencyKeyField name={names.nameFor(signature)} />
         <PromptLibrary
           lang={lang}
+          userId={userId}
           onApply={applyTemplate}
           currentDraft={() => ({
             prompt: videoPrompt,

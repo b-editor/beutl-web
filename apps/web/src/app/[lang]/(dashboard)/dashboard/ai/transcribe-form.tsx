@@ -442,7 +442,7 @@ export function TranscribeForm({
   }
 
   function sendToTranslation() {
-    if (!saveSubtitleHandoff({ cues, sourceName: audioName })) {
+    if (!saveSubtitleHandoff(userId, { cues, sourceName: audioName })) {
       toast({
         title: t("dashboard:ai.handoffFailed"),
         variant: "destructive",

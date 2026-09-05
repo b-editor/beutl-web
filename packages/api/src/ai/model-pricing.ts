@@ -32,6 +32,11 @@ import {
   AI_PRICING_CATALOG,
   AI_VIDEO_RESOLUTIONS,
 } from "@beutl/core";
+import {
+  clearAiImageModelCapabilitiesCache,
+  loadAiImageModelCapabilities,
+  type AiImageModelCapabilities,
+} from "./image-model-capabilities";
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -190,9 +195,38 @@ function splitModelId(model: string): { author: string; slug: string } | null {
   };
 }
 
+function imageEndpointReferenceMaximum(
+  supportedParameters: unknown,
+): number {
+  if (
+    typeof supportedParameters !== "object" ||
+    supportedParameters === null ||
+    !("input_references" in supportedParameters)
+  ) {
+    return 0;
+  }
+  const descriptor = supportedParameters.input_references;
+  if (
+    typeof descriptor === "object" &&
+    descriptor !== null &&
+    "type" in descriptor &&
+    descriptor.type === "range" &&
+    "max" in descriptor &&
+    typeof descriptor.max === "number" &&
+    Number.isFinite(descriptor.max) &&
+    descriptor.max >= 0
+  ) {
+    return Math.min(Math.floor(descriptor.max), AI_MAX_IMAGE_REFERENCES);
+  }
+  // Presence without a published maximum has the same unrestricted meaning
+  // as the capability parser, narrowed to what this service is priced to send.
+  return AI_MAX_IMAGE_REFERENCES;
+}
+
 async function estimateImageOperation(
   model: string,
   referenceImages: number,
+  correlateEndpointReferences: boolean,
   options: { force: boolean; now: number },
 ): Promise<AiCostEstimate> {
   const parts = splitModelId(model);
@@ -219,7 +253,17 @@ async function estimateImageOperation(
       costUsd: entry.costUsd,
     })),
   );
-  return estimateImageCost({ endpoints, referenceImages });
+  return estimateImageCost({
+    endpoints,
+    referenceImages,
+    ...(correlateEndpointReferences
+      ? {
+          referenceImagesByEndpoint: response.endpoints.map((endpoint) =>
+            imageEndpointReferenceMaximum(endpoint.supportedParameters)
+          ),
+        }
+      : {}),
+  });
 }
 
 async function loadModelPricing(
@@ -317,11 +361,33 @@ export async function loadAiCostEstimates({
     }
     return models.map((model) => ({ operation, model }));
   });
+  const generationModels = [
+    ...new Set(
+      pairs
+        .filter(({ operation }) => operation === "image.generate")
+        .map(({ model }) => model),
+    ),
+  ];
+  if (force && generationModels.length > 0) {
+    clearAiImageModelCapabilitiesCache();
+  }
+  // A missing capability entry means the public lookup failed or did not know
+  // the model. Keep the established fail-open behavior in that case: pricing
+  // the service-wide maximum is conservative and does not misreport an outage
+  // as proof that the model accepts no references.
+  const imageCapabilities = generationModels.length > 0
+    ? await loadAiImageModelCapabilities(generationModels, options.now)
+    : new Map<string, AiImageModelCapabilities>();
 
   const entries = await Promise.all(
     pairs.map(async ({ operation, model }): Promise<AiCostEstimateEntry> => {
       try {
-        const estimate = await estimateOperation(operation, model, options);
+        const estimate = await estimateOperation(
+          operation,
+          model,
+          imageCapabilities,
+          options,
+        );
         return { operation, model, estimate };
       } catch (error) {
         console.warn("[ai-cost] estimate failed", {
@@ -349,6 +415,7 @@ export function aiCostEstimateKey(operation: string, model: string): string {
 async function estimateOperation(
   operation: string,
   model: string,
+  imageCapabilities: ReadonlyMap<string, AiImageModelCapabilities>,
   options: { force: boolean; now: number },
 ): Promise<AiCostEstimate> {
   if (operation === "video.generate") {
@@ -360,7 +427,11 @@ async function estimateOperation(
     // most expensive valid request shape.
     return await estimateImageOperation(
       model,
-      operation === "image.generate" ? AI_MAX_IMAGE_REFERENCES : 1,
+      operation === "image.generate"
+        ? imageCapabilities.get(model)?.maxReferenceImages ??
+          AI_MAX_IMAGE_REFERENCES
+        : 1,
+      operation === "image.generate" && imageCapabilities.has(model),
       options,
     );
   }

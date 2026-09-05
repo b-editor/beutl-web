@@ -1,4 +1,5 @@
 import type { SubtitleCue } from "./subtitle-format";
+import { accountScopedAiStorageKey } from "./ai-browser-storage";
 
 // Transcribing and translating are separate pages, but they are one task: get
 // subtitles out of an audio track in another language. Handing the cues over
@@ -8,7 +9,11 @@ import type { SubtitleCue } from "./subtitle-format";
 // Session storage, not local storage: this is a leftover from the current
 // visit, and transcripts are the user's own speech.
 
-const HANDOFF_KEY = "beutl:ai:subtitle-handoff";
+const HANDOFF_NAMESPACE = "beutl:ai:subtitle-handoff";
+
+function handoffKey(userId: string): string {
+  return accountScopedAiStorageKey(HANDOFF_NAMESPACE, userId);
+}
 
 export type SubtitleHandoff = {
   cues: SubtitleCue[];
@@ -16,20 +21,23 @@ export type SubtitleHandoff = {
   sourceName: string | null;
 };
 
-export function saveSubtitleHandoff(handoff: SubtitleHandoff): boolean {
+export function saveSubtitleHandoff(
+  userId: string,
+  handoff: SubtitleHandoff,
+): boolean {
   if (typeof window === "undefined") return false;
   try {
-    window.sessionStorage.setItem(HANDOFF_KEY, JSON.stringify(handoff));
+    window.sessionStorage.setItem(handoffKey(userId), JSON.stringify(handoff));
     return true;
   } catch {
     return false;
   }
 }
 
-export function loadSubtitleHandoff(): SubtitleHandoff | null {
+export function loadSubtitleHandoff(userId: string): SubtitleHandoff | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(HANDOFF_KEY);
+    const raw = window.sessionStorage.getItem(handoffKey(userId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (parsed === null || typeof parsed !== "object") return null;
@@ -54,10 +62,10 @@ export function loadSubtitleHandoff(): SubtitleHandoff | null {
   }
 }
 
-export function clearSubtitleHandoff(): void {
+export function clearSubtitleHandoff(userId: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.removeItem(HANDOFF_KEY);
+    window.sessionStorage.removeItem(handoffKey(userId));
   } catch {
     // Nothing to clean up when storage is unavailable.
   }

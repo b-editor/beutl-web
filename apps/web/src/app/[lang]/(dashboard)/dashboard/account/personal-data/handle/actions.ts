@@ -56,6 +56,11 @@ export async function deleteUser(token: string, identifier: string) {
     if (prepared.unboundCheckoutRecoveries > 0) {
       throw new Error("Checkout recovery is pending before account deletion");
     }
+    if (prepared.customerProvisioningRecoveries > 0) {
+      throw new Error(
+        "Stripe Customer provisioning recovery is pending before account deletion",
+      );
+    }
     await enqueueUserStorageCleanups({
       userId: intent.userId,
       prisma,

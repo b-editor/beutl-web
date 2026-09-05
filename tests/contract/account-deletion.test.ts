@@ -60,7 +60,10 @@ describe("resumable account deletion", () => {
       async (callback: (prisma: object) => Promise<unknown>) =>
         await callback({ transaction: true }),
     );
-    mocks.prepareAccountDeletionOutboxes.mockResolvedValue({ unboundCheckoutRecoveries: 0 });
+    mocks.prepareAccountDeletionOutboxes.mockResolvedValue({
+      unboundCheckoutRecoveries: 0,
+      customerProvisioningRecoveries: 0,
+    });
   });
 
   it("durably authorizes before Stripe and deletes locally only after closure", async () => {
@@ -200,6 +203,21 @@ describe("resumable account deletion", () => {
 
     expect(mocks.enqueueUserStorageCleanups).toHaveBeenCalled();
     expect(mocks.prepareAccountDeletionOutboxes).toHaveBeenCalled();
+    expect(mocks.deleteUserById).not.toHaveBeenCalled();
+  });
+
+  it("keeps the user while Stripe Customer provisioning recovery is pending", async () => {
+    mocks.prepareAccountDeletionOutboxes.mockResolvedValue({
+      unboundCheckoutRecoveries: 0,
+      customerProvisioningRecoveries: 1,
+    });
+
+    await expect(
+      deleteUser("confirmation-token", "owner@example.com"),
+    ).rejects.toThrow(
+      "Stripe Customer provisioning recovery is pending before account deletion",
+    );
+    expect(mocks.enqueueUserStorageCleanups).not.toHaveBeenCalled();
     expect(mocks.deleteUserById).not.toHaveBeenCalled();
   });
 });

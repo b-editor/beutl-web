@@ -144,7 +144,10 @@ describe("account deletion intent authorization", () => {
       creditTransaction: { findFirst: async () => null },
       user: { findUnique: async () => ({ id: "user-1" }) },
       package: { findMany: async () => [] },
-      stripeCustomerProvisioning: { updateMany: async () => ({ count: 0 }) },
+      stripeCustomerProvisioning: {
+        updateMany: async () => ({ count: 0 }),
+        count: async () => 0,
+      },
       stripeCheckoutCleanup: {
         findUnique: async () => null,
         create: async ({ data }: any) => ({ ...data }),
