@@ -33,6 +33,10 @@ import {
 } from "@beutl/core";
 import { MAX_AI_IMAGE_UPLOAD_BYTES } from "@beutl/api";
 import { editImageAction } from "./actions";
+import {
+  preparedImageEditSourceWithinLimit,
+  rawImageEditSourceExceedsLimit,
+} from "@/lib/ai-image-edit-limits";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AiAccessNotice,
@@ -130,8 +134,6 @@ export function ImageEditForm({
   const { contents: sourceContents, reading: readingSource } =
     useFileFingerprints(sourceFiles, MAX_AI_IMAGE_UPLOAD_BYTES);
   const sourceContent = sourceContents[0] ?? "";
-  const sourceTooLarge =
-    sourceFile !== null && sourceFile.size > MAX_AI_IMAGE_UPLOAD_BYTES;
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
@@ -154,6 +156,11 @@ export function ImageEditForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
   const editTask = chosenTask;
+  const sourceTooLarge = sourceFile !== null && rawImageEditSourceExceedsLimit(
+    editTask,
+    sourceFile.size,
+    MAX_AI_IMAGE_UPLOAD_BYTES,
+  );
   useEffect(() => {
     const restored = names.restoredModels();
     if (restored.length === 0 || editTask === "") return;
@@ -304,7 +311,7 @@ export function ImageEditForm({
             file,
             Number(outpaintExpansion),
           );
-          if (prepared.size > MAX_AI_IMAGE_UPLOAD_BYTES) {
+          if (!preparedImageEditSourceWithinLimit(prepared.size, MAX_AI_IMAGE_UPLOAD_BYTES)) {
             throw new Error("Prepared outpaint image exceeds the upload limit");
           }
           // 送るのは、押した時点の画面。広げているあいだに task や model、

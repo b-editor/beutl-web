@@ -156,6 +156,71 @@ const app = new Hono()
     // A reference image turns this into image-to-image, which needs multipart.
     // A request without one stays exactly the JSON call it has always been.
     const multipart = isMultipartRequest(c.req.raw);
+    if (multipart) {
+      // A multipart body may contain up to 20 MiB of references. Decide whether
+      // this account can start any new image generation before buffering them.
+      // A live or recently completed idempotent request remains collectable even
+      // after its plan or balance changes; its exact fingerprint is still checked
+      // after parsing, before any result is returned.
+      const idempotencyKeyHash = await getAiIdempotencyKeyHash(c.req.raw);
+      if (!idempotencyKeyHash) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      const keyState = await aiJobStateForIdempotencyKey({
+        userId,
+        idempotencyKeyHash,
+      });
+      if (keyState === "deleted") {
+        return c.json(await apiErrorResponse("aiRequestWasDeleted"), {
+          status: 409,
+        });
+      }
+      if (keyState !== "collectable") {
+        // Video capabilities are irrelevant to this operation. Supplying an
+        // empty snapshot keeps this rejection path independent of a provider
+        // lookup while still computing image-model affordability from the
+        // canonical catalog and ledger.
+        const entitlements = await getEntitlements(userId, {
+          videoCapabilities: new Map(),
+        });
+        if (!entitlements.canUseAi) {
+          // The key lookup and this advisory snapshot are not one transaction.
+          // When the key was unused, another request with that key may reserve
+          // the final balance in between. Keep that key so a retry can collect
+          // the winner. A settled row already occupies its unique key and cannot
+          // race a new reservation, so its ordinary terminal refusal is safe.
+          return keyState === "none"
+            ? c.json(await apiErrorResponse("aiRequestInProgress"), {
+              status: 409,
+            })
+            : c.json(await apiErrorResponse("aiPlanRequired"), {
+              status: 402,
+            });
+        }
+        const modelAvailability =
+          entitlements.modelAvailability["image.generate"] ?? {};
+        if (Object.keys(modelAvailability).length === 0) {
+          return keyState === "none"
+            ? c.json(await apiErrorResponse("aiRequestInProgress"), {
+              status: 409,
+            })
+            : c.json(await apiErrorResponse("aiModelUnavailable"), {
+              status: 400,
+            });
+        }
+        if (!entitlements.availability["image.generate"]) {
+          return keyState === "none"
+            ? c.json(await apiErrorResponse("aiRequestInProgress"), {
+              status: 409,
+            })
+            : c.json(await apiErrorResponse("aiUsageLimitExceeded"), {
+              status: 402,
+            });
+        }
+      }
+    }
     let rawBody: unknown;
     // Several pictures may guide one generation; the models take between three
     // and sixteen and the price is set for AI_MAX_IMAGE_REFERENCES. A single

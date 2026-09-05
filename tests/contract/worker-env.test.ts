@@ -29,7 +29,13 @@ vi.mock("../../packages/api/src/ai/entitlements", async (importOriginal) => {
   >();
   return {
     ...actual,
-    getEntitlements: vi.fn().mockResolvedValue({ canUseAi: true }),
+    getEntitlements: vi.fn().mockResolvedValue({
+      canUseAi: true,
+      availability: { "image.generate": true },
+      modelAvailability: {
+        "image.generate": { "openai/gpt-image-1": true },
+      },
+    }),
   };
 });
 
@@ -228,6 +234,7 @@ describe("worker request body route limits", () => {
     const headers = {
       authorization: await authorizationHeader(),
       "content-type": `multipart/form-data; boundary=${boundary}`,
+      "Idempotency-Key": `worker-cap-${pathname}`,
     };
     const exact = await worker.fetch(
       new Request(`https://beutl.beditor.net${pathname}`, {

@@ -35,6 +35,7 @@ import {
 } from "../../packages/api/src/ai/upload-limits";
 import {
   getAiRequestIdentity,
+  sha256Hex,
 } from "../../packages/api/src/ai/request-integrity";
 // Contract tests for the v3 AI endpoints, covering authorization, plan and
 // balance failures, and successful response shapes. OpenRouter is mocked.
@@ -733,6 +734,237 @@ describe("v3 AI endpoints contract", () => {
         error_code: "aiPlanRequired",
       });
       expect(state.aiJobs.size).toBe(0);
+    });
+
+    it("rejects multipart references before reading them without Pro", async () => {
+      const formDataRead = vi.spyOn(Request.prototype, "formData");
+      const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+      try {
+        const body = new FormData();
+        body.set("prompt", "do not read this reference");
+        body.set("aspectRatio", "1:1");
+        body.set(
+          "reference",
+          new File([PNG_BYTES], "private.png", { type: "image/png" }),
+        );
+
+        const response = await makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: await authHeaders("image-no-plan-preflight"),
+          body,
+        });
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error_code: "aiRequestInProgress",
+        });
+        expect(formDataRead).not.toHaveBeenCalled();
+        expect(fileRead).not.toHaveBeenCalled();
+        expect(loadAiImageModelCapabilities).not.toHaveBeenCalled();
+        expect(vi.mocked(listVideoModels)).not.toHaveBeenCalled();
+        expect(state.aiJobs.size).toBe(0);
+      } finally {
+        formDataRead.mockRestore();
+        fileRead.mockRestore();
+      }
+    });
+
+    it("rejects unaffordable multipart references before reading them", async () => {
+      await activatePro();
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 500,
+        monthlyUsageLimit: 500,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "exhaust-image-preflight",
+      });
+      const formDataRead = vi.spyOn(Request.prototype, "formData");
+      const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+      try {
+        const body = new FormData();
+        body.set("prompt", "still do not read this reference");
+        body.set("aspectRatio", "1:1");
+        body.set(
+          "reference",
+          new File([PNG_BYTES], "private.png", { type: "image/png" }),
+        );
+
+        const response = await makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: await authHeaders("image-no-balance-preflight"),
+          body,
+        });
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error_code: "aiRequestInProgress",
+        });
+        expect(formDataRead).not.toHaveBeenCalled();
+        expect(fileRead).not.toHaveBeenCalled();
+        expect(loadAiImageModelCapabilities).not.toHaveBeenCalled();
+        expect(vi.mocked(listVideoModels)).not.toHaveBeenCalled();
+        expect(state.aiJobs.size).toBe(0);
+      } finally {
+        formDataRead.mockRestore();
+        fileRead.mockRestore();
+      }
+    });
+
+    it("retains the key when a concurrent request reserves the last balance", async () => {
+      await activatePro();
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 480,
+        monthlyUsageLimit: 500,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "leave-one-image-charge",
+      });
+      const key = "concurrent-preflight-winner";
+      const identity = await getAiRequestIdentityForTest({
+        key,
+        operation: "image.generate",
+        input: {
+          prompt: "one winner",
+          aspectRatio: "1:1",
+          references: [{
+            fileName: "style.png",
+            contentType: "image/png",
+            contentSha256: await sha256Hex(PNG_BYTES),
+          }],
+        },
+      });
+      const request = async () => {
+        const body = new FormData();
+        body.set("prompt", "one winner");
+        body.set("aspectRatio", "1:1");
+        body.set(
+          "reference",
+          new File([PNG_BYTES], "style.png", { type: "image/png" }),
+        );
+        return await makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: await authHeaders(key),
+          body,
+        });
+      };
+
+      type FindFirst = typeof prisma.aiJob.findFirst;
+      const aiJobs = prisma.aiJob as { findFirst: FindFirst };
+      const originalFindFirst = aiJobs.findFirst;
+      let observedNone = false;
+      let releaseLookup = () => {};
+      const lookupObserved = new Promise<void>((resolve) => {
+        let release!: () => void;
+        const blocked = new Promise<void>((unblock) => {
+          release = unblock;
+        });
+        releaseLookup = release;
+        aiJobs.findFirst = (async (...args: Parameters<FindFirst>) => {
+          const result = await originalFindFirst(...args);
+          const where = args[0].where;
+          if (!observedNone && result === null &&
+            where.userId === USER_ID &&
+            where.idempotencyKeyHash === identity.idempotencyKeyHash) {
+            observedNone = true;
+            resolve();
+            await blocked;
+          }
+          return result;
+        }) as FindFirst;
+      });
+
+      try {
+        const contender = request();
+        await lookupObserved;
+        const winner = await createReservedAiJob({
+          userId: USER_ID,
+          kind: "image",
+          provider: "openrouter",
+          status: "running",
+          inputParams: {
+            prompt: "one winner",
+            aspectRatio: "1:1",
+            references: [{ filename: "style.png" }],
+          },
+          usageUnits: 20,
+          model: "openai/gpt-image-1",
+          ...identity,
+        });
+        expect(winner.ok).toBe(true);
+
+        releaseLookup();
+        const preflightResponse = await contender;
+        expect(preflightResponse.status).toBe(409);
+        expect(await preflightResponse.json()).toMatchObject({
+          error_code: "aiRequestInProgress",
+        });
+
+        aiJobs.findFirst = originalFindFirst;
+        const replay = await request();
+        expect(replay.status).toBe(409);
+        expect(await replay.json()).toMatchObject({
+          error_code: "aiRequestInProgress",
+        });
+        expect(state.aiJobs.size).toBe(1);
+        expect(
+          state.creditTransactions.filter(transaction =>
+            transaction.kind === "usage" &&
+            transaction.aiJobId !== "leave-one-image-charge"
+          ),
+        ).toHaveLength(1);
+      } finally {
+        releaseLookup();
+        aiJobs.findFirst = originalFindFirst;
+      }
+    });
+
+    it("returns a terminal plan denial for a settled multipart key", async () => {
+      await activatePro();
+      const key = "settled-key-after-plan";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        inputParams: { prompt: "already failed", aspectRatio: "1:1" },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.generate",
+          input: { prompt: "already failed", aspectRatio: "1:1" },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+      if (!reservation.ok) throw new Error("The setup reservation failed");
+      state.aiJobs.set(reservation.job.id, {
+        ...state.aiJobs.get(reservation.job.id)!,
+        status: "failed",
+      });
+      await deactivatePro();
+      const formDataRead = vi.spyOn(Request.prototype, "formData");
+      try {
+        const body = new FormData();
+        body.set("prompt", "already failed");
+        body.set("aspectRatio", "1:1");
+        body.set(
+          "reference",
+          new File([PNG_BYTES], "unused.png", { type: "image/png" }),
+        );
+
+        const response = await makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: await authHeaders(key),
+          body,
+        });
+
+        expect(response.status).toBe(402);
+        expect(await response.json()).toMatchObject({
+          error_code: "aiPlanRequired",
+        });
+        expect(formDataRead).not.toHaveBeenCalled();
+      } finally {
+        formDataRead.mockRestore();
+      }
     });
 
     it("requires an idempotency key before reserving paid usage", async () => {
@@ -1440,6 +1672,100 @@ describe("v3 AI endpoints contract", () => {
           references: [{ filename: "style.png" }],
         },
       });
+    });
+
+    it("replays a settled multipart generation after the plan ends", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockResolvedValue({
+        b64Json: Buffer.from(PNG_BYTES).toString("base64"),
+        mediaType: "image/png",
+      });
+      const key = "settled-reference-replay";
+      const request = async () => {
+        const body = new FormData();
+        body.set("prompt", "remember this style");
+        body.set("aspectRatio", "1:1");
+        body.set(
+          "reference",
+          new File([PNG_BYTES], "style.png", { type: "image/png" }),
+        );
+        return await makeApp().request("/api/v3/ai/images", {
+          method: "POST",
+          headers: await authHeaders(key),
+          body,
+        });
+      };
+
+      const first = await request();
+      expect(first.status).toBe(200);
+      const firstPayload = await first.json();
+      const capabilityCalls = loadAiImageModelCapabilities.mock.calls.length;
+      await deactivatePro();
+
+      const replay = await request();
+
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual(firstPayload);
+      expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+      expect(loadAiImageModelCapabilities).toHaveBeenCalledTimes(capabilityCalls);
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
+    });
+
+    it("reaches a held multipart generation after the plan ends", async () => {
+      await activatePro();
+      const key = "held-reference-replay";
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "image",
+        provider: "openrouter",
+        status: "running",
+        inputParams: {
+          prompt: "held style",
+          aspectRatio: "1:1",
+          references: [{ filename: "style.png" }],
+        },
+        usageUnits: 20,
+        ...(await getAiRequestIdentityForTest({
+          key,
+          operation: "image.generate",
+          input: {
+            prompt: "held style",
+            aspectRatio: "1:1",
+            references: [{
+              fileName: "style.png",
+              contentType: "image/png",
+              contentSha256: await sha256Hex(PNG_BYTES),
+            }],
+          },
+        })),
+      });
+      expect(reservation.ok).toBe(true);
+      await deactivatePro();
+      const body = new FormData();
+      body.set("prompt", "held style");
+      body.set("aspectRatio", "1:1");
+      body.set(
+        "reference",
+        new File([PNG_BYTES], "style.png", { type: "image/png" }),
+      );
+
+      const response = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: await authHeaders(key),
+        body,
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error_code: "aiRequestInProgress",
+      });
+      expect(loadAiImageModelCapabilities).not.toHaveBeenCalled();
+      expect(vi.mocked(generateImage)).not.toHaveBeenCalled();
+      expect(
+        state.creditTransactions.filter(transaction => transaction.kind === "usage"),
+      ).toHaveLength(1);
     });
 
     it("rejects an oversized generated image before storage", async () => {

@@ -6,6 +6,10 @@ import {
   translationCharacterCount,
 } from "@beutl/api";
 import { fileFingerprint } from "../../apps/web/src/lib/ai-screen";
+import {
+  preparedImageEditSourceWithinLimit,
+  rawImageEditSourceExceedsLimit,
+} from "../../apps/web/src/lib/ai-image-edit-limits";
 
 const translateFormSource = readFileSync(
   new URL(
@@ -82,6 +86,17 @@ describe("dashboard AI form input limits", () => {
     expect(imageEditFormSource).toContain("sourceTooLarge ? \"\" : requestSignature");
     expect(imageEditFormSource).toContain("blocksSubmit(blocked, holdsName) || sourceTooLarge");
     expect(imageEditFormSource).toContain("readingSource || sourceTooLarge");
-    expect(imageEditFormSource).toContain("prepared.size > MAX_AI_IMAGE_UPLOAD_BYTES");
+    expect(imageEditFormSource).toContain("preparedImageEditSourceWithinLimit");
+  });
+
+  it("allows an oversized raw source only for outpaint preparation", () => {
+    const limit = 5 * 1024 * 1024;
+    const oversized = limit + 1;
+    expect(rawImageEditSourceExceedsLimit("upscale", oversized, limit)).toBe(true);
+    expect(rawImageEditSourceExceedsLimit("outpaint", oversized, limit)).toBe(false);
+    expect(preparedImageEditSourceWithinLimit(limit, limit)).toBe(true);
+    expect(preparedImageEditSourceWithinLimit(oversized, limit)).toBe(false);
+    expect(imageEditFormSource).toContain("rawImageEditSourceExceedsLimit");
+    expect(imageEditFormSource).toContain("preparedImageEditSourceWithinLimit");
   });
 });
