@@ -25,7 +25,33 @@ import {
 export type AiOperationModelsDraft = {
   operation: string;
   models: AiOperationModelInput[];
+  expected: AiOperationModelSnapshot[];
 };
+
+export type AiOperationModelSnapshot = {
+  modelId: string;
+  priceUnits: number;
+  displayName: string | null;
+  enabled: boolean;
+  sortOrder: number;
+  updatedAt: string;
+};
+
+export function matchesAiOperationModelSnapshot(
+  actual: readonly AiOperationModelSnapshot[],
+  expected: readonly AiOperationModelSnapshot[],
+): boolean {
+  return actual.length === expected.length && actual.every((row, index) => {
+    const snapshot = expected[index];
+    return snapshot !== undefined &&
+      row.modelId === snapshot.modelId &&
+      row.priceUnits === snapshot.priceUnits &&
+      row.displayName === snapshot.displayName &&
+      row.enabled === snapshot.enabled &&
+      row.sortOrder === snapshot.sortOrder &&
+      row.updatedAt === snapshot.updatedAt;
+  });
+}
 
 export type AiConfigurationChanges = {
   settings: AiSettingChange[];
@@ -85,7 +111,7 @@ export function validateAiConfigurationChanges(
     if (typeof entry !== "object" || entry === null) {
       return { ok: false, message: "Invalid model changes" };
     }
-    const { operation, models: rows } = entry as Record<string, unknown>;
+    const { operation, models: rows, expected } = entry as Record<string, unknown>;
     if (
       typeof operation !== "string" ||
       !(AI_OPERATIONS as readonly string[]).includes(operation)
@@ -99,6 +125,12 @@ export function validateAiConfigurationChanges(
 
     if (!Array.isArray(rows)) {
       return { ok: false, message: "Invalid model changes" };
+    }
+    if (!Array.isArray(expected)) {
+      return { ok: false, message: "Invalid model snapshot" };
+    }
+    if (expected.length > MAX_MODELS_PER_OPERATION) {
+      return { ok: false, message: "Too many models in snapshot" };
     }
     if (rows.length > MAX_MODELS_PER_OPERATION) {
       return { ok: false, message: `Too many models for ${operation}` };
@@ -119,7 +151,37 @@ export function validateAiConfigurationChanges(
       seenModelIds.add(validated.value.modelId);
       validatedRows.push(validated.value);
     }
-    drafts.push({ operation, models: validatedRows });
+    const validatedExpected: AiOperationModelSnapshot[] = [];
+    for (const snapshot of expected) {
+      if (typeof snapshot !== "object" || snapshot === null) {
+        return { ok: false, message: "Invalid model snapshot" };
+      }
+      const value = snapshot as Record<string, unknown>;
+      if (
+        typeof value.modelId !== "string" ||
+        typeof value.priceUnits !== "number" ||
+        !Number.isSafeInteger(value.priceUnits) ||
+        value.priceUnits < 0 ||
+        (value.displayName !== null && typeof value.displayName !== "string") ||
+        typeof value.enabled !== "boolean" ||
+        typeof value.sortOrder !== "number" ||
+        !Number.isSafeInteger(value.sortOrder) ||
+        value.sortOrder < 0 ||
+        typeof value.updatedAt !== "string" ||
+        !Number.isFinite(new Date(value.updatedAt).getTime())
+      ) {
+        return { ok: false, message: "Invalid model snapshot" };
+      }
+      validatedExpected.push({
+        modelId: value.modelId,
+        priceUnits: value.priceUnits,
+        displayName: value.displayName as string | null,
+        enabled: value.enabled,
+        sortOrder: value.sortOrder,
+        updatedAt: value.updatedAt,
+      });
+    }
+    drafts.push({ operation, models: validatedRows, expected: validatedExpected });
   }
 
   if (validatedSettings.changes.length === 0 && drafts.length === 0) {

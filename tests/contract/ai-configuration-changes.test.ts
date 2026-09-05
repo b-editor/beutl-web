@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   AI_DEFAULT_OPERATION_MODELS,
@@ -7,7 +8,9 @@ import {
 } from "@beutl/core";
 import {
   MAX_MODELS_PER_OPERATION,
+  matchesAiOperationModelSnapshot,
   validateAiConfigurationChanges,
+  type AiOperationModelSnapshot,
 } from "../../apps/admin/src/lib/ai-configuration-changes";
 
 const builtInOf = (operation: string) => [
@@ -28,7 +31,20 @@ function validate(
     currentSettingValueOf?: (key: string) => string;
   } = {},
 ) {
-  return validateAiConfigurationChanges(input, {
+  const preparedInput = input && typeof input === "object" && !Array.isArray(input)
+    ? {
+        ...(input as Record<string, unknown>),
+        models: Array.isArray((input as Record<string, unknown>).models)
+          ? ((input as Record<string, unknown>).models as unknown[]).map((entry) =>
+              entry && typeof entry === "object" && !Array.isArray(entry) &&
+                !Object.prototype.hasOwnProperty.call(entry, "expected")
+                ? { ...(entry as object), expected: [] }
+                : entry,
+            )
+          : (input as Record<string, unknown>).models,
+      }
+    : input;
+  return validateAiConfigurationChanges(preparedInput, {
     currentSettingValueOf:
       overrides.currentSettingValueOf ??
       ((key) => AI_SETTINGS[key]?.fallback ?? ""),
@@ -50,6 +66,52 @@ function model(overrides: Record<string, unknown> = {}) {
 }
 
 describe("saving the AI configuration in one go", () => {
+  const snapshot = (overrides: Partial<AiOperationModelSnapshot> = {}): AiOperationModelSnapshot => ({
+    modelId: "openai/gpt-image-1",
+    priceUnits: 20,
+    displayName: null,
+    enabled: true,
+    sortOrder: 0,
+    updatedAt: "2026-09-06T00:00:00.000Z",
+    ...overrides,
+  });
+
+  it("rejects a second admin save after the stored row changed", () => {
+    const baseline = [snapshot()];
+    expect(matchesAiOperationModelSnapshot(baseline, baseline)).toBe(true);
+    expect(matchesAiOperationModelSnapshot(
+      [snapshot({ priceUnits: 25, updatedAt: "2026-09-06T00:01:00.000Z" })],
+      baseline,
+    )).toBe(false);
+  });
+
+  it("detects a concurrent add instead of deleting it as stale", () => {
+    const baseline = [snapshot()];
+    const concurrent = [
+      ...baseline,
+      snapshot({ modelId: "google/veo-3.1", sortOrder: 1 }),
+    ];
+    expect(matchesAiOperationModelSnapshot(concurrent, baseline)).toBe(false);
+  });
+
+  it("accepts an empty expected snapshot for an operation using its built-in fallback", () => {
+    expect(matchesAiOperationModelSnapshot([], [])).toBe(true);
+    expect(matchesAiOperationModelSnapshot([snapshot()], [])).toBe(false);
+  });
+
+  it("wires opaque model snapshots from the page into the transactional save", async () => {
+    const [pageSource, formSource, actionSource] = await Promise.all([
+      readFile(new URL("../../apps/admin/src/app/[lang]/admin/ai/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../../apps/admin/src/app/[lang]/admin/ai/settings-form.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../../apps/admin/src/app/[lang]/admin/ai/actions.ts", import.meta.url), "utf8"),
+    ]);
+    expect(pageSource).toContain("modelSnapshots={modelSnapshots}");
+    expect(formSource).toContain("reduceModelDrafts(previous");
+    expect(formSource).toContain("serializeModelDrafts(modelDrafts)");
+    expect(actionSource).toContain("matchesAiOperationModelSnapshot(actual, draft.expected)");
+    expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
+  });
+
   it("accepts an allowance and a model list together", () => {
     const result = validate({
       settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "800" }],

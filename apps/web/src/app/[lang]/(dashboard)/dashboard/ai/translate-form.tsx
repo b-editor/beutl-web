@@ -250,6 +250,12 @@ export function TranslateForm({
   // The cues the source carried, so a translation can be written back out as a
   // subtitle file instead of a bare list of strings.
   const sourceCues: SubtitleCue[] | null = parsed.ok ? parsed.cues : null;
+  const sourceCueById = useMemo(
+    () => parsed.ok && sourceCues
+      ? new Map(parsed.segments.map((segment, index) => [segment.id, sourceCues[index]]))
+      : new Map<string, SubtitleCue>(),
+    [parsed, sourceCues],
+  );
 
   const blocked = blockedReason(
     access,
@@ -651,7 +657,9 @@ export function TranslateForm({
           </Button>
         </div>
         <ul className="flex flex-col gap-2">
-          {translated.map((segment, index) => (
+          {translated.map((segment, index) => {
+            const sourceCue = sourceCueById.get(segment.id);
+            return (
             <li
               key={segment.id}
               className="flex flex-col gap-2 rounded-lg border bg-background p-3"
@@ -660,9 +668,9 @@ export function TranslateForm({
                 <span className="text-sm font-bold tabular-nums text-muted-foreground">
                   {index + 1}
                 </span>
-                {!sourceChanged && sourceCues?.[index] && (
+                {!sourceChanged && sourceCue && (
                   <span className="truncate text-xs text-muted-foreground">
-                    {sourceCues[index].text}
+                    {sourceCue.text}
                   </span>
                 )}
                 <Button
@@ -695,7 +703,8 @@ export function TranslateForm({
                 aria-label={t("dashboard:ai.cueText", { number: index + 1 })}
               />
             </li>
-          ))}
+            );
+          })}
         </ul>
       </ResultPanel>
     ) : (

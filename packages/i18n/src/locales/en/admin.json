@@ -381,7 +381,8 @@
       "save": "Save changes",
       "discard": "Discard",
       "saveSuccess": "Saved {{total}} settings",
-      "saveFailed": "Failed to save the settings"
+      "saveFailed": "Failed to save the settings",
+      "saveConflict": "The AI model settings changed elsewhere. Reload and review before saving."
     }
   },
   "category": {

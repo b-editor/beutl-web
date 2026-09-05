@@ -396,7 +396,22 @@ function fromJson(text: string): SubtitleParseResult {
     }
     seenIds.add(id);
     segments.push({ id, text: record.text });
-    if (typeof record.start === "number" && typeof record.end === "number") {
+    const hasStart = record.start !== undefined;
+    const hasEnd = record.end !== undefined;
+    if (hasStart !== hasEnd) {
+      return { ok: false, reason: "invalidSegment" };
+    }
+    if (hasStart && hasEnd) {
+      if (
+        typeof record.start !== "number" ||
+        typeof record.end !== "number" ||
+        !Number.isFinite(record.start) ||
+        !Number.isFinite(record.end) ||
+        record.start < 0 ||
+        record.end <= record.start
+      ) {
+        return { ok: false, reason: "invalidSegment" };
+      }
       cues.push({ start: record.start, end: record.end, text: record.text });
     } else {
       everyEntryIsTimed = false;

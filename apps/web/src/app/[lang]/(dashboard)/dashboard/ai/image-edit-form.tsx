@@ -130,6 +130,8 @@ export function ImageEditForm({
   const { contents: sourceContents, reading: readingSource } =
     useFileFingerprints(sourceFiles, MAX_AI_IMAGE_UPLOAD_BYTES);
   const sourceContent = sourceContents[0] ?? "";
+  const sourceTooLarge =
+    sourceFile !== null && sourceFile.size > MAX_AI_IMAGE_UPLOAD_BYTES;
   const [comparisonMode, setComparisonMode] = useState<string>("result");
   const [typedPrompt, setTypedPrompt] = useState("");
   // Canvas preparation happens before the action runs, so its failure has no
@@ -184,7 +186,7 @@ export function ImageEditForm({
   // （outpaint の前置きは task と prompt から決まるので、この 2 つで足りる）。
   // 引き伸ばし幅は送る絵そのものに焼き込まれるので、絵の見分けと一緒に動く。
   const signatureWith = (model: string) =>
-    requestSignature([
+    sourceTooLarge ? "" : requestSignature([
       editTask,
       model,
       selected?.needsPrompt ? typedPrompt.trim() : null,
@@ -210,11 +212,11 @@ export function ImageEditForm({
   const selectedModel = models.some((entry) => entry.id === chosenModel)
     ? chosenModel
     : defaultModelId(models);
-  const signature = signatureWith(selectedModel);
-  const holdsName = holdsSignature(signature);
+  const signature = sourceTooLarge ? "" : signatureWith(selectedModel);
+  const holdsName = !sourceTooLarge && holdsSignature(signature);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
-  const submitBlocked = blocksSubmit(blocked, holdsName) || !names.ready;
+  const submitBlocked = blocksSubmit(blocked, holdsName) || sourceTooLarge || !names.ready;
   const taskUnaffordable =
     blocked === null &&
     editTask !== "" &&
@@ -235,7 +237,7 @@ export function ImageEditForm({
     taskHasNoModel,
     // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
     // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
-    busy: isPending || isPreparing || readingSource,
+    busy: isPending || isPreparing || readingSource || sourceTooLarge,
   });
 
   async function prepareOutpaintFile(
@@ -302,6 +304,9 @@ export function ImageEditForm({
             file,
             Number(outpaintExpansion),
           );
+          if (prepared.size > MAX_AI_IMAGE_UPLOAD_BYTES) {
+            throw new Error("Prepared outpaint image exceeds the upload limit");
+          }
           // 送るのは、押した時点の画面。広げているあいだに task や model、
           // 文章や元の絵が変えられても、いま作った絵と、いま名乗る名前と、
           // 本文の中身がばらばらになってはいけない——ばらばらなものを送れば、

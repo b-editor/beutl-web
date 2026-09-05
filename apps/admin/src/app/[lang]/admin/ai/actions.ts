@@ -34,7 +34,10 @@ import {
 import { getDb } from "@beutl/db";
 import { deriveTopUpUnitValue, isAiModelId } from "@beutl/core";
 import { resolveOfferPricing } from "@/lib/stripe-pricing";
-import { validateAiConfigurationChanges } from "@/lib/ai-configuration-changes";
+import {
+  matchesAiOperationModelSnapshot,
+  validateAiConfigurationChanges,
+} from "@/lib/ai-configuration-changes";
 import {
   AI_DEFAULT_OPERATION_MODELS,
   aiMinimumChargeOf,
@@ -452,7 +455,8 @@ export async function terminalizeOrphanTopUpResolution(
 // could be looking at — an allowance saved before the model it was raised for
 // is an operation nobody can start — and left the page with two save
 // mechanisms for one screen.
-export async function saveAiConfiguration(input: unknown): Promise<ActionResult> {
+export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
     // Validation reads inside the transaction because it is a cross-field rule
     // over state this save does not carry: the settings and operations it
@@ -489,6 +493,22 @@ export async function saveAiConfiguration(input: unknown): Promise<ActionResult>
       });
       if (!validated.ok) {
         return { ok: false as const, message: validated.message };
+      }
+
+      for (const draft of validated.models) {
+        const actual = storedRows
+          .filter((row) => row.operation === draft.operation)
+          .map((row) => ({
+            modelId: row.modelId,
+            priceUnits: row.priceUnits,
+            displayName: row.displayName,
+            enabled: row.enabled,
+            sortOrder: row.sortOrder,
+            updatedAt: row.updatedAt.toISOString(),
+          }));
+        if (!matchesAiOperationModelSnapshot(actual, draft.expected)) {
+          return { ok: false as const, message: t("admin:ai.form.saveConflict") };
+        }
       }
 
       // These values decide what users are charged, so record who changed what,

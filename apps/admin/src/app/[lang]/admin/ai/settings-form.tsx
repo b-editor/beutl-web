@@ -16,6 +16,12 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { useToast } from "@beutl/ui/use-toast";
 import { Button } from "@beutl/ui/ui/button";
 import type { AiSettingChange } from "@/lib/ai-setting-changes";
+import type { AiOperationModelSnapshot } from "@/lib/ai-configuration-changes";
+import {
+  reduceModelDrafts,
+  serializeModelDrafts,
+  type ModelDraftState,
+} from "@/lib/ai-model-draft-state";
 import { saveAiConfiguration } from "./actions";
 
 export type AiSettingRow = {
@@ -54,7 +60,7 @@ type FormContextValue = {
   // a set of edits: adding, repricing, removing and reordering are then the
   // same thing to compare and to submit.
   models: Map<string, AiModelRow[]>;
-  modelDrafts: Map<string, AiModelRow[]>;
+  modelDrafts: Map<string, ModelDraftState>;
   isPending: boolean;
   setValue(key: string, value: string): void;
   markReset(key: string): void;
@@ -68,21 +74,6 @@ function draftOf(
   setting: AiSettingRow,
 ): Draft {
   return drafts.get(setting.key) ?? { value: setting.value, reset: false };
-}
-
-function sameModels(left: AiModelRow[], right: AiModelRow[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((model, index) => {
-      const other = right[index]!;
-      return (
-        model.modelId === other.modelId &&
-        model.priceUnits === other.priceUnits &&
-        model.displayName === other.displayName &&
-        model.enabled === other.enabled
-      );
-    })
-  );
 }
 
 function isChanged(setting: AiSettingRow, draft: Draft): boolean {
@@ -128,7 +119,7 @@ export function useAiModels(operation: string): {
   const saved = context.models.get(operation) ?? [];
   const draft = context.modelDrafts.get(operation);
   return {
-    models: draft ?? saved,
+    models: draft?.rows ?? saved,
     changed: draft !== undefined,
     isPending: context.isPending,
     setModels: (models) => context.setModels(operation, models),
@@ -151,7 +142,7 @@ export function useAiModelPrice(
   );
   const drafted = context.modelDrafts
     .get(operation)
-    ?.find((model) => model.modelId === modelId);
+    ?.rows.find((model) => model.modelId === modelId);
   const effective = drafted ?? saved;
   return {
     priceUnits: effective?.priceUnits ?? null,
@@ -182,11 +173,13 @@ export function AiConfigurationForm({
   lang,
   settings,
   models,
+  modelSnapshots = [],
   children,
 }: {
   lang: string;
   settings: AiSettingRow[];
   models: { operation: string; models: AiModelRow[] }[];
+  modelSnapshots?: { operation: string; models: AiOperationModelSnapshot[] }[];
   children: ReactNode;
 }) {
   const { t } = useTranslation(lang);
@@ -194,7 +187,7 @@ export function AiConfigurationForm({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
-  const [modelDrafts, setModelDrafts] = useState<Map<string, AiModelRow[]>>(
+  const [modelDrafts, setModelDrafts] = useState<Map<string, ModelDraftState>>(
     new Map(),
   );
 
@@ -205,6 +198,10 @@ export function AiConfigurationForm({
   const modelsByOperation = useMemo(
     () => new Map(models.map((entry) => [entry.operation, entry.models])),
     [models],
+  );
+  const snapshotsByOperation = useMemo(
+    () => new Map(modelSnapshots.map((entry) => [entry.operation, entry.models])),
+    [modelSnapshots],
   );
 
   // A refresh arriving while nothing is being edited should adopt the server's
@@ -243,20 +240,16 @@ export function AiConfigurationForm({
 
   const setModels = useCallback(
     (operation: string, next: AiModelRow[]) => {
-      setModelDrafts((previous) => {
-        const updated = new Map(previous);
-        const saved = modelsByOperation.get(operation) ?? [];
-        // Editing back to what is stored is not a change, so the save bar and
-        // the discard button both stop offering to act on it.
-        if (sameModels(saved, next)) {
-          updated.delete(operation);
-        } else {
-          updated.set(operation, next);
-        }
-        return updated;
-      });
+      const saved = modelsByOperation.get(operation) ?? [];
+      setModelDrafts((previous) => reduceModelDrafts(previous, {
+        type: "set",
+        operation,
+        rows: next,
+        saved,
+        snapshot: snapshotsByOperation.get(operation) ?? [],
+      }));
     },
-    [modelsByOperation],
+    [modelsByOperation, snapshotsByOperation],
   );
 
   const changes = useMemo(() => {
@@ -286,17 +279,14 @@ export function AiConfigurationForm({
         value: draft.reset ? null : draft.value.trim(),
       }),
     );
-    const modelChanges = [...modelDrafts].map(([operation, rows]) => ({
-      operation,
-      models: rows,
-    }));
+    const modelChanges = serializeModelDrafts(modelDrafts);
 
     startTransition(async () => {
       try {
         const result = await saveAiConfiguration({
           settings: settingChanges,
           models: modelChanges,
-        });
+        }, lang);
         if (result.success) {
           committedRef.current = pendingCount;
           toast({
@@ -322,7 +312,7 @@ export function AiConfigurationForm({
         router.refresh();
       }
     });
-  }, [changes, modelDrafts, pendingCount, toast, t, router]);
+  }, [changes, lang, modelDrafts, pendingCount, toast, t, router]);
 
   const contextValue = useMemo<FormContextValue>(
     () => ({

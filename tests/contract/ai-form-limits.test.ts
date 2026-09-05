@@ -21,6 +21,13 @@ const videoFormSource = readFileSync(
   ),
   "utf8",
 );
+const imageEditFormSource = readFileSync(
+  new URL(
+    "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/image-edit-form.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("dashboard AI form input limits", () => {
   it("counts translation segments and glossary text against one shared limit", () => {
@@ -68,5 +75,13 @@ describe("dashboard AI form input limits", () => {
     expect(videoFormSource).toContain("busy: isPending || readingFrames || oversizedFrame");
     expect(videoFormSource).toContain("composedPromptTooLong || oversizedFrame");
     expect(videoFormSource).toContain("oversizedFrame ||");
+  });
+
+  it("fails closed for oversized image-edit sources before naming or dispatch", () => {
+    expect(imageEditFormSource).toContain("const sourceTooLarge =");
+    expect(imageEditFormSource).toContain("sourceTooLarge ? \"\" : requestSignature");
+    expect(imageEditFormSource).toContain("blocksSubmit(blocked, holdsName) || sourceTooLarge");
+    expect(imageEditFormSource).toContain("readingSource || sourceTooLarge");
+    expect(imageEditFormSource).toContain("prepared.size > MAX_AI_IMAGE_UPLOAD_BYTES");
   });
 });

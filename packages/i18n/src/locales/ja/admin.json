@@ -381,7 +381,8 @@
       "save": "変更を保存",
       "discard": "破棄",
       "saveSuccess": "{{total}} 件の設定を保存しました",
-      "saveFailed": "設定の保存に失敗しました"
+      "saveFailed": "設定の保存に失敗しました",
+      "saveConflict": "AI モデル設定が別の管理者によって変更されました。再読み込みして内容を確認してから保存してください。"
     }
   },
   "category": {

@@ -4,6 +4,7 @@ import {
   listPackagePaymentRefundInterventions,
   resumePackagePaymentRefundIntervention,
 } from "../../packages/db/src/package-payment-refund-attempt";
+import { formatAmount } from "@beutl/core";
 
 describe("package payment refund interventions", () => {
   it("lists only operator-paused attempts in oldest-first order", async () => {
@@ -72,6 +73,13 @@ describe("package payment refund interventions", () => {
     expect(source).toContain('t("admin:ai.interventions.common.unauthenticated")');
     expect(source).toContain('result.message === "Forbidden"');
     expect(source).toContain('t("admin:ai.interventions.common.forbidden")');
+    expect(source).toContain("formatAmount(row.amount, row.currency, lang)");
+    expect(source).not.toContain("row.amount} {row.currency.toUpperCase()}");
+  });
+
+  it("formats refund minor units correctly for zero- and two-decimal currencies", () => {
+    expect(formatAmount(1234, "jpy", "en")).toBe("¥1,234");
+    expect(formatAmount(1234, "usd", "en")).toBe("$12.34");
   });
 
   it("wires the admin page to pagination and the selected-attempt reconciler", async () => {

@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
+import { formatAmount } from "@beutl/core";
 import { useState, useTransition } from "react";
 import { resumePackagePaymentRefundInterventionAction } from "./actions";
 
@@ -54,7 +55,7 @@ function PackagePaymentRefundRow({ lang, row }: { lang: string; row: Row }) {
     {message && <p className="mb-2 text-muted-foreground">{message}</p>}
     <p className="break-all font-mono">{t("admin:ai.interventions.packagePayment.attempt")}: {row.id}</p>
     <p className="break-all font-mono">{t("admin:ai.interventions.packagePayment.paymentIntent")}: {row.paymentIntentId}</p>
-    <p>{row.amount} {row.currency.toUpperCase()} · {t("admin:ai.interventions.common.attempts", { count: row.attempts })}</p>
+    <p>{formatAmount(row.amount, row.currency, lang)} · {t("admin:ai.interventions.common.attempts", { count: row.attempts })}</p>
     <p className="text-muted-foreground">{row.lastError ?? t("admin:ai.interventions.packagePayment.operatorRequired")}</p>
     <textarea className="mt-2 min-h-16 w-full rounded border p-2" aria-label={t("admin:ai.interventions.common.reasonPlaceholder")} placeholder={t("admin:ai.interventions.common.reasonPlaceholder")} value={reason} onChange={(event) => setReason(event.target.value)} />
     <textarea className="mt-2 min-h-16 w-full rounded border p-2" aria-label={t("admin:ai.interventions.common.evidencePlaceholder")} placeholder={t("admin:ai.interventions.common.evidencePlaceholder")} value={evidence} onChange={(event) => setEvidence(event.target.value)} />

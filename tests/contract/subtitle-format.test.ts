@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   applyTranslationToCues,
@@ -183,6 +184,18 @@ describe("subtitle source parsing", () => {
     ]);
   });
 
+  it.each([
+    ["overflow", '[{"start":0,"end":1e400,"text":"Hello"}]'],
+    ["negative start", '[{"start":-1,"end":1,"text":"Hello"}]'],
+    ["zero duration", '[{"start":1,"end":1,"text":"Hello"}]'],
+    ["backwards duration", '[{"start":2,"end":1,"text":"Hello"}]'],
+  ])("rejects imported JSON with %s timing", (_, input) => {
+    expect(parseSubtitleSource(input)).toEqual({
+      ok: false,
+      reason: "invalidSegment",
+    });
+  });
+
   it("reports no timings when only some JSON entries are timed", () => {
     const result = parseSubtitleSource(
       '[{"start":0,"end":1,"text":"Hello"},{"text":"World"}]',
@@ -365,6 +378,19 @@ describe("re-timing a translation", () => {
         { id: "3", text: "Appended by hand" },
       ]),
     ).toBeNull();
+  });
+
+  it("renders source text by segment id rather than result position", async () => {
+    const source = await readFile(
+      new URL(
+        "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/translate-form.tsx",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(source).toContain("const sourceCueById = useMemo");
+    expect(source).toContain("sourceCueById.get(segment.id)");
+    expect(source).not.toContain("sourceCues[index].text");
   });
 
 });

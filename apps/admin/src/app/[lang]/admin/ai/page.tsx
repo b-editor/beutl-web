@@ -35,6 +35,7 @@ import { TopUpResolutionInterventions } from "./topup-resolution-interventions";
 import { PackagePaymentRefundInterventions } from "./package-payment-refund-interventions";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import { Pagination } from "@/components/admin/pagination";
+import type { AiOperationModelSnapshot } from "@/lib/ai-configuration-changes";
 
 const REFUND_INTERVENTION_PAGE_SIZE = 25;
 
@@ -88,6 +89,20 @@ export default async function Page(props: {
       enabled: true,
     }));
   };
+  const modelSnapshots: { operation: string; models: AiOperationModelSnapshot[] }[] =
+    AI_OPERATIONS.map((operation) => ({
+      operation,
+      models: registeredModels
+        .filter((row) => row.operation === operation)
+        .map((row) => ({
+          modelId: row.modelId,
+          priceUnits: row.priceUnits,
+          displayName: row.displayName,
+          enabled: row.enabled,
+          sortOrder: row.sortOrder,
+          updatedAt: row.updatedAt.toISOString(),
+        })),
+    }));
 
   // Per operation, because an image model that cannot take a picture is fine
   // for generation and useless for every edit.
@@ -196,6 +211,7 @@ export default async function Page(props: {
           operation,
           models: modelsOf(operation),
         }))}
+        modelSnapshots={modelSnapshots}
       >
         <div className="flex flex-col gap-8">
           <section className="flex flex-col gap-3">
