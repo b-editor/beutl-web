@@ -199,6 +199,15 @@
         "operatorRequired": "管理者の対応が必要です",
         "terminalizeAfterRefundProof": "返金証跡を確認して終端化"
       },
+      "packagePayment": {
+        "title": "パッケージ決済返金の管理者対応",
+        "description": "再試行を使い切って停止したパッケージ返金です。再開時には Stripe の正規識別情報を再確認してから返金を試行します。",
+        "empty": "対応が必要なパッケージ返金はありません。",
+        "attempt": "返金試行",
+        "paymentIntent": "PaymentIntent",
+        "operatorRequired": "管理者の対応が必要です",
+        "resumeConfirm": "Stripe を再確認して、このパッケージ返金を再開しますか？"
+      },
       "messages": {
         "invalidInput": "管理者対応の入力が不正です。",
         "reasonAndEvidenceRequired": "理由と証跡をそれぞれ10文字以上で入力してください。",
@@ -211,6 +220,9 @@
         "stripeNotConfigured": "Stripe が設定されていません。",
         "topUpAbsenceRecorded": "Stripe で見つからなかったことを初回記録しました。{{retryAt}} 以降にもう一度お試しください。",
         "topUpTerminalized": "孤立したトップアップ復旧を終端化しました。",
+        "packagePaymentRefundResumed": "パッケージ決済の返金を再確認して再開しました。",
+        "packagePaymentRefundCompleted": "パッケージ決済の返金を再確認して完了しました。",
+        "packagePaymentRefundStillRequiresIntervention": "Stripe の再確認は完了しましたが、この返金には引き続き管理者の対応が必要です。",
         "unsafe": "安全に処理できません: {{reason}}",
         "stripeVerificationFailed": "Stripe の確認に失敗しました: {{reason}}"
       }

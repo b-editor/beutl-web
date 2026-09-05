@@ -21,6 +21,7 @@ import {
   renewTopUpCheckoutResolutionOperatorLease,
   releaseTopUpCheckoutResolutionOperatorLease,
   TOP_UP_OPERATOR_ABSENCE_CONFIRMATION_MS,
+  resumePackagePaymentRefundIntervention,
 } from "@beutl/db";
 import {
   aiCostEstimateKey,
@@ -28,6 +29,7 @@ import {
   loadAiModelCatalog,
   loadAiSettings,
   discoverTopUpCheckoutAttempt,
+  reconcilePackagePaymentRefundAttempt,
 } from "@beutl/api";
 import { getDb } from "@beutl/db";
 import { deriveTopUpUnitValue, isAiModelId } from "@beutl/core";
@@ -39,6 +41,57 @@ import {
 } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
+
+function parsePackageRefundInterventionInput(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const value = input as Record<string, unknown>;
+  if (typeof value.id !== "string" || typeof value.expectedUpdatedAt !== "string") return null;
+  const expectedUpdatedAt = new Date(value.expectedUpdatedAt);
+  return Number.isFinite(expectedUpdatedAt.getTime()) ? { id: value.id, expectedUpdatedAt } : null;
+}
+
+export async function resumePackagePaymentRefundInterventionAction(lang: string, input: unknown): Promise<ActionResult> {
+  const { t } = await getTranslation(lang);
+  return await adminAction(async (session) => {
+    const parsed = parsePackageRefundInterventionInput(input);
+    const value = input as Record<string, unknown>;
+    if (!parsed || typeof value.operatorReason !== "string" || value.operatorReason.trim().length < 10 || typeof value.operatorEvidence !== "string" || value.operatorEvidence.trim().length < 10) return { success: false, message: t("admin:ai.interventions.messages.reasonAndEvidenceRequired") };
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) return { success: false, message: t("admin:ai.interventions.messages.stripeNotConfigured") };
+    const now = new Date();
+    const transition = await startRetryableTransaction(async (tx) => {
+      const result = await resumePackagePaymentRefundIntervention({ ...parsed, now, prisma: tx });
+      if (result.status !== "resumed") return result;
+      await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.packagePaymentRefundInterventionResumed, details: `refundAttemptId: ${parsed.id}, updatedAt: ${parsed.expectedUpdatedAt.toISOString()}->${now.toISOString()}, reason: ${value.operatorReason}, evidence: ${value.operatorEvidence}`, prisma: tx });
+      return result;
+    });
+    if (transition.status !== "resumed") return { success: false, message: t("admin:ai.interventions.messages.resolutionChanged") };
+    const outcome = await reconcilePackagePaymentRefundAttempt({
+      id: parsed.id,
+      now,
+      secretKey: secret,
+    });
+    revalidatePath("/[lang]/admin/ai", "page");
+    if (outcome.status === "refunded") {
+      return {
+        success: true,
+        message: t("admin:ai.interventions.messages.packagePaymentRefundCompleted"),
+      };
+    }
+    if (outcome.status === "pending") {
+      return {
+        success: true,
+        message: t("admin:ai.interventions.messages.packagePaymentRefundResumed"),
+      };
+    }
+    return {
+      success: false,
+      message: outcome.status === "intervention-required"
+        ? t("admin:ai.interventions.messages.packagePaymentRefundStillRequiresIntervention")
+        : t("admin:ai.interventions.messages.resolutionChanged"),
+    };
+  });
+}
 
 async function verifyCanonicalPaymentIntent(
   stripe: Stripe,

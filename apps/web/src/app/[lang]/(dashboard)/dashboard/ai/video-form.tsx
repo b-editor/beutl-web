@@ -283,28 +283,33 @@ export function VideoForm({
   const audio = options.generateAudio && generateAudio;
   // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
   // 同じ依頼に見え、片方が走っている間もう片方を始められない。
-  const frames = useMemo(
-    () => [firstFrame, lastFrame].filter((frame): frame is File => frame !== null),
-    [firstFrame, lastFrame],
-  );
-  const { contents: frameContents, reading: readingFrames } =
-    useFileFingerprints(frames, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
-  // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
-  // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
-  // 作るので、画面に見えている条件と、その名前で買うものが食い違わない。
+  // モデルが受け取るものだけを読む。非対応モデルへ切り替えたときに、画面から
+  // 隠れた選択中のファイルを依頼の一部として扱わない。
   const sentFirstFrame = options.firstFrame ? firstFrame : null;
   const sentLastFrame =
     sentFirstFrame && options.lastFrame ? lastFrame : null;
-  const firstFrameContent = firstFrame ? frameContents[0] ?? "" : "";
-  const lastFrameContent = lastFrame
-    ? frameContents[firstFrame ? 1 : 0] ?? ""
+  const frames = useMemo(
+    () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
+    [sentFirstFrame, sentLastFrame],
+  );
+  const { contents: frameContents, reading: readingFrames } =
+    useFileFingerprints(frames, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+  const oversizedFrame = [sentFirstFrame, sentLastFrame].some(
+    (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  );
+  // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
+  // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
+  // 作るので、画面に見えている条件と、その名前で買うものが食い違わない。
+  const firstFrameContent = sentFirstFrame ? frameContents[0] ?? "" : "";
+  const lastFrameContent = sentLastFrame
+    ? frameContents[sentFirstFrame ? 1 : 0] ?? ""
     : "";
   // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。文章はここに
   // ある材料から組み立てられるので、材料をそのまま数える。種とフレームは入力欄
   // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
   // 外れるのは安全側だ。同じ名前で別の依頼が届けば断られるだけで、同じ依頼が
   // 二つの名前に割れて二度課金されることはない。
-  const signature = requestSignature([
+  const signature = oversizedFrame ? "" : requestSignature([
     model,
     // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
     // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
@@ -337,12 +342,12 @@ export function VideoForm({
     sentLastFrame ? lastFrameContent : "",
   ]);
   useEffect(() => {
-    if (names.ready && !readingFrames) void names.ensure(signature);
-  }, [names.ready, names, readingFrames, signature]);
+    if (names.ready && !readingFrames && !oversizedFrame) void names.ensure(signature);
+  }, [names.ready, names, readingFrames, signature, oversizedFrame]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
   // 支払い済みの結果を取りに行く道が閉じる。
-  const holdsName = names.holds(signature);
+  const holdsName = !oversizedFrame && names.holds(signature);
   const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
   useEffect(() => {
     if (readingFrames) return;
@@ -359,7 +364,9 @@ export function VideoForm({
     holdsSelectedModel,
     holdsName,
   );
-  const submitBlocked = blocksSubmit(blocked, holdsName) || !modelCanSubmit;
+  const submitBlocked = blocksSubmit(blocked, holdsName) ||
+    oversizedFrame ||
+    !modelCanSubmit;
   const canSubmit = canSubmitAiRequest({
     submitBlocked,
     hasTask: true,
@@ -367,7 +374,7 @@ export function VideoForm({
     taskHasNoModel: models.length === 0 && !holdsName,
     // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
     // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
-    busy: isPending || readingFrames,
+    busy: isPending || readingFrames || oversizedFrame,
   });
   // The same composition the action validates, so the counter measures what the
   // server will.
@@ -388,7 +395,7 @@ export function VideoForm({
     event.preventDefault();
     // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
     // Enter を押したときにボタンが断っているはずの依頼が出ていく。
-    if (!canSubmit || composedPromptTooLong || !names.ready) return;
+    if (!canSubmit || composedPromptTooLong || oversizedFrame || !names.ready) return;
 
     const idempotencyKey = await names.acquireAndCommit(
       signature,
@@ -671,6 +678,7 @@ export function VideoForm({
           disabled={
             submitBlocked ||
             composedPromptTooLong ||
+            oversizedFrame ||
             isPending ||
             readingFrames
           }

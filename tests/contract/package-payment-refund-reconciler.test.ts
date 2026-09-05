@@ -18,7 +18,10 @@ vi.mock("@beutl/db", () => ({
   reschedulePackagePaymentRefundAttempt: mocks.reschedule,
   markPackagePaymentRefundIntervention: mocks.intervention,
 }));
-import { reconcilePackagePaymentRefunds } from "../../packages/api/src/ai/package-payment-refunds";
+import {
+  reconcilePackagePaymentRefundAttempt,
+  reconcilePackagePaymentRefunds,
+} from "../../packages/api/src/ai/package-payment-refunds";
 
 describe("package payment refund reconciler", () => {
   beforeEach(() => {
@@ -66,5 +69,79 @@ describe("package payment refund reconciler", () => {
     } as never);
     expect(result.pending).toBe(1);
     expect(mocks.refundsCreate).not.toHaveBeenCalled();
+  });
+
+  it("reconciles an explicitly selected attempt without consulting the batch window", async () => {
+    mocks.listDue.mockResolvedValue(
+      Array.from({ length: 50 }, (_, index) => ({ id: `older-${index}` })),
+    );
+    mocks.claim.mockResolvedValue({
+      id: "selected",
+      paymentIntentId: "pi_selected",
+      amount: 100,
+      currency: "usd",
+      attempts: 1,
+      userId: "u1",
+      packageId: "p1",
+      customerId: "cus_1",
+    });
+    mocks.retrieve.mockResolvedValue({
+      id: "pi_selected",
+      status: "succeeded",
+      amount: 100,
+      amount_received: 100,
+      currency: "usd",
+      customer: "cus_1",
+      metadata: {
+        beutlPurchaseKind: "package",
+        beutlUserId: "u1",
+        packageId: "p1",
+      },
+    });
+    mocks.refundsList.mockResolvedValue({ data: [], has_more: false });
+    mocks.refundsCreate.mockResolvedValue({ status: "pending" });
+
+    const outcome = await reconcilePackagePaymentRefundAttempt({
+      id: "selected",
+      now: new Date("2026-08-25T00:00:00Z"),
+      stripeClient: {
+        paymentIntents: { retrieve: mocks.retrieve },
+        refunds: { list: mocks.refundsList, create: mocks.refundsCreate },
+      } as never,
+    });
+
+    expect(mocks.listDue).not.toHaveBeenCalled();
+    expect(mocks.claim).toHaveBeenCalledWith(expect.objectContaining({ id: "selected" }));
+    expect(outcome).toEqual({ status: "pending" });
+  });
+
+  it("keeps the first post-resume transient failure retryable", async () => {
+    mocks.claim.mockResolvedValue({
+      id: "resumed",
+      paymentIntentId: "pi_resumed",
+      amount: 100,
+      currency: "usd",
+      attempts: 1,
+      userId: "u1",
+      packageId: "p1",
+      customerId: "cus_1",
+    });
+    mocks.retrieve.mockRejectedValue(new Error("temporary Stripe failure"));
+
+    const outcome = await reconcilePackagePaymentRefundAttempt({
+      id: "resumed",
+      now: new Date("2026-08-25T00:00:00Z"),
+      stripeClient: {
+        paymentIntents: { retrieve: mocks.retrieve },
+        refunds: { list: mocks.refundsList, create: mocks.refundsCreate },
+      } as never,
+    });
+
+    expect(outcome).toEqual({ status: "pending" });
+    expect(mocks.reschedule).toHaveBeenCalledWith(expect.objectContaining({
+      id: "resumed",
+      lastError: "temporary Stripe failure",
+    }));
+    expect(mocks.intervention).not.toHaveBeenCalled();
   });
 });

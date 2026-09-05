@@ -26,6 +26,10 @@ import {
 } from "react";
 import { runAiStream } from "@/lib/ai-event-stream";
 import {
+  MAX_TRANSLATION_CHARACTERS,
+  translationCharacterCount,
+} from "@beutl/api";
+import {
   applyTranslationToCues,
   MAX_GLOSSARY_ENTRIES,
   parseGlossary,
@@ -139,14 +143,20 @@ export function TranslateForm({
   // once, at the end.
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPending || !parsed.ok || targetLanguage === "" || submitBlocked || !names.ready) {
+    if (
+      isPending ||
+      !parsed.ok ||
+      translationTooLong ||
+      targetLanguage === "" ||
+      submitBlocked ||
+      !names.ready
+    ) {
       return;
     }
 
     const idempotencyKey = await names.acquireAndCommit(signature, model, null);
     if (!idempotencyKey) return;
 
-    const glossaryEntries = parseGlossary(glossary);
     const style = {
       ...(Object.keys(glossaryEntries).length > 0
         ? { glossary: glossaryEntries }
@@ -254,6 +264,17 @@ export function TranslateForm({
   // ものが同じでも別の名前になる。
   const charactersPerLine = positiveNumber(maxCharactersPerLine);
   const lines = positiveNumber(maxLines);
+  const glossaryEntries = useMemo(() => parseGlossary(glossary), [glossary]);
+  const translationCharacters = parsed.ok
+    ? translationCharacterCount({
+      segments: parsed.segments,
+      style: Object.keys(glossaryEntries).length > 0
+        ? { glossary: glossaryEntries }
+        : undefined,
+    })
+    : 0;
+  const translationTooLong =
+    parsed.ok && translationCharacters > MAX_TRANSLATION_CHARACTERS;
   const signature = requestSignature([
     model,
     detectedSourceLanguage,
@@ -273,7 +294,7 @@ export function TranslateForm({
     // 語彙集は並べ替えてから数える。サーバーは指紋を取るときに鍵を並べ替える
     // ので、行を入れ替えただけでは同じ依頼——数える順を揃えないと、別の名前で
     // 二度課金される。
-    ...Object.entries(parseGlossary(glossary))
+    ...Object.entries(glossaryEntries)
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .flat(),
   ]);
@@ -291,6 +312,7 @@ export function TranslateForm({
   }, [holdsSelectedModel, model, translateModels]);
   const holdsName = names.holds(signature);
   const submitBlocked = blocksSubmit(blocked, holdsName) ||
+    translationTooLong ||
     !canSubmitModelRequest(
       translateModels,
       model,
@@ -505,7 +527,11 @@ export function TranslateForm({
           className="w-full"
           forceSpinner={isPending}
           disabled={
-            submitBlocked || !parsed.ok || targetLanguage === "" || isPending
+            submitBlocked ||
+            translationTooLong ||
+            !parsed.ok ||
+            targetLanguage === "" ||
+            isPending
           }
         >
           {t("dashboard:ai.translate")}

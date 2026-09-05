@@ -199,6 +199,15 @@
         "operatorRequired": "Operator intervention required",
         "terminalizeAfterRefundProof": "Terminalize after refund proof"
       },
+      "packagePayment": {
+        "title": "Package payment refund interventions",
+        "description": "Package refunds paused after exhaustive retries. Resume performs a fresh canonical Stripe identity check before another refund attempt.",
+        "empty": "No package payment refund interventions.",
+        "attempt": "Refund attempt",
+        "paymentIntent": "PaymentIntent",
+        "operatorRequired": "Operator intervention required",
+        "resumeConfirm": "Recheck Stripe and resume this package refund?"
+      },
       "messages": {
         "invalidInput": "The intervention input is invalid.",
         "reasonAndEvidenceRequired": "Enter a reason and evidence of at least 10 characters each.",
@@ -211,6 +220,9 @@
         "stripeNotConfigured": "Stripe is not configured.",
         "topUpAbsenceRecorded": "The first Stripe absence observation was recorded. Try again after {{retryAt}}.",
         "topUpTerminalized": "The orphaned top-up resolution was terminalized.",
+        "packagePaymentRefundResumed": "Package payment refund rechecked and resumed.",
+        "packagePaymentRefundCompleted": "Package payment refund rechecked and completed.",
+        "packagePaymentRefundStillRequiresIntervention": "The Stripe recheck completed, but this refund still requires operator intervention.",
         "unsafe": "The operation cannot be completed safely: {{reason}}",
         "stripeVerificationFailed": "Stripe verification failed: {{reason}}"
       }

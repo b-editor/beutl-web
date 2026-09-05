@@ -151,3 +151,62 @@ export async function markPackagePaymentRefundIntervention({
     },
   });
 }
+
+/** Lists refund attempts paused for operator intervention. */
+export async function listPackagePaymentRefundInterventions({
+  page = 1,
+  pageSize = 50,
+  prisma,
+}: { page?: number; pageSize?: number; prisma?: PrismaTransaction } = {}) {
+  if (!Number.isSafeInteger(page) || page < 1) {
+    throw new RangeError("Package refund intervention page must be a positive integer");
+  }
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+    throw new RangeError("Package refund intervention page size must be between 1 and 100");
+  }
+  const db = prisma ?? await getDb();
+  const where = { status: "intervention" };
+  const [items, total] = await Promise.all([
+    db.packagePaymentRefundAttempt.findMany({
+      where,
+      orderBy: [{ updatedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.packagePaymentRefundAttempt.count({ where }),
+  ]);
+  return { items, total };
+}
+
+/**
+ * Reopens one paused refund using an exact updatedAt compare-and-swap.
+ * The caller must immediately run the canonical Stripe reconciler after this
+ * transition; no payment/refund identity is accepted from the operator.
+ */
+export async function resumePackagePaymentRefundIntervention({
+  id,
+  expectedUpdatedAt,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  expectedUpdatedAt: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const updated = await db.packagePaymentRefundAttempt.updateMany({
+    where: { id, status: "intervention", updatedAt: expectedUpdatedAt },
+    data: {
+      status: "required",
+      notBefore: now,
+      attempts: 0,
+      lastError: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      updatedAt: now,
+    },
+  });
+  if (updated.count !== 1) return { status: "conflict" as const };
+  return { status: "resumed" as const, updatedAt: now };
+}

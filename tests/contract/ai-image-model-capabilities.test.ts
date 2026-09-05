@@ -138,6 +138,70 @@ describe("what an image model accepts", () => {
     expect(entry?.seed).toBe(true);
   });
 
+  it("never combines capabilities from disjoint provider endpoints", async () => {
+    listModelEndpoints.mockResolvedValue({
+      endpoints: [
+        endpoint({
+          aspect_ratio: { type: "enum", values: ["1:1"] },
+          background: { type: "enum", values: ["auto", "transparent"] },
+          input_references: { type: "range", min: 0, max: 2 },
+        }),
+        endpoint({
+          aspect_ratio: { type: "enum", values: ["16:9"] },
+          background: { type: "enum", values: ["auto", "opaque"] },
+          seed: { type: "range", min: 0, max: 1 },
+          resolution: { type: "enum", values: ["1K", "4K"] },
+        }),
+      ],
+    });
+
+    const entry = (await loadAiImageModelCapabilities(["a/model"]))
+      .get("a/model")!;
+
+    // Preserve the additive wire contract for existing clients. Server-side
+    // validation retains which endpoint supplied each option.
+    expect(entry).toMatchObject({
+      aspectRatios: ["1:1", "16:9"],
+      backgrounds: ["auto", "opaque", "transparent"],
+      seed: true,
+      maxReferenceImages: 2,
+      resolution: true,
+    });
+    expect(unsupportedImageRequestReason(entry, {
+      aspectRatio: "1:1",
+      background: "transparent",
+      referenceImages: 2,
+    })).toBeNull();
+    expect(unsupportedImageRequestReason(entry, {
+      aspectRatio: "16:9",
+      background: "opaque",
+      seed: 7,
+      resolution: true,
+    })).toBeNull();
+
+    for (const request of [
+      { aspectRatio: "1:1", seed: 7 },
+      { aspectRatio: "1:1", resolution: true },
+      { aspectRatio: "16:9", background: "transparent" as const },
+      { aspectRatio: "16:9", referenceImages: 1 },
+    ]) {
+      expect(unsupportedImageRequestReason(entry, request)).not.toBeNull();
+    }
+
+    expect(isImageModelUsable(entry, {
+      referenceImages: true,
+      background: "transparent",
+    })).toBe(true);
+    expect(isImageModelUsable(entry, {
+      referenceImages: true,
+      resolution: true,
+    })).toBe(false);
+    expect(isImageModelUsable(entry, {
+      referenceImages: true,
+      background: "opaque",
+    })).toBe(false);
+  });
+
   it("asks once per model and reuses the answer", async () => {
     listModelEndpoints.mockResolvedValue({ endpoints: GPT_IMAGE_1 });
 

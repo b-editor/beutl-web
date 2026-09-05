@@ -60,6 +60,7 @@ export const auditLogActions = {
     storageMultipartInterventionTerminalized: "admin.storageMultipartInterventionTerminalized",
     storageUploadInterventionResumed: "admin.storageUploadInterventionResumed",
     storageUploadInterventionTerminalized: "admin.storageUploadInterventionTerminalized",
+    packagePaymentRefundInterventionResumed: "admin.packagePaymentRefundInterventionResumed",
   },
 } as const;
 

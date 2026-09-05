@@ -28,20 +28,28 @@ import {
   getStorageMultipartInterventions,
   getStorageUploadInterventions,
   getTopUpCheckoutInterventions,
+  getPackagePaymentRefundInterventions,
 } from "./queries";
 import { StorageMultipartInterventions, StorageUploadInterventions } from "./storage-interventions";
 import { TopUpResolutionInterventions } from "./topup-resolution-interventions";
+import { PackagePaymentRefundInterventions } from "./package-payment-refund-interventions";
+import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { Pagination } from "@/components/admin/pagination";
+
+const REFUND_INTERVENTION_PAGE_SIZE = 25;
 
 // Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
+  searchParams: Promise<{ page?: string | string[] }>;
 }) {
   await requireAdmin();
   const { lang } = await props.params;
+  const { page } = await props.searchParams;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, storageUploadInterventions, topUpInterventions] =
+  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, storageUploadInterventions, topUpInterventions, packagePaymentRefundPage] =
     await Promise.all([
       getAiSettings(),
       getAiOperationModels(),
@@ -50,6 +58,14 @@ export default async function Page(props: {
       getStorageMultipartInterventions(),
       getStorageUploadInterventions(),
       getTopUpCheckoutInterventions(),
+      fetchPaginated(
+        (pageNumber) => getPackagePaymentRefundInterventions(
+          pageNumber,
+          REFUND_INTERVENTION_PAGE_SIZE,
+        ),
+        parsePageParam(page),
+        REFUND_INTERVENTION_PAGE_SIZE,
+      ),
     ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
   // An operation with nothing registered still offers the built-in model, and
@@ -151,6 +167,23 @@ export default async function Page(props: {
           </p>
         </div>
         <TopUpResolutionInterventions lang={lang} rows={topUpInterventions} />
+      </section>
+      <section className="flex flex-col gap-3 rounded-lg border p-4">
+        <div>
+          <h2 className="text-lg font-semibold">{t("admin:ai.interventions.packagePayment.title")}</h2>
+          <p className="text-sm text-muted-foreground">{t("admin:ai.interventions.packagePayment.description")}</p>
+        </div>
+        <PackagePaymentRefundInterventions
+          lang={lang}
+          rows={packagePaymentRefundPage.result.items}
+        />
+        <Pagination
+          basePath={`/${lang}/admin/ai`}
+          currentPage={packagePaymentRefundPage.currentPage}
+          totalPages={packagePaymentRefundPage.totalPages}
+          previousLabel={t("admin:common.previousPage")}
+          nextLabel={t("admin:common.nextPage")}
+        />
       </section>
 
       {/* The allowance and every operation's models are committed together by

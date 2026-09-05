@@ -20,6 +20,9 @@ import {
 //
 // Unlike video, this is one request per model rather than one for the whole
 // list: the provider publishes image capabilities per model endpoint.
+// Fields in this public object are the union used to populate existing clients;
+// they do not promise that their full Cartesian product is valid. The server
+// retains endpoint correlation internally and validates the complete request.
 export type AiImageModelCapabilities = {
   modelId: string;
   aspectRatios: AiImageAspectRatio[];
@@ -63,6 +66,16 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 
+// The public capability object remains the compact union consumed by existing
+// Web and C# clients. Request validation needs the correlation that union loses,
+// so loaded objects retain their normalized provider endpoint shapes here without
+// adding fields to the wire contract.
+type ImageEndpointRequestShape = Omit<AiImageModelCapabilities, "modelId">;
+const endpointRequestShapes = new WeakMap<
+  AiImageModelCapabilities,
+  readonly ImageEndpointRequestShape[]
+>();
+
 export function clearAiImageModelCapabilitiesCache(): void {
   cache.clear();
 }
@@ -105,9 +118,52 @@ function enumValues(descriptor: unknown): string[] | null {
   return null;
 }
 
-// A model is served by several provider endpoints and the router picks one that
-// takes the request, so what the model accepts is the union of what its
-// endpoints accept.
+function toEndpointRequestShape(
+  supportedParameters: Record<string, unknown>,
+  modelPublishesAspectRatios: boolean,
+): ImageEndpointRequestShape {
+  const supported = new Set(Object.keys(supportedParameters));
+  const values = new Map<string, Set<string>>();
+  for (const [name, descriptor] of Object.entries(supportedParameters)) {
+    const listed = enumValues(descriptor);
+    if (listed) values.set(name, new Set(listed));
+  }
+
+  const accepts = (name: string, value: string) => {
+    const known = values.get(name);
+    return known ? known.has(value) : supported.has(name);
+  };
+  const listedRatios = values.get("aspect_ratio");
+  const aspectRatios = listedRatios && listedRatios.size > 0
+    ? AI_IMAGE_ASPECT_RATIOS.filter((ratio) => listedRatios.has(ratio))
+    : supported.has("aspect_ratio") || !modelPublishesAspectRatios
+      ? [...AI_IMAGE_ASPECT_RATIOS]
+      : [];
+  const referenceMaximum = rangeMaximum(
+    supportedParameters.input_references,
+  );
+  const inputReferences = supported.has("input_references");
+
+  return {
+    aspectRatios,
+    backgrounds: AI_IMAGE_BACKGROUNDS.filter(
+      (value) => value === "auto" || accepts("background", value),
+    ),
+    seed: supported.has("seed"),
+    inputReferences,
+    maxReferenceImages: inputReferences
+      ? Math.min(
+          referenceMaximum ?? AI_MAX_IMAGE_REFERENCES,
+          AI_MAX_IMAGE_REFERENCES,
+        )
+      : 0,
+    resolution: accepts("resolution", UPSCALE_RESOLUTION),
+  };
+}
+
+// The public view is a union so existing clients retain every individual
+// choice the router can serve. The endpoint shapes attached below preserve
+// which choices can be made together for server-side pre-reservation checks.
 function toCapabilities(
   modelId: string,
   endpoints: { supportedParameters: Record<string, unknown> }[],
@@ -149,7 +205,7 @@ function toCapabilities(
     return known ? known.has(value) : supported.has(name);
   };
 
-  return {
+  const capabilities: AiImageModelCapabilities = {
     modelId,
     // A model that publishes no ratios states no restriction, which leaves
     // every ratio this service knows how to ask for on offer.
@@ -172,6 +228,16 @@ function toCapabilities(
     // Upscaling asks for 4K; a model whose sizes stop at 2K cannot serve it.
     resolution: accepts("resolution", UPSCALE_RESOLUTION),
   };
+  endpointRequestShapes.set(
+    capabilities,
+    endpoints.map((endpoint) =>
+      toEndpointRequestShape(
+        endpoint.supportedParameters ?? {},
+        ratios.size > 0,
+      )
+    ),
+  );
+  return capabilities;
 }
 
 async function loadOne(
@@ -249,6 +315,48 @@ export function unsupportedImageRequestReason(
   },
 ): UnsupportedImageRequestReason | null {
   if (!capabilities) return null;
+  const unionReason = unsupportedImageRequestReasonForShape(
+    capabilities,
+    request,
+  );
+  if (unionReason) return unionReason;
+
+  const endpointShapes = endpointRequestShapes.get(capabilities);
+  if (!endpointShapes) return null;
+  for (const endpoint of endpointShapes) {
+    if (unsupportedImageRequestReasonForShape(endpoint, request) === null) {
+      return null;
+    }
+  }
+
+  // Every individual value exists in the public union, but no provider
+  // endpoint accepts this combination. The caller exposes one generic
+  // unsupported-request error, so use the first endpoint's deterministic
+  // reason without widening the public reason contract.
+  return endpointShapes.length > 0
+    ? unsupportedImageRequestReasonForShape(endpointShapes[0], request) ??
+      "aspectRatio"
+    : request.referenceImages !== undefined && request.referenceImages > 0
+      ? "referenceImages"
+      : request.resolution === true
+        ? "resolution"
+        : request.seed !== undefined
+          ? "seed"
+          : request.background !== undefined && request.background !== "auto"
+            ? "background"
+            : "aspectRatio";
+}
+
+function unsupportedImageRequestReasonForShape(
+  capabilities: ImageEndpointRequestShape,
+  request: {
+    aspectRatio?: string;
+    background?: AiImageBackground;
+    seed?: number;
+    referenceImages?: number;
+    resolution?: boolean;
+  },
+): UnsupportedImageRequestReason | null {
   if (
     request.aspectRatio !== undefined &&
     !capabilities.aspectRatios.includes(request.aspectRatio as AiImageAspectRatio)
@@ -290,17 +398,35 @@ export function isImageModelUsable(
   } = {},
 ): boolean {
   if (!capabilities) return true;
-  if (capabilities.aspectRatios.length === 0) return false;
+  const endpointShapes = endpointRequestShapes.get(capabilities);
+  return endpointShapes
+    ? endpointShapes.some((endpoint) =>
+        isImageEndpointUsable(endpoint, requires)
+      )
+    : isImageEndpointUsable(capabilities, requires);
+}
+
+function isImageEndpointUsable(
+  capabilities: ImageEndpointRequestShape,
+  requires: {
+    referenceImages?: boolean;
+    resolution?: boolean;
+    background?: AiImageBackground | undefined;
+  },
+): boolean {
+  // Generation always supplies an aspect ratio. Edit operations identify
+  // themselves by requiring an input image and do not send that parameter.
+  if (
+    requires.referenceImages !== true &&
+    capabilities.aspectRatios.length === 0
+  ) {
+    return false;
+  }
   if (requires.referenceImages === true && capabilities.maxReferenceImages < 1) {
     return false;
   }
   if (requires.resolution === true && !capabilities.resolution) return false;
-  if (
-    requires.background !== undefined &&
-    requires.background !== "auto" &&
-    !capabilities.backgrounds.includes(requires.background)
-  ) {
-    return false;
-  }
-  return true;
+  return requires.background === undefined ||
+    requires.background === "auto" ||
+    capabilities.backgrounds.includes(requires.background);
 }
