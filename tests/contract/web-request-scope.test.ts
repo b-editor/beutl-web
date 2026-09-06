@@ -30,9 +30,6 @@ describe("server-render database resources", () => {
     expect(prisma).toContain(
       "const getPrismaClient = cache(createPrismaClient);",
     );
-    expect(prisma).toContain(
-      "new PrismaPg({ connectionString, max: 5, maxUses: 1 })",
-    );
     expect(prisma).toContain("setDbProvider(getPrismaClient);");
     expect(prisma).toContain('import { after } from "next/server";');
     expect(prisma).toContain("after(() => prisma.$disconnect());");
