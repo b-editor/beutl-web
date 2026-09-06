@@ -15,7 +15,7 @@ export async function AuthLegalLinks({
 
   if (agreement) {
     return (
-      <p className={cn("text-right text-xs leading-5 text-muted-foreground", className)}>
+      <p className={cn("w-full text-left text-xs leading-5 text-muted-foreground", className)}>
         {t("auth:legalNotice.prefix")}
         <Link className="text-foreground underline underline-offset-4" href={`/${lang}/docs/terms`}>
           {t("terms")}
