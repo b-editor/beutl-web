@@ -70,11 +70,15 @@ const GPT_IMAGE_ENDPOINTS = imageEndpoints("openai/gpt-image-1", [
   { billable: "output_image", unit: "token", cost_usd: 0.00004 },
 ], {
   input_references: { type: "range", min: 0, max: 16 },
+  background: { type: "enum", values: ["auto", "transparent"] },
 });
 
 const SEEDREAM_ENDPOINTS = imageEndpoints("bytedance-seed/seedream-4.5", [
   { billable: "output_image", unit: "image", cost_usd: 0.04 },
-]);
+], {
+  input_references: { type: "range", min: 0, max: 1 },
+  resolution: { type: "enum", values: ["1K", "2K", "4K"] },
+});
 
 const WHISPER_MODEL = modelPayload("openai/whisper-large-v3-turbo", {
   prompt: "0.00000333",
@@ -330,6 +334,70 @@ describe("AI provider cost estimates", () => {
       // would incorrectly report 0.46464 for a request it cannot serve.
       expect(estimate.usdMin).toBeCloseTo(0.08448, 8);
       expect(estimate.usdMax).toBeCloseTo(0.14784, 8);
+    }
+  });
+
+  it.each([
+    [
+      "image.edit.remove_background",
+      {
+        input_references: { type: "range", min: 0, max: 1 },
+        background: { type: "enum", values: ["auto", "transparent"] },
+      },
+      {
+        input_references: { type: "range", min: 0, max: 1 },
+        background: { type: "enum", values: ["auto", "opaque"] },
+      },
+    ],
+    [
+      "image.edit.upscale",
+      {
+        input_references: { type: "range", min: 0, max: 1 },
+        resolution: { type: "enum", values: ["1K", "4K"] },
+      },
+      {
+        input_references: { type: "range", min: 0, max: 1 },
+        resolution: { type: "enum", values: ["1K", "2K"] },
+      },
+    ],
+    [
+      "image.edit.restyle",
+      { input_references: { type: "range", min: 0, max: 1 } },
+      {},
+    ],
+  ])("excludes expensive endpoints that cannot serve %s", async (
+    operation,
+    supportedParameters,
+    unsupportedParameters,
+  ) => {
+    const modelId = `vendor/${operation.replaceAll(".", "-")}`;
+    const supported = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.00001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.00004 },
+    ], supportedParameters).endpoints[0];
+    const unsupportedExpensive = imageEndpoints(modelId, [
+      { billable: "input_image", unit: "token", cost_usd: 0.001 },
+      { billable: "output_image", unit: "token", cost_usd: 0.004 },
+    ], unsupportedParameters).endpoints[0];
+    const response = {
+      id: modelId,
+      endpoints: [supported, unsupportedExpensive],
+    };
+    stubFetch((url) =>
+      url.includes(`/images/models/vendor/${modelId.split("/")[1]}/endpoints`)
+        ? jsonResponse(response)
+        : jsonResponse({ error: { code: 404, message: "Resource not found" } }, 404)
+    );
+
+    const result = await loadAiCostEstimates({
+      modelsOf: (candidate) => candidate === operation ? [modelId] : [],
+    });
+
+    const estimate = result.entries[0]?.estimate;
+    expect(estimate?.status).toBe("estimated");
+    if (estimate?.status === "estimated") {
+      expect(estimate.usdMin).toBeCloseTo(0.0528, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.0528, 8);
     }
   });
 

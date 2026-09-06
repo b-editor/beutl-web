@@ -28,6 +28,7 @@ import {
   type ImagePricingEntry,
 } from "./cost-estimate";
 import {
+  AI_IMAGE_ASPECT_RATIOS,
   AI_MAX_IMAGE_REFERENCES,
   AI_PRICING_CATALOG,
   AI_VIDEO_RESOLUTIONS,
@@ -223,10 +224,84 @@ function imageEndpointReferenceMaximum(
   return AI_MAX_IMAGE_REFERENCES;
 }
 
+function imageEndpointEnumValues(
+  supportedParameters: unknown,
+  name: string,
+): string[] | null | undefined {
+  if (
+    typeof supportedParameters !== "object" ||
+    supportedParameters === null ||
+    !(name in supportedParameters)
+  ) {
+    return undefined;
+  }
+  const descriptor = (supportedParameters as Record<string, unknown>)[name];
+  if (
+    typeof descriptor === "object" &&
+    descriptor !== null &&
+    "type" in descriptor &&
+    descriptor.type === "enum" &&
+    "values" in descriptor &&
+    Array.isArray(descriptor.values)
+  ) {
+    return descriptor.values.filter(
+      (value): value is string => typeof value === "string",
+    );
+  }
+  return null;
+}
+
+function imageEndpointAccepts(
+  supportedParameters: unknown,
+  name: string,
+  value: string,
+): boolean {
+  if (
+    typeof supportedParameters !== "object" ||
+    supportedParameters === null ||
+    !(name in supportedParameters)
+  ) {
+    return false;
+  }
+  const values = imageEndpointEnumValues(supportedParameters, name);
+  return values === null || values?.includes(value) === true;
+}
+
+function imageEndpointSupportsOperation(
+  supportedParameters: unknown,
+  operation: string,
+  modelPublishesAspectRatios: boolean,
+): boolean {
+  if (operation === "image.generate") {
+    const ratios = imageEndpointEnumValues(
+      supportedParameters,
+      "aspect_ratio",
+    );
+    return ratios === undefined
+      ? !modelPublishesAspectRatios
+      : ratios === null || ratios.length === 0 || ratios.some((ratio) =>
+          (AI_IMAGE_ASPECT_RATIOS as readonly string[]).includes(ratio)
+        );
+  }
+  if (imageEndpointReferenceMaximum(supportedParameters) < 1) return false;
+  if (operation === "image.edit.remove_background") {
+    return imageEndpointAccepts(
+      supportedParameters,
+      "background",
+      "transparent",
+    );
+  }
+  if (operation === "image.edit.upscale") {
+    return imageEndpointAccepts(supportedParameters, "resolution", "4K");
+  }
+  return true;
+}
+
 async function estimateImageOperation(
   model: string,
+  operation: string,
   referenceImages: number,
-  correlateEndpointReferences: boolean,
+  correlateEndpointCapabilities: boolean,
   options: { force: boolean; now: number },
 ): Promise<AiCostEstimate> {
   const parts = splitModelId(model);
@@ -246,7 +321,20 @@ async function estimateImageOperation(
     return { status: "unknown", reason: outcome.failure };
   }
   const response = outcome.value as ImageModelEndpointsResponse;
-  const endpoints: ImagePricingEntry[][] = response.endpoints.map((endpoint) =>
+  const modelPublishesAspectRatios = response.endpoints.some((endpoint) =>
+    (imageEndpointEnumValues(endpoint.supportedParameters, "aspect_ratio") ?? [])
+      .length > 0
+  );
+  const applicable = correlateEndpointCapabilities
+    ? response.endpoints.filter((endpoint) =>
+        imageEndpointSupportsOperation(
+          endpoint.supportedParameters,
+          operation,
+          modelPublishesAspectRatios,
+        )
+      )
+    : response.endpoints;
+  const endpoints: ImagePricingEntry[][] = applicable.map((endpoint) =>
     endpoint.pricing.map((entry) => ({
       billable: entry.billable,
       unit: entry.unit,
@@ -256,9 +344,9 @@ async function estimateImageOperation(
   return estimateImageCost({
     endpoints,
     referenceImages,
-    ...(correlateEndpointReferences
+    ...(correlateEndpointCapabilities && operation === "image.generate"
       ? {
-          referenceImagesByEndpoint: response.endpoints.map((endpoint) =>
+          referenceImagesByEndpoint: applicable.map((endpoint) =>
             imageEndpointReferenceMaximum(endpoint.supportedParameters)
           ),
         }
@@ -427,11 +515,12 @@ async function estimateOperation(
     // most expensive valid request shape.
     return await estimateImageOperation(
       model,
+      operation,
       operation === "image.generate"
         ? imageCapabilities.get(model)?.maxReferenceImages ??
           AI_MAX_IMAGE_REFERENCES
         : 1,
-      operation === "image.generate" && imageCapabilities.has(model),
+      operation !== "image.generate" || imageCapabilities.has(model),
       options,
     );
   }
