@@ -1,14 +1,23 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-
-export const metadata: Metadata = {
-  title: "利用規約 | Beutl",
-  description: "Beutlのオンラインサービスに適用される利用規約です。",
-};
+import { EnglishTermsPage } from "./english";
 
 type Props = {
   params: Promise<{ lang: string }>;
 };
+
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const { lang } = await props.params;
+  return lang === "en"
+    ? {
+        title: "Terms of Service | Beutl",
+        description: "Terms that apply to Beutl online services.",
+      }
+    : {
+        title: "利用規約 | Beutl",
+        description: "Beutlのオンラインサービスに適用される利用規約です。",
+      };
+}
 
 const sectionClass =
   "mt-10 scroll-m-20 text-2xl font-semibold tracking-tight";
@@ -20,7 +29,12 @@ const linkClass = "underline underline-offset-4 hover:text-primary";
 
 export default async function Page(props: Props) {
   const { lang } = await props.params;
+  if (lang === "en") return <EnglishTermsPage lang={lang} />;
 
+  return <JapaneseTermsPage lang={lang} />;
+}
+
+function JapaneseTermsPage({ lang }: { lang: string }) {
   return (
     <article className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
       <h1 className="scroll-m-20 border-b pb-2 text-3xl font-semibold tracking-tight first:mt-0">

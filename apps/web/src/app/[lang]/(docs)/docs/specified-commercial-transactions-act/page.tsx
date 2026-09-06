@@ -1,13 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-
-export const metadata: Metadata = {
-  title: "特定商取引法に基づく表記 | Beutl",
-};
+import { EnglishCommercialTransactionsPage } from "./english";
 
 type Props = {
   params: Promise<{ lang: string }>;
 };
+
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const { lang } = await props.params;
+  return {
+    title:
+      lang === "en"
+        ? "Disclosure under the Act on Specified Commercial Transactions | Beutl"
+        : "特定商取引法に基づく表記 | Beutl",
+  };
+}
 
 const headingClass =
   "mt-10 scroll-m-20 text-2xl font-semibold tracking-tight";
@@ -40,7 +47,14 @@ const rows = [
 
 export default async function Page(props: Props) {
   const { lang } = await props.params;
+  if (lang === "en") {
+    return <EnglishCommercialTransactionsPage lang={lang} />;
+  }
 
+  return <JapaneseCommercialTransactionsPage lang={lang} />;
+}
+
+function JapaneseCommercialTransactionsPage({ lang }: { lang: string }) {
   return (
     <article className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
       <h1 className="scroll-m-20 border-b pb-2 text-3xl font-semibold tracking-tight first:mt-0">

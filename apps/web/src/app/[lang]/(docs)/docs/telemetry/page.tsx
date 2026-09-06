@@ -1,16 +1,32 @@
 import type { Metadata } from "next";
+import { EnglishTelemetryPage } from "./english";
 
-export const metadata: Metadata = {
-  title: "テレメトリーポリシー | Beutl",
-  description: "Beutlデスクトップアプリのテレメトリーについて説明します。",
+type Props = {
+  params: Promise<{ lang: string }>;
 };
+
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const { lang } = await props.params;
+  return lang === "en"
+    ? {
+        title: "Telemetry Policy | Beutl",
+        description: "Telemetry collected by the Beutl desktop application.",
+      }
+    : {
+        title: "テレメトリーポリシー | Beutl",
+        description: "Beutlデスクトップアプリのテレメトリーについて説明します。",
+      };
+}
 
 const headingClass =
   "mt-10 scroll-m-20 text-2xl font-semibold tracking-tight";
 const listClass = "my-6 ml-6 list-disc [&>li]:mt-2";
 const linkClass = "underline underline-offset-4 hover:text-primary";
 
-export default function Page() {
+export default async function Page(props: Props) {
+  const { lang } = await props.params;
+  if (lang === "en") return <EnglishTelemetryPage />;
+
   return (
     <article className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
       <h1 className="scroll-m-20 border-b pb-2 text-3xl font-semibold tracking-tight first:mt-0">
