@@ -36,8 +36,7 @@ export async function getAiUsageReport({
   now: Date;
 }) {
   const since = aiUsageRangeStart(range, now);
-  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
-  // レポート全体で 1 つのクライアントを共有する。
+  // Explicitly share the render-scoped client across the entire report.
   const prisma = await getDb();
 
   const [

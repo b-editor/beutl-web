@@ -11,8 +11,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const { lang } = params;
   const { t } = await getTranslation(lang);
 
-  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
-  // 3 つのクエリで 1 つのクライアントを共有する。
+  // Explicitly share the render-scoped client across these parallel queries.
   const prisma = await getDb();
   // listAuditLogs は絞り込みなしの total を返すため、総数は別クエリを発行せず流用する。
   const [userCount, openFeedbackCount, recentLogs] = await Promise.all([

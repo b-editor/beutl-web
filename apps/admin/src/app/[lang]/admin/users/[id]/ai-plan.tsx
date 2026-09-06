@@ -43,8 +43,7 @@ export async function AiPlanSection({
   userId: string;
 }) {
   const { t } = await getTranslation(lang);
-  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
-  // このセクションのクエリで 1 つのクライアントを共有する。
+  // Explicitly share the render-scoped client across this section's queries.
   const prisma = await getDb();
   const [account, subscription, jobs, transactions, settings, intervention] =
     await Promise.all([

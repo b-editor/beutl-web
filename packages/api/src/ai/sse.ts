@@ -1,5 +1,3 @@
-import { trackDbProviderScopeTask } from "@beutl/db/provider";
-
 // Sending an answer while it is still being worked out.
 //
 // A caller asks for this with `Accept: text/event-stream`, and everything that
@@ -46,7 +44,7 @@ export function eventStreamResponse(
         HEARTBEAT_INTERVAL_MS,
       );
 
-      const producer = (async () => {
+      void (async () => {
         try {
           await run((event, data) =>
             write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
@@ -70,7 +68,6 @@ export function eventStreamResponse(
           }
         }
       })();
-      void trackDbProviderScopeTask(producer);
     },
   });
 

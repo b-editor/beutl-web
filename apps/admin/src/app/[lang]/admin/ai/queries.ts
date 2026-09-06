@@ -86,8 +86,7 @@ export const getAiEconomics = cache(async () => {
   ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
 
-  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
-  // 両方のオファー取得で 1 つのクライアントを共有する。
+  // Explicitly share the render-scoped client across both offer reads.
   const prisma = await getDb();
   const [pro, topUp, costs] = await Promise.all([
     resolveOfferPricing({ kind: "pro", prisma }),

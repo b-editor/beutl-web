@@ -3,7 +3,6 @@ import {
   existsUserPaymentHistory,
   findFileForContentAccess,
 } from "@beutl/db";
-import { releaseCurrentDbProviderClient } from "@beutl/db/provider-scope";
 import { tryGetUserIdFromHeaders } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
@@ -53,9 +52,6 @@ export async function GET(
   });
 
   if (access.outcome === "allowed") {
-    // Authorization is the last database operation on this path. Do not retain
-    // Prisma's compiler and pool while a potentially large R2 body is streamed.
-    await releaseCurrentDbProviderClient();
     const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
     const object = await bucket.get(file.objectKey);
     if (!object) {

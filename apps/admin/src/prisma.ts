@@ -1,12 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { hasDbProviderScope, setDbProvider } from "@beutl/db";
+import { setDbProvider } from "@beutl/db";
 import { after } from "next/server";
 import { cache } from "react";
 
-// OpenNext (Cloudflare Workers) 用の PrismaClient 生成を @beutl/db に登録する。
-// Hyperdrive の per-request 接続モデル (maxUses:1) に合わせ、毎リクエスト新規生成する。
+// Register a lazy OpenNext factory without reusing request-bound I/O across
+// Worker invocations. The React cache below deduplicates Server Component calls.
 const createPrismaClient = async () => {
   const { env } = await getCloudflareContext({ async: true });
 
@@ -21,14 +21,12 @@ const createPrismaClient = async () => {
 
   const adapter = new PrismaPg({ connectionString, maxUses: 1 });
   const prisma = new PrismaClient({ adapter });
-  if (!hasDbProviderScope()) {
-    after(() => prisma.$disconnect());
-  }
+  after(() => prisma.$disconnect());
   return prisma;
 };
 
-// React handles RSC renders; the production Worker wrapper also covers Route
-// Handlers and Server Actions.
+// OpenNext recommends React cache for sharing one Prisma client throughout a
+// Server Component render. Calls outside that render create their own client.
 const getPrismaClient = cache(createPrismaClient);
 
 setDbProvider(getPrismaClient);

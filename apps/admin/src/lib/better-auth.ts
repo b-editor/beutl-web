@@ -173,8 +173,8 @@ async function createAuthWithPrisma() {
   });
 }
 
-// Better Auth closes over its Prisma adapter. React's server cache keeps the
-// instance within one request instead of retaining that adapter globally.
+// Better Auth closes over its Prisma adapter. React shares the instance within
+// one Server Component render without retaining that adapter globally.
 export const getAuth = cache(createAuthWithPrisma);
 
 export const auth = {

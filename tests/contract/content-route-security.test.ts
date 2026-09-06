@@ -12,15 +12,11 @@ const authMocks = vi.hoisted(() => ({
 const bucketMocks = vi.hoisted(() => ({
   get: vi.fn(),
 }));
-const lifecycleMocks = vi.hoisted(() => ({
-  releaseCurrentDbProviderClient: vi.fn(),
-}));
 
 vi.mock("@beutl/db", () => dbMocks);
 vi.mock("@beutl/api", () => ({
   tryGetUserIdFromHeaders: authMocks.tryGetUserIdFromHeaders,
 }));
-vi.mock("@beutl/db/provider-scope", () => lifecycleMocks);
 vi.mock("@/lib/better-auth", () => ({
   auth: {
     api: {
@@ -80,7 +76,6 @@ describe("content route security", () => {
     authMocks.getSession.mockResolvedValue(null);
     authMocks.tryGetUserIdFromHeaders.mockResolvedValue(null);
     dbMocks.existsUserPaymentHistory.mockResolvedValue(false);
-    lifecycleMocks.releaseCurrentDbProviderClient.mockResolvedValue(undefined);
   });
 
   it("hides denied file existence behind a no-store 404", async () => {
@@ -110,7 +105,6 @@ describe("content route security", () => {
     expect(response.headers.get("Content-Security-Policy")).toBe(
       "default-src 'none'; sandbox",
     );
-    expect(lifecycleMocks.releaseCurrentDbProviderClient).not.toHaveBeenCalled();
     expect(bucketMocks.get).not.toHaveBeenCalled();
   });
 
@@ -128,10 +122,6 @@ describe("content route security", () => {
 
     const response = await requestContent();
 
-    expect(lifecycleMocks.releaseCurrentDbProviderClient).toHaveBeenCalledOnce();
-    expect(
-      lifecycleMocks.releaseCurrentDbProviderClient.mock.invocationCallOrder[0],
-    ).toBeLessThan(bucketMocks.get.mock.invocationCallOrder[0]);
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe(
       "application/octet-stream",

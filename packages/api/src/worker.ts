@@ -2,10 +2,7 @@
 // 同一ドメイン・パス分割 (beutl.beditor.net/api/v{1,2,3}/*) で受ける。
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import {
-  runWithDbProviderResponseScope,
-  runWithDbProviderScope,
-} from "@beutl/db/provider-scope";
+import { setDbProvider } from "@beutl/db";
 import {
   boundedBody,
   apiRequestBodyLimit,
@@ -57,29 +54,10 @@ export interface Env {
 type ExecutionContextLike = {
   waitUntil(promise: Promise<unknown>): void;
 };
-type ApiExecutionContext = Parameters<typeof api.fetch>[2];
 
 type ScheduledControllerLike = {
   scheduledTime: number;
 };
-
-function fulfilledValue<T>(result: PromiseSettledResult<T>): T {
-  if (result.status === "rejected") throw result.reason;
-  return result.value;
-}
-
-function withWaitUntil<T extends ExecutionContextLike>(
-  context: T,
-  waitUntil: (promise: Promise<unknown>) => void,
-): T {
-  return new Proxy(context, {
-    get(target, property, receiver) {
-      if (property === "waitUntil") return waitUntil;
-      const value = Reflect.get(target, property, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-}
 
 // Hyperdrive の per-request 接続モデル (maxUses:1) に合わせ、毎リクエスト新規生成する。
 // モジュールスコープで PrismaClient を保持しない (isolate 跨ぎのリーク防止)。
@@ -100,6 +78,7 @@ function configureRuntime(env: Env): void {
       process.env[key] = value;
     }
   }
+  setDbProvider(createProvider(env));
   if (env.BEUTL_R2_BUCKET) {
     setR2BucketProvider(() => env.BEUTL_R2_BUCKET as R2BucketLike);
   }
@@ -153,11 +132,7 @@ function withBoundedBody(
 }
 
 export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    context?: ExecutionContextLike,
-  ): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     // Bound the body before routing. Some v1 handlers parse JSON before auth,
     // so declared and streamed sizes must be rejected at the Worker boundary.
     let bodyLimitExceeded = false;
@@ -173,30 +148,18 @@ export default {
     // process.env へコピーする。v1/account (JWT) や v1/app (バージョン) は
     // process.env を直接参照するため、これがないと独立 Worker で undefined になる。
     configureRuntime(env);
-    return await runWithDbProviderResponseScope(
-      createProvider(env),
-      async (waitUntil) => {
-        try {
-          const response = await api.fetch(
-            bounded,
-            env,
-            context
-              ? (withWaitUntil(context, waitUntil) as ApiExecutionContext)
-              : undefined,
-          );
-          // Hono's JSON parser can turn a stream error into a generic 400 before
-          // the endpoint sees it. The outer stream marker still gives the Worker
-          // an unambiguous 413 response for chunked bodies.
-          return bodyLimitExceeded
-            ? await fileTooLargeApiResponse()
-            : response;
-        } catch (error) {
-          if (bodyLimitExceeded) return await fileTooLargeApiResponse();
-          throw error;
-        }
-      },
-      context?.waitUntil.bind(context),
-    );
+    try {
+      const response = await api.fetch(bounded, env);
+      // Hono's JSON parser can turn a stream error into a generic 400 before
+      // the endpoint sees it. The outer stream marker still gives the Worker
+      // an unambiguous 413 response for chunked bodies.
+      return bodyLimitExceeded
+        ? await fileTooLargeApiResponse()
+        : response;
+    } catch (error) {
+      if (bodyLimitExceeded) return await fileTooLargeApiResponse();
+      throw error;
+    }
   },
   async scheduled(
     controller: ScheduledControllerLike,
@@ -204,72 +167,58 @@ export default {
     context: ExecutionContextLike,
   ): Promise<void> {
     configureRuntime(env);
+    const scheduledAt = new Date(controller.scheduledTime);
+    // Duplicate top-up and package-payment refunds may be created by checkout
+    // recovery. Let both refund workers finish before cleanup consumes their
+    // durable resolution rows, while keeping unrelated reconcilers parallel.
+    const topUpDuplicateRefunds = reconcileTopUpDuplicateRefunds(
+      scheduledAt,
+      env.STRIPE_SECRET_KEY,
+    );
+    const packagePaymentRefunds = reconcilePackagePaymentRefunds(
+      scheduledAt,
+      env.STRIPE_SECRET_KEY,
+    );
+    const stripeCheckoutCleanups = Promise.all([
+      topUpDuplicateRefunds,
+      packagePaymentRefunds,
+    ]).then(() =>
+      reconcileStripeCheckoutCleanups(scheduledAt, env.STRIPE_SECRET_KEY),
+    );
     context.waitUntil(
-      runWithDbProviderScope(createProvider(env), async () => {
-        const scheduledAt = new Date(controller.scheduledTime);
-        // Duplicate top-up and package-payment refunds may be created by
-        // checkout recovery. Let both refund workers finish before cleanup
-        // consumes their durable resolution rows, while keeping unrelated
-        // reconcilers parallel.
-        const topUpDuplicateRefunds = reconcileTopUpDuplicateRefunds(
-          scheduledAt,
-          env.STRIPE_SECRET_KEY,
-        );
-        const packagePaymentRefunds = reconcilePackagePaymentRefunds(
-          scheduledAt,
-          env.STRIPE_SECRET_KEY,
-        );
-        const stripeCheckoutCleanups = Promise.all([
-          topUpDuplicateRefunds,
-          packagePaymentRefunds,
-        ]).then(() =>
-          reconcileStripeCheckoutCleanups(scheduledAt, env.STRIPE_SECRET_KEY),
-        );
-        const settled = await Promise.allSettled([
-          abandonStaleStorageUploads(scheduledAt),
-          reconcileStorageMultipartCleanups(scheduledAt),
-          reconcileAiJobs(scheduledAt),
-          reconcileDeletedAccountRemoteJobs(scheduledAt),
-          reconcileTopUpRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
-          topUpDuplicateRefunds,
-          packagePaymentRefunds,
-          reconcileStripeCustomerProvisioning(
-            scheduledAt,
-            env.STRIPE_SECRET_KEY,
-          ),
-          stripeCheckoutCleanups,
-          reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
-        ]);
-        const failures = settled.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(
-            failures,
-            "One or more scheduled reconciliation tasks failed",
-          );
-        }
-        const storageUploads = fulfilledValue(settled[0]);
-        const storageMultipartCleanups = fulfilledValue(settled[1]);
-        const jobs = fulfilledValue(settled[2]);
-        const deletedAccountJobs = fulfilledValue(settled[3]);
-        const topUpRefunds = fulfilledValue(settled[4]);
-        const duplicateRefunds = fulfilledValue(settled[5]);
-        const paymentRefunds = fulfilledValue(settled[6]);
-        const stripeCustomerProvisioning = fulfilledValue(settled[7]);
-        const checkoutCleanups = fulfilledValue(settled[8]);
-        const billingRefunds = fulfilledValue(settled[9]);
-
+      Promise.all([
+        abandonStaleStorageUploads(scheduledAt),
+        reconcileStorageMultipartCleanups(scheduledAt),
+        reconcileAiJobs(scheduledAt),
+        reconcileDeletedAccountRemoteJobs(scheduledAt),
+        reconcileTopUpRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
+        topUpDuplicateRefunds,
+        packagePaymentRefunds,
+        reconcileStripeCustomerProvisioning(scheduledAt, env.STRIPE_SECRET_KEY),
+        stripeCheckoutCleanups,
+        reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
+      ]).then(([
+        storageUploads,
+        storageMultipartCleanups,
+        jobs,
+        deletedAccountJobs,
+        topUpRefunds,
+        topUpDuplicateRefunds,
+        packagePaymentRefunds,
+        stripeCustomerProvisioning,
+        stripeCheckoutCleanups,
+        billingRefunds,
+      ]) => {
         console.log("Scheduled reconciliation completed", {
           storageUploads,
           storageMultipartCleanups,
           jobs,
           deletedAccountJobs,
           topUpRefunds,
-          topUpDuplicateRefunds: duplicateRefunds,
-          packagePaymentRefunds: paymentRefunds,
+          topUpDuplicateRefunds,
+          packagePaymentRefunds,
           stripeCustomerProvisioning,
-          stripeCheckoutCleanups: checkoutCleanups,
+          stripeCheckoutCleanups,
           billingRefunds,
         });
         if (topUpRefunds.interventionRequired > 0) {
@@ -277,19 +226,17 @@ export default {
             count: topUpRefunds.interventionRequired,
           });
         }
-        if (duplicateRefunds.interventionRequired > 0) {
-          console.error("Top-up duplicate refunds require manual intervention", {
-            count: duplicateRefunds.interventionRequired,
-          });
+        if (topUpDuplicateRefunds.interventionRequired > 0) {
+          console.error("Top-up duplicate refunds require manual intervention", { count: topUpDuplicateRefunds.interventionRequired });
         }
         if (billingRefunds.interventionRequired > 0) {
           console.error("Billing refunds require manual intervention", {
             count: billingRefunds.interventionRequired,
           });
         }
-        if (paymentRefunds.interventionRequired > 0) {
+        if (packagePaymentRefunds.interventionRequired > 0) {
           console.error("Package payment refunds require manual intervention", {
-            count: paymentRefunds.interventionRequired,
+            count: packagePaymentRefunds.interventionRequired,
           });
         }
         if (stripeCustomerProvisioning.interventionRequired > 0) {
@@ -297,14 +244,14 @@ export default {
             count: stripeCustomerProvisioning.interventionRequired,
           });
         }
-        if (checkoutCleanups.interventionRequired > 0) {
+        if (stripeCheckoutCleanups.interventionRequired > 0) {
           console.error("Stripe Checkout cleanups require manual intervention", {
-            count: checkoutCleanups.interventionRequired,
+            count: stripeCheckoutCleanups.interventionRequired,
           });
         }
-        if (checkoutCleanups.detachedIntervention > 0) {
+        if (stripeCheckoutCleanups.detachedIntervention > 0) {
           console.error("Detached package checkout recovery requires manual intervention", {
-            count: checkoutCleanups.detachedIntervention,
+            count: stripeCheckoutCleanups.detachedIntervention,
           });
         }
       }),
