@@ -1,4 +1,5 @@
 import { getTranslation } from "@beutl/i18n";
+import { loadAiVideoModelCapabilities } from "@beutl/api";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiFeatureLinks } from "./feature-links";
 import { countActiveAiJobs, getAiScreenState } from "./queries";
@@ -11,7 +12,9 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const { access, balance } = await getAiScreenState(session.user.id);
+  const { access, balance } = await getAiScreenState(session.user.id, {
+    videoCapabilities: loadAiVideoModelCapabilities(),
+  });
   const activeJobCount = access.canUseAi
     ? await countActiveAiJobs(session.user.id)
     : 0;

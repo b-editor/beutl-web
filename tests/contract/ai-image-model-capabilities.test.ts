@@ -213,7 +213,8 @@ describe("what an image model accepts", () => {
 
   it("imposes nothing when the provider cannot be reached", async () => {
     listModelEndpoints.mockRejectedValue(new Error("provider is down"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // An outage in the lookup must not take image generation offline.
     await expect(loadAiImageModelCapabilities(["a/model"])).resolves.toEqual(
@@ -222,6 +223,14 @@ describe("what an image model accepts", () => {
     expect(
       unsupportedImageRequestReason(undefined, { aspectRatio: "16:9" }),
     ).toBeNull();
+    expect(errorLog).not.toHaveBeenCalled();
+    expect(warningLog).toHaveBeenCalledWith(
+      "Failed to read OpenRouter image model capabilities",
+      "a/model",
+      "OpenRouter image model endpoints failed: provider is down",
+    );
+    errorLog.mockRestore();
+    warningLog.mockRestore();
   });
 });
 

@@ -97,6 +97,23 @@ describe("AI entitlements", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it("does not use an interactive transaction for full AI presentation", async () => {
+    await activatePro();
+    const transaction = vi
+      .spyOn(prisma, "$transaction")
+      .mockRejectedValue(
+        Object.assign(new Error("Unable to start a transaction in time"), {
+          code: "P2028",
+        }),
+      );
+
+    const entitlements = await readEntitlements();
+
+    expect(entitlements.canUseAi).toBe(true);
+    expect(entitlements.modelAvailability["video.generate"]).toBeDefined();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it("uses an explicitly supplied client without resolving the provider", async () => {
     await activatePro();
     setDbProvider(async () => {
@@ -108,6 +125,37 @@ describe("AI entitlements", () => {
     });
 
     expect(summary.canUseAi).toBe(true);
+  });
+
+  it("uses an explicitly supplied client for full AI presentation", async () => {
+    await activatePro();
+    setDbProvider(async () => {
+      throw new Error("the configured provider must not be used");
+    });
+
+    const entitlements = await getEntitlements(USER_ID, {
+      prisma: prisma as never,
+      videoCapabilities,
+    });
+
+    expect(entitlements.canUseAi).toBe(true);
+  });
+
+  it("reuses a Server Component's in-flight model catalog", async () => {
+    await activatePro();
+    const catalog = await loadAiModelCatalog({ prisma: prisma as never });
+    const catalogRead = vi
+      .spyOn(prisma.aiOperationModel, "findMany")
+      .mockRejectedValue(new Error("model catalog must not be loaded twice"));
+
+    const entitlements = await getEntitlements(USER_ID, {
+      catalog: Promise.resolve(catalog),
+      prisma: prisma as never,
+      videoCapabilities: Promise.resolve(videoCapabilities),
+    });
+
+    expect(entitlements.canUseAi).toBe(true);
+    expect(catalogRead).not.toHaveBeenCalled();
   });
 
   it("keeps summary fields identical to the full entitlement response", async () => {

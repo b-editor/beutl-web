@@ -1,32 +1,29 @@
 import "server-only";
-import {
-  getEntitlements,
-  loadAiModelCatalog,
-  loadAiVideoModelCapabilities,
-  type AiVideoModelCapabilities,
-} from "@beutl/api";
-import { listAiJobsByUserId } from "@beutl/db";
+import { getEntitlements, loadAiModelCatalog } from "@beutl/api";
+import { getDb, listAiJobsByUserId } from "@beutl/db";
 import type { AiAccess, AiBalance } from "./shared";
 
 // Every AI screen needs the same two things from the server: whether the plan
 // allows the operation at all, and whether the balance still covers it. Both
 // come out of one entitlements read.
-export async function getAiScreenState(userId: string): Promise<{
-  access: AiAccess;
-  balance: AiBalance;
-  videoCapabilities: ReadonlyMap<string, AiVideoModelCapabilities>;
-}> {
-  // These snapshots belong to this render. Passing them down explicitly avoids
-  // both duplicate I/O in getEntitlements/video pages and a module-global
-  // in-flight promise that could retain request-bound Worker resources.
-  const [videoCapabilities, catalog] = await Promise.all([
-    loadAiVideoModelCapabilities(),
-    loadAiModelCatalog(),
+export async function getAiScreenState(
+  userId: string,
+  { videoCapabilities = new Map() }: {
+    videoCapabilities?:
+      | ReadonlyMap<string, { durations: readonly number[] }>
+      | PromiseLike<ReadonlyMap<string, { durations: readonly number[] }>>;
+  } = {},
+): Promise<{ access: AiAccess; balance: AiBalance }> {
+  const prisma = await getDb();
+  const catalogPromise = loadAiModelCatalog({ prisma });
+  const [entitlements, catalog] = await Promise.all([
+    getEntitlements(userId, {
+      catalog: catalogPromise,
+      prisma,
+      videoCapabilities,
+    }),
+    catalogPromise,
   ]);
-  const entitlements = await getEntitlements(userId, {
-    videoCapabilities,
-    catalog,
-  });
   return {
     access: {
       canUseAi: entitlements.canUseAi,
@@ -60,7 +57,6 @@ export async function getAiScreenState(userId: string): Promise<{
       // allowance comes back.
       endsAtPeriodEnd: entitlements.cancelAtPeriodEnd,
     },
-    videoCapabilities,
   };
 }
 

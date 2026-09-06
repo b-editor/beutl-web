@@ -1,4 +1,5 @@
 import { getTranslation } from "@beutl/i18n";
+import { loadAiVideoModelCapabilities } from "@beutl/api";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiPageHeader } from "../shared";
 import { VideoForm } from "../video-form";
@@ -13,11 +14,16 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const {
-    access,
-    balance,
-    videoCapabilities: capabilities,
-  } = await getAiScreenState(session.user.id);
+  // Both consumers need the same provider snapshot. Keep this promise scoped
+  // to the render: module-global in-flight I/O cannot safely cross Cloudflare
+  // Worker request contexts.
+  const capabilitiesPromise = loadAiVideoModelCapabilities();
+  const [{ access, balance }, capabilities] = await Promise.all([
+    getAiScreenState(session.user.id, {
+      videoCapabilities: capabilitiesPromise,
+    }),
+    capabilitiesPromise,
+  ]);
 
   const { models, modelOptions } = buildAiVideoScreenOptions(
     access,
