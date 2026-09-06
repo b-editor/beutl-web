@@ -15,6 +15,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { resolveNativeAuthReturnUrl } from "@beutl/next/local-redirect";
+import { AuthLegalLinks } from "@/components/auth/legal-links";
 
 export default async function Page(
   props: { searchParams: Promise<{ returnUrl?: string }>; params: Promise<{ lang: string }> }
@@ -90,12 +91,10 @@ export default async function Page(
             </Link>
           </CardFooter>
         </Card>
-        <Link
-          className="ml-auto text-sm absolute top-full right-0 translate-y-4"
-          href={`/${lang}/docs/privacy`}
-        >
-          {t("privacy")}
-        </Link>
+        <AuthLegalLinks
+          lang={lang}
+          className="absolute top-full right-0 translate-y-4"
+        />
       </div>
     </div>
   );

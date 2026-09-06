@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@beutl/ui/ui/card";
-import Link from "next/link";
 import Image from "next/image";
 import { getTranslation } from "@beutl/i18n";
+import { AuthLegalLinks } from "@/components/auth/legal-links";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
   const params = await props.params;
@@ -32,12 +32,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
             <p>{t("auth:emailSent")}</p>
           </CardContent>
         </Card>
-        <Link
-          className="ml-auto text-sm absolute top-full right-0 translate-y-4"
-          href={`/${lang}/docs/privacy`}
-        >
-          {t("privacy")}
-        </Link>
+        <AuthLegalLinks
+          lang={lang}
+          className="absolute top-full right-0 translate-y-4"
+        />
       </div>
     </div>
   );

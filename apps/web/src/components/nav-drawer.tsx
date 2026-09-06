@@ -51,26 +51,33 @@ export async function StandardDrawer({ lang }: { lang: string }) {
 
             <NavigationMenu className="flex-col items-stretch max-w-full pt-4">
               <NavigationMenuList className="flex-col items-stretch space-x-0">
-                {(["docs", "store", "privacy", "telemetry"] as NavLinkKey[]).map(
-                  (key) => (
-                    <NavigationMenuItem key={key}>
-                      <NavigationMenuLink
-                        className={cn(
-                          navigationMenuTriggerStyle(),
-                          "w-full justify-start",
-                        )}
-                        asChild
+                {(
+                  [
+                    "docs",
+                    "store",
+                    "terms",
+                    "privacy",
+                    "commercialTransactions",
+                    "telemetry",
+                  ] as NavLinkKey[]
+                ).map((key) => (
+                  <NavigationMenuItem key={key}>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        "w-full justify-start",
+                      )}
+                      asChild
+                    >
+                      <Link
+                        href={navHref(key, lang)}
+                        prefetch={key === "docs" ? false : undefined}
                       >
-                        <Link
-                          href={navHref(key, lang)}
-                          prefetch={key === "docs" ? false : undefined}
-                        >
-                          {t(key)}
-                        </Link>
-                      </NavigationMenuLink>
-                    </NavigationMenuItem>
-                  ),
-                )}
+                        {t(key)}
+                      </Link>
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                ))}
               </NavigationMenuList>
             </NavigationMenu>
           </div>

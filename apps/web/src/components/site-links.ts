@@ -26,7 +26,9 @@ export type NavLinkKey =
   | "docs"
   | "store"
   | "dashboard"
+  | "terms"
   | "privacy"
+  | "commercialTransactions"
   | "telemetry";
 
 export function navHref(key: NavLinkKey, lang: string): string {
@@ -37,8 +39,12 @@ export function navHref(key: NavLinkKey, lang: string): string {
       return `/${lang}/store`;
     case "dashboard":
       return `/${lang}/dashboard`;
+    case "terms":
+      return `/${lang}/docs/terms`;
     case "privacy":
       return `/${lang}/docs/privacy`;
+    case "commercialTransactions":
+      return `/${lang}/docs/specified-commercial-transactions-act`;
     case "telemetry":
       return `/${lang}/docs/telemetry`;
   }

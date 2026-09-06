@@ -23,7 +23,13 @@ export default function Form({
   returnUrl,
   email,
   lang,
-}: { returnUrl?: string; email?: string; lang: string }) {
+  legalLinks,
+}: {
+  returnUrl?: string;
+  email?: string;
+  lang: string;
+  legalLinks: React.ReactNode;
+}) {
   const [state, dispatch] = useActionState(signUpWithEmailAction, {});
   const { t } = useTranslation(lang);
   const { oauthLoading, handleOAuthSignIn } = useOAuthSignIn({ returnUrl, lang });
@@ -107,12 +113,7 @@ export default function Form({
               </div>
             </CardContent>
           </Card>
-          <Link
-            className="ml-auto text-sm absolute top-full right-0 translate-y-4"
-            href={`/${lang}/docs/privacy`}
-          >
-            {t("privacy")}
-          </Link>
+          {legalLinks}
         </div>
       </div>
     </form>
