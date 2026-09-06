@@ -16,7 +16,7 @@
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/i18n": "workspace:*",
-    "@hono/zod-validator": "^0.7.6",
+    "@hono/zod-validator": "^0.9.1",
     "@openrouter/sdk": "^1.2.42",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
