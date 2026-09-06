@@ -4,6 +4,10 @@ import {
   PRO_PLAN,
 } from "@beutl/api";
 import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutAmount,
+} from "@beutl/core";
+import {
   activateBillingOffer,
   findBillingOfferByStripePriceId,
   findTopUpCheckoutAttempt,
@@ -293,11 +297,17 @@ export function blocksNewProCheckout(
 export function topUpPaymentMatchesOffer(
   paymentIntent: Stripe.PaymentIntent,
   offer: BillingOfferRecord,
+  promotionCodesEnabled = false,
 ): boolean {
   return (
     offer.kind === "top_up" &&
     paymentIntent.metadata?.billingOfferId === offer.id &&
-    paymentIntent.amount_received === offer.unitAmount &&
+    paymentIntent.amount_received === paymentIntent.amount &&
+    isValidStripeCheckoutAmount(
+      paymentIntent.amount,
+      offer.unitAmount,
+      promotionCodesEnabled,
+    ) &&
     paymentIntent.currency.toLowerCase() === offer.currency.toLowerCase() &&
     Number(paymentIntent.metadata?.creditAmount) === offer.creditAmount
   );
@@ -322,6 +332,7 @@ export async function resolveTopUpPayment(
     !topUpPaymentMatchesOffer(
       paymentIntent,
       attempt.billingOffer as BillingOfferRecord,
+      allowsStripePromotionCodes(attempt.paramsJson),
     )
   ) {
     return { status: "invalid" as const, attempt };

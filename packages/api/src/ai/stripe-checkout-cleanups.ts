@@ -1,4 +1,10 @@
 import Stripe from "stripe";
+import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutAmount,
+  isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
+} from "@beutl/core";
 import { discoverPackageCheckoutAttempt, discoverTopUpCheckoutAttempt, discoverLegacyPackageCheckoutAttempt } from "../package-checkout-discovery";
 import {
   completeStripeCheckoutCleanup,
@@ -123,6 +129,7 @@ async function hydrateTopUpPayments(
     ownerUserId: string;
     stripeCustomerId: string;
     billingOfferId: string;
+    paramsJson?: string | null;
   },
 ): Promise<HydratedTopUpPayment[]> {
   const offer = await findBillingOfferById({ id: attempt.billingOfferId });
@@ -136,12 +143,38 @@ async function hydrateTopUpPayments(
   ) {
     throw new Error("Top-up recovery billing offer is invalid");
   }
+  const promotionCodesEnabled = allowsStripePromotionCodes(attempt.paramsJson);
   const hydrated: HydratedTopUpPayment[] = [];
   for (const session of sessions) {
+    const sessionCustomer = typeof session.customer === "string"
+      ? session.customer
+      : session.customer?.id;
     const paymentIntentId = typeof session.payment_intent === "string"
       ? session.payment_intent
       : session.payment_intent?.id;
     if (!paymentIntentId) {
+      if (
+        session.status === "complete" &&
+        session.mode === "payment" &&
+        sessionCustomer === attempt.stripeCustomerId &&
+        session.metadata?.beutlApplication === "beutl-web" &&
+        session.metadata?.beutlUserId === attempt.ownerUserId &&
+        session.metadata?.topUpAttemptId === attempt.id &&
+        session.metadata?.billingOfferId === attempt.billingOfferId &&
+        session.metadata?.creditAmount === String(offer.creditAmount) &&
+        (session.currency === null ||
+          session.currency.toLowerCase() === offer.currency.toLowerCase()) &&
+        isZeroCostStripeCheckoutSessionAmount(
+          {
+            amountSubtotal: session.amount_subtotal,
+            amountTotal: session.amount_total,
+          },
+          offer.unitAmount,
+          promotionCodesEnabled,
+        )
+      ) {
+        continue;
+      }
       throw new Error(`Completed top-up Session ${session.id} has no PaymentIntent`);
     }
     const paymentIntent = await stripe.paymentIntents.retrieve(
@@ -159,10 +192,24 @@ async function hydrateTopUpPayments(
       paymentIntent.metadata?.beutlUserId !== attempt.ownerUserId ||
       paymentIntent.metadata?.billingOfferId !== attempt.billingOfferId ||
       paymentIntent.metadata?.creditAmount !== String(offer.creditAmount) ||
-      paymentIntent.amount !== offer.unitAmount ||
+      !isValidStripeCheckoutAmount(
+        paymentIntent.amount,
+        offer.unitAmount,
+        promotionCodesEnabled,
+      ) ||
       paymentIntent.currency.toLowerCase() !== offer.currency.toLowerCase() ||
+      !isValidStripeCheckoutSessionAmount(
+        {
+          amountSubtotal: session.amount_subtotal,
+          amountTotal: session.amount_total,
+        },
+        offer.unitAmount,
+        promotionCodesEnabled,
+        !promotionCodesEnabled,
+      ) ||
       (session.amount_total !== null &&
-        session.amount_total !== offer.unitAmount) ||
+        session.amount_total !== undefined &&
+        session.amount_total !== paymentIntent.amount) ||
       (session.currency !== null &&
         session.currency.toLowerCase() !== offer.currency.toLowerCase()) ||
       !paymentIntent.latest_charge ||
@@ -509,13 +556,35 @@ export async function reconcileStripeCheckoutCleanups(
         inactiveLegacy;
       const resolveCompleted = async (completed: Stripe.Checkout.Session[]) => {
         if (attempt.accountDeletionAt !== null && completed.length === 1) {
-          const [canonical] = completed;
+          const canonical = completed[0]!;
+          const paymentIntentId = typeof canonical.payment_intent === "string"
+            ? canonical.payment_intent
+            : canonical.payment_intent?.id;
+          if (!paymentIntentId) {
+            const hydrated = await hydrateTopUpPayments(
+              stripe,
+              [canonical],
+              attempt,
+            );
+            if (hydrated.length !== 0) {
+              throw new Error(
+                "Top-up recovery returned a payment without a PaymentIntent",
+              );
+            }
+            if ((await markDetachedTopUpCheckoutRecoveryTerminal({
+              attemptId: attempt.id,
+              leaseToken: recoveryLeaseToken,
+            })).count !== 1) {
+              throw new Error("Zero-cost top-up terminalization lease lost");
+            }
+            return;
+          }
           const stored = await completeDetachedTopUpCheckoutRecovery({
             attemptId: attempt.id,
             leaseToken: recoveryLeaseToken,
-            stripeCheckoutSessionId: canonical!.id,
-            expiresAt: canonical!.expires_at
-              ? new Date(canonical!.expires_at * 1_000)
+            stripeCheckoutSessionId: canonical.id,
+            expiresAt: canonical.expires_at
+              ? new Date(canonical.expires_at * 1_000)
               : attempt.expiresAt,
           });
           if (stored === "not-stored") {
@@ -667,12 +736,9 @@ export async function reconcileStripeCheckoutCleanups(
         }
         if (discovered.status === "expired") {
           await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
-        } else if (
-          discovered.status === "complete" &&
-          attempt.accountDeletionAt === null
-        ) {
+        } else if (discovered.status === "complete") {
           await resolveCompleted([discovered]);
-        } else if (discovered.status === "open" || discovered.status === "complete") {
+        } else if (discovered.status === "open") {
           const stored = await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: discovered.id, expiresAt: discovered.expires_at ? new Date(discovered.expires_at * 1000) : attempt.expiresAt });
           if (stored === "not-stored") throw new Error("Top-up discovery lease lost");
         } else {

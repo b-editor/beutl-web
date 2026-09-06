@@ -136,6 +136,12 @@ money. Without them the page falls back to the recorded offer and says so, and
 when Stripe and the stored offer disagree it flags that too (purchases still
 settle against the stored terms).
 
+Pro and credit top-up Checkout Sessions let customers enter active Stripe
+promotion codes. Create and constrain those codes in the Stripe Dashboard; the
+package store does not accept them. A top-up promotion must leave a positive
+amount to pay because credit fulfillment is tied to its successful
+PaymentIntent, so do not make a 100%-off code eligible for the top-up Price.
+
 Costs come from OpenRouter's public price endpoints, which need no API key, so
 the admin Worker holds no provider credentials. They
 are estimates from a published rate card, not recorded spend: where a rate is

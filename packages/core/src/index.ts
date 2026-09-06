@@ -105,3 +105,9 @@ export type {
   AiAllowanceQuantityKind,
   AiUnitValue,
 } from "./ai-allowance";
+export {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutAmount,
+  isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
+} from "./stripe-checkout";

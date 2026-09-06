@@ -3,12 +3,17 @@ import {
   attachTopUpRefundId,
   attachTopUpRefundPaymentIntent,
   claimTopUpRefundAttempt,
+  findBillingOfferById,
   listDueTopUpRefundAttempts,
   markTopUpRefundInterventionRequired,
   markTopUpRefundNotRequired,
   recordTopUpRefund,
   rescheduleTopUpRefundAttempt,
 } from "@beutl/db";
+import {
+  allowsStripePromotionCodes,
+  isZeroCostStripeCheckoutSessionAmount,
+} from "@beutl/core";
 import Stripe from "stripe";
 import {
   getCanonicalPaymentRefundState,
@@ -169,7 +174,7 @@ async function resolvePaymentIntent({
 
   const session = await stripe.checkout.sessions.retrieve(
     attempt.stripeCheckoutSessionId,
-    { expand: ["payment_intent"] },
+    { expand: ["payment_intent", "line_items.data.price"] },
   );
   assertStripeOwner(
     `Checkout Session ${session.id}`,
@@ -187,6 +192,46 @@ async function resolvePaymentIntent({
     return attached
       ? { outcome: "resolved", stripePaymentIntentId }
       : { outcome: "lost" };
+  }
+
+  if (
+    session.status === "complete" &&
+    (session.payment_status === "paid" ||
+      session.payment_status === "no_payment_required")
+  ) {
+    const offer = await findBillingOfferById({ id: attempt.billingOfferId });
+    const lines = session.line_items?.data;
+    const line = lines?.[0];
+    const isOwnedZeroCostTopUp =
+      offer?.kind === "top_up" &&
+      Number.isSafeInteger(offer.creditAmount) &&
+      (offer.creditAmount ?? 0) > 0 &&
+      lines?.length === 1 &&
+      line?.quantity === 1 &&
+      expandableId(line.price) === offer.stripePriceId &&
+      session.mode === "payment" &&
+      session.metadata?.beutlApplication === "beutl-web" &&
+      session.metadata?.beutlUserId === attempt.ownerUserId &&
+      session.metadata?.topUpAttemptId === attempt.id &&
+      session.metadata?.billingOfferId === attempt.billingOfferId &&
+      session.metadata?.creditAmount === String(offer.creditAmount) &&
+      session.currency?.toLowerCase() === offer.currency.toLowerCase() &&
+      isZeroCostStripeCheckoutSessionAmount(
+        {
+          amountSubtotal: session.amount_subtotal,
+          amountTotal: session.amount_total,
+        },
+        offer.unitAmount,
+        allowsStripePromotionCodes(attempt.paramsJson),
+      );
+    if (isOwnedZeroCostTopUp) {
+      const marked = await markTopUpRefundNotRequired({
+        attemptId: attempt.id,
+        refundLeaseToken,
+        now,
+      });
+      return { outcome: marked ? "no-refund-required" : "lost" };
+    }
   }
 
   const canCloseWithoutRefund =

@@ -27,6 +27,11 @@ import {
   PRO_PLAN,
 } from "@beutl/api";
 import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
+} from "@beutl/core";
+import {
   bindTopUpCheckoutCreation,
   bindProCheckoutSession,
   claimTopUpCheckoutCreation,
@@ -45,6 +50,7 @@ import {
   releaseTopUpCheckoutCreation,
   requireTopUpRefund,
   scheduleBillingRefundAttempt,
+  setProCheckoutAttemptParams,
   startRetryableTransaction,
 } from "@beutl/db";
 import { redirect } from "next/navigation";
@@ -105,6 +111,50 @@ function subscriptionMatchesOffer(
     item.price.recurring.interval_count ===
       billingOffer.recurringIntervalCount
   );
+}
+
+function canonicalizeCheckoutParams(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeCheckoutParams);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalizeCheckoutParams(item)]),
+    );
+  }
+  return value;
+}
+
+function persistedProCheckoutParams(
+  paramsJson: string,
+  current: Stripe.Checkout.SessionCreateParams,
+): Stripe.Checkout.SessionCreateParams {
+  let persisted: unknown;
+  try {
+    persisted = JSON.parse(paramsJson);
+  } catch {
+    throw new Error(
+      "Persisted Pro Checkout parameters do not match the current offer",
+    );
+  }
+  const legacy = { ...current };
+  delete legacy.allow_promotion_codes;
+  const canonicalPersisted = JSON.stringify(
+    canonicalizeCheckoutParams(persisted),
+  );
+  const canonicalCurrent = JSON.stringify(canonicalizeCheckoutParams(current));
+  const canonicalLegacy = JSON.stringify(canonicalizeCheckoutParams(legacy));
+  if (
+    canonicalPersisted !== canonicalCurrent &&
+    canonicalPersisted !== canonicalLegacy
+  ) {
+    throw new Error(
+      "Persisted Pro Checkout parameters do not match the current offer",
+    );
+  }
+  return persisted as Stripe.Checkout.SessionCreateParams;
 }
 
 async function compensateSupersededProCheckout({
@@ -467,6 +517,7 @@ export async function createProCheckout(): Promise<void> {
   const proCheckoutParams: Stripe.Checkout.SessionCreateParams = {
     customer: customerId,
     mode: "subscription",
+    allow_promotion_codes: true,
     line_items: [{ price: offer.stripePriceId, quantity: 1 }],
     metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id },
     subscription_data: { metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id } },
@@ -610,8 +661,27 @@ export async function createProCheckout(): Promise<void> {
       );
     }
 
+    let createParams = proCheckoutParams;
+    if (attempt.paramsJson) {
+      // Preserve the exact parameters attached to this idempotency key. An
+      // attempt started before promotion codes were enabled may already exist
+      // at Stripe even when its create response never reached this process.
+      createParams = persistedProCheckoutParams(
+        attempt.paramsJson,
+        proCheckoutParams,
+      );
+    } else {
+      const persisted = await setProCheckoutAttemptParams({
+        userId: session.user.id,
+        checkoutKey: attempt.checkoutKey,
+        paramsJson: JSON.stringify(proCheckoutParams),
+      });
+      if (persisted.count !== 1) {
+        continue;
+      }
+    }
     const checkoutSession = await stripe.checkout.sessions.create(
-      proCheckoutParams,
+      createParams,
       {
         idempotencyKey: `ai-pro-checkout:${attempt.checkoutKey}`,
       },
@@ -708,6 +778,7 @@ function buildTopUpCheckoutParams({
   return {
     customer: customerId,
     mode: "payment",
+    allow_promotion_codes: true,
     line_items: [{ price: offer.stripePriceId, quantity: 1 }],
     metadata: {
       ...stripeOwnerMetadata(userId),
@@ -760,38 +831,78 @@ function topUpParamsMatchAttempt({
       String(offer.creditAmount);
 }
 
-function topUpSessionMatchesAttempt({
-  checkoutSession,
-  attemptId,
-  customerId,
-  offer,
-  userId,
-  requireLineItems,
-}: {
+type TopUpSessionIdentityExpectation = {
   checkoutSession: Stripe.Checkout.Session;
   attemptId: string;
   customerId: string;
   offer: PersistedBillingOffer;
   userId: string;
   requireLineItems: boolean;
-}): boolean {
+};
+
+function topUpSessionIdentityMatches({
+  checkoutSession,
+  attemptId,
+  customerId,
+  offer,
+  userId,
+  requireLineItems,
+}: TopUpSessionIdentityExpectation): boolean {
   const lines = checkoutSession.line_items?.data;
   const lineMatches = lines === undefined
     ? !requireLineItems
     : lines.length === 1 && lines[0]?.quantity === 1 &&
       expandableId(lines[0].price) === offer.stripePriceId;
-  return checkoutSession.mode === "payment" &&
+  return offer.kind === "top_up" &&
+    checkoutSession.mode === "payment" &&
     expandableId(checkoutSession.customer) === customerId &&
     checkoutSession.metadata?.beutlApplication === "beutl-web" &&
     checkoutSession.metadata?.beutlUserId === userId &&
     checkoutSession.metadata?.topUpAttemptId === attemptId &&
     checkoutSession.metadata?.billingOfferId === offer.id &&
     checkoutSession.metadata?.creditAmount === String(offer.creditAmount) &&
-    (checkoutSession.amount_total === null ||
-      checkoutSession.amount_total === offer.unitAmount) &&
     (checkoutSession.currency === null ||
       checkoutSession.currency.toLowerCase() === offer.currency.toLowerCase()) &&
     lineMatches;
+}
+
+function topUpSessionMatchesAttempt(
+  expectation: TopUpSessionIdentityExpectation & {
+    promotionCodesEnabled: boolean;
+  },
+): boolean {
+  const { checkoutSession, offer, promotionCodesEnabled } = expectation;
+  return topUpSessionIdentityMatches(expectation) &&
+    isValidStripeCheckoutSessionAmount(
+      {
+        amountSubtotal: checkoutSession.amount_subtotal,
+        amountTotal: checkoutSession.amount_total,
+      },
+      offer.unitAmount,
+      promotionCodesEnabled,
+      true,
+    );
+}
+
+function isCompletedZeroCostTopUpSession(
+  expectation: TopUpSessionIdentityExpectation & {
+    promotionCodesEnabled: boolean;
+  },
+): boolean {
+  const { checkoutSession, offer, promotionCodesEnabled } = expectation;
+  return topUpSessionIdentityMatches(expectation) &&
+    checkoutSession.status === "complete" &&
+    (checkoutSession.payment_status === "paid" ||
+      checkoutSession.payment_status === "no_payment_required") &&
+    checkoutSession.payment_intent === null &&
+    isZeroCostStripeCheckoutSessionAmount(
+      {
+        amountSubtotal: checkoutSession.amount_subtotal,
+        amountTotal: checkoutSession.amount_total,
+      },
+      offer.unitAmount,
+      promotionCodesEnabled,
+    );
 }
 
 export async function createCreditCheckout(): Promise<void> {
@@ -843,14 +954,29 @@ export async function createCreditCheckout(): Promise<void> {
         attempt.stripeCheckoutSessionId,
         { expand: ["line_items.data.price"] },
       );
-      if (!topUpSessionMatchesAttempt({
+      const sessionExpectation = {
         checkoutSession: existing,
         attemptId: attempt.id,
         customerId: attempt.stripeCustomerId,
         offer,
         userId: authSession.user.id,
         requireLineItems: true,
-      })) {
+        promotionCodesEnabled: allowsStripePromotionCodes(attempt.paramsJson),
+      };
+      if (isCompletedZeroCostTopUpSession(sessionExpectation)) {
+        const terminalized = await expireTopUpCheckoutAttempt({
+          attemptId: attempt.id,
+          ownerUserId: authSession.user.id,
+          stripeCheckoutSessionId: existing.id,
+        });
+        if (terminalized.count !== 1) {
+          throw new Error(
+            "Zero-cost top-up Checkout changed during terminalization",
+          );
+        }
+        continue;
+      }
+      if (!topUpSessionMatchesAttempt(sessionExpectation)) {
         throw new Error("Bound top-up Checkout failed canonical validation");
       }
       if (existing.status === "expired") {
@@ -919,14 +1045,28 @@ export async function createCreditCheckout(): Promise<void> {
           discovery.session.id,
           { expand: ["line_items.data.price"] },
         );
-        if (!topUpSessionMatchesAttempt({
+        const sessionExpectation = {
           checkoutSession,
           attemptId: claim.attempt.id,
           customerId: claim.attempt.stripeCustomerId,
           offer,
           userId: authSession.user.id,
           requireLineItems: true,
-        })) {
+          promotionCodesEnabled: allowsStripePromotionCodes(params),
+        };
+        if (isCompletedZeroCostTopUpSession(sessionExpectation)) {
+          const terminalized = await expireTopUpCheckoutAttempt({
+            attemptId: claim.attempt.id,
+            ownerUserId: authSession.user.id,
+            stripeCheckoutSessionId: null,
+            leaseToken,
+          });
+          if (terminalized.count !== 1) {
+            throw new Error("Zero-cost top-up discovery lease was lost");
+          }
+          continue;
+        }
+        if (!topUpSessionMatchesAttempt(sessionExpectation)) {
           throw new Error("Discovered top-up Checkout failed canonical validation");
         }
       } else {
@@ -969,14 +1109,28 @@ export async function createCreditCheckout(): Promise<void> {
           timeout: 20_000,
           maxNetworkRetries: 2,
         });
-        if (!topUpSessionMatchesAttempt({
+        const sessionExpectation = {
           checkoutSession,
           attemptId: claim.attempt.id,
           customerId: claim.attempt.stripeCustomerId,
           offer,
           userId: authSession.user.id,
           requireLineItems: false,
-        })) {
+          promotionCodesEnabled: allowsStripePromotionCodes(params),
+        };
+        if (isCompletedZeroCostTopUpSession(sessionExpectation)) {
+          const terminalized = await expireTopUpCheckoutAttempt({
+            attemptId: claim.attempt.id,
+            ownerUserId: authSession.user.id,
+            stripeCheckoutSessionId: null,
+            leaseToken,
+          });
+          if (terminalized.count !== 1) {
+            throw new Error("Zero-cost top-up replay lease was lost");
+          }
+          continue;
+        }
+        if (!topUpSessionMatchesAttempt(sessionExpectation)) {
           throw new Error("Created top-up Checkout failed canonical validation");
         }
       }
@@ -1046,7 +1200,6 @@ export async function reconcileAiCheckoutSuccess(
   if (
     checkoutSession.id !== stripeCheckoutSessionId ||
     checkoutSession.status !== "complete" ||
-    checkoutSession.payment_status !== "paid" ||
     !customerId ||
     !hasStripeOwnerMetadata(checkoutSession.metadata, authSession.user.id)
   ) {
@@ -1071,6 +1224,12 @@ export async function reconcileAiCheckoutSuccess(
   const usesCurrentCustomer = currentCustomer?.stripeId === customerId;
 
   if (checkoutSession.mode === "subscription") {
+    if (
+      checkoutSession.payment_status !== "paid" &&
+      checkoutSession.payment_status !== "no_payment_required"
+    ) {
+      return false;
+    }
     const subscriptionId =
       typeof checkoutSession.subscription === "string"
         ? checkoutSession.subscription
@@ -1225,6 +1384,29 @@ export async function reconcileAiCheckoutSuccess(
       checkoutSession.metadata?.topUpAttemptId !== attempt.id ||
       checkoutSession.metadata?.billingOfferId !== attempt.billingOfferId
     ) {
+      return false;
+    }
+    const offer = await findBillingOfferById({ id: attempt.billingOfferId });
+    if (!offer || offer.kind !== "top_up") {
+      return false;
+    }
+    if (isCompletedZeroCostTopUpSession({
+      checkoutSession,
+      attemptId: attempt.id,
+      customerId: attempt.stripeCustomerId,
+      offer,
+      userId: authSession.user.id,
+      requireLineItems: false,
+      promotionCodesEnabled: allowsStripePromotionCodes(attempt.paramsJson),
+    })) {
+      await expireTopUpCheckoutAttempt({
+        attemptId: attempt.id,
+        ownerUserId: authSession.user.id,
+        stripeCheckoutSessionId,
+      });
+      return false;
+    }
+    if (checkoutSession.payment_status !== "paid") {
       return false;
     }
     const paymentIntentId =

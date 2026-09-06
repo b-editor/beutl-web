@@ -1,4 +1,8 @@
 import { addPurchasedCredits, type StripePaymentDetails } from "./credit-account";
+import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutAmount,
+} from "@beutl/core";
 import { getDb } from "./provider";
 import {
   startRetryableTransaction,
@@ -549,7 +553,11 @@ export async function fulfillTopUpCheckoutAttempt({
       return { status: "invalid" as const };
     }
     if (
-      attempt.billingOffer.unitAmount !== stripePayment.amount ||
+      !isValidStripeCheckoutAmount(
+        stripePayment.amount,
+        attempt.billingOffer.unitAmount,
+        allowsStripePromotionCodes(attempt.paramsJson),
+      ) ||
       attempt.billingOffer.currency.toLowerCase() !==
         stripePayment.currency.toLowerCase() ||
       !Number.isSafeInteger(attempt.billingOffer.creditAmount) ||

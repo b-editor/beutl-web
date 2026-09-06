@@ -22,6 +22,7 @@ describe("top-up webhook versus multiple-Session recovery", () => {
       ownerUserId: "user-1",
       activeOwnerKey: "user-1",
       checkoutKey: "ai-top-up-checkout:attempt-1",
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
       stripeCustomerId: "cus-1",
       billingOfferId: "offer-1",
       stripeCheckoutSessionId: null,
@@ -107,7 +108,7 @@ describe("top-up webhook versus multiple-Session recovery", () => {
     await expect(fulfillTopUpCheckoutAttempt({
       attemptId: "attempt-1",
       stripePaymentIntentId: "pi-canonical",
-      stripePayment: { amount: 1_000, currency: "usd" },
+      stripePayment: { amount: 800, currency: "usd" },
       stripeRefundState: { succeededAmount: 0, pendingAmount: 0 },
       now,
       prisma: tx as never,
@@ -129,7 +130,7 @@ describe("top-up webhook versus multiple-Session recovery", () => {
       canonicalPaymentIntentId: "pi-canonical",
       expectedPaymentIntents: [{
         paymentIntentId: "pi-duplicate",
-        amount: 1_000,
+        amount: 800,
         currency: "usd",
       }],
       prisma: tx as never,
@@ -153,7 +154,7 @@ describe("top-up webhook versus multiple-Session recovery", () => {
         sessionId: "cs-canonical",
         expiresAt: new Date(now.getTime() + 60_000),
         paymentIntentId: "pi-canonical",
-        stripePayment: { amount: 1_000, currency: "usd" },
+        stripePayment: { amount: 800, currency: "usd" },
       },
       prisma: tx as never,
     })).resolves.toBe(true);
