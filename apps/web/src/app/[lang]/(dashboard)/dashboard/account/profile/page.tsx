@@ -1,30 +1,21 @@
-import { auth } from "@/lib/better-auth";
+import { authOrSignIn } from "@/lib/auth-guard";
 import {
+  getDb,
   getProfileByUserId,
   getSocialProfilesByUserId,
 } from "@beutl/db";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
 import { Form } from "./components";
 import { getTranslation } from "@beutl/i18n";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
-  const params = await props.params;
-
-  const {
-    lang
-  } = params;
-
-  const headersList = await headers();
-  const session = await auth.api.getSession({ headers: headersList });
-  if (!session?.user) {
-    const url = headersList.get("x-url") || `/${lang}`;
-    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
-  }
-
-  const profile = await getProfileByUserId(session.user.id);
-  const socials = await getSocialProfilesByUserId(session.user.id);
-  const { t } = await getTranslation(lang);
+  const { lang } = await props.params;
+  const session = await authOrSignIn();
+  const prisma = await getDb();
+  const [profile, socials, { t }] = await Promise.all([
+    getProfileByUserId(session.user.id, prisma),
+    getSocialProfilesByUserId(session.user.id, prisma),
+    getTranslation(lang),
+  ]);
 
   return (
     <div>
