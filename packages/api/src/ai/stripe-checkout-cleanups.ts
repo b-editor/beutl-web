@@ -1,4 +1,9 @@
 import Stripe from "stripe";
+import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutAmount,
+  isValidStripeCheckoutSessionAmount,
+} from "@beutl/core";
 import { discoverPackageCheckoutAttempt, discoverTopUpCheckoutAttempt, discoverLegacyPackageCheckoutAttempt } from "../package-checkout-discovery";
 import {
   completeStripeCheckoutCleanup,
@@ -123,6 +128,7 @@ async function hydrateTopUpPayments(
     ownerUserId: string;
     stripeCustomerId: string;
     billingOfferId: string;
+    paramsJson?: string | null;
   },
 ): Promise<HydratedTopUpPayment[]> {
   const offer = await findBillingOfferById({ id: attempt.billingOfferId });
@@ -136,6 +142,7 @@ async function hydrateTopUpPayments(
   ) {
     throw new Error("Top-up recovery billing offer is invalid");
   }
+  const promotionCodesEnabled = allowsStripePromotionCodes(attempt.paramsJson);
   const hydrated: HydratedTopUpPayment[] = [];
   for (const session of sessions) {
     const paymentIntentId = typeof session.payment_intent === "string"
@@ -159,10 +166,21 @@ async function hydrateTopUpPayments(
       paymentIntent.metadata?.beutlUserId !== attempt.ownerUserId ||
       paymentIntent.metadata?.billingOfferId !== attempt.billingOfferId ||
       paymentIntent.metadata?.creditAmount !== String(offer.creditAmount) ||
-      paymentIntent.amount !== offer.unitAmount ||
+      !isValidStripeCheckoutAmount(
+        paymentIntent.amount,
+        offer.unitAmount,
+        promotionCodesEnabled,
+      ) ||
       paymentIntent.currency.toLowerCase() !== offer.currency.toLowerCase() ||
-      (session.amount_total !== null &&
-        session.amount_total !== offer.unitAmount) ||
+      !isValidStripeCheckoutSessionAmount(
+        {
+          amountSubtotal: session.amount_subtotal,
+          amountTotal: session.amount_total,
+        },
+        offer.unitAmount,
+        promotionCodesEnabled,
+      ) ||
+      session.amount_total !== paymentIntent.amount ||
       (session.currency !== null &&
         session.currency.toLowerCase() !== offer.currency.toLowerCase()) ||
       !paymentIntent.latest_charge ||

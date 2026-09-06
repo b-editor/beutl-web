@@ -430,6 +430,7 @@ describe("Stripe AI billing webhook", () => {
     mocks.retrievePaymentIntent.mockResolvedValue({
       id: "pi_1",
       customer: "cus_1",
+      amount: 1000,
       amount_received: 1000,
       currency: "usd",
       status: "succeeded",
@@ -541,6 +542,7 @@ describe("Stripe AI billing webhook", () => {
       stripeEvent("payment_intent.succeeded", {
         id: "pi_1",
         customer: "cus_1",
+        amount: 1000,
         amount_received: 1000,
         currency: "usd",
         status: "succeeded",

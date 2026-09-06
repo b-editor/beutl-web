@@ -27,6 +27,10 @@ import {
   PRO_PLAN,
 } from "@beutl/api";
 import {
+  allowsStripePromotionCodes,
+  isValidStripeCheckoutSessionAmount,
+} from "@beutl/core";
+import {
   bindTopUpCheckoutCreation,
   bindProCheckoutSession,
   claimTopUpCheckoutCreation,
@@ -45,6 +49,7 @@ import {
   releaseTopUpCheckoutCreation,
   requireTopUpRefund,
   scheduleBillingRefundAttempt,
+  setProCheckoutAttemptParams,
   startRetryableTransaction,
 } from "@beutl/db";
 import { redirect } from "next/navigation";
@@ -105,6 +110,21 @@ function subscriptionMatchesOffer(
     item.price.recurring.interval_count ===
       billingOffer.recurringIntervalCount
   );
+}
+
+function persistedProCheckoutParams(
+  paramsJson: string,
+  current: Stripe.Checkout.SessionCreateParams,
+): Stripe.Checkout.SessionCreateParams {
+  const legacy = { ...current };
+  delete legacy.allow_promotion_codes;
+  if (
+    paramsJson !== JSON.stringify(current) &&
+    paramsJson !== JSON.stringify(legacy)
+  ) {
+    throw new Error("Persisted Pro Checkout parameters do not match the current offer");
+  }
+  return JSON.parse(paramsJson) as Stripe.Checkout.SessionCreateParams;
 }
 
 async function compensateSupersededProCheckout({
@@ -467,6 +487,7 @@ export async function createProCheckout(): Promise<void> {
   const proCheckoutParams: Stripe.Checkout.SessionCreateParams = {
     customer: customerId,
     mode: "subscription",
+    allow_promotion_codes: true,
     line_items: [{ price: offer.stripePriceId, quantity: 1 }],
     metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id },
     subscription_data: { metadata: { ...stripeOwnerMetadata(session.user.id), planId: PRO_PLAN.id, billingOfferId: offer.id } },
@@ -610,8 +631,27 @@ export async function createProCheckout(): Promise<void> {
       );
     }
 
+    let createParams = proCheckoutParams;
+    if (attempt.paramsJson) {
+      // Preserve the exact parameters attached to this idempotency key. An
+      // attempt started before promotion codes were enabled may already exist
+      // at Stripe even when its create response never reached this process.
+      createParams = persistedProCheckoutParams(
+        attempt.paramsJson,
+        proCheckoutParams,
+      );
+    } else {
+      const persisted = await setProCheckoutAttemptParams({
+        userId: session.user.id,
+        checkoutKey: attempt.checkoutKey,
+        paramsJson: JSON.stringify(proCheckoutParams),
+      });
+      if (persisted.count !== 1) {
+        continue;
+      }
+    }
     const checkoutSession = await stripe.checkout.sessions.create(
-      proCheckoutParams,
+      createParams,
       {
         idempotencyKey: `ai-pro-checkout:${attempt.checkoutKey}`,
       },
@@ -708,6 +748,7 @@ function buildTopUpCheckoutParams({
   return {
     customer: customerId,
     mode: "payment",
+    allow_promotion_codes: true,
     line_items: [{ price: offer.stripePriceId, quantity: 1 }],
     metadata: {
       ...stripeOwnerMetadata(userId),
@@ -767,6 +808,7 @@ function topUpSessionMatchesAttempt({
   offer,
   userId,
   requireLineItems,
+  promotionCodesEnabled,
 }: {
   checkoutSession: Stripe.Checkout.Session;
   attemptId: string;
@@ -774,6 +816,7 @@ function topUpSessionMatchesAttempt({
   offer: PersistedBillingOffer;
   userId: string;
   requireLineItems: boolean;
+  promotionCodesEnabled: boolean;
 }): boolean {
   const lines = checkoutSession.line_items?.data;
   const lineMatches = lines === undefined
@@ -787,8 +830,15 @@ function topUpSessionMatchesAttempt({
     checkoutSession.metadata?.topUpAttemptId === attemptId &&
     checkoutSession.metadata?.billingOfferId === offer.id &&
     checkoutSession.metadata?.creditAmount === String(offer.creditAmount) &&
-    (checkoutSession.amount_total === null ||
-      checkoutSession.amount_total === offer.unitAmount) &&
+    isValidStripeCheckoutSessionAmount(
+      {
+        amountSubtotal: checkoutSession.amount_subtotal,
+        amountTotal: checkoutSession.amount_total,
+      },
+      offer.unitAmount,
+      promotionCodesEnabled,
+      true,
+    ) &&
     (checkoutSession.currency === null ||
       checkoutSession.currency.toLowerCase() === offer.currency.toLowerCase()) &&
     lineMatches;
@@ -850,6 +900,7 @@ export async function createCreditCheckout(): Promise<void> {
         offer,
         userId: authSession.user.id,
         requireLineItems: true,
+        promotionCodesEnabled: allowsStripePromotionCodes(attempt.paramsJson),
       })) {
         throw new Error("Bound top-up Checkout failed canonical validation");
       }
@@ -926,6 +977,7 @@ export async function createCreditCheckout(): Promise<void> {
           offer,
           userId: authSession.user.id,
           requireLineItems: true,
+          promotionCodesEnabled: allowsStripePromotionCodes(params),
         })) {
           throw new Error("Discovered top-up Checkout failed canonical validation");
         }
@@ -976,6 +1028,7 @@ export async function createCreditCheckout(): Promise<void> {
           offer,
           userId: authSession.user.id,
           requireLineItems: false,
+          promotionCodesEnabled: allowsStripePromotionCodes(params),
         })) {
           throw new Error("Created top-up Checkout failed canonical validation");
         }

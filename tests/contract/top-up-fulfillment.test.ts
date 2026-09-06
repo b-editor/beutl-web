@@ -14,12 +14,16 @@ vi.mock("@beutl/db", () => ({
   requireTopUpRefund: mocks.requireTopUpRefund,
 }));
 
-import { fulfillOrRefundTopUpPayment } from "../../apps/web/src/lib/stripe/ai-billing";
+import {
+  fulfillOrRefundTopUpPayment,
+  topUpPaymentMatchesOffer,
+} from "../../apps/web/src/lib/stripe/ai-billing";
 
 const paymentIntent = {
   id: "pi_delayed",
   status: "succeeded",
   customer: "cus_1",
+  amount: 1_000,
   amount_received: 1_000,
   currency: "usd",
   metadata: {
@@ -36,6 +40,7 @@ const attempt = {
   ownerUserId: "user-1",
   stripeCustomerId: "cus_1",
   billingOfferId: "offer_top_up_v1",
+  paramsJson: JSON.stringify({ allow_promotion_codes: true }),
   billingOffer: {
     id: "offer_top_up_v1",
     kind: "top_up",
@@ -94,6 +99,48 @@ describe("durable top-up fulfillment", () => {
       fulfillOrRefundTopUpPayment(stripe, paymentIntent),
     ).resolves.toMatchObject({ status: "fulfilled", creditAmount: 500 });
     expect(createRefund).not.toHaveBeenCalled();
+  });
+
+  it("fulfills a discounted payment from a promotion-code Checkout", async () => {
+    const discountedPayment = {
+      ...paymentIntent,
+      amount: 800,
+      amount_received: 800,
+    };
+    mocks.fulfillTopUpCheckoutAttempt.mockResolvedValue({
+      status: "fulfilled",
+      userId: "user-1",
+      creditAmount: 500,
+    });
+    retrievePaymentIntent.mockResolvedValue(discountedPayment);
+
+    await expect(
+      fulfillOrRefundTopUpPayment(stripe, discountedPayment as never),
+    ).resolves.toMatchObject({ status: "fulfilled", creditAmount: 500 });
+    expect(mocks.fulfillTopUpCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripePayment: { amount: 800, currency: "usd" },
+      }),
+    );
+  });
+
+  it("does not accept a discount for a legacy Checkout", () => {
+    const discountedPayment = {
+      ...paymentIntent,
+      amount: 800,
+      amount_received: 800,
+    };
+
+    expect(topUpPaymentMatchesOffer(
+      discountedPayment as never,
+      attempt.billingOffer as never,
+      false,
+    )).toBe(false);
+    expect(topUpPaymentMatchesOffer(
+      discountedPayment as never,
+      attempt.billingOffer as never,
+      true,
+    )).toBe(true);
   });
 
   it("waits for canonical recovery instead of refunding its in-flight payment", async () => {

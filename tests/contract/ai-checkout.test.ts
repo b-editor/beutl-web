@@ -96,6 +96,8 @@ function topUpCheckoutSession(
     mode: "payment",
     status: "open",
     customer: "cus_1",
+    allow_promotion_codes: true,
+    amount_subtotal: 1_000,
     amount_total: 1_000,
     currency: "usd",
     expires_at: Math.floor(Date.now() / 1_000) + 86_400,
@@ -192,6 +194,7 @@ describe("AI checkout actions", () => {
     const topUpParams = {
       customer: "cus_1",
       mode: "payment",
+      allow_promotion_codes: true,
       line_items: [{ price: "price_credits", quantity: 1 }],
       metadata: {
         beutlApplication: "beutl-web",
@@ -280,6 +283,7 @@ describe("AI checkout actions", () => {
     expect(mocks.checkoutCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "subscription",
+        allow_promotion_codes: true,
         success_url:
           "https://beutl.example/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
         subscription_data: {
@@ -304,6 +308,47 @@ describe("AI checkout actions", () => {
     );
   });
 
+  it("replays pre-promotion Pro parameters with their original idempotency key", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    const legacyParams = {
+      customer: "cus_1",
+      mode: "subscription",
+      line_items: [{ price: "price_pro", quantity: 1 }],
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+        planId: "pro",
+        billingOfferId: "offer_pro",
+      },
+      subscription_data: {
+        metadata: {
+          beutlApplication: "beutl-web",
+          beutlUserId: "user-1",
+          planId: "pro",
+          billingOfferId: "offer_pro",
+        },
+      },
+      success_url:
+        "https://beutl.example/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://beutl.example/dashboard/account/billing",
+    };
+    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+      userId: "user-1",
+      checkoutKey: "attempt-legacy",
+      billingOfferId: "offer_pro",
+      stripeCheckoutSessionId: null,
+      paramsJson: JSON.stringify(legacyParams),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+
+    await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutCreate).toHaveBeenCalledWith(legacyParams, {
+      idempotencyKey: "ai-pro-checkout:attempt-legacy",
+    });
+    expect(mocks.setProCheckoutAttemptParams).not.toHaveBeenCalled();
+  });
+
   it("copies the top-up amount to the Stripe PaymentIntent", async () => {
     mocks.getSubscriptionByUserId.mockResolvedValue({
       status: "active",
@@ -316,6 +361,7 @@ describe("AI checkout actions", () => {
     expect(mocks.checkoutCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "payment",
+        allow_promotion_codes: true,
         payment_intent_data: {
           metadata: {
             beutlApplication: "beutl-web",
@@ -332,6 +378,34 @@ describe("AI checkout actions", () => {
         maxNetworkRetries: 2,
       },
     );
+    expect(JSON.parse(
+      mocks.getOrCreateTopUpCheckoutAttempt.mock.calls[0]![0].paramsJson,
+    )).toMatchObject({ allow_promotion_codes: true });
+  });
+
+  it("reuses a promotion-code discounted top-up Checkout", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const boundAttempt = {
+      ...mocks.topUpAttempt!,
+      stripeCheckoutSessionId: "cs_discounted",
+    };
+    mocks.getOrCreateTopUpCheckoutAttempt.mockResolvedValue(boundAttempt);
+    mocks.checkoutRetrieve.mockResolvedValue(topUpCheckoutSession({
+      id: "cs_discounted",
+      amount_total: 800,
+    }));
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+    expect(mocks.checkoutRetrieve).toHaveBeenCalledWith("cs_discounted", {
+      expand: ["line_items.data.price"],
+    });
   });
 
   it("recovers a normal top-up after Stripe committed but the response was lost", async () => {
