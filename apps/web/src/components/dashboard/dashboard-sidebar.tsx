@@ -37,7 +37,6 @@ import {
   Library,
   LogOut,
   Mail,
-  ScrollText,
   Shield,
   Sparkles,
   Store,
@@ -178,24 +177,6 @@ export function DashboardSidebar({
       label: t("store"),
       icon: Store,
     },
-    {
-      key: "terms",
-      href: navHref("terms", lang),
-      label: t("terms"),
-      icon: ScrollText,
-    },
-    {
-      key: "privacy",
-      href: navHref("privacy", lang),
-      label: t("privacy"),
-      icon: Shield,
-    },
-    {
-      key: "commercialTransactions",
-      href: navHref("commercialTransactions", lang),
-      label: t("commercialTransactions"),
-      icon: ScrollText,
-    },
   ] as const;
 
   const displayName = user.name ?? user.email ?? "";
@@ -306,7 +287,7 @@ export function DashboardSidebar({
       <SidebarFooter>
         <SidebarMenu>
           {/* ダッシュボードは共通の NavBar を出さないので、公開サイトへの出口を
-              ここに置く。項目は NavBar の公開リンクと揃える。 */}
+              ここに置く。 */}
           {siteItems.map((item) => (
             <SidebarMenuItem key={item.key}>
               <SidebarMenuButton asChild tooltip={item.label}>
