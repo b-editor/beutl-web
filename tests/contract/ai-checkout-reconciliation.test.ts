@@ -4,10 +4,12 @@ const mocks = vi.hoisted(() => ({
   cancelSubscription: vi.fn(),
   checkoutRetrieve: vi.fn(),
   deleteBoundProCheckoutAttempt: vi.fn(),
+  expireTopUpCheckoutAttempt: vi.fn(),
   findBillingOfferById: vi.fn(),
   findProCheckoutAttemptBySessionId: vi.fn(),
   findCustomerByUserId: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
+  findTopUpCheckoutAttemptBySessionId: vi.fn(),
   getSubscriptionByUserId: vi.fn(),
   invoicePaymentList: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
@@ -63,12 +65,15 @@ vi.mock("@beutl/db", () => ({
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
     "pre-owner-metadata-2026-08-09",
   deleteBoundProCheckoutAttempt: mocks.deleteBoundProCheckoutAttempt,
+  expireTopUpCheckoutAttempt: mocks.expireTopUpCheckoutAttempt,
   findBillingOfferById: mocks.findBillingOfferById,
   findCustomerByUserId: mocks.findCustomerByUserId,
   findProCheckoutAttemptBySessionId:
     mocks.findProCheckoutAttemptBySessionId,
   findStripeCustomerOwnershipByStripeId:
     mocks.findStripeCustomerOwnershipByStripeId,
+  findTopUpCheckoutAttemptBySessionId:
+    mocks.findTopUpCheckoutAttemptBySessionId,
   getSubscriptionByUserId: mocks.getSubscriptionByUserId,
   reconcileSubscriptionObservation: mocks.reconcileSubscriptionObservation,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
@@ -137,6 +142,8 @@ describe("AI Checkout return reconciliation", () => {
     });
     mocks.getSubscriptionByUserId.mockResolvedValue(null);
     mocks.findBillingOfferById.mockResolvedValue(proOffer);
+    mocks.expireTopUpCheckoutAttempt.mockResolvedValue({ count: 1 });
+    mocks.findTopUpCheckoutAttemptBySessionId.mockResolvedValue(null);
     mocks.reconcileSubscriptionObservation.mockResolvedValue({
       applied: true,
       subscription: { stripeSubscriptionId: "sub_1" },
@@ -267,6 +274,56 @@ describe("AI Checkout return reconciliation", () => {
       reconcileAiCheckoutSuccess("cs_verified"),
     ).resolves.toBe(false);
     expect(mocks.retrieveSubscription).not.toHaveBeenCalled();
+  });
+
+  it("releases a completed zero-cost top-up without granting credits", async () => {
+    const topUpOffer = {
+      ...proOffer,
+      id: "offer_top_up",
+      kind: "top_up",
+      stripePriceId: "price_top_up",
+      stripeProductId: "prod_top_up",
+      unitAmount: 1_000,
+      creditAmount: 500,
+      recurringInterval: null,
+      recurringIntervalCount: null,
+    };
+    mocks.checkoutRetrieve.mockResolvedValue({
+      id: "cs_zero_cost",
+      status: "complete",
+      payment_status: "no_payment_required",
+      mode: "payment",
+      customer: "cus_1",
+      payment_intent: null,
+      amount_subtotal: 1_000,
+      amount_total: 0,
+      currency: "usd",
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+        topUpAttemptId: "topup-attempt-1",
+        billingOfferId: "offer_top_up",
+        creditAmount: "500",
+      },
+    });
+    mocks.findTopUpCheckoutAttemptBySessionId.mockResolvedValue({
+      id: "topup-attempt-1",
+      ownerUserId: "user-1",
+      stripeCustomerId: "cus_1",
+      billingOfferId: "offer_top_up",
+      stripeCheckoutSessionId: "cs_zero_cost",
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
+    });
+    mocks.findBillingOfferById.mockResolvedValue(topUpOffer);
+
+    await expect(reconcileAiCheckoutSuccess("cs_zero_cost"))
+      .resolves.toBe(false);
+
+    expect(mocks.expireTopUpCheckoutAttempt).toHaveBeenCalledWith({
+      attemptId: "topup-attempt-1",
+      ownerUserId: "user-1",
+      stripeCheckoutSessionId: "cs_zero_cost",
+    });
   });
 
   it("cancels and refunds a completed Session for a superseded customer", async () => {

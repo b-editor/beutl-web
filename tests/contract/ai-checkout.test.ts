@@ -332,18 +332,33 @@ describe("AI checkout actions", () => {
         "https://beutl.example/dashboard/account/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://beutl.example/dashboard/account/billing",
     };
+    const reorderedLegacyParams = {
+      cancel_url: legacyParams.cancel_url,
+      success_url: legacyParams.success_url,
+      subscription_data: {
+        metadata: Object.fromEntries(
+          Object.entries(legacyParams.subscription_data.metadata).reverse(),
+        ),
+      },
+      metadata: Object.fromEntries(
+        Object.entries(legacyParams.metadata).reverse(),
+      ),
+      line_items: legacyParams.line_items,
+      mode: legacyParams.mode,
+      customer: legacyParams.customer,
+    };
     mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-legacy",
       billingOfferId: "offer_pro",
       stripeCheckoutSessionId: null,
-      paramsJson: JSON.stringify(legacyParams),
+      paramsJson: JSON.stringify(reorderedLegacyParams),
       expiresAt: new Date(Date.now() + 86_400_000),
     });
 
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
 
-    expect(mocks.checkoutCreate).toHaveBeenCalledWith(legacyParams, {
+    expect(mocks.checkoutCreate).toHaveBeenCalledWith(reorderedLegacyParams, {
       idempotencyKey: "ai-pro-checkout:attempt-legacy",
     });
     expect(mocks.setProCheckoutAttemptParams).not.toHaveBeenCalled();
@@ -406,6 +421,40 @@ describe("AI checkout actions", () => {
     expect(mocks.checkoutRetrieve).toHaveBeenCalledWith("cs_discounted", {
       expand: ["line_items.data.price"],
     });
+  });
+
+  it("terminalizes a zero-cost top-up before creating a replacement", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const zeroCostAttempt = {
+      ...mocks.topUpAttempt!,
+      stripeCheckoutSessionId: "cs_zero_cost",
+    };
+    const replacementAttempt = { ...mocks.topUpAttempt! };
+    mocks.getOrCreateTopUpCheckoutAttempt
+      .mockResolvedValueOnce(zeroCostAttempt)
+      .mockResolvedValueOnce(replacementAttempt);
+    mocks.checkoutRetrieve.mockResolvedValue(topUpCheckoutSession({
+      id: "cs_zero_cost",
+      status: "complete",
+      payment_status: "no_payment_required",
+      payment_intent: null,
+      amount_total: 0,
+      url: null,
+    }));
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.expireTopUpCheckoutAttempt).toHaveBeenCalledWith({
+      attemptId: "topup-attempt-1",
+      ownerUserId: "user-1",
+      stripeCheckoutSessionId: "cs_zero_cost",
+    });
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
   });
 
   it("recovers a normal top-up after Stripe committed but the response was lost", async () => {

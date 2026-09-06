@@ -308,6 +308,48 @@ describe("top-up account-deletion recovery reconciliation", () => {
     expect(database.state.topUpCheckoutResolutions.size).toBe(0);
   });
 
+  it("terminalizes a recovered zero-cost Session without a PaymentIntent", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      ownerUserId: "active-user",
+      accountDeletionAt: null,
+      activeOwnerKey: "active-user",
+      checkoutKey: "ai-top-up-checkout:attempt-topup",
+      status: "open",
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
+      refundNotBefore: null,
+    });
+    const completed = session("cs-zero-cost", "unused", {
+      payment_intent: null,
+      amount_total: 0,
+      metadata: {
+        ...session("unused", "unused").metadata,
+        beutlUserId: "active-user",
+        creditAmount: "500",
+      },
+    });
+    const retrievePaymentIntent = vi.fn();
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async ({ status }: any) => ({
+          data: status === "complete" ? [completed] : [],
+          has_more: false,
+        })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: retrievePaymentIntent },
+      refunds: { list: vi.fn(), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup"))
+      .toMatchObject({ status: "expired", activeOwnerKey: null });
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
   it("schedules only the remaining refund for a partially refunded normal Session", async () => {
     const database = createInMemoryPrisma();
     setDbProvider(async () => database.prisma as any);
@@ -548,6 +590,37 @@ describe("top-up account-deletion recovery reconciliation", () => {
       expect.objectContaining({
         stripePaymentIntentId: "pi-discount-b",
         amount: 800,
+      }),
+    ]);
+  });
+
+  it("hydrates legacy Sessions whose amount fields were not retained", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, { paramsJson: null });
+    const historical = [
+      session("cs-legacy-a", "pi-legacy-a", {
+        amount_subtotal: null,
+        amount_total: null,
+      }),
+      session("cs-legacy-b", "pi-legacy-b", {
+        amount_subtotal: null,
+        amount_total: null,
+      }),
+    ];
+    const stripe = stripeFor(
+      historical,
+      { "pi-legacy-a": 10, "pi-legacy-b": 20 },
+    );
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutResolutions.get("attempt-topup"))
+      .toMatchObject({ canonicalPaymentIntentId: "pi-legacy-a" });
+    expect([...database.state.topUpDuplicateRefundAttempts.values()]).toEqual([
+      expect.objectContaining({
+        stripePaymentIntentId: "pi-legacy-b",
+        amount: 1_000,
       }),
     ]);
   });

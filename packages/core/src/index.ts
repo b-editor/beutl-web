@@ -109,4 +109,5 @@ export {
   allowsStripePromotionCodes,
   isValidStripeCheckoutAmount,
   isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
 } from "./stripe-checkout";

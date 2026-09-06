@@ -64,3 +64,17 @@ export function isValidStripeCheckoutSessionAmount(
     promotionCodesEnabled,
   );
 }
+
+export function isZeroCostStripeCheckoutSessionAmount(
+  { amountSubtotal, amountTotal }: StripeCheckoutAmounts,
+  undiscountedAmount: number,
+  promotionCodesEnabled: boolean,
+): boolean {
+  return (
+    promotionCodesEnabled &&
+    Number.isSafeInteger(undiscountedAmount) &&
+    undiscountedAmount > 0 &&
+    amountSubtotal === undiscountedAmount &&
+    amountTotal === 0
+  );
+}

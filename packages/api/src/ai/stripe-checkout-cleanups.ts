@@ -3,6 +3,7 @@ import {
   allowsStripePromotionCodes,
   isValidStripeCheckoutAmount,
   isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
 } from "@beutl/core";
 import { discoverPackageCheckoutAttempt, discoverTopUpCheckoutAttempt, discoverLegacyPackageCheckoutAttempt } from "../package-checkout-discovery";
 import {
@@ -145,10 +146,35 @@ async function hydrateTopUpPayments(
   const promotionCodesEnabled = allowsStripePromotionCodes(attempt.paramsJson);
   const hydrated: HydratedTopUpPayment[] = [];
   for (const session of sessions) {
+    const sessionCustomer = typeof session.customer === "string"
+      ? session.customer
+      : session.customer?.id;
     const paymentIntentId = typeof session.payment_intent === "string"
       ? session.payment_intent
       : session.payment_intent?.id;
     if (!paymentIntentId) {
+      if (
+        session.status === "complete" &&
+        session.mode === "payment" &&
+        sessionCustomer === attempt.stripeCustomerId &&
+        session.metadata?.beutlApplication === "beutl-web" &&
+        session.metadata?.beutlUserId === attempt.ownerUserId &&
+        session.metadata?.topUpAttemptId === attempt.id &&
+        session.metadata?.billingOfferId === attempt.billingOfferId &&
+        session.metadata?.creditAmount === String(offer.creditAmount) &&
+        (session.currency === null ||
+          session.currency.toLowerCase() === offer.currency.toLowerCase()) &&
+        isZeroCostStripeCheckoutSessionAmount(
+          {
+            amountSubtotal: session.amount_subtotal,
+            amountTotal: session.amount_total,
+          },
+          offer.unitAmount,
+          promotionCodesEnabled,
+        )
+      ) {
+        continue;
+      }
       throw new Error(`Completed top-up Session ${session.id} has no PaymentIntent`);
     }
     const paymentIntent = await stripe.paymentIntents.retrieve(
@@ -179,8 +205,11 @@ async function hydrateTopUpPayments(
         },
         offer.unitAmount,
         promotionCodesEnabled,
+        !promotionCodesEnabled,
       ) ||
-      session.amount_total !== paymentIntent.amount ||
+      (session.amount_total !== null &&
+        session.amount_total !== undefined &&
+        session.amount_total !== paymentIntent.amount) ||
       (session.currency !== null &&
         session.currency.toLowerCase() !== offer.currency.toLowerCase()) ||
       !paymentIntent.latest_charge ||

@@ -3,6 +3,7 @@ import {
   allowsStripePromotionCodes,
   isValidStripeCheckoutAmount,
   isValidStripeCheckoutSessionAmount,
+  isZeroCostStripeCheckoutSessionAmount,
 } from "@beutl/core";
 
 describe("Stripe Checkout promotion-code amounts", () => {
@@ -37,5 +38,25 @@ describe("Stripe Checkout promotion-code amounts", () => {
       1_000,
       false,
     )).toBe(true);
+    expect(isValidStripeCheckoutSessionAmount(
+      { amountSubtotal: null, amountTotal: null },
+      1_000,
+      false,
+      true,
+    )).toBe(true);
+  });
+
+  it("recognizes only promotion-enabled zero-cost Sessions", () => {
+    const amounts = { amountSubtotal: 1_000, amountTotal: 0 };
+
+    expect(isZeroCostStripeCheckoutSessionAmount(amounts, 1_000, true))
+      .toBe(true);
+    expect(isZeroCostStripeCheckoutSessionAmount(amounts, 1_000, false))
+      .toBe(false);
+    expect(isZeroCostStripeCheckoutSessionAmount(
+      { amountSubtotal: undefined, amountTotal: 0 },
+      1_000,
+      true,
+    )).toBe(false);
   });
 });
