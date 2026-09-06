@@ -7,7 +7,17 @@ import { tryGetUserIdFromHeaders } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/lib/better-auth";
-import { contentCacheHeaders } from "@/lib/content-cache";
+import {
+  contentCacheHeaders,
+  contentDeliveryHeaders,
+} from "@/lib/content-cache";
+
+function contentDisposition(disposition: string, fileName: string): string {
+  const fallback = fileName
+    .replace(/[^\x20-\x7e]/gu, "_")
+    .replace(/["\\]/gu, "_");
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
 
 export async function GET(
   request: NextRequest,
@@ -56,10 +66,15 @@ export async function GET(
       );
     }
 
+    const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
     return new NextResponse(object.body, {
       headers: {
-        "Content-Type": file.mimeType || "application/octet-stream",
         "Content-Length": object.size.toString(),
+        ...deliveryHeaders,
+        "Content-Disposition": contentDisposition(
+          deliveryHeaders["Content-Disposition"],
+          file.name,
+        ),
         ...contentCacheHeaders(access.canUsePublicCache),
       },
       status: 200,

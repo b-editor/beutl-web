@@ -10,19 +10,18 @@ import {
   getProfileByUserId,
   retrieveDevPackageByName,
   startTransaction,
+  deleteUnreferencedFileWithStorageCleanup,
   updateDevPackageTags,
 } from "@beutl/db";
+import type { PrismaTransaction } from "@beutl/db";
 import {
   createRelease as createReleaseRecord,
-  deleteReleaseById,
+  deleteReleaseWithStorageCleanup,
   getReleasePackageAndFileId,
   getReleasePublishedByIdOrThrow,
   getReleaseWithFileById,
   updateRelease as updateReleaseRecord,
 } from "@beutl/db";
-import {
-  deleteStorageFile,
-} from "@/lib/storage";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
@@ -61,19 +60,9 @@ export async function updateRelease(
     }
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      let fileId = release.file?.id;
       // Only the kind is decided here; it is merged into the package's visible tags
       // inside the write transaction, so a tag edit landing meanwhile is not discarded.
       let packageType: PackageType | undefined;
-      // Deleting the old artifact clears the release's file relation, so it waits until
-      // the replacement is committed — a failure in between would leave a published
-      // release with nothing to download. Which file that is can only be read inside the
-      // transaction: a concurrent save may have replaced it since this request started.
-      let replacesArtifact = false;
-      let replacedFileId: string | undefined;
-      // Tracked so a failed release transaction does not strand the upload against
-      // the publisher's quota.
-      let uploadedFileId: string | undefined;
 
       const packageName = await getPackageNameFromPackageId({
         packageId: release.packageId,
@@ -82,13 +71,64 @@ export async function updateRelease(
         return { success: false, message: t("developer:errors.idNotFound") };
       }
 
-      // Read before the upload: a failure here would otherwise strand the file the
-      // cleanup below only covers once the transaction is reached.
+      // Audit the visibility transition separately; publication rechecks ownership
+      // in the File transaction before changing the release.
       const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
         id: validated.data.id,
       });
 
+      const publishRelease = async (
+        tx: PrismaTransaction,
+        replacementFileId?: string,
+      ): Promise<ReleaseRecord> => {
+        const current = await getReleaseWithFileById({
+          id: validated.data.id,
+          prisma: tx,
+        });
+        const devPackage = await retrieveDevPackageByName({
+          name: packageName,
+          userId: session.user.id,
+          prisma: tx,
+        });
+        if (!current || current.packageId !== release.packageId || !devPackage) {
+          throw new Error("Release ownership changed before publication");
+        }
+
+        const replacedFileId =
+          replacementFileId &&
+          current.file?.id !== replacementFileId &&
+          current.file?.userId === session.user.id
+            ? current.file.id
+            : undefined;
+        const updated = await updateReleaseRecord({
+          id: validated.data.id,
+          title: validated.data.title,
+          description: validated.data.description,
+          targetVersion: validated.data.targetVersion,
+          published: validated.data.published === "on",
+          fileId: replacementFileId ?? current.file?.id,
+          prisma: tx,
+        });
+
+        if (packageType) {
+          await updateDevPackageTags({
+            packageId: release.packageId,
+            tags: applyPackageType(devPackage.tags, packageType),
+            prisma: tx,
+          });
+        }
+        if (replacedFileId) {
+          await deleteUnreferencedFileWithStorageCleanup({
+            fileId: replacedFileId,
+            userId: session.user.id,
+            prisma: tx,
+          });
+        }
+        return updated;
+      };
+
       const uploaded = formData.getAll("file") as File[];
+      let data: ReleaseRecord;
       const singleNupkg =
         uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");
 
@@ -97,14 +137,14 @@ export async function updateRelease(
         // upload may have left so the store stops classifying it as a data package.
         packageType = "extension";
 
-        const deletedSize = release.file
-          ? BigInt(release.file.size)
-          : BigInt(0);
+        let published: ReleaseRecord | undefined;
         const result = await createDedicatedFile(
           session.user.id,
           uploaded[0],
-          deletedSize,
           t,
+          async (tx, record) => {
+            published = await publishRelease(tx, record.id);
+          },
         );
         if (!result.success) {
           return {
@@ -113,9 +153,10 @@ export async function updateRelease(
           };
         }
 
-        replacesArtifact = true;
-        fileId = result.record!.id;
-        uploadedFileId = result.record!.id;
+        if (!published) {
+          throw new Error("Release artifact publication did not return a result");
+        }
+        data = published;
       } else if (uploaded.length > 0) {
         const profile = await getProfileByUserId(session.user.id);
         const username = profile?.userName || session.user.name || session.user.id;
@@ -135,93 +176,25 @@ export async function updateRelease(
 
         packageType = getPackageType(built.tags);
 
-        const deletedSize = release.file ? BigInt(release.file.size) : BigInt(0);
+        let published: ReleaseRecord | undefined;
         const result = await createDedicatedFile(
           session.user.id,
           built.file,
-          deletedSize,
           t,
+          async (tx, record) => {
+            published = await publishRelease(tx, record.id);
+          },
         );
         if (!result.success) {
           return { success: false, message: result.message };
         }
 
-        replacesArtifact = true;
-        fileId = result.record!.id;
-        uploadedFileId = result.record!.id;
-      }
-
-      // The tags describe the artifact the release points at, so either both writes land
-      // or neither does — a partial commit leaves the store classifying the package from
-      // an artifact the release does not serve.
-      let data: ReleaseRecord;
-      try {
-        data = await startTransaction(async (tx) => {
-          if (replacesArtifact) {
-            // A concurrent save may have replaced the artifact since this request read
-            // it, and the file this one actually displaces is the one to clean up.
-            const current = await getReleaseWithFileById({
-              id: validated.data.id,
-              prisma: tx,
-            });
-            replacedFileId = current?.file?.id;
-          }
-
-          const updated = await updateReleaseRecord({
-            id: validated.data.id,
-            title: validated.data.title,
-            description: validated.data.description,
-            targetVersion: validated.data.targetVersion,
-            published: validated.data.published === "on",
-            fileId: fileId,
-            prisma: tx,
-          });
-
-          if (packageType) {
-            // Read the visible tags here rather than before the upload, so a tag edit
-            // that landed while the archive was being built is not discarded.
-            const devPackage = await retrieveDevPackageByName({
-              name: packageName,
-              userId: session.user.id,
-              prisma: tx,
-            });
-            await updateDevPackageTags({
-              packageId: release.packageId,
-              tags: applyPackageType(devPackage?.tags ?? [], packageType),
-              prisma: tx,
-            });
-          }
-
-          return updated;
-        });
-      } catch (error) {
-        // Nothing references the upload now, and it would still count against the
-        // publisher's quota, so every retry would cost them another copy.
-        if (uploadedFileId) {
-          try {
-            await deleteStorageFile({ fileId: uploadedFileId });
-          } catch (cleanupError) {
-            console.error(
-              `Failed to delete the orphaned upload ${uploadedFileId}:`,
-              cleanupError,
-            );
-          }
+        if (!published) {
+          throw new Error("Release artifact publication did not return a result");
         }
-        throw error;
-      }
-
-      if (replacedFileId) {
-        // The release already points at the new artifact, so a failure here must not
-        // report the save as failed — a retry would upload another copy while the
-        // orphaned file keeps consuming the publisher's quota either way.
-        try {
-          await deleteStorageFile({ fileId: replacedFileId });
-        } catch (error) {
-          console.error(
-            `Failed to delete the replaced artifact ${replacedFileId}:`,
-            error,
-          );
-        }
+        data = published;
+      } else {
+        data = await startTransaction((tx) => publishRelease(tx));
       }
 
       await addAuditLog({
@@ -307,13 +280,9 @@ export async function deleteRelease({
       };
     }
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      if (release.fileId) {
-        await deleteStorageFile({
-          fileId: release.fileId,
-        });
-      }
-      await deleteReleaseById({
+      await deleteReleaseWithStorageCleanup({
         id: releaseId,
+        userId: session.user.id,
       });
       await addAuditLog({
         userId: session.user.id,

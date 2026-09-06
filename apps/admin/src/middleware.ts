@@ -9,7 +9,9 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Skip all internal paths (_next)
-    "/((?!_next).*)",
+    // _next と /api を除く。/api は localeMiddleware が素通しするだけだが、
+    // matcher に含めると Next.js が本文を middleware 用に複製し、既定 10MB を
+    // 超えた分を捨てるため、大きなアップロードが壊れて届く。
+    "/((?!_next|api/).*)",
   ],
 };

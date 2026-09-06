@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { setDbProvider } from "@beutl/db";
+import { setR2BucketProvider } from "@beutl/api";
 
 // OpenNext (Cloudflare Workers) 用の PrismaClient 生成を @beutl/db に登録する。
 // Hyperdrive の per-request 接続モデル (maxUses:1) に合わせ、毎リクエスト新規生成する。
@@ -24,5 +25,15 @@ const createPrismaClient = async () => {
 };
 
 setDbProvider(createPrismaClient);
+
+// AI 出力の保存先 (R2) を @beutl/api のストレージ層に登録する。
+// getCloudflareContext はリクエストコンテキストでのみ利用可能なため遅延実行する。
+setR2BucketProvider(() => {
+  const { env } = getCloudflareContext();
+  if (!env.BEUTL_R2_BUCKET) {
+    throw new Error("BEUTL_R2_BUCKET binding not found");
+  }
+  return env.BEUTL_R2_BUCKET;
+});
 
 export type { PrismaClient };

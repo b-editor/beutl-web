@@ -2,11 +2,9 @@ import "server-only";
 
 import { getUserIdFromPackageId } from "@beutl/db";
 import type { updateRelease as updateReleaseRecord } from "@beutl/db";
-import { isValidNuGetVersionRange, STORAGE_QUOTA_BYTES } from "@beutl/core";
-import {
-  calcTotalFileSize,
-  createStorageFile,
-} from "@/lib/storage";
+import { isValidNuGetVersionRange, STORAGE_FILE_COUNT_LIMIT, STORAGE_QUOTA_BYTES } from "@beutl/core";
+import { createDedicatedStorageFile } from "@/lib/storage";
+import type { PrismaTransaction } from "@beutl/db";
 import type { Translator } from "@beutl/i18n";
 import SemVer from "semver";
 import { z } from "zod";
@@ -77,29 +75,25 @@ async function sameUser<TResult>(
 async function createDedicatedFile(
   userId: string,
   file: File,
-  size: bigint,
   t: Translator,
+  publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>,
 ) {
-  const maxSize = BigInt(STORAGE_QUOTA_BYTES);
-  let totalSize = await calcTotalFileSize({ userId });
-  totalSize -= size;
-
-  if (totalSize + BigInt(file.size) > maxSize) {
-    return {
-      success: false,
-      message: t("developer:errors.storageFull"),
-    };
-  }
-
-  const record = await createStorageFile({
+  // Reserve the replacement before uploading. The optional publication callback
+  // swaps the owning relation and retires the previous File in that same commit
+  // transaction, while failed writes remain covered by the durable cleanup outbox.
+  const outcome = await createDedicatedStorageFile({
     file,
-    visibility: "DEDICATED",
     userId,
+    quotaBytes: BigInt(STORAGE_QUOTA_BYTES),
+    fileCountLimit: STORAGE_FILE_COUNT_LIMIT,
+    publish,
   });
+  if (outcome.kind === "overQuota") return { success: false, message: t("developer:errors.storageFull") };
+  if (outcome.kind === "tooManyFiles") return { success: false, message: t("developer:errors.storageFull") };
 
   return {
     success: true,
-    record,
+    record: outcome.record,
   };
 }
 

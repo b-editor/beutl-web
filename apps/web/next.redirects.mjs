@@ -3,10 +3,15 @@
 //
 // 特に /account/manage/email と /account/manage/personal-data/handle は送信済みの
 // 確認メールに埋まっている。ConfirmationToken.expires を過ぎるまで外さないこと。
+// AI プランの画面は請求ページへ統合された。このパスは main に存在したことがなく、
+// 旧 URL を success_url に持つ Stripe セッションは本番には無い。それでも残すのは、
+// このブランチの途中のコミットをデプロイしてから進めた場合に、決済直後の戻り先が
+// 404 になるのを避けるため。
 const MOVED = [
   ["/storage/:path*", "/dashboard/storage/:path*"],
   ["/library/:path*", "/dashboard/library/:path*"],
   ["/developer/:path*", "/dashboard/developer/:path*"],
+  ["/dashboard/account/ai-plan", "/dashboard/account/billing"],
   ["/account/manage/:path*", "/dashboard/account/:path*"],
 ];
 

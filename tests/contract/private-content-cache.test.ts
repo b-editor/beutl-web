@@ -7,12 +7,17 @@ describe("authenticated content caching", () => {
     expect(contentCacheHeaders(false)).toEqual({
       "Cache-Control": "no-store",
       Vary: "Cookie, Authorization",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
     });
   });
 
-  it("keeps explicitly public content immutable", () => {
+  it("requires public content to be revalidated before every reuse", () => {
     expect(contentCacheHeaders(true)).toEqual({
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, no-cache, must-revalidate",
+      Vary: "Cookie, Authorization",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
     });
   });
 
@@ -64,6 +69,8 @@ describe("authenticated content caching", () => {
     ).toEqual({
       "Cache-Control": "no-store",
       Vary: "Cookie, Authorization",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
     });
   });
 

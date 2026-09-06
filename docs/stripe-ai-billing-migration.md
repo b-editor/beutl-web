@@ -1,0 +1,440 @@
+# Stripe AI billing migration safety
+
+The AI top-up feature was not deployed before
+`20260808120000_replace_subscription_credits_with_monthly_usage`. The migration
+therefore expects no legacy `CreditTransaction` rows whose `kind` is
+`purchase`.
+
+The migration deliberately installs and immediately removes a portable `CHECK`
+constraint before changing the ledger. PostgreSQL and CockroachDB validate the
+constraint against existing rows when it is added, so an unexpected legacy
+purchase stops the migration instead of being trusted without Stripe payment
+amount and currency provenance.
+
+Before applying the migration, operators can run:
+
+```sql
+SELECT "id", "userId", "stripePaymentId", "createdAt"
+FROM "CreditTransaction"
+WHERE "kind" = 'purchase';
+```
+
+An empty result is the expected precondition. If rows exist, stop and reconcile
+each purchase against Stripe before retrying the migration. Do not bypass the
+guard or delete purchases without an explicit balance and refund/dispute
+reconciliation plan.
+
+The later hardening migration also creates a unique index on
+`Customer.stripeId`. Before creating it, the migration deterministically kept
+one local mapping for each duplicated Stripe customer and removed the others.
+That cleanup enforced uniqueness, but it could not prove that the retained
+local user actually owned a metadata-free Stripe customer.
+
+## Legacy customer ownership cohort
+
+`20260809180000_add_stripe_ownership_and_account_deletion_saga` is a separate,
+forward-only migration. It snapshots the exact `(Customer.stripeId,
+Customer.userId)` pairs present at deployment into `StripeCustomerOwnership`
+with migration cohort `pre-owner-metadata-2026-08-09`, then adds a composite
+foreign key. The forward-only
+`20260811120500_relax_customer_ownership_fk` migration removes that enforcing
+foreign key before rollout. This expand step lets an older application instance
+continue writing `Customer` while new instances dual-write ownership evidence;
+new runtime reads treat a mapping without that evidence as unowned.
+
+### Mandatory maintenance cutover
+
+The ownership migration and the later FK-removal migration have already been
+applied in development, so their checksums are immutable. On a fresh production
+database, Prisma necessarily applies the FK before it reaches the forward-only
+removal. The old application does not dual-write `StripeCustomerOwnership`, so
+billing writes must not run between those two migration records.
+
+Use this deployment order:
+
+1. Put checkout, billing-portal, and Stripe-webhook routes into maintenance mode.
+   Return a retryable response for Stripe webhooks so Stripe redelivers them.
+2. Run `prisma migrate deploy` to completion. Do not resume traffic after a
+   partially applied migration batch.
+3. Verify that the transitional constraint is absent:
+
+   ```sql
+   SELECT 1
+   FROM information_schema.table_constraints
+   WHERE constraint_name = 'Customer_stripeId_userId_fkey';
+   ```
+
+   The expected result is no rows.
+4. Deploy the new application and Worker, then resume billing traffic.
+
+This maintenance window is required only for the migration batch containing
+the transitional FK. Subsequent forward migrations do not recreate it.
+
+New and replacement mappings are written in one retryable database transaction with a
+non-null `verifiedAt`, and only after Stripe returns the owner metadata supplied
+while creating the customer. Existing cohort rows remain as audit evidence if
+the current mapping is replaced. They are not ownership proof: the earlier
+customer-deduplication migration could not prove which local user owned a
+metadata-free Stripe customer.
+
+Runtime ownership is deliberately fail-closed:
+
+- matching Stripe owner metadata plus the current database mapping is accepted
+  and marks the ownership row as verified;
+- absent, partial, or conflicting owner metadata is never accepted for email
+  changes, billing portal access, checkout reuse, webhook entitlement, or
+  account deletion;
+- a live mapping whose Stripe customer lacks valid metadata is not replaced
+  automatically. Billing and account-deletion operations fail closed until an
+  operator reconciles ownership and any payable remote state; the legacy
+  customer remains untouched during that intervention.
+
+Before replacing a mapping, the application expires every owned open Checkout
+Session on the old customer. If mapping persistence still loses a race with
+account-deletion authorization, it removes the newly created unmapped customer
+after confirming that it did not become the current mapping.
+
+Operators can inspect the cohort with:
+
+```sql
+SELECT "stripeId", "userId", "migrationCohort", "verifiedAt"
+FROM "StripeCustomerOwnership"
+ORDER BY "createdAt", "stripeId";
+```
+
+## Open legacy package PaymentIntents
+
+A metadata-free legacy PaymentIntent is not adopted or reused. New checkout
+always uses a metadata-owned customer and writes owner metadata to the payment.
+Webhook fulfillment requires that strong evidence and otherwise fails closed;
+operators must reconcile any pre-deployment open PaymentIntent directly in
+Stripe instead of assigning it from the migration cohort.
+
+## Bound legacy Pro Checkout Sessions
+
+`20260811120000_version_paid_ai_billing_offers` cannot infer an immutable
+`BillingOffer` for a legacy `ProCheckoutAttempt`. Unbound attempts are safe for
+the migration to remove, but a bound attempt can still name a payable Stripe
+Checkout Session. The migration therefore has a fail-fast `CHECK` preflight and
+will not delete a bound row.
+
+Keep checkout traffic paused and run this before applying the migration:
+
+```sql
+SELECT "userId", "checkoutKey", "stripeCheckoutSessionId", "expiresAt"
+FROM "ProCheckoutAttempt"
+WHERE "stripeCheckoutSessionId" IS NOT NULL
+ORDER BY "userId";
+```
+
+An empty result is the required precondition. For every returned row, retrieve
+the exact Checkout Session from Stripe and verify its customer, Pro mode, owner
+metadata, Price, and Subscription metadata before mutating it. Reconcile by
+Stripe status:
+
+- expire an `open` Session, then re-retrieve it and confirm it is `expired`;
+- if expiry loses to completion, or the Session is already `complete`, retain
+  the customer, Session, Subscription, Invoice, and every paid PaymentIntent
+  handle, cancel the Subscription, and fully refund every paid PaymentIntent;
+- treat only a Stripe-confirmed `expired` Session, or a canceled and fully
+  refunded completed Session, as terminal.
+
+Delete the corresponding `ProCheckoutAttempt` row only after that terminal
+state has been verified and recorded in the deployment log. Re-run the query
+until it is empty, then retry `prisma migrate deploy`. Do not bypass the guard,
+null the binding, or delete the row merely because its local `expiresAt` has
+passed; Checkout remains remotely payable until Stripe says otherwise.
+
+## Legacy active Pro subscriptions
+
+The same offer-versioning migration assigns currently active legacy Pro rows to
+a non-checkout migration offer. That sentinel preserves the entitlement the
+previous application already granted while avoiding a guess about a Stripe
+Price from SQL alone. It cannot be selected in Checkout. The first canonical
+Stripe subscription read resolves the exact Price and replaces the sentinel
+with the verified active or historical offer.
+
+CockroachDB installations that default new tables to `schema_locked = true`
+must keep the migration SQL's explicit temporary unlocks. The migration unlocks
+each newly created billing table before it adds indexes or foreign keys and
+relocks it after the schema change completes. Do not manually mark a partially
+applied migration as complete; first recover its incomplete tables, then retry
+the corrected migration through Prisma.
+
+## Fresh Cockroach bootstrap
+
+The historical migration `20260302201320_change_bigint_to_int` contains a
+Cockroach-incompatible statement on a fresh chain: with the cluster default
+`create_table_with_schema_locked = true`, Prisma can report P3018 before later
+migrations run. Do not edit that historical migration or mark it applied; its
+checksum is part of the migration history. Existing production upgrades do not
+re-run an already applied migration, so this is a fresh-database bootstrap
+concern only.
+
+For a new Cockroach v26.1+ database, use the dedicated command below. It
+requires a separately provisioned empty database URL and changes only the
+migration subprocess URL; the runtime `DATABASE_URL` remains unchanged:
+
+```bash
+FRESH_COCKROACH_DATABASE_URL='postgresql://root@host:26257/new_empty_db?sslmode=verify-full' \
+  vp run --workspace-root migrate:fresh-cockroach
+```
+
+The command appends the session option
+`options=-c%20create_table_with_schema_locked%3Doff` (Cockroach's actual v26.3
+session variable is `create_table_with_schema_locked`) while preserving any
+existing query parameters. It must not be added to the normal runtime or
+upgrade URL, because turning schema locking off globally weakens the intended
+schema-ownership guard. After deployment, verify the explicit relocks (and
+investigate any application table that is still unlocked):
+
+```sql
+SHOW CREATE TABLE "PackageCheckoutResolution";
+SHOW CREATE TABLE "TopUpDuplicateRefundAttempt";
+SHOW CREATE TABLE "TopUpCheckoutResolution";
+SHOW CREATE TABLE "StorageUpload";
+SHOW CREATE TABLE "StorageMultipartCleanup";
+```
+
+Each result must include `WITH (schema_locked = true)`. Repeat `SHOW CREATE
+TABLE` for the other application tables listed by `SHOW TABLES`; an application
+table whose result lacks that clause is an incomplete relock and must be
+repaired before traffic resumes.
+
+The durable storage-upload start migration requires a maintenance cutover.
+`20260825160000_durable_storage_upload_start` is immutable and defaults
+`StorageUpload.startState` to `intent` while enforcing that only `active` rows
+have a non-null `uploadId`; an old writer that omits `startState` therefore
+cannot write during this transition. Quiesce storage-upload starts before
+running `prisma migrate deploy` through `20260827000000_split_storage_multipart_cleanup`.
+Verify that the repaired default is `active`, the three start-state checks are
+present, and `SHOW CREATE TABLE "StorageUpload"` reports
+`schema_locked = true`. Deploy the new runtime (which writes `intent`
+explicitly), then resume storage traffic. Do not edit or resolve the 1600
+migration to change its checksum; the 2600 migration is the forward repair for
+databases where 1600 was already applied.
+
+The 2700 migration separates object deletion from multipart abort. It backfills
+legacy handles from `AiStorageCleanup.uploadId` and zero-sized abandoned
+`StorageUpload` orphan rows into `StorageMultipartCleanup`, then removes the
+orphan rows and constrains the retired cleanup column to `NULL`. This outbox
+deliberately has no User foreign key and
+uses `(objectKey, uploadId)` as its identity, so every handle survives an
+account cascade and a delayed abort cannot delete an object produced later at
+the same key. Use this cutover order: stop storage starts, both the Web and
+admin account-deletion surfaces, and scheduled storage cleanup; apply the
+migration; deploy the new Web, admin, and standalone API runtimes; verify the
+new table is schema-locked; only then resume traffic and schedules. An old
+runtime can still try to write the retired combined `uploadId` field and must
+not overlap the new `CHECK` constraint.
+
+The 2701 storage-cleanup hardening migration adds durable `attempts`,
+`lastError`, `interventionAt`, `status`, and a CAS `revision` to every detached
+multipart handle. Transient aborts retry with bounded exponential backoff;
+after five attempts, or immediately when the R2 binding has no abort capability,
+the row becomes `intervention` and appears in Admin → AI settings. Operators
+must use the exact revision and intervention timestamp shown there to Resume or
+Terminalize. Terminalize is an explicit risk acknowledgement (the remote handle
+may still exist), records an audit log, and releases object-key cleanup only
+after every handle for that key is resolved. It never deletes a winner object.
+
+The `20260827030000_add_storage_upload_completion_lease` migration (followed
+immediately by the forward `20260828000000_harden_unknown_storage_completion`
+constraint repair) is a maintenance cutover, not a rolling application change.
+Before applying it,
+quiesce storage-upload start, part, finish, and cancel requests, account
+deletion, and all storage schedulers. Apply the migration, deploy every Web,
+admin, and standalone API runtime that understands the completion lease and
+the fail-closed `unknown` outcome, then verify `SHOW CREATE TABLE
+"StorageUpload"` reports `schema_locked = true` and includes the completion
+state, lease-pair, intervention, and retry-window constraints. Resume storage
+traffic, account deletion, and schedulers only after those checks pass. Do not
+run an old runtime across this window: an old finisher can turn an unknown
+provider result back into a second remote `complete` attempt.
+
+A completion that passes the local response deadline, or otherwise loses a
+definitive provider outcome after `complete()` was issued, remains `unknown`.
+The scheduler and a client retry may recover a visible object into its File
+receipt, but they never issue a second `complete`, abort the multipart, or
+release account deletion. Ordinary Resume and Terminalize are disabled for
+this state. There is no operator override from `unknown`: R2 exposes no
+completion-status API that can prove an old call has terminated, and a HEAD
+absence is only a point-in-time observation. The row intentionally remains
+fail-closed unless a receipt can be recovered from a visible object.
+
+Configure and verify the R2 safety net during every release:
+
+```bash
+apps/web/node_modules/.bin/wrangler r2 bucket lifecycle set beutl-dev --file apps/web/r2-lifecycle.json
+BEUTL_R2_BUCKET_NAME=beutl-dev vp run verify:r2-lifecycle
+```
+
+The live output must report `Abort incomplete multipart uploads` after `7 days`.
+Cloudflare's default is seven days; the release is No-Go if the
+lifecycle cannot be read or does not contain this exact rule. Keep the command
+output with the deployment record.
+
+The receipt-retention migration preflights orphaned and duplicate receipts,
+then drops and recreates its named index and foreign key because Cockroach does
+not support conditional dynamic DDL in a migration block. Run it during the
+maintenance window with no concurrent storage-upload writes. If any migration
+fails after its temporary unlock, do not resume traffic: retry the migration
+and confirm `SHOW CREATE TABLE` reports `schema_locked = true` before release.
+
+## Rolling cutover for the unknown-completion probe lease
+
+`20260829010000_add_unknown_probe_lease` adds the paired
+`unknownProbeLeaseToken`/`unknownProbeNotBefore` fields used to serialize
+recovery probes for `StorageUpload` rows in `unknown` state. It is a rolling
+cutover with a strict quiesce window because an old finisher does not know the
+pair: an old writer can clear or rewrite completion fields while the new
+constraint requires both probe columns to be null outside `unknown`. An old
+finisher can also issue a second remote `complete()` after a new worker has
+claimed the probe, so it must not overlap this deployment.
+
+Use the following order for every environment:
+
+1. Quiesce storage-upload start, part, finish, and cancel requests, account
+   deletion, and all storage cleanup/reconciliation schedulers. Return a
+   retryable response to new requests and let clients retry after the window.
+2. Apply `prisma migrate deploy` through
+   `20260829010000_add_unknown_probe_lease` (and the following dedicated
+   reservation migration, when enabled) to completion. Do not mark a partial
+   batch applied or resume traffic after a failed statement.
+3. Verify the schema before deploying application traffic:
+
+   ```sql
+   SHOW CREATE TABLE "StorageUpload";
+   SELECT column_name, is_nullable, column_default
+   FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND column_name IN (
+       'unknownProbeLeaseToken', 'unknownProbeNotBefore', 'reservationKind'
+     );
+   SELECT constraint_name
+   FROM information_schema.table_constraints
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND constraint_name IN (
+       'StorageUpload_unknownProbeLease_pair_ck',
+       'StorageUpload_reservationKind_ck',
+       'StorageUpload_startState_ck',
+       'StorageUpload_startState_uploadId_ck',
+       'StorageUpload_creationLease_ck',
+       'StorageUpload_completionLease_pair_ck',
+       'StorageUpload_completionIntervention_ck'
+     );
+   SELECT index_name
+   FROM information_schema.statistics
+   WHERE table_schema = 'public' AND table_name = 'StorageUpload'
+     AND index_name IN (
+       'StorageUpload_completionState_unknownProbeNotBefore_idx',
+       'StorageUpload_userId_reservationKind_completedFileId_idx'
+     );
+   ```
+
+   `SHOW CREATE TABLE` must report `schema_locked = true`; both probe columns
+   must be nullable; `reservationKind` must be non-null with the literal
+   `multipart` default; all seven named constraints and both indexes must appear.
+   A dedicated active reservation must accept a paired creation lease and reject
+   either half of the pair; a settled or abandoned dedicated row must reject a
+   remaining creation lease. Multipart intent/creating/active rows must retain
+   their pre-2902 start-state and upload-ID rules.
+   Also verify that a row in `unknown` state accepts either both probe values or
+   neither, while an `idle`, `retry`, `resumed`, `settled`, or `intervention`
+   row rejects a non-null probe value.
+4. Deploy the Web, admin, and standalone API runtimes that understand the
+   probe pair and the fail-closed `unknown` state. Drain every old finisher
+   instance before enabling any new finish call; an old finisher is
+   incompatible with the non-null probe pair and can double-complete a remote
+   multipart upload.
+5. Resume storage traffic, account deletion, and schedulers only after all
+   runtimes report the new schema and the verification queries above have been
+   recorded in the deployment log.
+
+## Durable top-up Checkout recovery
+
+`20260826050000_harden_topup_checkout_recovery` gives each user one nullable,
+unique active top-up slot. It also persists the exact Checkout parameters and
+Stripe idempotency key before the first remote call. A request that loses the
+create response therefore reuses the same attempt, enumerates every open,
+complete, and expired Checkout Session page, and binds the discovered Session.
+It does not rotate the attempt until exhaustive discovery proves absence after
+Stripe's 24-hour idempotency retention boundary. Multiple matching Sessions
+fail closed in the request path; the recovery worker expires extra open
+Sessions, selects one completed canonical payment, and refunds completed
+duplicates before the active slot can be reused.
+
+Duplicate-refund processing reclaims expired worker leases. Every automatic
+non-success consumes the bounded attempt budget, including a pre-existing
+nonterminal Refund and a newly returned `pending`, `requires_action`, `failed`,
+or `canceled` Refund. Exhausted rows retain their first intervention timestamp
+and are re-read canonically from Stripe every six hours. A later successful
+Refund atomically reopens the Checkout resolution and account-deletion recovery
+instead of leaving deletion permanently blocked.
+
+## Resumable account deletion
+
+An account-deletion link now consumes its confirmation token and creates an
+`AccountDeletionIntent` in the same transaction before any Stripe mutation. The
+intent snapshots the Stripe customer ID. Reusing the same link finds that
+authorization first, so a crash, Stripe outage, or later token expiration does
+not prevent resumption. The durable authorization itself expires after seven
+days; an unfinished saga then requires a newly issued confirmation link.
+
+Stripe subscription cancellation and customer deletion remain idempotent. Only
+after closure succeeds does one local transaction enqueue all R2 object cleanup
+records and delete the user. A metadata-free pre-deployment customer blocks the
+remote closure step and requires operator reconciliation; the cohort alone is
+never used to authorize destructive Stripe operations.
+
+Deletion authorization also expires any Pro checkout attempt without erasing
+its bound Stripe Session ID. A bind that races authorization records that handle
+but returns a deletion-specific result, so the checkout action validates and
+expires the Session instead of redirecting to it. If Checkout completes during
+expiry, cancellation and full-refund work is persisted outside the User cascade
+before the local binding is removed.
+
+## Equal-second subscription observations
+
+Stripe event creation timestamps have one-second precision. The subscription
+watermark now also stores when the handler retrieved the canonical Stripe
+object. Reversible states such as `active`, `past_due`, `paused`, and `unpaid`
+follow the later canonical observation instead of a restrictive status rank.
+Only `canceled` and `incomplete_expired` remain irreversible and monotonic.
+Custom Stripe `cancel_at` values are stored separately from the billing-period
+end. Entitlement and account displays use the earlier timestamp, while monthly
+usage accounting keeps the original billing period so resuming a cancellation
+cannot reset the allowance.
+
+## Authorized Pro offers and portal configuration
+
+Only `STRIPE_PRO_PRICE_ID` and immutable `priceId:productId` pairs explicitly
+listed in `STRIPE_PRO_HISTORICAL_OFFERS` can grant Pro entitlement. A Price seen
+on a customer-edited subscription is never learned as an offer. The configured
+billing portal must be active, cancel at period end, and have subscription price
+switching disabled; its ID is supplied through
+`STRIPE_BILLING_PORTAL_CONFIGURATION_ID`.
+
+## Repairing subscriptions stranded by a refund
+
+A refund issued together with a cancellation only reaches the database through
+the subscription lifecycle events. If one of those is missed, the local row keeps
+its last non-terminal status while Stripe reports the subscription as canceled.
+That row then grants AI access until its stored period elapses, and it used to
+block the customer from subscribing again.
+
+Two changes close this. Pro checkout now derives the blocking decision from
+Stripe rather than the stored row, and refund webhooks re-read the canonical
+subscription and persist a terminal status when Stripe has ended it.
+
+Rows stranded before that fix still need a one-off repair:
+
+```bash
+pnpm --filter @beutl/web reconcile:stale-subscriptions          # report only
+pnpm --filter @beutl/web reconcile:stale-subscriptions --apply  # write
+```
+
+The script inspects every non-terminal subscription, retrieves the canonical
+object from Stripe, and writes back the terminal status and billing period. A
+subscription Stripe no longer recognizes is reconciled as canceled, matching
+the account-page and webhook recovery paths.

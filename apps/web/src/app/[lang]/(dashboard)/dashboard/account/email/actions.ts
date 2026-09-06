@@ -13,12 +13,13 @@ import {
   existsUserById,
   updateUserEmail,
 } from "@beutl/db";
-import { synchronizeMappedStripeCustomer } from "@/lib/customer";
+import { updateCustomerEmailIfExist } from "@/lib/customer";
 import { startTransaction } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import {
   consumeConfirmationToken,
   issueConfirmationToken,
+  validateConfirmationToken,
 } from "@/lib/confirmation-token-flow";
 
 type State = {
@@ -105,7 +106,7 @@ export async function sendConfirmationEmail(
 
 export async function updateEmail(token: string, identifier: string) {
   const lang = await getLanguage();
-  const result = await consumeConfirmationToken({
+  const result = await validateConfirmationToken({
     token,
     identifier,
     purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
@@ -122,13 +123,16 @@ export async function updateEmail(token: string, identifier: string) {
   const { tokenData } = result;
 
   const updated = await startTransaction(async (p) => {
-    await updateUserEmail({
-      userId: tokenData.userId,
-      email: tokenData.identifier,
+    const consumed = await consumeConfirmationToken({
+      token,
+      identifier,
+      purpose: ConfirmationTokenPurpose.EMAIL_UPDATE,
       prisma: p,
     });
-
-    await synchronizeMappedStripeCustomer({
+    if (!consumed.valid || consumed.tokenData.userId !== tokenData.userId) {
+      return false;
+    }
+    await updateUserEmail({
       userId: tokenData.userId,
       email: tokenData.identifier,
       prisma: p,
@@ -146,10 +150,28 @@ export async function updateEmail(token: string, identifier: string) {
     );
   }
 
+  let stripeCustomerEmailSync = "failed";
+  try {
+    stripeCustomerEmailSync = (
+      await updateCustomerEmailIfExist({
+        userId: tokenData.userId,
+        email: tokenData.identifier,
+      })
+    ).status;
+  } catch (error) {
+    // The local email is already committed. Keep that successful update and
+    // expose the secondary-sync failure to logs/audit; future billing entry
+    // points retry the same idempotent customer email synchronization.
+    console.error("Stripe customer email synchronization failed", {
+      userId: tokenData.userId,
+      error,
+    });
+  }
+
   await addAuditLog({
     userId: tokenData.userId,
     action: auditLogActions.account.emailChanged,
-    details: `email: ${tokenData.identifier}`,
+    details: `email: ${tokenData.identifier}, stripeCustomerEmailSync: ${stripeCustomerEmailSync}`,
   });
   revalidatePath(`/${lang}/dashboard/account/email`);
   redirect(

@@ -13,5 +13,16 @@
   "setToPublic": "Set to public",
   "searchByFileName": "Search by file name",
   "storage": "Storage",
-  "storageUsage": "Using {{totalSize}} of 1.00GB"
+  "storageUsage": "Using {{totalSize}} of 1.00GB",
+  "uploadErrors": {
+    "insufficientStorageSpace": "There is not enough storage space left for this file.",
+    "uploadNotFound": "This upload is no longer in progress. Try again.",
+    "uploadFailed": "The upload could not be completed. Try again.",
+    "storagePersistenceUnavailable": "Browser storage is unavailable. Keep this page open, enable browser storage, and retry. No new upload will start until the completion handle is saved.",
+    "invalidRequestBody": "This file could not be uploaded.",
+    "authenticationIsRequired": "Sign in again to upload.",
+    "fileNotFound": "That file is no longer there.",
+    "tooManyUploads": "Too many uploads are already going. Wait for one to finish and try again.",
+    "tooManyFiles": "You have reached the limit on how many files you can store. Delete some and try again."
+  }
 }

@@ -21,16 +21,6 @@ export function hasStripeOwnerMetadata(
   );
 }
 
-export function hasConflictingStripeOwnerMetadata(
-  metadata: StripeOwnershipMetadata | null | undefined,
-  userId: string,
-): boolean {
-  const hasAnyOwnershipMetadata =
-    metadata?.beutlApplication !== undefined ||
-    metadata?.beutlUserId !== undefined;
-  return hasAnyOwnershipMetadata && !hasStripeOwnerMetadata(metadata, userId);
-}
-
 export function getExpandableId(
   value: string | { id: string } | null | undefined,
 ): string | null {
@@ -41,4 +31,41 @@ export function isDeletedCustomer(
   customer: Stripe.Customer | Stripe.DeletedCustomer,
 ): customer is Stripe.DeletedCustomer {
   return "deleted" in customer && customer.deleted === true;
+}
+
+export type StripeCustomerOwnershipRecord = {
+  stripeId: string;
+  userId: string;
+  migrationCohort: string | null;
+  verifiedAt: Date | null;
+  createdAt?: Date;
+};
+
+export type StripeCustomerOwnershipProof =
+  | "stripe-metadata"
+  | "mismatch";
+
+export function getStripeCustomerOwnershipProof({
+  customerId,
+  metadata,
+  ownership,
+  userId,
+}: {
+  customerId: string;
+  metadata: StripeOwnershipMetadata | null | undefined;
+  ownership: StripeCustomerOwnershipRecord | null | undefined;
+  userId: string;
+}): StripeCustomerOwnershipProof {
+  if (
+    !ownership ||
+    ownership.stripeId !== customerId ||
+    ownership.userId !== userId
+  ) {
+    return "mismatch";
+  }
+  if (hasStripeOwnerMetadata(metadata, userId)) {
+    return "stripe-metadata";
+  }
+
+  return "mismatch";
 }

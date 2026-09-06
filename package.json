@@ -22,10 +22,14 @@
     "upload:web": "pnpm --filter @beutl/web upload",
     "upload:api": "pnpm --filter @beutl/api upload",
     "upload:admin": "pnpm --filter @beutl/admin upload",
-    "preview": "pnpm --filter @beutl/web preview"
+    "preview": "pnpm --filter @beutl/web preview",
+    "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach",
+    "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
   },
   "devDependencies": {
     "fflate": "^0.8.3",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
     "hono": "^4.13.0",
     "vitest": "^4.1.10"
   },

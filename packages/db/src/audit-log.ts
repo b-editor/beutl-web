@@ -15,6 +15,11 @@ export const auditLogActions = {
     sentDeleteAccountConfirmation: "account.sentDeleteAccountConfirmation",
     accountDeleted: "account.accountDeleted",
     signInMethodDeleted: "account.signInMethodDeleted",
+    // 持ち主を確かめられない古い Customer を置き換えたが、そこにまだ請求の
+    // 続く subscription が残っていた。metadata が無いので、それがこの利用者の
+    // ものだという証拠が無く、こちらから解約すると別人の契約を止めかねない
+    // ——人が見て決められるように、手掛かりだけを残す。
+    legacyCustomerLeftBilling: "account.legacyCustomerLeftBilling",
   },
   developer: {
     createPackage: "developer.createPackage",
@@ -42,6 +47,20 @@ export const auditLogActions = {
     updatePackageInterval: "admin.updatePackageInterval",
     userDeleted: "admin.userDeleted",
     feedbackStatusChanged: "admin.feedbackStatusChanged",
+    aiSettingChanged: "admin.aiSettingChanged",
+    aiSettingReset: "admin.aiSettingReset",
+    aiOperationModelSaved: "admin.aiOperationModelSaved",
+    aiOperationModelRemoved: "admin.aiOperationModelRemoved",
+    aiCreditsAdjusted: "admin.aiCreditsAdjusted",
+    aiMonthlyUsageAdjusted: "admin.aiMonthlyUsageAdjusted",
+    packageCheckoutResolution: "admin.packageCheckoutResolution",
+    topUpCheckoutInterventionResumed: "admin.topUpCheckoutInterventionResumed",
+    topUpCheckoutInterventionTerminalized: "admin.topUpCheckoutInterventionTerminalized",
+    storageMultipartInterventionResumed: "admin.storageMultipartInterventionResumed",
+    storageMultipartInterventionTerminalized: "admin.storageMultipartInterventionTerminalized",
+    storageUploadInterventionResumed: "admin.storageUploadInterventionResumed",
+    storageUploadInterventionTerminalized: "admin.storageUploadInterventionTerminalized",
+    packagePaymentRefundInterventionResumed: "admin.packagePaymentRefundInterventionResumed",
   },
 } as const;
 

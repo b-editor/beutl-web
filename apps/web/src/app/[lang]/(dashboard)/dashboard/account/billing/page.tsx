@@ -1,84 +1,118 @@
 import { getTranslation } from "@beutl/i18n";
+import { Alert, AlertDescription } from "@beutl/ui/ui/alert";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createStripe } from "@/lib/stripe/config";
-import { Separator } from "@beutl/ui/ui/separator";
-import { formatAmount } from "@beutl/core";
-import { getUserPaymentHistory } from "@beutl/db";
-import { findPackageForBillingHistory } from "@beutl/db";
-import { Button } from "@beutl/ui/ui/button";
-import Link from "next/link";
-import { ExternalLink } from "lucide-react";
+import { buildBillingHistory } from "@/lib/billing-history";
+import { syncSubscriptionFromStripe } from "@/lib/stripe/subscription-sync";
+import { reconcileAiCheckoutSuccess } from "./actions";
+import {
+  AiUsageSection,
+  PaymentHistorySection,
+  PaymentMethodSection,
+  PlanSection,
+} from "./components";
+import { retrieveBillingPage } from "./queries";
 
-export default async function Page(props: { params: Promise<{ lang: string }> }) {
-  const params = await props.params;
-
-  const {
-    lang
-  } = params;
-
+export default async function Page(props: {
+  params: Promise<{ lang: string }>;
+  searchParams: Promise<{
+    checkout?: string;
+    portal?: string;
+    session_id?: string;
+  }>;
+}) {
+  const { lang } = await props.params;
+  const searchParams = await props.searchParams;
   const session = await authOrSignIn();
 
-  const history = await getUserPaymentHistory({ userId: session.user.id });
-  const items = await Promise.all(
-    history.map(async (item) => {
-      const p1 = findPackageForBillingHistory({
-        packageId: item.packageId,
-      });
-      const stripe = createStripe();
-      const p2 = stripe.paymentIntents.retrieve(item.paymentId);
-      const [pkg, payment] = await Promise.all([p1, p2]);
-      return {
-        product: pkg ? pkg.displayName || pkg.name : "不明なアイテム",
-        seller:
-          pkg?.user.Profile?.displayName || pkg?.user.name || "不明なユーザー",
-        amount: payment.amount,
-        currency: payment.currency,
-        paiedAt: item.createdAt,
-        id: item.id,
-      };
-    }),
-  );
+  // 下の 2 つは webhook が本命で、これはその先読み。落ちても DB の値でページは
+  // 正しく描けるので、握り潰さずに知らせたうえで描画を続ける。
+  let stripeUnavailable = false;
+
+  // ポータルでの解約は subscription webhook が届くまで見えない。戻ってきた時点で
+  // Stripe を直接読み、ユーザーが今変更した状態をそのまま見せる。
+  if (searchParams.portal === "returned") {
+    try {
+      await syncSubscriptionFromStripe(session.user.id);
+    } catch (error) {
+      console.error("Could not sync the subscription on portal return", error);
+      stripeUnavailable = true;
+    }
+  }
+
+  let checkoutSuccess = false;
+  if (
+    searchParams.checkout === "success" &&
+    typeof searchParams.session_id === "string"
+  ) {
+    try {
+      checkoutSuccess = await reconcileAiCheckoutSuccess(
+        searchParams.session_id,
+      );
+    } catch (error) {
+      console.error("Could not reconcile the AI checkout", error);
+      stripeUnavailable = true;
+    }
+  }
+
   const { t } = await getTranslation(lang);
+  const {
+    subscriptions,
+    offers,
+    aiUsage,
+    hasStripeCustomer,
+    payments,
+    creditPurchases,
+    packagesById,
+    subscriptionPayments,
+    documentByPaymentIntentId,
+    billingDocumentsUnavailable,
+  } = await retrieveBillingPage(session.user.id);
+  const history = buildBillingHistory({
+    subscriptionPayments,
+    payments,
+    creditPurchases,
+    packagesById,
+    documentByPaymentIntentId,
+    t,
+    lang,
+  });
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold">{t("account:billing.title")}</h1>
-      <div className="mt-4 rounded-lg border text-card-foreground">
-        <h3 className="font-bold text-md m-6 mb-4">
-          {t("account:billing.paymentMethod")}
-        </h3>
-        <Separator />
+    <div className="flex flex-col gap-6">
+      <div>
+        <h1 className="text-2xl font-bold">{t("account:billing.title")}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {t("account:billing.description")}
+        </p>
+      </div>
 
-        <div className="py-4 px-6">
-          <Button asChild>
-            <Link href="https://app.link.com/">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              {t("account:billing.changePaymentMethod")}
-            </Link>
-          </Button>
-        </div>
-      </div>
-      <div className="mt-4 rounded-lg border text-card-foreground">
-        <h3 className="font-bold text-md m-6 mb-4">
-          {t("account:billing.paymentHistory")}
-        </h3>
-        <Separator />
-        <ul className="[&_li:last-child]:border-0">
-          {items.map((item) => (
-            <li
-              className="flex items-center py-4 px-6 gap-2 border-b"
-              key={item.id}
-            >
-              <div className="flex-1">
-                <p className="font-bold">{item.product}</p>
-                <p className="text-foreground/70 text-sm">{item.seller}</p>
-              </div>
-              <div>{formatAmount(item.amount, item.currency, lang)}</div>
-              <div>{new Date(item.paiedAt).toLocaleString()}</div>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {checkoutSuccess && (
+        <Alert>
+          <CheckCircle2 className="h-4 w-4" />
+          <AlertDescription>
+            {t("account:aiPlan.checkoutSuccess")}
+          </AlertDescription>
+        </Alert>
+      )}
+      {(stripeUnavailable || billingDocumentsUnavailable) && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            {t("account:billing.stripeUnavailableNotice")}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <PlanSection
+        lang={lang}
+        t={t}
+        subscriptions={subscriptions}
+        offers={offers}
+      />
+      <AiUsageSection lang={lang} t={t} usage={aiUsage} />
+      <PaymentMethodSection t={t} hasStripeCustomer={hasStripeCustomer} />
+      <PaymentHistorySection lang={lang} t={t} entries={history} />
     </div>
   );
 }

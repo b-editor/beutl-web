@@ -1,0 +1,13 @@
+ALTER TABLE "TopUpCheckoutAttempt" SET (schema_locked = false);
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "paramsJson" STRING;
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryLeaseToken" STRING;
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryLeaseExpiresAt" TIMESTAMP(3);
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryAttempts" INT4 NOT NULL DEFAULT 0;
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryLastError" STRING;
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryNotBefore" TIMESTAMP(3);
+ALTER TABLE "TopUpCheckoutAttempt" ADD COLUMN IF NOT EXISTS "recoveryInterventionAt" TIMESTAMP(3);
+UPDATE "TopUpCheckoutAttempt" SET "recoveryInterventionAt" = CURRENT_TIMESTAMP, "recoveryLastError" = 'Legacy top-up attempt has no durable params; operator recovery required' WHERE "accountDeletionAt" IS NOT NULL AND "stripeCheckoutSessionId" IS NULL AND "paramsJson" IS NULL AND "recoveryInterventionAt" IS NULL;
+CREATE INDEX IF NOT EXISTS "TopUpCheckoutAttempt_recovery_idx" ON "TopUpCheckoutAttempt" ("accountDeletionAt", "stripeCheckoutSessionId", "recoveryNotBefore", "recoveryLeaseExpiresAt", "recoveryInterventionAt");
+ALTER TABLE "TopUpCheckoutAttempt" ADD CONSTRAINT IF NOT EXISTS "TopUpCheckoutAttempt_recovery_attempts_check" CHECK ("recoveryAttempts" >= 0);
+ALTER TABLE "TopUpCheckoutAttempt" ADD CONSTRAINT IF NOT EXISTS "TopUpCheckoutAttempt_recovery_lease_pair_check" CHECK (("recoveryLeaseToken" IS NULL AND "recoveryLeaseExpiresAt" IS NULL) OR ("recoveryLeaseToken" IS NOT NULL AND "recoveryLeaseExpiresAt" IS NOT NULL));
+ALTER TABLE "TopUpCheckoutAttempt" SET (schema_locked = true);

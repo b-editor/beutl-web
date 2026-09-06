@@ -11,6 +11,7 @@
   "invalidLocaleId": "Invalid locale ID.",
   "invalidReleaseVersion": "Invalid version.\nThe same version of the release may already exist or the format may be invalid.",
   "invalidRefreshToken": "Invalid refresh token.",
+  "aiRequestChanged": "This name belongs to the request you sent a moment ago. Put the request back as it was to recover its result, or reload the page to start a different one.",
   "invalidRequestBody": "Invalid request body.",
   "packageResourceNotFound": "Package resource not found.",
   "packageResourceHasAlreadyBeenAdded": "This package resource has already been added.",
@@ -27,6 +28,18 @@
   "virtualAssetCannotBeDownloaded": "Virtual assets cannot be downloaded from this URL.",
   "cannotDeleteReleaseAssets": "Cannot delete release assets.",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "Cannot publish a release that does not have an asset.",
+  "aiPlanRequired": "A Beutl AI subscription is required to use AI features.",
+  "aiUsageLimitExceeded": "Your monthly AI allowance and additional credits are insufficient.",
+  "aiProviderError": "The AI provider returned an error. Please try again later.",
+  "aiRequestInterrupted": "The connection dropped before the answer arrived. Run it again — the same request is asked for, so a run that finished is not paid for twice.",
+  "aiJobNotFound": "AI job not found.",
+  "aiJobLimitReached": "A video generation job is already in progress. Please wait for it to complete.",
+  "aiJobIsActive": "An active AI job cannot be deleted.",
+  "aiRequestInProgress": "This AI request is still in progress. Please try again shortly.",
+  "aiRequestWasDeleted": "This AI request was deleted. Start a new request to run it again.",
+  "aiModelUnavailable": "The model this request used is no longer available. Start a new request to choose another one.",
+  "aiModelDoesNotSupportRequest": "The selected model does not support this combination. Change the resolution, length or aspect ratio, or pick another model.",
   "unknown": "An unknown error occurred.",
-  "invalidVersionFormat": "Invalid version format."
+  "invalidVersionFormat": "Invalid version format.",
+  "aiResultUnavailable": "The result of this request could not be read just now. Ask for it again — the same request is asked for, so what has already been paid for is not paid for twice."
 }

@@ -5,15 +5,12 @@ import type { ActionResult } from "@beutl/core";
 import { authenticated } from "@/lib/auth-guard";
 import {
   createDevPackageScreenshot,
-  deleteDevPackageScreenshot,
+  deleteDevPackageScreenshotAndFile,
   getPackageNameFromPackageId,
+  reorderDevPackageScreenshots,
   retrieveDevPackageLastScreenshotOrder,
   retrieveDevPackageScreenshots,
-  updateDevPackageScreenshotOrder,
 } from "@beutl/db";
-import {
-  deleteStorageFile,
-} from "@/lib/storage";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
@@ -36,20 +33,30 @@ export async function addScreenshot(formData: FormData): Promise<ActionResult> {
       const result = await createDedicatedFile(
         session.user.id,
         file,
-        BigInt(0),
         t,
+        async (tx, record) => {
+          const existing = await tx.packageScreenshot.findUnique({
+            where: { packageId_fileId: { packageId: id, fileId: record.id } },
+          });
+          if (existing) return;
+          // Serialize max(order)+1 allocation on the Package row. Cockroach turns concurrent
+          // writers into a retryable transaction conflict before the unique order can diverge.
+          await tx.package.update({
+            where: { id },
+            data: { updatedAt: new Date() },
+          });
+          const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({ packageId: id, prisma: tx });
+          await createDevPackageScreenshot({
+            packageId: id,
+            fileId: record.id,
+            order: (lastScreenshot?.order ?? -1) + 1,
+            prisma: tx,
+          });
+        },
       );
       if (!result.success) {
         return result;
       }
-      const lastScreenshot = await retrieveDevPackageLastScreenshotOrder({
-        packageId: id,
-      });
-      await createDevPackageScreenshot({
-        packageId: id,
-        fileId: result.record!.id,
-        order: (lastScreenshot?.order || 0) + 1,
-      });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -99,21 +106,10 @@ export async function moveScreenshot({
       }
       all.splice(index, 1);
       all.splice(index + sign, 0, target);
-      const promises = all
-        .map((item, i) => ({
-          ...item,
-          order: i,
-          originalOrder: item.order,
-        }))
-        .map(async (item) => {
-          if (item.order === item.originalOrder) return;
-          await updateDevPackageScreenshotOrder({
-            packageId,
-            fileId: item.fileId,
-            order: item.order,
-          });
-        });
-      await Promise.all(promises);
+      await reorderDevPackageScreenshots({
+        packageId,
+        orderedFileIds: all.map((item) => item.fileId),
+      });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,
@@ -136,8 +132,7 @@ export async function deleteScreenshot({
     const { t } = await getTranslation(lang);
     return await sameUser(packageId, session.user.id, t, async () => {
       const name = await getPackageNameFromPackageId({ packageId });
-      await deleteDevPackageScreenshot({ packageId, fileId });
-      await deleteStorageFile({ fileId });
+      await deleteDevPackageScreenshotAndFile({ packageId, fileId });
       await addAuditLog({
         userId: session.user.id,
         action: auditLogActions.developer.updatePackage,

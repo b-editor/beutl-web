@@ -4,18 +4,23 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./error": "./src/error.ts"
   },
   "dependencies": {
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/i18n": "workspace:*",
     "@hono/zod-validator": "^0.7.6",
+    "@openrouter/sdk": "^1.2.42",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "country-to-currency": "^2.0.2",
     "hono": "^4.13.0",
+    "music-metadata": "^11.14.0",
+    "negotiator": "^1.0.0",
     "semver": "^7.7.1",
+    "stripe": "^20.3.1",
     "zod": "^4.3.6"
   },
   "scripts": {

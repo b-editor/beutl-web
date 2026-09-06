@@ -12,7 +12,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     lang
   } = params;
 
-  await authOrSignIn();
+  const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
   const files = await retrieveFiles();
   let totalSize = 0;
@@ -33,7 +33,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
         />
       </div>
       <div className="rounded-lg border text-card-foreground">
-        <List data={files} lang={lang} />
+        <List data={files} lang={lang} userId={session.user.id} />
       </div>
     </div>
   );

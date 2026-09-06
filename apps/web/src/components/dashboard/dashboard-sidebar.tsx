@@ -26,16 +26,23 @@ import {
   BookOpen,
   ChevronRight,
   CircleUser,
+  Clapperboard,
   Code2,
   CreditCard,
   HardDrive,
+  History,
+  Image as ImageIcon,
+  Languages,
   LayoutDashboard,
   Library,
   LogOut,
   Mail,
   Shield,
+  Sparkles,
   Store,
   Trash,
+  WandSparkles,
+  AudioLines,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -74,7 +81,7 @@ export function DashboardSidebar({
   const section =
     (dashboardIndex === -1 ? undefined : segments[dashboardIndex + 1]) ??
     "overview";
-  const accountSlug =
+  const subSlug =
     dashboardIndex === -1 ? undefined : segments[dashboardIndex + 2];
 
   const items = [
@@ -83,6 +90,12 @@ export function DashboardSidebar({
       href: `/${lang}/dashboard`,
       label: t("dashboard:nav.overview"),
       icon: LayoutDashboard,
+    },
+    {
+      // AI は機能ごとのページを子に持つので、アカウントと同じ開閉式サブメニューにする。
+      section: "ai",
+      label: t("dashboard:nav.ai"),
+      icon: Sparkles,
     },
     {
       section: "storage",
@@ -116,6 +129,39 @@ export function DashboardSidebar({
     { slug: "billing", label: t("account:billing.title"), icon: CreditCard },
     { slug: "security", label: t("account:security.title"), icon: Shield },
     { slug: "personal-data", label: t("account:data.title"), icon: Trash },
+  ] as const;
+
+  const aiItems = [
+    {
+      slug: "generate",
+      label: t("dashboard:ai.imageGeneration"),
+      icon: ImageIcon,
+    },
+    {
+      slug: "edit",
+      label: t("dashboard:ai.imageEdit"),
+      icon: WandSparkles,
+    },
+    {
+      slug: "transcribe",
+      label: t("dashboard:ai.transcription"),
+      icon: AudioLines,
+    },
+    {
+      slug: "translate",
+      label: t("dashboard:ai.translation"),
+      icon: Languages,
+    },
+    {
+      slug: "video",
+      label: t("dashboard:ai.videoGeneration"),
+      icon: Clapperboard,
+    },
+    {
+      slug: "jobs",
+      label: t("dashboard:ai.jobHistory"),
+      icon: History,
+    },
   ] as const;
 
   const siteItems = [
@@ -170,15 +216,15 @@ export function DashboardSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) =>
-                item.section === "account" ? (
-                  // アカウントは設定ページを子に持つので、shadcn の nav-main と
-                  // 同じ Collapsible + SidebarMenuSub で開閉する。
+                item.section === "account" || item.section === "ai" ? (
+                  // アカウントと AI は設定/機能ページを子に持つので、shadcn の
+                  // nav-main と同じ Collapsible + SidebarMenuSub で開閉する。
                   <Collapsible
                     // defaultOpen は uncontrolled なのでマウント時にしか効かない。
-                    // アカウント配下への出入りで張り直し、開閉状態を追従させる。
-                    key={`${item.section}-${section === "account"}`}
+                    // 配下への出入りで張り直し、開閉状態を追従させる。
+                    key={`${item.section}-${section === item.section}`}
                     asChild
-                    defaultOpen={section === "account"}
+                    defaultOpen={section === item.section}
                     className="group/collapsible"
                   >
                     <SidebarMenuItem>
@@ -194,14 +240,18 @@ export function DashboardSidebar({
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <SidebarMenuSub>
-                          {accountItems.map((sub) => (
+                          {(item.section === "account" ? accountItems : aiItems).map((sub) => (
                             <SidebarMenuSubItem key={sub.slug}>
                               <SidebarMenuSubButton
                                 asChild
-                                isActive={accountSlug === sub.slug}
+                                isActive={subSlug === sub.slug}
                               >
                                 <Link
-                                  href={`/${lang}/dashboard/account/${sub.slug}`}
+                                  href={
+                                    item.section === "account"
+                                      ? `/${lang}/dashboard/account/${sub.slug}`
+                                      : `/${lang}/dashboard/ai/${sub.slug}`
+                                  }
                                 >
                                   <sub.icon />
                                   <span>{sub.label}</span>

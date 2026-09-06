@@ -11,6 +11,7 @@
   "invalidLocaleId": "無効なロケールIDです。",
   "invalidReleaseVersion": "無効なバージョンです。\n既に同じバージョンのリリースが存在している、またはフォーマットが無効である可能性があります。",
   "invalidRefreshToken": "無効なリフレッシュトークンです。",
+  "aiRequestChanged": "この名前は、直前に送った依頼のものです。内容を元に戻すとその結果を取り戻せます。別の内容で作るには、ページを再読み込みしてください。",
   "invalidRequestBody": "無効なリクエストボディです。",
   "packageResourceNotFound": "パッケージリソースが見つかりませんでした。",
   "packageResourceHasAlreadyBeenAdded": "このパッケージリソースは既に追加されています。",
@@ -27,6 +28,18 @@
   "virtualAssetCannotBeDownloaded": "仮想アセットはこのURLからダウンロードできません。",
   "cannotDeleteReleaseAssets": "リリースアセットは削除できません。",
   "cannotPublishAReleaseThatDoesNotHaveAnAsset": "アセットがないリリースは公開できません。",
+  "aiPlanRequired": "AI機能を利用するにはBeutl AIサブスクリプションへの加入が必要です。",
+  "aiUsageLimitExceeded": "今月のAI利用枠と追加クレジットが不足しています。",
+  "aiProviderError": "AIプロバイダーでエラーが発生しました。しばらくしてからもう一度お試しください。",
+  "aiRequestInterrupted": "応答が届く前に接続が切れました。もう一度実行すると同じリクエストとして問い合わせるため、完了していた場合でも二重に課金されません。",
+  "aiJobNotFound": "AIジョブが見つかりませんでした。",
+  "aiJobLimitReached": "進行中の動画生成ジョブがあります。完了するまでお待ちください。",
+  "aiJobIsActive": "実行中のAIジョブは削除できません。",
+  "aiRequestInProgress": "このAIリクエストは処理中です。少し待ってから再試行してください。",
+  "aiRequestWasDeleted": "このAIリクエストは削除されています。再実行するには新しいリクエストを開始してください。",
+  "aiModelUnavailable": "このリクエストで使ったモデルは現在利用できません。新しいリクエストで別のモデルを選んでください。",
+  "aiModelDoesNotSupportRequest": "選択したモデルはこの組み合わせに対応していません。解像度・長さ・アスペクト比を変えるか、別のモデルを選んでください。",
   "unknown": "不明なエラーが発生しました。",
-  "invalidVersionFormat": "バージョンの形式が無効です。"
+  "invalidVersionFormat": "バージョンの形式が無効です。",
+  "aiResultUnavailable": "このリクエストの結果を読み出せませんでした。もう一度実行してください。同じリクエストとして問い合わせるため、支払い済みの分が二重に請求されることはありません。"
 }

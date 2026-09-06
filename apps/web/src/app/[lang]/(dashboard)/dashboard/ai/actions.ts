@@ -1,0 +1,1823 @@
+"use server";
+
+import { throwIfUnauth } from "@/lib/auth-guard";
+import { getLanguage } from "@beutl/next/language";
+import { getTranslation } from "@beutl/i18n";
+import { headers } from "next/headers";
+import {
+  AI_JOB_FAILURE_MESSAGES,
+  AiProviderError,
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_AI_PROMPT_LENGTH,
+  MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  createCallbackNonce,
+  createReservedAiJob,
+  decodeGeneratedImageBase64,
+  editImage,
+  failAiJobAndRefundUsage,
+  generateImage,
+  inspectGeneratedImage,
+  isIso6391LanguageCode,
+  loadAiModelCatalog,
+  parseAudio,
+  readAiJsonResult,
+  saveAiImage,
+  saveAiJsonResult,
+  sha256Hex,
+  MAX_TRANSLATION_CHARACTERS,
+  MAX_TRANSLATION_SEGMENTS,
+  SAFE_SEGMENT_ID_PATTERN,
+  synchronizeAiVideoJob,
+  type AiRequestIdentity,
+  findReplayableAiJob,
+  toAiRequestIdentity,
+  transcribeAudio,
+  translateSegments,
+  translationCharacterCount,
+  validateAiInputImage,
+  parseReplayableAiJobInput,
+  sanitizeAiJobInputParams,
+  type TranslationStyle,
+  validateTranscriptionResult,
+  type AiInputImageMimeType,
+  type ImageEditTask,
+} from "@beutl/api";
+import {
+  finalizeAiJobDeletionByUserId,
+  getAiJobById,
+  getAiJobResultFile,
+  listAiJobsByUserId,
+  prepareAiJobDeletionByUserId,
+} from "@beutl/db";
+import {
+  classifyVideoSubmissionFailure,
+  createAndAttachVideoJob,
+  deleteAiOutputObject,
+  loadAiImageModelCapabilities,
+  loadAiVideoModelCapabilities,
+  unsupportedImageRequestReason,
+  unsupportedVideoRequestReason,
+} from "@beutl/api";
+import {
+  AI_IMAGE_ASPECT_RATIOS,
+  AI_MAX_IMAGE_REFERENCES,
+  AI_IMAGE_BACKGROUNDS,
+  AI_IMAGE_EDIT_TASKS,
+  AI_VIDEO_ASPECT_RATIOS,
+  AI_VIDEO_RESOLUTIONS,
+  aiImageEditTaskRequiresPrompt,
+  aspectRatioOfLegacyImageSize,
+  isAiSeed,
+  isAiVideoDurationSeconds,
+  type AiImageAspectRatio,
+  type AiImageBackground,
+  type AiVideoAspectRatio,
+  type AiVideoResolution,
+} from "@beutl/core";
+import { composePrompt } from "@/lib/ai-prompt";
+import { parseGlossary } from "@/lib/subtitle-format";
+import { getContentUrl } from "@/lib/content-url";
+import { aiFailureResult } from "@/lib/ai-screen";
+import { retryJobFingerprint } from "@/lib/ai-retry-attempt";
+
+export type AiActionResult = {
+  success: boolean;
+  message?: string;
+  // この失敗は「同じ名前で問い合わせ直せば結果が戻る」ものか。true のあいだ
+  // フォームは idempotency key を持ち続け、次の送信は同じリクエストとして
+  // 扱われる。false（既定）なら決着がついたということなので、次は新しい
+  // リクエストになる。
+  keepIdempotencyKey?: boolean;
+  jobId?: string;
+  status?: string;
+  url?: string | null;
+  fileName?: string | null;
+  contentType?: string | null;
+  segments?: unknown;
+  // Word timings and the detected language come back from the provider and are
+  // stored with the transcript; the editor uses them to cut a cue at a word
+  // rather than at the midpoint of its duration.
+  words?: unknown;
+  language?: string;
+  jobs?: unknown[];
+  nextCursor?: { createdAt: string; id: string } | null;
+};
+
+// まだ結果が出ていない、というだけの状態。失敗・取り消しは決着がついている。
+function stillRunning(status: string): boolean {
+  return status === "queued" || status === "running" || status === "finalizing";
+}
+
+const supportedEditImageTypes = new Set<AiInputImageMimeType>([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+const supportedFrameImageTypes = new Set<AiInputImageMimeType>([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+// The form sends a key that stays the same across every arrival of one
+// submission, so a double click or a retried POST lands on the job the first
+// arrival created instead of reserving and charging again. A missing or
+// malformed key means the request cannot be made safely repeatable, so it is
+// refused rather than charged — the v3 endpoints answer a missing
+// Idempotency-Key header the same way.
+async function requestIdentityOf(
+  formData: FormData,
+  operation: string,
+  input: unknown,
+) {
+  return await toAiRequestIdentity({
+    idempotencyKey: formData.get("idempotencyKey"),
+    operation,
+    input,
+  });
+}
+
+// The model the user picked, resolved against the catalog. An id that is
+// unknown or has been disabled is refused rather than quietly replaced by the
+// default: the default may cost more than the one they chose, and they would
+// be charged that price for a model they never asked for.
+async function resolveModelOf(formData: FormData, operation: string) {
+  const requested = namedModelOf(formData);
+  if (requested === undefined) return null;
+  const catalog = await loadAiModelCatalog();
+  return catalog.resolve(operation, requested);
+}
+
+// 名指しされたモデル。undefined は「形が不正」、null は「指定なし」。
+function namedModelOf(formData: FormData): string | null | undefined {
+  const requested = formData.get("model");
+  if (requested === null) return null;
+  return typeof requested === "string" ? requested : undefined;
+}
+
+// 指紋に載せるモデル。名指しされていないときは載せない。既定モデルを載せると、
+// 既定が入れ替わったあとに同じ名前で問い合わせ直しても別のリクエストに見え、
+// 支払い済みの job に届かなくなる。
+function fingerprintModelOf(formData: FormData): { model?: string } {
+  const named = namedModelOf(formData);
+  return named ? { model: named } : {};
+}
+
+// 既に使われた名前に対する答え。今のモデル設定を見る前に読むので、支払い済みの
+// job は、そのモデルが止められたあとでも取り戻せる。
+async function replayOf(userId: string, identity: AiRequestIdentity) {
+  return await findReplayableAiJob({ userId, ...identity });
+}
+
+type ReplayOutcome = Awaited<ReturnType<typeof replayOf>>;
+
+function settledReplay(
+  replay: ReplayOutcome,
+  t: (key: string) => string,
+): AiActionResult | null {
+  if (replay?.outcome === "idempotencyConflict") {
+    // この名前は、いま送られてきたものとは別の依頼のもの。名前を捨てると、その
+    // 依頼が支払い済みだったときに戻る道が閉じる——画面の中身を元に戻せば、
+    // 同じ名前でその結果を取りに行ける。
+    return {
+      success: false,
+      message: t("api-errors:aiRequestChanged"),
+      keepIdempotencyKey: true,
+    };
+  }
+  if (replay?.outcome === "deleted") {
+    return { success: false, message: t("api-errors:aiRequestWasDeleted") };
+  }
+  return null;
+}
+
+// Reservation failures use the same recovery contract as replay and streaming
+// endpoints. In particular, an idempotency collision means the submitted body
+// must be restored and retried under the existing key; rotating it would turn a
+// paid request into an unrelated second charge. Keeping this mapping in one
+// place prevents the seven reservation call sites from drifting apart.
+function reservationFailure(
+  errorCode: string,
+  t: (key: string) => string,
+): AiActionResult {
+  return aiFailureResult(errorCode, t);
+}
+
+// 文字起こしと翻訳は保存した JSON を読み直して返す。
+async function answerFromExistingTranscriptionJob(
+  job: { id: string; status: string; resultFileId: string | null },
+  { userId, durationSeconds }: { userId: string; durationSeconds: number },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  // The same submission arriving twice must show the result the first one paid
+  // for. Returning only a URL left the screen blank, because the editor renders
+  // segments and never reads a URL.
+  if (job.status === "succeeded" && job.resultFileId) {
+    const recovered = await recoverTranscription({
+      jobId: job.id,
+      userId,
+      durationSeconds,
+    });
+    if (recovered) return { success: true, jobId: job.id, ...recovered };
+    // 支払い済みの結果を読めなかっただけ。名前を捨てると次は新規課金になる。
+    return {
+      success: false,
+      message: t("api-errors:aiResultUnavailable"),
+      keepIdempotencyKey: true,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
+}
+
+async function answerFromExistingTranslationJob(
+  job: { id: string; status: string; resultFileId: string | null },
+  {
+    userId,
+    segments,
+  }: { userId: string; segments: { id: string; text: string }[] },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded" && job.resultFileId) {
+    const recovered = await recoverTranslation({ jobId: job.id, userId, segments });
+    if (recovered) return { success: true, jobId: job.id, segments: recovered };
+    return {
+      success: false,
+      message: t("api-errors:aiResultUnavailable"),
+      keepIdempotencyKey: true,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
+}
+
+// 画像と画像編集はどちらもファイルひとつを返す。
+async function answerFromExistingFileJob(
+  job: {
+    id: string;
+    status: string;
+    resultFileId: string | null;
+    resultFile?: { name: string; mimeType: string } | null;
+  },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded" && job.resultFileId) {
+    return {
+      success: true,
+      jobId: job.id,
+      url: await getContentUrl(job.resultFileId),
+      fileName: "resultFile" in job ? job.resultFile?.name ?? null : null,
+      contentType: "resultFile" in job ? job.resultFile?.mimeType ?? null : null,
+    };
+  }
+  return stillRunning(job.status)
+    ? {
+      success: false,
+      message: t("api-errors:aiRequestInProgress"),
+      keepIdempotencyKey: true,
+    }
+    : { success: false, message: t("api-errors:aiProviderError") };
+}
+
+// Video submissions are asynchronous, but an idempotency replay still has to
+// respect the durable row's terminal outcome. Returning success unconditionally
+// makes a response-lost retry appear queued even after the provider failed and
+// usage was refunded. Keep active rows recoverable, return the stored result for
+// success, and surface terminal failure without retaining the key.
+async function answerFromExistingVideoJob(
+  job: {
+    id: string;
+    status: string;
+    resultFileId: string | null;
+  },
+  t: (key: string) => string,
+): Promise<AiActionResult> {
+  if (job.status === "succeeded") {
+    return {
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+    };
+  }
+  if (stillRunning(job.status)) {
+    return {
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+    };
+  }
+  return {
+    success: false,
+    message: t("api-errors:aiProviderError"),
+    status: job.status,
+  };
+}
+
+// Submitting a video is the one AI operation whose failure is not simply a
+// refund: OpenRouter may have accepted a job we lost track of. The shared
+// classifier decides, so this path and the v3 endpoints cannot drift apart.
+async function handleVideoSubmissionFailure({
+  userId,
+  jobId,
+  error,
+  t,
+}: {
+  userId: string;
+  jobId: string;
+  error: unknown;
+  t: (key: string) => string;
+}): Promise<AiActionResult> {
+  const handling = classifyVideoSubmissionFailure(error);
+  if (handling.action === "refund") {
+    await failAiJobAndRefundUsage({
+      userId,
+      aiJobId: jobId,
+      error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+      ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
+    });
+    return { success: false, message: t("api-errors:aiProviderError") };
+  }
+  if (handling.action === "keepQueued") {
+    // The provider may still call back, so the job stays queued rather than
+    // being refunded out from under a submission that was accepted.
+    console.error(
+      `OpenRouter video submission outcome is unknown for AI job ${jobId}`,
+      error,
+    );
+    return { success: true, jobId };
+  }
+  throw error;
+}
+
+// A repeated submission has to answer with the result the first one produced,
+// not merely with "already done". Both recoveries re-read the stored JSON and
+// re-validate it, exactly as the v3 endpoints do, so a corrupted or truncated
+// object fails loudly instead of rendering as an empty editor.
+async function recoverTranscription({
+  jobId,
+  userId,
+  durationSeconds,
+}: {
+  jobId: string;
+  userId: string;
+  durationSeconds: number;
+}): Promise<{ segments: unknown; language?: string; words?: unknown } | null> {
+  const fileRecord = await getAiJobResultFile({ jobId, userId });
+  if (!fileRecord) return null;
+  try {
+    const stored = validateTranscriptionResult(
+      (await readAiJsonResult({ objectKey: fileRecord.objectKey })) as {
+        segments?: unknown;
+        language?: unknown;
+        words?: unknown;
+      },
+      durationSeconds,
+    );
+    return {
+      segments: stored.segments,
+      ...(stored.language ? { language: stored.language } : {}),
+      ...(stored.words ? { words: stored.words } : {}),
+    };
+  } catch (error) {
+    console.error("Failed to recover AI transcription result", error);
+    return null;
+  }
+}
+
+async function recoverTranslation({
+  jobId,
+  userId,
+  segments,
+}: {
+  jobId: string;
+  userId: string;
+  segments: { id: string; text: string }[];
+}): Promise<{ id: string; text: string }[] | null> {
+  const fileRecord = await getAiJobResultFile({ jobId, userId });
+  if (!fileRecord) return null;
+  try {
+    const stored = (await readAiJsonResult({
+      objectKey: fileRecord.objectKey,
+    })) as { segments?: unknown };
+    if (!Array.isArray(stored.segments)) return null;
+    const translatedById = new Map<string, string>();
+    for (const entry of stored.segments) {
+      if (entry === null || typeof entry !== "object") return null;
+      const record = entry as { id?: unknown; text?: unknown };
+      if (typeof record.id !== "string" || typeof record.text !== "string") {
+        return null;
+      }
+      translatedById.set(record.id, record.text);
+    }
+    // The stored result belongs to this request only when it covers exactly the
+    // segments being asked for again.
+    if (
+      translatedById.size !== segments.length ||
+      !segments.every((segment) => translatedById.has(segment.id))
+    ) {
+      return null;
+    }
+    return segments.map((segment) => ({
+      id: segment.id,
+      text: translatedById.get(segment.id) as string,
+    }));
+  } catch (error) {
+    console.error("Failed to recover AI translation result", error);
+    return null;
+  }
+}
+
+// Only an operation whose whole input was recorded can be repeated. A prompt is
+// recorded; an uploaded image is not — neither the source of an edit nor the
+// frames a video was conditioned on — so those would rerun as something else at
+// full price.
+function canRetryJob(job: {
+  kind: string;
+  status: string;
+  inputParams: unknown;
+}): boolean {
+  if (job.status !== "failed" && job.status !== "succeeded") return false;
+  if (job.kind !== "image" && job.kind !== "video") return false;
+  return parseReplayableAiJobInput(job.kind, job.inputParams).success;
+}
+
+// The cue timings the translate screen already holds, keyed by segment id.
+// Anything that does not line up with the segments being sent is dropped rather
+// than guessed at.
+function readTranslationContexts(
+  value: FormDataEntryValue | null,
+  ids: string[],
+): Record<string, { start: number; end: number }> {
+  if (typeof value !== "string" || value.trim() === "") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object") return {};
+  const known = new Set(ids);
+  const contexts: Record<string, { start: number; end: number }> = {};
+  for (const [id, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!known.has(id) || entry === null || typeof entry !== "object") continue;
+    const record = entry as { start?: unknown; end?: unknown };
+    if (
+      typeof record.start !== "number" ||
+      typeof record.end !== "number" ||
+      !Number.isFinite(record.start) ||
+      !Number.isFinite(record.end) ||
+      record.end <= record.start
+    ) {
+      continue;
+    }
+    contexts[id] = { start: record.start, end: record.end };
+  }
+  return contexts;
+}
+
+function readTranslationStyle(formData: FormData): TranslationStyle | undefined {
+  const glossary = parseGlossary(String(formData.get("glossary") ?? ""));
+  const maxCharactersPerLine = Number(
+    String(formData.get("maxCharactersPerLine") ?? "").trim(),
+  );
+  const maxLines = Number(String(formData.get("maxLines") ?? "").trim());
+  const style: TranslationStyle = {
+    ...(Object.keys(glossary).length > 0 ? { glossary } : {}),
+    ...(Number.isSafeInteger(maxCharactersPerLine) &&
+    maxCharactersPerLine >= 1 &&
+    maxCharactersPerLine <= 200
+      ? { maxCharactersPerLine }
+      : {}),
+    ...(Number.isSafeInteger(maxLines) && maxLines >= 1 && maxLines <= 10
+      ? { maxLines }
+      : {}),
+  };
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof AiProviderError) {
+    return "aiProviderError";
+  }
+  console.error("AI action failed", error);
+  return "unknown";
+}
+
+async function resolveOrigin(): Promise<string> {
+  const fromEnv = process.env.PUBLIC_ORIGIN;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const url = (await headers()).get("x-url");
+  if (url) return new URL(url).origin;
+  return "";
+}
+
+// OpenRouter only calls back over HTTPS, so a server reachable only over plain
+// HTTP — a local one, typically — gets no callback URL at all and its jobs are
+// finished by the poll path instead. Sending the URL anyway fails the whole
+// submission, which made video generation impossible to run locally.
+async function resolveVideoCallbackUrl(
+  jobId: string,
+  nonce: string,
+): Promise<string | undefined> {
+  const origin = await resolveOrigin();
+  let callbackUrl: URL;
+  try {
+    callbackUrl = new URL(
+      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
+      origin,
+    );
+  } catch {
+    return undefined;
+  }
+  if (callbackUrl.protocol !== "https:") return undefined;
+  callbackUrl.searchParams.set("nonce", nonce);
+  return callbackUrl.toString();
+}
+
+export async function generateImageAction(
+  _state: AiActionResult,
+  formData: FormData,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const prompt = composePrompt({
+    main: String(formData.get("prompt") ?? "").trim(),
+    style: String(formData.get("style") ?? "").trim() || undefined,
+    composition: String(formData.get("composition") ?? "").trim() || undefined,
+    exclusions: String(formData.get("exclusions") ?? "").trim() || undefined,
+  });
+  const aspectRatio = String(
+    formData.get("aspectRatio") ?? "1:1",
+  ) as AiImageAspectRatio;
+  const background = String(
+    formData.get("background") ?? "auto",
+  ) as AiImageBackground;
+  const seedField = String(formData.get("seed") ?? "").trim();
+  const seed = seedField === "" ? undefined : Number(seedField);
+  if (!prompt || prompt.length > MAX_AI_PROMPT_LENGTH) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!AI_IMAGE_BACKGROUNDS.includes(background)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (seed !== undefined && !isAiSeed(seed)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  // The pictures a generation is guided by. How many a model takes differs, and
+  // the price is set for AI_MAX_IMAGE_REFERENCES of them.
+  const referenceFiles = formData
+    .getAll("reference")
+    .filter((value): value is File => value instanceof File && value.size > 0);
+  if (referenceFiles.length > AI_MAX_IMAGE_REFERENCES) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  // Size first: validateAiInputImage buffers the whole upload, so checking
+  // afterwards lets an oversized body be materialized before it is refused.
+  // The total matters as much as each one: every picture is held raw, again as
+  // base64 and again through JSON, so the per-picture limit taken four times
+  // over is past what this Worker has.
+  if (
+    referenceFiles.some((file) => file.size > MAX_AI_IMAGE_UPLOAD_BYTES) ||
+    referenceFiles.reduce((total, file) => total + file.size, 0) >
+      MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES
+  ) {
+    return { success: false, message: t("api-errors:fileIsTooLarge") };
+  }
+  const validated = await Promise.all(
+    referenceFiles.map((file) =>
+      validateAiInputImage(file, supportedEditImageTypes),
+    ),
+  );
+  const references = validated.filter(
+    (reference): reference is NonNullable<typeof reference> =>
+      reference !== null,
+  );
+  if (references.length !== referenceFiles.length) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const identity = await requestIdentityOf(formData, "image.generate", {
+    ...fingerprintModelOf(formData),
+    prompt,
+    aspectRatio,
+    ...(background !== "auto" ? { background } : {}),
+    ...(seed === undefined ? {} : { seed }),
+    // Every picture is part of what makes this request the request it is: the
+    // same prompt guided by different pictures is a different run.
+    ...(references.length > 0
+      ? {
+          references: await Promise.all(
+            references.map(async (reference, index) => ({
+              fileName: referenceFiles[index]!.name,
+              contentType: reference.mimeType,
+              contentSha256: await sha256Hex(reference.bytes),
+            })),
+          ),
+        }
+      : {}),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingFileJob(replay.job, t);
+  }
+
+  const selectedModel = await resolveModelOf(formData, "image.generate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+
+  // Checked before the reservation: GPT Image-1 renders 1:1, 3:2 and 2:3 and
+  // GPT Image-2 cuts out no background, and a rejection that arrives after the
+  // usage is reserved reads as a provider outage.
+  if (
+    unsupportedImageRequestReason(
+      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+        selectedModel.modelId,
+      ),
+      {
+        aspectRatio,
+        background,
+        ...(seed === undefined ? {} : { seed }),
+        referenceImages: references.length,
+      },
+    )
+  ) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
+  const cost = selectedModel.priceUnits;
+  const reservation = await createReservedAiJob({
+    userId: session.user.id,
+    kind: "image",
+    provider: "openrouter",
+    status: "running",
+    inputParams: {
+      prompt,
+      aspectRatio,
+      ...(background !== "auto" ? { background } : {}),
+      ...(seed === undefined ? {} : { seed }),
+      ...(referenceFiles.length > 0
+        ? {
+            references: referenceFiles.map((file) => ({ filename: file.name })),
+          }
+        : {}),
+    },
+    usageUnits: cost,
+    model: selectedModel.modelId,
+    ...identity,
+  });
+  if (!reservation.ok) {
+    return reservationFailure(reservation.errorCode, t);
+  }
+  const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    // 同時に届いた 2 本のうち、予約が決着をつけたほう。
+    return await answerFromExistingFileJob(job, t);
+  }
+
+  try {
+    const result = await generateImage({
+      prompt,
+      aspectRatio,
+      ...(background !== "auto" ? { background } : {}),
+      ...(references.length > 0
+        ? {
+            referenceImages: references.map((reference) => ({
+              bytes: reference.bytes,
+              mimeType: reference.mimeType,
+            })),
+          }
+        : {}),
+      ...(seed === undefined ? {} : { seed }),
+      model: selectedModel.modelId,
+    });
+    const bytes = decodeGeneratedImageBase64(result.b64Json);
+    await inspectGeneratedImage(bytes, result.mediaType);
+    const file = await saveAiImage({
+      jobId: job.id,
+      userId: session.user.id,
+      bytes,
+      mimeType: "image/png",
+      filename: `ai-image-${job.id}.png`,
+    });
+    return {
+      success: true,
+      jobId: job.id,
+      url: await getContentUrl(file.id),
+      fileName: file.name,
+      contentType: file.mimeType,
+    };
+  } catch (error) {
+    await failAiJobAndRefundUsage({
+      userId: session.user.id,
+      aiJobId: job.id,
+      error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
+    });
+    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  }
+}
+
+export async function editImageAction(
+  _state: AiActionResult,
+  formData: FormData,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const task = String(formData.get("task") ?? "") as ImageEditTask;
+  const prompt = String(formData.get("prompt") ?? "").trim();
+  const outpaintExpansion = Number(formData.get("outpaintExpansion") ?? 25);
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0 || file.size > MAX_AI_IMAGE_UPLOAD_BYTES) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!(AI_IMAGE_EDIT_TASKS as readonly string[]).includes(task)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (aiImageEditTaskRequiresPrompt(task) && !prompt) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (prompt.length > MAX_AI_PROMPT_LENGTH) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (task === "outpaint" && ![10, 25, 50].includes(outpaintExpansion)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  const validated = await validateAiInputImage(file, supportedEditImageTypes);
+  if (!validated) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  // editImage substitutes its own prompt for the tasks that do not take one, so
+  // carrying the user's text for those would record and fingerprint a string
+  // the provider never sees. The v3 endpoint drops it for the same reason.
+  const editPrompt = !aiImageEditTaskRequiresPrompt(task)
+    ? undefined
+    : task === "outpaint"
+      ? `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`
+      : prompt;
+
+  const identity = await requestIdentityOf(formData, `image.edit.${task}`, {
+    ...fingerprintModelOf(formData),
+    task,
+    ...(editPrompt ? { prompt: editPrompt } : {}),
+    fileName: file.name,
+    contentType: validated.mimeType,
+    contentSha256: await sha256Hex(validated.bytes),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingFileJob(replay.job, t);
+  }
+
+  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+  const cost = selectedModel.priceUnits;
+  // An edit hands the model a picture, cuts out a background or asks for a
+  // size; a model that takes none of those is refused before it is paid for.
+  if (
+    unsupportedImageRequestReason(
+      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+        selectedModel.modelId,
+      ),
+      {
+        // The picture being edited.
+        referenceImages: 1,
+        // Removing a background is asking for a transparent one.
+        ...(task === "remove_background"
+          ? { background: "transparent" as const }
+          : {}),
+        resolution: task === "upscale",
+      },
+    )
+  ) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
+  const reservation = await createReservedAiJob({
+    userId: session.user.id,
+    // The same kind the v3 edit endpoint writes. Tagging an edit as "image"
+    // makes it indistinguishable from a generation, and the retry path then
+    // reruns it as text-to-image: no source picture, and the generation price.
+    kind: "image_edit",
+    provider: "openrouter",
+    status: "running",
+    inputParams: {
+      task,
+      filename: file.name,
+      ...(editPrompt ? { prompt: editPrompt } : {}),
+      ...(task === "outpaint" ? { outpaintExpansion } : {}),
+    },
+    usageUnits: cost,
+    model: selectedModel.modelId,
+    ...identity,
+  });
+  if (!reservation.ok) {
+    return reservationFailure(reservation.errorCode, t);
+  }
+  const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    // 同時に届いた 2 本のうち、予約が決着をつけたほう。
+    return await answerFromExistingFileJob(job, t);
+  }
+
+  try {
+    const result = await editImage({
+      task,
+      image: validated.bytes,
+      mimeType: validated.mimeType,
+      ...(editPrompt ? { prompt: editPrompt } : {}),
+      model: selectedModel.modelId,
+    });
+    const bytes = decodeGeneratedImageBase64(result.b64Json);
+    await inspectGeneratedImage(bytes, result.mediaType);
+    const saved = await saveAiImage({
+      jobId: job.id,
+      userId: session.user.id,
+      bytes,
+      mimeType: "image/png",
+      filename: `ai-edit-${job.id}.png`,
+    });
+    return {
+      success: true,
+      jobId: job.id,
+      url: await getContentUrl(saved.id),
+      fileName: saved.name,
+      contentType: saved.mimeType,
+    };
+  } catch (error) {
+    await failAiJobAndRefundUsage({
+      userId: session.user.id,
+      aiJobId: job.id,
+      error: AI_JOB_FAILURE_MESSAGES.imageEdit,
+    });
+    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  }
+}
+
+export async function transcribeAction(
+  _state: AiActionResult,
+  formData: FormData,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const file = formData.get("file");
+  const language =
+    String(formData.get("language") ?? "").trim().toLowerCase() || undefined;
+  if (!(file instanceof File) || file.size === 0 || file.size > MAX_AI_TRANSCRIPTION_UPLOAD_BYTES) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  // The value reaches the provider prompt and is stored on the job, so it is
+  // held to the same ISO 639-1 allowlist the v3 endpoint applies.
+  if (language !== undefined && !isIso6391LanguageCode(language)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  let parsedAudio;
+  try {
+    parsedAudio = await parseAudio(file);
+  } catch {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
+  const identity = await requestIdentityOf(formData, "audio.transcribe", {
+    ...fingerprintModelOf(formData),
+    // ブラウザが名乗る種類は数えない。同じ音声でも、選び方や取り込み元で
+    // 変わることがあり、そのたびに別の依頼になる——中身のハッシュと長さが
+    // 音声を見分けるので、これが無くて困ることはない。逆に数えると、送り手
+    // には同じ依頼に見えるものが指紋だけ食い違い、その名前では二度と通らない。
+    fileName: file.name,
+    durationSeconds: parsedAudio.durationSeconds,
+    contentSha256: await sha256Hex(parsedAudio.bytes),
+    ...(language ? { language } : {}),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingTranscriptionJob(
+      replay.job,
+      { userId: session.user.id, durationSeconds: parsedAudio.durationSeconds },
+      t,
+    );
+  }
+
+  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+  const cost = selectedModel.priceUnits * minutes;
+  const reservation = await createReservedAiJob({
+    userId: session.user.id,
+    kind: "stt",
+    provider: "openrouter",
+    status: "running",
+    inputParams: {
+      filename: file.name,
+      durationSeconds: parsedAudio.durationSeconds,
+      ...(language ? { language } : {}),
+    },
+    usageUnits: cost,
+    model: selectedModel.modelId,
+    ...identity,
+  });
+  if (!reservation.ok) {
+    return reservationFailure(reservation.errorCode, t);
+  }
+  const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    return await answerFromExistingTranscriptionJob(
+      job,
+      { userId: session.user.id, durationSeconds: parsedAudio.durationSeconds },
+      t,
+    );
+  }
+
+  try {
+    const result = await transcribeAudio({
+      audio: parsedAudio.bytes,
+      durationSeconds: parsedAudio.durationSeconds,
+      filename: file.name,
+      mimeType: file.type || "audio/mpeg",
+      ...(language ? { language } : {}),
+      model: selectedModel.modelId,
+    });
+    await saveAiJsonResult({
+      jobId: job.id,
+      userId: session.user.id,
+      filename: `transcription-${job.id}.json`,
+      result: {
+        version: 1,
+        kind: "stt",
+        segments: result.segments,
+        ...(result.language ? { language: result.language } : {}),
+        ...(result.words ? { words: result.words } : {}),
+      },
+    });
+    return {
+      success: true,
+      jobId: job.id,
+      segments: result.segments,
+      ...(result.language ? { language: result.language } : {}),
+      ...(result.words ? { words: result.words } : {}),
+    };
+  } catch (error) {
+    await failAiJobAndRefundUsage({
+      userId: session.user.id,
+      aiJobId: job.id,
+      error: AI_JOB_FAILURE_MESSAGES.transcription,
+    });
+    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  }
+}
+
+export async function translateAction(
+  _state: AiActionResult,
+  formData: FormData,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const targetLanguage = String(formData.get("targetLanguage") ?? "").trim().toLowerCase();
+  const sourceLanguage = String(formData.get("sourceLanguage") ?? "").trim().toLowerCase() || undefined;
+  const segmentsText = String(formData.get("segments") ?? "").trim();
+  if (!segmentsText || !isIso6391LanguageCode(targetLanguage)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (sourceLanguage !== undefined && !isIso6391LanguageCode(sourceLanguage)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  let segments: { id: string; text: string }[];
+  try {
+    const parsed = JSON.parse(segmentsText) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      parsed.length > MAX_TRANSLATION_SEGMENTS
+    ) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    // A repeated ID cannot be answered: the provider returns one translation
+    // per ID, so the reply can never cover the input. Rejecting it here rather
+    // than at the response keeps a request that could not have succeeded from
+    // being reserved, charged, and paid for at the provider. The v3 endpoint
+    // rejects the same body with 400.
+    const seenIds = new Set<string>();
+    segments = parsed.map((item) => {
+      const record = item as { id?: unknown; text?: unknown };
+      if (
+        typeof record.id !== "string" ||
+        !SAFE_SEGMENT_ID_PATTERN.test(record.id) ||
+        seenIds.has(record.id) ||
+        typeof record.text !== "string" ||
+        record.text.trim().length === 0
+      ) {
+        throw new Error("invalid segment");
+      }
+      seenIds.add(record.id);
+      return { id: record.id, text: record.text };
+    });
+  } catch {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  // Timings from the source the user pasted. A translated line that does not
+  // fit its cue is unreadable no matter how good the wording is.
+  const contexts = readTranslationContexts(
+    formData.get("contexts"),
+    segments.map((segment) => segment.id),
+  );
+  const style = readTranslationStyle(formData);
+  // The glossary is sent to the provider and paid for there, so it counts
+  // against the same budget and the same charge as the segments.
+  const characterCount = translationCharacterCount({ segments, style });
+  if (characterCount > MAX_TRANSLATION_CHARACTERS) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const identity = await requestIdentityOf(formData, "subtitle.translate", {
+    ...fingerprintModelOf(formData),
+    ...(sourceLanguage ? { sourceLanguage } : {}),
+    targetLanguage,
+    segments,
+    ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
+    ...(style ? { style } : {}),
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingTranslationJob(
+      replay.job,
+      { userId: session.user.id, segments },
+      t,
+    );
+  }
+
+  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+
+  const usageUnits =
+    selectedModel.priceUnits *
+    Math.max(1, Math.ceil(characterCount / 1_000));
+  const reservation = await createReservedAiJob({
+    userId: session.user.id,
+    kind: "translation",
+    provider: "openrouter",
+    status: "running",
+    inputParams: {
+      ...(sourceLanguage ? { sourceLanguage } : {}),
+      targetLanguage,
+      segmentCount: segments.length,
+      characterCount,
+    },
+    usageUnits,
+    model: selectedModel.modelId,
+    ...identity,
+  });
+  if (!reservation.ok) {
+    return reservationFailure(reservation.errorCode, t);
+  }
+  const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    return await answerFromExistingTranslationJob(
+      job,
+      { userId: session.user.id, segments },
+      t,
+    );
+  }
+
+  try {
+    const translated = await translateSegments({
+      ...(sourceLanguage ? { sourceLanguage } : {}),
+      targetLanguage,
+      segments,
+      ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
+      ...(style ? { style } : {}),
+      model: selectedModel.modelId,
+    });
+    await saveAiJsonResult({
+      jobId: job.id,
+      userId: session.user.id,
+      filename: `translation-${job.id}.json`,
+      result: {
+        version: 1,
+        kind: "translation",
+        ...(sourceLanguage ? { sourceLanguage } : {}),
+        targetLanguage,
+        // Without the timing a stored translation can only be recovered as
+        // text, so the history cannot re-export it as a subtitle file.
+        segments: translated.map((segment) => {
+          const context = contexts[segment.id];
+          return context ? { ...segment, context } : segment;
+        }),
+      },
+    });
+    return { success: true, jobId: job.id, segments: translated };
+  } catch (error) {
+    await failAiJobAndRefundUsage({
+      userId: session.user.id,
+      aiJobId: job.id,
+      error: AI_JOB_FAILURE_MESSAGES.translation,
+    });
+    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  }
+}
+
+export async function createVideoAction(
+  _state: AiActionResult,
+  formData: FormData,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const prompt = composePrompt({
+    main: String(formData.get("prompt") ?? "").trim(),
+    style: String(formData.get("style") ?? "").trim() || undefined,
+    composition: String(formData.get("composition") ?? "").trim() || undefined,
+    motion: String(formData.get("motion") ?? "").trim() || undefined,
+    exclusions: String(formData.get("exclusions") ?? "").trim() || undefined,
+  });
+  const durationSeconds = Number(formData.get("durationSeconds") ?? 4);
+  const resolution = String(
+    formData.get("resolution") ?? "720p",
+  ) as AiVideoResolution;
+  const videoAspectRatio = String(
+    formData.get("aspectRatio") ?? "16:9",
+  ) as AiVideoAspectRatio;
+  // Audio on by default: that is what the provider has effectively been
+  // producing, and what the cost estimate assumes is being paid for.
+  const generateAudio = String(formData.get("generateAudio") ?? "true") !== "false";
+  const videoSeedField = String(formData.get("seed") ?? "").trim();
+  const videoSeed =
+    videoSeedField === "" ? undefined : Number(videoSeedField);
+  if (!prompt || prompt.length > MAX_AI_PROMPT_LENGTH) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!isAiVideoDurationSeconds(durationSeconds)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!AI_VIDEO_RESOLUTIONS.includes(resolution)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (!AI_VIDEO_ASPECT_RATIOS.includes(videoAspectRatio)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (videoSeed !== undefined && !isAiSeed(videoSeed)) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const firstFrame = formData.get("firstFrame");
+  const lastFrame = formData.get("lastFrame");
+  // 終わりのフレームだけの依頼は、この API には無い形——v3 /videos/frames も
+  // エディタの DTO も断る。ここで通すと、入口によって受ける形が変わり、
+  // 予約して課金してから断られることになる。
+  const hasFirstFrame = firstFrame instanceof File && firstFrame.size > 0;
+  const hasLastFrame = lastFrame instanceof File && lastFrame.size > 0;
+  if (hasLastFrame && !hasFirstFrame) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  const frameImages: Array<{
+    type: "image_url";
+    image_url: { url: string };
+    frame_type: "first_frame" | "last_frame";
+  }> = [];
+  // Two runs of the same prompt with different start frames are different
+  // requests, so the frames belong in the fingerprint.
+  const frameDigests: Record<string, { contentType: string; sha256: string }> =
+    {};
+  // Recorded so the history can tell a frame-conditioned video apart from a
+  // text-to-video one. The images themselves are not kept, which is why such a
+  // job cannot be rerun.
+  const frameParams: Record<string, { filename: string; mimeType: string }> = {};
+  for (const [frame, frameType] of [
+    [firstFrame, "first_frame"],
+    [lastFrame, "last_frame"],
+  ] as const) {
+    if (frame instanceof File && frame.size > 0) {
+      if (frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES) {
+        return { success: false, message: t("api-errors:fileIsTooLarge") };
+      }
+      const validated = await validateAiInputImage(frame, supportedFrameImageTypes);
+      if (!validated) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      const bytes = new Uint8Array(validated.bytes);
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode(
+          ...bytes.subarray(offset, offset + chunkSize),
+        );
+      }
+      frameImages.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${validated.mimeType};base64,${btoa(binary)}`,
+        },
+        frame_type: frameType,
+      });
+      frameDigests[frameType] = {
+        contentType: validated.mimeType,
+        sha256: await sha256Hex(validated.bytes),
+      };
+      frameParams[frameType === "first_frame" ? "firstFrame" : "lastFrame"] = {
+        filename: frame.name,
+        mimeType: validated.mimeType,
+      };
+    }
+  }
+
+  const identity = await requestIdentityOf(formData, "video.generate", {
+    ...fingerprintModelOf(formData),
+    prompt,
+    durationSeconds,
+    resolution,
+    aspectRatio: videoAspectRatio,
+    generateAudio,
+    ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+    ...frameDigests,
+  });
+  if (!identity) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+
+  const replay = await replayOf(session.user.id, identity);
+  const settled = settledReplay(replay, t);
+  if (settled) return settled;
+  if (replay?.outcome === "existing") {
+    return await answerFromExistingVideoJob(replay.job, t);
+  }
+
+  const selectedModel = await resolveModelOf(formData, "video.generate");
+  if (!selectedModel) {
+    return { success: false, message: t("api-errors:aiModelUnavailable") };
+  }
+
+  // Checked before the reservation: a model that cannot render this
+  // combination is refused by the provider after the usage has been reserved,
+  // and the refund that follows tells the user only that "the provider failed".
+  const unsupported = unsupportedVideoRequestReason(
+    (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+    {
+      resolution,
+      durationSeconds,
+      aspectRatio: videoAspectRatio,
+      generateAudio,
+      ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+      firstFrame: frameImages.some((frame) => frame.frame_type === "first_frame"),
+      lastFrame: frameImages.some((frame) => frame.frame_type === "last_frame"),
+    },
+  );
+  if (unsupported) {
+    return {
+      success: false,
+      message: t("api-errors:aiModelDoesNotSupportRequest"),
+    };
+  }
+
+  const callbackNonce = await createCallbackNonce();
+  const cost = selectedModel.priceUnits * durationSeconds;
+  const reservation = await createReservedAiJob({
+    userId: session.user.id,
+    kind: "video",
+    provider: "openrouter",
+    status: "queued",
+    inputParams: {
+      prompt,
+      durationSeconds,
+      resolution,
+      aspectRatio: videoAspectRatio,
+      generateAudio,
+      ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+      ...frameParams,
+    },
+    usageUnits: cost,
+    model: selectedModel.modelId,
+    activeJobLimit: 1,
+    callbackNonceHash: callbackNonce.hash,
+    ...identity,
+  });
+  if (!reservation.ok) {
+    return reservationFailure(reservation.errorCode, t);
+  }
+  const { job } = reservation;
+  if (reservation.outcome === "existing") {
+    return await answerFromExistingVideoJob(job, t);
+  }
+
+  const callbackUrl = await resolveVideoCallbackUrl(job.id, callbackNonce.nonce);
+
+  try {
+    await createAndAttachVideoJob({
+      jobId: job.id,
+      prompt,
+      durationSeconds,
+      resolution,
+      aspectRatio: videoAspectRatio,
+      generateAudio,
+      ...(videoSeed === undefined ? {} : { seed: videoSeed }),
+      ...(frameImages.length > 0 ? { frameImages } : {}),
+      ...(callbackUrl === undefined ? {} : { callbackUrl }),
+      callbackNonceHash: callbackNonce.hash,
+      model: selectedModel.modelId,
+    });
+    return { success: true, jobId: job.id };
+  } catch (error) {
+    return await handleVideoSubmissionFailure({
+      userId: session.user.id,
+      jobId: job.id,
+      error,
+      t,
+    });
+  }
+}
+
+export async function listJobsAction(
+  cursor?: { createdAt: string; id: string } | null,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const page = await listAiJobsByUserId({
+    userId: session.user.id,
+    limit: 20,
+    ...(cursor ? { cursor: { createdAt: new Date(cursor.createdAt), id: cursor.id } } : {}),
+  });
+  const jobs = await Promise.all(
+    page.jobs.map(async (job) => ({
+      id: job.id,
+      kind: job.kind,
+      status: job.status,
+      model: job.model,
+      createdAt: job.createdAt.toISOString(),
+      url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+      fileName: job.resultFile?.name ?? null,
+      contentType: job.resultFile?.mimeType ?? null,
+      inputParams: sanitizeAiJobInputParams(job.kind, job.inputParams),
+      canRetry: canRetryJob(job),
+    })),
+  );
+  return {
+    success: true,
+    jobs,
+    nextCursor: page.nextCursor
+      ? {
+          createdAt: page.nextCursor.createdAt.toISOString(),
+          id: page.nextCursor.id,
+        }
+      : null,
+  };
+}
+
+export async function retryJobAction(
+  jobId: string,
+  idempotencyKey: string,
+  expectedFingerprint?: string,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const job = await getAiJobById({ jobId });
+  if (!job || job.userId !== session.user.id) {
+    return { success: false, message: t("api-errors:aiJobNotFound") };
+  }
+  if (job.status !== "failed" && job.status !== "succeeded") {
+    return { success: false, message: t("api-errors:aiJobIsActive") };
+  }
+  const replayInput = parseReplayableAiJobInput(job.kind, job.inputParams);
+  if (!replayInput.success) {
+    return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  const input = replayInput.data;
+  // A retry confirmation owns an immutable snapshot of the original job. If
+  // the row was edited between opening the dialog and submitting it, refuse
+  // before reservation rather than silently retrying a different model/body.
+  if (expectedFingerprint !== undefined) {
+    const actualFingerprint = await retryJobFingerprint({
+      kind: job.kind,
+      model: job.model,
+      inputParams: replayInput.data,
+    });
+    // Accept the pre-fingerprint JSON token during the short rolling window,
+    // but all new browser confirmations carry only the bounded digest.
+    const legacyMatch = expectedFingerprint.startsWith("{") &&
+      JSON.stringify({
+        kind: job.kind,
+        model: job.model,
+        inputParams: replayInput.data,
+      }) === expectedFingerprint;
+    if (actualFingerprint !== expectedFingerprint && !legacyMatch) {
+      return {
+        success: false,
+        message: t("api-errors:aiRequestChanged"),
+        keepIdempotencyKey: true,
+      };
+    }
+  }
+  // A rerun repeats the request, so it repeats the model too. If that model has
+  // since been disabled the retry is refused rather than moved to the default:
+  // silently running something else and charging the default's price is not a
+  // retry. Jobs from before the column existed carry no model and resolve to
+  // the operation's default, which is what they ran on.
+  const catalog = await loadAiModelCatalog();
+
+  if (job.kind === "image") {
+    // The reference image was never stored, so this would generate something
+    // else and charge for it.
+    // Both spellings have existed in persisted jobs. Neither can be replayed
+    // because the uploaded bytes were never retained; accepting either would
+    // charge for a different, reference-free generation.
+    if (input.reference !== undefined || input.references !== undefined) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    // Required rather than defaulted: a generation always recorded its shape, so
+    // a job without one is not a generation and must not be rerun as one. Jobs
+    // predating aspect ratios carry the fixed size they were asked for.
+    const aspectRatio =
+      input.aspectRatio !== undefined
+        ? typeof input.aspectRatio === "string"
+          ? (input.aspectRatio as AiImageAspectRatio)
+          : null
+        : typeof input.size === "string"
+          ? aspectRatioOfLegacyImageSize(input.size)
+          : null;
+    if (aspectRatio === null || !AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    // A missing background is the legacy "auto" request. A value that was
+    // persisted but is no longer recognized cannot be silently changed to
+    // auto: that would charge for a different request body.
+    let background: AiImageBackground | undefined;
+    if (input.background !== undefined) {
+      if (
+        typeof input.background !== "string" ||
+        !AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground)
+      ) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      background =
+        input.background === "auto"
+          ? undefined
+          : (input.background as AiImageBackground);
+    }
+    let seed: number | undefined;
+    if (input.seed !== undefined) {
+      if (!isAiSeed(input.seed)) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      seed = input.seed;
+    }
+    const retryModel = catalog.resolve("image.generate", job.model);
+    if (!retryModel) {
+      return { success: false, message: t("api-errors:aiModelUnavailable") };
+    }
+    // Capabilities may have narrowed since the original run. Validate the
+    // exact replay before reserving usage so a now-unsupported ratio,
+    // background, or seed never reaches the paid provider/refund path.
+    if (
+      unsupportedImageRequestReason(
+        (await loadAiImageModelCapabilities([retryModel.modelId])).get(
+          retryModel.modelId,
+        ),
+        {
+          aspectRatio,
+          background: background ?? "auto",
+          ...(seed === undefined ? {} : { seed }),
+          referenceImages: 0,
+        },
+      )
+    ) {
+      return {
+        success: false,
+        message: t("api-errors:aiModelDoesNotSupportRequest"),
+      };
+    }
+    const identity = await toAiRequestIdentity({
+      idempotencyKey,
+      operation: "image.generate",
+      input: {
+        model: retryModel.modelId,
+        prompt: input.prompt,
+        aspectRatio,
+        ...(background ? { background } : {}),
+        ...(seed === undefined ? {} : { seed }),
+      },
+    });
+    if (!identity) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const cost = retryModel.priceUnits;
+    const reservation = await createReservedAiJob({
+      userId: session.user.id,
+      kind: "image",
+      provider: "openrouter",
+      status: "running",
+      inputParams: {
+        prompt: input.prompt,
+        aspectRatio,
+        ...(background ? { background } : {}),
+        ...(seed === undefined ? {} : { seed }),
+      },
+      usageUnits: cost,
+      model: retryModel.modelId,
+      ...identity,
+    });
+    if (!reservation.ok) {
+      return reservationFailure(reservation.errorCode, t);
+    }
+    const { job: retried } = reservation;
+    if (reservation.outcome === "existing") {
+      // A lost response can arrive after the provider already finished the
+      // reserved retry. Recover its file instead of treating it as a generic
+      // provider failure (which would discard the only idempotency key).
+      return await answerFromExistingFileJob(retried, t);
+    }
+    try {
+      const result = await generateImage({
+        prompt: input.prompt,
+        aspectRatio,
+        ...(background ? { background } : {}),
+        ...(seed === undefined ? {} : { seed }),
+        model: retryModel.modelId,
+      });
+      const bytes = decodeGeneratedImageBase64(result.b64Json);
+      await inspectGeneratedImage(bytes, result.mediaType);
+      const file = await saveAiImage({
+        jobId: retried.id,
+        userId: session.user.id,
+        bytes,
+        mimeType: "image/png",
+        filename: `ai-image-${retried.id}.png`,
+      });
+      return {
+        success: true,
+        jobId: retried.id,
+        url: await getContentUrl(file.id),
+        fileName: file.name,
+        contentType: file.mimeType,
+      };
+    } catch (error) {
+      await failAiJobAndRefundUsage({
+        userId: session.user.id,
+        aiJobId: retried.id,
+        error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
+      });
+      return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+    }
+  }
+
+  if (job.kind === "video") {
+    // The frames are not stored, so this would submit a different video and
+    // charge for it. The button is hidden for these, but the rule belongs here.
+    if (input.firstFrame !== undefined || input.lastFrame !== undefined) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const durationSeconds = input.durationSeconds === undefined
+      ? 4
+      : input.durationSeconds;
+    const resolution = input.resolution === undefined
+      ? "720p"
+      : input.resolution;
+    // Jobs created before these existed carry neither; the defaults reproduce
+    // what they were actually submitted with.
+    const retryAspectRatio = input.aspectRatio === undefined
+      ? "16:9"
+      : input.aspectRatio;
+    const retryGenerateAudio = input.generateAudio === undefined
+      ? true
+      : input.generateAudio;
+    let retrySeed: number | undefined;
+    if (input.seed !== undefined) {
+      if (!isAiSeed(input.seed)) {
+        return { success: false, message: t("api-errors:invalidRequestBody") };
+      }
+      retrySeed = input.seed;
+    }
+    if (typeof durationSeconds !== "number" || !isAiVideoDurationSeconds(durationSeconds)) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    if (typeof resolution !== "string" || !AI_VIDEO_RESOLUTIONS.includes(resolution as AiVideoResolution)) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    if (typeof retryAspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio as AiVideoAspectRatio)) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const retryModel = catalog.resolve("video.generate", job.model);
+    if (!retryModel) {
+      return { success: false, message: t("api-errors:aiModelUnavailable") };
+    }
+    // What the model accepts can have changed since the original run, and a
+    // rerun that the provider now refuses would be charged for first.
+    if (typeof retryGenerateAudio !== "boolean") {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const validatedResolution = resolution as AiVideoResolution;
+    const validatedAspectRatio = retryAspectRatio as AiVideoAspectRatio;
+    const retryUnsupported = unsupportedVideoRequestReason(
+      (await loadAiVideoModelCapabilities()).get(retryModel.modelId),
+      {
+        resolution: validatedResolution,
+        durationSeconds,
+        aspectRatio: validatedAspectRatio,
+        generateAudio: retryGenerateAudio,
+        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
+      },
+    );
+    if (retryUnsupported) {
+      return {
+        success: false,
+        message: t("api-errors:aiModelDoesNotSupportRequest"),
+      };
+    }
+    const identity = await toAiRequestIdentity({
+      idempotencyKey,
+      operation: "video.generate",
+      input: {
+        model: retryModel.modelId,
+        prompt: input.prompt,
+        durationSeconds,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
+        generateAudio: retryGenerateAudio,
+        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
+      },
+    });
+    if (!identity) {
+      return { success: false, message: t("api-errors:invalidRequestBody") };
+    }
+    const callbackNonce = await createCallbackNonce();
+    const cost = retryModel.priceUnits * durationSeconds;
+    const reservation = await createReservedAiJob({
+      userId: session.user.id,
+      kind: "video",
+      provider: "openrouter",
+      status: "queued",
+      inputParams: {
+        prompt: input.prompt,
+        durationSeconds,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
+        generateAudio: retryGenerateAudio,
+        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
+      },
+      usageUnits: cost,
+      model: retryModel.modelId,
+      activeJobLimit: 1,
+      callbackNonceHash: callbackNonce.hash,
+      ...identity,
+    });
+    if (!reservation.ok) {
+      return reservationFailure(reservation.errorCode, t);
+    }
+    const { job: retried } = reservation;
+    if (reservation.outcome === "existing") {
+      return await answerFromExistingVideoJob(retried, t);
+    }
+    const callbackUrl = await resolveVideoCallbackUrl(
+      retried.id,
+      callbackNonce.nonce,
+    );
+    try {
+      await createAndAttachVideoJob({
+        jobId: retried.id,
+        prompt: input.prompt,
+        durationSeconds,
+        resolution: validatedResolution,
+        aspectRatio: validatedAspectRatio,
+        generateAudio: retryGenerateAudio,
+        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        callbackNonceHash: callbackNonce.hash,
+        model: retryModel.modelId,
+      });
+      return { success: true, jobId: retried.id };
+    } catch (error) {
+      return await handleVideoSubmissionFailure({
+        userId: session.user.id,
+        jobId: retried.id,
+        error,
+        t,
+      });
+    }
+  }
+
+  return { success: false, message: t("api-errors:invalidRequestBody") };
+}
+
+export async function refreshVideoJobAction(jobId: string): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const job = await getAiJobById({ jobId });
+  if (!job || job.userId !== session.user.id) {
+    return { success: false, message: t("api-errors:aiJobNotFound") };
+  }
+  // A submission whose outcome was unknown stays queued with no provider job
+  // ID, waiting on the callback. Polling one throws, so without this the only
+  // manual recovery the screen offers reports a permanent provider failure for
+  // a job that is merely still waiting. The v3 route carries the same guard.
+  if (
+    job.kind === "video" &&
+    job.status !== "succeeded" &&
+    job.status !== "failed" &&
+    job.providerJobId
+  ) {
+    try {
+      const current = await synchronizeAiVideoJob({ job });
+      if (!current) {
+        return { success: false, message: t("api-errors:aiJobNotFound") };
+      }
+      return {
+        success: true,
+        jobId: current.id,
+        status: current.status,
+        url: current.resultFileId ? await getContentUrl(current.resultFileId) : null,
+      };
+    } catch (error) {
+      console.error(`Failed to synchronize AI video job ${job.id}`, error);
+      return { success: false, message: t("api-errors:aiProviderError") };
+    }
+  }
+  return {
+    success: true,
+    jobId: job.id,
+    status: job.status,
+    url: job.resultFileId ? await getContentUrl(job.resultFileId) : null,
+  };
+}
+
+export async function deleteJobAction(jobId: string): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  const prepared = await prepareAiJobDeletionByUserId({
+    userId: session.user.id,
+    jobId,
+  });
+  if (prepared.outcome === "notFound") {
+    return { success: false, message: t("api-errors:aiJobNotFound") };
+  }
+  if (prepared.outcome === "active") {
+    return { success: false, message: t("api-errors:aiJobIsActive") };
+  }
+  if (prepared.outputFile) {
+    await deleteAiOutputObject(prepared.outputFile.objectKey);
+  }
+  await finalizeAiJobDeletionByUserId({
+    userId: session.user.id,
+    jobId,
+    outputFileId: prepared.outputFile?.id,
+    outputObjectKey: prepared.outputFile?.objectKey,
+  });
+  return { success: true };
+}
