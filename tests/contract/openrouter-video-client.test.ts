@@ -191,6 +191,21 @@ describe("OpenRouter video client contract", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("classifies an already-aborted request as unsent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort(new DOMException("page reloaded", "AbortError"));
+
+    await expect(
+      createVideoJob({ ...SUBMISSION, signal: controller.signal }),
+    ).rejects.toMatchObject({
+      name: "AiVideoSubmissionError",
+      outcome: "definite_failure",
+    } satisfies Partial<AiVideoSubmissionError>);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     [400, "definite_failure"],
     [500, "unknown"],

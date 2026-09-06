@@ -1,5 +1,5 @@
 import { getTranslation } from "@beutl/i18n";
-import { loadAiVideoModelCapabilities } from "@beutl/api";
+import { loadAiVideoModelCapabilities } from "@beutl/api/ai/video-model-capabilities";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiFeatureLinks } from "./feature-links";
 import { countActiveAiJobs, getAiScreenState } from "./queries";

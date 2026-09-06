@@ -28,7 +28,7 @@ import { runAiStream } from "@/lib/ai-event-stream";
 import {
   MAX_TRANSLATION_CHARACTERS,
   translationCharacterCount,
-} from "@beutl/api";
+} from "@beutl/core";
 import {
   applyTranslationToCues,
   MAX_GLOSSARY_ENTRIES,

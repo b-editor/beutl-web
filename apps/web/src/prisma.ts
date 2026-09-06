@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { setDbProvider } from "@beutl/db";
-import { setR2BucketProvider } from "@beutl/api";
+import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { after } from "next/server";
 import { cache } from "react";
 

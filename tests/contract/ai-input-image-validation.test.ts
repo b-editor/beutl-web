@@ -1,5 +1,5 @@
 import { deflateSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   validateAiInputImage,
   type AiInputImageMimeType,
@@ -227,6 +227,49 @@ async function validatePng(bytes: Uint8Array) {
 }
 
 describe("AI input image validation", () => {
+  it("cancels PNG decompression and propagates the abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("page reloaded", "AbortError");
+    let markReadStarted: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let markCancelled: (reason: unknown) => void;
+    const cancelled = new Promise<unknown>((resolve) => {
+      markCancelled = resolve;
+    });
+
+    class BlockingDecompressionStream {
+      readonly readable = new ReadableStream<Uint8Array>({
+        pull() {
+          markReadStarted();
+        },
+        cancel(cancelReason) {
+          markCancelled(cancelReason);
+        },
+      });
+
+      readonly writable = new WritableStream<Uint8Array>();
+    }
+
+    vi.stubGlobal("DecompressionStream", BlockingDecompressionStream);
+    try {
+      const pending = validateAiInputImage(
+        new File([PNG_BYTES], "frame.png", { type: "image/png" }),
+        ALL_IMAGE_TYPES,
+        controller.signal,
+      );
+      await readStarted;
+
+      controller.abort(reason);
+
+      await expect(pending).rejects.toBe(reason);
+      await expect(cancelled).resolves.toBe(reason);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("returns fully validated bytes and the sniffed MIME type", async () => {
     const file = new File([PNG_BYTES], "frame.png", { type: "image/png" });
 

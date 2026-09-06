@@ -19,6 +19,8 @@ describe("server-render database resources", () => {
     expect(prisma).toContain("setDbProvider(getPrismaClient);");
     expect(prisma).toContain('import { after } from "next/server";');
     expect(prisma).toContain("after(() => prisma.$disconnect());");
+    expect(prisma).toContain('from "@beutl/api/ai/r2-provider";');
+    expect(prisma).not.toMatch(/from "@beutl\/api"/u);
     expect(prisma).not.toMatch(/(?:let|const)\s+prisma(?:Client|Promise)\s*=/i);
   });
 

@@ -28,16 +28,14 @@ import {
 } from "react";
 
 import {
-  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
-  MAX_AI_IMAGE_UPLOAD_BYTES,
-} from "@beutl/api";
-import {
   AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
-  formatBytes,
   AI_MAX_SEED,
   AI_MIN_SEED,
+  MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
+  formatBytes,
   type AiImageAspectRatio,
   type AiImageBackground,
 } from "@beutl/core";

@@ -10,7 +10,6 @@ import {
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
-import { loadAiVideoModelCapabilities } from "./video-model-capabilities";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -317,7 +316,10 @@ export async function getEntitlements(
   const [{ summary, balance }, catalog, videoCapabilities] = await Promise.all([
     loadEntitlementSnapshot(userId, prisma),
     options.catalog ?? loadAiModelCatalog({ prisma }),
-    options.videoCapabilities ?? loadAiVideoModelCapabilities(),
+    options.videoCapabilities ??
+      import("./video-model-capabilities").then(
+        ({ loadAiVideoModelCapabilities }) => loadAiVideoModelCapabilities(),
+      ),
   ]);
 
   return {

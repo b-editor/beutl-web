@@ -27,11 +27,11 @@ import {
 } from "react";
 import {
   AI_IMAGE_EDIT_TASKS,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   aiImageEditTaskRequiresPrompt,
   type AiImageEditTask,
 } from "@beutl/core";
-import { MAX_AI_IMAGE_UPLOAD_BYTES } from "@beutl/api";
 import { editImageAction } from "./actions";
 import {
   preparedImageEditSourceWithinLimit,

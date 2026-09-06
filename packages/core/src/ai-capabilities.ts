@@ -168,6 +168,27 @@ export const MAX_TRANSLATION_SEGMENTS = 200;
 export const MAX_TRANSLATION_CHARACTERS = 20_000;
 export const SAFE_SEGMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
+// What a translation request costs to send, in characters. A glossary is
+// caller-supplied text that reaches the provider, so it counts against both
+// the request cap and the charge.
+export function translationCharacterCount({
+  segments,
+  style,
+}: {
+  segments: { text: string }[];
+  style?: { glossary?: Record<string, string> } | undefined;
+}): number {
+  const segmentCharacters = segments.reduce(
+    (total, segment) => total + segment.text.length,
+    0,
+  );
+  const glossaryCharacters = Object.entries(style?.glossary ?? {}).reduce(
+    (total, [term, translation]) => total + term.length + translation.length,
+    0,
+  );
+  return segmentCharacters + glossaryCharacters;
+}
+
 // Every language a caption request may name, and the only ones it may name.
 // Here rather than in @beutl/api so the picker offers exactly what the server
 // accepts: a list in the browser that drifts from the one being validated

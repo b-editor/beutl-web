@@ -5,7 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./error": "./src/error.ts"
+    "./error": "./src/error.ts",
+    "./ai/entitlements": "./src/ai/entitlements.ts",
+    "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
+    "./ai/model-catalog": "./src/ai/model-catalog.ts",
+    "./ai/video-model-capabilities": "./src/ai/video-model-capabilities.ts",
+    "./ai/r2-provider": "./src/ai/r2-provider.ts"
   },
   "dependencies": {
     "@beutl/core": "workspace:*",
@@ -21,7 +26,7 @@
     "negotiator": "^1.0.0",
     "semver": "^7.7.1",
     "stripe": "^20.3.1",
-    "zod": "^4.3.6"
+    "zod": "^4.5.4"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

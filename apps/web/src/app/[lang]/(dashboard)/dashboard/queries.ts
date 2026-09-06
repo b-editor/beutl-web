@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getDb, sumFileSizeByUserId } from "@beutl/db";
-import { getEntitlementSummary } from "@beutl/api";
+import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import { retrievePackages } from "./library/actions";
 
 // 概要に出すライブラリのパッケージ数。これを超える分は一覧ページで見てもらう。

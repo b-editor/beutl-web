@@ -176,6 +176,24 @@ describe("AI entitlements", () => {
     expect(summary).toEqual(base);
   });
 
+  it("uses a supplied model catalog without reading it again", async () => {
+    await activatePro();
+    const catalog = await loadAiModelCatalog();
+    const catalogRead = vi
+      .spyOn(prisma.aiOperationModel, "findMany")
+      .mockRejectedValue(new Error("model catalog must not be loaded twice"));
+
+    const entitlements = await getEntitlements(USER_ID, {
+      videoCapabilities,
+      catalog,
+    });
+
+    const imageModel = catalog.getDefault("image.generate").modelId;
+    expect(entitlements.modelAvailability["image.generate"][imageModel])
+      .toBe(true);
+    expect(catalogRead).not.toHaveBeenCalled();
+  });
+
   it("reports a video as startable only once the shortest clip is affordable", async () => {
     await activatePro();
     // Less than four seconds of allowance cannot start the shortest valid clip.

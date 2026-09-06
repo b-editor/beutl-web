@@ -27,6 +27,15 @@ function toUsagePeriod(subscription: {
   };
 }
 
+function requestFingerprintMatches(
+  actual: string | null,
+  canonical: string,
+  compatible: readonly string[] = [],
+): boolean {
+  return actual !== null &&
+    (actual === canonical || compatible.includes(actual));
+}
+
 // その名前で既に作られた job を、今のモデル設定を見る前に引き当てる。
 //
 // 応答が消えたあとに管理者がモデルを無効化したり、モデルの受け付ける形が変わっ
@@ -36,10 +45,15 @@ export async function findReplayableAiJob({
   userId,
   idempotencyKeyHash,
   requestFingerprint,
+  compatibleRequestFingerprints = [],
 }: {
   userId: string;
   idempotencyKeyHash: string;
   requestFingerprint: string;
+  // Narrow compatibility aliases for fingerprints emitted by an older
+  // request entry point. They are considered only when reading an existing
+  // reservation; a new reservation always stores requestFingerprint.
+  compatibleRequestFingerprints?: readonly string[];
 }): Promise<
   | { outcome: "existing"; job: NonNullable<Awaited<ReturnType<typeof getAiJobByIdempotency>>> }
   | { outcome: "idempotencyConflict" }
@@ -48,7 +62,13 @@ export async function findReplayableAiJob({
 > {
   const existing = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
   if (!existing) return null;
-  if (existing.requestFingerprint !== requestFingerprint) {
+  if (
+    !requestFingerprintMatches(
+      existing.requestFingerprint,
+      requestFingerprint,
+      compatibleRequestFingerprints,
+    )
+  ) {
     return { outcome: "idempotencyConflict" };
   }
   if (existing.deletedAt) return { outcome: "deleted" };
@@ -120,6 +140,7 @@ export async function createReservedAiJob({
   activeJobLimit,
   idempotencyKeyHash,
   requestFingerprint,
+  compatibleRequestFingerprints = [],
   callbackNonceHash,
 }: {
   userId: string;
@@ -134,11 +155,22 @@ export async function createReservedAiJob({
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
   requestFingerprint?: string;
+  // Accepted only for an existing reservation. New rows retain the canonical
+  // requestFingerprint above.
+  compatibleRequestFingerprints?: readonly string[];
   callbackNonceHash?: string;
 }) {
   if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
     throw new TypeError(
       "AI idempotency key hash and request fingerprint must be provided together",
+    );
+  }
+  if (
+    compatibleRequestFingerprints.length > 0 &&
+    (!idempotencyKeyHash || !requestFingerprint)
+  ) {
+    throw new TypeError(
+      "AI compatible request fingerprints require an idempotency identity",
     );
   }
   try {
@@ -150,7 +182,13 @@ export async function createReservedAiJob({
           prisma,
         });
         if (existing) {
-          if (existing.requestFingerprint !== requestFingerprint) {
+          if (
+            !requestFingerprintMatches(
+              existing.requestFingerprint,
+              requestFingerprint,
+              compatibleRequestFingerprints,
+            )
+          ) {
             return { outcome: "idempotencyConflict" as const };
           }
           return existing.deletedAt
@@ -285,7 +323,13 @@ export async function createReservedAiJob({
         return null;
       });
       if (existing) {
-        if (existing.requestFingerprint !== requestFingerprint) {
+        if (
+          !requestFingerprintMatches(
+            existing.requestFingerprint,
+            requestFingerprint,
+            compatibleRequestFingerprints,
+          )
+        ) {
           return {
             ok: false as const,
             errorCode: "aiRequestChanged" as const,

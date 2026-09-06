@@ -9,42 +9,29 @@ import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@beutl/ui/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { Slider } from "@beutl/ui/ui/slider";
 import { Clapperboard, Clock, Coins, History } from "lucide-react";
 import Link from "next/link";
-import {
-  useActionState,
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-  type FormEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AI_MAX_SEED,
   AI_MIN_SEED,
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
 } from "@beutl/core";
-import { MAX_AI_VIDEO_FRAME_UPLOAD_BYTES } from "@beutl/api";
 import { composePrompt } from "@/lib/ai-prompt";
-import { createVideoAction } from "./actions";
+import { runAiRequest } from "@/lib/ai-request";
+import { buildAiVideoSubmission } from "@/lib/ai-video-submit";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AdvancedOptions,
   AiAccessNotice,
   ModelSelect,
   AiWorkspace,
-  IdempotencyKeyField,
   ResultPanel,
   ResultShimmer,
   blockedReason,
@@ -59,9 +46,9 @@ import {
   useHeldModelCapabilities,
   defaultModelId,
   isAiPromptWithinLimit,
+  keepsIdempotencyKey,
   type AiAccess,
 } from "./shared";
-
 
 function FramePicker({
   id,
@@ -143,23 +130,13 @@ function FramePicker({
       )}
       {preview && (
         /* eslint-disable-next-line @next/next/no-img-element */
-        <img
-          src={preview}
-          alt={label}
-          className="mt-1 max-w-[12rem] rounded-lg border"
-        />
+        <img src={preview} alt={label} className="mt-1 max-w-[12rem] rounded-lg border" />
       )}
     </div>
   );
 }
 
-function Note({
-  icon: Icon,
-  children,
-}: {
-  icon: typeof Clock;
-  children: React.ReactNode;
-}) {
+function Note({ icon: Icon, children }: { icon: typeof Clock; children: React.ReactNode }) {
   return (
     <li className="flex gap-3">
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -180,22 +157,37 @@ export type AiVideoModelOptions = {
   lastFrame: boolean;
 };
 
+type VideoSubmitState = {
+  success: boolean;
+  message?: string;
+  keepIdempotencyKey?: boolean;
+  jobId?: string;
+};
+
+type VideoJobResponse = {
+  jobId: string;
+  status: "running" | "succeeded" | "failed";
+};
+
+function isVideoJobResponse(value: unknown): value is VideoJobResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.jobId === "string" &&
+    record.jobId.length > 0 &&
+    (record.status === "running" || record.status === "succeeded" || record.status === "failed")
+  );
+}
+
 // The options this screen offers, narrowed to one model. Values are derived on
 // every render rather than corrected in state: switching to a model that cannot
 // do 1080p must not leave a stale 1080p in a hidden field, which is what the
 // server would then be charged for and refuse.
-function optionsOf(
-  capabilities: Record<string, AiVideoModelOptions> | undefined,
-  modelId: string,
-) {
+function optionsOf(capabilities: Record<string, AiVideoModelOptions> | undefined, modelId: string) {
   const supported = capabilities?.[modelId];
   return {
-    durations: supported?.durations.length
-      ? supported.durations
-      : [...AI_VIDEO_DURATIONS_SECONDS],
-    resolutions: supported?.resolutions.length
-      ? supported.resolutions
-      : [...AI_VIDEO_RESOLUTIONS],
+    durations: supported?.durations.length ? supported.durations : [...AI_VIDEO_DURATIONS_SECONDS],
+    resolutions: supported?.resolutions.length ? supported.resolutions : [...AI_VIDEO_RESOLUTIONS],
     aspectRatios: supported?.aspectRatios.length
       ? supported.aspectRatios
       : [...AI_VIDEO_ASPECT_RATIOS],
@@ -235,9 +227,15 @@ export function VideoForm({
   capabilities?: Record<string, AiVideoModelOptions>;
 }) {
   const { t } = useTranslation(lang);
-  const [state, dispatch, isPending] = useActionState(createVideoAction, {
+  const [state, setState] = useState<VideoSubmitState>({
     success: false,
   });
+  const [isPending, setIsPending] = useState(false);
+  // Acquiring the durable request name is asynchronous. React's pending state
+  // cannot close the double-click window before that await, so guard it
+  // synchronously as well.
+  const submittingRef = useRef(false);
+  const activeRequestRef = useRef<AbortController | null>(null);
   const [videoDuration, setVideoDuration] = useState<string>("4");
   const [videoResolution, setVideoResolution] = useState<string>("720p");
   const [videoAspectRatio, setVideoAspectRatio] = useState<string>("16:9");
@@ -245,9 +243,7 @@ export function VideoForm({
   const [videoPrompt, setVideoPrompt] = useState("");
   const [videoStyle, setVideoStyle] = useState("");
   const names = useAiRequestNames(userId, "video.generate");
-  const [model, setModel] = useState(() =>
-    defaultModelId(access.models["video.generate"] ?? []),
-  );
+  const [model, setModel] = useState(() => defaultModelId(access.models["video.generate"] ?? []));
   const [videoComposition, setVideoComposition] = useState("");
   const [videoMotion, setVideoMotion] = useState("");
   const [videoExclusions, setVideoExclusions] = useState("");
@@ -255,16 +251,20 @@ export function VideoForm({
   const [firstFrame, setFirstFrame] = useState<File | null>(null);
   const [lastFrame, setLastFrame] = useState<File | null>(null);
 
-  const models = useMemo(
-    () => access.models["video.generate"] ?? [],
-    [access.models],
-  );
+  // A Server Action keeps running after its browser has reloaded because it has
+  // no Request signal. This screen submits through the internal route instead;
+  // aborting its fetch on navigation lets that route pass cancellation all the
+  // way to the provider while the durable idempotency key stays recoverable.
+  useEffect(() => {
+    return () => activeRequestRef.current?.abort();
+  }, []);
+
+  const models = useMemo(() => access.models["video.generate"] ?? [], [access.models]);
   const selectableModels = names.modelsWithHeld(models);
   const blocked = blockedReason(access, ["video.generate"], models.length === 0);
   // 直前の失敗が名前を残していれば、残高で塞がない。支払い済みの結果を取りに
   // 行く道を閉じることになる。
-  const keepsName =
-    (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
+  const keepsName = (state as { keepIdempotencyKey?: boolean }).keepIdempotencyKey === true;
   useEffect(() => {
     names.settle(keepsName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -286,24 +286,23 @@ export function VideoForm({
   // モデルが受け取るものだけを読む。非対応モデルへ切り替えたときに、画面から
   // 隠れた選択中のファイルを依頼の一部として扱わない。
   const sentFirstFrame = options.firstFrame ? firstFrame : null;
-  const sentLastFrame =
-    sentFirstFrame && options.lastFrame ? lastFrame : null;
+  const sentLastFrame = sentFirstFrame && options.lastFrame ? lastFrame : null;
   const frames = useMemo(
     () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
     [sentFirstFrame, sentLastFrame],
   );
-  const { contents: frameContents, reading: readingFrames } =
-    useFileFingerprints(frames, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+  const { contents: frameContents, reading: readingFrames } = useFileFingerprints(
+    frames,
+    MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  );
   const oversizedFrame = [sentFirstFrame, sentLastFrame].some(
     (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   );
   // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
   // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
   // 作るので、画面に見えている条件と、その名前で買うものが食い違わない。
-  const firstFrameContent = sentFirstFrame ? frameContents[0] ?? "" : "";
-  const lastFrameContent = sentLastFrame
-    ? frameContents[sentFirstFrame ? 1 : 0] ?? ""
-    : "";
+  const firstFrameContent = sentFirstFrame ? (frameContents[0] ?? "") : "";
+  const lastFrameContent = sentLastFrame ? (frameContents[sentFirstFrame ? 1 : 0] ?? "") : "";
   // サーバーが指紋を取るのと同じものから、こちらで見えるぶんだけ。文章はここに
   // ある材料から組み立てられるので、材料をそのまま数える。種とフレームは入力欄
   // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
@@ -358,15 +357,8 @@ export function VideoForm({
     const corrected = correctedModelId(models, model, holdsSelectedModel);
     if (corrected !== model) setModel(corrected);
   }, [holdsSelectedModel, model, models, names, readingFrames]);
-  const modelCanSubmit = canSubmitModelRequest(
-    models,
-    model,
-    holdsSelectedModel,
-    holdsName,
-  );
-  const submitBlocked = blocksSubmit(blocked, holdsName) ||
-    oversizedFrame ||
-    !modelCanSubmit;
+  const modelCanSubmit = canSubmitModelRequest(models, model, holdsSelectedModel, holdsName);
+  const submitBlocked = blocksSubmit(blocked, holdsName) || oversizedFrame || !modelCanSubmit;
   const canSubmit = canSubmitAiRequest({
     submitBlocked,
     hasTask: true,
@@ -395,23 +387,94 @@ export function VideoForm({
     event.preventDefault();
     // ボタンとキーボード送信で同じ答えを使う。片方だけを見ていると、入力欄で
     // Enter を押したときにボタンが断っているはずの依頼が出ていく。
-    if (!canSubmit || composedPromptTooLong || oversizedFrame || !names.ready) return;
+    if (
+      !canSubmit ||
+      composedPromptTooLong ||
+      oversizedFrame ||
+      !names.ready ||
+      submittingRef.current
+    ) {
+      return;
+    }
 
-    const idempotencyKey = await names.acquireAndCommit(
-      signature,
-      model,
-      names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
-    );
-    if (!idempotencyKey) return;
+    submittingRef.current = true;
+    setIsPending(true);
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
 
-    const formData = new FormData(event.currentTarget);
-    formData.set("idempotencyKey", idempotencyKey);
-    formData.delete("firstFrame");
-    formData.delete("lastFrame");
-    if (sentFirstFrame) formData.set("firstFrame", sentFirstFrame);
-    if (sentLastFrame) formData.set("lastFrame", sentLastFrame);
+    try {
+      const idempotencyKey = await names.acquireAndCommit(
+        signature,
+        model,
+        names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
+      );
+      if (!idempotencyKey) return;
 
-    dispatch(formData);
+      const composedPrompt = composePrompt({
+        main: videoPrompt,
+        style: videoStyle,
+        composition: videoComposition,
+        motion: videoMotion,
+        exclusions: videoExclusions,
+      });
+      const { operation, body } = buildAiVideoSubmission({
+        prompt: composedPrompt,
+        durationSeconds: duration,
+        resolution,
+        aspectRatio,
+        generateAudio: audio,
+        model,
+        seedEnabled: options.seed,
+        seedText: videoSeed,
+        firstFrame: sentFirstFrame,
+        lastFrame: sentLastFrame,
+      });
+
+      const outcome = await runAiRequest<VideoJobResponse>(operation, {
+        body,
+        idempotencyKey,
+        signal: controller.signal,
+      });
+      if (!outcome.ok) {
+        setState({
+          success: false,
+          message: t(`api-errors:${outcome.errorCode}`),
+          ...(keepsIdempotencyKey(outcome.errorCode) ? { keepIdempotencyKey: true } : {}),
+        });
+        return;
+      }
+      if (!isVideoJobResponse(outcome.result)) {
+        setState({
+          success: false,
+          message: t("api-errors:aiRequestInterrupted"),
+          keepIdempotencyKey: true,
+        });
+        return;
+      }
+      if (outcome.result.status === "failed") {
+        setState({
+          success: false,
+          message: t("api-errors:aiProviderError"),
+        });
+        return;
+      }
+      setState({ success: true, jobId: outcome.result.jobId });
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error("AI video submission response was lost", error);
+        setState({
+          success: false,
+          message: t("api-errors:aiRequestInterrupted"),
+          keepIdempotencyKey: true,
+        });
+      }
+    } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
+      submittingRef.current = false;
+      if (!controller.signal.aborted) setIsPending(false);
+    }
   }
 
   function applyTemplate(template: PromptTemplate) {
@@ -424,12 +487,7 @@ export function VideoForm({
 
   const form = (
     <Card>
-      <form
-        action={dispatch}
-        onSubmit={handleSubmit}
-        className="flex flex-col gap-4 p-6"
-      >
-        <IdempotencyKeyField name={names.nameFor(signature)} />
+      <form method="post" onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
         <PromptLibrary
           lang={lang}
           userId={userId}
@@ -451,9 +509,7 @@ export function VideoForm({
                 there. */}
             <span
               className={`text-xs tabular-nums ${
-                composedLength > MAX_AI_PROMPT_LENGTH
-                  ? "text-destructive"
-                  : "text-muted-foreground"
+                composedLength > MAX_AI_PROMPT_LENGTH ? "text-destructive" : "text-muted-foreground"
               }`}
             >
               {composedLength} / {MAX_AI_PROMPT_LENGTH}
@@ -471,12 +527,7 @@ export function VideoForm({
           />
         </div>
 
-        <ModelSelect
-          lang={lang}
-          models={selectableModels}
-          value={model}
-          onChange={setModel}
-        />
+        <ModelSelect lang={lang} models={selectableModels} value={model} onChange={setModel} />
 
         <div className="flex flex-col space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
@@ -511,9 +562,7 @@ export function VideoForm({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col space-y-1.5">
-            <Label htmlFor="videoResolution">
-              {t("dashboard:ai.resolution")}
-            </Label>
+            <Label htmlFor="videoResolution">{t("dashboard:ai.resolution")}</Label>
             {/* Left enabled with one entry: a greyed-out box reads as a
                 setting that is unavailable rather than one that is fixed. */}
             <Select value={resolution} onValueChange={setVideoResolution}>
@@ -533,9 +582,7 @@ export function VideoForm({
 
           {/* Resolution alone could not express a vertical clip. */}
           <div className="flex flex-col space-y-1.5">
-            <Label htmlFor="videoAspectRatio">
-              {t("dashboard:ai.aspectRatio")}
-            </Label>
+            <Label htmlFor="videoAspectRatio">{t("dashboard:ai.aspectRatio")}</Label>
             <Select value={aspectRatio} onValueChange={setVideoAspectRatio}>
               <SelectTrigger id="videoAspectRatio">
                 <SelectValue />
@@ -562,11 +609,7 @@ export function VideoForm({
           <Label htmlFor="videoAudio" className="font-normal">
             {t("dashboard:ai.generateAudio")}
           </Label>
-          <input
-            type="hidden"
-            name="generateAudio"
-            value={audio ? "true" : "false"}
-          />
+          <input type="hidden" name="generateAudio" value={audio ? "true" : "false"} />
         </div>
 
         <AdvancedOptions lang={lang}>
@@ -585,9 +628,7 @@ export function VideoForm({
               onChange={(event) => setVideoSeed(event.target.value)}
               className="max-w-[12rem]"
             />
-            <p className="text-xs text-muted-foreground">
-              {t("dashboard:ai.seedHint")}
-            </p>
+            <p className="text-xs text-muted-foreground">{t("dashboard:ai.seedHint")}</p>
           </div>
           <div className="flex flex-col space-y-1.5">
             <Label htmlFor="videoStyle">{t("dashboard:ai.promptStyle")}</Label>
@@ -600,9 +641,7 @@ export function VideoForm({
             />
           </div>
           <div className="flex flex-col space-y-1.5">
-            <Label htmlFor="videoComposition">
-              {t("dashboard:ai.promptComposition")}
-            </Label>
+            <Label htmlFor="videoComposition">{t("dashboard:ai.promptComposition")}</Label>
             <Input
               id="videoComposition"
               name="composition"
@@ -622,9 +661,7 @@ export function VideoForm({
             />
           </div>
           <div className="flex flex-col space-y-1.5">
-            <Label htmlFor="videoExclusions">
-              {t("dashboard:ai.promptAvoid")}
-            </Label>
+            <Label htmlFor="videoExclusions">{t("dashboard:ai.promptAvoid")}</Label>
             <Input
               id="videoExclusions"
               name="exclusions"
@@ -655,11 +692,7 @@ export function VideoForm({
               file={lastFrame}
               onPick={setLastFrame}
               clearLabel={t("dashboard:ai.clearFrame")}
-              note={
-                lastFrame && !sentLastFrame
-                  ? t("dashboard:ai.lastFrameNeedsFirst")
-                  : null
-              }
+              note={lastFrame && !sentLastFrame ? t("dashboard:ai.lastFrameNeedsFirst") : null}
             />
           )}
         </AdvancedOptions>
@@ -677,9 +710,9 @@ export function VideoForm({
           // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分から
           // ないまま作った名前で課金され、読み終えた時点で名前が変わる。
           disabled={
+            !names.ready ||
             submitBlocked ||
-            composedPromptTooLong ||
-            oversizedFrame ||
+            composedPromptTooLong || oversizedFrame ||
             isPending ||
             readingFrames
           }
@@ -697,9 +730,7 @@ export function VideoForm({
     <ResultShimmer label={t("dashboard:ai.processing")} />
   ) : state.success ? (
     <ResultPanel title={t("dashboard:ai.videoQueuedTitle")}>
-      <p className="text-sm text-muted-foreground">
-        {t("dashboard:ai.videoQueued")}
-      </p>
+      <p className="text-sm text-muted-foreground">{t("dashboard:ai.videoQueued")}</p>
       <Button asChild variant="outline" size="sm" className="self-start">
         <Link href={`/${lang}/dashboard/ai/jobs`} prefetch={false}>
           <History className="mr-2 h-4 w-4" />

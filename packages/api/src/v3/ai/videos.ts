@@ -221,6 +221,8 @@ const app = new Hono()
         status: 401,
       });
     }
+    const requestSignal = c.req.raw.signal;
+    requestSignal.throwIfAborted();
 
     let rawBody: unknown;
     try {
@@ -236,14 +238,10 @@ const app = new Hono()
         status: 400,
       });
     }
+    requestSignal.throwIfAborted();
 
     const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
       parsedBody.data;
-    const catalog = await loadAiModelCatalog();
-    const selectedModel = catalog.resolve(
-      "video.generate",
-      parsedBody.data.model,
-    );
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate",
@@ -282,6 +280,11 @@ const app = new Hono()
     // 回収するものが無かったので新しい依頼。ここで初めて、今のモデルがこの形を
     // 取れるかを問う。予約のあとに拒否されると、返金されたプロバイダー障害と
     // 見分けがつかなくなる。
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve(
+      "video.generate",
+      parsedBody.data.model,
+    );
     if (!selectedModel) {
       return c.json(await apiErrorResponse("aiModelUnavailable"), {
         status: 400,
@@ -303,6 +306,7 @@ const app = new Hono()
         status: 400,
       });
     }
+    requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
     const cost = selectedModel.priceUnits * durationSeconds;
@@ -337,14 +341,22 @@ const app = new Hono()
         status: isTerminalAiJobStatus(job.status) ? 200 : 202,
       });
     }
-
-    const callbackUrl = openRouterVideoCallbackUrl(
-      c.req.raw,
-      job.id,
-      callbackNonce.nonce,
-    );
+    if (requestSignal.aborted) {
+      await failAiJobAndRefundUsage({
+        userId,
+        aiJobId: job.id,
+        error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+        expectedProviderJobId: null,
+      });
+      requestSignal.throwIfAborted();
+    }
 
     try {
+      const callbackUrl = openRouterVideoCallbackUrl(
+        c.req.raw,
+        job.id,
+        callbackNonce.nonce,
+      );
       await createAndAttachVideoJob({
         jobId: job.id,
         prompt,
@@ -356,7 +368,7 @@ const app = new Hono()
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
-        signal: c.req.raw.signal,
+        signal: requestSignal,
       });
 
       const current = await getAiJobById({ jobId: job.id });
@@ -391,6 +403,8 @@ const app = new Hono()
         status: 401,
       });
     }
+    const requestSignal = c.req.raw.signal;
+    requestSignal.throwIfAborted();
 
     // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前が取りに来る
     // 価値のある job を指しているなら別——契約中に課金された結果は、契約が終わった
@@ -412,8 +426,8 @@ const app = new Hono()
       });
     }
 
-    const entitlements = await getEntitlements(userId);
     if (keyState !== "collectable") {
+      const entitlements = await getEntitlements(userId);
       const recoverableDenial = async () =>
         c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
       if (!entitlements.canUseAi) {
@@ -434,6 +448,7 @@ const app = new Hono()
           : c.json(await apiErrorResponse("aiUsageLimitExceeded"), { status: 402 });
       }
     }
+    requestSignal.throwIfAborted();
     let body: Awaited<ReturnType<typeof c.req.parseBody>>;
     try {
       body = await parseBodyWithUploadLimit(
@@ -449,6 +464,7 @@ const app = new Hono()
       }
       throw error;
     }
+    requestSignal.throwIfAborted();
     const firstFrame = body["firstFrame"];
     const lastFrame = body["lastFrame"];
     for (const frame of [firstFrame, lastFrame]) {
@@ -489,20 +505,33 @@ const app = new Hono()
       });
     }
 
-    const [firstFrameImage, lastFrameImage] = await Promise.all([
-      validateAiInputImage(firstFrame, supportedFrameImageTypes),
-      lastFrame instanceof File
-        ? validateAiInputImage(lastFrame, supportedFrameImageTypes)
-        : null,
-    ]);
-    if (
-      !firstFrameImage ||
-      (lastFrame instanceof File && !lastFrameImage)
-    ) {
+    // A PNG can expand to the full decode limit while it is inspected. Keep
+    // the two validations sequential so two maximum-size frames never retain
+    // their decompressed scanlines at the same time in a Worker isolate.
+    const firstFrameImage = await validateAiInputImage(
+      firstFrame,
+      supportedFrameImageTypes,
+      requestSignal,
+    );
+    if (!firstFrameImage) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
+    requestSignal.throwIfAborted();
+    const lastFrameImage = lastFrame instanceof File
+      ? await validateAiInputImage(
+          lastFrame,
+          supportedFrameImageTypes,
+          requestSignal,
+        )
+      : null;
+    if (lastFrame instanceof File && !lastFrameImage) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    requestSignal.throwIfAborted();
 
     const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
       fields.data;
@@ -510,40 +539,70 @@ const app = new Hono()
       sha256Hex(firstFrameImage.bytes),
       lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
     ]);
-    const catalog = await loadAiModelCatalog();
-    const selectedModel = catalog.resolve("video.generate", fields.data.model);
+    requestSignal.throwIfAborted();
+    const commonFingerprintInput = {
+      ...(fields.data.model ? { model: fields.data.model } : {}),
+      prompt,
+      durationSeconds,
+      resolution,
+      aspectRatio,
+      generateAudio,
+      ...(seed === undefined ? {} : { seed }),
+    };
+    const firstFrameFingerprint = {
+      contentType: firstFrameImage.mimeType,
+      sha256: firstFrameSha256,
+    };
+    const lastFrameFingerprint = lastFrameImage
+      ? {
+          contentType: lastFrameImage.mimeType,
+          sha256: lastFrameSha256,
+        }
+      : null;
     const requestIdentity = await getAiRequestIdentity({
       request: c.req.raw,
       operation: "video.generate.frames",
       input: {
-        ...(fields.data.model ? { model: fields.data.model } : {}),
-        prompt,
-        durationSeconds,
-        resolution,
-        aspectRatio,
-        generateAudio,
-        ...(seed === undefined ? {} : { seed }),
-        firstFrame: {
-          contentType: firstFrameImage.mimeType,
-          sha256: firstFrameSha256,
-        },
-        ...(lastFrameImage
+        ...commonFingerprintInput,
+        firstFrame: firstFrameFingerprint,
+        ...(lastFrameFingerprint
           ? {
-              lastFrame: {
-                contentType: lastFrameImage.mimeType,
-                sha256: lastFrameSha256,
-              },
+              lastFrame: lastFrameFingerprint,
             }
           : {}),
       },
     });
-    if (!requestIdentity) {
+    // Dashboard Server Actions originally used the text-to-video operation
+    // name and provider-style frame keys. A page reload can move that exact
+    // retry to this endpoint while the old reservation is still the only path
+    // to a paid job. Accept that fingerprint only as a replay alias.
+    const legacyRequestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "video.generate",
+      input: {
+        ...commonFingerprintInput,
+        first_frame: firstFrameFingerprint,
+        ...(lastFrameFingerprint
+          ? {
+              last_frame: lastFrameFingerprint,
+            }
+          : {}),
+      },
+    });
+    if (!requestIdentity || !legacyRequestIdentity) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
+    const compatibleRequestFingerprints = [
+      legacyRequestIdentity.requestFingerprint,
+    ];
 
-    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    const replay = await findReplayableAiJob({
+      userId,
+      ...requestIdentity,
+      compatibleRequestFingerprints,
+    });
     if (replay?.outcome === "existing") {
       // 動画は非同期なので、job そのものが答え。支払い済みのものはモデル設定を
       // 見る前に返す。
@@ -559,6 +618,8 @@ const app = new Hono()
     }
 
     // 回収するものが無かったので新しい依頼。
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve("video.generate", fields.data.model);
     if (!selectedModel) {
       return c.json(await apiErrorResponse("aiModelUnavailable"), {
         status: 400,
@@ -582,25 +643,36 @@ const app = new Hono()
         status: 400,
       });
     }
+    requestSignal.throwIfAborted();
+
+    // Expand the frames before charging. A Worker killed by its resource limit
+    // cannot run a catch/finally refund, so no paid row may exist yet while the
+    // request performs its largest synchronous allocation.
+    let frameImages: VideoFrameImage[];
+    try {
+      frameImages = [
+        toVideoFrameImage(
+          firstFrameImage.bytes,
+          firstFrameImage.mimeType,
+          "first_frame",
+        ),
+      ];
+      if (lastFrame instanceof File && lastFrameImage) {
+        frameImages.push(
+          toVideoFrameImage(
+            lastFrameImage.bytes,
+            lastFrameImage.mimeType,
+            "last_frame",
+          ),
+        );
+      }
+    } catch (cause) {
+      console.error("Failed to encode AI video frames", cause);
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    }
+    requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
-    const frameImages = [
-      toVideoFrameImage(
-        firstFrameImage.bytes,
-        firstFrameImage.mimeType,
-        "first_frame",
-      ),
-    ];
-    if (lastFrame instanceof File && lastFrameImage) {
-      frameImages.push(
-        toVideoFrameImage(
-          lastFrameImage.bytes,
-          lastFrameImage.mimeType,
-          "last_frame",
-        ),
-      );
-    }
-
     const cost = selectedModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId,
@@ -632,6 +704,7 @@ const app = new Hono()
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
+      compatibleRequestFingerprints,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -644,14 +717,23 @@ const app = new Hono()
         status: isTerminalAiJobStatus(job.status) ? 200 : 202,
       });
     }
-
-    const callbackUrl = openRouterVideoCallbackUrl(
-      c.req.raw,
-      job.id,
-      callbackNonce.nonce,
-    );
+    if (requestSignal.aborted) {
+      await failAiJobAndRefundUsage({
+        userId,
+        aiJobId: job.id,
+        error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+        expectedProviderJobId: null,
+      });
+      requestSignal.throwIfAborted();
+    }
 
     try {
+      const callbackUrl = openRouterVideoCallbackUrl(
+        c.req.raw,
+        job.id,
+        callbackNonce.nonce,
+      );
+
       await createAndAttachVideoJob({
         jobId: job.id,
         prompt,
@@ -664,7 +746,7 @@ const app = new Hono()
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
-        signal: c.req.raw.signal,
+        signal: requestSignal,
       });
 
       const current = await getAiJobById({ jobId: job.id });
