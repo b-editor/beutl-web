@@ -18,10 +18,11 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         Established: October 12, 2024; last revised: September 6, 2026
       </p>
       <p className="leading-7 not-first:mt-6">
-        The operator of Beutl (the &quot;Operator&quot;) handles information
-        about Users of Beutl accounts, the Store, cloud storage, paid AI
-        features, APIs, and other online services (collectively, the
-        &quot;Service&quot;) as described in this Privacy Policy.
+        The person or entity that operates Beutl (&quot;we&quot;, &quot;us&quot;,
+        or &quot;our&quot;) handles information about Users of Beutl accounts,
+        the Store, cloud storage, paid AI features, APIs, and other online
+        services (collectively, the &quot;Service&quot;) as described in this
+        Privacy Policy.
       </p>
       <p className="leading-7 not-first:mt-6">
         This Policy applies to beutl.beditor.net, APIs provided under that
@@ -70,9 +71,9 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         </li>
       </ul>
       <p className="leading-7 not-first:mt-6">
-        The Service does not currently offer password authentication, so the
-        Operator does not collect a password for your Beutl account. The
-        Operator also does not receive your Google or GitHub password.
+        The Service does not currently offer password authentication, so we do
+        not collect a password for your Beutl account. We also do not
+        receive your Google or GitHub password.
       </p>
 
       <h3 className={subSectionClass}>
@@ -145,13 +146,13 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ul>
       <p className="leading-7 not-first:mt-6">
         Card numbers, security codes, and other complete card details are
-        entered directly into Stripe and are not stored by the Operator.
+        entered directly into Stripe and are not stored by us.
       </p>
 
       <h3 className={subSectionClass}>2.5 Inquiries and feedback</h3>
       <p className="leading-7 not-first:mt-6">
         We collect your name, email address, inquiry category and message,
-        response status, and communications with the Operator.
+        response status, and communications with us.
       </p>
 
       <h3 className={subSectionClass}>
@@ -186,7 +187,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
 
       <h2 className={sectionClass}>3. Purposes of use</h2>
       <p className="leading-7 not-first:mt-6">
-        The Operator uses collected information to:
+        We use collected information to:
       </p>
       <ul className={listClass}>
         <li>Verify identity and manage authentication, accounts, and profiles</li>
@@ -247,7 +248,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
           operation.
         </li>
         <li>
-          The Operator stores results, job history, and information needed for
+          We store results, job history, and information needed for
           billing and recovery. Unless you separately save them to storage,
           source images and audio are ordinarily processed temporarily for the
           AI operation and are not stored as Beutl job-history files. Retention
@@ -316,8 +317,8 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         7. Disclosures to and processing by external providers
       </h2>
       <p className="leading-7 not-first:mt-6">
-        To provide the Service, the Operator engages the following providers to
-        process information or discloses information at your direction. A
+        To provide the Service, we engage the following providers to process
+        information or disclose information at your direction. A
         provider&apos;s own policy may also apply when it independently collects
         information.
       </p>
@@ -509,7 +510,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         external link.
       </p>
       <p className="leading-7 not-first:mt-6">
-        The Operator may also disclose information with your consent; where
+        We may also disclose information with your consent; where
         required by law; where necessary to protect life, physical safety, or
         property and consent is difficult to obtain; as part of a business
         transfer; or in another circumstance permitted by the Act on the
@@ -544,9 +545,9 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         .
       </p>
       <p className="leading-7 not-first:mt-6">
-        The Operator reviews public information and contractual terms of these
-        providers and applies safeguards such as limiting transmitted data,
-        encrypting communications, and controlling access. Contact the Operator
+        We review public information and contractual terms of these providers
+        and apply safeguards such as limiting transmitted data,
+        encrypting communications, and controlling access. Contact us
         if you need more information about processing countries or safeguards.
       </p>
 
@@ -595,7 +596,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
 
       <h2 className={sectionClass}>10. Security measures</h2>
       <p className="leading-7 not-first:mt-6">
-        The Operator applies measures including the following according to the
+        We apply measures including the following according to the
         nature and risk of the information. Additional details are available on
         request to the extent disclosure would not compromise security.
       </p>
@@ -643,10 +644,10 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
           identify the request and information concerned.
         </li>
         <li>
-          The Operator will verify that the requester is the individual or an
+          We will verify that the requester is the individual or an
           authorized representative through account sign-in, a reply to the
           registered email address, or another reasonable method, and will
-          respond without delay as required by law. If the Operator cannot grant
+          respond without delay as required by law. If we cannot grant
           a request under applicable law, the reason will be explained.
         </li>
         <li>
@@ -659,8 +660,8 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         12. Sale of personal information and anonymous data
       </h2>
       <p className="leading-7 not-first:mt-6">
-        The Operator does not sell personal information for consideration and
-        does not disclose it to third parties for advertising. Statistics that
+        We do not sell personal information for consideration and do not
+        disclose it to third parties for advertising. Statistics that
         have been aggregated or anonymized so that they do not identify an
         individual may be used to operate or improve the Service, manage costs,
         or publish information.
@@ -670,16 +671,16 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       <p className="leading-7 not-first:mt-6">
         A minor must use the Service with the consent of a parent or other legal
         representative. If you learn that personal information was provided
-        without the required consent, contact the Operator. After verifying the
-        circumstances, the Operator will respond as required by law.
+        without the required consent, contact us. After verifying the
+        circumstances, we will respond as required by law.
       </p>
 
       <h2 className={sectionClass}>14. Changes to this Policy</h2>
       <p className="leading-7 not-first:mt-6">
-        The Operator may amend this Policy in response to changes in the Service
+        We may amend this Policy in response to changes in the Service
         or applicable law. The amendment and its effective date will be
-        published on this page. If an amendment materially affects Users, the
-        Operator will provide reasonable advance notice through the Service, by
+        published on this page. If an amendment materially affects Users, we
+        will provide reasonable advance notice through the Service, by
         email to the registered address, or by another appropriate method. An
         amendment that legally requires individual consent applies only after
         that consent is obtained through the designated process.
@@ -691,7 +692,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         Policy, security measures, or an individual-rights request to:
       </p>
       <p className="leading-7 not-first:mt-6">
-        Operator and privacy contact: Beutl Operator
+        Privacy contact: Beutl privacy desk
         <br />
         Email: contact@beditor.net
       </p>

@@ -21,7 +21,8 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
         These Terms of Service (the &quot;Terms&quot;) set out the conditions
         for using the Beutl account, Store, cloud storage, paid AI features,
         APIs, and other online services (collectively, the &quot;Service&quot;)
-        provided by the operator of Beutl (the &quot;Operator&quot;).
+        provided by the person or entity that operates Beutl (&quot;we&quot;,
+        &quot;us&quot;, or &quot;our&quot;).
       </p>
       <p className="leading-7 not-first:mt-6">
         Anyone who uses the Service (a &quot;User&quot;) must review and agree
@@ -33,8 +34,8 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>1. Scope and additional terms</h2>
       <ol className={orderedListClass}>
         <li>
-          These Terms apply to all aspects of the relationship between the
-          Operator and Users concerning the Service.
+          These Terms apply to all aspects of our relationship with Users
+          concerning the Service.
         </li>
         <li>
           Product pages, checkout screens, licenses, guidelines, notices, and
@@ -43,7 +44,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           Terms conflict with these Terms, the Additional Terms take precedence
           only for the matter they specifically govern. Terms established by a
           Publisher or another third party cannot alter payment, security, or
-          other aspects of the relationship between the Operator and a User.
+          other aspects of the relationship between us and a User.
         </li>
         <li>
           Open-source Beutl software is governed by the licenses included with
@@ -82,9 +83,9 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           methods, and must not allow another person to use them.
         </li>
         <li>
-          Unless an act is attributable to the Operator&apos;s intent or
+          Unless an act is attributable to our intent or
           negligence, activity performed through an account is treated as
-          activity of the User who owns that account. Contact the Operator
+          activity of the User who owns that account. Contact us
           immediately if you become aware of unauthorized use or compromised
           authentication information.
         </li>
@@ -149,7 +150,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           is resolved in order to prevent duplicate execution.
         </li>
         <li>
-          If a refund, payment reversal, or dispute occurs, the Operator may
+          If a refund, payment reversal, or dispute occurs, we may
           revoke the corresponding product entitlement or credits. If credits
           that have already been consumed correspond to a refunded or reversed
           payment, the shortfall may be deducted from credits purchased later.
@@ -179,7 +180,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           rightsholder.
         </li>
         <li>
-          You grant the Operator a non-exclusive license to use, reproduce,
+          You grant us a non-exclusive license to use, reproduce,
           transform, transmit, and display User Content only as necessary to
           provide, store, convert, back up, secure, distribute, display, and
           support the Service. This license generally lasts until the relevant
@@ -210,7 +211,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           or data materially different from its description.
         </li>
         <li>
-          A Publisher grants the Operator a non-exclusive right to use, review,
+          A Publisher grants us a non-exclusive right to use, review,
           store, reproduce, distribute, display, and promote the package as
           necessary to operate the Service and to license it to acquirers.
         </li>
@@ -241,9 +242,9 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           from it, on a standalone or substantially identical basis.
         </li>
         <li>
-          The Operator may unpublish or stop distributing a package, revoke a
-          purchase, or take other appropriate action if the Operator reasonably
-          believes that the package violates law or these Terms, infringes
+          We may unpublish or stop distributing a package, revoke a purchase,
+          or take other appropriate action if we reasonably believe that the
+          package violates law or these Terms, infringes
           rights, presents a security risk, or has a material defect.
         </li>
       </ol>
@@ -260,14 +261,14 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
         </li>
         <li>
           AI output may be inaccurate, incomplete, inappropriate, or similar to
-          output provided to someone else. The Operator does not warrant its
+          output provided to someone else. We do not warrant its
           originality, accuracy, legality, fitness for a particular purpose, or
           non-infringement of third-party rights. You are responsible for
           reviewing output and obtaining any required rights before using or
           publishing it.
         </li>
         <li>
-          The Operator does not claim ownership of AI input or output. Whether
+          We do not claim ownership of AI input or output. Whether
           rights arise in output, and who owns those rights, depends on
           applicable law, the input, and relevant third-party terms.
         </li>
@@ -320,7 +321,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
         </li>
         <li>
           Reselling or providing the Service or any part of it to a third party
-          without the Operator&apos;s permission
+          without our permission
         </li>
         <li>Assisting, inducing, or attempting any of the preceding acts</li>
       </ul>
@@ -331,12 +332,12 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <ol className={orderedListClass}>
         <li>
           When reasonably necessary to comply with law or these Terms, protect
-          third-party rights, or secure the Service, the Operator may investigate
+          third-party rights, or secure the Service, we may investigate
           activity, make User Content private, remove content, restrict
           features, suspend an account, or terminate an agreement.
         </li>
         <li>
-          When the matter is not urgent, the Operator will, where practicable,
+          When the matter is not urgent, we will, where practicable,
           provide the reason before or after taking action and accept an
           explanation from the User. Notice may be withheld where required for
           legal process, an investigation, security, or protection of
@@ -354,8 +355,8 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           the Service unavailable.
         </li>
         <li>
-          A package supplied by a Publisher is not necessarily created by the
-          Operator. Although the Operator works to maintain safety, you must
+          A package supplied by a Publisher is not necessarily created by us.
+          Although we work to maintain safety, you must
           review the permissions, source, description, license, and supported
           environment before using a package.
         </li>
@@ -366,15 +367,15 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       </h2>
       <ol className={orderedListClass}>
         <li>
-          The Operator may change or temporarily interrupt all or part of the
+          We may change or temporarily interrupt all or part of the
           Service for maintenance, incident response, security, legal
           compliance, changes to third-party services, or another reasonable
-          cause. Except in an emergency, the Operator will provide advance
+          cause. Except in an emergency, we will provide advance
           notice where practicable if the effect on Users is material.
         </li>
         <li>
-          If the Operator discontinues the Service or a paid feature, the
-          Operator will provide reasonable advance notice and, in accordance
+          If we discontinue the Service or a paid feature, we will provide
+          reasonable advance notice and, in accordance
           with law and Additional Terms, take reasonable measures such as
           migration, substitute performance, or a refund for unprovided paid
           service or remaining paid entitlements.
@@ -411,7 +412,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <ol className={orderedListClass}>
         <li>
           The Service is provided as available. To the fullest extent permitted
-          by law, the Operator makes no express or implied warranty that the
+          by law, we make no express or implied warranty that the
           Service will always be available without interruption, will operate
           in every environment, will be free from defects or vulnerabilities,
           will preserve or restore every item of data, or that the Service, AI
@@ -419,39 +420,39 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
           lawful, or fit for a particular purpose.
         </li>
         <li>
-          The Operator does not warrant that using or being unable to use the
+          We do not warrant that using or being unable to use the
           Service will cause no loss, or that any resulting loss will be
           compensated. You are responsible for backing up important files and
           work and for using the Service, AI output, and packages at your own
           judgment and risk.
         </li>
         <li>
-          This section does not exclude liability that the Operator must bear
+          This section does not exclude liability that we must bear
           under applicable law.
         </li>
       </ol>
 
-      <h2 className={sectionClass}>15. Operator liability</h2>
+      <h2 className={sectionClass}>15. Our liability</h2>
       <ol className={orderedListClass}>
         <li>
-          The Operator is not liable for loss caused by a User&apos;s conduct
+          We are not liable for loss caused by a User&apos;s conduct
           or environment, a Publisher or another third party, a third-party
           service outage or specification change, a communications failure,
           power outage, disaster, law or government action, or any other cause
-          not attributable to the Operator.
+          not attributable to us.
         </li>
         <li>
-          If loss results from the Operator&apos;s ordinary negligence, the
-          Operator is not liable for lost profits, indirect, special,
-          consequential, or data-loss damages, and is liable only for direct and
-          ordinary loss actually incurred. If the User paid for the relevant
+          If loss results from our ordinary negligence, we are not liable for
+          lost profits or indirect, special, consequential, or data-loss
+          damages, and are liable only for direct
+          and ordinary loss actually incurred. If the User paid for the relevant
           service during the twelve months before the event causing the loss,
           liability is capped at that amount. This monetary cap does not apply
           where the User paid no consideration for the relevant service.
         </li>
         <li>
           The exclusions and limitations in the preceding two paragraphs do not
-          apply to loss caused by the Operator&apos;s intent or gross
+          apply to loss caused by our intentional misconduct or gross
           negligence. They also do not apply to the extent that the Consumer
           Contract Act or another mandatory law prohibits the exclusion or
           limitation.
@@ -461,13 +462,13 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>16. User responsibility</h2>
       <p className="leading-7 not-first:mt-6">
         If a breach of these Terms or infringement of third-party rights caused
-        by a matter attributable to a User causes actual loss to the Operator,
+        by a matter attributable to a User causes actual loss to us,
         that User is responsible for the direct and ordinary loss.
       </p>
 
       <h2 className={sectionClass}>17. Privacy</h2>
       <p className="leading-7 not-first:mt-6">
-        The Operator handles information about Users in accordance with the
+        We handle information about Users in accordance with the
         {" "}
         <Link className={linkClass} href={`/${lang}/docs/privacy`}>
           Privacy Policy
@@ -479,16 +480,16 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>18. Changes to these Terms</h2>
       <ol className={orderedListClass}>
         <li>
-          The Operator may amend these Terms under Article 548-4 of the Civil
+          We may amend these Terms under Article 548-4 of the Civil
           Code when an amendment benefits Users generally, or when it is not
           contrary to the purpose of the agreement and is reasonable in light
           of the need for the amendment, the appropriateness of its substance,
           and other relevant circumstances.
         </li>
         <li>
-          The Operator will publish the amendment and its effective date through
-          the Service. If an amendment materially disadvantages Users, the
-          Operator will provide reasonable advance notice by email to the
+          We will publish the amendment and its effective date through
+          the Service. If an amendment materially disadvantages Users, we will
+          provide reasonable advance notice by email to the
           registered address or another appropriate method.
         </li>
         <li>
@@ -501,9 +502,9 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>19. Notices and contact</h2>
       <ol className={orderedListClass}>
         <li>
-          The Operator may notify Users by publishing a notice through the
+          We may notify Users by publishing a notice through the
           Service, sending it to a registered email address, or using another
-          method the Operator considers appropriate.
+          method we consider appropriate.
         </li>
         <li>
           Send questions about these Terms or the Service, rights-infringement
@@ -517,7 +518,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <ol className={orderedListClass}>
         <li>
           A User may not assign their status or any right or obligation under
-          these Terms to a third party without the Operator&apos;s prior written
+          these Terms to a third party without our prior written
           consent.
         </li>
         <li>
@@ -530,17 +531,17 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <ol className={orderedListClass}>
         <li>These Terms and the Service are governed by Japanese law.</li>
         <li>
-          If a dispute arises, the Operator and User will first attempt to
-          resolve it through good-faith discussion. If the dispute cannot be
+          If a dispute arises, we will first attempt to resolve it with the User
+          through good-faith discussion. If the dispute cannot be
           resolved, a court in Japan that has jurisdiction under the Code of
           Civil Procedure or other applicable law will serve as the court of
           first instance.
         </li>
       </ol>
 
-      <h2 className={subSectionClass}>Operator</h2>
+      <h2 className={subSectionClass}>Service provider</h2>
       <p className="leading-7 not-first:mt-6">
-        Beutl Operator
+        Disclosed without delay upon request.
         <br />
         Contact: contact@beditor.net
       </p>

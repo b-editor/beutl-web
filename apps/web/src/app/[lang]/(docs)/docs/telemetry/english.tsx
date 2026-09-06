@@ -13,9 +13,11 @@ export function EnglishTelemetryPage() {
         Last revised: September 6, 2026
       </p>
       <p className="leading-7 not-first:mt-6">
-        This document applies to the Beutl desktop application. To improve
-        Beutl&apos;s quality, we may collect usage data that is not intended to
-        identify you directly (collectively, &quot;Telemetry Data&quot;).
+        This document applies to the Beutl desktop application. The person or
+        entity that operates Beutl (&quot;we&quot;, &quot;us&quot;, or
+        &quot;our&quot;) may collect usage data that is not intended to identify
+        you directly (collectively, &quot;Telemetry Data&quot;) to improve
+        Beutl&apos;s quality.
       </p>
 
       <h2 className={headingClass}>1. Data we collect</h2>
@@ -49,8 +51,8 @@ export function EnglishTelemetryPage() {
       </p>
       <p className="leading-7 not-first:mt-6">
         The data may be processed in the region of the Grafana Cloud stack
-        selected by the operator and by Grafana Labs subprocessors. It is kept
-        for the retention period configured by the operator in Grafana Cloud
+        selected by us and by Grafana Labs subprocessors. It is kept for the
+        retention period we configure in Grafana Cloud
         and for any additional period reasonably necessary to investigate an
         incident.
       </p>
