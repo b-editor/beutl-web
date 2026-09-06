@@ -75,6 +75,37 @@ describe("AI entitlements", () => {
     expect(summary).not.toHaveProperty("modelAvailability");
   });
 
+  it("does not use an interactive transaction for account presentation", async () => {
+    await activatePro();
+    const transaction = vi
+      .spyOn(prisma, "$transaction")
+      .mockRejectedValue(
+        Object.assign(new Error("Unable to start a transaction in time"), {
+          code: "P2028",
+        }),
+      );
+
+    const summary = await getEntitlementSummary(USER_ID, {
+      prisma: prisma as never,
+    });
+
+    expect(summary.canUseAi).toBe(true);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("uses an explicitly supplied client without resolving the provider", async () => {
+    await activatePro();
+    setDbProvider(async () => {
+      throw new Error("the configured provider must not be used");
+    });
+
+    const summary = await getEntitlementSummary(USER_ID, {
+      prisma: prisma as never,
+    });
+
+    expect(summary.canUseAi).toBe(true);
+  });
+
   it("keeps summary fields identical to the full entitlement response", async () => {
     await activatePro();
     await consumeUsage({

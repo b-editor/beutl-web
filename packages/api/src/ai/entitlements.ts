@@ -1,6 +1,7 @@
 import {
   findAccountDeletionIntentByUserId,
   findCreditAccount,
+  getDb,
   getSubscriptionByUserId,
   startRetryableTransaction,
   type PrismaTransaction,
@@ -282,11 +283,15 @@ async function loadEntitlementSnapshot(
 // both of which can be comparatively large on a 128 MiB Worker isolate.
 export async function getEntitlementSummary(
   userId: string,
+  options: { prisma?: PrismaTransaction } = {},
 ): Promise<EntitlementSummaryResponse> {
-  return await startRetryableTransaction(async (prisma) => {
-    const { summary } = await loadEntitlementSnapshot(userId, prisma);
-    return summary;
-  });
+  // This snapshot only drives account presentation. Every paid operation
+  // revalidates entitlement inside its own transaction, so keeping several UI
+  // reads in an interactive transaction adds a fragile connection-start
+  // deadline without providing an authorization guarantee.
+  const prisma = options.prisma ?? await getDb();
+  const { summary } = await loadEntitlementSnapshot(userId, prisma);
+  return summary;
 }
 
 export async function getEntitlements(
