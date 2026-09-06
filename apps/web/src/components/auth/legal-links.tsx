@@ -21,10 +21,13 @@ export async function AuthLegalLinks({
           {t("terms")}
         </Link>
         {t("auth:legalNotice.between")}
-        <Link className="text-foreground underline underline-offset-4" href={`/${lang}/docs/privacy`}>
-          {t("privacy")}
-        </Link>
-        {t("auth:legalNotice.suffix")}
+        {lang === "ja" && <br />}
+        <span className={lang === "ja" ? "whitespace-nowrap" : undefined}>
+          <Link className="text-foreground underline underline-offset-4" href={`/${lang}/docs/privacy`}>
+            {t("privacy")}
+          </Link>
+          {t("auth:legalNotice.suffix")}
+        </span>
       </p>
     );
   }

@@ -15,6 +15,8 @@ describe("authentication legal links", () => {
     expect(legalLinks).not.toContain("@beutl/ui/i18n-client");
     expect(legalLinks).toContain('import { getTranslation } from "@beutl/i18n"');
     expect(legalLinks).toContain("await getTranslation(lang)");
+    expect(legalLinks).toContain('lang === "ja" && <br />');
+    expect(legalLinks).toContain('lang === "ja" ? "whitespace-nowrap" : undefined');
   });
 
   it.each(["sign-in", "sign-up"])(
