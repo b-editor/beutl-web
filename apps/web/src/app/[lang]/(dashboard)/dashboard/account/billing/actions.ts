@@ -134,13 +134,19 @@ async function expireOpenCheckoutSession(
   if (checkoutSession.status !== "open") {
     return checkoutSession;
   }
+  const retrieveExpanded = () =>
+    stripe.checkout.sessions.retrieve(checkoutSession.id, {
+      expand: ["line_items.data.price"],
+    });
   try {
-    return await stripe.checkout.sessions.expire(checkoutSession.id);
+    const resolved = await stripe.checkout.sessions.expire(checkoutSession.id);
+    // Stripe normally returns an expired Session here. Defensively hydrate a
+    // completed result before callers perform exact line-item validation.
+    return resolved.status === "complete"
+      ? await retrieveExpanded()
+      : resolved;
   } catch (error) {
-    const resolved = await stripe.checkout.sessions.retrieve(
-      checkoutSession.id,
-      { expand: ["line_items.data.price"] },
-    );
+    const resolved = await retrieveExpanded();
     if (resolved.status !== "complete" && resolved.status !== "expired") {
       throw error;
     }

@@ -496,7 +496,12 @@ describe("AI checkout actions", () => {
     );
   });
 
-  it("keeps a pre-promotion top-up Checkout that completes during expiry", async () => {
+  it.each([
+    { outcome: "returns completion", expireReturnsCompletion: true },
+    { outcome: "rejects after completion", expireReturnsCompletion: false },
+  ])("keeps a pre-promotion top-up Checkout when expiry $outcome", async ({
+    expireReturnsCompletion,
+  }) => {
     mocks.getSubscriptionByUserId.mockResolvedValue({
       status: "active",
       planId: "pro",
@@ -524,9 +529,16 @@ describe("AI checkout actions", () => {
         status: "complete",
         url: null,
       });
-    mocks.checkoutExpire.mockRejectedValue(
-      new Error("Checkout Session already completed"),
-    );
+    if (expireReturnsCompletion) {
+      mocks.checkoutExpire.mockResolvedValue({
+        id: "cs_topup_pre_promotion_race",
+        status: "complete",
+      });
+    } else {
+      mocks.checkoutExpire.mockRejectedValue(
+        new Error("Checkout Session already completed"),
+      );
+    }
 
     await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
 
