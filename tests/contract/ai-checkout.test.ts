@@ -308,7 +308,7 @@ describe("AI checkout actions", () => {
     );
   });
 
-  it("replays pre-promotion Pro parameters with their original idempotency key", async () => {
+  it("resolves a pre-promotion Pro replay before rotating to a new Checkout", async () => {
     mocks.getSubscriptionByUserId.mockResolvedValue(null);
     const legacyParams = {
       customer: "cus_1",
@@ -347,21 +347,45 @@ describe("AI checkout actions", () => {
       mode: legacyParams.mode,
       customer: legacyParams.customer,
     };
-    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
-      userId: "user-1",
-      checkoutKey: "attempt-legacy",
-      billingOfferId: "offer_pro",
-      stripeCheckoutSessionId: null,
-      paramsJson: JSON.stringify(reorderedLegacyParams),
-      expiresAt: new Date(Date.now() + 86_400_000),
-    });
+    mocks.getOrCreateProCheckoutAttempt
+      .mockResolvedValueOnce({
+        userId: "user-1",
+        checkoutKey: "attempt-legacy",
+        billingOfferId: "offer_pro",
+        stripeCheckoutSessionId: null,
+        paramsJson: JSON.stringify(reorderedLegacyParams),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      })
+      .mockResolvedValueOnce({
+        userId: "user-1",
+        checkoutKey: "attempt-current",
+        billingOfferId: "offer_pro",
+        stripeCheckoutSessionId: null,
+        paramsJson: null,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
 
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
 
-    expect(mocks.checkoutCreate).toHaveBeenCalledWith(reorderedLegacyParams, {
-      idempotencyKey: "ai-pro-checkout:attempt-legacy",
+    expect(mocks.checkoutCreate).toHaveBeenNthCalledWith(
+      1,
+      reorderedLegacyParams,
+      { idempotencyKey: "ai-pro-checkout:attempt-legacy" },
+    );
+    expect(mocks.checkoutExpire).toHaveBeenCalledWith("cs_1");
+    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+      userId: "user-1",
+      checkoutKey: "attempt-legacy",
+      stripeCheckoutSessionId: "cs_1",
     });
-    expect(mocks.setProCheckoutAttemptParams).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ allow_promotion_codes: true }),
+      { idempotencyKey: "ai-pro-checkout:attempt-current" },
+    );
+    expect(mocks.setProCheckoutAttemptParams).toHaveBeenCalledWith(
+      expect.objectContaining({ checkoutKey: "attempt-current" }),
+    );
   });
 
   it("copies the top-up amount to the Stripe PaymentIntent", async () => {
@@ -421,6 +445,183 @@ describe("AI checkout actions", () => {
     expect(mocks.checkoutRetrieve).toHaveBeenCalledWith("cs_discounted", {
       expand: ["line_items.data.price"],
     });
+  });
+
+  it("expires a bound pre-promotion top-up Checkout before creating a replacement", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const legacyParams = JSON.parse(
+      mocks.topUpAttempt!.paramsJson as string,
+    );
+    delete legacyParams.allow_promotion_codes;
+    const legacyAttempt = {
+      ...mocks.topUpAttempt!,
+      stripeCheckoutSessionId: "cs_topup_pre_promotion",
+      paramsJson: JSON.stringify(legacyParams),
+    };
+    mocks.getOrCreateTopUpCheckoutAttempt.mockResolvedValueOnce(legacyAttempt);
+    mocks.checkoutRetrieve.mockResolvedValue(
+      topUpCheckoutSession({
+        id: "cs_topup_pre_promotion",
+        allow_promotion_codes: false,
+      }),
+    );
+    mocks.checkoutExpire.mockResolvedValue(
+      topUpCheckoutSession({
+        id: "cs_topup_pre_promotion",
+        status: "expired",
+        url: null,
+        allow_promotion_codes: false,
+      }),
+    );
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutExpire).toHaveBeenCalledWith(
+      "cs_topup_pre_promotion",
+    );
+    expect(mocks.expireTopUpCheckoutAttempt).toHaveBeenCalledWith({
+      attemptId: "topup-attempt-1",
+      ownerUserId: "user-1",
+      stripeCheckoutSessionId: "cs_topup_pre_promotion",
+    });
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.checkoutCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ allow_promotion_codes: true }),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    { outcome: "returns completion", expireReturnsCompletion: true },
+    { outcome: "rejects after completion", expireReturnsCompletion: false },
+  ])("keeps a pre-promotion top-up Checkout when expiry $outcome", async ({
+    expireReturnsCompletion,
+  }) => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const legacyParams = JSON.parse(
+      mocks.topUpAttempt!.paramsJson as string,
+    );
+    delete legacyParams.allow_promotion_codes;
+    const legacyAttempt = {
+      ...mocks.topUpAttempt!,
+      stripeCheckoutSessionId: "cs_topup_pre_promotion_race",
+      paramsJson: JSON.stringify(legacyParams),
+    };
+    mocks.getOrCreateTopUpCheckoutAttempt.mockResolvedValue(legacyAttempt);
+    const openSession = topUpCheckoutSession({
+      id: "cs_topup_pre_promotion_race",
+      allow_promotion_codes: false,
+    });
+    mocks.checkoutRetrieve
+      .mockResolvedValueOnce(openSession)
+      .mockResolvedValueOnce({
+        ...openSession,
+        status: "complete",
+        url: null,
+      });
+    if (expireReturnsCompletion) {
+      mocks.checkoutExpire.mockResolvedValue({
+        id: "cs_topup_pre_promotion_race",
+        status: "complete",
+      });
+    } else {
+      mocks.checkoutExpire.mockRejectedValue(
+        new Error("Checkout Session already completed"),
+      );
+    }
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutRetrieve).toHaveBeenCalledTimes(2);
+    expect(mocks.expireTopUpCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("resolves an unbound pre-promotion top-up replay before rotating", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue({
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro",
+      currentPeriodEnd: new Date(Date.now() + 60_000),
+    });
+    const legacyParams = JSON.parse(
+      mocks.topUpAttempt!.paramsJson as string,
+    );
+    delete legacyParams.allow_promotion_codes;
+    const legacyAttempt = {
+      ...mocks.topUpAttempt!,
+      stripeCheckoutSessionId: null,
+      paramsJson: JSON.stringify(legacyParams),
+    };
+    const currentParams = structuredClone(
+      JSON.parse(mocks.topUpAttempt!.paramsJson as string),
+    );
+    currentParams.metadata.topUpAttemptId = "topup-attempt-2";
+    currentParams.payment_intent_data.metadata.topUpAttemptId =
+      "topup-attempt-2";
+    const currentAttempt = {
+      ...mocks.topUpAttempt!,
+      id: "topup-attempt-2",
+      checkoutKey: "ai-top-up-checkout:topup-attempt-2",
+      stripeCheckoutSessionId: null,
+      paramsJson: JSON.stringify(currentParams),
+    };
+    mocks.getOrCreateTopUpCheckoutAttempt
+      .mockResolvedValueOnce(legacyAttempt)
+      .mockResolvedValueOnce(currentAttempt);
+    mocks.claimTopUpCheckoutCreation
+      .mockResolvedValueOnce({ status: "claimed", attempt: legacyAttempt })
+      .mockResolvedValueOnce({ status: "claimed", attempt: currentAttempt });
+    mocks.checkoutCreate
+      .mockResolvedValueOnce(
+        topUpCheckoutSession({ allow_promotion_codes: false }),
+      )
+      .mockResolvedValueOnce(
+        topUpCheckoutSession({
+          id: "cs_topup_current",
+          metadata: currentParams.metadata,
+        }),
+      );
+    mocks.checkoutExpire.mockResolvedValue(
+      topUpCheckoutSession({
+        status: "expired",
+        url: null,
+        allow_promotion_codes: false,
+      }),
+    );
+
+    await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutCreate).toHaveBeenNthCalledWith(
+      1,
+      legacyParams,
+      expect.objectContaining({
+        idempotencyKey: "ai-top-up-checkout:topup-attempt-1",
+      }),
+    );
+    expect(mocks.expireTopUpCheckoutAttempt).toHaveBeenCalledWith({
+      attemptId: "topup-attempt-1",
+      ownerUserId: "user-1",
+      stripeCheckoutSessionId: null,
+      leaseToken: expect.any(String),
+    });
+    expect(mocks.checkoutCreate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ allow_promotion_codes: true }),
+      expect.objectContaining({
+        idempotencyKey: "ai-top-up-checkout:topup-attempt-2",
+      }),
+    );
   });
 
   it("terminalizes a zero-cost top-up before creating a replacement", async () => {
@@ -671,6 +872,111 @@ describe("AI checkout actions", () => {
     ]);
   });
 
+  it("expires a bound pre-promotion Pro Checkout before creating a replacement", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    const legacySession = {
+      id: "cs_pre_promotion",
+      customer: "cus_1",
+      mode: "subscription",
+      status: "open",
+      url: "https://checkout.stripe.com/pre-promotion",
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+        planId: "pro",
+        billingOfferId: "offer_pro",
+      },
+      line_items: {
+        data: [{ quantity: 1, price: { id: "price_pro" } }],
+      },
+    };
+    mocks.getOrCreateProCheckoutAttempt
+      .mockResolvedValueOnce({
+        userId: "user-1",
+        checkoutKey: "attempt-pre-promotion",
+        billingOfferId: "offer_pro",
+        stripeCheckoutSessionId: legacySession.id,
+        paramsJson: JSON.stringify({ mode: "subscription" }),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      })
+      .mockResolvedValueOnce({
+        userId: "user-1",
+        checkoutKey: "attempt-current",
+        billingOfferId: "offer_pro",
+        stripeCheckoutSessionId: null,
+        paramsJson: null,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+    mocks.checkoutRetrieve.mockResolvedValue(legacySession);
+    mocks.checkoutExpire.mockResolvedValue({
+      ...legacySession,
+      status: "expired",
+      url: null,
+    });
+
+    await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutExpire).toHaveBeenCalledWith(legacySession.id);
+    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+      userId: "user-1",
+      checkoutKey: "attempt-pre-promotion",
+      stripeCheckoutSessionId: legacySession.id,
+    });
+    expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.checkoutCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ allow_promotion_codes: true }),
+      expect.objectContaining({
+        idempotencyKey: "ai-pro-checkout:attempt-current",
+      }),
+    );
+  });
+
+  it("keeps a pre-promotion Pro Checkout that completes during expiry", async () => {
+    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    const legacySession = {
+      id: "cs_pre_promotion_race",
+      customer: "cus_1",
+      mode: "subscription",
+      status: "open",
+      url: "https://checkout.stripe.com/pre-promotion-race",
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "user-1",
+        planId: "pro",
+        billingOfferId: "offer_pro",
+      },
+      line_items: {
+        data: [{ quantity: 1, price: { id: "price_pro" } }],
+      },
+    };
+    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+      userId: "user-1",
+      checkoutKey: "attempt-pre-promotion-race",
+      billingOfferId: "offer_pro",
+      stripeCheckoutSessionId: legacySession.id,
+      paramsJson: JSON.stringify({ mode: "subscription" }),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    mocks.checkoutRetrieve
+      .mockResolvedValueOnce(legacySession)
+      .mockResolvedValueOnce({
+        ...legacySession,
+        status: "complete",
+        url: null,
+      });
+    mocks.checkoutExpire.mockRejectedValue(
+      new Error("Checkout Session already completed"),
+    );
+
+    await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(mocks.checkoutRetrieve).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+    expect(mocks.scheduleBillingRefundAttempt).not.toHaveBeenCalled();
+    expect(mocks.subscriptionCancel).not.toHaveBeenCalled();
+  });
+
   it("reuses an open Checkout bound to an explicitly authorized historical offer", async () => {
     process.env.STRIPE_PRO_PRICE_ID = "price_pro_v2";
     process.env.STRIPE_PRO_HISTORICAL_OFFERS = "price_old:prod_old";
@@ -688,6 +994,7 @@ describe("AI checkout actions", () => {
       checkoutKey: "attempt-old",
       billingOfferId: "offer_old",
       stripeCheckoutSessionId: "cs_old",
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
       expiresAt: new Date(Date.now() + 86_400_000),
     });
     mocks.checkoutRetrieve.mockResolvedValue({
@@ -723,6 +1030,7 @@ describe("AI checkout actions", () => {
       checkoutKey: "attempt-expired-cache",
       billingOfferId: "offer_pro",
       stripeCheckoutSessionId: "cs_still_open",
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
       expiresAt: new Date(Date.now() - 1),
     });
     mocks.checkoutRetrieve.mockResolvedValue({
