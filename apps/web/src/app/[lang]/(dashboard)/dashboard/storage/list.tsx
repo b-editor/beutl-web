@@ -465,6 +465,11 @@ export function List({
       .sort(byName);
   }, [searching, childFolders, currentFolderId, folders, query]);
 
+  // Every file and folder is already on the client, so opening a folder is a
+  // URL change and nothing else. Next.js integrates the native pushState with
+  // its router (14.1+), so useSearchParams above sees the new "folder" value
+  // and the back button walks the folders again; router.push would instead
+  // refetch the whole page from the server for each step.
   const navigateToFolder = useCallback(
     (folderId: string | null) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");

@@ -146,13 +146,13 @@ export async function moveStorageFiles({
     if (folderId !== null && !(await folderBelongsToUser(tx, folderId, userId))) {
       return { kind: "targetNotFound" as const };
     }
-    const result = await tx.file.updateMany({
-      where: { id: { in: ids }, userId, aiJobResult: null },
-      data: { folderId },
-    });
-    return result.count === ids.length
-      ? { kind: "moved" as const }
-      : { kind: "notFound" as const };
+    // All or nothing: a stray id in the request must not move the rest, or the
+    // caller reports a failure while some files have already changed place.
+    const where = { id: { in: ids }, userId, aiJobResult: null } as const;
+    const found = await tx.file.count({ where });
+    if (found !== ids.length) return { kind: "notFound" as const };
+    await tx.file.updateMany({ where, data: { folderId } });
+    return { kind: "moved" as const };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
