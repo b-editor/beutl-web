@@ -373,6 +373,33 @@ export async function updateFileVisibility({
   return result;
 }
 
+// 表示名の変更。専用ファイル (パッケージやプロフィールが握るもの) は他画面が名前を
+// 前提にしているため対象外。1 件も更新されなければ false を返し、呼び出し側が
+// 「無い」か「触れない」かを判断する。
+export async function updateFileName({
+  fileId,
+  userId,
+  name,
+  prisma,
+}: {
+  fileId: string;
+  userId: string;
+  name: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? await getDb();
+  const result = await db.file.updateMany({
+    where: {
+      id: fileId,
+      userId,
+      aiJobResult: null,
+      visibility: { not: "DEDICATED" },
+    },
+    data: { name },
+  });
+  return result.count === 1;
+}
+
 export async function retrieveFileNamesAndSizesByUserId({
   userId,
   prisma,
@@ -414,7 +441,10 @@ export async function retrieveStorageFilesByUserId({
       size: true,
       mimeType: true,
       visibility: true,
+      createdAt: true,
+      folderId: true,
     },
+    orderBy: { createdAt: "desc" },
   });
 }
 

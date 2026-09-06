@@ -30,6 +30,7 @@ export * from "./profile";
 export * from "./pro-checkout-attempt";
 export * from "./release";
 export * from "./session";
+export * from "./storage-folder";
 export * from "./storage-upload";
 export * from "./storage-multipart-cleanup";
 export * from "./subscription";

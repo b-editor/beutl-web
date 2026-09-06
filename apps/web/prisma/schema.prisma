@@ -39,6 +39,7 @@ model User {
   stripeCustomerOwnerships     StripeCustomerOwnership[]
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
   AiSetting                    AiSetting[]
+  StorageFolder                StorageFolder[]
   AiOperationModel             AiOperationModel[]
   StorageUpload                StorageUpload[]
 }
@@ -186,8 +187,30 @@ model File {
   Release           Release[]
   aiJobResult       AiJob?              @relation("AiJobResultFile")
   storageUploadReceipt StorageUpload? @relation("StorageUploadCompletedFile")
+  // 置き場所。フォルダーが消えてもファイルは残り、ルートに戻る (SetNull)。
+  // 中身ごと消すときはアプリ側がストレージの後始末付きで先に消す。
+  folderId          String?
+  folder            StorageFolder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([folderId])
+}
+
+// ストレージ画面でユーザーがファイルを整理するためのフォルダー。ツリーは親への
+// 参照だけで持つ。R2 のキーとは無関係で、表示上の入れ物にすぎない。
+model StorageFolder {
+  id        String          @id @default(uuid())
+  name      String
+  userId    String
+  parentId  String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    StorageFolder?  @relation("StorageFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  StorageFolder[] @relation("StorageFolderTree")
+  files     File[]
+
+  @@index([userId, parentId])
 }
 
 /// An upload in progress, split into parts because one request cannot carry a

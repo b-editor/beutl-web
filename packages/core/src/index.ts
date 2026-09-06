@@ -20,6 +20,7 @@ export {
   STORAGE_FILE_COUNT_LIMIT,
   STORAGE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_FILE_NAME_MAX_LENGTH,
 } from "./storage-quota";
 export type { ActionResult } from "./action-result";
 export {
