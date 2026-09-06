@@ -181,6 +181,53 @@ describe("AI job reconciliation", () => {
     ).toHaveLength(0);
   });
 
+  it("accepts a compatible fingerprint from a unique-conflict winner", async () => {
+    const idempotencyKeyHash = "p2002-compatible-fingerprint-key";
+    const winner = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 160,
+      idempotencyKeyHash,
+      requestFingerprint: "legacy-frame-fingerprint",
+    });
+
+    const findFirst = store.prisma.aiJob.findFirst.bind(store.prisma.aiJob);
+    let lookupCount = 0;
+    vi.spyOn(store.prisma.aiJob, "findFirst").mockImplementation(
+      async (args) => {
+        // The canonical endpoint misses the legacy winner in its transaction;
+        // the unique index reports it and the fallback read must still replay.
+        lookupCount++;
+        if (lookupCount === 1) return null;
+        return await findFirst(args);
+      },
+    );
+
+    const result = await createReservedAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "openrouter",
+      status: "running",
+      usageUnits: 160,
+      idempotencyKeyHash,
+      requestFingerprint: "canonical-frame-fingerprint",
+      compatibleRequestFingerprints: ["legacy-frame-fingerprint"],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "existing",
+      job: { id: winner.id, requestFingerprint: "legacy-frame-fingerprint" },
+    });
+    expect(lookupCount).toBeGreaterThanOrEqual(2);
+    expect(store.state.aiJobs.size).toBe(1);
+    expect(
+      store.state.creditTransactions.filter((item) => item.kind === "usage"),
+    ).toHaveLength(0);
+  });
+
   it("keeps a unique idempotency collision recoverable when the winner is not yet readable", async () => {
     const idempotencyKeyHash = "p2002-unreadable-winner-key";
     await createAiJob({

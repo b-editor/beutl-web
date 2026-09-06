@@ -13,6 +13,9 @@
     // Allow to fetch URLs in your app
     // see https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public
     "global_fetch_strictly_public",
+    // Propagate a browser reload/navigation through Request.signal so long AI
+    // submissions release their Worker resources when the client disconnects.
+    "enable_request_signal",
   ],
   "keep_vars": true,
   // 同一ドメイン・パス分割: /api/v{1,2,3}/* は beutl-web-api (packages/api/wrangler.jsonc) が処理。

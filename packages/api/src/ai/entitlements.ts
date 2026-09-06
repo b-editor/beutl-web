@@ -301,6 +301,10 @@ export async function getEntitlements(
       string,
       { durations: readonly number[] }
     >;
+    // Server-rendered AI screens already need this catalog to build their
+    // model picker. Accepting that request-local snapshot keeps affordability
+    // and the picker on the same rows without reading the catalog twice.
+    catalog?: AiModelCatalog;
   } = {},
 ): Promise<EntitlementsResponse> {
   const videoCapabilities = options.videoCapabilities ??
@@ -308,7 +312,9 @@ export async function getEntitlements(
   return await startRetryableTransaction(async (prisma) => {
     const [{ summary, balance }, catalog] = await Promise.all([
       loadEntitlementSnapshot(userId, prisma),
-      loadAiModelCatalog({ prisma }),
+      options.catalog
+        ? Promise.resolve(options.catalog)
+        : loadAiModelCatalog({ prisma }),
     ]);
 
     return {

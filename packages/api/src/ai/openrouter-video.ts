@@ -100,6 +100,12 @@ export async function createVideoJob({
       );
     }
   }
+  if (signal?.aborted) {
+    throw new AiVideoSubmissionError(
+      "OpenRouter video submission was cancelled before it was sent",
+      { outcome: "definite_failure", cause: signal.reason },
+    );
+  }
 
   let client: ReturnType<typeof createOpenRouterClient>;
   let requestOptions: { signal?: AbortSignal };

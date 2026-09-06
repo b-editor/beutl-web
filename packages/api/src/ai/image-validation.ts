@@ -185,7 +185,9 @@ async function decodePngData(
   bitsPerPixel: number,
   bitDepth: number,
   paletteEntries: number | null,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   const expectedBytes = rowLayouts.reduce(
     (sum, row) => sum + 1 + row.byteLength,
     0,
@@ -228,9 +230,21 @@ async function decodePngData(
   let previousRow: Uint8Array | null = null;
   let previousPass = -1;
   const bytesPerPixel = Math.max(1, Math.ceil(bitsPerPixel / 8));
+  const abortSignal = signal;
+  const cancelOnAbort = abortSignal === undefined
+    ? undefined
+    : () => {
+        void reader.cancel(abortSignal.reason).catch(() => undefined);
+      };
+  if (abortSignal && cancelOnAbort) {
+    abortSignal.addEventListener("abort", cancelOnAbort, { once: true });
+  }
   try {
+    signal?.throwIfAborted();
     for (;;) {
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       for (const byte of value) {
         if (total >= expectedBytes || rowIndex >= rowLayouts.length) {
@@ -280,13 +294,19 @@ async function decodePngData(
     }
   } catch (cause) {
     await reader.cancel(cause).catch(() => undefined);
+    signal?.throwIfAborted();
     if (cause instanceof InvalidGeneratedImageError) throw cause;
     throw new InvalidGeneratedImageError(
       "Generated PNG contains corrupt compressed data",
       { cause },
     );
+  } finally {
+    if (abortSignal && cancelOnAbort) {
+      abortSignal.removeEventListener("abort", cancelOnAbort);
+    }
   }
 
+  signal?.throwIfAborted();
   if (
     total !== expectedBytes ||
     rowIndex !== rowLayouts.length ||
@@ -301,7 +321,9 @@ async function decodePngData(
 
 async function parsePng(
   bytes: Uint8Array,
+  signal?: AbortSignal,
 ): Promise<ImageMetadata> {
+  signal?.throwIfAborted();
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   if (
     bytes.length < 45 ||
@@ -326,6 +348,7 @@ async function parsePng(
   const idatParts: Uint8Array[] = [];
 
   while (offset + 12 <= bytes.length) {
+    signal?.throwIfAborted();
     const length = view.getUint32(offset);
     const typeOffset = offset + 4;
     const dataOffset = offset + 8;
@@ -418,7 +441,9 @@ async function parsePng(
           bitsPerPixel,
           bitDepth,
           colorType === 3 ? paletteEntries : null,
+          signal,
         );
+        signal?.throwIfAborted();
         return { mimeType: "image/png", width, height };
       }
       if (
@@ -472,23 +497,27 @@ export function decodeGeneratedImageBase64(value: string): ArrayBuffer {
 
 async function inspectPngBytes(
   value: ArrayBuffer,
+  signal?: AbortSignal,
 ): Promise<ImageMetadata> {
+  signal?.throwIfAborted();
   const bytes = new Uint8Array(value);
   if (bytes[0] !== 0x89 || !hasAsciiAt(bytes, 1, "PNG")) {
     throw new InvalidGeneratedImageError(
       "Image bytes are not PNG",
     );
   }
-  return await parsePng(bytes);
+  return await parsePng(bytes, signal);
 }
 
 export async function inspectInputPng(
   value: ArrayBuffer,
+  signal?: AbortSignal,
 ): Promise<ImageMetadata> {
+  signal?.throwIfAborted();
   if (value.byteLength === 0 || value.byteLength > MAX_AI_GENERATED_IMAGE_BYTES) {
     throw new InvalidGeneratedImageError("Input PNG size is invalid");
   }
-  return await inspectPngBytes(value);
+  return await inspectPngBytes(value, signal);
 }
 
 export async function inspectGeneratedImage(

@@ -68,6 +68,30 @@ vi.mock(
     return { ...actual, loadAiImageModelCapabilities };
   },
 );
+const inspectInputPngMock = vi.hoisted(() =>
+  vi.fn<
+    (value: ArrayBuffer) => Promise<{
+      mimeType: "image/png";
+      width: number;
+      height: number;
+    }>
+  >(),
+);
+vi.mock("../../packages/api/src/ai/image-validation", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../packages/api/src/ai/image-validation")
+  >();
+  inspectInputPngMock.mockImplementation(actual.inspectInputPng);
+  return { ...actual, inspectInputPng: inspectInputPngMock };
+});
+const getEntitlementsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/api/src/ai/entitlements", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../packages/api/src/ai/entitlements")
+  >();
+  getEntitlementsMock.mockImplementation(actual.getEntitlements);
+  return { ...actual, getEntitlements: getEntitlementsMock };
+});
 vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("../../packages/api/src/ai/openrouter-video")
@@ -2697,6 +2721,53 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
+    it("replays a paid job even when the current model catalog is unavailable", async () => {
+      const key = "text-video-replay-without-catalog";
+      const input = {
+        prompt: "Recover the existing video",
+        durationSeconds: 4,
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+      };
+      const identity = await getAiRequestIdentityForTest({
+        key,
+        operation: "video.generate",
+        input,
+      });
+      const job = await createAiJob({
+        userId: USER_ID,
+        kind: "video",
+        provider: "openrouter",
+        status: "running",
+        inputParams: input,
+        usageUnits: 160,
+        model: "retired/video-model",
+        ...identity,
+      });
+      const catalogRead = vi
+        .spyOn(prisma.aiOperationModel, "findMany")
+        .mockRejectedValue(new Error("model catalog is unavailable"));
+
+      const response = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders(key)),
+        },
+        body: JSON.stringify(input),
+      });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({
+        jobId: job.id,
+        status: "running",
+      });
+      expect(catalogRead).not.toHaveBeenCalled();
+      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      catalogRead.mockRestore();
+    });
+
     it("rejects a new reservation after account deletion is authorized", async () => {
       await activatePro();
       state.accountDeletionIntents.set("deletion-intent", {
@@ -2878,6 +2949,48 @@ describe("v3 AI endpoints contract", () => {
       expectOpaqueCallbackUrl(createRequest.callbackUrl, job.id);
     });
 
+    it("refunds a new reservation when the client disconnects during commit", async () => {
+      await activatePro();
+      const controller = new AbortController();
+      const create = prisma.aiJob.create.bind(prisma.aiJob);
+      const createSpy = vi.spyOn(prisma.aiJob, "create").mockImplementation(
+        async (args) => {
+          const job = await create(args);
+          controller.abort(new DOMException("page reloaded", "AbortError"));
+          return job;
+        },
+      );
+
+      const response = makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("disconnect-during-video-reservation")),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+        signal: controller.signal,
+      });
+      await response.catch(() => undefined);
+      createSpy.mockRestore();
+
+      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      expect([...state.aiJobs.values()]).toHaveLength(1);
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        status: "failed",
+        providerJobId: null,
+      });
+      expect(
+        state.creditTransactions.filter((transaction) =>
+          transaction.kind === "usage"
+        ),
+      ).toHaveLength(1);
+      expect(
+        state.creditTransactions.filter((transaction) =>
+          transaction.kind === "refund"
+        ),
+      ).toHaveLength(1);
+    });
+
     it("returns 429 aiJobLimitReached while another job is active", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockResolvedValue({
@@ -3014,6 +3127,40 @@ describe("v3 AI endpoints contract", () => {
       const account = await getCreditAccount({ userId: USER_ID });
       expect(account.monthlyUsageUsed).toBe(0);
       expect(account.purchasedCredits).toBe(0);
+    });
+
+    it("refunds when callback configuration fails after reservation", async () => {
+      await activatePro();
+      process.env.PUBLIC_ORIGIN = "://invalid-origin";
+
+      const response = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders("invalid-video-callback-origin")),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({
+        error_code: "aiProviderError",
+      });
+      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        status: "failed",
+        providerJobId: null,
+      });
+      expect(
+        state.creditTransactions.filter((transaction) =>
+          transaction.kind === "usage"
+        ),
+      ).toHaveLength(1);
+      expect(
+        state.creditTransactions.filter((transaction) =>
+          transaction.kind === "refund"
+        ),
+      ).toHaveLength(1);
     });
 
     it("keeps an ambiguous submission pending, pollable, and duplicate-blocking", async () => {
@@ -3207,6 +3354,305 @@ describe("v3 AI endpoints contract", () => {
   });
 
   describe("POST /api/v3/ai/videos/frames", () => {
+    it("never overlaps PNG inspection for the two frame slots", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockResolvedValue({
+        id: "provider-sequential-frame-validation",
+        status: "pending",
+      });
+      const originalInspect = inspectInputPngMock.getMockImplementation();
+      if (!originalInspect) throw new Error("PNG inspector mock is not initialized");
+
+      let inspectionCalls = 0;
+      let activeInspections = 0;
+      let maximumActiveInspections = 0;
+      let markFirstStarted!: () => void;
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        markFirstStarted = resolve;
+      });
+      const firstCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      inspectInputPngMock.mockImplementation(async (bytes) => {
+        const call = ++inspectionCalls;
+        activeInspections++;
+        maximumActiveInspections = Math.max(
+          maximumActiveInspections,
+          activeInspections,
+        );
+        try {
+          if (call === 1) {
+            markFirstStarted();
+            await firstCanFinish;
+          }
+          return await originalInspect(bytes);
+        } finally {
+          activeInspections--;
+        }
+      });
+
+      let responsePromise: Promise<Response> | null = null;
+      try {
+        const form = new FormData();
+        form.append("prompt", "Validate without overlapping decoders");
+        form.append("durationSeconds", "4");
+        form.append(
+          "firstFrame",
+          new File([PNG_BYTES], "first.png", { type: "image/png" }),
+        );
+        form.append(
+          "lastFrame",
+          new File([PNG_BYTES], "last.png", { type: "image/png" }),
+        );
+
+        responsePromise = makeApp().request("/api/v3/ai/videos/frames", {
+          method: "POST",
+          headers: await authHeaders("sequential-frame-validation"),
+          body: form,
+        });
+        await firstStarted;
+        // Give a concurrently-started second validation a full event-loop turn
+        // to reach the instrumented PNG decoder before making the assertion.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+        expect(inspectInputPngMock).toHaveBeenCalledTimes(1);
+        expect(maximumActiveInspections).toBe(1);
+        releaseFirst();
+
+        const response = await responsePromise;
+        expect(response.status).toBe(200);
+        expect(inspectInputPngMock).toHaveBeenCalledTimes(2);
+        expect(maximumActiveInspections).toBe(1);
+      } finally {
+        releaseFirst();
+        inspectInputPngMock.mockImplementation(originalInspect);
+        await responsePromise?.catch(() => undefined);
+      }
+    });
+
+    it("stops before the second frame and reservation after a client disconnect", async () => {
+      await activatePro();
+      const originalInspect = inspectInputPngMock.getMockImplementation();
+      if (!originalInspect) throw new Error("PNG inspector mock is not initialized");
+
+      let markFirstStarted!: () => void;
+      let releaseFirst!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        markFirstStarted = resolve;
+      });
+      const firstCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      inspectInputPngMock.mockImplementation(async (bytes) => {
+        markFirstStarted();
+        await firstCanFinish;
+        return await originalInspect(bytes);
+      });
+
+      const controller = new AbortController();
+      let responsePromise: Promise<Response> | null = null;
+      try {
+        const form = new FormData();
+        form.append("prompt", "Stop validating after this page reloads");
+        form.append("durationSeconds", "4");
+        form.append(
+          "firstFrame",
+          new File([PNG_BYTES], "first.png", { type: "image/png" }),
+        );
+        form.append(
+          "lastFrame",
+          new File([PNG_BYTES], "last.png", { type: "image/png" }),
+        );
+        responsePromise = makeApp().request("/api/v3/ai/videos/frames", {
+          method: "POST",
+          headers: await authHeaders("disconnect-during-frame-validation"),
+          body: form,
+          signal: controller.signal,
+        });
+
+        await firstStarted;
+        controller.abort(new DOMException("page reloaded", "AbortError"));
+        releaseFirst();
+        await responsePromise.catch(() => undefined);
+
+        expect(inspectInputPngMock).toHaveBeenCalledTimes(1);
+        expect(state.aiJobs.size).toBe(0);
+        expect(state.creditTransactions).toEqual([]);
+        expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      } finally {
+        releaseFirst();
+        inspectInputPngMock.mockImplementation(originalInspect);
+        await responsePromise?.catch(() => undefined);
+      }
+    });
+
+    it("replays the exact legacy dashboard frame fingerprint", async () => {
+      await activatePro();
+      const key = "legacy-dashboard-frame-replay";
+      const firstFrameSha256 = await sha256Hex(PNG_BYTES);
+      const legacyIdentity = await getAiRequestIdentityForTest({
+        key,
+        operation: "video.generate",
+        input: {
+          prompt: "Animate the legacy frame",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+          first_frame: {
+            contentType: "image/png",
+            sha256: firstFrameSha256,
+          },
+        },
+      });
+      const reservation = await createReservedAiJob({
+        userId: USER_ID,
+        kind: "video",
+        provider: "openrouter",
+        status: "running",
+        inputParams: {
+          prompt: "Animate the legacy frame",
+          durationSeconds: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          generateAudio: true,
+          firstFrame: { filename: "first.png", mimeType: "image/png" },
+        },
+        usageUnits: 160,
+        model: "google/veo-3.1",
+        ...legacyIdentity,
+      });
+      if (!reservation.ok) throw new Error("Legacy reservation failed");
+      getEntitlementsMock.mockClear();
+      const catalogRead = vi
+        .spyOn(prisma.aiOperationModel, "findMany")
+        .mockRejectedValue(new Error("model catalog is unavailable"));
+
+      const request = async (prompt: string) => {
+        const form = new FormData();
+        form.append("prompt", prompt);
+        form.append("durationSeconds", "4");
+        form.append(
+          "firstFrame",
+          new File([PNG_BYTES], "first.png", { type: "image/png" }),
+        );
+        return await makeApp().request("/api/v3/ai/videos/frames", {
+          method: "POST",
+          headers: await authHeaders(key),
+          body: form,
+        });
+      };
+
+      const replay = await request("Animate the legacy frame");
+      expect(replay.status).toBe(202);
+      expect(await replay.json()).toMatchObject({
+        jobId: reservation.job.id,
+        status: "running",
+      });
+      expect(getEntitlementsMock).not.toHaveBeenCalled();
+      expect(catalogRead).not.toHaveBeenCalled();
+
+      const changed = await request("Animate a changed frame");
+      expect(changed.status).toBe(409);
+      expect(await changed.json()).toMatchObject({
+        error_code: "aiRequestChanged",
+      });
+      expect(getEntitlementsMock).not.toHaveBeenCalled();
+      expect(catalogRead).not.toHaveBeenCalled();
+      expect(state.aiJobs.size).toBe(1);
+      expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+      expect(
+        state.creditTransactions.filter((transaction) =>
+          transaction.kind === "usage"
+        ),
+      ).toHaveLength(1);
+      catalogRead.mockRestore();
+    });
+
+    it("stores the canonical frame fingerprint for a new request", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockResolvedValue({
+        id: "provider-canonical-frame-fingerprint",
+        status: "pending",
+      });
+      const key = "canonical-frame-fingerprint";
+      const firstFrameSha256 = await sha256Hex(PNG_BYTES);
+      const commonInput = {
+        prompt: "Reserve with the canonical fingerprint",
+        durationSeconds: 4,
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+      };
+      const frameFingerprint = {
+        contentType: "image/png",
+        sha256: firstFrameSha256,
+      };
+      const canonicalIdentity = await getAiRequestIdentityForTest({
+        key,
+        operation: "video.generate.frames",
+        input: { ...commonInput, firstFrame: frameFingerprint },
+      });
+      const legacyIdentity = await getAiRequestIdentityForTest({
+        key,
+        operation: "video.generate",
+        input: { ...commonInput, first_frame: frameFingerprint },
+      });
+      const form = new FormData();
+      form.append("prompt", commonInput.prompt);
+      form.append("durationSeconds", "4");
+      form.append(
+        "firstFrame",
+        new File([PNG_BYTES], "first.png", { type: "image/png" }),
+      );
+
+      const response = await makeApp().request("/api/v3/ai/videos/frames", {
+        method: "POST",
+        headers: await authHeaders(key),
+        body: form,
+      });
+
+      expect(response.status).toBe(200);
+      const job = [...state.aiJobs.values()][0];
+      expect(job?.requestFingerprint).toBe(canonicalIdentity.requestFingerprint);
+      expect(job?.requestFingerprint).not.toBe(legacyIdentity.requestFingerprint);
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledOnce();
+    });
+
+    it("does not reserve usage when frame encoding fails", async () => {
+      await activatePro();
+      const headers = await authHeaders("frame-encoding-failure");
+      const form = new FormData();
+      form.append("prompt", "Encode this frame");
+      form.append("durationSeconds", "4");
+      form.append(
+        "firstFrame",
+        new File([PNG_BYTES], "first.png", { type: "image/png" }),
+      );
+      vi.stubGlobal("btoa", () => {
+        throw new RangeError("base64 allocation failed");
+      });
+
+      try {
+        const response = await makeApp().request("/api/v3/ai/videos/frames", {
+          method: "POST",
+          headers,
+          body: form,
+        });
+
+        expect(response.status).toBe(500);
+        expect(await response.json()).toMatchObject({
+          error_code: "aiProviderError",
+        });
+        expect(vi.mocked(createVideoJob)).not.toHaveBeenCalled();
+        expect(state.aiJobs.size).toBe(0);
+        expect(state.creditTransactions).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it("rejects a missing firstFrame before charging", async () => {
       await activatePro();
       const form = new FormData();

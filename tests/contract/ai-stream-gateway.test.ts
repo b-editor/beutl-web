@@ -25,11 +25,12 @@ import { INTERNAL_REQUEST_HEADER } from "../../apps/web/src/lib/internal-request
 
 const SITE = "http://localhost:3000";
 
-function post(headers: Record<string, string> = {}): Request {
+function post(headers: Record<string, string> = {}, signal?: AbortSignal): Request {
   return new Request(`${SITE}/api/internal/ai/translations`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ targetLanguage: "ja", segments: [] }),
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -50,6 +51,19 @@ describe("the dashboard's way in to the AI API", () => {
     expect(request.headers.get("authorization")).toMatch(/^Bearer \S+$/);
     // The cookie has done its work here and has no business going further.
     expect(request.headers.get("cookie")).toBeNull();
+  });
+
+  it("keeps browser cancellation connected to the forwarded API request", async () => {
+    const controller = new AbortController();
+    await POST(post({ [INTERNAL_REQUEST_HEADER]: "1" }, controller.signal));
+
+    const request = forwarded[0]!;
+    expect(request.signal.aborted).toBe(false);
+
+    controller.abort(new DOMException("page reloaded", "AbortError"));
+
+    expect(request.signal.aborted).toBe(true);
+    expect(request.signal.reason).toMatchObject({ name: "AbortError" });
   });
 
   it("refuses a request that does not carry this site's own header", async () => {
@@ -83,14 +97,10 @@ describe("the dashboard's way in to the AI API", () => {
     await POST(post({ [INTERNAL_REQUEST_HEADER]: "1", origin: SITE }));
 
     const token = forwarded[0]!.headers.get("authorization")!.slice("Bearer ".length);
-    const claims = JSON.parse(
-      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    expect(claims["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"]).toBe(
+      "user-1",
     );
-    expect(
-      claims[
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
-      ],
-    ).toBe("user-1");
     expect(claims.exp - claims.iat).toBe(60);
   });
 });

@@ -1,5 +1,10 @@
 import "server-only";
-import { getEntitlements, loadAiModelCatalog } from "@beutl/api";
+import {
+  getEntitlements,
+  loadAiModelCatalog,
+  loadAiVideoModelCapabilities,
+  type AiVideoModelCapabilities,
+} from "@beutl/api";
 import { listAiJobsByUserId } from "@beutl/db";
 import type { AiAccess, AiBalance } from "./shared";
 
@@ -9,11 +14,19 @@ import type { AiAccess, AiBalance } from "./shared";
 export async function getAiScreenState(userId: string): Promise<{
   access: AiAccess;
   balance: AiBalance;
+  videoCapabilities: ReadonlyMap<string, AiVideoModelCapabilities>;
 }> {
-  const [entitlements, catalog] = await Promise.all([
-    getEntitlements(userId),
+  // These snapshots belong to this render. Passing them down explicitly avoids
+  // both duplicate I/O in getEntitlements/video pages and a module-global
+  // in-flight promise that could retain request-bound Worker resources.
+  const [videoCapabilities, catalog] = await Promise.all([
+    loadAiVideoModelCapabilities(),
     loadAiModelCatalog(),
   ]);
+  const entitlements = await getEntitlements(userId, {
+    videoCapabilities,
+    catalog,
+  });
   return {
     access: {
       canUseAi: entitlements.canUseAi,
@@ -47,6 +60,7 @@ export async function getAiScreenState(userId: string): Promise<{
       // allowance comes back.
       endsAtPeriodEnd: entitlements.cancelAtPeriodEnd,
     },
+    videoCapabilities,
   };
 }
 

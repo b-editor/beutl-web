@@ -26,6 +26,7 @@ export async function POST(request: Request): Promise<Response> {
   const session = await auth.api.getSession({ headers: request.headers });
   const userId = session?.user?.id;
   if (!userId) return unauthorizedResponse();
+  request.signal.throwIfAborted();
 
   const secret = process.env.JWT_SECRET;
   if (!secret) {
@@ -43,6 +44,7 @@ export async function POST(request: Request): Promise<Response> {
     secret,
     "HS256",
   );
+  request.signal.throwIfAborted();
 
   // The same request, at the same path under the API's own prefix, carrying the
   // token instead of the cookie. Everything past this point — what the request

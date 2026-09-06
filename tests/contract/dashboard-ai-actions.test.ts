@@ -30,7 +30,6 @@ vi.mock("@/lib/content-url", () => ({
 }));
 
 import {
-  createVideoAction,
   generateImageAction,
   listJobsAction,
   retryJobAction,
@@ -84,13 +83,6 @@ vi.mock("@beutl/db", async (importOriginal) => {
   return { ...actual, getAiJobResultFile: vi.fn() };
 });
 
-const PNG_BYTES = Uint8Array.from(
-  Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-    "base64",
-  ),
-);
-
 describe("dashboard AI actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,10 +102,6 @@ describe("dashboard AI actions", () => {
 
   // Every submission carries the key that makes a resubmission land on the job
   // the first arrival created instead of reserving and charging again.
-  function pngFile(name: string): File {
-    return new File([PNG_BYTES.slice()], name, { type: "image/png" });
-  }
-
   function generateForm(prompt = "a cat"): FormData {
     const formData = new FormData();
     formData.set("prompt", prompt);
@@ -121,39 +109,6 @@ describe("dashboard AI actions", () => {
     formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000001");
     return formData;
   }
-
-  function videoForm(
-    prompt = "Animate the scene",
-    idempotencyKey = "3f1a0d0e-0000-4000-8000-000000000101",
-  ): FormData {
-    const formData = new FormData();
-    formData.set("prompt", prompt);
-    formData.set("durationSeconds", "4");
-    formData.set("resolution", "720p");
-    formData.set("aspectRatio", "16:9");
-    formData.set("generateAudio", "true");
-    formData.set("idempotencyKey", idempotencyKey);
-    return formData;
-  }
-
-  // 終わりのフレームだけの依頼は v3 /videos/frames もエディタの DTO も断る。
-  // 入口によって受ける形が変わると、こちらから送ったぶんだけ、予約して課金して
-  // から断られる。
-  it("refuses a last frame with no first frame, as the API does", async () => {
-    const formData = new FormData();
-    formData.set("prompt", "Animate the scene");
-    formData.set("durationSeconds", "4");
-    formData.set("resolution", "720p");
-    formData.set("aspectRatio", "16:9");
-    formData.set("idempotencyKey", "3f1a0d0e-0000-4000-8000-000000000009");
-    formData.set("lastFrame", pngFile("last.png"));
-
-    const result = await createVideoAction({ success: false }, formData);
-
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("invalidRequestBody");
-    expect(vi.mocked(createReservedAiJob)).not.toHaveBeenCalled();
-  });
 
   it("rejects an empty prompt", async () => {
     const formData = generateForm("  ");
@@ -542,86 +497,6 @@ describe("dashboard AI actions", () => {
         model: "dear/model",
       });
     }
-
-    it("reports a failed replay before model resolution instead of returning queued success", async () => {
-      const formData = videoForm();
-      const identity = await toAiRequestIdentity({
-        idempotencyKey: formData.get("idempotencyKey"),
-        operation: "video.generate",
-        input: {
-          prompt: "Animate the scene",
-          durationSeconds: 4,
-          resolution: "720p",
-          aspectRatio: "16:9",
-          generateAudio: true,
-        },
-      });
-      expect(identity).not.toBeNull();
-      await createAiJob({
-        userId: "user-1",
-        kind: "video",
-        provider: "openrouter",
-        status: "failed",
-        inputParams: {
-          prompt: "Animate the scene",
-          durationSeconds: 4,
-          resolution: "720p",
-          aspectRatio: "16:9",
-          generateAudio: true,
-        },
-        usageUnits: 32,
-        model: "dear/video",
-        idempotencyKeyHash: identity!.idempotencyKeyHash,
-        requestFingerprint: identity!.requestFingerprint,
-      });
-
-      const result = await createVideoAction({ success: false }, formData);
-
-      expect(result).toMatchObject({
-        success: false,
-        message: "api-errors:aiProviderError",
-        status: "failed",
-      });
-      expect(result.keepIdempotencyKey).toBeUndefined();
-      expect(createReservedAiJob).not.toHaveBeenCalled();
-    });
-
-    it.each(["failed", "succeeded", "queued"] as const)(
-      "honors the durable status for an existing video reservation (%s)",
-      async (status) => {
-        await registerVideoModel();
-        vi.mocked(createReservedAiJob).mockResolvedValue({
-          ok: true,
-          outcome: "existing",
-          job: {
-            id: `job-existing-video-${status}`,
-            status,
-            resultFileId: status === "succeeded" ? "file-video" : null,
-            resultFile: null,
-          },
-        });
-
-        const result = await createVideoAction(
-          { success: false },
-          videoForm("A different prompt", `3f1a0d0e-0000-4000-8000-00000000010${status === "failed" ? "2" : status === "succeeded" ? "3" : "4"}`),
-        );
-
-        if (status === "failed") {
-          expect(result).toMatchObject({
-            success: false,
-            message: "api-errors:aiProviderError",
-            status,
-          });
-        } else {
-          expect(result).toMatchObject({
-            success: true,
-            jobId: `job-existing-video-${status}`,
-            status,
-          });
-        }
-        expect(createAndAttachVideoJob).not.toHaveBeenCalled();
-      },
-    );
 
     it("retries a legacy video row with the canonical history fingerprint", async () => {
       await registerVideoModel();

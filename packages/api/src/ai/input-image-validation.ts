@@ -438,11 +438,15 @@ function filenameExtension(filename: string): string | null {
 export async function validateAiInputImage(
   file: File,
   allowedMimeTypes: ReadonlySet<AiInputImageMimeType>,
+  signal?: AbortSignal,
 ): Promise<ValidatedAiInputImage | null> {
   let bytes: ArrayBuffer;
   try {
+    signal?.throwIfAborted();
     bytes = await file.arrayBuffer();
+    signal?.throwIfAborted();
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 
@@ -458,7 +462,7 @@ export async function validateAiInputImage(
   try {
     switch (mimeType) {
       case "image/png":
-        await inspectInputPng(bytes);
+        await inspectInputPng(bytes, signal);
         break;
       case "image/jpeg":
         inspectJpeg(data);
@@ -471,8 +475,10 @@ export async function validateAiInputImage(
         break;
     }
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 
+  signal?.throwIfAborted();
   return { bytes, mimeType };
 }
