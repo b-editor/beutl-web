@@ -13,9 +13,15 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
+  // Both consumers need the same provider snapshot. Keep this promise scoped
+  // to the render: module-global in-flight I/O cannot safely cross Cloudflare
+  // Worker request contexts.
+  const capabilitiesPromise = loadAiVideoModelCapabilities();
   const [{ access, balance }, capabilities] = await Promise.all([
-    getAiScreenState(session.user.id),
-    loadAiVideoModelCapabilities(),
+    getAiScreenState(session.user.id, {
+      videoCapabilities: capabilitiesPromise,
+    }),
+    capabilitiesPromise,
   ]);
 
   // Which parameters a video may carry differs per model, so the screen offers

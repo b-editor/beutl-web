@@ -118,7 +118,13 @@ export async function loadAiVideoModelCapabilities(
       models.map((model) => [model.id, toCapabilities(model)]),
     );
   } catch (error) {
-    console.error("Failed to read OpenRouter video model capabilities", error);
+    // This lookup deliberately fails open, so report a degraded optional read
+    // as a warning rather than turning a successfully rendered page into an
+    // error event. Keep only the normalized message instead of serializing an
+    // SDK error and its worker stack as the log message.
+    console.warn("Failed to read OpenRouter video model capabilities", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     capabilities = new Map();
     ttl = FAILURE_CACHE_TTL_MS;
   }
