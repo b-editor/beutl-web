@@ -20,7 +20,7 @@ const createPrismaClient = async () => {
     throw new Error("Hyperdrive connection string not available");
   }
 
-  const adapter = new PrismaPg({ connectionString, maxUses: 1 });
+  const adapter = new PrismaPg({ connectionString, max: 5, maxUses: 1 });
   const prisma = new PrismaClient({ adapter });
   after(() => prisma.$disconnect());
   return prisma;

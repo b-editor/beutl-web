@@ -13,6 +13,9 @@ describe("server-render database resources", () => {
     expect(prisma).toContain(
       "const getPrismaClient = cache(createPrismaClient);",
     );
+    expect(prisma).toContain(
+      "new PrismaPg({ connectionString, max: 5, maxUses: 1 })",
+    );
     expect(prisma).toContain("setDbProvider(getPrismaClient);");
     expect(prisma).toContain('import { after } from "next/server";');
     expect(prisma).toContain("after(() => prisma.$disconnect());");
@@ -67,5 +70,18 @@ describe("server-render database resources", () => {
       "getSocialProfilesByUserId(session.user.id, prisma)",
     );
     expect(profilePage).not.toContain("auth.api.getSession");
+  });
+
+  it("shares one render client with entitlement summaries", () => {
+    for (const path of [
+      "apps/web/src/app/[lang]/(dashboard)/dashboard/queries.ts",
+      "apps/web/src/app/[lang]/(dashboard)/dashboard/account/billing/queries.ts",
+    ]) {
+      const query = source(path);
+      expect(query.match(/await getDb\(\)/g), path).toHaveLength(1);
+      expect(query, path).toContain(
+        "getEntitlementSummary(userId, { prisma })",
+      );
+    }
   });
 });

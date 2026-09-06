@@ -61,12 +61,11 @@ async function retrieveBillingDocumentsIfReachable({
 }
 
 export async function retrieveBillingPage(userId: string) {
-  // Explicitly share the request-scoped PrismaClient across billing reads.
-  // The entitlement summary owns its consistent transaction.
+  // Explicitly share the render-scoped PrismaClient across all billing reads.
   const prisma = await getDb();
   const [entitlements, customer, payments, creditPurchases] = await Promise.all(
     [
-      getEntitlementSummary(userId),
+      getEntitlementSummary(userId, { prisma }),
       findCustomerByUserId({ userId, prisma }),
       getUserPaymentHistory({ userId, prisma }),
       getCreditPurchasesByUserId({ userId, prisma }),
