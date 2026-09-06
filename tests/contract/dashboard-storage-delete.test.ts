@@ -12,9 +12,16 @@ vi.mock("@/lib/auth-guard", () => ({
   throwIfUnauth: vi.fn(async () => ({ user: { id: "user-1" } })),
 }));
 vi.mock("@beutl/db", () => ({
+  createStorageFolder: vi.fn(),
+  deleteStorageFolderTree: vi.fn(),
   deleteUserFilesWithStorageCleanup: vi.fn(),
+  moveStorageFiles: vi.fn(),
+  moveStorageFolder: vi.fn(),
+  renameStorageFolder: vi.fn(),
   retrieveFilesByIdsAndUserId: vi.fn(),
   retrieveStorageFilesByUserId: vi.fn(),
+  retrieveStorageFoldersByUserId: vi.fn(),
+  updateFileName: vi.fn(),
   updateFileVisibility: vi.fn(),
 }));
 

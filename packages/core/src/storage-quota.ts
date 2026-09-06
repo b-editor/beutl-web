@@ -14,3 +14,6 @@ export const STORAGE_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 // ファイルを順に完成させれば、1GiB の枠の内側で R2 のオブジェクトと DB の行を
 // 際限なく増やせる。増えて困るのは容量ではなくその数のほうなので、別に限る。
 export const STORAGE_FILE_COUNT_LIMIT = 10_000;
+
+// ファイル名の上限。R2 のキーではなく表示名なので、Content-Disposition に収まる長さで足りる。
+export const STORAGE_FILE_NAME_MAX_LENGTH = 255;

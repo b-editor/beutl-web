@@ -5,12 +5,12 @@ import {
   unauthorizedResponse,
 } from "@/lib/internal-request";
 import { startUpload } from "@/lib/storage-upload-server";
-import { STORAGE_QUOTA_BYTES } from "@beutl/core";
+import { STORAGE_QUOTA_BYTES, STORAGE_FILE_NAME_MAX_LENGTH } from "@beutl/core";
 
 // Starting an upload that will arrive in parts. What comes back is the id every
 // later request names, and how the file is to be cut up.
 
-const MAX_NAME_LENGTH = 255;
+const MAX_NAME_LENGTH = STORAGE_FILE_NAME_MAX_LENGTH;
 const MAX_CONTROL_BODY_BYTES = 4 * 1024;
 // 開始要求の名前。ブラウザが作った UUID で、応答が失われたときの問い合わせ直しに
 // 使う。形を絞るのは、他人の行を引き当てる推測をさせないため。

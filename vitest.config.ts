@@ -47,6 +47,14 @@ export default defineConfig({
         find: /^@beutl\/ui\//,
         replacement: `${path.resolve(__dirname, "packages/ui/src")}/`,
       },
+      // next/* は apps/web の node_modules にしか無い。tests/ から vi.mock("next/cache")
+      // と書いたときも、アクションが import する実体と同じファイルに解決させる。
+      // そうしないとモックが別モジュール ID に登録され、本物の revalidatePath が
+      // 「static generation store missing」で落ちる。
+      {
+        find: /^next\/(cache|headers|navigation)$/,
+        replacement: path.resolve(__dirname, "apps/web/node_modules/next/$1.js"),
+      },
       // server-only は Next.js 専用パッケージ。契約テストは node 環境で実行するため
       // 空モジュールに解決する。
       {

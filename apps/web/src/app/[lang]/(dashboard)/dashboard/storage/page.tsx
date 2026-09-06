@@ -1,40 +1,32 @@
-import { Progress } from "@beutl/ui/ui/progress";
 import { authOrSignIn } from "@/lib/auth-guard";
-import { formatBytes, STORAGE_QUOTA_BYTES } from "@beutl/core";
-import { retrieveFiles } from "./actions";
-import { List } from "./list";
 import { getTranslation } from "@beutl/i18n";
+import { retrieveFiles, retrieveFolders } from "./actions";
+import { List } from "./list";
+import { StorageUsage } from "./usage";
 
 export default async function Page(props: { params: Promise<{ lang: string }> }) {
-  const params = await props.params;
-
-  const {
-    lang
-  } = params;
+  const { lang } = await props.params;
 
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const files = await retrieveFiles();
-  let totalSize = 0;
+  const [files, folders] = await Promise.all([retrieveFiles(), retrieveFolders()]);
+  let usedBytes = 0;
   for (const file of files) {
-    totalSize += Number(file.size);
+    usedBytes += Number(file.size);
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <h1 className="text-2xl font-bold">{t("storage:storage")}</h1>
-        <p className="text-sm text-muted-foreground">
-          {t("storage:storageUsage", { totalSize: formatBytes(totalSize) })}
-        </p>
-        <Progress
-          value={(totalSize / STORAGE_QUOTA_BYTES) * 100}
-          max={100}
-        />
+        <StorageUsage lang={lang} usedBytes={usedBytes} fileCount={files.length} />
       </div>
-      <div className="rounded-lg border text-card-foreground">
-        <List data={files} lang={lang} userId={session.user.id} />
-      </div>
+      <List
+        data={files}
+        folders={folders}
+        lang={lang}
+        userId={session.user.id}
+      />
     </div>
   );
 }
