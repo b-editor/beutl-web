@@ -54,19 +54,9 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         も確認してください。
       </p>
 
-      <h2 className={sectionClass}>1. 個人情報取扱事業者</h2>
-      <dl className="mt-6 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 leading-7">
-        <dt className="font-semibold">氏名又は名称</dt>
-        <dd>請求があった場合、遅滞なく開示します。</dd>
-        <dt className="font-semibold">住所</dt>
-        <dd>本人からの求めに応じて遅滞なく回答します。</dd>
-        <dt className="font-semibold">連絡先</dt>
-        <dd>contact@beditor.net</dd>
-      </dl>
+      <h2 className={sectionClass}>1. 取得する情報</h2>
 
-      <h2 className={sectionClass}>2. 取得する情報</h2>
-
-      <h3 className={subSectionClass}>2.1 アカウント及び認証情報</h3>
+      <h3 className={subSectionClass}>1.1 アカウント及び認証情報</h3>
       <ul className={listClass}>
         <li>氏名又は表示名、メールアドレス、プロフィール画像、利用者ID</li>
         <li>プロフィールの自己紹介、公開用ユーザー名及び登録したソーシャルリンク</li>
@@ -78,7 +68,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         本サービスは現在パスワード認証を提供していないため、Beutlアカウント用のパスワードは取得しません。Google又はGitHubのパスワードも運営者には提供されません。
       </p>
 
-      <h3 className={subSectionClass}>2.2 プロフィール、ストレージ及び公開コンテンツ</h3>
+      <h3 className={subSectionClass}>1.2 プロフィール、ストレージ及び公開コンテンツ</h3>
       <ul className={listClass}>
         <li>保存又は公開したファイルの内容、ファイル名、種類、容量、ハッシュ値、公開範囲及び作成・更新日時</li>
         <li>パッケージの名称、説明、Webサイト、タグ、価格、通貨、画像、リリース、対応バージョン及び公開状態</li>
@@ -86,7 +76,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         <li>アップロードの進行状況、再開又は安全な削除に必要な識別子及び処理記録</li>
       </ul>
 
-      <h3 className={subSectionClass}>2.3 AI機能の入力、出力及び利用履歴</h3>
+      <h3 className={subSectionClass}>1.3 AI機能の入力、出力及び利用履歴</h3>
       <ul className={listClass}>
         <li>プロンプト、編集指示、用語集、字幕、言語、スタイル及びその他の設定</li>
         <li>参照画像、編集対象画像、動画の先頭・末尾画像及び文字起こし対象の音声</li>
@@ -97,7 +87,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         画像、音声、字幕等には、利用者又は第三者の顔、声、氏名その他の個人情報が含まれる場合があります。利用者は、必要な権利及び本人同意を得た情報だけを送信してください。
       </p>
 
-      <h3 className={subSectionClass}>2.4 購入、請求及び利用枠に関する情報</h3>
+      <h3 className={subSectionClass}>1.4 購入、請求及び利用枠に関する情報</h3>
       <ul className={listClass}>
         <li>Stripeの顧客、チェックアウト、支払い、請求書、サブスクリプション、返金及び異議申立てに関する識別子と状態</li>
         <li>購入商品、金額、通貨、課金期間、購入日時、利用権及び支払い履歴</li>
@@ -107,24 +97,24 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         カード番号、セキュリティコードその他のカード情報はStripeへ直接入力され、運営者は完全なカード情報を保存しません。
       </p>
 
-      <h3 className={subSectionClass}>2.5 問い合わせ及びフィードバック</h3>
+      <h3 className={subSectionClass}>1.5 問い合わせ及びフィードバック</h3>
       <p className="leading-7 not-first:mt-6">
         氏名、メールアドレス、問い合わせの分類・本文、対応状況及び運営者との連絡内容を取得します。
       </p>
 
-      <h3 className={subSectionClass}>2.6 技術情報及び利用記録</h3>
+      <h3 className={subSectionClass}>1.6 技術情報及び利用記録</h3>
       <ul className={listClass}>
         <li>IPアドレス、接続元ポート、User-Agent、ブラウザー、OS、端末種別及びおおまかな国・地域</li>
         <li>アクセス日時、要求先、操作内容、参照元、応答状態、障害情報及びセキュリティ監査ログ</li>
         <li>Cookie、セッション識別子及びブラウザーに保存される設定・復旧情報</li>
       </ul>
 
-      <h3 className={subSectionClass}>2.7 外部サービスから受け取る情報</h3>
+      <h3 className={subSectionClass}>1.7 外部サービスから受け取る情報</h3>
       <p className="leading-7 not-first:mt-6">
         利用者が選択した場合、Google又はGitHubから氏名、メールアドレス、プロフィール画像、外部アカウント識別子その他認証に必要な情報を、Stripeから支払い及び契約状態を、AI事業者から処理結果及び利用状況を受け取ります。受け取る範囲は、利用者の設定、各サービスの仕様及び許可画面により異なります。
       </p>
 
-      <h2 className={sectionClass}>3. 利用目的</h2>
+      <h2 className={sectionClass}>2. 利用目的</h2>
       <p className="leading-7 not-first:mt-6">
         運営者は、取得した情報を次の目的で利用します。
       </p>
@@ -141,12 +131,12 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         <li>本規約その他の条件の履行、紛争対応及び法令上の義務の履行</li>
       </ul>
 
-      <h2 className={sectionClass}>4. 公開される情報</h2>
+      <h2 className={sectionClass}>3. 公開される情報</h2>
       <p className="leading-7 not-first:mt-6">
         公開用ユーザー名、表示名、自己紹介、ソーシャルリンク、プロフィール画像、公開パッケージ、その説明、価格、スクリーンショット及びリリースファイル等は、利用者が公開操作を行った場合、インターネット上の不特定多数の者へ提供されます。検索エンジン又は第三者の保存により、公開を停止した後も複製が残る場合があります。秘密情報又は公開してはならない個人情報を含めないでください。
       </p>
 
-      <h2 className={sectionClass}>5. AI機能における情報の取扱い</h2>
+      <h2 className={sectionClass}>4. AI機能における情報の取扱い</h2>
       <ol className={orderedListClass}>
         <li>
           AI機能への入力は、処理のためOpenRouter, Inc.へ送信され、さらに選択されたモデルを実行するAI事業者へ送信されます。モデルの提供者と実際の処理基盤が異なる場合があります。
@@ -183,7 +173,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         で確認できます。
       </p>
 
-      <h2 className={sectionClass}>6. Cookie及びブラウザー内の保存領域</h2>
+      <h2 className={sectionClass}>5. Cookie及びブラウザー内の保存領域</h2>
       <ol className={orderedListClass}>
         <li>
           本サービスは、サインイン状態の維持、セキュリティ、サイドバーの開閉状態等のため、必要なCookieを使用します。Cookieを無効にすると、サインインその他の機能を利用できない場合があります。
@@ -199,7 +189,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         </li>
       </ol>
 
-      <h2 className={sectionClass}>7. 外部事業者への委託・提供</h2>
+      <h2 className={sectionClass}>6. 外部事業者への委託・提供</h2>
       <p className="leading-7 not-first:mt-6">
         運営者は、本サービスの提供に必要な範囲で、次の外部事業者に情報の取扱いを委託し、又は利用者の指示に基づいて情報を提供します。各社が独立して取得する情報には、各社のポリシーも適用されます。
       </p>
@@ -347,7 +337,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         上記のほか、本人の同意がある場合、法令に基づく場合、人の生命・身体・財産の保護に必要で同意取得が困難な場合、又は事業承継に伴う場合等、個人情報保護法その他の法令で認められる範囲で情報を提供することがあります。
       </p>
 
-      <h2 className={sectionClass}>8. 外国における取扱い</h2>
+      <h2 className={sectionClass}>7. 外国における取扱い</h2>
       <p className="leading-7 not-first:mt-6">
         本サービスのデータベースに記録される情報は、CockroachDBのシンガポールリージョンに保存します。Cockroach Labs, Inc.は米国に所在し、サービスの運用又はサポート等のため、同社又は再委託先がシンガポール国外から情報を取り扱う場合があります。
       </p>
@@ -367,7 +357,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         運営者は、各事業者の公表情報及び契約条件を確認し、送信する情報の限定、通信の暗号化、アクセス制御その他の安全管理措置を講じます。具体的な取扱国又は安全管理措置について確認したい場合は、連絡先へ問い合わせてください。
       </p>
 
-      <h2 className={sectionClass}>9. 保存期間と削除</h2>
+      <h2 className={sectionClass}>8. 保存期間と削除</h2>
       <ul className={listClass}>
         <li>
           アカウント、プロフィール、ストレージ及び公開コンテンツは、利用者が削除するか、アカウントが終了するまでを基本として保存します。
@@ -392,7 +382,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         </li>
       </ul>
 
-      <h2 className={sectionClass}>10. 安全管理措置</h2>
+      <h2 className={sectionClass}>9. 安全管理措置</h2>
       <p className="leading-7 not-first:mt-6">
         運営者は、取り扱う情報の性質及びリスクに応じて、主に次の措置を講じます。安全を損なわない範囲で、本人からの求めに応じて詳細を回答します。
       </p>
@@ -405,7 +395,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         <li>漏えい等が発生した場合の調査、影響拡大の防止、復旧及び法令に基づく報告・本人通知</li>
       </ul>
 
-      <h2 className={sectionClass}>11. 本人による確認、訂正及び削除</h2>
+      <h2 className={sectionClass}>10. 本人による確認、訂正及び削除</h2>
       <ol className={orderedListClass}>
         <li>
           利用者は、アカウント設定からプロフィール、メールアドレス、連携アカウント、パスキー、ファイル、AIジョブ等を確認、変更又は削除できます。アカウント自体の削除も同画面から申請できます。
@@ -421,22 +411,22 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         </li>
       </ol>
 
-      <h2 className={sectionClass}>12. 個人情報の販売及び匿名情報</h2>
+      <h2 className={sectionClass}>11. 個人情報の販売及び匿名情報</h2>
       <p className="leading-7 not-first:mt-6">
         運営者は、個人情報を対価と引き換えに販売しません。また、広告配信のために個人情報を第三者へ提供しません。個人を識別できないよう集計又は匿名化した統計情報は、サービスの運営、改善、費用管理又は情報公開のために利用することがあります。
       </p>
 
-      <h2 className={sectionClass}>13. 未成年者</h2>
+      <h2 className={sectionClass}>12. 未成年者</h2>
       <p className="leading-7 not-first:mt-6">
         未成年者は、親権者その他の法定代理人の同意を得たうえで本サービスを利用してください。法定代理人の同意なく個人情報が提供されたことが判明した場合は、連絡先へ知らせてください。本人確認のうえ、法令に従って対応します。
       </p>
 
-      <h2 className={sectionClass}>14. 本ポリシーの変更</h2>
+      <h2 className={sectionClass}>13. 本ポリシーの変更</h2>
       <p className="leading-7 not-first:mt-6">
         運営者は、サービス内容又は法令の変更等に応じて本ポリシーを変更することがあります。変更内容と効力発生日を本ページに掲載し、利用者への影響が大きい変更は、合理的な期間を設けて本サービス上又は登録メールアドレスへの通知等により知らせます。法令上本人の同意が必要な変更は、所定の方法で同意を得ます。
       </p>
 
-      <h2 className={sectionClass}>15. 問い合わせ及び苦情窓口</h2>
+      <h2 className={sectionClass}>14. 問い合わせ及び苦情窓口</h2>
       <p className="leading-7 not-first:mt-6">
         個人情報の取扱い、本ポリシー、安全管理措置又は開示等の請求に関する問い合わせ及び苦情は、次の窓口へ連絡してください。
       </p>

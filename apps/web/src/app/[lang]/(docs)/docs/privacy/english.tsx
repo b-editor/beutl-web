@@ -37,20 +37,10 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         .
       </p>
 
-      <h2 className={sectionClass}>1. Controller</h2>
-      <dl className="mt-6 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 leading-7">
-        <dt className="font-semibold">Name</dt>
-        <dd>Disclosed without delay upon request.</dd>
-        <dt className="font-semibold">Address</dt>
-        <dd>Disclosed without delay upon a verified request.</dd>
-        <dt className="font-semibold">Contact</dt>
-        <dd>contact@beditor.net</dd>
-      </dl>
-
-      <h2 className={sectionClass}>2. Information we collect</h2>
+      <h2 className={sectionClass}>1. Information we collect</h2>
 
       <h3 className={subSectionClass}>
-        2.1 Account and authentication information
+        1.1 Account and authentication information
       </h3>
       <ul className={listClass}>
         <li>Name or display name, email address, profile image, and User ID</li>
@@ -77,7 +67,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </p>
 
       <h3 className={subSectionClass}>
-        2.2 Profiles, storage, and published content
+        1.2 Profiles, storage, and published content
       </h3>
       <ul className={listClass}>
         <li>
@@ -99,7 +89,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ul>
 
       <h3 className={subSectionClass}>
-        2.3 AI input, output, and usage history
+        1.3 AI input, output, and usage history
       </h3>
       <ul className={listClass}>
         <li>
@@ -128,7 +118,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </p>
 
       <h3 className={subSectionClass}>
-        2.4 Purchases, billing, and usage allowances
+        1.4 Purchases, billing, and usage allowances
       </h3>
       <ul className={listClass}>
         <li>
@@ -149,14 +139,14 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         entered directly into Stripe and are not stored by us.
       </p>
 
-      <h3 className={subSectionClass}>2.5 Inquiries and feedback</h3>
+      <h3 className={subSectionClass}>1.5 Inquiries and feedback</h3>
       <p className="leading-7 not-first:mt-6">
         We collect your name, email address, inquiry category and message,
         response status, and communications with us.
       </p>
 
       <h3 className={subSectionClass}>
-        2.6 Technical information and usage records
+        1.6 Technical information and usage records
       </h3>
       <ul className={listClass}>
         <li>
@@ -174,7 +164,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ul>
 
       <h3 className={subSectionClass}>
-        2.7 Information received from external services
+        1.7 Information received from external services
       </h3>
       <p className="leading-7 not-first:mt-6">
         When you choose to use an integration, we receive your name, email
@@ -185,7 +175,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         specifications, and the authorization screen.
       </p>
 
-      <h2 className={sectionClass}>3. Purposes of use</h2>
+      <h2 className={sectionClass}>2. Purposes of use</h2>
       <p className="leading-7 not-first:mt-6">
         We use collected information to:
       </p>
@@ -222,7 +212,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         </li>
       </ul>
 
-      <h2 className={sectionClass}>4. Information made public</h2>
+      <h2 className={sectionClass}>3. Information made public</h2>
       <p className="leading-7 not-first:mt-6">
         If you choose to publish them, your public username, display name,
         biography, social links, profile image, published packages,
@@ -233,7 +223,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         be made public.
       </p>
 
-      <h2 className={sectionClass}>5. Information handled by AI features</h2>
+      <h2 className={sectionClass}>4. Information handled by AI features</h2>
       <ol className={orderedListClass}>
         <li>
           AI input is sent to OpenRouter, Inc. for processing and is then sent
@@ -286,7 +276,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         .
       </p>
 
-      <h2 className={sectionClass}>6. Cookies and browser storage</h2>
+      <h2 className={sectionClass}>5. Cookies and browser storage</h2>
       <ol className={orderedListClass}>
         <li>
           The Service uses necessary cookies to maintain sign-in state, protect
@@ -314,7 +304,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ol>
 
       <h2 className={sectionClass}>
-        7. Disclosures to and processing by external providers
+        6. Disclosures to and processing by external providers
       </h2>
       <p className="leading-7 not-first:mt-6">
         To provide the Service, we engage the following providers to process
@@ -517,7 +507,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         Protection of Personal Information or other applicable law.
       </p>
 
-      <h2 className={sectionClass}>8. Processing outside Japan</h2>
+      <h2 className={sectionClass}>7. Processing outside Japan</h2>
       <p className="leading-7 not-first:mt-6">
         Information recorded in the Service database is stored in the Singapore
         region of CockroachDB. Cockroach Labs, Inc. is located in the United
@@ -551,7 +541,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         if you need more information about processing countries or safeguards.
       </p>
 
-      <h2 className={sectionClass}>9. Retention and deletion</h2>
+      <h2 className={sectionClass}>8. Retention and deletion</h2>
       <ul className={listClass}>
         <li>
           Accounts, profiles, stored files, and published content are generally
@@ -594,7 +584,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         </li>
       </ul>
 
-      <h2 className={sectionClass}>10. Security measures</h2>
+      <h2 className={sectionClass}>9. Security measures</h2>
       <p className="leading-7 not-first:mt-6">
         We apply measures including the following according to the
         nature and risk of the information. Additional details are available on
@@ -628,7 +618,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ul>
 
       <h2 className={sectionClass}>
-        11. Access, correction, and deletion requests
+        10. Access, correction, and deletion requests
       </h2>
       <ol className={orderedListClass}>
         <li>
@@ -657,7 +647,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       </ol>
 
       <h2 className={sectionClass}>
-        12. Sale of personal information and anonymous data
+        11. Sale of personal information and anonymous data
       </h2>
       <p className="leading-7 not-first:mt-6">
         We do not sell personal information for consideration and do not
@@ -667,7 +657,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         or publish information.
       </p>
 
-      <h2 className={sectionClass}>13. Minors</h2>
+      <h2 className={sectionClass}>12. Minors</h2>
       <p className="leading-7 not-first:mt-6">
         A minor must use the Service with the consent of a parent or other legal
         representative. If you learn that personal information was provided
@@ -675,7 +665,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         circumstances, we will respond as required by law.
       </p>
 
-      <h2 className={sectionClass}>14. Changes to this Policy</h2>
+      <h2 className={sectionClass}>13. Changes to this Policy</h2>
       <p className="leading-7 not-first:mt-6">
         We may amend this Policy in response to changes in the Service
         or applicable law. The amendment and its effective date will be
@@ -686,7 +676,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         that consent is obtained through the designated process.
       </p>
 
-      <h2 className={sectionClass}>15. Inquiries and complaints</h2>
+      <h2 className={sectionClass}>14. Inquiries and complaints</h2>
       <p className="leading-7 not-first:mt-6">
         Send inquiries and complaints concerning personal information, this
         Policy, security measures, or an individual-rights request to:
