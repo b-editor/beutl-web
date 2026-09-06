@@ -101,7 +101,8 @@ describe("what a video model accepts", () => {
 
   it("imposes nothing when the provider cannot be reached", async () => {
     listVideoModels.mockRejectedValue(new Error("provider is down"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // An outage in the capability list must not take video generation offline:
     // callers read a missing entry as "no restriction known".
@@ -110,6 +111,13 @@ describe("what a video model accepts", () => {
       resolution: "1080p",
       durationSeconds: 4,
     })).toBeNull();
+    expect(errorLog).not.toHaveBeenCalled();
+    expect(warningLog).toHaveBeenCalledWith(
+      "Failed to read OpenRouter video model capabilities",
+      { message: "provider is down" },
+    );
+    errorLog.mockRestore();
+    warningLog.mockRestore();
   });
 });
 

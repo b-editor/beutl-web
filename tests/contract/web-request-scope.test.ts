@@ -84,4 +84,22 @@ describe("server-render database resources", () => {
       );
     }
   });
+
+  it("shares video capability I/O only inside one Server Component render", () => {
+    const videoPage = source(
+      "apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video/page.tsx",
+    );
+    const capabilities = source(
+      "packages/api/src/ai/video-model-capabilities.ts",
+    );
+
+    expect(videoPage.match(/loadAiVideoModelCapabilities\(\)/g)).toHaveLength(1);
+    expect(videoPage).toContain(
+      "const capabilitiesPromise = loadAiVideoModelCapabilities();",
+    );
+    expect(videoPage).toContain("videoCapabilities: capabilitiesPromise");
+    expect(capabilities).not.toMatch(
+      /inflight.*Promise<Map<string, AiVideoModelCapabilities>>/,
+    );
+  });
 });

@@ -274,7 +274,7 @@ async function loadOne(
   } catch (error) {
     // An outage in the capability lookup must not take image generation
     // offline: callers read a missing entry as "no restriction known".
-    console.error(
+    console.warn(
       "Failed to read OpenRouter image model capabilities",
       modelId,
       toAiProviderError(error, "OpenRouter image model endpoints failed")

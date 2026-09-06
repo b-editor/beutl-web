@@ -297,30 +297,38 @@ export async function getEntitlementSummary(
 export async function getEntitlements(
   userId: string,
   options: {
-    videoCapabilities?: ReadonlyMap<
-      string,
-      { durations: readonly number[] }
-    >;
+    // A Server Component also needs this catalog's display metadata. Accept its
+    // in-flight read so entitlement availability and the form share one query
+    // without serializing the rest of the snapshot behind it.
+    catalog?: AiModelCatalog | PromiseLike<AiModelCatalog>;
+    prisma?: PrismaTransaction;
+    videoCapabilities?:
+      | ReadonlyMap<string, { durations: readonly number[] }>
+      | PromiseLike<ReadonlyMap<string, { durations: readonly number[] }>>;
   } = {},
 ): Promise<EntitlementsResponse> {
-  const videoCapabilities = options.videoCapabilities ??
-    await loadAiVideoModelCapabilities();
-  return await startRetryableTransaction(async (prisma) => {
-    const [{ summary, balance }, catalog] = await Promise.all([
-      loadEntitlementSnapshot(userId, prisma),
-      loadAiModelCatalog({ prisma }),
-    ]);
+  // This is an advisory presentation snapshot. Every paid operation repeats
+  // the entitlement and balance checks in the transaction that reserves its
+  // usage, so an interactive transaction here adds a connection-start deadline
+  // without making the later authorization decision atomic. This is the same
+  // boundary as getEntitlementSummary(), with the catalog joined for the model
+  // availability shown by AI screens and clients.
+  const prisma = options.prisma ?? await getDb();
+  const [{ summary, balance }, catalog, videoCapabilities] = await Promise.all([
+    loadEntitlementSnapshot(userId, prisma),
+    options.catalog ?? loadAiModelCatalog({ prisma }),
+    options.videoCapabilities ?? loadAiVideoModelCapabilities(),
+  ]);
 
-    return {
-      ...summary,
-      ...toAiOperationAvailability(
-        balance,
-        summary.canUseAi,
-        catalog,
-        videoCapabilities,
-      ),
-    };
-  });
+  return {
+    ...summary,
+    ...toAiOperationAvailability(
+      balance,
+      summary.canUseAi,
+      catalog,
+      videoCapabilities,
+    ),
+  };
 }
 
 export async function canStartAiOperation(
