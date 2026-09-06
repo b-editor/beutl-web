@@ -2,7 +2,7 @@ import { getTranslation } from "@beutl/i18n";
 import {
   isImageModelUsable,
   loadAiImageModelCapabilities,
-} from "@beutl/api";
+} from "@beutl/api/ai/image-model-capabilities";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiPageHeader } from "../shared";
 import {

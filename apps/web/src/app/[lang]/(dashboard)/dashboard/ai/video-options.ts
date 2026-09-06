@@ -1,7 +1,7 @@
 import {
   isVideoModelUsable,
   type AiVideoModelCapabilities,
-} from "@beutl/api";
+} from "@beutl/api/ai/video-model-capabilities";
 import type { AiAccess, AiScreenModel } from "./shared";
 import type { AiVideoModelOptions } from "./video-form";
 

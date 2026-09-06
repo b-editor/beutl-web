@@ -5,10 +5,8 @@ const loadAiModelCatalog = vi.hoisted(() => vi.fn());
 const getDb = vi.hoisted(() => vi.fn());
 const listAiJobsByUserId = vi.hoisted(() => vi.fn());
 
-vi.mock("@beutl/api", () => ({
-  getEntitlements,
-  loadAiModelCatalog,
-}));
+vi.mock("@beutl/api/ai/entitlements", () => ({ getEntitlements }));
+vi.mock("@beutl/api/ai/model-catalog", () => ({ loadAiModelCatalog }));
 vi.mock("@beutl/db", () => ({ getDb, listAiJobsByUserId }));
 
 import { getAiScreenState } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/queries";

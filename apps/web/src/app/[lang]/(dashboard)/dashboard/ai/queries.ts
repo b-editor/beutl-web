@@ -1,5 +1,6 @@
 import "server-only";
-import { getEntitlements, loadAiModelCatalog } from "@beutl/api";
+import { getEntitlements } from "@beutl/api/ai/entitlements";
+import { loadAiModelCatalog } from "@beutl/api/ai/model-catalog";
 import { getDb, listAiJobsByUserId } from "@beutl/db";
 import type { AiAccess, AiBalance } from "./shared";
 

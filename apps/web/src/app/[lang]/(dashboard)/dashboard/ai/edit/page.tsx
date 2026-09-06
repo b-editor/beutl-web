@@ -3,7 +3,7 @@ import { AI_IMAGE_EDIT_TASKS } from "@beutl/core";
 import {
   isImageModelUsable,
   loadAiImageModelCapabilities,
-} from "@beutl/api";
+} from "@beutl/api/ai/image-model-capabilities";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { AiPageHeader } from "../shared";
 import { ImageEditForm } from "../image-edit-form";

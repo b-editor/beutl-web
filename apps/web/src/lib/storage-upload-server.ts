@@ -33,7 +33,7 @@ import {
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
 } from "@beutl/db";
-import { getR2Bucket } from "@beutl/api";
+import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 
 // Uploading a file that one request cannot carry.
 //

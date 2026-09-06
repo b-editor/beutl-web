@@ -20,9 +20,9 @@ import {
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
 } from "@beutl/core";
-import { MAX_AI_VIDEO_FRAME_UPLOAD_BYTES } from "@beutl/api";
 import { composePrompt } from "@/lib/ai-prompt";
 import { runAiRequest } from "@/lib/ai-request";
 import { buildAiVideoSubmission } from "@/lib/ai-video-submit";

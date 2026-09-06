@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AiVideoModelCapabilities } from "@beutl/api";
+import type { AiVideoModelCapabilities } from "@beutl/api/ai/video-model-capabilities";
 import type { AiAccess } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/shared";
 import { buildAiVideoScreenOptions } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video-options";
 

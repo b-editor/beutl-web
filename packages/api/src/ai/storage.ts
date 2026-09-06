@@ -9,52 +9,14 @@ import {
   makeAiStorageCleanupDue,
   registerAiStorageCleanup,
 } from "@beutl/db";
+import { getR2Bucket } from "./r2-provider";
 
 export { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "@beutl/core";
-
-// R2 bucket injection point. The standalone worker registers its wrangler.jsonc
-// binding and Next.js registers the getCloudflareContext environment through
-// setR2BucketProvider, keeping API storage independent of either runtime.
-const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
-
-export type R2BucketLike = {
-  put(
-    key: string,
-    value: ArrayBuffer | ReadableStream | string,
-    options?: { httpMetadata?: { contentType?: string } },
-  ): Promise<unknown>;
-  get?(key: string): Promise<{
-    body?: ReadableStream<Uint8Array>;
-    arrayBuffer?: () => Promise<ArrayBuffer>;
-    size?: number;
-  } | null>;
-  delete?(key: string): Promise<unknown>;
-  // Whether an object is there, without reading it. Used to tell an upload that
-  // was joined but never recorded from one that is still in parts.
-  head?(key: string): Promise<{ size?: number } | null>;
-  // A file too large for one request arrives in parts and is joined in the
-  // bucket, so an upload outlives the request that started it: it is named by
-  // an upload id, added to part by part, and either joined or given up.
-  createMultipartUpload?(
-    key: string,
-    options?: { httpMetadata?: { contentType?: string } },
-  ): Promise<{ uploadId: string }>;
-  resumeMultipartUpload?(
-    key: string,
-    uploadId: string,
-  ): {
-    uploadPart(
-      partNumber: number,
-      value: ReadableStream<Uint8Array>,
-    ): Promise<{ partNumber: number; etag: string }>;
-    complete(
-      parts: { partNumber: number; etag: string }[],
-    ): Promise<{ size: number }>;
-    abort(): Promise<void>;
-  };
-};
-
-type R2BucketProvider = () => R2BucketLike;
+export {
+  getR2Bucket,
+  setR2BucketProvider,
+  type R2BucketLike,
+} from "./r2-provider";
 const AI_OUTPUT_WRITE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 export const MAX_AI_TEXT_RESULT_BYTES = MAX_AI_RESULT_BYTES;
 
@@ -63,22 +25,6 @@ export class AiOutputCommitConflictError extends Error {
     super(`AI job ${jobId} is no longer owned by this finalizer`);
     this.name = "AiOutputCommitConflictError";
   }
-}
-
-export function setR2BucketProvider(fn: R2BucketProvider): void {
-  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = fn;
-}
-
-export function getR2Bucket(): R2BucketLike {
-  const provider = (globalThis as Record<string, unknown>)[GLOBAL_KEY] as
-    | R2BucketProvider
-    | undefined;
-  if (!provider) {
-    throw new Error(
-      "R2 bucket provider is not set. Call setR2BucketProvider() before using AI storage.",
-    );
-  }
-  return provider();
 }
 
 export async function deleteAiOutputObject(objectKey: string): Promise<void> {

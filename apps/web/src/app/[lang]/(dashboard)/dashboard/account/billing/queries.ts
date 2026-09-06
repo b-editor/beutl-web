@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getEntitlementSummary } from "@beutl/api";
+import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import {
   findCustomerByUserId,
   findPackagesForBillingHistory,
