@@ -18,10 +18,10 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         Established: October 12, 2024; last revised: September 6, 2026
       </p>
       <p className="leading-7 not-first:mt-6">
-        Yuto Terada (the &quot;Operator&quot;) handles information about Users
-        of Beutl accounts, the Store, cloud storage, paid AI features, APIs, and
-        other online services (collectively, the &quot;Service&quot;) as
-        described in this Privacy Policy.
+        The operator of Beutl (the &quot;Operator&quot;) handles information
+        about Users of Beutl accounts, the Store, cloud storage, paid AI
+        features, APIs, and other online services (collectively, the
+        &quot;Service&quot;) as described in this Privacy Policy.
       </p>
       <p className="leading-7 not-first:mt-6">
         This Policy applies to beutl.beditor.net, APIs provided under that
@@ -39,7 +39,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>1. Controller</h2>
       <dl className="mt-6 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 leading-7">
         <dt className="font-semibold">Name</dt>
-        <dd>Yuto Terada</dd>
+        <dd>Disclosed without delay upon request.</dd>
         <dt className="font-semibold">Address</dt>
         <dd>Disclosed without delay upon a verified request.</dd>
         <dt className="font-semibold">Contact</dt>
@@ -691,7 +691,7 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         Policy, security measures, or an individual-rights request to:
       </p>
       <p className="leading-7 not-first:mt-6">
-        Operator and privacy contact: Yuto Terada
+        Operator and privacy contact: Beutl Operator
         <br />
         Email: contact@beditor.net
       </p>

@@ -44,7 +44,7 @@ function JapaneseTermsPage({ lang }: { lang: string }) {
         制定日・最終改定日：2026年9月6日
       </p>
       <p className="leading-7 not-first:mt-6">
-        この利用規約（以下「本規約」といいます。）は、寺田雄翔（以下「運営者」といいます。）が提供するBeutlのアカウント、ストア、クラウドストレージ、有料AI機能、APIその他のオンラインサービス（以下、総称して「本サービス」といいます。）の利用条件を定めるものです。
+        この利用規約（以下「本規約」といいます。）は、Beutlの運営者（以下「運営者」といいます。）が提供するアカウント、ストア、クラウドストレージ、有料AI機能、APIその他のオンラインサービス（以下、総称して「本サービス」といいます。）の利用条件を定めるものです。
       </p>
       <p className="leading-7 not-first:mt-6">
         本サービスを利用する方（以下「利用者」といいます。）は、本規約の内容を確認し、同意したうえで本サービスを利用してください。アカウントの作成、本サービスへのサインイン、商品の取得若しくは購入、コンテンツの公開又はAI処理の実行をもって、本規約に同意したものとします。
@@ -344,7 +344,7 @@ function JapaneseTermsPage({ lang }: { lang: string }) {
 
       <h2 className={subSectionClass}>運営者</h2>
       <p className="leading-7 not-first:mt-6">
-        寺田雄翔
+        Beutl運営者
         <br />
         連絡先：contact@beditor.net
       </p>

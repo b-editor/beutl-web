@@ -55,5 +55,6 @@ describe("legal page localization", () => {
     expect(english).toContain(`export function ${component}`);
     expect(english).toContain(englishTitle);
     expect(english).not.toContain(japaneseTitle);
+    expect(`${page}\n${english}`).not.toMatch(/寺田雄翔|Yuto Terada/);
   });
 });

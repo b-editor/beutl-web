@@ -21,7 +21,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
         These Terms of Service (the &quot;Terms&quot;) set out the conditions
         for using the Beutl account, Store, cloud storage, paid AI features,
         APIs, and other online services (collectively, the &quot;Service&quot;)
-        provided by Yuto Terada (the &quot;Operator&quot;).
+        provided by the operator of Beutl (the &quot;Operator&quot;).
       </p>
       <p className="leading-7 not-first:mt-6">
         Anyone who uses the Service (a &quot;User&quot;) must review and agree
@@ -540,7 +540,7 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
 
       <h2 className={subSectionClass}>Operator</h2>
       <p className="leading-7 not-first:mt-6">
-        Yuto Terada
+        Beutl Operator
         <br />
         Contact: contact@beditor.net
       </p>

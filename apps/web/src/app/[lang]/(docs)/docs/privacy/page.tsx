@@ -44,7 +44,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         制定日：2024年10月12日　最終改定日：2026年9月6日
       </p>
       <p className="leading-7 not-first:mt-6">
-        寺田雄翔（以下「運営者」といいます。）は、Beutlのアカウント、ストア、クラウドストレージ、有料AI機能、APIその他のオンラインサービス（以下、総称して「本サービス」といいます。）で取り扱う利用者情報を、次のとおり取り扱います。
+        Beutlの運営者（以下「運営者」といいます。）は、アカウント、ストア、クラウドストレージ、有料AI機能、APIその他のオンラインサービス（以下、総称して「本サービス」といいます。）で取り扱う利用者情報を、次のとおり取り扱います。
       </p>
       <p className="leading-7 not-first:mt-6">
         本ポリシーは、beutl.beditor.net及び同ドメインで提供するAPIその他本サービスに適用されます。外部サイト及び第三者が独自に提供するパッケージ等には、各提供者のポリシーが適用される場合があります。Beutlデスクトップアプリが任意で送信する利用状況データについては、
@@ -56,8 +56,8 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
 
       <h2 className={sectionClass}>1. 個人情報取扱事業者</h2>
       <dl className="mt-6 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 leading-7">
-        <dt className="font-semibold">氏名</dt>
-        <dd>寺田雄翔</dd>
+        <dt className="font-semibold">氏名又は名称</dt>
+        <dd>請求があった場合、遅滞なく開示します。</dd>
         <dt className="font-semibold">住所</dt>
         <dd>本人からの求めに応じて遅滞なく回答します。</dd>
         <dt className="font-semibold">連絡先</dt>
@@ -441,7 +441,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         個人情報の取扱い、本ポリシー、安全管理措置又は開示等の請求に関する問い合わせ及び苦情は、次の窓口へ連絡してください。
       </p>
       <p className="leading-7 not-first:mt-6">
-        運営者・個人情報保護管理者：寺田雄翔
+        運営者・個人情報保護窓口：Beutl運営者
         <br />
         メールアドレス：contact@beditor.net
       </p>

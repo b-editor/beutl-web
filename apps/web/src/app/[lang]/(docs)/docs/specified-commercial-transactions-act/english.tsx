@@ -5,8 +5,11 @@ const headingClass =
 const listClass = "my-6 ml-6 list-disc [&>li]:mt-2";
 
 const rows = [
-  ["Seller", "Yuto Terada"],
-  ["Person responsible for operations", "Yuto Terada"],
+  ["Seller", "Disclosed without delay upon request."],
+  [
+    "Person responsible for operations",
+    "Disclosed without delay upon request.",
+  ],
   ["Address", "Disclosed without delay upon request."],
   ["Telephone number", "Disclosed without delay upon request."],
   ["Email address", "contact@beditor.net"],
