@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getEntitlements } from "@beutl/api";
+import { getEntitlementSummary } from "@beutl/api";
 import {
   findCustomerByUserId,
   findPackagesForBillingHistory,
@@ -61,13 +61,12 @@ async function retrieveBillingDocumentsIfReachable({
 }
 
 export async function retrieveBillingPage(userId: string) {
-  // getDb() は Hyperdrive の maxUses:1 に合わせて呼ぶたび新しい接続を張るため、
-  // 複数のクエリで 1 つのクライアントを共有する。getEntitlements は prisma を
-  // 受け取らず自前でトランザクションを開くので、これだけは別接続になる。
+  // Explicitly share the request-scoped PrismaClient across billing reads.
+  // The entitlement summary owns its consistent transaction.
   const prisma = await getDb();
   const [entitlements, customer, payments, creditPurchases] = await Promise.all(
     [
-      getEntitlements(userId),
+      getEntitlementSummary(userId),
       findCustomerByUserId({ userId, prisma }),
       getUserPaymentHistory({ userId, prisma }),
       getCreditPurchasesByUserId({ userId, prisma }),

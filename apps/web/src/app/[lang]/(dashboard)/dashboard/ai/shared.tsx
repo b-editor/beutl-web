@@ -130,6 +130,7 @@ export function AiPageHeader({
       <div>
         <Link
           href={`/${lang}/dashboard/ai`}
+          prefetch={false}
           className="inline-flex items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronRight className="mr-1 h-4 w-4 rotate-180" />
@@ -141,6 +142,7 @@ export function AiPageHeader({
       {balance && (
         <Link
           href={`/${lang}/dashboard/ai`}
+          prefetch={false}
           className="w-44 rounded-lg border bg-card p-3 text-card-foreground transition-colors hover:bg-accent/50"
         >
           <div className="flex items-baseline justify-between gap-2">
@@ -211,7 +213,7 @@ export function AiAccessNotice({
             : t("dashboard:ai.balanceExhaustedDescription")}
         </span>
         <Button asChild size="sm" variant={isPlan ? "default" : "outline"}>
-          <Link href={billingHref(lang)}>
+          <Link href={billingHref(lang)} prefetch={false}>
             {isPlan
               ? t("account:aiPlan.subscribe")
               : t("account:aiPlan.buyCredits")}
@@ -288,7 +290,9 @@ export function AiUsageCard({
               })}
         </p>
         <Button asChild variant="outline" size="sm">
-          <Link href={billingHref(lang)}>{t("account:aiPlan.buyCredits")}</Link>
+          <Link href={billingHref(lang)} prefetch={false}>
+            {t("account:aiPlan.buyCredits")}
+          </Link>
         </Button>
       </div>
 

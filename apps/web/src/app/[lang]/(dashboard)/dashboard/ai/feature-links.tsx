@@ -93,6 +93,7 @@ export function AiFeatureLinks({
       {activeJobCount > 0 && (
         <Link
           href={`/${lang}/dashboard/ai/jobs`}
+          prefetch={false}
           className="flex items-center gap-3 rounded-lg border bg-card p-4 text-card-foreground transition-colors hover:bg-accent/50"
         >
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -117,6 +118,7 @@ export function AiFeatureLinks({
             <Link
               key={feature.slug}
               href={`/${lang}/dashboard/ai/${feature.slug}`}
+              prefetch={false}
               className="flex flex-col gap-3 rounded-lg border bg-card p-6 text-card-foreground transition-colors hover:bg-accent/50"
             >
               <div className="flex items-start justify-between gap-2">

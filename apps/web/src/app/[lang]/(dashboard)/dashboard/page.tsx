@@ -36,6 +36,7 @@ export default async function Page(props: {
       <div className="flex flex-col gap-4 md:flex-row md:flex-wrap">
         <Link
           href={`/${lang}/dashboard/storage`}
+          prefetch={false}
           className="flex max-w-sm flex-col gap-3 rounded-lg border bg-card p-6 text-card-foreground transition-colors hover:bg-accent/50 md:min-w-[320px]"
         >
           <div className="flex items-center gap-4">
@@ -58,6 +59,7 @@ export default async function Page(props: {
               ? `/${lang}/dashboard/ai`
               : `/${lang}/dashboard/account/billing`
           }
+          prefetch={false}
           className="flex max-w-sm flex-col gap-3 rounded-lg border bg-card p-6 text-card-foreground transition-colors hover:bg-accent/50 md:min-w-[320px]"
         >
           <div className="flex items-center gap-4">
@@ -105,6 +107,7 @@ export default async function Page(props: {
           </h2>
           <Link
             href={`/${lang}/dashboard/library`}
+            prefetch={false}
             className="text-sm text-muted-foreground hover:text-foreground"
           >
             {t("dashboard:overview.viewAll")}
@@ -118,6 +121,7 @@ export default async function Page(props: {
             </p>
             <Link
               href={`/${lang}/store`}
+              prefetch={false}
               className="text-sm font-medium text-primary hover:underline"
             >
               {t("dashboard:overview.browseStore")}

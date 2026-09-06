@@ -13,6 +13,7 @@
 // 画面ごとの上限は、その画面へ普通に送られてくるものを縮めるためのもので、
 // 境界ではない。
 import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
+import { runWithConfiguredDbProviderResponseScope } from "@beutl/db/provider-scope";
 //@ts-expect-error: Will be resolved by wrangler build
 import openNext from "./.open-next/worker.js";
 
@@ -23,10 +24,30 @@ export { DOShardedTagCache } from "./.open-next/worker.js";
 //@ts-expect-error: Will be resolved by wrangler build
 export { BucketCachePurge } from "./.open-next/worker.js";
 
+function withWaitUntil(context, waitUntil) {
+  return new Proxy(context, {
+    get(target, property, receiver) {
+      if (property === "waitUntil") return waitUntil;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
-    return await fetchWithBodyLimit(request, env, ctx, (bounded, nextEnv, nextCtx) =>
-      openNext.fetch(bounded, nextEnv, nextCtx),
+    return await runWithConfiguredDbProviderResponseScope(
+      (waitUntil) => {
+        const scopedContext = withWaitUntil(ctx, waitUntil);
+        return fetchWithBodyLimit(
+          request,
+          env,
+          scopedContext,
+          (bounded, nextEnv, nextCtx) =>
+            openNext.fetch(bounded, nextEnv, nextCtx),
+        );
+      },
+      ctx.waitUntil.bind(ctx),
     );
   },
 };

@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./provider": "./src/provider.ts",
+    "./provider-scope": "./src/provider-scope.ts"
   },
   "dependencies": {
     "@prisma/client": "^7.9.1"

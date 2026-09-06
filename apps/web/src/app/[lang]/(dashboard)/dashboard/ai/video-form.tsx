@@ -701,7 +701,7 @@ export function VideoForm({
         {t("dashboard:ai.videoQueued")}
       </p>
       <Button asChild variant="outline" size="sm" className="self-start">
-        <Link href={`/${lang}/dashboard/ai/jobs`}>
+        <Link href={`/${lang}/dashboard/ai/jobs`} prefetch={false}>
           <History className="mr-2 h-4 w-4" />
           {t("dashboard:ai.jobHistory")}
         </Link>

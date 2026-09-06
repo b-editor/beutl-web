@@ -188,7 +188,7 @@ export function DashboardSidebar({
           <SidebarMenuItem>
             {/* 選択状態は下のメニューが持つので、ここは素性の表示に徹する。 */}
             <SidebarMenuButton size="lg" asChild tooltip={displayName}>
-              <Link href={`/${lang}/dashboard/account/profile`}>
+              <Link href={`/${lang}/dashboard/account/profile`} prefetch={false}>
                 <Avatar className="h-8 w-8 shrink-0 rounded-lg">
                   {user.image && (
                     <AvatarImage src={user.image} alt={displayName} />
@@ -247,6 +247,7 @@ export function DashboardSidebar({
                                 isActive={subSlug === sub.slug}
                               >
                                 <Link
+                                  prefetch={false}
                                   href={
                                     item.section === "account"
                                       ? `/${lang}/dashboard/account/${sub.slug}`
@@ -270,7 +271,7 @@ export function DashboardSidebar({
                       isActive={section === item.section}
                       tooltip={item.label}
                     >
-                      <Link href={item.href}>
+                      <Link href={item.href} prefetch={false}>
                         <item.icon />
                         <span>{item.label}</span>
                       </Link>
@@ -290,10 +291,7 @@ export function DashboardSidebar({
           {siteItems.map((item) => (
             <SidebarMenuItem key={item.key}>
               <SidebarMenuButton asChild tooltip={item.label}>
-                <Link
-                  href={item.href}
-                  prefetch={item.key === "docs" ? false : undefined}
-                >
+                <Link href={item.href} prefetch={false}>
                   <item.icon />
                   <span>{item.label}</span>
                 </Link>
@@ -302,7 +300,7 @@ export function DashboardSidebar({
           ))}
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip={t("signOut")}>
-              <Link href={`/${lang}/account/sign-out`}>
+              <Link href={`/${lang}/account/sign-out`} prefetch={false}>
                 <LogOut />
                 <span>{t("signOut")}</span>
               </Link>

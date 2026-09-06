@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": ".open-next/worker.js",
+  "main": "worker.js",
   "name": "beutl-admin",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": [

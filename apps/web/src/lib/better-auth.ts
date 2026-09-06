@@ -8,13 +8,11 @@ import { onUserCreated } from "@beutl/next/auth-hooks";
 import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
+import { cache } from "react";
 
 // Export types for use elsewhere
 export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
-
-// Create auth instance lazily but cache it
-let authInstance: Awaited<ReturnType<typeof createAuthWithPrisma>> | null = null;
 
 // Create the auth instance with Prisma adapter
 async function createAuthWithPrisma() {
@@ -60,7 +58,7 @@ async function createAuthWithPrisma() {
           });
         },
       }),
-      nextCookies()
+      nextCookies(),
     ],
     session: {
       expiresIn: 60 * 60 * 24 * 30,
@@ -151,28 +149,21 @@ async function createAuthWithPrisma() {
   });
 }
 
+// Better Auth closes over its Prisma adapter. React's server cache keeps the
+// instance within one request, so no request-bound I/O survives in the Worker
+// module scope.
+export const getAuth = cache(createAuthWithPrisma);
+
 // Export an async auth handler for route.ts
 export const auth = {
   handler: async (request: Request) => {
-    if (!authInstance) {
-      authInstance = await createAuthWithPrisma();
-    }
-    return authInstance.handler(request);
+    const instance = await getAuth();
+    return instance.handler(request);
   },
   api: {
     getSession: async (options: { headers: Headers }) => {
-      if (!authInstance) {
-        authInstance = await createAuthWithPrisma();
-      }
-      return authInstance.api.getSession(options);
+      const instance = await getAuth();
+      return instance.api.getSession(options);
     },
   },
 };
-
-// Export the auth instance getter for other uses
-export async function getAuth() {
-  if (!authInstance) {
-    authInstance = await createAuthWithPrisma();
-  }
-  return authInstance;
-}

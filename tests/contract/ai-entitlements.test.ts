@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeUsage,
   setDbProvider,
   upsertAiOperationModel,
   upsertSubscription,
 } from "@beutl/db";
-import { getEntitlements } from "@beutl/api";
+import { getEntitlements, getEntitlementSummary } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const USER_ID = "entitlements-user";
@@ -18,11 +18,13 @@ const VIDEO_MINIMUM_SECONDS = 4;
 
 describe("AI entitlements", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
+  let prisma: ReturnType<typeof createInMemoryPrisma>["prisma"];
 
   beforeEach(() => {
     const memory = createInMemoryPrisma();
     state = memory.state;
-    setDbProvider(async () => memory.prisma as never);
+    prisma = memory.prisma;
+    setDbProvider(async () => prisma as never);
   });
 
   const videoCapabilities = new Map([
@@ -55,6 +57,40 @@ describe("AI entitlements", () => {
     // A signed-in visitor to any page that shows an allowance reaches this, and
     // the rows it used to create counted as accounts in the admin reports.
     expect(state.creditAccounts.size).toBe(0);
+  });
+
+  it("reads account summary without loading provider or model availability", async () => {
+    await activatePro();
+    const catalogRead = vi
+      .spyOn(prisma.aiOperationModel, "findMany")
+      .mockRejectedValue(new Error("model catalog must not be loaded"));
+
+    const summary = await getEntitlementSummary(USER_ID);
+
+    expect(summary.canUseAi).toBe(true);
+    expect(summary.plan).toBe("pro");
+    expect(summary.balance.monthlyUsage.remainingPercent).toBe(100);
+    expect(catalogRead).not.toHaveBeenCalled();
+    expect(summary).not.toHaveProperty("availability");
+    expect(summary).not.toHaveProperty("modelAvailability");
+  });
+
+  it("keeps summary fields identical to the full entitlement response", async () => {
+    await activatePro();
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 125,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "entitlements-summary-parity",
+    });
+
+    const summary = await getEntitlementSummary(USER_ID);
+    const full = await readEntitlements();
+    const { availability: _availability, modelAvailability: _models, ...base } =
+      full;
+
+    expect(summary).toEqual(base);
   });
 
   it("reports a video as startable only once the shortest clip is affordable", async () => {

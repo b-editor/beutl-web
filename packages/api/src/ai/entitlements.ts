@@ -3,6 +3,7 @@ import {
   findCreditAccount,
   getSubscriptionByUserId,
   startRetryableTransaction,
+  type PrismaTransaction,
   usagePeriodsEqual,
 } from "@beutl/db";
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
@@ -60,6 +61,11 @@ export type EntitlementsResponse = {
   // can grey out the ones it cannot pay for without knowing any price.
   modelAvailability: AiModelAvailability;
 };
+
+export type EntitlementSummaryResponse = Omit<
+  EntitlementsResponse,
+  "availability" | "modelAvailability"
+>;
 
 export function toAiBalanceSnapshot(
   account: {
@@ -209,6 +215,80 @@ export function isActiveProSubscription(
   );
 }
 
+async function loadEntitlementSnapshot(
+  userId: string,
+  prisma: PrismaTransaction,
+): Promise<{
+  summary: EntitlementSummaryResponse;
+  balance: AiBalanceSnapshot;
+}> {
+  const [subscription, deletionIntent, settings] = await Promise.all([
+    getSubscriptionByUserId({ userId, prisma }),
+    findAccountDeletionIntentByUserId({ userId, prisma }),
+    loadAiSettings({ prisma }),
+  ]);
+  const isActive =
+    deletionIntent === null && isActiveProSubscription(subscription);
+  const effectiveEnd = subscription
+    ? getEffectiveSubscriptionEnd(subscription)
+    : null;
+  // Reading what someone is entitled to must not touch the ledger at all —
+  // not to open a row, and not to apply the period reset. A subscriber's
+  // account is opened and rolled over by the operation that first spends
+  // against it; until then the counter is read against the period it was
+  // recorded for, which is what that operation would write anyway.
+  const stored = await findCreditAccount({ userId, prisma });
+  const account =
+    stored === null
+      ? { monthlyUsageUsed: 0, purchasedCredits: 0, purchasedCreditDebt: 0 }
+      : {
+          ...stored,
+          monthlyUsageUsed:
+            isActive &&
+            subscription &&
+            !usagePeriodsEqual(
+              { start: stored.usagePeriodStart, end: stored.usagePeriodEnd },
+              {
+                start: subscription.currentPeriodStart,
+                end: subscription.currentPeriodEnd,
+              },
+            )
+              ? 0
+              : stored.monthlyUsageUsed,
+        };
+  const balance = toAiBalanceSnapshot(
+    account,
+    isActive ? settings.getMonthlyUsageLimit() : 0,
+  );
+
+  return {
+    summary: {
+      plan: isActive ? "pro" : null,
+      subscriptionStatus: subscription?.status ?? null,
+      currentPeriodStart: subscription?.currentPeriodStart
+        ? subscription.currentPeriodStart.toISOString()
+        : null,
+      currentPeriodEnd: effectiveEnd ? effectiveEnd.toISOString() : null,
+      cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
+      canUseAi: isActive,
+      balance: toAiBalancePresentation(balance),
+    },
+    balance,
+  };
+}
+
+// Account and billing surfaces only need the plan and balance. Keep those
+// reads independent from provider capability discovery and the model catalog,
+// both of which can be comparatively large on a 128 MiB Worker isolate.
+export async function getEntitlementSummary(
+  userId: string,
+): Promise<EntitlementSummaryResponse> {
+  return await startRetryableTransaction(async (prisma) => {
+    const { summary } = await loadEntitlementSnapshot(userId, prisma);
+    return summary;
+  });
+}
+
 export async function getEntitlements(
   userId: string,
   options: {
@@ -221,61 +301,16 @@ export async function getEntitlements(
   const videoCapabilities = options.videoCapabilities ??
     await loadAiVideoModelCapabilities();
   return await startRetryableTransaction(async (prisma) => {
-    const [subscription, deletionIntent, settings, catalog] = await Promise.all([
-      getSubscriptionByUserId({ userId, prisma }),
-      findAccountDeletionIntentByUserId({ userId, prisma }),
-      loadAiSettings({ prisma }),
+    const [{ summary, balance }, catalog] = await Promise.all([
+      loadEntitlementSnapshot(userId, prisma),
       loadAiModelCatalog({ prisma }),
     ]);
-    const isActive =
-      deletionIntent === null && isActiveProSubscription(subscription);
-    const effectiveEnd = subscription
-      ? getEffectiveSubscriptionEnd(subscription)
-      : null;
-    // Reading what someone is entitled to must not touch the ledger at all —
-    // not to open a row, and not to apply the period reset. A subscriber's
-    // account is opened and rolled over by the operation that first spends
-    // against it; until then the counter is read against the period it was
-    // recorded for, which is what that operation would write anyway.
-    const stored = await findCreditAccount({ userId, prisma });
-    const account =
-      stored === null
-        ? { monthlyUsageUsed: 0, purchasedCredits: 0, purchasedCreditDebt: 0 }
-        : {
-            ...stored,
-            monthlyUsageUsed:
-              isActive &&
-              subscription &&
-              !usagePeriodsEqual(
-                { start: stored.usagePeriodStart, end: stored.usagePeriodEnd },
-                {
-                  start: subscription.currentPeriodStart,
-                  end: subscription.currentPeriodEnd,
-                },
-              )
-                ? 0
-                : stored.monthlyUsageUsed,
-          };
-    const balance = toAiBalanceSnapshot(
-      account,
-      isActive ? settings.getMonthlyUsageLimit() : 0,
-    );
 
     return {
-      plan: isActive ? "pro" : null,
-      subscriptionStatus: subscription?.status ?? null,
-      currentPeriodStart: subscription?.currentPeriodStart
-        ? subscription.currentPeriodStart.toISOString()
-        : null,
-      currentPeriodEnd: effectiveEnd
-        ? effectiveEnd.toISOString()
-        : null,
-      cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
-      canUseAi: isActive,
-      balance: toAiBalancePresentation(balance),
+      ...summary,
       ...toAiOperationAvailability(
         balance,
-        isActive,
+        summary.canUseAi,
         catalog,
         videoCapabilities,
       ),

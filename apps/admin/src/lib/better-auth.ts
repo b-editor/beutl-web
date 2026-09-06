@@ -8,24 +8,10 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
 import { sendEmail } from "@beutl/email";
 import type { Session, User } from "better-auth";
+import { cache } from "react";
 
 export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
-
-// インスタンスではなく Promise を保持する。初回の同時リクエストで createAuthWithPrisma
-// が二重実行されると PrismaClient が 2 つ作られ、最後に書いた方が残る。
-// 失敗時は Promise を捨てて次回に再試行させる (従来の null 保持と同じ挙動)。
-let authPromise: Promise<Awaited<ReturnType<typeof createAuthWithPrisma>>> | null = null;
-
-function getAuthInstance() {
-  if (!authPromise) {
-    authPromise = createAuthWithPrisma().catch((error) => {
-      authPromise = null;
-      throw error;
-    });
-  }
-  return authPromise;
-}
 
 async function createAuthWithPrisma() {
   const prisma = await getDb();
@@ -187,19 +173,19 @@ async function createAuthWithPrisma() {
   });
 }
 
+// Better Auth closes over its Prisma adapter. React's server cache keeps the
+// instance within one request instead of retaining that adapter globally.
+export const getAuth = cache(createAuthWithPrisma);
+
 export const auth = {
   handler: async (request: Request) => {
-    const instance = await getAuthInstance();
+    const instance = await getAuth();
     return instance.handler(request);
   },
   api: {
     getSession: async (options: { headers: Headers }) => {
-      const instance = await getAuthInstance();
+      const instance = await getAuth();
       return instance.api.getSession(options);
     },
   },
 };
-
-export async function getAuth() {
-  return getAuthInstance();
-}

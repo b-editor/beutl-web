@@ -20,6 +20,7 @@ export function LibraryPackageCard({
   return (
     <Link
       href={`/${lang}/store/${item.name}`}
+      prefetch={false}
       className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3 min-w-0"
     >
       <Card className="h-full">

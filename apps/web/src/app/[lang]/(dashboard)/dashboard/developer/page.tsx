@@ -19,7 +19,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
         <h1 className="text-2xl font-bold">{t("developer:portal.title")}</h1>
         <div className="flex gap-2">
           <Button asChild>
-            <Link href={`/${lang}/dashboard/developer/new/project`}>
+            <Link
+              href={`/${lang}/dashboard/developer/new/project`}
+              prefetch={false}
+            >
               {t("developer:portal.createNewExtension")}
             </Link>
           </Button>
@@ -37,6 +40,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
           {packages.map((item) => (
             <Link
               href={`/${lang}/dashboard/developer/projects/${item.name}`}
+              prefetch={false}
               className="text-start p-2 basis-full md:basis-1/2 lg:basis-1/3 min-w-0"
               key={item.name}
             >
