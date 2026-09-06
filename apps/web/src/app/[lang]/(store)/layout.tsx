@@ -6,5 +6,5 @@ export default async function Layout(props: {
 }) {
   const { lang } = await props.params;
   const { children } = props;
-  return <PageShell lang={lang}>{children}</PageShell>;
+  return <PageShell lang={lang} footer>{children}</PageShell>;
 }

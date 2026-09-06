@@ -2,6 +2,7 @@ import { auth } from "@/lib/better-auth";
 import Form from "./form";
 import { headers } from "next/headers";
 import { localRedirect, resolveSafeReturnUrl } from "@beutl/next/local-redirect";
+import { AuthLegalLinks } from "@/components/auth/legal-links";
 
 export default async function Page(
   props: {
@@ -28,5 +29,17 @@ export default async function Page(
     await localRedirect(returnUrl || `/${lang}`);
   }
 
-  return <Form returnUrl={returnUrl} lang={lang} />;
+  return (
+    <Form
+      returnUrl={returnUrl}
+      lang={lang}
+      legalLinks={
+        <AuthLegalLinks
+          lang={lang}
+          agreement
+          className="absolute top-full right-0 translate-y-4"
+        />
+      }
+    />
+  );
 }

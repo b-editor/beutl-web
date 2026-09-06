@@ -26,7 +26,15 @@ export default async function Footer({ lang }: { lang: string }) {
           ))}
         </div>
         <div className="mt-8 flex gap-3 flex-wrap">
-          {(["privacy", "telemetry", "docs"] as NavLinkKey[]).map((key) => (
+          {(
+            [
+              "terms",
+              "privacy",
+              "commercialTransactions",
+              "telemetry",
+              "docs",
+            ] as NavLinkKey[]
+          ).map((key) => (
             <Link key={key} href={navHref(key, lang)}>
               {t(key)}
             </Link>

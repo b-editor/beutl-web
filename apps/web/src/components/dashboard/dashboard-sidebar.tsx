@@ -37,6 +37,7 @@ import {
   Library,
   LogOut,
   Mail,
+  ScrollText,
   Shield,
   Sparkles,
   Store,
@@ -176,6 +177,24 @@ export function DashboardSidebar({
       href: navHref("store", lang),
       label: t("store"),
       icon: Store,
+    },
+    {
+      key: "terms",
+      href: navHref("terms", lang),
+      label: t("terms"),
+      icon: ScrollText,
+    },
+    {
+      key: "privacy",
+      href: navHref("privacy", lang),
+      label: t("privacy"),
+      icon: Shield,
+    },
+    {
+      key: "commercialTransactions",
+      href: navHref("commercialTransactions", lang),
+      label: t("commercialTransactions"),
+      icon: ScrollText,
     },
   ] as const;
 
