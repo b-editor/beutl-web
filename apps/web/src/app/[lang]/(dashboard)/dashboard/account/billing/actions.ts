@@ -127,6 +127,27 @@ function canonicalizeCheckoutParams(value: unknown): unknown {
   return value;
 }
 
+async function expireOpenCheckoutSession(
+  stripe: ReturnType<typeof createStripe>,
+  checkoutSession: Stripe.Checkout.Session,
+): Promise<Stripe.Checkout.Session> {
+  if (checkoutSession.status !== "open") {
+    return checkoutSession;
+  }
+  try {
+    return await stripe.checkout.sessions.expire(checkoutSession.id);
+  } catch (error) {
+    const resolved = await stripe.checkout.sessions.retrieve(
+      checkoutSession.id,
+      { expand: ["line_items.data.price"] },
+    );
+    if (resolved.status !== "complete" && resolved.status !== "expired") {
+      throw error;
+    }
+    return resolved;
+  }
+}
+
 function persistedProCheckoutParams(
   paramsJson: string,
   current: Stripe.Checkout.SessionCreateParams,
@@ -556,6 +577,9 @@ export async function createProCheckout(): Promise<void> {
       const authorizedOffer =
         attemptOffer?.kind === "pro" &&
         recognizedProPriceIds.has(attemptOffer.stripePriceId);
+      const promotionCodesEnabled = allowsStripePromotionCodes(
+        attempt.paramsJson,
+      );
       if (!isValidatedBoundSession(existingSession)) {
         if (
           existingSession.id === attempt.stripeCheckoutSessionId &&
@@ -575,7 +599,8 @@ export async function createProCheckout(): Promise<void> {
       if (
         authorizedOffer &&
         existingSession.status === "open" &&
-        existingSession.url
+        existingSession.url &&
+        promotionCodesEnabled
       ) {
         redirect(existingSession.url);
       }
@@ -615,6 +640,15 @@ export async function createProCheckout(): Promise<void> {
         finalSession = await stripe.checkout.sessions.retrieve(
           finalSession.id,
           { expand: ["line_items.data.price"] },
+        );
+      }
+      if (
+        authorizedOffer &&
+        finalSession.status === "complete" &&
+        isValidatedBoundSession(finalSession)
+      ) {
+        redirect(
+          `/dashboard/account/billing?checkout=success&session_id=${finalSession.id}`,
         );
       }
       if (finalSession.status === "complete") {
@@ -749,6 +783,29 @@ export async function createProCheckout(): Promise<void> {
         }
       }
       continue;
+    }
+
+    if (!allowsStripePromotionCodes(createParams)) {
+      const finalSession = await expireOpenCheckoutSession(
+        stripe,
+        checkoutSession,
+      );
+      if (finalSession.status === "complete") {
+        redirect(
+          `/dashboard/account/billing?checkout=success&session_id=${finalSession.id}`,
+        );
+      }
+      if (finalSession.status === "expired") {
+        await deleteBoundProCheckoutAttempt({
+          userId: session.user.id,
+          checkoutKey: attempt.checkoutKey,
+          stripeCheckoutSessionId: checkoutSession.id,
+        });
+        continue;
+      }
+      throw new Error(
+        `Pre-promotion Checkout Session ${checkoutSession.id} remains ${finalSession.status ?? "unknown"}`,
+      );
     }
 
     if (!checkoutSession.url) {
@@ -954,6 +1011,9 @@ export async function createCreditCheckout(): Promise<void> {
         attempt.stripeCheckoutSessionId,
         { expand: ["line_items.data.price"] },
       );
+      const promotionCodesEnabled = allowsStripePromotionCodes(
+        attempt.paramsJson,
+      );
       const sessionExpectation = {
         checkoutSession: existing,
         attemptId: attempt.id,
@@ -961,7 +1021,7 @@ export async function createCreditCheckout(): Promise<void> {
         offer,
         userId: authSession.user.id,
         requireLineItems: true,
-        promotionCodesEnabled: allowsStripePromotionCodes(attempt.paramsJson),
+        promotionCodesEnabled,
       };
       if (isCompletedZeroCostTopUpSession(sessionExpectation)) {
         const terminalized = await expireTopUpCheckoutAttempt({
@@ -978,6 +1038,38 @@ export async function createCreditCheckout(): Promise<void> {
       }
       if (!topUpSessionMatchesAttempt(sessionExpectation)) {
         throw new Error("Bound top-up Checkout failed canonical validation");
+      }
+      if (existing.status === "open" && !promotionCodesEnabled) {
+        const finalSession = await expireOpenCheckoutSession(stripe, existing);
+        if (finalSession.status === "complete") {
+          if (!topUpSessionMatchesAttempt({
+            ...sessionExpectation,
+            checkoutSession: finalSession,
+          })) {
+            throw new Error(
+              "Completed pre-promotion top-up Checkout failed canonical validation",
+            );
+          }
+          redirect(
+            `/dashboard/account/billing?checkout=success&session_id=${finalSession.id}`,
+          );
+        }
+        if (finalSession.status !== "expired") {
+          throw new Error(
+            `Pre-promotion top-up Checkout ${existing.id} remains ${finalSession.status ?? "unknown"}`,
+          );
+        }
+        const expired = await expireTopUpCheckoutAttempt({
+          attemptId: attempt.id,
+          ownerUserId: authSession.user.id,
+          stripeCheckoutSessionId: existing.id,
+        });
+        if (expired.count !== 1) {
+          throw new Error(
+            "Pre-promotion top-up Checkout changed during rotation",
+          );
+        }
+        continue;
       }
       if (existing.status === "expired") {
         const expired = await expireTopUpCheckoutAttempt({
@@ -1135,6 +1227,45 @@ export async function createCreditCheckout(): Promise<void> {
         }
       }
 
+      const promotionCodesEnabled = allowsStripePromotionCodes(params);
+      if (checkoutSession.status === "open" && !promotionCodesEnabled) {
+        const finalSession = await expireOpenCheckoutSession(
+          stripe,
+          checkoutSession,
+        );
+        if (finalSession.status === "expired") {
+          const expired = await expireTopUpCheckoutAttempt({
+            attemptId: claim.attempt.id,
+            ownerUserId: authSession.user.id,
+            stripeCheckoutSessionId: null,
+            leaseToken,
+          });
+          if (expired.count !== 1) {
+            throw new Error(
+              "Pre-promotion top-up Checkout rotation lease was lost",
+            );
+          }
+          continue;
+        }
+        if (
+          finalSession.status !== "complete" ||
+          !topUpSessionMatchesAttempt({
+            checkoutSession: finalSession,
+            attemptId: claim.attempt.id,
+            customerId: claim.attempt.stripeCustomerId,
+            offer,
+            userId: authSession.user.id,
+            requireLineItems: true,
+            promotionCodesEnabled,
+          })
+        ) {
+          throw new Error(
+            "Completed pre-promotion top-up Checkout failed canonical validation",
+          );
+        }
+        checkoutSession = finalSession;
+      }
+
       if (checkoutSession.status === "expired") {
         const expired = await expireTopUpCheckoutAttempt({
           attemptId: claim.attempt.id,
@@ -1160,6 +1291,11 @@ export async function createCreditCheckout(): Promise<void> {
       }
       if (checkoutSession.status === "open" && checkoutSession.url) {
         redirect(checkoutSession.url);
+      }
+      if (checkoutSession.status === "complete") {
+        redirect(
+          `/dashboard/account/billing?checkout=success&session_id=${checkoutSession.id}`,
+        );
       }
       redirect("/dashboard/account/billing");
     } catch (error) {
