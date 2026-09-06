@@ -350,6 +350,45 @@ describe("top-up account-deletion recovery reconciliation", () => {
     expect(retrievePaymentIntent).not.toHaveBeenCalled();
   });
 
+  it("marks a deletion-raced zero-cost Session as refund not required", async () => {
+    const database = createInMemoryPrisma();
+    setDbProvider(async () => database.prisma as any);
+    seedAttempt(database, {
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
+    });
+    const completed = session("cs-zero-cost-deletion", "unused", {
+      payment_intent: null,
+      amount_total: 0,
+      metadata: {
+        ...session("unused", "unused").metadata,
+        creditAmount: "500",
+      },
+    });
+    const retrievePaymentIntent = vi.fn();
+    const stripe: any = {
+      checkout: { sessions: {
+        list: vi.fn(async ({ status }: any) => ({
+          data: status === "complete" ? [completed] : [],
+          has_more: false,
+        })),
+        expire: vi.fn(),
+        retrieve: vi.fn(),
+      } },
+      paymentIntents: { retrieve: retrievePaymentIntent },
+      refunds: { list: vi.fn(), create: vi.fn() },
+    };
+
+    await reconcileStripeCheckoutCleanups(NOW, "sk_test", stripe);
+
+    expect(database.state.topUpCheckoutAttempts.get("attempt-topup"))
+      .toMatchObject({
+        status: "refund_not_required",
+        stripeCheckoutSessionId: null,
+        activeOwnerKey: null,
+      });
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
   it("schedules only the remaining refund for a partially refunded normal Session", async () => {
     const database = createInMemoryPrisma();
     setDbProvider(async () => database.prisma as any);

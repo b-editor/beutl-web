@@ -366,6 +366,62 @@ describe("durable top-up refund processing", () => {
     });
   });
 
+  it("closes an account-deletion zero-cost Checkout without a refund", async () => {
+    database.state.billingOffers.set("offer_top_up_v1", {
+      id: "offer_top_up_v1",
+      kind: "top_up",
+      stripePriceId: "price_top_up",
+      stripeProductId: "prod_top_up",
+      unitAmount: 1_000,
+      currency: "usd",
+      creditAmount: 500,
+      recurringInterval: null,
+      recurringIntervalCount: null,
+      checkoutEnabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    seedAttempt({
+      paramsJson: JSON.stringify({ allow_promotion_codes: true }),
+    });
+    checkoutRetrieve.mockResolvedValue({
+      id: "cs_1",
+      customer: "cus_1",
+      status: "complete",
+      payment_status: "no_payment_required",
+      payment_intent: null,
+      mode: "payment",
+      amount_subtotal: 1_000,
+      amount_total: 0,
+      currency: "usd",
+      metadata: {
+        beutlApplication: "beutl-web",
+        beutlUserId: "deleted-user",
+        topUpAttemptId: "attempt-1",
+        billingOfferId: "offer_top_up_v1",
+        creditAmount: "500",
+      },
+      line_items: {
+        data: [{ quantity: 1, price: { id: "price_top_up" } }],
+      },
+    });
+
+    await expect(processTopUpRefunds({ stripe, now })).resolves.toMatchObject({
+      claimed: 1,
+      noRefundRequired: 1,
+      interventionRequired: 0,
+      errors: 0,
+    });
+    expect(checkoutExpire).not.toHaveBeenCalled();
+    expect(paymentIntentRetrieve).not.toHaveBeenCalled();
+    expect(refundCreate).not.toHaveBeenCalled();
+    expect(database.state.topUpCheckoutAttempts.get("attempt-1")).toMatchObject({
+      status: "refund_not_required",
+      refundStatus: "not_required",
+      refundLeaseToken: null,
+    });
+  });
+
   it("resolves Checkout to PaymentIntent, creates one idempotent refund, and records canonical success", async () => {
     seedAttempt();
     checkoutRetrieve.mockResolvedValue({

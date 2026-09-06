@@ -556,13 +556,35 @@ export async function reconcileStripeCheckoutCleanups(
         inactiveLegacy;
       const resolveCompleted = async (completed: Stripe.Checkout.Session[]) => {
         if (attempt.accountDeletionAt !== null && completed.length === 1) {
-          const [canonical] = completed;
+          const canonical = completed[0]!;
+          const paymentIntentId = typeof canonical.payment_intent === "string"
+            ? canonical.payment_intent
+            : canonical.payment_intent?.id;
+          if (!paymentIntentId) {
+            const hydrated = await hydrateTopUpPayments(
+              stripe,
+              [canonical],
+              attempt,
+            );
+            if (hydrated.length !== 0) {
+              throw new Error(
+                "Top-up recovery returned a payment without a PaymentIntent",
+              );
+            }
+            if ((await markDetachedTopUpCheckoutRecoveryTerminal({
+              attemptId: attempt.id,
+              leaseToken: recoveryLeaseToken,
+            })).count !== 1) {
+              throw new Error("Zero-cost top-up terminalization lease lost");
+            }
+            return;
+          }
           const stored = await completeDetachedTopUpCheckoutRecovery({
             attemptId: attempt.id,
             leaseToken: recoveryLeaseToken,
-            stripeCheckoutSessionId: canonical!.id,
-            expiresAt: canonical!.expires_at
-              ? new Date(canonical!.expires_at * 1_000)
+            stripeCheckoutSessionId: canonical.id,
+            expiresAt: canonical.expires_at
+              ? new Date(canonical.expires_at * 1_000)
               : attempt.expiresAt,
           });
           if (stored === "not-stored") {
@@ -714,12 +736,9 @@ export async function reconcileStripeCheckoutCleanups(
         }
         if (discovered.status === "expired") {
           await markDetachedTopUpCheckoutRecoveryTerminal({ attemptId: attempt.id, leaseToken: recoveryLeaseToken });
-        } else if (
-          discovered.status === "complete" &&
-          attempt.accountDeletionAt === null
-        ) {
+        } else if (discovered.status === "complete") {
           await resolveCompleted([discovered]);
-        } else if (discovered.status === "open" || discovered.status === "complete") {
+        } else if (discovered.status === "open") {
           const stored = await completeDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: discovered.id, expiresAt: discovered.expires_at ? new Date(discovered.expires_at * 1000) : attempt.expiresAt });
           if (stored === "not-stored") throw new Error("Top-up discovery lease lost");
         } else {
