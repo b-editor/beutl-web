@@ -124,7 +124,6 @@
   "storagePlan": {
     "title": "ストレージプラン",
     "description": "契約中はアップロードできる容量が増えます。既存のファイルはそのままです。",
-    "subscribeTier": "{{tier}} に加入",
     "tierQuota": "容量 {{quota}}",
     "currentTier": "現在のプラン",
     "changeTier": "プランを変更",
@@ -132,6 +131,12 @@
     "cancelScheduledNotice": "解約を受け付けました。期限まではプランの容量を利用できます。期限後、無料枠を超えている間は新しいアップロードができなくなりますが、既存のファイルは削除されません。",
     "tierChanged": "ストレージプランを変更しました。",
     "tierChangeFailed": "プランを変更できませんでした。決済が拒否されたか追加の認証が必要です。支払い方法を変更してからもう一度お試しください。",
-    "downgradeBlocked": "そのプランの容量を超えて使用しています。先にファイルを削除してからプランを変更してください。"
+    "downgradeBlocked": "そのプランの容量を超えて使用しています。先にファイルを削除してからプランを変更してください。",
+    "choosePlan": "プランを選択",
+    "selectTierTitle": "ストレージプランを選ぶ",
+    "changeTierTitle": "ストレージプランを変更",
+    "tierOptions": "選べるプラン",
+    "confirmSubscribe": "このプランに加入",
+    "confirmChange": "このプランに変更"
   }
 }

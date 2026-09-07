@@ -124,7 +124,6 @@
   "storagePlan": {
     "title": "Storage plan",
     "description": "More room for uploads while the plan is active. Existing files are never touched.",
-    "subscribeTier": "Subscribe to {{tier}}",
     "tierQuota": "{{quota}} of storage",
     "currentTier": "Current plan",
     "changeTier": "Change plan",
@@ -132,6 +131,12 @@
     "cancelScheduledNotice": "Your cancellation is scheduled. The plan's storage stays available until the date above. After that, new uploads are refused while you are over the free quota, but nothing is deleted.",
     "tierChanged": "Your storage plan was changed.",
     "tierChangeFailed": "The plan could not be changed. The payment was declined or needs verification; update your payment method and try again.",
-    "downgradeBlocked": "You are using more than that plan allows. Delete files first, then change the plan."
+    "downgradeBlocked": "You are using more than that plan allows. Delete files first, then change the plan.",
+    "choosePlan": "Choose a plan",
+    "selectTierTitle": "Choose a storage plan",
+    "changeTierTitle": "Change your storage plan",
+    "tierOptions": "Available plans",
+    "confirmSubscribe": "Subscribe to this plan",
+    "confirmChange": "Switch to this plan"
   }
 }

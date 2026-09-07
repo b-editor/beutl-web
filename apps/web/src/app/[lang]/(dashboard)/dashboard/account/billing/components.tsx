@@ -6,8 +6,6 @@ import {
   formatBytes,
   formatCount,
   formatDate,
-  STORAGE_TIER_IDS,
-  storageTierOf,
   type StorageTierId,
 } from "@beutl/core";
 import type { Translator } from "@beutl/i18n";
@@ -35,11 +33,8 @@ import {
   createPaymentMethodPortalLink,
   createProCheckout,
 } from "./actions";
-import {
-  changeStorageTier,
-  createStorageCancelPortalLink,
-  createStorageCheckout,
-} from "./storage-actions";
+import { createStorageCancelPortalLink } from "./storage-actions";
+import { StorageTierDialog } from "./storage-tier-dialog";
 import type {
   BillingOfferEntry,
   BillingSubscriptionEntry,
@@ -84,35 +79,6 @@ function ManageSubscriptionButton({
         {t("account:aiPlan.manageSubscription")}
       </SubmitButton>
     </form>
-  );
-}
-
-// 今のティア以外へ切り替えるボタン。Select はクライアント部品なので、ティアの
-// 数だけフォームを並べる。
-function ChangeStorageTierForm({
-  t,
-  currentTier,
-}: {
-  t: Translator;
-  currentTier: StorageTierId | null;
-}) {
-  return (
-    <div className="mt-3 flex flex-col gap-2">
-      <p className="text-sm font-medium">{t("account:storagePlan.changeTier")}</p>
-      <div className="flex flex-wrap gap-2">
-        {STORAGE_TIER_IDS.filter((tier) => tier !== currentTier).map((tier) => (
-          <form key={tier} action={changeStorageTier}>
-            <input type="hidden" name="tier" value={tier} />
-            <SubmitButton variant="outline" size="sm">
-              {t(`account:billing.storageTier.${tier}`)}
-            </SubmitButton>
-          </form>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {t("account:storagePlan.changeTierHint")}
-      </p>
-    </div>
   );
 }
 
@@ -193,12 +159,15 @@ export function PlanSection({
                     )}
                   </p>
                 )}
-                {subscription.product === "storage" &&
-                  subscription.status === "active" && (
-                    <ChangeStorageTierForm t={t} currentTier={subscription.tier} />
-                  )}
               </div>
-              <ManageSubscriptionButton t={t} product={subscription.product} />
+              <div className="flex flex-wrap gap-2">
+                {subscription.product === "storage" &&
+                  subscription.status === "active" &&
+                  subscription.tier !== null && (
+                    <StorageTierDialog lang={lang} currentTier={subscription.tier} />
+                  )}
+                <ManageSubscriptionButton t={t} product={subscription.product} />
+              </div>
             </div>
           ))
         )}
@@ -221,7 +190,10 @@ export function PlanSection({
                   </form>
                 </div>
               ) : (
-                <div key={offer.product} className="flex flex-col gap-3">
+                <div
+                  key={offer.product}
+                  className="flex flex-wrap items-center justify-between gap-4"
+                >
                   <div>
                     <p className="font-bold">
                       {formatBillingProductLabel(t, offer.product)}
@@ -229,32 +201,17 @@ export function PlanSection({
                     <p className="text-sm text-muted-foreground">
                       {t("account:storagePlan.description")}
                     </p>
+                    {/* i18next escapes interpolated values for HTML, which
+                        would turn the separator into an entity; React already
+                        escapes text, so the list is rendered as JSX instead. */}
+                    <p className="text-sm text-muted-foreground">
+                      {t("account:storagePlan.tierOptions")}:{" "}
+                      {offer.tiers
+                        .map((tier) => t(`account:billing.storageTier.${tier}`))
+                        .join(" / ")}
+                    </p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    {offer.tiers.map((tier) => (
-                      <div
-                        key={tier}
-                        className="flex flex-col gap-2 rounded-lg border p-4"
-                      >
-                        <p className="font-bold">
-                          {t(`account:billing.storageTier.${tier}`)}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {t("account:storagePlan.tierQuota", {
-                            quota: formatBytes(storageTierOf(tier).quotaBytes),
-                          })}
-                        </p>
-                        <form action={createStorageCheckout}>
-                          <input type="hidden" name="tier" value={tier} />
-                          <SubmitButton className="w-full">
-                            {t("account:storagePlan.subscribeTier", {
-                              tier: t(`account:billing.storageTier.${tier}`),
-                            })}
-                          </SubmitButton>
-                        </form>
-                      </div>
-                    ))}
-                  </div>
+                  <StorageTierDialog lang={lang} currentTier={null} tiers={offer.tiers} />
                 </div>
               ),
             )}
