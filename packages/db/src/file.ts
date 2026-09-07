@@ -278,6 +278,67 @@ export async function deleteUnreferencedFileWithStorageCleanup({
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
+/** Batch form of deleteUnreferencedFileWithStorageCleanup. The query count does
+ * not grow with the number of files, so a package that owns many release
+ * artifacts still finishes inside the interactive transaction timeout. Files
+ * still referenced elsewhere are retained, exactly as in the single form. */
+export async function deleteUnreferencedFilesWithStorageCleanup({
+  fileIds,
+  userId,
+  prisma,
+}: {
+  fileIds: string[];
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const uniqueIds = [...new Set(fileIds)];
+  const run = async (tx: PrismaTransaction) => {
+    if (uniqueIds.length === 0) {
+      return { deleted: [] as string[], retained: [] as string[] };
+    }
+    const files = await tx.file.findMany({
+      where: { id: { in: uniqueIds }, userId, aiJobResult: null },
+      select: { id: true, objectKey: true, ...fileReferenceSelect },
+    });
+    if (files.length !== uniqueIds.length) {
+      const found = new Set(files.map((file) => file.id));
+      const missing = uniqueIds.find((id) => !found.has(id));
+      throw new Error(`Storage file ${missing} was not found`);
+    }
+    const retained = files.filter((file) => hasLiveFileReference(file));
+    const deletable = files.filter((file) => !hasLiveFileReference(file));
+    if (deletable.length === 0) {
+      return { deleted: [] as string[], retained: retained.map((file) => file.id) };
+    }
+
+    const objectKeys = deletable.map((file) => file.objectKey);
+    await tx.aiStorageCleanup.createMany({
+      data: objectKeys.map((objectKey) => ({
+        objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "writing",
+        notBefore: new Date(),
+      })),
+    });
+    const deleted = await tx.file.deleteMany({
+      where: { id: { in: deletable.map((file) => file.id) }, userId, aiJobResult: null },
+    });
+    if (deleted.count !== deletable.length) {
+      throw new Error("Storage files changed before deletion");
+    }
+    await tx.aiStorageCleanup.updateMany({
+      where: { objectKey: { in: objectKeys }, state: "writing", leaseToken: null },
+      data: { state: "cleanup", notBefore: new Date() },
+    });
+    return {
+      deleted: deletable.map((file) => file.id),
+      retained: retained.map((file) => file.id),
+    };
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
+}
+
 /** Atomically delete an exact user-selected set, or retain the whole set when
  * any row is dedicated, missing, or still referenced. */
 export async function deleteUserFilesWithStorageCleanup({

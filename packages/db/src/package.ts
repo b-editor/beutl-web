@@ -3,7 +3,10 @@ import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 import { startRetryableTransaction } from "./transaction";
 import { preparePackageDeletionOutboxes } from "./package-checkout-attempt";
-import { deleteUnreferencedFileWithStorageCleanup } from "./file";
+import {
+  deleteUnreferencedFilesWithStorageCleanup,
+  deleteUnreferencedFileWithStorageCleanup,
+} from "./file";
 
 export async function findPackageIdById({
   id,
@@ -903,6 +906,10 @@ export async function deleteDevPackageScreenshotAndFile({
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
+// Package deletion cascades Release / PackageScreenshot rows and retires their
+// files in one transaction. Prisma's 5 s default is too tight behind Hyperdrive.
+const DEV_PACKAGE_DELETION_TRANSACTION = { maxWait: 5_000, timeout: 20_000 } as const;
+
 export async function deleteDevPackage({
   packageId,
   prisma,
@@ -934,16 +941,18 @@ export async function deleteDevPackage({
     }
     await preparePackageDeletionOutboxes({ packageId, prisma: tx });
     const deleted = await tx.package.delete({ where: { id: packageId } });
-    for (const fileId of ownedFileIds) {
-      await deleteUnreferencedFileWithStorageCleanup({
-        fileId,
-        userId: pkg.userId,
-        prisma: tx,
-      });
-    }
+    // One round trip per release or screenshot does not fit the interactive
+    // transaction timeout once a package has accumulated a few dozen files.
+    await deleteUnreferencedFilesWithStorageCleanup({
+      fileIds: [...ownedFileIds],
+      userId: pkg.userId,
+      prisma: tx,
+    });
     return deleted;
   };
-  return prisma ? await run(prisma) : await startRetryableTransaction(run);
+  return prisma
+    ? await run(prisma)
+    : await startRetryableTransaction(run, DEV_PACKAGE_DELETION_TRANSACTION);
 }
 
 export async function upsertPackagePricings({

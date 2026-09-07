@@ -25,7 +25,9 @@ import {
   findStorageCleanupForMutation,
   freezeStorageUploadForAccountDeletion,
   deleteReleaseWithStorageCleanup,
+  deleteDevPackage,
   deleteDevPackageScreenshotAndFile,
+  deleteUnreferencedFilesWithStorageCleanup,
   deleteUnreferencedFileWithStorageCleanup,
   setDbProvider,
 } from "@beutl/db";
@@ -351,6 +353,149 @@ describe("legacy storage cleanup contracts", () => {
     expect(calls).toEqual([]);
   });
 
+  it("retires unreferenced package files in a fixed number of queries and keeps shared ones", async () => {
+    const calls: string[] = [];
+    let deletedIds: string[] = [];
+    let outboxKeys: string[] = [];
+    let promotedKeys: string[] = [];
+    const unreferenced = { Package: [], PackageScreenshot: [], Profile: [], Release: [], aiJobResult: null };
+    const tx = {
+      file: {
+        findMany: async () => {
+          calls.push("file-find");
+          return [
+            { id: "a", objectKey: "obj/a", ...unreferenced },
+            { id: "shared", objectKey: "obj/shared", ...unreferenced, Package: [{ id: "other-package" }] },
+            { id: "b", objectKey: "obj/b", ...unreferenced },
+          ];
+        },
+        deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+          calls.push("file-delete");
+          deletedIds = where.id.in;
+          return { count: where.id.in.length };
+        },
+      },
+      aiStorageCleanup: {
+        createMany: async ({ data }: { data: Array<{ objectKey: string; state: string }> }) => {
+          calls.push("outbox-create");
+          outboxKeys = data.map((row) => row.objectKey);
+          expect(data.every((row) => row.state === "writing")).toBe(true);
+          return { count: data.length };
+        },
+        updateMany: async ({ where }: { where: { objectKey: { in: string[] } } }) => {
+          calls.push("outbox-promote");
+          promotedKeys = where.objectKey.in;
+          return { count: where.objectKey.in.length };
+        },
+      },
+    } as never;
+
+    const result = await deleteUnreferencedFilesWithStorageCleanup({
+      fileIds: ["a", "shared", "b", "a"],
+      userId: "u",
+      prisma: tx,
+    });
+    expect(calls).toEqual(["file-find", "outbox-create", "file-delete", "outbox-promote"]);
+    expect(deletedIds).toEqual(["a", "b"]);
+    expect(outboxKeys).toEqual(["obj/a", "obj/b"]);
+    expect(promotedKeys).toEqual(["obj/a", "obj/b"]);
+    expect(result).toEqual({ deleted: ["a", "b"], retained: ["shared"] });
+  });
+
+  it("refuses a batch with a missing file and skips an empty batch", async () => {
+    const calls: string[] = [];
+    const tx = {
+      file: {
+        findMany: async () => {
+          calls.push("file-find");
+          return [{ id: "a", objectKey: "obj/a", Package: [], PackageScreenshot: [], Profile: [], Release: [], aiJobResult: null }];
+        },
+        deleteMany: async () => { calls.push("file-delete"); return { count: 1 }; },
+      },
+      aiStorageCleanup: {
+        createMany: async () => { calls.push("outbox-create"); return { count: 1 }; },
+        updateMany: async () => { calls.push("outbox-promote"); return { count: 1 }; },
+      },
+    } as never;
+
+    await expect(deleteUnreferencedFilesWithStorageCleanup({
+      fileIds: ["a", "gone"],
+      userId: "u",
+      prisma: tx,
+    })).rejects.toThrow("gone was not found");
+    expect(calls).toEqual(["file-find"]);
+
+    calls.length = 0;
+    await expect(deleteUnreferencedFilesWithStorageCleanup({
+      fileIds: [],
+      userId: "u",
+      prisma: tx,
+    })).resolves.toEqual({ deleted: [], retained: [] });
+    expect(calls).toEqual([]);
+  });
+
+  it("deletes a package with many releases without a query per file", async () => {
+    // Every query is a Hyperdrive round trip inside one interactive transaction,
+    // so the count must not scale with the number of releases or screenshots.
+    const queriesFor = async (releaseCount: number) => {
+      let queries = 0;
+      const releaseFiles = Array.from({ length: releaseCount }, (_, index) => ({
+        id: `release-${index}`,
+        userId: "u",
+      }));
+      const unreferenced = { Package: [], PackageScreenshot: [], Profile: [], Release: [], aiJobResult: null };
+      const handlers: Record<string, Record<string, (args: never) => Promise<unknown>>> = {
+        package: {
+          findUniqueOrThrow: async () => ({
+            userId: "u",
+            iconFile: { id: "icon", userId: "u" },
+            PackageScreenshot: [{ file: { id: "shot", userId: "u" } }],
+            Release: releaseFiles.map((file) => ({ file })),
+          }),
+          delete: async () => ({ id: "pkg" }),
+        },
+        packageCheckoutAttempt: {
+          findMany: async () => [],
+          updateMany: async () => ({ count: 0 }),
+        },
+        file: {
+          findMany: async () => [
+            { id: "icon", objectKey: "obj/icon", ...unreferenced },
+            { id: "shot", objectKey: "obj/shot", ...unreferenced },
+            ...releaseFiles.map((file) => ({ id: file.id, objectKey: `obj/${file.id}`, ...unreferenced })),
+          ],
+          deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => ({ count: where.id.in.length }),
+        },
+        aiStorageCleanup: {
+          createMany: async ({ data }: { data: unknown[] }) => ({ count: data.length }),
+          updateMany: async ({ where }: { where: { objectKey: { in: string[] } } }) => ({ count: where.objectKey.in.length }),
+        },
+      };
+      const tx = new Proxy({}, {
+        get: (_target, model) => {
+          if (typeof model !== "string") return undefined;
+          return new Proxy({}, {
+            get: (_inner, method) => {
+              if (typeof method !== "string") return undefined;
+              return async (args: never) => {
+                queries++;
+                const handler = handlers[model]?.[method];
+                if (!handler) throw new Error(`unexpected query ${model}.${method}`);
+                return handler(args);
+              };
+            },
+          });
+        },
+      });
+      await deleteDevPackage({ packageId: "pkg", prisma: tx as never });
+      return queries;
+    };
+
+    const single = await queriesFor(1);
+    expect(await queriesFor(40)).toBe(single);
+    expect(single).toBeLessThanOrEqual(10);
+  });
+
   it("generic storage deletion refuses a legacy visible package artifact", async () => {
     const calls: string[] = [];
     let reads = 0;
@@ -575,7 +720,7 @@ describe("legacy storage cleanup contracts", () => {
       packageDb.indexOf("export async function upsertPackagePricings"),
     );
     expect(packageDelete.indexOf("tx.package.delete")).toBeLessThan(
-      packageDelete.indexOf("deleteUnreferencedFileWithStorageCleanup"),
+      packageDelete.indexOf("deleteUnreferencedFilesWithStorageCleanup"),
     );
 
     const packageAction = await readFile(
