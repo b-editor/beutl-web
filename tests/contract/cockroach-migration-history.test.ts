@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import {
   driftFingerprint,
   findDataMigrations,
   inspectMigrationHistory,
+  localChecksums,
   planBaseline,
   planDeploy,
   readMigrationNames,
@@ -88,6 +90,7 @@ describe("inspectMigrationHistory", () => {
       hasApplicationTables: true,
       applied: [],
       unfinished: [],
+      checksums: {},
     });
   });
 
@@ -98,9 +101,9 @@ describe("inspectMigrationHistory", () => {
           { rows: [{ has_tables: true, has_history: true }] },
           {
             rows: [
-              { migration_name: names[0], finished_at: new Date(), rolled_back_at: null },
-              { migration_name: names[1], finished_at: null, rolled_back_at: new Date() },
-              { migration_name: names[2], finished_at: null, rolled_back_at: null },
+              { migration_name: names[0], checksum: "abc", finished_at: new Date(), rolled_back_at: null },
+              { migration_name: names[1], checksum: "def", finished_at: null, rolled_back_at: new Date() },
+              { migration_name: names[2], checksum: "ghi", finished_at: null, rolled_back_at: null },
             ],
           },
         ),
@@ -109,6 +112,7 @@ describe("inspectMigrationHistory", () => {
       hasApplicationTables: true,
       applied: [names[0]],
       unfinished: [names[2]],
+      checksums: { [names[0]]: "abc" },
     });
   });
 
@@ -182,6 +186,35 @@ describe("planBaseline", () => {
         through: undefined,
       }),
     ).toThrow("do not exist locally");
+  });
+
+  it("refuses a recorded history that is not a prefix, so a gap is never filled out of order", () => {
+    expect(() =>
+      planBaseline({
+        names,
+        history: { ...empty, applied: [names[0], names[2]] },
+        through: undefined,
+      }),
+    ).toThrow(`records ${names[2]} where the history expects ${names[1]}`);
+  });
+
+  it("refuses a recorded migration whose checksum differs from the local file", () => {
+    expect(() =>
+      planBaseline({
+        names,
+        history: { ...empty, applied: [names[0]], checksums: { [names[0]]: "recorded" } },
+        through: undefined,
+        checksums: { [names[0]]: "local" },
+      }),
+    ).toThrow("checksum that differs from the local migration.sql");
+    expect(
+      planBaseline({
+        names,
+        history: { ...empty, applied: [names[0]], checksums: { [names[0]]: "same" } },
+        through: undefined,
+        checksums: { [names[0]]: "same" },
+      }).pending,
+    ).toEqual(names.slice(1));
   });
 
   it("refuses a boundary before migrations that are already recorded", () => {
@@ -275,6 +308,15 @@ describe("assertDistinctDatabase", () => {
       assertDistinctDatabase("postgresql://root@[::1]:26257/defaultdb", [
         ["MIGRATE_DATABASE_URL", "postgresql://root@localhost:26257/defaultdb"],
       ]),
+    ).toThrow("same database as MIGRATE_DATABASE_URL");
+  });
+
+  it("ignores a trailing root dot in the hostname", () => {
+    expect(() =>
+      assertDistinctDatabase(
+        "postgresql://root@cluster.example.invalid.:26257/defaultdb?sslmode=verify-full",
+        [["MIGRATE_DATABASE_URL", target]],
+      ),
     ).toThrow("same database as MIGRATE_DATABASE_URL");
   });
 
@@ -418,6 +460,16 @@ describe("planDeploy", () => {
     ).toThrow(`records ${names[1]} where the history expects ${names[0]}`);
   });
 
+  it("refuses a recorded migration whose checksum differs from the local file", () => {
+    expect(() =>
+      planDeploy({
+        names,
+        history: { ...healthy, checksums: { [names[0]]: "recorded" } },
+        checksums: { [names[0]]: "local", [names[1]]: "x" },
+      }),
+    ).toThrow("checksum that differs from the local migration.sql");
+  });
+
   it("tells an older checkout apart from a foreign database", () => {
     expect(() =>
       planDeploy({
@@ -459,6 +511,22 @@ describe("dataStatements", () => {
     expect(dataStatements(`TRUNCATE "T";`)).toHaveLength(1);
   });
 
+  it("keeps a DO block and a string literal with a semicolon as one statement", () => {
+    const block = `DO $$ BEGIN IF EXISTS (SELECT 1 FROM "T") THEN RAISE EXCEPTION 'repair; then retry'; END IF; END $$;`;
+    expect(dataStatements(block)).toEqual([block.slice(0, -1)]);
+    expect(dataStatements(`ALTER TABLE "T" ADD COLUMN "note" STRING DEFAULT 'a;b';`)).toEqual([]);
+  });
+
+  it("reports every construct that is not purely structural", () => {
+    expect(dataStatements(`COPY "T" FROM STDIN;`)).toHaveLength(1);
+    expect(dataStatements(`IMPORT INTO "T" CSV DATA (x);`)).toHaveLength(1);
+    expect(dataStatements(`CREATE TABLE "Copy" AS SELECT * FROM "T";`)).toHaveLength(1);
+    expect(dataStatements(`SELECT crdb_internal.something();`)).toHaveLength(1);
+    expect(
+      dataStatements(`CREATE TABLE "T" ("id" STRING NOT NULL, CONSTRAINT "T_pkey" PRIMARY KEY ("id"));\nCREATE UNIQUE INDEX "T_id_key" ON "T"("id");\nCREATE VIEW "V" AS SELECT "id" FROM "T";\nSET create_table_with_schema_locked = off;`),
+    ).toEqual([]);
+  });
+
   it("ignores comments and schema-only statements", () => {
     expect(
       dataStatements(`-- UPDATE "T" SET x = 1;\n/* DELETE FROM "T"; */\nALTER TABLE "T" ADD CONSTRAINT "fk" FOREIGN KEY ("p") REFERENCES "P"("id") ON DELETE CASCADE ON UPDATE CASCADE;`),
@@ -468,28 +536,42 @@ describe("dataStatements", () => {
 
 describe("assertShadowIsNotTarget", () => {
   it("passes when the target cannot see the probe, and drops the probe", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
     const target = recordingClient({ rows: [{ visible: false }] });
     await expect(
       assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
     ).resolves.toBeUndefined();
-    expect(shadow.queries[0]).toMatch(/^CREATE TABLE "_beutl_shadow_probe_[0-9a-f]{32}"/);
-    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS "_beutl_shadow_probe_[0-9a-f]{32}"/);
+    expect(shadow.queries[0]).toMatch(
+      /^CREATE TABLE "_beutl_shadow_probe_[0-9a-f]{32}" \("id" INT8 PRIMARY KEY\) WITH \(schema_locked = false\)$/,
+    );
+    expect(shadow.queries[1]).toMatch(/^GRANT SELECT ON TABLE "_beutl_shadow_probe_[0-9a-f]{32}" TO public$/);
+    expect(shadow.queries[2]).toContain("information_schema.tables");
+    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS "_beutl_shadow_probe_[0-9a-f]{32}"/);
     expect(target.queries[0]).toContain("information_schema.tables");
   });
 
   it("refuses when the target sees the probe, and still drops it", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
     const target = recordingClient({ rows: [{ visible: true }] });
     await expect(
       assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
     ).rejects.toThrow("reaches the same database as MIGRATE_DATABASE_URL");
-    expect(shadow.queries).toHaveLength(2);
-    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS/);
+    expect(shadow.queries).toHaveLength(4);
+    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
+  });
+
+  it("refuses when the shadow cannot see its own probe, so an unreliable catalog never passes", async () => {
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: false }] }, { rows: [] });
+    const target = recordingClient({ rows: [{ visible: false }] });
+    await expect(
+      assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
+    ).rejects.toThrow("cannot see its own probe");
+    expect(target.queries).toHaveLength(0);
+    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
   });
 
   it("hides connection and query details", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
     await expect(
       assertShadowIsNotTarget({
         shadowClient: shadow,
@@ -500,6 +582,23 @@ describe("assertShadowIsNotTarget", () => {
         },
       }),
     ).rejects.toThrow("refusing to continue");
-    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS/);
+    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
+  });
+});
+
+describe("localChecksums", () => {
+  it("matches what Prisma records: the sha256 of migration.sql", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "beutl-checksum-"));
+    try {
+      await mkdir(join(dir, names[0]));
+      await writeFile(join(dir, names[0], "migration.sql"), "CREATE TABLE \"T\" (\"id\" STRING);\n");
+      expect(localChecksums(dir, [names[0]])).toEqual({
+        [names[0]]: createHash("sha256")
+          .update(`CREATE TABLE "T" ("id" STRING);\n`)
+          .digest("hex"),
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

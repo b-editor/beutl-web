@@ -54,20 +54,24 @@ export async function inspectMigrationHistory(client) {
     const row = tables.rows[0] ?? {};
     const hasApplicationTables = Boolean(row.has_tables);
     if (!row.has_history) {
-      return { hasApplicationTables, applied: [], unfinished: [] };
+      return { hasApplicationTables, applied: [], unfinished: [], checksums: {} };
     }
     const history = await client.query(
-      `SELECT migration_name, finished_at, rolled_back_at FROM "${HISTORY_TABLE}" ORDER BY started_at, migration_name`,
+      `SELECT migration_name, checksum, finished_at, rolled_back_at FROM "${HISTORY_TABLE}" ORDER BY started_at, migration_name`,
     );
     const applied = [];
     const unfinished = [];
+    const checksums = {};
     for (const record of history.rows) {
       if (record.rolled_back_at) {
         continue;
       }
       (record.finished_at ? applied : unfinished).push(record.migration_name);
+      if (record.finished_at && record.checksum) {
+        checksums[record.migration_name] = record.checksum;
+      }
     }
-    return { hasApplicationTables, applied, unfinished };
+    return { hasApplicationTables, applied, unfinished, checksums };
   } catch {
     // Deliberately omit the database client error: pg errors can contain the
     // connection string, host, credentials, or SQL details.
@@ -77,8 +81,53 @@ export async function inspectMigrationHistory(client) {
   }
 }
 
+/**
+ * Prisma records sha256(migration.sql) with every applied migration. A
+ * recorded checksum that differs from the local file means the history was
+ * edited on one side, and prisma migrate deploy would not notice.
+ */
+export function localChecksums(migrationsDir, names) {
+  const checksums = {};
+  for (const name of names) {
+    checksums[name] = createHash("sha256")
+      .update(readFileSync(join(migrationsDir, name, "migration.sql")))
+      .digest("hex");
+  }
+  return checksums;
+}
+
+function assertRecordedChecksums(history, checksums) {
+  if (!checksums) {
+    return;
+  }
+  for (const name of history.applied) {
+    const recorded = history.checksums?.[name];
+    if (recorded && name in checksums && recorded !== checksums[name]) {
+      throw new MigrationHistoryError(
+        `MIGRATE_DATABASE_URL recorded ${name} with a checksum that differs from the local migration.sql; the migration was edited after it was applied, or the database was migrated from a different history. Refusing to continue`,
+      );
+    }
+  }
+}
+
+/**
+ * The chain is forward-only: a recorded migration after an unrecorded one,
+ * or two recorded out of order, would make the next deploy run an older
+ * migration after the ones that may supersede it. The recorded names, in
+ * the order they were recorded, must be an exact prefix of the history.
+ */
+function assertRecordedPrefix(names, history) {
+  for (let index = 0; index < history.applied.length; index++) {
+    if (history.applied[index] !== names[index]) {
+      throw new MigrationHistoryError(
+        `MIGRATE_DATABASE_URL records ${history.applied[index]} where the history expects ${names[index]}; the recorded chain must match prisma/migrations in order and without gaps. Repair the record with prisma migrate resolve (--rolled-back removes a record) first`,
+      );
+    }
+  }
+}
+
 /** Decide which migrations a baseline still has to record. */
-export function planBaseline({ names, history, through }) {
+export function planBaseline({ names, history, through, checksums }) {
   const selected = selectMigrationsThrough(names, through);
   if (!history.hasApplicationTables) {
     throw new MigrationHistoryError(
@@ -104,11 +153,12 @@ export function planBaseline({ names, history, through }) {
       `MIGRATE_DATABASE_URL already records migrations after ${through} (${beyond.join(", ")}); unset MIGRATE_BASELINE_THROUGH or choose a later migration`,
     );
   }
-  const appliedSet = new Set(history.applied);
+  assertRecordedChecksums(history, checksums);
+  assertRecordedPrefix(selected, history);
   return {
     selected,
-    alreadyRecorded: selected.filter((name) => appliedSet.has(name)),
-    pending: selected.filter((name) => !appliedSet.has(name)),
+    alreadyRecorded: selected.slice(0, history.applied.length),
+    pending: selected.slice(history.applied.length),
   };
 }
 
@@ -150,7 +200,8 @@ function databaseKey(connectionString, label) {
   // database; compare what pg would connect to, not the raw spelling. The
   // loopback aliases are one listener as well. Anything a name can still
   // hide (a CNAME, a proxy) is caught by connectedDatabaseIdentity().
-  const hostname = url.hostname.toLowerCase();
+  // "cluster.example.com." is the same host as "cluster.example.com".
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
   const host = LOOPBACK_HOSTS.has(hostname) ? "loopback" : hostname;
   return `${host}:${url.port}${decodeURIComponent(url.pathname)}`;
 }
@@ -164,13 +215,28 @@ function databaseKey(connectionString, label) {
  */
 export async function assertShadowIsNotTarget({ shadowClient, targetClient }) {
   const probe = `_beutl_shadow_probe_${randomUUID().replaceAll("-", "")}`;
-  try {
-    await shadowClient.query(`CREATE TABLE "${probe}" ("id" INT8 PRIMARY KEY)`);
-    const { rows } = await targetClient.query(
-      "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1) AS visible",
-      [probe],
+  const seen = async (client) =>
+    Boolean(
+      (
+        await client.query(
+          "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1) AS visible",
+          [probe],
+        )
+      ).rows[0]?.visible,
     );
-    if (rows[0]?.visible) {
+  try {
+    // Unlocked so the drop below cannot be refused; granted to public so a
+    // target role other than the shadow role still sees it in the catalog.
+    await shadowClient.query(
+      `CREATE TABLE "${probe}" ("id" INT8 PRIMARY KEY) WITH (schema_locked = false)`,
+    );
+    await shadowClient.query(`GRANT SELECT ON TABLE "${probe}" TO public`);
+    if (!(await seen(shadowClient))) {
+      throw new MigrationHistoryError(
+        "The shadow connection cannot see its own probe table in the catalog, so the databases cannot be told apart; refusing to continue",
+      );
+    }
+    if (await seen(targetClient)) {
       throw new MigrationHistoryError(
         "MIGRATE_SHADOW_DATABASE_URL reaches the same database as MIGRATE_DATABASE_URL: a table created through the shadow URL is visible through the target URL. The shadow database is reset on every run and must be a dedicated, disposable database",
       );
@@ -183,9 +249,11 @@ export async function assertShadowIsNotTarget({ shadowClient, targetClient }) {
       "Unable to prove that MIGRATE_SHADOW_DATABASE_URL and MIGRATE_DATABASE_URL are different databases; refusing to continue",
     );
   } finally {
-    await shadowClient
-      .query(`DROP TABLE IF EXISTS "${probe}"`)
-      .catch(() => undefined);
+    await shadowClient.query(`DROP TABLE IF EXISTS "${probe}"`).catch(() => {
+      console.error(
+        `Could not drop the probe table "${probe}" through MIGRATE_SHADOW_DATABASE_URL; drop it by hand`,
+      );
+    });
   }
 }
 
@@ -255,7 +323,7 @@ export function assertVerifiedTls(connectionString, label) {
 }
 
 /** Refuse to deploy where the history is absent, broken, or from another repository. */
-export function planDeploy({ names, history }) {
+export function planDeploy({ names, history, checksums }) {
   if (history.applied.length === 0) {
     throw new MigrationHistoryError(
       "MIGRATE_DATABASE_URL records no applied migrations; run migrate:baseline (existing schema) or migrate:fresh-cockroach (empty database) first",
@@ -282,41 +350,75 @@ export function planDeploy({ names, history }) {
         : `MIGRATE_DATABASE_URL records migrations that do not exist locally (${unknown.join(", ")}); its history belongs to a different migration directory. Refusing to deploy`,
     );
   }
-  // The chain is forward-only: a recorded migration after an unrecorded one,
-  // or two recorded out of order, would make deploy run an older migration
-  // after the ones that may supersede it. The recorded names, in the order
-  // they were recorded, must be an exact prefix of the history.
-  for (let index = 0; index < history.applied.length; index++) {
-    if (history.applied[index] !== names[index]) {
-      throw new MigrationHistoryError(
-        `MIGRATE_DATABASE_URL records ${history.applied[index]} where the history expects ${names[index]}; the recorded chain must match prisma/migrations in order and without gaps. Repair the record with prisma migrate resolve first`,
-      );
-    }
-  }
+  assertRecordedChecksums(history, checksums);
+  assertRecordedPrefix(names, history);
   return { pending: names.slice(history.applied.length) };
 }
 
-const DATA_STATEMENT = /^(INSERT|UPDATE|DELETE|UPSERT|MERGE|TRUNCATE)\b/i;
-const DATA_KEYWORD = /\b(INSERT|UPDATE|DELETE|UPSERT|MERGE|TRUNCATE)\b/i;
+const SCHEMA_ONLY_STATEMENT =
+  /^(CREATE (UNIQUE )?INDEX|CREATE (TYPE|SEQUENCE|SCHEMA|VIEW|DATABASE)|ALTER|DROP|COMMENT|SET|RESET|BEGIN|START TRANSACTION|COMMIT|END|GRANT|REVOKE)\b/i;
+
+/** A statement that only describes structure. Anything else may write rows. */
+function isSchemaOnly(statement) {
+  const text = statement.replace(/\s+/g, " ");
+  if (/^CREATE TABLE\b/i.test(text)) {
+    // CREATE TABLE ... AS SELECT stores rows; a column list does not.
+    return !/\bAS (SELECT|WITH|VALUES|TABLE)\b/i.test(text);
+  }
+  return SCHEMA_ONLY_STATEMENT.test(text);
+}
 
 /**
- * Statements in a migration that change rows. Comments are removed first and
- * the text is split on ";" so a statement that shares a line with another, or
- * follows a block comment, is still seen. A CTE counts when it carries a
- * data keyword anywhere, because "WITH ... UPDATE" is how backfills are
- * usually written. The detector errs toward reporting a statement.
+ * Statements in a migration that may change rows. Comments are removed first
+ * and the text is split on ";" so a statement that shares a line with another,
+ * or follows a block comment, is still seen. Rather than listing every
+ * data-changing construct (INSERT, UPDATE, DELETE, UPSERT, MERGE, TRUNCATE,
+ * COPY, IMPORT, CREATE TABLE AS, a CTE, ...) the detector lists the statements
+ * that cannot write rows and reports everything else.
  */
 export function dataStatements(sql) {
-  return String(sql)
+  const text = String(sql)
     .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n]*/g, " ")
-    .split(";")
+    .replace(/--[^\n]*/g, " ");
+  return splitStatements(text)
     .map((statement) => statement.trim())
-    .filter(
-      (statement) =>
-        DATA_STATEMENT.test(statement) ||
-        (/^WITH\b/i.test(statement) && DATA_KEYWORD.test(statement)),
-    );
+    .filter((statement) => statement && !isSchemaOnly(statement));
+}
+
+/** Split on ";" outside string literals and $$ blocks, so a DO body stays one statement. */
+function splitStatements(text) {
+  const statements = [];
+  let current = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (quote === "$$") {
+      if (text.startsWith("$$", index)) {
+        current += "$$";
+        index += 1;
+        quote = null;
+        continue;
+      }
+    } else if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      }
+    } else if (text.startsWith("$$", index)) {
+      current += "$$";
+      index += 1;
+      quote = "$$";
+      continue;
+    } else if (char === "'") {
+      quote = "'";
+    } else if (char === ";") {
+      statements.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  statements.push(current);
+  return statements;
 }
 
 function readMigrationSql(migrationsDir, name) {

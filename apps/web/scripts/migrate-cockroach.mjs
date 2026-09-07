@@ -22,6 +22,7 @@ import {
   driftFingerprint,
   findDataMigrations,
   inspectMigrationHistory,
+  localChecksums,
   planBaseline,
   planDeploy,
   readMigrationNames,
@@ -208,7 +209,12 @@ async function baseline() {
     target,
     inspectMigrationHistory,
   );
-  const plan = planBaseline({ names, history, through });
+  const plan = planBaseline({
+    names,
+    history,
+    through,
+    checksums: localChecksums(migrationsDir, names),
+  });
   if (plan.alreadyRecorded.length > 0) {
     console.log(
       `${plan.alreadyRecorded.length} migrations are already recorded and will be kept`,
@@ -292,7 +298,11 @@ async function deploy() {
     target,
     inspectMigrationHistory,
   );
-  const plan = planDeploy({ names, history });
+  const plan = planDeploy({
+    names,
+    history,
+    checksums: localChecksums(migrationsDir, names),
+  });
   console.log(
     plan.pending.length === 0
       ? "No pending migrations."

@@ -39,9 +39,10 @@ so a forgotten variable fails instead of migrating the wrong cluster. Both
 URLs must name their port explicitly and, unless they point at a loopback
 cluster, carry exactly one `sslmode=verify-full` and no `ssl` parameter;
 the commands refuse anything else. Before a replay they also create an
-empty probe table through the shadow URL, refuse when it is visible through
-the target URL, and drop it again, so two spellings of one database cannot
-pass whatever the URLs look like. Pass
+empty, unlocked probe table through the shadow URL, grant it to `public`,
+require the shadow connection to see it, refuse when the target connection
+sees it too, and drop it again, so two spellings of one database cannot pass
+whatever the URLs look like. Pass
 production URLs on the command line rather than storing them in `.env`.
 
 | Command | Purpose |
@@ -49,7 +50,7 @@ production URLs on the command line rather than storing them in `.env`.
 | `pnpm migrate:status` | Show which migrations the target records |
 | `pnpm migrate:diff` | Print the SQL that would bring the target in line with the migration history; exit code 2 means drift |
 | `pnpm migrate:baseline` | One-time: record the history as applied on a database that received it by hand |
-| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, a recorded chain that is not the history in order and without gaps, or a history from another migration directory |
+| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, a recorded chain that is not the history in order and without gaps, a recorded checksum that differs from the local `migration.sql`, or a history from another migration directory |
 | `pnpm migrate:fresh-cockroach` | Bootstrap an empty Cockroach database (see [Fresh Cockroach bootstrap](stripe-ai-billing-migration.md#fresh-cockroach-bootstrap)) |
 
 Release order: run the migration before deploying the Workers, unless the
@@ -63,10 +64,9 @@ MIGRATE_DATABASE_URL='postgresql://user@host:26257/db?sslmode=verify-full' \
 
 ### One-time baseline of the production database
 
-Production was migrated by applying each `migration.sql` by hand. Its schema
-therefore matches the history, but `_prisma_migrations` does not exist, and
-`migrate deploy` would try to start from `20260302104549_init`. Record the
-history once:
+Production was created with `prisma db push` and later updated by hand, so it
+carries the tables but no `_prisma_migrations`, and `migrate deploy` would try
+to start from `20260302104549_init`. Record the history once:
 
 1. Run the baseline. The shadow database must be a dedicated empty database
    (the development shadow database is fine); it is reset on every run.
@@ -75,15 +75,20 @@ history once:
    MIGRATE_DATABASE_URL='…' MIGRATE_SHADOW_DATABASE_URL='…' pnpm migrate:baseline
    ```
 
-   The command first lists the migrations to record that change rows
-   (`INSERT`, `UPDATE`, `DELETE`) and stops with a fingerprint, because a
-   schema comparison cannot tell whether their data effects reached the
-   database. Check each one by hand: the rows it would have written or
-   removed must already be in the state it produces, or the tables it
-   touches must be empty. Then rerun with `MIGRATE_BASELINE_DATA_VERIFIED`
-   set to that fingerprint; it covers the names and the SQL of those
-   migrations, so an edited `migration.sql` asks for a new confirmation.
-   The command then replays the history into the
+   A database that already records part of the history must record it in
+   the order of `prisma/migrations` and with the same checksums; a record
+   out of place is removed with `prisma migrate resolve --rolled-back`
+   before rerunning. The command first lists the migrations to record that
+   may change rows (every statement that is not purely structural: `INSERT`,
+   `UPDATE`, `DELETE`, `TRUNCATE`, `COPY`, `IMPORT`, `CREATE TABLE AS`, a
+   `DO` block, and so on) and stops with a fingerprint, because a schema
+   comparison cannot tell whether their data effects reached the database.
+   Check each one by hand: the rows it would have written or removed must
+   already be in the state it produces, or the tables it touches must be
+   empty, or the statement provably writes nothing. Then rerun with
+   `MIGRATE_BASELINE_DATA_VERIFIED` set to that fingerprint; it covers the
+   names and the SQL of those migrations, so an edited `migration.sql` asks
+   for a new confirmation. The command then replays the history into the
    shadow database and compares production against it. On CockroachDB Cloud every statement is a
    schema-change job, so the replay takes 20 minutes or more; `SHOW JOBS` on
    the shadow database shows progress. With no difference it runs
@@ -121,8 +126,13 @@ which Prisma reports as four `SET DEFAULT` statements. The baseline accepted
 that drift by fingerprint (`a99f99cc1d024c06`), and `pnpm migrate:diff` keeps
 reporting it.
 
-The 2026-09-07 baseline predates the data-migration check, so the effects of
-the 21 row-changing migrations were verified by hand against production: the
+The 2026-09-07 baseline predates the data-migration check, so the 25
+migrations the detector reports were verified by hand against production.
+Four of them (`20260825170000_retain_storage_upload_receipts`,
+`20260825210000_add_package_checkout_resolution`,
+`20260825220000_add_topup_duplicate_refund_attempt`, and
+`20260825230000_add_topup_checkout_resolution`) run a `DO` block that only
+raises on inconsistent data and writes nothing. For the 21 that change rows, the
 tables they rewrite (`CreditAccount`, `CreditTransaction`, `AiJob`,
 `StorageUpload`, `StorageMultipartCleanup`, `SubscriptionEntitlementHold`,
 `StripeCreditReversal`, and every checkout and refund attempt table) were
