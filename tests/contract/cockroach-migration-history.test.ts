@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import {
   MigrationHistoryError,
   assertDistinctDatabase,
+  assertShadowIsNotTarget,
   assertVerifiedTls,
+  dataMigrationFingerprint,
+  dataStatements,
   driftFingerprint,
   findDataMigrations,
   inspectMigrationHistory,
@@ -262,6 +265,19 @@ describe("assertDistinctDatabase", () => {
     ).toThrow("same database as MIGRATE_DATABASE_URL");
   });
 
+  it("treats the loopback aliases as one listener", () => {
+    expect(() =>
+      assertDistinctDatabase("postgresql://root@127.0.0.1:26257/defaultdb", [
+        ["MIGRATE_DATABASE_URL", "postgresql://root@localhost:26257/defaultdb"],
+      ]),
+    ).toThrow("same database as MIGRATE_DATABASE_URL");
+    expect(() =>
+      assertDistinctDatabase("postgresql://root@[::1]:26257/defaultdb", [
+        ["MIGRATE_DATABASE_URL", "postgresql://root@localhost:26257/defaultdb"],
+      ]),
+    ).toThrow("same database as MIGRATE_DATABASE_URL");
+  });
+
   it("accepts another database on the same cluster", () => {
     expect(() =>
       assertDistinctDatabase(
@@ -390,7 +406,16 @@ describe("planDeploy", () => {
         names,
         history: { ...healthy, applied: [names[0], names[2]] },
       }),
-    ).toThrow(`records ${names[2]} but not the earlier ${names[1]}`);
+    ).toThrow(`records ${names[2]} where the history expects ${names[1]}`);
+  });
+
+  it("refuses a recorded history in the wrong order", () => {
+    expect(() =>
+      planDeploy({
+        names,
+        history: { ...healthy, applied: [names[1], names[0]] },
+      }),
+    ).toThrow(`records ${names[1]} where the history expects ${names[0]}`);
   });
 
   it("tells an older checkout apart from a foreign database", () => {
@@ -415,8 +440,66 @@ describe("findDataMigrations", () => {
       await write(names[1], `ALTER TABLE "User" ADD COLUMN "tags" STRING[];\nUPDATE "User" SET "tags" = {} WHERE "tags" IS NULL;\n`);
       await write(names[2], `INSERT INTO "AiOperationModel" ("operation") VALUES (x)\nON CONFLICT DO NOTHING;\n`);
       expect(findDataMigrations(dir, names)).toEqual([names[1], names[2]]);
+      const before = dataMigrationFingerprint(dir, [names[1], names[2]]);
+      await writeFile(join(dir, names[2], "migration.sql"), `INSERT INTO "AiOperationModel" ("operation") VALUES (y);\n`);
+      expect(dataMigrationFingerprint(dir, [names[1], names[2]])).not.toBe(before);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("dataStatements", () => {
+  it("sees a statement that shares a line with another or follows a block comment", () => {
+    expect(
+      dataStatements(`CREATE TABLE "T" ("id" STRING); UPDATE "T" SET "id" = 1;`),
+    ).toHaveLength(1);
+    expect(dataStatements(`/* backfill */ UPDATE "T" SET "id" = 1;`)).toHaveLength(1);
+    expect(dataStatements(`WITH d AS (SELECT 1) DELETE FROM "T" WHERE "id" IN (SELECT * FROM d);`)).toHaveLength(1);
+    expect(dataStatements(`TRUNCATE "T";`)).toHaveLength(1);
+  });
+
+  it("ignores comments and schema-only statements", () => {
+    expect(
+      dataStatements(`-- UPDATE "T" SET x = 1;\n/* DELETE FROM "T"; */\nALTER TABLE "T" ADD CONSTRAINT "fk" FOREIGN KEY ("p") REFERENCES "P"("id") ON DELETE CASCADE ON UPDATE CASCADE;`),
+    ).toEqual([]);
+  });
+});
+
+describe("assertShadowIsNotTarget", () => {
+  it("passes when the target cannot see the probe, and drops the probe", async () => {
+    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    const target = recordingClient({ rows: [{ visible: false }] });
+    await expect(
+      assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
+    ).resolves.toBeUndefined();
+    expect(shadow.queries[0]).toMatch(/^CREATE TABLE "_beutl_shadow_probe_[0-9a-f]{32}"/);
+    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS "_beutl_shadow_probe_[0-9a-f]{32}"/);
+    expect(target.queries[0]).toContain("information_schema.tables");
+  });
+
+  it("refuses when the target sees the probe, and still drops it", async () => {
+    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    const target = recordingClient({ rows: [{ visible: true }] });
+    await expect(
+      assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
+    ).rejects.toThrow("reaches the same database as MIGRATE_DATABASE_URL");
+    expect(shadow.queries).toHaveLength(2);
+    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS/);
+  });
+
+  it("hides connection and query details", async () => {
+    const shadow = recordingClient({ rows: [] }, { rows: [] });
+    await expect(
+      assertShadowIsNotTarget({
+        shadowClient: shadow,
+        targetClient: {
+          query: async () => {
+            throw new Error("postgresql://secret@example.invalid/password");
+          },
+        },
+      }),
+    ).rejects.toThrow("refusing to continue");
+    expect(shadow.queries[1]).toMatch(/^DROP TABLE IF EXISTS/);
   });
 });

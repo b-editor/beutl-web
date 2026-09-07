@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -147,8 +147,46 @@ function databaseKey(connectionString, label) {
     );
   }
   // pg decodes the database name, so "/%64efaultdb" and "/defaultdb" are one
-  // database; compare what pg would connect to, not the raw spelling.
-  return `${url.hostname.toLowerCase()}:${url.port}${decodeURIComponent(url.pathname)}`;
+  // database; compare what pg would connect to, not the raw spelling. The
+  // loopback aliases are one listener as well. Anything a name can still
+  // hide (a CNAME, a proxy) is caught by connectedDatabaseIdentity().
+  const hostname = url.hostname.toLowerCase();
+  const host = LOOPBACK_HOSTS.has(hostname) ? "loopback" : hostname;
+  return `${host}:${url.port}${decodeURIComponent(url.pathname)}`;
+}
+
+/**
+ * Prove that the two connections do not reach one database, whatever the
+ * URLs look like: an empty probe table created through the shadow connection
+ * must be invisible through the target connection. CockroachDB Cloud does not
+ * expose crdb_internal.cluster_id(), so the proof has to be observational;
+ * the probe is dropped again either way, and the shadow is reset afterwards.
+ */
+export async function assertShadowIsNotTarget({ shadowClient, targetClient }) {
+  const probe = `_beutl_shadow_probe_${randomUUID().replaceAll("-", "")}`;
+  try {
+    await shadowClient.query(`CREATE TABLE "${probe}" ("id" INT8 PRIMARY KEY)`);
+    const { rows } = await targetClient.query(
+      "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1) AS visible",
+      [probe],
+    );
+    if (rows[0]?.visible) {
+      throw new MigrationHistoryError(
+        "MIGRATE_SHADOW_DATABASE_URL reaches the same database as MIGRATE_DATABASE_URL: a table created through the shadow URL is visible through the target URL. The shadow database is reset on every run and must be a dedicated, disposable database",
+      );
+    }
+  } catch (error) {
+    if (error instanceof MigrationHistoryError) {
+      throw error;
+    }
+    throw new MigrationHistoryError(
+      "Unable to prove that MIGRATE_SHADOW_DATABASE_URL and MIGRATE_DATABASE_URL are different databases; refusing to continue",
+    );
+  } finally {
+    await shadowClient
+      .query(`DROP TABLE IF EXISTS "${probe}"`)
+      .catch(() => undefined);
+  }
 }
 
 /** The shadow database is wiped on every replay; it must be nobody's real database. */
@@ -244,21 +282,46 @@ export function planDeploy({ names, history }) {
         : `MIGRATE_DATABASE_URL records migrations that do not exist locally (${unknown.join(", ")}); its history belongs to a different migration directory. Refusing to deploy`,
     );
   }
-  const applied = new Set(history.applied);
-  // The chain is forward-only: a recorded migration after an unrecorded one
-  // would make deploy run the older one last, after the migrations that may
-  // supersede it. The recorded names must be an exact prefix of the history.
-  const gap = names.slice(0, history.applied.length).find((name) => !applied.has(name));
-  if (gap) {
-    const later = history.applied[history.applied.length - 1];
-    throw new MigrationHistoryError(
-      `MIGRATE_DATABASE_URL records ${later} but not the earlier ${gap}; a gap in the history cannot be deployed over. Repair the record with prisma migrate resolve first`,
-    );
+  // The chain is forward-only: a recorded migration after an unrecorded one,
+  // or two recorded out of order, would make deploy run an older migration
+  // after the ones that may supersede it. The recorded names, in the order
+  // they were recorded, must be an exact prefix of the history.
+  for (let index = 0; index < history.applied.length; index++) {
+    if (history.applied[index] !== names[index]) {
+      throw new MigrationHistoryError(
+        `MIGRATE_DATABASE_URL records ${history.applied[index]} where the history expects ${names[index]}; the recorded chain must match prisma/migrations in order and without gaps. Repair the record with prisma migrate resolve first`,
+      );
+    }
   }
-  return { pending: names.filter((name) => !applied.has(name)) };
+  return { pending: names.slice(history.applied.length) };
 }
 
-const DATA_STATEMENT = /^\s*(INSERT|UPDATE|DELETE|UPSERT|MERGE)\b/i;
+const DATA_STATEMENT = /^(INSERT|UPDATE|DELETE|UPSERT|MERGE|TRUNCATE)\b/i;
+const DATA_KEYWORD = /\b(INSERT|UPDATE|DELETE|UPSERT|MERGE|TRUNCATE)\b/i;
+
+/**
+ * Statements in a migration that change rows. Comments are removed first and
+ * the text is split on ";" so a statement that shares a line with another, or
+ * follows a block comment, is still seen. A CTE counts when it carries a
+ * data keyword anywhere, because "WITH ... UPDATE" is how backfills are
+ * usually written. The detector errs toward reporting a statement.
+ */
+export function dataStatements(sql) {
+  return String(sql)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\n]*/g, " ")
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(
+      (statement) =>
+        DATA_STATEMENT.test(statement) ||
+        (/^WITH\b/i.test(statement) && DATA_KEYWORD.test(statement)),
+    );
+}
+
+function readMigrationSql(migrationsDir, name) {
+  return readFileSync(join(migrationsDir, name, "migration.sql"), "utf8");
+}
 
 /**
  * Migrations that change rows, not only the schema. A schema comparison
@@ -266,10 +329,19 @@ const DATA_STATEMENT = /^\s*(INSERT|UPDATE|DELETE|UPSERT|MERGE)\b/i;
  * be told that an operator checked them.
  */
 export function findDataMigrations(migrationsDir, names) {
-  return names.filter((name) => {
-    const sql = readFileSync(join(migrationsDir, name, "migration.sql"), "utf8");
-    return sql
-      .split("\n")
-      .some((line) => !line.trimStart().startsWith("--") && DATA_STATEMENT.test(line));
-  });
+  return names.filter(
+    (name) => dataStatements(readMigrationSql(migrationsDir, name)).length > 0,
+  );
+}
+
+/**
+ * Identity of the data migrations an operator verified: the names and the
+ * SQL, so an edited migration.sql invalidates the confirmation.
+ */
+export function dataMigrationFingerprint(migrationsDir, names) {
+  return driftFingerprint(
+    names
+      .map((name) => `${name}\n${readMigrationSql(migrationsDir, name)}`)
+      .join("\n"),
+  );
 }

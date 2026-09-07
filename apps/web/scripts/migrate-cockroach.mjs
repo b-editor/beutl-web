@@ -16,7 +16,9 @@ import pg from "pg";
 import {
   MigrationHistoryError,
   assertDistinctDatabase,
+  assertShadowIsNotTarget,
   assertVerifiedTls,
+  dataMigrationFingerprint,
   driftFingerprint,
   findDataMigrations,
   inspectMigrationHistory,
@@ -106,7 +108,17 @@ async function withClient(label, url, fn) {
  * 2 drift, anything else an error. The drift SQL is echoed for review and
  * identified by a fingerprint an operator can hand back to `baseline`.
  */
+/** The URLs may spell one server two ways; let the servers prove they differ. */
+async function assertDistinctConnectedDatabases(target, shadow) {
+  await withClient("MIGRATE_DATABASE_URL", target, (targetClient) =>
+    withClient("MIGRATE_SHADOW_DATABASE_URL", shadow, (shadowClient) =>
+      assertShadowIsNotTarget({ shadowClient, targetClient }),
+    ),
+  );
+}
+
 async function diffAgainstHistory({ target, shadow, migrations }) {
+  await assertDistinctConnectedDatabases(target, shadow);
   const unlocked = await withClient(
     "MIGRATE_SHADOW_DATABASE_URL",
     shadow,
@@ -211,7 +223,7 @@ async function baseline() {
   // after the twenty-minute drift check.
   const dataMigrations = findDataMigrations(migrationsDir, plan.pending);
   if (dataMigrations.length > 0) {
-    const fingerprint = driftFingerprint(dataMigrations.join("\n"));
+    const fingerprint = dataMigrationFingerprint(migrationsDir, dataMigrations);
     console.log(
       `${dataMigrations.length} of the ${plan.pending.length} migrations to record change rows, which the schema comparison cannot verify:\n  ${dataMigrations.join("\n  ")}`,
     );

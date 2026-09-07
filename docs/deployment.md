@@ -38,7 +38,10 @@ takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
 so a forgotten variable fails instead of migrating the wrong cluster. Both
 URLs must name their port explicitly and, unless they point at a loopback
 cluster, carry exactly one `sslmode=verify-full` and no `ssl` parameter;
-the commands refuse anything else. Pass
+the commands refuse anything else. Before a replay they also create an
+empty probe table through the shadow URL, refuse when it is visible through
+the target URL, and drop it again, so two spellings of one database cannot
+pass whatever the URLs look like. Pass
 production URLs on the command line rather than storing them in `.env`.
 
 | Command | Purpose |
@@ -46,7 +49,7 @@ production URLs on the command line rather than storing them in `.env`.
 | `pnpm migrate:status` | Show which migrations the target records |
 | `pnpm migrate:diff` | Print the SQL that would bring the target in line with the migration history; exit code 2 means drift |
 | `pnpm migrate:baseline` | One-time: record the history as applied on a database that received it by hand |
-| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, a gap in the history, or a history from another migration directory |
+| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, a recorded chain that is not the history in order and without gaps, or a history from another migration directory |
 | `pnpm migrate:fresh-cockroach` | Bootstrap an empty Cockroach database (see [Fresh Cockroach bootstrap](stripe-ai-billing-migration.md#fresh-cockroach-bootstrap)) |
 
 Release order: run the migration before deploying the Workers, unless the
@@ -78,7 +81,9 @@ history once:
    database. Check each one by hand: the rows it would have written or
    removed must already be in the state it produces, or the tables it
    touches must be empty. Then rerun with `MIGRATE_BASELINE_DATA_VERIFIED`
-   set to that fingerprint. The command then replays the history into the
+   set to that fingerprint; it covers the names and the SQL of those
+   migrations, so an edited `migration.sql` asks for a new confirmation.
+   The command then replays the history into the
    shadow database and compares production against it. On CockroachDB Cloud every statement is a
    schema-change job, so the replay takes 20 minutes or more; `SHOW JOBS` on
    the shadow database shows progress. With no difference it runs
