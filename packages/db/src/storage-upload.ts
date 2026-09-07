@@ -1704,17 +1704,22 @@ export type StaleStorageUploadBand =
       beforeAnySize: Date;
     };
 
+export type StaleStorageUploadCursor = { createdAt: Date; id: string };
+
 export async function listStorageUploadsStartedBefore({
   before,
   now,
   limit,
   band,
+  after,
   prisma,
 }: {
   before: Date;
   now: Date;
   limit: number;
   band?: StaleStorageUploadBand;
+  // Continue past the last row of a previous page (ordered by createdAt, id).
+  after?: StaleStorageUploadCursor;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
@@ -1748,6 +1753,16 @@ export async function listStorageUploadsStartedBefore({
     where: {
       AND: [
         staleness,
+        ...(after
+          ? [
+              {
+                OR: [
+                  { createdAt: { gt: after.createdAt } },
+                  { createdAt: after.createdAt, id: { gt: after.id } },
+                ],
+              },
+            ]
+          : []),
         {
           OR: [
             { cleanupLeaseUntil: null },
@@ -1767,7 +1782,7 @@ export async function listStorageUploadsStartedBefore({
         { completionState: { not: "unknown" } },
       ],
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: limit,
   } as never);
   return rows.map((row) => withCompletionFields(row)!);

@@ -707,6 +707,49 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(100);
   });
 
+  it("walks past large uploads not yet due to reach a newer one that is", async () => {
+    // Every row here is above the size whose grace is the shortest, so all of
+    // them sit in the graced band. A hundred 156 GiB uploads started 30 hours
+    // ago are inside their 44-hour grace and fill the first page; the 85 GiB
+    // upload started 25 hours ago is past its 24.2-hour grace and sits behind
+    // them in age order.
+    const template = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "large.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!template.ok) throw new Error(template.reason);
+    const templateRow = state.storageUploads.get(template.upload.id)!;
+    state.storageUploads.delete(templateRow.id);
+    const hour = 60 * 60 * 1000;
+    for (let index = 0; index < 100; index++) {
+      const id = crypto.randomUUID();
+      state.storageUploads.set(id, {
+        ...templateRow,
+        id,
+        objectKey: `${templateRow.objectKey}-${index}`,
+        size: BigInt(156) * BigInt(1024 ** 3),
+        createdAt: new Date(Date.now() - 30 * hour - index),
+      });
+    }
+    state.storageUploads.set("due-85", {
+      ...templateRow,
+      id: "due-85",
+      objectKey: `${templateRow.objectKey}-due`,
+      size: BigInt(85) * BigInt(1024 ** 3),
+      createdAt: new Date(Date.now() - 25 * hour),
+    });
+
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 1,
+      failed: 0,
+    });
+    expect(state.storageUploads.has("due-85")).toBe(false);
+    expect(state.storageUploads.size).toBe(100);
+  });
+
   it("keeps active completion fenced, then escalates an expired lease", async () => {
     const started = await startUpload({
       userId: USER_ID,

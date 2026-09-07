@@ -8,8 +8,10 @@ import {
 } from "@beutl/core";
 import {
   countFilesByUserId,
+  countStorageUploadsByUserId,
   resolveStorageQuota,
   sumFileSizeByUserId,
+  sumStorageUploadSizeByUserId,
   type PrismaTransaction,
 } from "@beutl/db";
 
@@ -34,12 +36,20 @@ export async function getStorageEntitlement(
   options: { prisma?: PrismaTransaction; now?: Date } = {},
 ): Promise<StorageEntitlementResponse> {
   const now = options.now ?? new Date();
-  const [quota, usedBytes, fileCount] = await Promise.all([
-    resolveStorageQuota({ userId, prisma: options.prisma, now }),
-    sumFileSizeByUserId({ userId, prisma: options.prisma }),
-    countFilesByUserId({ userId, prisma: options.prisma }),
-  ]);
+  // Whether an upload can start is judged the way the start path judges it:
+  // completed files plus what uploads still in flight have reserved, in both
+  // bytes and slots. Reporting only the completed usage would say "yes" to a
+  // client whose next start is refused.
+  const [quota, usedBytes, fileCount, reservedBytes, activeUploads] =
+    await Promise.all([
+      resolveStorageQuota({ userId, prisma: options.prisma, now }),
+      sumFileSizeByUserId({ userId, prisma: options.prisma }),
+      countFilesByUserId({ userId, prisma: options.prisma }),
+      sumStorageUploadSizeByUserId({ userId, prisma: options.prisma }),
+      countStorageUploadsByUserId({ userId, prisma: options.prisma }),
+    ]);
   const used = Number(usedBytes);
+  const committed = Number(usedBytes + reservedBytes);
   const subscription = quota.subscription;
   const effectiveEnd = subscription
     ? effectiveSubscriptionEnd(subscription)
@@ -50,7 +60,9 @@ export async function getStorageEntitlement(
     usedBytes: used,
     fileCount,
     fileCountLimit: quota.fileCountLimit,
-    canUpload: used < quota.quotaBytes && fileCount < quota.fileCountLimit,
+    canUpload:
+      committed < quota.quotaBytes &&
+      fileCount + activeUploads < quota.fileCountLimit,
     subscriptionStatus: subscription?.status ?? null,
     currentPeriodStart: subscription?.currentPeriodStart
       ? subscription.currentPeriodStart.toISOString()

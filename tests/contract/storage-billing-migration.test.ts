@@ -66,6 +66,26 @@ describe("subscription plan generalization migration", () => {
     expect(firstIndex).toBeLessThan(relockOf("BillingOffer"));
   });
 
+  it("lets a storage Checkout be queued for cleanup", async () => {
+    // The cleanup row's kind is the plan id, and the table's CHECK predates
+    // the storage plan. Account deletion queues such a row inside its
+    // transaction, so a rejected insert would block the deletion outright.
+    const sql = await readFile(
+      new URL(
+        "../../apps/web/prisma/migrations/20260908010000_allow_storage_checkout_cleanup/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(sql).toContain('DROP CONSTRAINT IF EXISTS "StripeCheckoutCleanup_kind_check"');
+    expect(sql).toMatch(/"StripeCheckoutCleanup_kind_check"\s+CHECK \("kind" IN \('package', 'pro', 'storage'\)\)/);
+    const unlock = sql.indexOf('ALTER TABLE "StripeCheckoutCleanup" SET (schema_locked = false)');
+    const relock = sql.lastIndexOf('ALTER TABLE "StripeCheckoutCleanup" SET (schema_locked = true)');
+    expect(unlock).toBeGreaterThanOrEqual(0);
+    expect(sql.indexOf("ADD CONSTRAINT")).toBeGreaterThan(unlock);
+    expect(relock).toBeGreaterThan(sql.indexOf("ADD CONSTRAINT"));
+  });
+
   it("matches the Prisma schema", async () => {
     const source = await readFile(schema, "utf8");
     expect(source).not.toContain("model StorageSubscription {");

@@ -13,6 +13,7 @@ import {
   markStorageUploadCompleted,
   recordStorageMultipartCleanupFailure,
   listStorageUploadsStartedBefore,
+  type StaleStorageUploadCursor,
   escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
   resolveStorageQuota,
@@ -65,6 +66,8 @@ export function abandonAfterMilliseconds(size: bigint | number): number {
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 const STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 const MAX_PER_RUN = 100;
+// How far one run walks the band of large uploads inside their grace.
+const MAX_GRACED_PAGES_PER_RUN = 10;
 
 export async function reconcileStorageMultipartCleanups(
   now: Date = new Date(),
@@ -275,21 +278,36 @@ export async function abandonStaleStorageUploads(
     limit: MAX_PER_RUN,
     band: { kind: "due", ...band },
   });
-  const graced =
-    due.length < MAX_PER_RUN
-      ? (
-          await listStorageUploadsStartedBefore({
-            before,
-            now,
-            limit: MAX_PER_RUN,
-            band: { kind: "graced", ...band },
-          })
-        ).filter(
-          (listed) =>
-            listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
-            now.getTime(),
-        )
-      : [];
+  // The graced band is ordered by age, and an older upload can still be inside
+  // its grace while a newer, smaller one is already due. Pages are walked past
+  // the rows that are not yet due until the run is full or the band is
+  // exhausted, within a bound so one run cannot scan without end.
+  const graced = [];
+  let after: StaleStorageUploadCursor | undefined;
+  for (
+    let page = 0;
+    page < MAX_GRACED_PAGES_PER_RUN && due.length + graced.length < MAX_PER_RUN;
+    page++
+  ) {
+    const rows = await listStorageUploadsStartedBefore({
+      before,
+      now,
+      limit: MAX_PER_RUN,
+      band: { kind: "graced", ...band },
+      after,
+    });
+    for (const listed of rows) {
+      if (
+        listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
+        now.getTime()
+      ) {
+        graced.push(listed);
+      }
+    }
+    if (rows.length < MAX_PER_RUN) break;
+    const last = rows[rows.length - 1];
+    after = { createdAt: last.createdAt, id: last.id };
+  }
   const stale = [...due, ...graced].slice(0, MAX_PER_RUN);
 
   let abandoned = 0;

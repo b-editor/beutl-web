@@ -252,7 +252,9 @@ reconciler, and account deletion take the plan from `metadata.planId`
 registry is `SUBSCRIPTION_PLANS` in `packages/core/src/subscription-plans.ts`
 and the Stripe-side Price mapping is `apps/web/src/lib/stripe/subscription-plans.ts`.
 Adding a tier to AI Pro later means adding tier ids to the registry and a
-Price per tier to that mapping, not new tables.
+Price per tier to that mapping, not new tables. Adding a whole plan also
+needs its id in the `StripeCheckoutCleanup_kind_check` constraint (see
+`docs/stripe-ai-billing-migration.md`).
 
 The Web Worker requires one monthly recurring Price per storage tier:
 

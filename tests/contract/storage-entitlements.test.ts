@@ -101,6 +101,57 @@ describe("storage entitlement for the desktop API", () => {
     expect(ai.plan).toBeNull();
   });
 
+  it("judges canUpload the way the start path does, with reservations counted", async () => {
+    // 900 MiB stored plus a 200 MiB upload still in flight leave no room in
+    // the free GiB, although the completed files alone would.
+    file("stored", 900 * 1024 * 1024);
+    memory.state.storageUploads.set("in-flight", {
+      id: "in-flight",
+      userId: USER_ID,
+      objectKey: "in-flight",
+      uploadId: "upload-1",
+      name: "in-flight.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(200 * 1024 * 1024),
+      partSize: 16 * 1024 * 1024,
+      createdAt: new Date(),
+      completedFileId: null,
+      abandonedAt: null,
+      startState: "active",
+      creationLeaseUntil: null,
+      creationLeaseToken: null,
+      completionState: "idle",
+      completionAttempts: 0,
+      completionLastError: null,
+      completionInterventionAt: null,
+      completionRetryNotBefore: null,
+      unknownProbeNotBefore: null,
+      unknownProbeLeaseToken: null,
+      completionRevision: 0,
+      cleanupLeaseUntil: null,
+      cleanupLeaseToken: null,
+    } as never);
+
+    const entitlement = await getStorageEntitlement(USER_ID);
+
+    // The reported usage stays what is actually stored.
+    expect(entitlement.usedBytes).toBe(900 * 1024 * 1024);
+    expect(entitlement.fileCount).toBe(1);
+    expect(entitlement.canUpload).toBe(false);
+
+    // Slots count the same way: an upload in flight holds one.
+    memory.state.storageUploads.set("in-flight", {
+      ...memory.state.storageUploads.get("in-flight")!,
+      size: BigInt(1),
+    });
+    // 9,999 completed files: the free limit of 10,000 has one slot left, and
+    // the upload in flight is holding it.
+    for (let index = 1; index < 9_999; index++) file(`f-${index}`, 1);
+    expect((await getStorageEntitlement(USER_ID)).canUpload).toBe(false);
+    memory.state.storageUploads.delete("in-flight");
+    expect((await getStorageEntitlement(USER_ID)).canUpload).toBe(true);
+  });
+
   it("excludes AI job results from the counted bytes", async () => {
     file("upload", 10);
     file("result", 1_000_000);

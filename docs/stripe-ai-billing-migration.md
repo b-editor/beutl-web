@@ -475,6 +475,10 @@ reason `20260825140000_detach_checkout_attempts` removed it from
 cascade so the cleanup reconciler can expire or compensate it. The cleanup
 row's `kind` is the plan id (`pro`, `storage`), and the reconciler validates
 the Session against that plan's offer kind and tier.
+`20260908010000_allow_storage_checkout_cleanup` widens
+`StripeCheckoutCleanup_kind_check` to accept `'storage'`; a plan id added to
+`SUBSCRIPTION_PLANS` later must be added to that CHECK in its own migration,
+or account deletion fails when it queues the plan's bound Session.
 
 Tier changes use `always_invoice` with `error_if_incomplete`. With
 `create_prorations` the difference would only be billed at the next renewal,
