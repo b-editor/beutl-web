@@ -117,8 +117,7 @@ describe("legacy storage cleanup contracts", () => {
     await expect(createDedicatedStorageFile({
       file,
       userId: "u",
-      quotaBytes: BigInt(1),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(1), fileCountLimit: 10 },
     })).resolves.toMatchObject({ kind: "overQuota" });
     expect(read).not.toHaveBeenCalled();
     expect(bucket.put).not.toHaveBeenCalled();
@@ -140,8 +139,7 @@ describe("legacy storage cleanup contracts", () => {
     const result = await createDedicatedStorageFile({
       file,
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     expect(result.kind).toBe("created");
     expect(order).toEqual(["reservation", "put"]);
@@ -170,8 +168,7 @@ describe("legacy storage cleanup contracts", () => {
     const result = await createDedicatedStorageFile({
       file,
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     expect(result.kind).toBe("created");
     expect(bucket.put).toHaveBeenCalledTimes(1);
@@ -214,8 +211,7 @@ describe("legacy storage cleanup contracts", () => {
     const result = await createDedicatedStorageFile({
       file: new File([new Uint8Array([7])], "relation.bin"),
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
       publish: async (_tx, record) => {
         publishCalls++;
         if (publishedFileId && publishedFileId !== record.id) {
@@ -240,8 +236,7 @@ describe("legacy storage cleanup contracts", () => {
     const result = await createDedicatedStorageFile({
       file: new File([new Uint8Array([1, 2])], "publish.bin"),
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
       publish: async (_tx, record) => {
         published.push(record.id);
       },
@@ -252,8 +247,7 @@ describe("legacy storage cleanup contracts", () => {
     await expect(createDedicatedStorageFile({
       file: new File([new Uint8Array([3])], "rollback.bin"),
       userId: "u",
-      quotaBytes: BigInt(20),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(20), fileCountLimit: 10 },
       publish: async () => { throw new Error("relation transaction failed"); },
     })).rejects.toThrow("relation transaction failed");
     expect([...memory.state.files.values()].some((file) => file.name === "rollback.bin")).toBe(false);
@@ -778,8 +772,7 @@ describe("legacy storage cleanup contracts", () => {
       name: "slow.bin",
       mimeType: "application/octet-stream",
       size: BigInt(2),
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     expect(reservation.kind).toBe("reserved");
     const future = new Date(Date.now() + 16 * 60_000);
@@ -804,8 +797,7 @@ describe("legacy storage cleanup contracts", () => {
     const operation = createDedicatedStorageFile({
       file: new File([new Uint8Array([1, 2])], "slow.bin"),
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
     const row = [...memory.state.storageUploads.values()][0];
@@ -831,8 +823,7 @@ describe("legacy storage cleanup contracts", () => {
     const operation = createDedicatedStorageFile({
       file: new File([new Uint8Array([1])], "late.bin"),
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     const rejection = operation.then(
       () => null,
@@ -882,8 +873,7 @@ describe("legacy storage cleanup contracts", () => {
     const operation = createDedicatedStorageFile({
       file: new File([new Uint8Array([1])], "db-hang.bin"),
       userId: "u",
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     const rejection = operation.then(
       () => null,
@@ -926,7 +916,7 @@ describe("legacy storage cleanup contracts", () => {
     }) as never;
     const operation = createDedicatedStorageFile({
       file: new File([new Uint8Array([1])], "late-renewal.bin"),
-      userId: "u", quotaBytes: BigInt(10), fileCountLimit: 10,
+      userId: "u", quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     const rejection = operation.then(() => null, (error: unknown) => error);
     await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
@@ -955,7 +945,7 @@ describe("legacy storage cleanup contracts", () => {
     }) as never;
     const operation = createDedicatedStorageFile({
       file: new File([new Uint8Array([1])], "hung-renewal.bin"),
-      userId: "u", quotaBytes: BigInt(10), fileCountLimit: 10,
+      userId: "u", quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     const rejection = operation.then(() => null, (error: unknown) => error);
     await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
@@ -978,8 +968,7 @@ describe("legacy storage cleanup contracts", () => {
       name: "host-loss.bin",
       mimeType: "application/octet-stream",
       size: BigInt(1),
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     expect(reserved.kind).toBe("reserved");
     const active = memory.state.storageUploads.get("host-loss")!;
@@ -1021,8 +1010,7 @@ describe("legacy storage cleanup contracts", () => {
       name: "unknown.bin",
       mimeType: "application/octet-stream",
       size: BigInt(1),
-      quotaBytes: BigInt(10),
-      fileCountLimit: 10,
+      quota: { quotaBytes: BigInt(10), fileCountLimit: 10 },
     });
     const row = memory.state.storageUploads.get("unknown-expired")!;
     memory.state.storageUploads.set(row.id, {

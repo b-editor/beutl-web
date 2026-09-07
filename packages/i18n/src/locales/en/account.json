@@ -91,7 +91,13 @@
     "paymentMethodDescription": "You can add or update your card information.",
     "noPaymentMethodYet": "No payment method is saved yet.",
     "changePaymentMethod": "Change Payment Method",
-    "stripeUnavailableNotice": "We could not reach Stripe, so this page may not reflect your latest changes. Reload in a moment."
+    "stripeUnavailableNotice": "We could not reach Stripe, so this page may not reflect your latest changes. Reload in a moment.",
+    "storageProductName": "Beutl Storage",
+    "storageTier": {
+      "100gb": "100 GB",
+      "200gb": "200 GB",
+      "1tb": "1 TB"
+    }
   },
   "aiPlan": {
     "plan": "Subscription",
@@ -114,5 +120,18 @@
     "manageSubscription": "Manage subscription",
     "checkoutFailed": "Failed to start checkout",
     "checkoutSuccess": "Checkout completed. It may take a few minutes to reflect."
+  },
+  "storagePlan": {
+    "title": "Storage plan",
+    "description": "More room for uploads while the plan is active. Existing files are never touched.",
+    "subscribeTier": "Subscribe to {{tier}}",
+    "tierQuota": "{{quota}} of storage",
+    "currentTier": "Current plan",
+    "changeTier": "Change plan",
+    "changeTierHint": "The difference for the rest of this period is charged right away. A card that needs extra verification cannot be charged this way; update your payment method first.",
+    "cancelScheduledNotice": "Your cancellation is scheduled. The plan's storage stays available until the date above. After that, new uploads are refused while you are over the free quota, but nothing is deleted.",
+    "tierChanged": "Your storage plan was changed.",
+    "tierChangeFailed": "The plan could not be changed. The payment was declined or needs verification; update your payment method and try again.",
+    "downgradeBlocked": "You are using more than that plan allows. Delete files first, then change the plan."
   }
 }

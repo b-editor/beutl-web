@@ -1,4 +1,5 @@
 import { PRO_PLAN } from "@beutl/api";
+import { STORAGE_PLAN, isStorageTierId, type StorageTierId } from "@beutl/core";
 import type { BillingProduct } from "@/lib/billing-product";
 import { invoiceServicePeriodSeconds } from "./invoice-period";
 import { getExpandableId, hasStripeOwnerMetadata } from "./ownership";
@@ -22,6 +23,8 @@ export type BillingDocumentLink = {
 export type SubscriptionPaymentRecord = {
   id: string;
   product: BillingProduct;
+  // ストレージの請求書だけ。契約側のメタデータが名乗るティア (参考情報)。
+  tier: StorageTierId | null;
   paidAt: Date;
   periodStart: Date;
   periodEnd: Date;
@@ -81,19 +84,25 @@ function servicePeriod(invoice: Stripe.Invoice): { start: Date; end: Date } {
   return { start: fromUnixSeconds(start), end: fromUnixSeconds(end) };
 }
 
-// この請求書がこのアプリの Pro サブスクリプションのものか。顧客 ID は呼び出し側で
+// この請求書がこのアプリのどのサブスクリプションのものか。顧客 ID は呼び出し側で
 // ユーザーに紐づけて解決済みだが、他所で作られた契約を Beutl の商品名で出さない
-// ために、契約側のメタデータも確かめる。
-function isOwnedProSubscriptionInvoice(
+// ために、契約側のメタデータも確かめる。該当しなければ null。
+function ownedSubscriptionInvoiceProduct(
   invoice: Stripe.Invoice,
   userId: string,
-): boolean {
+): { product: BillingProduct; tier: StorageTierId | null } | null {
   const details = invoice.parent?.subscription_details;
-  return (
-    details != null &&
-    details.metadata?.planId === PRO_PLAN.id &&
-    hasStripeOwnerMetadata(details.metadata, userId)
-  );
+  if (details == null || !hasStripeOwnerMetadata(details.metadata, userId)) {
+    return null;
+  }
+  if (details.metadata?.planId === PRO_PLAN.id) {
+    return { product: "aiPro", tier: null };
+  }
+  if (details.metadata?.planId === STORAGE_PLAN.id) {
+    const tier = details.metadata?.tier;
+    return { product: "storage", tier: isStorageTierId(tier) ? tier : null };
+  }
+  return null;
 }
 
 export async function retrieveBillingDocuments({
@@ -130,11 +139,8 @@ export async function retrieveBillingDocuments({
       }
     }
 
-    if (
-      invoice.status !== "paid" ||
-      invoice.amount_paid <= 0 ||
-      !isOwnedProSubscriptionInvoice(invoice, userId)
-    ) {
+    const owned = ownedSubscriptionInvoiceProduct(invoice, userId);
+    if (invoice.status !== "paid" || invoice.amount_paid <= 0 || !owned) {
       continue;
     }
     const period = servicePeriod(invoice);
@@ -143,7 +149,8 @@ export async function retrieveBillingDocuments({
       .filter((summary): summary is ChargeSummary => summary !== undefined);
     subscriptionPayments.push({
       id: invoice.id,
-      product: "aiPro",
+      product: owned.product,
+      tier: owned.tier,
       paidAt: fromUnixSeconds(
         invoice.status_transitions.paid_at ?? invoice.created,
       ),

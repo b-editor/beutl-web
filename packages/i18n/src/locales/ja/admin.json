@@ -463,5 +463,26 @@
     "cancel": "キャンセル",
     "previousPage": "前のページ",
     "nextPage": "次のページ"
+  },
+  "storage": {
+    "plan": "ストレージ契約",
+    "activeSubscriptions": "有効なストレージ契約",
+    "activeSubscriptionsHint": "ティア別の契約数。期間フィルタには依存しません。",
+    "byTier": "ティア別",
+    "tier": "ティア",
+    "count": "契約数",
+    "quota": "容量",
+    "tiers": {
+      "100gb": "100 GB",
+      "200gb": "200 GB",
+      "1tb": "1 TB"
+    },
+    "free": "無料枠",
+    "planActive": "有効",
+    "planNone": "契約なし",
+    "status": "状態",
+    "usage": "使用量",
+    "usageValue": "{{used}} / {{quota}} ({{files}} / {{limit}} 件)",
+    "subscriptionPeriod": "契約期間の終了"
   }
 }

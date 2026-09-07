@@ -1,10 +1,11 @@
+import { isSubscriptionTier, subscriptionPlanOfOfferKind } from "@beutl/core";
 import { getDb } from "./provider";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
 } from "./transaction";
 
-export type BillingOfferKind = "pro" | "top_up";
+export type BillingOfferKind = "pro" | "top_up" | "storage";
 
 export type BillingOfferTerms = {
   kind: BillingOfferKind;
@@ -15,6 +16,8 @@ export type BillingOfferTerms = {
   creditAmount: number | null;
   recurringInterval: string | null;
   recurringIntervalCount: number | null;
+  // ティアを持つプランの Price だけに入る。省略は null と同じ。
+  tier?: string | null;
 };
 
 function normalizeTerms(terms: BillingOfferTerms): BillingOfferTerms {
@@ -32,14 +35,6 @@ function normalizeTerms(terms: BillingOfferTerms): BillingOfferTerms {
     throw new RangeError("Billing offer currency must not be empty");
   }
   if (
-    terms.kind === "pro" &&
-    (terms.creditAmount !== null ||
-      terms.recurringInterval !== "month" ||
-      terms.recurringIntervalCount !== 1)
-  ) {
-    throw new Error("A Pro billing offer must be a monthly recurring Price");
-  }
-  if (
     terms.kind === "top_up" &&
     (!Number.isSafeInteger(terms.creditAmount) ||
       (terms.creditAmount ?? 0) <= 0 ||
@@ -48,7 +43,29 @@ function normalizeTerms(terms: BillingOfferTerms): BillingOfferTerms {
   ) {
     throw new Error("A top-up billing offer must be a positive one-time Price");
   }
-  return { ...terms, currency };
+  const tier = terms.tier ?? null;
+  const plan = subscriptionPlanOfOfferKind(terms.kind);
+  if (plan) {
+    // サブスクリプションの offer は月次 1 回。ティアの集合はプランの定義が決める:
+    // ティアを持つプランは既知のティアが必須、持たないプランは null だけ。
+    if (
+      terms.creditAmount !== null ||
+      terms.recurringInterval !== "month" ||
+      terms.recurringIntervalCount !== 1
+    ) {
+      throw new Error(`A ${plan.id} billing offer must be a monthly recurring Price`);
+    }
+    if (!isSubscriptionTier(plan, tier)) {
+      throw new Error(
+        plan.tierIds.length === 0
+          ? `A ${plan.id} billing offer has no tiers`
+          : `A ${plan.id} billing offer must name a known tier`,
+      );
+    }
+  } else if (tier !== null) {
+    throw new Error("Only a subscription billing offer can carry a tier");
+  }
+  return { ...terms, currency, tier };
 }
 
 function assertSameTerms(
@@ -71,6 +88,12 @@ function assertSameTerms(
       );
     }
   }
+  // 既存の Pro / top-up 行は列が NULL で、条件側は省略されている。どちらも「無し」。
+  if ((stored.tier ?? null) !== (incoming.tier ?? null)) {
+    throw new Error(
+      `Stripe Price ${incoming.stripePriceId} conflicts with its persisted billing offer`,
+    );
+  }
 }
 
 // Activating a checkout offer retires only the checkout pointer. Historical
@@ -91,9 +114,12 @@ export async function activateBillingOffer({
     });
     assertSameTerms(offer as BillingOfferTerms, terms);
 
+    // 「販売中の offer は kind とティアごとに 1 つ」。ティアの無い kind では
+    // tier が null 同士なので、従来どおり kind ごとに 1 つになる。
     await tx.billingOffer.updateMany({
       where: {
         kind: terms.kind,
+        tier: terms.tier ?? null,
         checkoutEnabled: true,
         id: { not: offer.id },
       },
@@ -167,28 +193,36 @@ export async function findBillingOfferByStripePriceId({
 // the caller always sees the same one.
 export async function findCheckoutBillingOffer({
   kind,
+  tier,
   prisma,
 }: {
   kind: BillingOfferKind;
+  tier?: string | null;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   return await db.billingOffer.findFirst({
-    where: { kind, checkoutEnabled: true },
+    where: {
+      kind,
+      checkoutEnabled: true,
+      ...(tier !== undefined ? { tier } : {}),
+    },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
   });
 }
 
 export async function listBillingOfferPriceIds({
   kind,
+  tier,
   prisma,
 }: {
   kind: BillingOfferKind;
+  tier?: string | null;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
   const offers = await db.billingOffer.findMany({
-    where: { kind },
+    where: { kind, ...(tier !== undefined ? { tier } : {}) },
     select: { stripePriceId: true },
   });
   return offers.map((offer) => offer.stripePriceId);

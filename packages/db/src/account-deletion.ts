@@ -51,21 +51,25 @@ export async function prepareAccountDeletionOutboxes({
     where: { userId },
     select: { stripeId: true },
   });
-  const proAttempt = await prisma.proCheckoutAttempt.findUnique({
+  // Every plan's bound Session gets a cleanup row; the cleanup kind names the
+  // plan so the worker validates the Session against the right offer kind.
+  const subscriptionAttempts = await prisma.subscriptionCheckoutAttempt.findMany({
     where: { userId },
-    select: { stripeCheckoutSessionId: true, billingOfferId: true, customerId: true },
+    select: { planId: true, stripeCheckoutSessionId: true, billingOfferId: true, customerId: true },
   });
-  const customerId = customer?.stripeId ?? proAttempt?.customerId;
-  if (customerId && proAttempt?.stripeCheckoutSessionId) {
-    await scheduleStripeCheckoutCleanup({
-      sessionId: proAttempt.stripeCheckoutSessionId,
-      userId,
-      kind: "pro",
-      customerId,
-      billingOfferId: proAttempt.billingOfferId,
-      now,
-      prisma,
-    });
+  for (const attempt of subscriptionAttempts) {
+    const customerId = customer?.stripeId ?? attempt.customerId;
+    if (customerId && attempt.stripeCheckoutSessionId) {
+      await scheduleStripeCheckoutCleanup({
+        sessionId: attempt.stripeCheckoutSessionId,
+        userId,
+        kind: attempt.planId,
+        customerId,
+        billingOfferId: attempt.billingOfferId,
+        now,
+        prisma,
+      });
+    }
   }
   {
     const packageAttempts = await prisma.packageCheckoutAttempt.findMany({
@@ -110,7 +114,7 @@ export async function prepareAccountDeletionOutboxes({
   // Expiry revokes redirect eligibility while deliberately retaining the bound
   // Stripe Session ID. The remote deletion saga still needs that handle to
   // expire the Session or durably compensate it if Checkout won the race.
-  await prisma.proCheckoutAttempt.updateMany({
+  await prisma.subscriptionCheckoutAttempt.updateMany({
     where: { userId },
     data: { expiresAt: now, accountDeletionAt: now },
   });
@@ -276,7 +280,7 @@ export async function findAccountDeletionIntentByUserId({
 }
 
 export type AccountDeletionBillingBlockerCategory =
-  | "proCheckout"
+  | "subscriptionCheckout"
   | "buyerPackageCheckout"
   | "sellerPackageCheckout"
   | "topUpCheckout"
@@ -288,15 +292,15 @@ export type AccountDeletionBillingBlockers = Readonly<Record<AccountDeletionBill
 export async function inspectAccountDeletionBillingBlockers({ userId, prisma }: { userId: string; prisma?: PrismaTransaction }): Promise<AccountDeletionBillingBlockers> {
   const db = prisma ?? await getDb();
   const ownedPackages = await db.package.findMany({ where: { userId }, select: { id: true } });
-  const [proCheckout, buyerPackageCheckout, sellerPackageCheckout, topUpCheckout, topUpRefund, topUpResolution] = await Promise.all([
-    db.proCheckoutAttempt.count({ where: { userId, accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, recoveryCompletedAt: null } }),
+  const [subscriptionCheckout, buyerPackageCheckout, sellerPackageCheckout, topUpCheckout, topUpRefund, topUpResolution] = await Promise.all([
+    db.subscriptionCheckoutAttempt.count({ where: { userId, accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, recoveryCompletedAt: null } }),
     db.packageCheckoutAttempt.count({ where: { userId, accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, status: { in: ["open", "recovering", "intervention"] } } }),
     db.packageCheckoutAttempt.count({ where: { packageId: { in: ownedPackages.map((pkg) => pkg.id) }, accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, status: { in: ["open", "recovering", "intervention"] } } }),
     db.topUpCheckoutAttempt.count({ where: { ownerUserId: userId, accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, status: { in: ["open", "payment_pending", "refund_required", "refund_pending", "refund_failed"] }, refundInterventionAt: null } }),
     db.topUpDuplicateRefundAttempt.count({ where: { ownerUserId: userId, status: { in: ["required", "processing", "retry", "intervention"] } } }),
     db.topUpCheckoutResolution.count({ where: { ownerUserId: userId, status: { in: ["refund_pending", "intervention"] } } }),
   ]);
-  return { proCheckout, buyerPackageCheckout, sellerPackageCheckout, topUpCheckout, topUpRefund, topUpResolution };
+  return { subscriptionCheckout, buyerPackageCheckout, sellerPackageCheckout, topUpCheckout, topUpRefund, topUpResolution };
 }
 
 export async function countUnboundAccountDeletionCheckoutAttempts({ userId, prisma }: { userId: string; prisma?: PrismaTransaction }) {
@@ -364,15 +368,12 @@ export async function reserveAdminAccountDeletion({
       where: { userId },
       select: { stripeId: true },
     });
-    const subscription = await tx.subscription.findUnique({
-      where: { userId },
+    // Any plan's live subscription blocks deletion until it is settled.
+    const subscription = await tx.subscription.findFirst({
+      where: { userId, status: { notIn: ["canceled", "incomplete_expired"] } },
       select: { status: true },
     });
-    if (
-      subscription &&
-      subscription.status !== "canceled" &&
-      subscription.status !== "incomplete_expired"
-    ) {
+    if (subscription) {
       return { status: "blocked", reason: "subscription" } as const;
     }
     await tx.accountDeletionIntent.upsert({

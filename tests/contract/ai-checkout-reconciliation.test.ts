@@ -3,14 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   cancelSubscription: vi.fn(),
   checkoutRetrieve: vi.fn(),
-  deleteBoundProCheckoutAttempt: vi.fn(),
+  deleteBoundSubscriptionCheckoutAttempt: vi.fn(),
   expireTopUpCheckoutAttempt: vi.fn(),
   findBillingOfferById: vi.fn(),
-  findProCheckoutAttemptBySessionId: vi.fn(),
+  findSubscriptionCheckoutAttemptBySessionId: vi.fn(),
   findCustomerByUserId: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
   findTopUpCheckoutAttemptBySessionId: vi.fn(),
-  getSubscriptionByUserId: vi.fn(),
+  getSubscription: vi.fn(),
   invoicePaymentList: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
   recordBillingRefundCancellation: vi.fn(),
@@ -38,43 +38,34 @@ vi.mock("@/lib/stripe/config", () => ({
     paymentIntents: { retrieve: vi.fn() },
   }),
 }));
+vi.mock("@/lib/stripe/subscription-billing", () => ({
+  activateConfiguredSubscriptionOffer: vi.fn(),
+  blocksNewSubscriptionCheckout: vi.fn(),
+  resolveSubscriptionOffer: (_plan: unknown, ...args: unknown[]) =>
+    mocks.resolveProBillingOffer(...args),
+}));
 vi.mock("@/lib/stripe/ai-billing", () => ({
-  activateConfiguredProOffer: vi.fn(),
   activateConfiguredTopUpOffer: vi.fn(),
-  blocksNewProCheckout: vi.fn(),
   fulfillOrRefundTopUpPayment: vi.fn(),
-  configuredProPriceIds: () => {
-    const result = new Set<string>();
-    if (process.env.STRIPE_PRO_PRICE_ID) {
-      result.add(process.env.STRIPE_PRO_PRICE_ID);
-    }
-    for (const entry of
-      process.env.STRIPE_PRO_HISTORICAL_OFFERS?.split(",") ?? []) {
-      const [priceId] = entry.split(":");
-      if (priceId) result.add(priceId);
-    }
-    return result;
-  },
   getSubscriptionPeriod: () => ({
     currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
     currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
   }),
-  resolveProBillingOffer: mocks.resolveProBillingOffer,
 }));
 vi.mock("@beutl/db", () => ({
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
     "pre-owner-metadata-2026-08-09",
-  deleteBoundProCheckoutAttempt: mocks.deleteBoundProCheckoutAttempt,
+  deleteBoundSubscriptionCheckoutAttempt: mocks.deleteBoundSubscriptionCheckoutAttempt,
   expireTopUpCheckoutAttempt: mocks.expireTopUpCheckoutAttempt,
   findBillingOfferById: mocks.findBillingOfferById,
   findCustomerByUserId: mocks.findCustomerByUserId,
-  findProCheckoutAttemptBySessionId:
-    mocks.findProCheckoutAttemptBySessionId,
+  findSubscriptionCheckoutAttemptBySessionId:
+    mocks.findSubscriptionCheckoutAttemptBySessionId,
   findStripeCustomerOwnershipByStripeId:
     mocks.findStripeCustomerOwnershipByStripeId,
   findTopUpCheckoutAttemptBySessionId:
     mocks.findTopUpCheckoutAttemptBySessionId,
-  getSubscriptionByUserId: mocks.getSubscriptionByUserId,
+  getSubscription: mocks.getSubscription,
   reconcileSubscriptionObservation: mocks.reconcileSubscriptionObservation,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
@@ -134,13 +125,13 @@ describe("AI Checkout return reconciliation", () => {
       userId: "user-1",
       stripeId: "cus_1",
     });
-    mocks.findProCheckoutAttemptBySessionId.mockResolvedValue({
+    mocks.findSubscriptionCheckoutAttemptBySessionId.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-1",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_verified",
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     mocks.findBillingOfferById.mockResolvedValue(proOffer);
     mocks.expireTopUpCheckoutAttempt.mockResolvedValue({ count: 1 });
     mocks.findTopUpCheckoutAttemptBySessionId.mockResolvedValue(null);
@@ -183,7 +174,7 @@ describe("AI Checkout return reconciliation", () => {
     ).resolves.toBe(false);
 
     expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalled();
-    expect(mocks.findProCheckoutAttemptBySessionId).not.toHaveBeenCalled();
+    expect(mocks.findSubscriptionCheckoutAttemptBySessionId).not.toHaveBeenCalled();
   });
 
   it("reconciles the exact completed and owned Checkout Session", async () => {
@@ -251,7 +242,7 @@ describe("AI Checkout return reconciliation", () => {
     expect(mocks.cancelSubscription).toHaveBeenCalled();
     expect(mocks.resolveProBillingOffer).not.toHaveBeenCalled();
     expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalled();
-    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       checkoutKey: "attempt-1",
       stripeCheckoutSessionId: "cs_verified",
@@ -393,7 +384,7 @@ describe("AI Checkout return reconciliation", () => {
       subscription: "sub_new",
       metadata: ownerMetadata,
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       stripeSubscriptionId: "sub_old",
       status: "canceled",
       stripeEventCreatedAt: new Date(1_786_060_800_000),
@@ -433,8 +424,8 @@ describe("AI Checkout return reconciliation", () => {
       subscription: "sub_old",
       metadata: ownerMetadata,
     });
-    mocks.findProCheckoutAttemptBySessionId.mockResolvedValue(null);
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.findSubscriptionCheckoutAttemptBySessionId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue({
       stripeSubscriptionId: "sub_new",
       status: "active",
       stripeEventCreatedAt: new Date(1_786_060_900_000),
@@ -452,7 +443,7 @@ describe("AI Checkout return reconciliation", () => {
     await expect(reconcileAiCheckoutSuccess("cs_old")).resolves.toBe(false);
     expect(mocks.resolveProBillingOffer).not.toHaveBeenCalled();
     expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalled();
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
   });
 
   it("treats reloading the same successful Session as idempotent", async () => {
@@ -466,8 +457,8 @@ describe("AI Checkout return reconciliation", () => {
       subscription: "sub_1",
       metadata: ownerMetadata,
     });
-    mocks.findProCheckoutAttemptBySessionId.mockResolvedValue(null);
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.findSubscriptionCheckoutAttemptBySessionId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue({
       stripeSubscriptionId: "sub_1",
       status: "active",
     });
@@ -479,6 +470,6 @@ describe("AI Checkout return reconciliation", () => {
     await expect(
       reconcileAiCheckoutSuccess("cs_verified"),
     ).resolves.toBe(true);
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { isActiveProSubscription } from "@beutl/api";
 import {
-  getSubscriptionByUserId,
+  getSubscription,
   reconcileSubscriptionEntitlementHold,
   setDbProvider,
 } from "@beutl/db";
@@ -132,7 +132,7 @@ describe("Pro entitlement reversal holds", () => {
       stripeCanonicalObservedAt: new Date("2026-08-11T00:00:01.000Z"),
     });
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(false);
 
     const won = {
@@ -146,7 +146,7 @@ describe("Pro entitlement reversal holds", () => {
     await reconcileSubscriptionEntitlementHold(won);
     await reconcileSubscriptionEntitlementHold(won);
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(true);
 
     await reconcileSubscriptionEntitlementHold({
@@ -173,7 +173,7 @@ describe("Pro entitlement reversal holds", () => {
 
     expect(hold).toMatchObject({ reversalAmount: 400, active: false });
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(true);
   });
 
@@ -187,7 +187,7 @@ describe("Pro entitlement reversal holds", () => {
       stripeCanonicalObservedAt: new Date("2026-08-11T00:00:01.000Z"),
     });
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(false);
 
     // invoice.paid advances the locally persisted period. The old full refund
@@ -195,7 +195,7 @@ describe("Pro entitlement reversal holds", () => {
     currentPeriodStart = septemberStart;
     currentPeriodEnd = octoberStart;
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(true);
   });
 
@@ -212,7 +212,7 @@ describe("Pro entitlement reversal holds", () => {
     };
 
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(true);
   });
 
@@ -228,7 +228,7 @@ describe("Pro entitlement reversal holds", () => {
     currentSubscriptionId = "sub_2";
 
     expect(
-      isActiveProSubscription(await getSubscriptionByUserId({ userId: "user-1" })),
+      isActiveProSubscription(await getSubscription({ userId: "user-1" })),
     ).toBe(true);
   });
 

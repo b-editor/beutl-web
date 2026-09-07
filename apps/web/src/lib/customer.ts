@@ -2,7 +2,7 @@ import {
   createVerifiedCustomerMappingIfAbsent,
   beginStripeCustomerProvisioning,
   findBillingOfferById,
-  findBoundProCheckoutAttemptForAccountDeletion,
+  findBoundSubscriptionCheckoutAttemptsForAccountDeletion,
   findAccountDeletionIntentByUserId,
   inspectAccountDeletionBillingBlockers,
   countActiveStripeCustomerProvisioning,
@@ -20,7 +20,10 @@ import {
   setTopUpCheckoutSession,
   startRetryableTransaction,
 } from "@beutl/db";
-import { PRO_PLAN } from "@beutl/api";
+import {
+  subscriptionPlanOf,
+  type SubscriptionPlanDefinition,
+} from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { isStripeResourceMissingError } from "@/lib/stripe/errors";
 import { createStripe } from "@/lib/stripe/config";
@@ -453,13 +456,15 @@ type PersistedBillingOffer = NonNullable<
   Awaited<ReturnType<typeof findBillingOfferById>>
 >;
 
-function checkoutSessionMatchesBoundProCheckout({
+function checkoutSessionMatchesBoundSubscriptionCheckout({
+  plan,
   checkoutSession,
   stripeCheckoutSessionId,
   billingOffer,
   expectedCustomerId,
   expectedUserId,
 }: {
+  plan: SubscriptionPlanDefinition;
   checkoutSession: Stripe.Checkout.Session;
   stripeCheckoutSessionId: string;
   billingOffer: PersistedBillingOffer;
@@ -471,32 +476,34 @@ function checkoutSessionMatchesBoundProCheckout({
     checkoutSession.id === stripeCheckoutSessionId &&
     checkoutSession.mode === "subscription" &&
     getExpandableId(checkoutSession.customer) === expectedCustomerId &&
-    checkoutSession.metadata?.planId === PRO_PLAN.id &&
+    checkoutSession.metadata?.planId === plan.id &&
     checkoutSession.metadata?.billingOfferId === billingOffer.id &&
     hasStripeOwnerMetadata(checkoutSession.metadata, expectedUserId) &&
-    billingOffer.kind === "pro" &&
+    billingOffer.kind === plan.offerKind &&
     lineItems?.length === 1 &&
     lineItems[0].quantity === 1 &&
     getExpandableId(lineItems[0].price) === billingOffer.stripePriceId
   );
 }
 
-function subscriptionMatchesBoundProCheckout({
+function subscriptionMatchesBoundSubscriptionCheckout({
+  plan,
   subscription,
   billingOffer,
   expectedCustomerId,
   expectedUserId,
 }: {
+  plan: SubscriptionPlanDefinition;
   subscription: Stripe.Subscription;
   billingOffer: PersistedBillingOffer;
   expectedCustomerId: string;
   expectedUserId: string;
 }): boolean {
   if (
-    billingOffer.kind !== "pro" ||
+    billingOffer.kind !== plan.offerKind ||
     subscription.items.data.length !== 1 ||
     getExpandableId(subscription.customer) !== expectedCustomerId ||
-    subscription.metadata?.planId !== PRO_PLAN.id ||
+    subscription.metadata?.planId !== plan.id ||
     subscription.metadata?.billingOfferId !== billingOffer.id ||
     !hasStripeOwnerMetadata(subscription.metadata, expectedUserId)
   ) {
@@ -545,7 +552,10 @@ async function listPaidInvoicePaymentIntentIds({
   }
 }
 
-async function resolveBoundProCheckoutForAccountDeletion({
+// Every plan whose Checkout is bound to a Session gets the same closure steps;
+// the plan only decides which offer kind the Session must match and how a
+// superseded completion is labeled.
+async function resolveBoundSubscriptionCheckoutsForAccountDeletion({
   stripe,
   expectedCustomerId,
   userId,
@@ -554,20 +564,44 @@ async function resolveBoundProCheckoutForAccountDeletion({
   expectedCustomerId: string;
   userId: string;
 }): Promise<void> {
-  const attempt = await findBoundProCheckoutAttemptForAccountDeletion({
+  const attempts = await findBoundSubscriptionCheckoutAttemptsForAccountDeletion({
     userId,
   });
-  if (!attempt) return;
+  for (const attempt of attempts) {
+    const plan = subscriptionPlanOf(attempt.planId);
+    if (!plan) continue;
+    await resolveBoundSubscriptionCheckoutForAccountDeletion({
+      stripe,
+      expectedCustomerId,
+      userId,
+      attempt,
+      plan,
+    });
+  }
+}
 
+async function resolveBoundSubscriptionCheckoutForAccountDeletion({
+  stripe,
+  expectedCustomerId,
+  userId,
+  attempt,
+  plan,
+}: {
+  stripe: StripeClient;
+  expectedCustomerId: string;
+  userId: string;
+  attempt: { billingOfferId: string; stripeCheckoutSessionId: string };
+  plan: SubscriptionPlanDefinition;
+}): Promise<void> {
   const [billingOffer, initialCheckoutSession] = await Promise.all([
     findBillingOfferById({ id: attempt.billingOfferId }),
     stripe.checkout.sessions.retrieve(attempt.stripeCheckoutSessionId, {
       expand: ["line_items.data.price"],
     }),
   ]);
-  if (!billingOffer || billingOffer.kind !== "pro") {
+  if (!billingOffer || billingOffer.kind !== plan.offerKind) {
     throw new Error(
-      `Bound Checkout Session ${attempt.stripeCheckoutSessionId} has no Pro billing offer`,
+      `Bound Checkout Session ${attempt.stripeCheckoutSessionId} has no ${plan.offerKind} billing offer`,
     );
   }
 
@@ -576,7 +610,8 @@ async function resolveBoundProCheckoutForAccountDeletion({
       expand: ["line_items.data.price"],
     });
   const matchesBinding = (checkoutSession: Stripe.Checkout.Session) =>
-    checkoutSessionMatchesBoundProCheckout({
+    checkoutSessionMatchesBoundSubscriptionCheckout({
+      plan,
       checkoutSession,
       stripeCheckoutSessionId: attempt.stripeCheckoutSessionId,
       billingOffer,
@@ -631,7 +666,8 @@ async function resolveBoundProCheckoutForAccountDeletion({
   const subscription = await stripe.subscriptions.retrieve(subscriptionId);
   if (
     getExpandableId(checkoutSession.subscription) !== subscription.id ||
-    !subscriptionMatchesBoundProCheckout({
+    !subscriptionMatchesBoundSubscriptionCheckout({
+      plan,
       subscription,
       billingOffer,
       expectedCustomerId,
@@ -654,7 +690,7 @@ async function resolveBoundProCheckoutForAccountDeletion({
     for (const stripePaymentIntentId of
       paymentIntentIds.size > 0 ? [...paymentIntentIds] : [null]) {
       const refundAttempt = await scheduleBillingRefundAttempt({
-        disposition: "superseded-pro-checkout",
+        disposition: plan.supersededDisposition,
         sourceKey:
           `${checkoutSession.id}:${stripePaymentIntentId ?? "no-payment"}`,
         stripeCustomerId: expectedCustomerId,
@@ -754,7 +790,7 @@ export async function closeStripeCustomerForAccountDeletion({
   // The attempt retains its Stripe handle after deletion authorization. Resolve
   // it before any destructive Customer operation so a Checkout completion that
   // won the race has a durable refund record before local cascade deletion.
-  await resolveBoundProCheckoutForAccountDeletion({
+  await resolveBoundSubscriptionCheckoutsForAccountDeletion({
     stripe,
     expectedCustomerId: customer.id,
     userId,
@@ -769,9 +805,10 @@ export async function closeStripeCustomerForAccountDeletion({
       if (!hasStripeOwnerMetadata(session.metadata, userId)) return { status: "owner-mismatch", customerId: customer.id };
       const isPackage = session.metadata?.beutlPurchaseKind === "package" && Boolean(session.metadata.packageId);
       const isTopUp = Boolean(session.metadata?.topUpAttemptId);
-      const isPro = Boolean(session.metadata?.billingOfferId) && !isTopUp;
+      const subscriptionPlan = Boolean(session.metadata?.billingOfferId) && !isTopUp ? (subscriptionPlanOf(session.metadata?.planId ?? "pro")?.id ?? null) : null;
       if (isTopUp) { if (!session.metadata?.topUpAttemptId || (await setTopUpCheckoutSession({ attemptId: session.metadata.topUpAttemptId, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : new Date() })) === "not-stored") return { status: "owner-mismatch", customerId: customer.id }; }
-      else if (isPackage || isPro) await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: isPackage ? "package" : "pro", customerId: customer.id, packageId: isPackage ? session.metadata?.packageId : null, billingOfferId: isPro ? session.metadata?.billingOfferId : null });
+      else if (isPackage) await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: "package", customerId: customer.id, packageId: session.metadata?.packageId, billingOfferId: null });
+      else if (subscriptionPlan) await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: subscriptionPlan, customerId: customer.id, packageId: null, billingOfferId: session.metadata?.billingOfferId });
       else return { status: "owner-mismatch", customerId: customer.id };
       try { await stripe.checkout.sessions.expire(session.id); } catch (error) { const current = await stripe.checkout.sessions.retrieve(session.id); if (current.status !== "complete" && current.status !== "expired") throw error; }
     }
@@ -787,7 +824,7 @@ export async function closeStripeCustomerForAccountDeletion({
       if (!hasStripeOwnerMetadata(session.metadata, userId)) return { status: "owner-mismatch", customerId: customer.id };
       const isPackage = session.metadata?.beutlPurchaseKind === "package" && Boolean(session.metadata.packageId);
       const isTopUp = Boolean(session.metadata?.topUpAttemptId);
-      const isPro = Boolean(session.metadata?.billingOfferId) && !isTopUp;
+      const subscriptionPlan = Boolean(session.metadata?.billingOfferId) && !isTopUp ? (subscriptionPlanOf(session.metadata?.planId ?? "pro")?.id ?? null) : null;
       if (isPackage || isTopUp) {
         const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
         if (!paymentIntentId) return { status: "owner-mismatch", customerId: customer.id };
@@ -801,13 +838,13 @@ export async function closeStripeCustomerForAccountDeletion({
         if (isTopUp) {
           if (!session.metadata?.topUpAttemptId || (await setTopUpCheckoutSession({ attemptId: session.metadata.topUpAttemptId, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : new Date() })) === "not-stored") return { status: "owner-mismatch", customerId: customer.id };
         } else await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: "package", customerId: customer.id, packageId: session.metadata?.packageId, billingOfferId: null });
-      } else if (isPro) {
+      } else if (subscriptionPlan) {
         const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
         if (!subscriptionId) return { status: "owner-mismatch", customerId: customer.id };
         let subscription: Stripe.Subscription;
         try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch { return { status: "owner-mismatch", customerId: customer.id }; }
         if (subscription.created < Math.floor(deletionAuthorizedAt.getTime() / 1000)) continue;
-        await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: "pro", customerId: customer.id, packageId: null, billingOfferId: session.metadata?.billingOfferId });
+        await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: subscriptionPlan, customerId: customer.id, packageId: null, billingOfferId: session.metadata?.billingOfferId });
       } else return { status: "owner-mismatch", customerId: customer.id };
     }
     if (!completed.has_more) break;

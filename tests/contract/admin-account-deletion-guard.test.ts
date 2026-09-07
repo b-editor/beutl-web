@@ -22,10 +22,14 @@ function transaction(overrides: {
       count: vi.fn().mockResolvedValue(overrides.provisioningCount ?? 0),
     },
     subscription: {
-      findUnique: vi.fn().mockResolvedValue(overrides.subscription ?? null),
+      findFirst: vi.fn().mockResolvedValue(overrides.subscription ?? null),
     },
-    proCheckoutAttempt: {
-      findUnique: vi.fn().mockResolvedValue(overrides.checkout ?? null),
+    subscriptionCheckoutAttempt: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue(
+          overrides.checkout ? [{ planId: "pro", ...overrides.checkout }] : [],
+        ),
       updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       count: vi.fn().mockResolvedValue(overrides.blockerCount ?? 0),
     },

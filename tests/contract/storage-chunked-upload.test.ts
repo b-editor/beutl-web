@@ -3,8 +3,8 @@ import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
 import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
+  STORAGE_FREE_FILE_COUNT_LIMIT,
+  STORAGE_FREE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
@@ -329,8 +329,8 @@ describe("uploading a file too large for one request", () => {
     expect(STORAGE_UPLOAD_PART_BYTES).toBeLessThan(100 * 1024 * 1024);
     expect(partCountOf(BigInt(STORAGE_UPLOAD_PART_BYTES))).toBe(1);
     expect(partCountOf(BigInt(STORAGE_UPLOAD_PART_BYTES + 1))).toBe(2);
-    expect(partCountOf(BigInt(STORAGE_QUOTA_BYTES))).toBe(
-      Math.ceil(STORAGE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES),
+    expect(partCountOf(BigInt(STORAGE_FREE_QUOTA_BYTES))).toBe(
+      Math.ceil(STORAGE_FREE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES),
     );
   });
 
@@ -537,7 +537,7 @@ describe("uploading a file too large for one request", () => {
   });
 
   it("counts what is already on its way against the quota", async () => {
-    const half = BigInt(STORAGE_QUOTA_BYTES) / BigInt(2);
+    const half = BigInt(STORAGE_FREE_QUOTA_BYTES) / BigInt(2);
     const first = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -1628,7 +1628,7 @@ describe("uploading a file too large for one request", () => {
       id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
-      size: BigInt(STORAGE_QUOTA_BYTES),
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES),
     });
     if (!started.ok) throw new Error(started.reason);
     const [tracked] = [...state.storageUploads.values()];
@@ -1656,7 +1656,7 @@ describe("uploading a file too large for one request", () => {
       id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
-      size: BigInt(STORAGE_QUOTA_BYTES),
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES),
     });
     if (!first.ok) throw new Error(first.reason);
     const refused = await startUpload({
@@ -1675,7 +1675,7 @@ describe("uploading a file too large for one request", () => {
   it("refuses to start once the account holds as many files as it may", async () => {
     // 容量だけでは本数を縛れない。1 バイトのファイルを順に完成させれば、枠の
     // 内側で R2 のオブジェクトと行をいくらでも増やせる。
-    for (let index = 0; index < STORAGE_FILE_COUNT_LIMIT; index++) {
+    for (let index = 0; index < STORAGE_FREE_FILE_COUNT_LIMIT; index++) {
       state.files.set(`file-${index}`, {
         id: `file-${index}`,
         objectKey: `key-${index}`,

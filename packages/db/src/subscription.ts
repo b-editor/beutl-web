@@ -1,135 +1,23 @@
+import { isSubscriptionTier, subscriptionPlanOf } from "@beutl/core";
 import { getDb } from "./provider";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
 } from "./transaction";
-
-const MAX_OBSERVATION_CAS_ATTEMPTS = 8;
-
-const IRREVERSIBLE_SUBSCRIPTION_STATUSES = new Set([
-  "canceled",
-  "incomplete_expired",
-]);
-
-type StripeSubscriptionObservation = {
-  userId: string;
-  stripeSubscriptionId: string;
-  status: string;
-  planId: string;
-  currentPeriodStart: Date | null;
-  currentPeriodEnd: Date | null;
-  cancelAtPeriodEnd: boolean;
-  cancelAt: Date | null;
-  billingOfferId?: string | null;
-  stripeSubscriptionCreatedAt: Date | null;
-  stripeEventId: string;
-  stripeEventCreatedAt: Date;
-  stripeCanonicalObservedAt: Date;
-  replaceExistingSubscription?: boolean;
-};
-
-function assertValidDate(value: Date, name: string): void {
-  if (Number.isNaN(value.getTime())) {
-    throw new RangeError(`${name} must be a valid date`);
-  }
-}
-
-function rankTimestamp(value: Date | null): string {
-  if (value === null) {
-    return "0000000000000000";
-  }
-  assertValidDate(value, "subscription observation timestamp");
-  const milliseconds = value.getTime();
-  if (milliseconds < 0) {
-    throw new RangeError("subscription observation timestamps must be non-negative");
-  }
-  return String(milliseconds).padStart(16, "0");
-}
-
-function createSubscriptionObservationRank({
-  stripeSubscriptionId,
-  stripeSubscriptionCreatedAt,
-  currentPeriodStart,
-  currentPeriodEnd,
-}: Pick<
-  StripeSubscriptionObservation,
-  | "stripeSubscriptionId"
-  | "stripeSubscriptionCreatedAt"
-  | "currentPeriodStart"
-  | "currentPeriodEnd"
->): string {
-  return [
-    rankTimestamp(stripeSubscriptionCreatedAt),
-    rankTimestamp(currentPeriodStart),
-    rankTimestamp(currentPeriodEnd),
-    stripeSubscriptionId,
-  ].join(":");
-}
-
-function compareSubscriptionObservation(
-  incoming: {
-    stripeEventCreatedAt: Date;
-    stripeCanonicalObservedAt: Date;
-    stripeEventId: string;
-    stripeObservationRank: string;
-    stripeSubscriptionId: string;
-    status: string;
-  },
-  stored: {
-    stripeEventCreatedAt: Date | null;
-    stripeCanonicalObservedAt: Date | null;
-    stripeEventId: string | null;
-    stripeObservationRank: string | null;
-    stripeSubscriptionId: string;
-    status: string;
-  },
-): number {
-  if (incoming.stripeSubscriptionId === stored.stripeSubscriptionId) {
-    const incomingIsTerminal = IRREVERSIBLE_SUBSCRIPTION_STATUSES.has(
-      incoming.status,
-    );
-    const storedIsTerminal = IRREVERSIBLE_SUBSCRIPTION_STATUSES.has(
-      stored.status,
-    );
-    if (incomingIsTerminal !== storedIsTerminal) {
-      return incomingIsTerminal ? 1 : -1;
-    }
-  }
-
-  if (stored.stripeEventCreatedAt === null) {
-    return 1;
-  }
-  const createdDifference =
-    incoming.stripeEventCreatedAt.getTime() -
-    stored.stripeEventCreatedAt.getTime();
-  if (createdDifference !== 0) {
-    return createdDifference;
-  }
-
-  const canonicalObservedDifference =
-    incoming.stripeCanonicalObservedAt.getTime() -
-    (stored.stripeCanonicalObservedAt?.getTime() ?? 0);
-  if (canonicalObservedDifference !== 0) {
-    return canonicalObservedDifference;
-  }
-
-  const storedRank = stored.stripeObservationRank ?? "";
-  if (incoming.stripeObservationRank !== storedRank) {
-    return incoming.stripeObservationRank > storedRank ? 1 : -1;
-  }
-
-  const storedEventId = stored.stripeEventId ?? "";
-  if (incoming.stripeEventId === storedEventId) {
-    return 0;
-  }
-  return incoming.stripeEventId > storedEventId ? 1 : -1;
-}
+import {
+  assertValidDate,
+  compareSubscriptionObservation,
+  createSubscriptionObservationRank,
+  MAX_OBSERVATION_CAS_ATTEMPTS,
+  type StripeSubscriptionObservation,
+} from "./subscription-observation";
 
 export async function upsertSubscription({
   userId,
   stripeSubscriptionId,
   status,
   planId,
+  tier = null,
   currentPeriodStart,
   currentPeriodEnd,
   cancelAtPeriodEnd,
@@ -141,6 +29,7 @@ export async function upsertSubscription({
   stripeSubscriptionId: string;
   status: string;
   planId: string;
+  tier?: string | null;
   currentPeriodStart?: Date | null;
   currentPeriodEnd?: Date | null;
   cancelAtPeriodEnd?: boolean;
@@ -151,13 +40,14 @@ export async function upsertSubscription({
   const db = prisma ?? await getDb();
   return await db.subscription.upsert({
     where: {
-      userId,
+      userId_planId: { userId, planId },
     },
     create: {
       userId,
       stripeSubscriptionId,
       status,
       planId,
+      tier,
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd,
@@ -167,7 +57,7 @@ export async function upsertSubscription({
     update: {
       stripeSubscriptionId,
       status,
-      planId,
+      tier,
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd,
@@ -177,17 +67,22 @@ export async function upsertSubscription({
   });
 }
 
-export async function getSubscriptionByUserId({
+// One user holds at most one subscription per plan. `entitlementHeld` is true
+// while a refund or dispute hold on this very subscription overlaps its
+// current period; holds on another plan's subscription do not count.
+export async function getSubscription({
   userId,
+  planId,
   prisma,
 }: {
   userId: string;
+  planId: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
   const subscription = await db.subscription.findUnique({
     where: {
-      userId,
+      userId_planId: { userId, planId },
     },
   });
   if (!subscription) {
@@ -214,6 +109,18 @@ export async function getSubscriptionByUserId({
   };
 }
 
+// Every plan's row for a user, without hold information.
+export async function listSubscriptionsByUserId({
+  userId,
+  prisma,
+}: {
+  userId: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.subscription.findMany({ where: { userId } });
+}
+
 export async function findSubscriptionByStripeSubscriptionId({
   stripeSubscriptionId,
   prisma,
@@ -227,12 +134,14 @@ export async function findSubscriptionByStripeSubscriptionId({
 
 export async function updateSubscriptionStatus({
   userId,
+  planId,
   status,
   currentPeriodStart,
   currentPeriodEnd,
   prisma,
 }: {
   userId: string;
+  planId: string;
   status: string;
   currentPeriodStart?: Date | null;
   currentPeriodEnd?: Date | null;
@@ -241,7 +150,7 @@ export async function updateSubscriptionStatus({
   const db = prisma ?? await getDb();
   return await db.subscription.update({
     where: {
-      userId,
+      userId_planId: { userId, planId },
     },
     data: {
       status,
@@ -264,6 +173,17 @@ export async function reconcileSubscriptionObservation(
   if (observation.stripeEventId.trim().length === 0) {
     throw new RangeError("stripeEventId must not be empty");
   }
+  // The tier is what the quota and the admin counts key on, so a value the
+  // plan does not define never reaches the row.
+  const plan = subscriptionPlanOf(observation.planId);
+  if (!plan) {
+    throw new RangeError(`Unknown subscription plan ${observation.planId}`);
+  }
+  if (!isSubscriptionTier(plan, observation.tier ?? null)) {
+    throw new RangeError(
+      `Plan ${plan.id} has no tier ${String(observation.tier)}`,
+    );
+  }
   assertValidDate(
     observation.stripeEventCreatedAt,
     "stripeEventCreatedAt",
@@ -283,6 +203,7 @@ export async function reconcileSubscriptionObservation(
   };
   const data = {
     planId: observation.planId,
+    tier: observation.tier ?? null,
     currentPeriodStart: observation.currentPeriodStart,
     currentPeriodEnd: observation.currentPeriodEnd,
     cancelAtPeriodEnd: observation.cancelAtPeriodEnd,
@@ -293,16 +214,17 @@ export async function reconcileSubscriptionObservation(
 
   for (let attempt = 0; attempt < MAX_OBSERVATION_CAS_ATTEMPTS; attempt++) {
     const result = await startRetryableTransaction(async (tx) => {
-      let stored = await tx.subscription.findUnique({
-        where: { userId: observation.userId },
-      });
+      const key = {
+        userId_planId: { userId: observation.userId, planId: observation.planId },
+      };
+      let stored = await tx.subscription.findUnique({ where: key });
 
       if (!stored) {
         if (observation.replaceExistingSubscription === false) {
           return { retry: false, applied: false, subscription: null };
         }
         stored = await tx.subscription.upsert({
-          where: { userId: observation.userId },
+          where: key,
           create: {
             userId: observation.userId,
             ...data,
@@ -327,6 +249,7 @@ export async function reconcileSubscriptionObservation(
         stored.stripeSubscriptionId === observation.stripeSubscriptionId &&
         stored.status === observation.status &&
         stored.planId === observation.planId &&
+        stored.tier === (observation.tier ?? null) &&
         stored.currentPeriodStart?.getTime() ===
           observation.currentPeriodStart?.getTime() &&
         stored.currentPeriodEnd?.getTime() ===
@@ -342,6 +265,7 @@ export async function reconcileSubscriptionObservation(
       const updated = await tx.subscription.updateMany({
         where: {
           userId: observation.userId,
+          planId: observation.planId,
           stripeSubscriptionId: stored.stripeSubscriptionId,
           stripeEventCreatedAt: stored.stripeEventCreatedAt,
           stripeCanonicalObservedAt: stored.stripeCanonicalObservedAt,
@@ -357,9 +281,7 @@ export async function reconcileSubscriptionObservation(
       return {
         retry: false,
         applied: true,
-        subscription: await tx.subscription.findUnique({
-          where: { userId: observation.userId },
-        }),
+        subscription: await tx.subscription.findUnique({ where: key }),
       };
     });
 

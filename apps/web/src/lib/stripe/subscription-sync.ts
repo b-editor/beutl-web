@@ -1,14 +1,11 @@
-// Pulls the current state of a user's Stripe subscription on demand.
+// Pulls the current state of a user's subscription for one plan on demand.
 //
 // Subscription state normally arrives through webhooks, but a cancellation made
 // in the customer portal is only observable once `customer.subscription.updated`
 // is delivered. Until then the account screens keep reporting an unchanged plan,
 // so a user who just canceled cannot tell that it registered. Reading Stripe
 // directly when the user returns from the portal closes that window.
-import {
-  getSubscriptionPeriod,
-  resolveProBillingOffer,
-} from "./ai-billing";
+import { getSubscriptionPeriod } from "./ai-billing";
 import {
   getScheduledCancellationTime,
   isCancellationScheduled,
@@ -20,12 +17,14 @@ import {
   getStripeCustomerOwnershipProof,
   type StripeCustomerOwnershipRecord,
 } from "./ownership";
+import { resolveSubscriptionOffer } from "./subscription-billing";
+import { subscriptionPlanConfig } from "./subscription-plans";
 import {
   findCustomerByUserId,
-  getSubscriptionByUserId,
+  getSubscription,
   reconcileSubscriptionObservation,
 } from "@beutl/db";
-import { PRO_PLAN } from "@beutl/api";
+import type { SubscriptionPlanId } from "@beutl/core";
 import type Stripe from "stripe";
 
 function syntheticEventId(subscriptionId: string): string {
@@ -51,12 +50,15 @@ function isOwnedByUser(
   }) !== "mismatch";
 }
 
-// Reconciles the stored subscription with Stripe for a single user. Returns true
-// when the local row changed, so the caller can decide whether to revalidate.
+// Reconciles the stored subscription of one plan with Stripe for a single
+// user. Returns true when the local row changed, so the caller can decide
+// whether to revalidate.
 export async function syncSubscriptionFromStripe(
   userId: string,
+  planId: SubscriptionPlanId = "pro",
 ): Promise<boolean> {
-  const stored = await getSubscriptionByUserId({ userId });
+  const plan = subscriptionPlanConfig(planId);
+  const stored = await getSubscription({ userId, planId: plan.id });
   if (!stored) {
     return false;
   }
@@ -82,6 +84,7 @@ export async function syncSubscriptionFromStripe(
         stripeSubscriptionId: stored.stripeSubscriptionId,
         status: "canceled",
         planId: stored.planId,
+        tier: stored.tier,
         billingOfferId: stored.billingOfferId,
         currentPeriodStart: stored.currentPeriodStart,
         currentPeriodEnd: stored.currentPeriodEnd,
@@ -118,12 +121,14 @@ export async function syncSubscriptionFromStripe(
   const period = getSubscriptionPeriod(subscription);
   const cancelAtPeriodEnd = isCancellationScheduled(subscription);
   const cancelAt = getScheduledCancellationTime(subscription);
-  const billingOffer = await resolveProBillingOffer(stripe, subscription, {
+  const billingOffer = await resolveSubscriptionOffer(plan, stripe, subscription, {
     ownershipVerified: true,
   });
   const status = billingOffer ? subscription.status : "invalid_price";
+  const tier = billingOffer ? billingOffer.tier : stored.tier;
   if (
     stored.status === status &&
+    (stored.tier ?? null) === (tier ?? null) &&
     stored.cancelAtPeriodEnd === cancelAtPeriodEnd &&
     stored.cancelAt?.getTime() === cancelAt?.getTime() &&
     stored.currentPeriodStart?.getTime() ===
@@ -144,7 +149,8 @@ export async function syncSubscriptionFromStripe(
     userId,
     stripeSubscriptionId: subscription.id,
     status,
-    planId: PRO_PLAN.id,
+    planId: plan.id,
+    tier,
     billingOfferId: billingOffer?.id ?? null,
     ...period,
     cancelAtPeriodEnd,

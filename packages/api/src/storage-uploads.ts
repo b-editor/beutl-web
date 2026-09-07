@@ -15,14 +15,11 @@ import {
   listStorageUploadsStartedBefore,
   escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
+  resolveStorageQuota,
   startRetryableTransaction,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
 } from "@beutl/db";
-import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
-} from "@beutl/core";
 import { getR2Bucket } from "./ai/storage";
 import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
@@ -42,9 +39,21 @@ export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 // can no longer take a receipt — so whatever is left in the bucket is this
 // sweep's to throw away.
 //
-// Long enough that a slow upload of the largest file this service takes is
-// never mistaken for an abandoned one.
+// Long enough that a slow upload is never mistaken for an abandoned one. A
+// 1 GiB file gets a day; a larger one gets as long as sending it at 1 MiB/s
+// would take, up to six days so the bucket's own seven-day lifecycle rule
+// remains the last line of defence (see apps/web/r2-lifecycle.json).
 const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
+const ABANDON_AFTER_MAX_MILLISECONDS = 6 * 24 * 60 * 60 * 1000;
+const ABANDON_BYTES_PER_SECOND = 1024 * 1024;
+
+export function abandonAfterMilliseconds(size: bigint | number): number {
+  const seconds = Number(size) / ABANDON_BYTES_PER_SECOND;
+  return Math.min(
+    ABANDON_AFTER_MAX_MILLISECONDS,
+    Math.max(ABANDON_AFTER_MILLISECONDS, Math.ceil(seconds * 1000)),
+  );
+}
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
@@ -188,13 +197,14 @@ export async function reconcileUnknownStorageUploadCompletions(
         }
 
         const actual = BigInt(object.size!);
-        const [stored, files] = await Promise.all([
+        const [quota, stored, files] = await Promise.all([
+          resolveStorageQuota({ userId: current.userId, prisma }),
           sumFileSizeByUserId({ userId: current.userId, prisma }),
           countFilesByUserId({ userId: current.userId, prisma }),
         ]);
         if (
-          stored + actual > BigInt(STORAGE_QUOTA_BYTES) ||
-          files >= STORAGE_FILE_COUNT_LIMIT
+          stored + actual > BigInt(quota.quotaBytes) ||
+          files >= quota.fileCountLimit
         ) {
           return "blocked" as const;
         }
@@ -243,6 +253,8 @@ export async function abandonStaleStorageUploads(
       console.error("Failed to reconcile unknown storage completions", error);
       return { inspected: 0, finalized: 0, errors: 1 };
     });
+  // 一覧は最短の猶予で引き、大きなファイルはその大きさに応じた猶予が過ぎるまで
+  // 手元で見送る。
   const stale = await listStorageUploadsStartedBefore({
     before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
     now,
@@ -252,6 +264,15 @@ export async function abandonStaleStorageUploads(
   let abandoned = 0;
   let failed = unknownRecovery.errors;
   for (const listed of stale) {
+    // 既に掃除のものになった行 (abandonedAt) は年齢に関係なく片付ける。
+    // 手つかずの大きなアップロードだけ、その大きさぶんの猶予を待つ。
+    if (
+      listed.abandonedAt === null &&
+      listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) >
+        now.getTime()
+    ) {
+      continue;
+    }
     // Dedicated artifacts have no multipart handle. Once their creation lease
     // expires, freeze the exact generation and preserve its delayed object
     // outbox. Never feed uploadId=null into the multipart pre-create path.

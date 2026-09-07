@@ -24,7 +24,9 @@ const STRIPE_API_BASE = "https://api.stripe.com/v1";
 const STRIPE_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
-const PRICE_ID_ENV: Record<BillingOfferKind, string> = {
+// The storage plan has one Price per tier and no admin economics page yet, so
+// it has no single entry here; resolveOfferPricing reports it as unconfigured.
+const PRICE_ID_ENV: Partial<Record<BillingOfferKind, string>> = {
   pro: "STRIPE_PRO_PRICE_ID",
   top_up: "STRIPE_CREDIT_PRICE_ID",
 };
@@ -110,7 +112,8 @@ async function fetchStripePrice(
   | { ok: false; reason: OfferPricingUnavailable }
 > {
   const secretKey = process.env.STRIPE_SECRET_KEY;
-  const priceId = process.env[PRICE_ID_ENV[kind]];
+  const envName = PRICE_ID_ENV[kind];
+  const priceId = envName ? process.env[envName] : undefined;
   if (!secretKey || !priceId) {
     return { ok: false, reason: "notConfigured" };
   }
@@ -150,10 +153,10 @@ async function fetchStripePrice(
     // and divided by the monthly allowance, so the per-unit figure the operator
     // prices against is twelve times what a subscriber actually pays.
     const recurrenceMatches =
-      kind === "pro"
-        ? price.recurringInterval === "month" &&
-          price.recurringIntervalCount === 1
-        : price.recurringInterval === null;
+      kind === "top_up"
+        ? price.recurringInterval === null
+        : price.recurringInterval === "month" &&
+          price.recurringIntervalCount === 1;
     if (!recurrenceMatches) {
       return { ok: false, reason: "notFound" };
     }

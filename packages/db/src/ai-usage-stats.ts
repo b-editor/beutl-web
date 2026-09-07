@@ -273,7 +273,15 @@ export async function getTopAiUsers({
 
 // The plan id is a parameter because the catalog that names it lives in
 // @beutl/api, which depends on this package.
-export async function countActiveProSubscriptions({
+export type ActiveSubscriptionCounts = {
+  total: number;
+  // ティアごとの内訳。ティアの無いプランでは空。
+  byTier: Record<string, number>;
+};
+
+// 今この瞬間に権利を与えている契約の数。isActiveSubscription と同じ規則で、
+// 返金・異議の hold が効いている契約と、削除が認可された口座は除く。
+export async function countActiveSubscriptions({
   now,
   planId,
   prisma,
@@ -281,34 +289,43 @@ export async function countActiveProSubscriptions({
   now: Date;
   planId: string;
   prisma?: PrismaTransaction;
-}): Promise<number> {
+}): Promise<ActiveSubscriptionCounts> {
   const db = prisma ?? await getDb();
-  const activeWhere = {
-    status: "active",
-    planId,
-    // A row with no offer was never matched to a Price and is granted
-    // nothing, the same way isActiveProSubscription reads it.
-    billingOfferId: {
-      not: null,
+  const candidates = await db.subscription.findMany({
+    where: {
+      status: "active",
+      planId,
+      // A row with no offer was never matched to a Price and is granted
+      // nothing, the same way isActiveSubscription reads it.
+      billingOfferId: {
+        not: null,
+      },
+      currentPeriodEnd: {
+        gt: now,
+      },
+      // A subscription cancelled mid-period stops being entitled at cancelAt,
+      // not at the end of the period it was paid through; counting by
+      // currentPeriodEnd alone reports it as spending against the allowance
+      // for weeks after it stopped being able to.
+      OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
     },
-    currentPeriodEnd: {
-      gt: now,
+    select: {
+      userId: true,
+      tier: true,
+      stripeSubscriptionId: true,
+      currentPeriodStart: true,
+      currentPeriodEnd: true,
     },
-    // A subscription cancelled mid-period stops being entitled at cancelAt,
-    // not at the end of the period it was paid through; counting by
-    // currentPeriodEnd alone reports it as spending against the allowance
-    // for weeks after it stopped being able to.
-    OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
-  };
-  const [activeCount, activeHolds, deletionIntents] = await Promise.all([
-    db.subscription.count({ where: activeWhere }),
+  });
+  const byTier: Record<string, number> = {};
+  if (candidates.length === 0) return { total: 0, byTier };
+
+  const [holds, deletionIntents] = await Promise.all([
     db.subscriptionEntitlementHold.findMany({
       where: {
         active: true,
-        user: {
-          Subscription: {
-            is: activeWhere,
-          },
+        stripeSubscriptionId: {
+          in: candidates.map((candidate) => candidate.stripeSubscriptionId),
         },
       },
       select: {
@@ -316,38 +333,24 @@ export async function countActiveProSubscriptions({
         stripeSubscriptionId: true,
         billingPeriodStart: true,
         billingPeriodEnd: true,
-        user: {
-          select: {
-            Subscription: {
-              select: {
-                stripeSubscriptionId: true,
-                currentPeriodStart: true,
-                currentPeriodEnd: true,
-              },
-            },
-          },
-        },
       },
     }),
     db.accountDeletionIntent.findMany({
       where: {
         expiresAt: { gt: now },
-        user: {
-          Subscription: {
-            is: activeWhere,
-          },
-        },
+        userId: { in: candidates.map((candidate) => candidate.userId) },
       },
       select: { userId: true },
     }),
   ]);
 
   // Holds remain as audit records after a period or subscription replacement.
-  // Mirror getSubscriptionByUserId's identity and overlap checks so only a hold
-  // that currently denies the allowance is removed from the report.
-  const ineligibleUsers = new Set<string>();
-  for (const hold of activeHolds) {
-    const subscription = hold.user.Subscription;
+  // Mirror getSubscription's identity and overlap checks so only a hold that
+  // currently denies the entitlement is removed from the count.
+  const ineligible = new Set(deletionIntents.map((intent) => intent.userId));
+  const byUser = new Map(candidates.map((candidate) => [candidate.userId, candidate]));
+  for (const hold of holds) {
+    const subscription = byUser.get(hold.userId);
     if (
       !subscription ||
       hold.stripeSubscriptionId !== subscription.stripeSubscriptionId
@@ -364,12 +367,18 @@ export async function countActiveProSubscriptions({
     ) {
       continue;
     }
-    ineligibleUsers.add(hold.userId);
+    ineligible.add(hold.userId);
   }
-  for (const intent of deletionIntents) {
-    ineligibleUsers.add(intent.userId);
+
+  let total = 0;
+  for (const candidate of candidates) {
+    if (ineligible.has(candidate.userId)) continue;
+    total += 1;
+    if (candidate.tier !== null) {
+      byTier[candidate.tier] = (byTier[candidate.tier] ?? 0) + 1;
+    }
   }
-  return Math.max(0, activeCount - ineligibleUsers.size);
+  return { total, byTier };
 }
 
 // The account row as stored. Unlike getCreditAccount this never creates one,

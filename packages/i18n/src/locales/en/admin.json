@@ -463,5 +463,26 @@
     "cancel": "Cancel",
     "previousPage": "Previous page",
     "nextPage": "Next page"
+  },
+  "storage": {
+    "plan": "Storage subscription",
+    "activeSubscriptions": "Active storage subscriptions",
+    "activeSubscriptionsHint": "By tier; independent of the selected window.",
+    "byTier": "By tier",
+    "tier": "Tier",
+    "count": "Subscriptions",
+    "quota": "Quota",
+    "tiers": {
+      "100gb": "100 GB",
+      "200gb": "200 GB",
+      "1tb": "1 TB"
+    },
+    "free": "Free",
+    "planActive": "Active",
+    "planNone": "No subscription",
+    "status": "Status",
+    "usage": "Usage",
+    "usageValue": "{{used}} / {{quota}} ({{files}} / {{limit}} files)",
+    "subscriptionPeriod": "Subscription ends"
   }
 }

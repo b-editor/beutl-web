@@ -56,24 +56,48 @@ async function main() {
     httpClient: Stripe.createFetchHttpClient(),
   });
 
-  let cursor = "";
   let inspected = 0;
   let repaired = 0;
 
   try {
+    const result = await repairSubscriptions(prisma, stripe, { apply });
+    inspected += result.inspected;
+    repaired += result.repaired;
+  } finally {
+    await prisma.$disconnect();
+  }
+
+  console.log(JSON.stringify({ apply, inspected, repaired }, null, 2));
+}
+
+// Every plan lives in the one Subscription table, keyed by (userId, planId);
+// pages walk that key so a user holding several plans is never skipped.
+export async function repairSubscriptions(prisma, stripe, { apply }) {
+  let cursor = null;
+  let inspected = 0;
+  let repaired = 0;
+  {
     for (;;) {
       const subscriptions = await prisma.subscription.findMany({
         where: {
           status: { notIn: [...TERMINAL_STATUSES] },
-          ...(cursor ? { userId: { gt: cursor } } : {}),
+          ...(cursor
+            ? {
+                OR: [
+                  { userId: { gt: cursor.userId } },
+                  { userId: cursor.userId, planId: { gt: cursor.planId } },
+                ],
+              }
+            : {}),
         },
-        orderBy: { userId: "asc" },
+        orderBy: [{ userId: "asc" }, { planId: "asc" }],
         take: 100,
       });
       if (subscriptions.length === 0) {
         break;
       }
-      cursor = subscriptions[subscriptions.length - 1].userId;
+      const last = subscriptions[subscriptions.length - 1];
+      cursor = { userId: last.userId, planId: last.planId };
 
       for (const stored of subscriptions) {
         inspected++;
@@ -87,12 +111,13 @@ async function main() {
             // Stripe has definitively removed this subscription. Reconcile it
             // to the same terminal state the webhook and account-page sync use.
             console.log(
-              `${apply ? "REPAIR" : "WOULD_REPAIR"} ${stored.userId}: ${stored.status} -> canceled (${stored.stripeSubscriptionId}, missing from Stripe)`,
+              `${apply ? "REPAIR" : "WOULD_REPAIR"} ${stored.userId}/${stored.planId}: ${stored.status} -> canceled (${stored.stripeSubscriptionId}, missing from Stripe)`,
             );
             if (apply) {
               await prisma.subscription.updateMany({
                 where: {
                   userId: stored.userId,
+                  planId: stored.planId,
                   stripeSubscriptionId: stored.stripeSubscriptionId,
                   status: { notIn: [...TERMINAL_STATUSES] },
                 },
@@ -102,8 +127,8 @@ async function main() {
                   cancelAt: null,
                 },
               });
-              await prisma.proCheckoutAttempt.deleteMany({
-                where: { userId: stored.userId },
+              await prisma.subscriptionCheckoutAttempt.deleteMany({
+                where: { userId: stored.userId, planId: stored.planId },
               });
             }
             repaired++;
@@ -117,7 +142,7 @@ async function main() {
         }
 
         console.log(
-          `${apply ? "REPAIR" : "WOULD_REPAIR"} ${stored.userId}: ${stored.status} -> ${subscription.status} (${subscription.id})`,
+          `${apply ? "REPAIR" : "WOULD_REPAIR"} ${stored.userId}/${stored.planId}: ${stored.status} -> ${subscription.status} (${subscription.id})`,
         );
         if (!apply) {
           repaired++;
@@ -128,6 +153,7 @@ async function main() {
         await prisma.subscription.updateMany({
           where: {
             userId: stored.userId,
+            planId: stored.planId,
             stripeSubscriptionId: stored.stripeSubscriptionId,
             status: { notIn: [...TERMINAL_STATUSES] },
           },
@@ -141,17 +167,14 @@ async function main() {
             cancelAt: getScheduledCancellationTime(subscription),
           },
         });
-        await prisma.proCheckoutAttempt.deleteMany({
-          where: { userId: stored.userId },
+        await prisma.subscriptionCheckoutAttempt.deleteMany({
+          where: { userId: stored.userId, planId: stored.planId },
         });
         repaired++;
       }
     }
-  } finally {
-    await prisma.$disconnect();
   }
-
-  console.log(JSON.stringify({ apply, inspected, repaired }, null, 2));
+  return { inspected, repaired };
 }
 
 const entryPoint = process.argv[1]

@@ -19,7 +19,10 @@
     "myLibrary": "ライブラリのパッケージ",
     "noLibraryPackages": "ライブラリにパッケージがありません",
     "browseStore": "ストアを見る",
-    "viewAll": "すべて見る"
+    "viewAll": "すべて見る",
+    "storageAlmostFull": "空き容量が残りわずかです",
+    "storageFull": "容量の上限に達しています",
+    "storageQuota": "{{quota}} 中 {{used}}"
   },
   "ai": {
     "title": "AI",

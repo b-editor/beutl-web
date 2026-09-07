@@ -13,7 +13,7 @@ import {
   findAdminCreditAdjustment,
   findAccountDeletionIntentByUserId,
   findCustomerByUserId,
-  getSubscriptionByUserId,
+  getSubscription,
   isUniqueConstraintViolation,
   prepareAccountDeletionOutboxes,
   reserveAdminAccountDeletion,
@@ -26,6 +26,7 @@ import {
   closeStripeCustomerForAdminAccountDeletion,
   isActiveProSubscription,
   loadAiSettings,
+  PRO_PLAN,
 } from "@beutl/api";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
@@ -179,7 +180,7 @@ export async function deleteUser({
       ) {
         return { status: "blocked" as const, reason: "customer" as const };
       }
-      const subscription = await getSubscriptionByUserId({ userId, prisma: tx });
+      const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma: tx });
       if (subscription && isActiveProSubscription(subscription)) {
         return { status: "blocked" as const, reason: "subscription" as const };
       }
@@ -376,8 +377,9 @@ export async function setAiMonthlyUsage({
 
     try {
       const result = await startRetryableTransaction(async (tx) => {
-        const subscription = await getSubscriptionByUserId({
+        const subscription = await getSubscription({
           userId,
+          planId: PRO_PLAN.id,
           prisma: tx,
         });
         if (!subscription || !isActiveProSubscription(subscription)) {

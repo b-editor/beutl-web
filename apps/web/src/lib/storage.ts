@@ -13,7 +13,9 @@ import {
   recordLateDedicatedStorageWriteResult,
   releaseDedicatedStorageReservation,
   renewDedicatedStorageReservation,
+  resolveStorageQuota,
   retrieveFilesByUserId,
+  startRetryableTransaction,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
@@ -173,18 +175,19 @@ export async function createStorageFile({
 
 /** Dedicated developer artifacts use the same transactional quota invariant as
  * multipart uploads. A durable reservation is committed before the provider
- * put, and the File commit consumes that reservation atomically. */
+ * put, and the File commit consumes that reservation atomically.
+ *
+ * The quota normally comes from the account's storage plan, read inside the
+ * reservation transaction. Tests pass an explicit override. */
 export async function createDedicatedStorageFile({
   file,
   userId,
-  quotaBytes,
-  fileCountLimit,
+  quota,
   publish,
 }: {
   file: File;
   userId: string;
-  quotaBytes: bigint;
-  fileCountLimit: number;
+  quota?: { quotaBytes: bigint; fileCountLimit: number };
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
   const files = await retrieveFilesByUserId({ userId });
@@ -194,16 +197,25 @@ export async function createDedicatedStorageFile({
     filename = ext ? file.name.replace(`.${ext}`, ` (${i}).${ext}`) : `${file.name} (${i})`;
   }
   const objectKey = crypto.randomUUID();
-  const reservation = await createDedicatedStorageReservation({
+  const reservationInput = {
     userId,
     id: crypto.randomUUID(),
     objectKey,
     name: filename,
     mimeType: file.type || "application/octet-stream",
     size: BigInt(file.size),
-    quotaBytes,
-    fileCountLimit,
-  });
+  };
+  const reservation = quota
+    ? await createDedicatedStorageReservation({ ...reservationInput, ...quota })
+    : await startRetryableTransaction(async (tx) => {
+        const resolved = await resolveStorageQuota({ userId, prisma: tx });
+        return await createDedicatedStorageReservation({
+          ...reservationInput,
+          quotaBytes: BigInt(resolved.quotaBytes),
+          fileCountLimit: resolved.fileCountLimit,
+          prisma: tx,
+        });
+      });
   if (reservation.kind !== "reserved") return reservation;
   const leaseToken = reservation.reservation.creationLeaseToken;
   let leaseUntil = reservation.reservation.creationLeaseUntil;

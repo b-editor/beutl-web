@@ -19,7 +19,10 @@
     "myLibrary": "Your library",
     "noLibraryPackages": "Your library is empty",
     "browseStore": "Browse the store",
-    "viewAll": "View all"
+    "viewAll": "View all",
+    "storageAlmostFull": "Almost out of space",
+    "storageFull": "Storage is full",
+    "storageQuota": "{{used}} of {{quota}}"
   },
   "ai": {
     "title": "AI",

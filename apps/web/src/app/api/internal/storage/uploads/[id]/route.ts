@@ -5,11 +5,15 @@ import {
   unauthorizedResponse,
 } from "@/lib/internal-request";
 import { cancelUpload, finishUpload } from "@/lib/storage-upload-server";
-import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
+import { STORAGE_MULTIPART_MAX_PARTS } from "@beutl/core";
 
-const MAX_PART_COUNT = Math.ceil(STORAGE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES);
+// The bucket's own ceiling on parts is the most any upload can have.
+const MAX_PART_COUNT = STORAGE_MULTIPART_MAX_PARTS;
 const MAX_ETAG_LENGTH = 256;
-const MAX_CONTROL_BODY_BYTES = 64 * 1024;
+// A completion names every part. Ten thousand entries of a quoted etag plus
+// a part number is a few megabytes, so size the body limit from the same
+// numbers instead of a round figure that silently caps the part count.
+const MAX_CONTROL_BODY_BYTES = MAX_PART_COUNT * (MAX_ETAG_LENGTH + 64);
 
 // Finishing an upload, or giving it up.
 //
@@ -36,8 +40,8 @@ export async function POST(
   if (
     !Array.isArray(parts) ||
     parts.length === 0 ||
-    // The whole quota cut into parts is what an upload can ever have; a longer
-    // list describes an upload that could not exist.
+    // The largest file cut into parts is what an upload can ever have; a
+    // longer list describes an upload that could not exist.
     parts.length > MAX_PART_COUNT ||
     !parts.every(
       (part) =>

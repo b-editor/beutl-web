@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   listCheckoutSessions: vi.fn(),
   constructEvent: vi.fn(),
-  deleteProCheckoutAttempt: vi.fn(),
+  deleteSubscriptionCheckoutAttempt: vi.fn(),
   findBillingOfferByStripePriceId: vi.fn(),
   findCustomerByStripeId: vi.fn(),
-  getSubscriptionByUserId: vi.fn(),
+  getSubscription: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
   retrieveSubscription: vi.fn(),
 }));
@@ -32,13 +32,13 @@ vi.mock("@beutl/db", () => ({
   addPurchasedCredits: vi.fn(),
   createUserPackage: vi.fn(),
   createUserPaymentHistory: vi.fn(),
-  deleteProCheckoutAttempt: mocks.deleteProCheckoutAttempt,
+  deleteSubscriptionCheckoutAttempt: mocks.deleteSubscriptionCheckoutAttempt,
   existsCreditTransactionByStripePaymentId: vi.fn(),
   existsUserPaymentHistoryByPaymentId: vi.fn(),
   findCustomerByStripeId: mocks.findCustomerByStripeId,
   findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
   findPackageIdById: vi.fn(),
-  getSubscriptionByUserId: mocks.getSubscriptionByUserId,
+  getSubscription: mocks.getSubscription,
   reconcilePurchasedCreditReversal: vi.fn(),
   reconcileSubscriptionObservation:
     mocks.reconcileSubscriptionObservation,
@@ -135,7 +135,7 @@ describe("canonical Stripe subscription webhook fallback", () => {
         verifiedAt: new Date("2026-08-09T00:00:00.000Z"),
       },
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_current",
     });
@@ -149,7 +149,7 @@ describe("canonical Stripe subscription webhook fallback", () => {
     // The portal does not delete the subscription. Stripe keeps reporting
     // `active` and only flags the scheduled cancellation, so that flag is the
     // only signal the account screens can show.
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_incoming",
     });
@@ -178,7 +178,7 @@ describe("canonical Stripe subscription webhook fallback", () => {
     // Current Stripe API versions leave `cancel_at_period_end` false for a
     // portal cancellation and record the scheduled end in `cancel_at`, so the
     // boolean alone would report the plan as unchanged.
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_incoming",
     });
@@ -274,7 +274,7 @@ describe("canonical Stripe subscription webhook fallback", () => {
         verifiedAt: null,
       },
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_incoming",
     });
@@ -360,7 +360,7 @@ describe("canonical Stripe subscription webhook fallback", () => {
       type: "customer.subscription.updated",
       data: { object: { id: "sub_old" } },
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_old",
     });
@@ -382,8 +382,8 @@ describe("canonical Stripe subscription webhook fallback", () => {
       subscription: "sub_old",
       limit: 100,
     });
-    expect(mocks.deleteProCheckoutAttempt).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteSubscriptionCheckoutAttempt).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       stripeCheckoutSessionId: "cs_old",
     });

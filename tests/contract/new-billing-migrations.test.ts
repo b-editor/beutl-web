@@ -25,6 +25,7 @@ const migrations = [
   "20260828000000_harden_unknown_storage_completion/migration.sql",
   "20260829010000_add_unknown_probe_lease/migration.sql",
   "20260829020000_add_dedicated_storage_reservation/migration.sql",
+  "20260908000000_generalize_subscription_plans/migration.sql",
 ];
 
 describe("new billing migrations", () => {

@@ -3,7 +3,7 @@ import {
   addPurchasedCredits,
   adjustPurchasedCreditsByAdmin,
   consumeUsage,
-  countActiveProSubscriptions,
+  countActiveSubscriptions,
   createAiJob,
   getAdminCreditAdjustmentTotals,
   getAiBalanceTotals,
@@ -388,7 +388,7 @@ describe("AI usage aggregates", () => {
       billingOfferId: "offer-1",
     });
 
-    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+    expect((await countActiveSubscriptions({ now, planId: "pro" })).total).toBe(1);
   });
 
   it("excludes only active entitlement holds for the current subscription period", async () => {
@@ -437,15 +437,15 @@ describe("AI usage aggregates", () => {
     ]);
     Object.assign(memory.prisma.subscriptionEntitlementHold, { findMany });
 
-    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+    expect((await countActiveSubscriptions({ now, planId: "pro" })).total).toBe(1);
+    // Holds are looked up by the candidate subscriptions themselves, so a
+    // hold on another plan's subscription of the same user never counts.
     expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           active: true,
-          user: {
-            Subscription: {
-              is: expect.objectContaining({ planId: "pro" }),
-            },
+          stripeSubscriptionId: {
+            in: ["sub-user-held", "sub-user-historical"],
           },
         }),
       }),
@@ -468,15 +468,11 @@ describe("AI usage aggregates", () => {
     const findMany = vi.fn().mockResolvedValue([{ userId: "user-deleting" }]);
     Object.assign(memory.prisma.accountDeletionIntent, { findMany });
 
-    expect(await countActiveProSubscriptions({ now, planId: "pro" })).toBe(1);
+    expect((await countActiveSubscriptions({ now, planId: "pro" })).total).toBe(1);
     expect(findMany).toHaveBeenCalledWith({
       where: {
         expiresAt: { gt: now },
-        user: {
-          Subscription: {
-            is: expect.objectContaining({ planId: "pro" }),
-          },
-        },
+        userId: { in: ["user-active", "user-deleting"] },
       },
       select: { userId: true },
     });

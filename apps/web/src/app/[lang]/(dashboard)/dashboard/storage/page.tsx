@@ -1,4 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
+import { resolveStorageQuota } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import { retrieveFiles, retrieveFolders } from "./actions";
 import { List } from "./list";
@@ -9,7 +10,13 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
 
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const [files, folders] = await Promise.all([retrieveFiles(), retrieveFolders()]);
+  const [files, folders, quota] = await Promise.all([
+    retrieveFiles(),
+    retrieveFolders(),
+    resolveStorageQuota({ userId: session.user.id }),
+  ]);
+  // 一覧はもう手元にあるのでそれを足す。判定側は進行中のアップロードの予約も
+  // 数えるので、バーが 100% に届く少し前に拒否されることはある。
   let usedBytes = 0;
   for (const file of files) {
     usedBytes += Number(file.size);
@@ -19,7 +26,12 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <h1 className="text-2xl font-bold">{t("storage:storage")}</h1>
-        <StorageUsage lang={lang} usedBytes={usedBytes} fileCount={files.length} />
+        <StorageUsage
+          lang={lang}
+          usedBytes={usedBytes}
+          fileCount={files.length}
+          quota={quota}
+        />
       </div>
       <List
         data={files}

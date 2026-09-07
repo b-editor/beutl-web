@@ -1,7 +1,5 @@
 import "server-only";
 import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
 import {
@@ -32,6 +30,7 @@ import {
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
+  resolveStorageQuota,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 
@@ -285,17 +284,21 @@ export async function startUpload({
       const active = await countStorageUploadsByUserId({ userId, prisma });
       if (active >= MAX_ACTIVE_UPLOADS) return "tooMany";
 
+      // 枠は契約で変わる。同じ取引の中で読むので、プランの失効とアップロードの
+      // 開始が入れ違うことはない。
+      const quota = await resolveStorageQuota({ userId, prisma });
+
       // 本数の上限。容量の枠内でも、小さなファイルを積み上げれば R2 の
       // オブジェクトと行はいくらでも増える。完成した本数と、いま進行中の本数を
       // 合わせて数える。
       const files = await countFilesByUserId({ userId, prisma });
-      if (files + active >= STORAGE_FILE_COUNT_LIMIT) return "tooManyFiles";
+      if (files + active >= quota.fileCountLimit) return "tooManyFiles";
 
       const [stored, underway] = await Promise.all([
         sumFileSizeByUserId({ userId, prisma }),
         sumStorageUploadSizeByUserId({ userId, prisma }),
       ]);
-      if (stored + underway + size > BigInt(STORAGE_QUOTA_BYTES)) {
+      if (stored + underway + size > BigInt(quota.quotaBytes)) {
         return null;
       }
 
@@ -782,14 +785,17 @@ async function finalizeUpload(
       // 掃除が取っていった行。控えは書けないし、書いてはいけない。
       if (current.abandonedAt) return { kind: "abandoned" as const };
 
-      const [stored, files] = await Promise.all([
+      // 開始から完了までの間にプランが失効していれば、ここで拒否されて
+      // オブジェクトは掃除される (新規のアップロードは受けない、の一部)。
+      const [quota, stored, files] = await Promise.all([
+        resolveStorageQuota({ userId, prisma }),
         sumFileSizeByUserId({ userId, prisma }),
         countFilesByUserId({ userId, prisma }),
       ]);
-      if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
+      if (stored + actual > BigInt(quota.quotaBytes)) {
         return { kind: "overQuota" as const };
       }
-      if (files >= STORAGE_FILE_COUNT_LIMIT) {
+      if (files >= quota.fileCountLimit) {
         return { kind: "tooManyFiles" as const };
       }
 

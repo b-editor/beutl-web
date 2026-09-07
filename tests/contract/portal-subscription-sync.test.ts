@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   findCustomerByUserId: vi.fn(),
   findBillingOfferByStripePriceId: vi.fn(),
-  getSubscriptionByUserId: vi.fn(),
+  getSubscription: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
   registerHistoricalBillingOffer: vi.fn(),
   retrieveCustomer: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("@beutl/db", () => ({
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT: "pre-owner-metadata-2026-08-09",
   findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
   findCustomerByUserId: mocks.findCustomerByUserId,
-  getSubscriptionByUserId: mocks.getSubscriptionByUserId,
+  getSubscription: mocks.getSubscription,
   reconcileSubscriptionObservation: mocks.reconcileSubscriptionObservation,
   registerHistoricalBillingOffer: mocks.registerHistoricalBillingOffer,
 }));
@@ -119,7 +119,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("stores a cancellation that Stripe has not yet delivered by webhook", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ cancel_at_period_end: true, canceled_at: 900 }),
     );
@@ -140,7 +140,7 @@ describe("customer portal subscription sync", () => {
     // On current API versions the portal leaves cancel_at_period_end false and
     // records the scheduled end in cancel_at, so reading only the boolean would
     // report the plan as unchanged.
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({
         cancel_at_period_end: false,
@@ -156,7 +156,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("reuses the stored webhook watermark so a later webhook still wins", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       // cancel_at is the future scheduled end; it must not become the watermark.
       stripeSubscription({
@@ -174,7 +174,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("orders a cancellation resumption after the preceding canonical read", async () => {
-    mocks.getSubscriptionByUserId
+    mocks.getSubscription
       .mockResolvedValueOnce(storedSubscription())
       .mockResolvedValueOnce(
         storedSubscription({
@@ -210,7 +210,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("writes nothing when Stripe agrees with the stored row", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(stripeSubscription());
 
     await expect(syncSubscriptionFromStripe("user-1")).resolves.toBe(false);
@@ -218,7 +218,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("records the terminal status once the cancellation takes effect", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ status: "canceled" }),
     );
@@ -232,7 +232,7 @@ describe("customer portal subscription sync", () => {
   it("keeps a paid historical Price valid after checkout rotates", async () => {
     process.env.STRIPE_PRO_PRICE_ID = "price_pro_v2";
     process.env.STRIPE_PRO_HISTORICAL_OFFERS = "price_pro_v1:prod_pro";
-    mocks.getSubscriptionByUserId.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(
       storedSubscription({ billingOfferId: "offer_pro_v1" }),
     );
     mocks.findBillingOfferByStripePriceId.mockResolvedValue({
@@ -282,7 +282,7 @@ describe("customer portal subscription sync", () => {
     process.env.STRIPE_PRO_HISTORICAL_OFFERS =
       "price_pro_archived:prod_pro";
     mocks.findBillingOfferByStripePriceId.mockResolvedValue(null);
-    mocks.getSubscriptionByUserId.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(
       storedSubscription({ billingOfferId: null }),
     );
     mocks.retrievePrice.mockResolvedValue({
@@ -335,7 +335,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("ignores a subscription that belongs to another customer", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ customer: "cus_other", cancel_at_period_end: true }),
     );
@@ -345,7 +345,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("rejects a metadata-free subscription even when the customer metadata matches", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ metadata: {}, cancel_at_period_end: true }),
     );
@@ -355,7 +355,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("marks a subscription Stripe no longer knows about as canceled", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(storedSubscription());
+    mocks.getSubscription.mockResolvedValue(storedSubscription());
     mocks.retrieveSubscription.mockRejectedValue(
       Object.assign(new Error("No such subscription"), {
         statusCode: 404,
@@ -379,7 +379,7 @@ describe("customer portal subscription sync", () => {
   });
 
   it("does nothing for a user without a stored subscription", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
 
     await expect(syncSubscriptionFromStripe("user-1")).resolves.toBe(false);
     expect(mocks.retrieveSubscription).not.toHaveBeenCalled();

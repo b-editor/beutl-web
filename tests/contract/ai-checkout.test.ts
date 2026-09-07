@@ -8,17 +8,17 @@ const mocks = vi.hoisted(() => ({
   pricesRetrieve: vi.fn(),
   activateBillingOffer: vi.fn(),
   bindTopUpCheckoutCreation: vi.fn(),
-  bindProCheckoutSession: vi.fn(),
+  bindSubscriptionCheckoutSession: vi.fn(),
   claimTopUpCheckoutCreation: vi.fn(),
   expireTopUpCheckoutAttempt: vi.fn(),
   createOrRetrieveOwnedCustomerId: vi.fn(),
-  deleteBoundProCheckoutAttempt: vi.fn(),
+  deleteBoundSubscriptionCheckoutAttempt: vi.fn(),
   findBillingOfferById: vi.fn(),
   getOrCreateTopUpCheckoutAttempt: vi.fn(),
-  getOrCreateProCheckoutAttempt: vi.fn(),
-  getSubscriptionByUserId: vi.fn(),
+  getOrCreateSubscriptionCheckoutAttempt: vi.fn(),
+  getSubscription: vi.fn(),
   setTopUpCheckoutSession: vi.fn(),
-  setProCheckoutAttemptParams: vi.fn(),
+  setSubscriptionCheckoutAttemptParams: vi.fn(),
   portalCreate: vi.fn(),
   portalConfigurationRetrieve: vi.fn(),
   invoicePaymentList: vi.fn(),
@@ -66,19 +66,19 @@ vi.mock("@/lib/stripe/config", () => ({
 vi.mock("@beutl/db", () => ({
   activateBillingOffer: mocks.activateBillingOffer,
   bindTopUpCheckoutCreation: mocks.bindTopUpCheckoutCreation,
-  bindProCheckoutSession: mocks.bindProCheckoutSession,
+  bindSubscriptionCheckoutSession: mocks.bindSubscriptionCheckoutSession,
   claimTopUpCheckoutCreation: mocks.claimTopUpCheckoutCreation,
-  deleteBoundProCheckoutAttempt: mocks.deleteBoundProCheckoutAttempt,
+  deleteBoundSubscriptionCheckoutAttempt: mocks.deleteBoundSubscriptionCheckoutAttempt,
   expireTopUpCheckoutAttempt: mocks.expireTopUpCheckoutAttempt,
   findBillingOfferById: mocks.findBillingOfferById,
   getOrCreateTopUpCheckoutAttempt: mocks.getOrCreateTopUpCheckoutAttempt,
-  getOrCreateProCheckoutAttempt: mocks.getOrCreateProCheckoutAttempt,
-  getSubscriptionByUserId: mocks.getSubscriptionByUserId,
+  getOrCreateSubscriptionCheckoutAttempt: mocks.getOrCreateSubscriptionCheckoutAttempt,
+  getSubscription: mocks.getSubscription,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
   releaseTopUpCheckoutCreation: mocks.releaseTopUpCheckoutCreation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
   setTopUpCheckoutSession: mocks.setTopUpCheckoutSession,
-  setProCheckoutAttemptParams: mocks.setProCheckoutAttemptParams,
+  setSubscriptionCheckoutAttemptParams: mocks.setSubscriptionCheckoutAttemptParams,
   startRetryableTransaction: mocks.startRetryableTransaction,
 }));
 import {
@@ -119,7 +119,7 @@ function topUpCheckoutSession(
 describe("AI checkout actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.setProCheckoutAttemptParams.mockResolvedValue({ count: 1 });
+    mocks.setSubscriptionCheckoutAttemptParams.mockResolvedValue({ count: 1 });
     process.env.PUBLIC_ORIGIN = "https://beutl.example";
     process.env.STRIPE_CREDIT_PRICE_ID = "price_credits";
     process.env.STRIPE_PRO_PRICE_ID = "price_pro";
@@ -184,7 +184,7 @@ describe("AI checkout actions", () => {
       recurringIntervalCount: id === "offer_top_up" ? null : 1,
       checkoutEnabled: id === "offer_pro",
     }));
-    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+    mocks.getOrCreateSubscriptionCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-1",
       billingOfferId: "offer_pro",
@@ -249,8 +249,8 @@ describe("AI checkout actions", () => {
     mocks.expireTopUpCheckoutAttempt.mockResolvedValue({ count: 1 });
     mocks.checkoutList.mockResolvedValue({ data: [], has_more: false });
     mocks.setTopUpCheckoutSession.mockResolvedValue("stored-for-checkout");
-    mocks.bindProCheckoutSession.mockResolvedValue("bound");
-    mocks.deleteBoundProCheckoutAttempt.mockResolvedValue(true);
+    mocks.bindSubscriptionCheckoutSession.mockResolvedValue("bound");
+    mocks.deleteBoundSubscriptionCheckoutAttempt.mockResolvedValue(true);
     mocks.checkoutCreate.mockResolvedValue({
       id: "cs_1",
       mode: "payment",
@@ -277,7 +277,7 @@ describe("AI checkout actions", () => {
   });
 
   it("copies Pro metadata to the Stripe Subscription", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
 
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.checkoutCreate).toHaveBeenCalledWith(
@@ -299,7 +299,7 @@ describe("AI checkout actions", () => {
         idempotencyKey: "ai-pro-checkout:attempt-1",
       },
     );
-    expect(mocks.bindProCheckoutSession).toHaveBeenCalledWith(
+    expect(mocks.bindSubscriptionCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "user-1",
         checkoutKey: "attempt-1",
@@ -309,7 +309,7 @@ describe("AI checkout actions", () => {
   });
 
   it("resolves a pre-promotion Pro replay before rotating to a new Checkout", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     const legacyParams = {
       customer: "cus_1",
       mode: "subscription",
@@ -347,7 +347,7 @@ describe("AI checkout actions", () => {
       mode: legacyParams.mode,
       customer: legacyParams.customer,
     };
-    mocks.getOrCreateProCheckoutAttempt
+    mocks.getOrCreateSubscriptionCheckoutAttempt
       .mockResolvedValueOnce({
         userId: "user-1",
         checkoutKey: "attempt-legacy",
@@ -373,7 +373,7 @@ describe("AI checkout actions", () => {
       { idempotencyKey: "ai-pro-checkout:attempt-legacy" },
     );
     expect(mocks.checkoutExpire).toHaveBeenCalledWith("cs_1");
-    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       checkoutKey: "attempt-legacy",
       stripeCheckoutSessionId: "cs_1",
@@ -383,13 +383,13 @@ describe("AI checkout actions", () => {
       expect.objectContaining({ allow_promotion_codes: true }),
       { idempotencyKey: "ai-pro-checkout:attempt-current" },
     );
-    expect(mocks.setProCheckoutAttemptParams).toHaveBeenCalledWith(
+    expect(mocks.setSubscriptionCheckoutAttemptParams).toHaveBeenCalledWith(
       expect.objectContaining({ checkoutKey: "attempt-current" }),
     );
   });
 
   it("copies the top-up amount to the Stripe PaymentIntent", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -423,7 +423,7 @@ describe("AI checkout actions", () => {
   });
 
   it("reuses a promotion-code discounted top-up Checkout", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -448,7 +448,7 @@ describe("AI checkout actions", () => {
   });
 
   it("expires a bound pre-promotion top-up Checkout before creating a replacement", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -502,7 +502,7 @@ describe("AI checkout actions", () => {
   ])("keeps a pre-promotion top-up Checkout when expiry $outcome", async ({
     expireReturnsCompletion,
   }) => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -548,7 +548,7 @@ describe("AI checkout actions", () => {
   });
 
   it("resolves an unbound pre-promotion top-up replay before rotating", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -625,7 +625,7 @@ describe("AI checkout actions", () => {
   });
 
   it("terminalizes a zero-cost top-up before creating a replacement", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -659,7 +659,7 @@ describe("AI checkout actions", () => {
   });
 
   it("recovers a normal top-up after Stripe committed but the response was lost", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -692,7 +692,7 @@ describe("AI checkout actions", () => {
   });
 
   it("serializes concurrent first creates through the durable create lease", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -729,7 +729,7 @@ describe("AI checkout actions", () => {
   });
 
   it("discovers every page before rotating an attempt past retention", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -782,7 +782,7 @@ describe("AI checkout actions", () => {
   });
 
   it("requires two exhaustive absence observations after retention", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -818,7 +818,7 @@ describe("AI checkout actions", () => {
   });
 
   it("fails closed when exhaustive discovery finds multiple remote Sessions", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -848,14 +848,14 @@ describe("AI checkout actions", () => {
   });
 
   it("does not let a user without active Pro buy top-up credits", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
 
     await expect(createCreditCheckout()).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.checkoutCreate).not.toHaveBeenCalled();
   });
 
   it("reuses one idempotency key for concurrent Pro checkout requests", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
 
     const results = await Promise.allSettled([
       createProCheckout(),
@@ -873,7 +873,7 @@ describe("AI checkout actions", () => {
   });
 
   it("expires a bound pre-promotion Pro Checkout before creating a replacement", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     const legacySession = {
       id: "cs_pre_promotion",
       customer: "cus_1",
@@ -890,7 +890,7 @@ describe("AI checkout actions", () => {
         data: [{ quantity: 1, price: { id: "price_pro" } }],
       },
     };
-    mocks.getOrCreateProCheckoutAttempt
+    mocks.getOrCreateSubscriptionCheckoutAttempt
       .mockResolvedValueOnce({
         userId: "user-1",
         checkoutKey: "attempt-pre-promotion",
@@ -917,7 +917,7 @@ describe("AI checkout actions", () => {
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
 
     expect(mocks.checkoutExpire).toHaveBeenCalledWith(legacySession.id);
-    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       checkoutKey: "attempt-pre-promotion",
       stripeCheckoutSessionId: legacySession.id,
@@ -932,7 +932,7 @@ describe("AI checkout actions", () => {
   });
 
   it("keeps a pre-promotion Pro Checkout that completes during expiry", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     const legacySession = {
       id: "cs_pre_promotion_race",
       customer: "cus_1",
@@ -949,7 +949,7 @@ describe("AI checkout actions", () => {
         data: [{ quantity: 1, price: { id: "price_pro" } }],
       },
     };
-    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+    mocks.getOrCreateSubscriptionCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-pre-promotion-race",
       billingOfferId: "offer_pro",
@@ -971,7 +971,7 @@ describe("AI checkout actions", () => {
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
 
     expect(mocks.checkoutRetrieve).toHaveBeenCalledTimes(2);
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
     expect(mocks.checkoutCreate).not.toHaveBeenCalled();
     expect(mocks.scheduleBillingRefundAttempt).not.toHaveBeenCalled();
     expect(mocks.subscriptionCancel).not.toHaveBeenCalled();
@@ -989,7 +989,7 @@ describe("AI checkout actions", () => {
       product: "prod_pro_v2",
       recurring: { interval: "month", interval_count: 1 },
     });
-    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+    mocks.getOrCreateSubscriptionCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-old",
       billingOfferId: "offer_old",
@@ -1019,13 +1019,13 @@ describe("AI checkout actions", () => {
       expand: ["line_items.data.price"],
     });
     expect(mocks.checkoutExpire).not.toHaveBeenCalled();
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
     expect(mocks.checkoutCreate).not.toHaveBeenCalled();
   });
 
   it("revalidates an open bound Checkout after its local expiry", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.getOrCreateProCheckoutAttempt.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.getOrCreateSubscriptionCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
       checkoutKey: "attempt-expired-cache",
       billingOfferId: "offer_pro",
@@ -1055,12 +1055,12 @@ describe("AI checkout actions", () => {
     expect(mocks.checkoutRetrieve).toHaveBeenCalledWith("cs_still_open", {
       expand: ["line_items.data.price"],
     });
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
     expect(mocks.checkoutCreate).not.toHaveBeenCalled();
   });
 
   it("expires an unauthorized open historical Checkout and creates the current offer", async () => {
-    mocks.getOrCreateProCheckoutAttempt
+    mocks.getOrCreateSubscriptionCheckoutAttempt
       .mockResolvedValueOnce({
         userId: "user-1",
         checkoutKey: "attempt-old",
@@ -1095,7 +1095,7 @@ describe("AI checkout actions", () => {
 
     await expect(createProCheckout()).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.checkoutExpire).toHaveBeenCalledWith("cs_old");
-    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       checkoutKey: "attempt-old",
       stripeCheckoutSessionId: "cs_old",
@@ -1137,7 +1137,7 @@ describe("AI checkout actions", () => {
         invoice: "in_old",
         url: null,
       };
-      mocks.getOrCreateProCheckoutAttempt
+      mocks.getOrCreateSubscriptionCheckoutAttempt
         .mockResolvedValueOnce({
           userId: "user-1",
           checkoutKey: "attempt-old",
@@ -1209,7 +1209,7 @@ describe("AI checkout actions", () => {
       });
       expect(mocks.subscriptionCancel).toHaveBeenCalled();
       expect(mocks.checkoutCreate).toHaveBeenCalledTimes(1);
-      expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+      expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
         userId: "user-1",
         checkoutKey: "attempt-old",
         stripeCheckoutSessionId: "cs_old",
@@ -1218,8 +1218,8 @@ describe("AI checkout actions", () => {
   );
 
   it("expires a newly created session when its database binding was superseded", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.getOrCreateProCheckoutAttempt
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.getOrCreateSubscriptionCheckoutAttempt
       .mockResolvedValueOnce({
         userId: "user-1",
         checkoutKey: "attempt-stale",
@@ -1247,7 +1247,7 @@ describe("AI checkout actions", () => {
         expires_at: Math.floor(Date.now() / 1000) + 86_400,
         url: "https://checkout.stripe.com/current",
       });
-    mocks.bindProCheckoutSession
+    mocks.bindSubscriptionCheckoutSession
       .mockResolvedValueOnce("superseded")
       .mockResolvedValueOnce("bound");
 
@@ -1258,8 +1258,8 @@ describe("AI checkout actions", () => {
   });
 
   it("expires a validated session instead of redirecting it when account deletion wins the bind race", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.bindProCheckoutSession.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.bindSubscriptionCheckoutSession.mockResolvedValue(
       "account-deletion-authorized",
     );
     mocks.checkoutRetrieve.mockResolvedValue({
@@ -1288,7 +1288,7 @@ describe("AI checkout actions", () => {
       expand: ["line_items.data.price"],
     });
     expect(mocks.checkoutExpire).toHaveBeenCalledWith("cs_1");
-    expect(mocks.deleteBoundProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       checkoutKey: "attempt-1",
       stripeCheckoutSessionId: "cs_1",
@@ -1300,8 +1300,8 @@ describe("AI checkout actions", () => {
   });
 
   it("durably compensates a deletion-raced session that completes during expiry", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.bindProCheckoutSession.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.bindSubscriptionCheckoutSession.mockResolvedValue(
       "account-deletion-authorized",
     );
     const openSession = {
@@ -1389,13 +1389,13 @@ describe("AI checkout actions", () => {
     expect(
       mocks.scheduleBillingRefundAttempt.mock.invocationCallOrder[0],
     ).toBeLessThan(
-      mocks.deleteBoundProCheckoutAttempt.mock.invocationCallOrder[0],
+      mocks.deleteBoundSubscriptionCheckoutAttempt.mock.invocationCallOrder[0],
     );
   });
 
   it("retains a deletion-raced Checkout when cancellation cannot be recorded", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.bindProCheckoutSession.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.bindSubscriptionCheckoutSession.mockResolvedValue(
       "account-deletion-authorized",
     );
     mocks.checkoutRetrieve.mockResolvedValue({
@@ -1463,12 +1463,12 @@ describe("AI checkout actions", () => {
         idempotencyKey: "beutl:superseded-pro-checkout-cancel:cs_1",
       },
     );
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
   });
 
   it("retains a deletion-raced Checkout when Stripe cancellation remains active", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.bindProCheckoutSession.mockResolvedValue(
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.bindSubscriptionCheckoutSession.mockResolvedValue(
       "account-deletion-authorized",
     );
     mocks.checkoutRetrieve.mockResolvedValue({
@@ -1524,11 +1524,11 @@ describe("AI checkout actions", () => {
       digest: expect.stringContaining("/dashboard/account/billing"),
     });
     expect(mocks.recordBillingRefundCancellation).not.toHaveBeenCalled();
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
   });
 
   it("does not create a second checkout for a non-terminal Stripe Pro subscription", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     mocks.subscriptionList.mockResolvedValue({
       data: [
         {
@@ -1553,7 +1553,7 @@ describe("AI checkout actions", () => {
   });
 
   it("checks every Stripe subscription page before creating a Pro checkout", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     mocks.subscriptionList
       .mockResolvedValueOnce({
         data: [{ id: "sub_old", status: "canceled", items: { data: [] } }],
@@ -1594,7 +1594,7 @@ describe("AI checkout actions", () => {
   it("lets a user resubscribe after a refund canceled the Stripe subscription", async () => {
     // A refund that cancels the subscription in Stripe can leave the local row
     // on its last non-terminal status when no subscription webhook is replayed.
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro",
@@ -1628,8 +1628,8 @@ describe("AI checkout actions", () => {
   });
 
   it("does not replace an open bound checkout whose ownership metadata mismatches", async () => {
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
-    mocks.getOrCreateProCheckoutAttempt
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.getOrCreateSubscriptionCheckoutAttempt
       .mockResolvedValueOnce({
         userId: "user-1",
         checkoutKey: "attempt-old",
@@ -1659,7 +1659,7 @@ describe("AI checkout actions", () => {
       "failed validation before its Stripe state was safely resolved",
     );
 
-    expect(mocks.deleteBoundProCheckoutAttempt).not.toHaveBeenCalled();
+    expect(mocks.deleteBoundSubscriptionCheckoutAttempt).not.toHaveBeenCalled();
     expect(mocks.checkoutExpire).not.toHaveBeenCalled();
     expect(mocks.subscriptionCancel).not.toHaveBeenCalled();
     expect(mocks.scheduleBillingRefundAttempt).not.toHaveBeenCalled();

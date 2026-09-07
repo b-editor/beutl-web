@@ -9,6 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { AiPlanSection } from "./ai-plan";
+import { StoragePlanSection } from "./storage-plan";
 
 // 残高と利用状況は台帳の現在値を示す必要がある。
 export const dynamic = "force-dynamic";
@@ -71,6 +72,7 @@ export default async function Page(props: {
       </section>
 
       <AiPlanSection lang={lang} userId={user.id} />
+      <StoragePlanSection lang={lang} userId={user.id} />
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:users.packages")}</h2>

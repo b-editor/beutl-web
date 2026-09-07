@@ -165,7 +165,7 @@ describe("monotonic Stripe state persistence", () => {
       stripeCanonicalObservedAt: new Date("2026-08-01T00:00:01.300Z"),
     });
 
-    expect(memory.state.subscriptions.get("user-1")).toMatchObject({
+    expect(memory.state.subscriptions.get("user-1:pro")).toMatchObject({
       status: "active",
       stripeEventId: "evt_a_active_recovery",
       stripeEventCreatedAt: eventTime,
@@ -201,7 +201,7 @@ describe("monotonic Stripe state persistence", () => {
       stripeCanonicalObservedAt: new Date("2026-08-01T00:00:02.100Z"),
     });
 
-    expect(memory.state.subscriptions.get("user-1")).toMatchObject({
+    expect(memory.state.subscriptions.get("user-1:pro")).toMatchObject({
       status: "canceled",
       stripeEventId: "evt_terminal",
     });
