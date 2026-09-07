@@ -311,6 +311,15 @@ describe("assertDistinctDatabase", () => {
     ).toThrow("same database as MIGRATE_DATABASE_URL");
   });
 
+  it("refuses query parameters that would move the endpoint", () => {
+    expect(() =>
+      assertDistinctDatabase(
+        "postgresql://root@cluster.example.invalid:26257/defaultdb?host=other.example.invalid",
+        [["MIGRATE_DATABASE_URL", target]],
+      ),
+    ).toThrow("MIGRATE_SHADOW_DATABASE_URL must not carry host as query parameters");
+  });
+
   it("ignores a trailing root dot in the hostname", () => {
     expect(() =>
       assertDistinctDatabase(
@@ -396,6 +405,21 @@ describe("assertVerifiedTls", () => {
         "MIGRATE_DATABASE_URL",
       ),
     ).toThrow("must not carry an ssl parameter");
+  });
+
+  it("refuses an endpoint override before granting the loopback exemption", () => {
+    expect(() =>
+      assertVerifiedTls(
+        "postgresql://root@localhost:26257/defaultdb?host=remote.example.invalid&sslmode=disable",
+        "MIGRATE_DATABASE_URL",
+      ),
+    ).toThrow("must not carry host as query parameters");
+    expect(() =>
+      assertVerifiedTls(
+        "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=verify-full&port=5432&user=admin",
+        "MIGRATE_DATABASE_URL",
+      ),
+    ).toThrow("must not carry port, user as query parameters");
   });
 
   it("lets a loopback cluster stay plain", () => {
@@ -514,7 +538,17 @@ describe("dataStatements", () => {
   it("keeps a DO block and a string literal with a semicolon as one statement", () => {
     const block = `DO $$ BEGIN IF EXISTS (SELECT 1 FROM "T") THEN RAISE EXCEPTION 'repair; then retry'; END IF; END $$;`;
     expect(dataStatements(block)).toEqual([block.slice(0, -1)]);
-    expect(dataStatements(`ALTER TABLE "T" ADD COLUMN "note" STRING DEFAULT 'a;b';`)).toEqual([]);
+    expect(dataStatements(`ALTER TABLE "T" ALTER COLUMN "note" SET DEFAULT 'a;b';`)).toEqual([]);
+  });
+
+  it("reports an ALTER that fills or rewrites existing rows", () => {
+    expect(dataStatements(`ALTER TABLE "T" ADD COLUMN "state" STRING NOT NULL DEFAULT 'active';`)).toHaveLength(1);
+    expect(dataStatements(`ALTER TABLE "T" ADD COLUMN IF NOT EXISTS "n" INT8 DEFAULT 0;`)).toHaveLength(1);
+    expect(dataStatements(`ALTER TABLE "T" ADD COLUMN "total" INT8 AS ("a" + "b") STORED;`)).toHaveLength(1);
+    expect(dataStatements(`ALTER TABLE "T" ALTER COLUMN "n" TYPE STRING USING "n"::STRING;`)).toHaveLength(1);
+    expect(
+      dataStatements(`ALTER TABLE "T" ADD COLUMN "note" STRING;\nALTER TABLE "T" ALTER COLUMN "n" SET DEFAULT 0;\nALTER TABLE "T" ADD CONSTRAINT "c" CHECK ("n" >= 0);\nALTER TABLE "T" SET (schema_locked = true);`),
+    ).toEqual([]);
   });
 
   it("reports every construct that is not purely structural", () => {
@@ -536,42 +570,44 @@ describe("dataStatements", () => {
 
 describe("assertShadowIsNotTarget", () => {
   it("passes when the target cannot see the probe, and drops the probe", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
-    const target = recordingClient({ rows: [{ visible: false }] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
+    const target = recordingClient({ rows: [] }, { rows: [{ visible: false }] });
     await expect(
       assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
     ).resolves.toBeUndefined();
-    expect(shadow.queries[0]).toMatch(
+    expect(shadow.queries[0]).toBe("SET default_transaction_use_follower_reads = off");
+    expect(target.queries[0]).toBe("SET default_transaction_use_follower_reads = off");
+    expect(shadow.queries[1]).toMatch(
       /^CREATE TABLE "_beutl_shadow_probe_[0-9a-f]{32}" \("id" INT8 PRIMARY KEY\) WITH \(schema_locked = false\)$/,
     );
-    expect(shadow.queries[1]).toMatch(/^GRANT SELECT ON TABLE "_beutl_shadow_probe_[0-9a-f]{32}" TO public$/);
-    expect(shadow.queries[2]).toContain("information_schema.tables");
-    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS "_beutl_shadow_probe_[0-9a-f]{32}"/);
-    expect(target.queries[0]).toContain("information_schema.tables");
+    expect(shadow.queries[2]).toMatch(/^GRANT SELECT ON TABLE "_beutl_shadow_probe_[0-9a-f]{32}" TO public$/);
+    expect(shadow.queries[3]).toContain("information_schema.tables");
+    expect(shadow.queries[4]).toMatch(/^DROP TABLE IF EXISTS "_beutl_shadow_probe_[0-9a-f]{32}"/);
+    expect(target.queries[1]).toContain("information_schema.tables");
   });
 
   it("refuses when the target sees the probe, and still drops it", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
-    const target = recordingClient({ rows: [{ visible: true }] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
+    const target = recordingClient({ rows: [] }, { rows: [{ visible: true }] });
     await expect(
       assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
     ).rejects.toThrow("reaches the same database as MIGRATE_DATABASE_URL");
-    expect(shadow.queries).toHaveLength(4);
-    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
+    expect(shadow.queries).toHaveLength(5);
+    expect(shadow.queries[4]).toMatch(/^DROP TABLE IF EXISTS/);
   });
 
   it("refuses when the shadow cannot see its own probe, so an unreliable catalog never passes", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: false }] }, { rows: [] });
-    const target = recordingClient({ rows: [{ visible: false }] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [] }, { rows: [{ visible: false }] }, { rows: [] });
+    const target = recordingClient({ rows: [] }, { rows: [{ visible: false }] });
     await expect(
       assertShadowIsNotTarget({ shadowClient: shadow, targetClient: target }),
     ).rejects.toThrow("cannot see its own probe");
-    expect(target.queries).toHaveLength(0);
-    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
+    expect(target.queries).toHaveLength(1);
+    expect(shadow.queries[4]).toMatch(/^DROP TABLE IF EXISTS/);
   });
 
   it("hides connection and query details", async () => {
-    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
+    const shadow = recordingClient({ rows: [] }, { rows: [] }, { rows: [] }, { rows: [{ visible: true }] }, { rows: [] });
     await expect(
       assertShadowIsNotTarget({
         shadowClient: shadow,
@@ -582,7 +618,7 @@ describe("assertShadowIsNotTarget", () => {
         },
       }),
     ).rejects.toThrow("refusing to continue");
-    expect(shadow.queries[3]).toMatch(/^DROP TABLE IF EXISTS/);
+    expect(shadow.queries.at(-1)).toMatch(/^DROP TABLE IF EXISTS/);
   });
 });
 

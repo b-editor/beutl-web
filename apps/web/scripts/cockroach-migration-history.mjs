@@ -187,8 +187,25 @@ export async function unlockPublicTables(client) {
   }
 }
 
+const ENDPOINT_OVERRIDES = ["host", "hostaddr", "port", "dbname", "database", "user", "password"];
+
+/**
+ * pg lets a query parameter such as host= or port= replace the endpoint in
+ * the URL authority, so every check that reads the authority would look at
+ * the wrong server. Those parameters are refused outright.
+ */
+function assertNoEndpointOverride(url, label) {
+  const found = ENDPOINT_OVERRIDES.filter((key) => url.searchParams.has(key));
+  if (found.length > 0) {
+    throw new MigrationHistoryError(
+      `${label} must not carry ${found.join(", ")} as query parameters; the host, port, database, and credentials have to be in the URL itself`,
+    );
+  }
+}
+
 function databaseKey(connectionString, label) {
   const url = new URL(connectionString);
+  assertNoEndpointOverride(url, label);
   if (!url.port) {
     // pg fills an omitted port from PGPORT or 5432, so two spellings of one
     // database could look different here; only explicit ports compare safely.
@@ -225,6 +242,10 @@ export async function assertShadowIsNotTarget({ shadowClient, targetClient }) {
       ).rows[0]?.visible,
     );
   try {
+    // A URL can opt a session into follower reads, which would let the
+    // target read a snapshot older than the probe and miss it.
+    await shadowClient.query("SET default_transaction_use_follower_reads = off");
+    await targetClient.query("SET default_transaction_use_follower_reads = off");
     // Unlocked so the drop below cannot be refused; granted to public so a
     // target role other than the shadow role still sees it in the catalog.
     await shadowClient.query(
@@ -300,6 +321,7 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
  */
 export function assertVerifiedTls(connectionString, label) {
   const url = new URL(connectionString);
+  assertNoEndpointOverride(url, label);
   if (LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
     return;
   }
@@ -364,6 +386,15 @@ function isSchemaOnly(statement) {
   if (/^CREATE TABLE\b/i.test(text)) {
     // CREATE TABLE ... AS SELECT stores rows; a column list does not.
     return !/\bAS (SELECT|WITH|VALUES|TABLE)\b/i.test(text);
+  }
+  if (/^ALTER\b/i.test(text)) {
+    // A column added with a DEFAULT (or computed) fills every existing row,
+    // and a type change with USING rewrites them; the schema comparison only
+    // sees the final column, not what those rows received.
+    return !(
+      (/\bADD COLUMN\b/i.test(text) && /\b(DEFAULT|STORED|VIRTUAL)\b/i.test(text)) ||
+      /\bUSING\b/i.test(text)
+    );
   }
   return SCHEMA_ONLY_STATEMENT.test(text);
 }

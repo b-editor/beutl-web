@@ -36,13 +36,16 @@ Locally, `prisma migrate dev` creates and applies migrations against
 target. They take the target from `MIGRATE_DATABASE_URL`, and the drift check
 takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
 so a forgotten variable fails instead of migrating the wrong cluster. Both
-URLs must name their port explicitly and, unless they point at a loopback
-cluster, carry exactly one `sslmode=verify-full` and no `ssl` parameter;
-the commands refuse anything else. Before a replay they also create an
-empty, unlocked probe table through the shadow URL, grant it to `public`,
-require the shadow connection to see it, refuse when the target connection
-sees it too, and drop it again, so two spellings of one database cannot pass
-whatever the URLs look like. Pass
+URLs must name their port explicitly, must not move the endpoint through
+query parameters such as `host=` or `port=`, and, unless they point at a
+loopback cluster, must carry exactly one `sslmode=verify-full` and no `ssl`
+parameter; the commands refuse anything else. Before a replay they also
+create an empty, unlocked probe table through the shadow URL, grant it to
+`public`, require the shadow connection to see it, refuse when the target
+connection sees it too (with follower reads switched off for both sessions
+so the target cannot read a snapshot older than the probe), and drop it
+again, so two spellings of one database cannot pass whatever the URLs look
+like. Pass
 production URLs on the command line rather than storing them in `.env`.
 
 | Command | Purpose |
@@ -81,7 +84,8 @@ to start from `20260302104549_init`. Record the history once:
    before rerunning. The command first lists the migrations to record that
    may change rows (every statement that is not purely structural: `INSERT`,
    `UPDATE`, `DELETE`, `TRUNCATE`, `COPY`, `IMPORT`, `CREATE TABLE AS`, a
-   `DO` block, and so on) and stops with a fingerprint, because a schema
+   `DO` block, an `ADD COLUMN` with a `DEFAULT` or a computed value, a type
+   change with `USING`, and so on) and stops with a fingerprint, because a schema
    comparison cannot tell whether their data effects reached the database.
    Check each one by hand: the rows it would have written or removed must
    already be in the state it produces, or the tables it touches must be
@@ -126,13 +130,18 @@ which Prisma reports as four `SET DEFAULT` statements. The baseline accepted
 that drift by fingerprint (`a99f99cc1d024c06`), and `pnpm migrate:diff` keeps
 reporting it.
 
-The 2026-09-07 baseline predates the data-migration check, so the 25
+The 2026-09-07 baseline predates the data-migration check, so the 28
 migrations the detector reports were verified by hand against production.
 Four of them (`20260825170000_retain_storage_upload_receipts`,
 `20260825210000_add_package_checkout_resolution`,
 `20260825220000_add_topup_duplicate_refund_attempt`, and
 `20260825230000_add_topup_checkout_resolution`) run a `DO` block that only
-raises on inconsistent data and writes nothing. For the 21 that change rows, the
+raises on inconsistent data and writes nothing. Three are reported only for a
+column added with a default: `Feedback.status` (one production row, set by
+the application), `Subscription.cancelAtPeriodEnd` (one row, holding the
+same `false` the migration writes), and `StorageUpload.startState` (no
+production rows, so the temporary `active` default filled nothing). For the
+21 that change rows, the
 tables they rewrite (`CreditAccount`, `CreditTransaction`, `AiJob`,
 `StorageUpload`, `StorageMultipartCleanup`, `SubscriptionEntitlementHold`,
 `StripeCreditReversal`, and every checkout and refund attempt table) were
