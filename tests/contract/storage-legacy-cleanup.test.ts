@@ -357,16 +357,19 @@ describe("legacy storage cleanup contracts", () => {
     const calls: string[] = [];
     let deletedIds: string[] = [];
     let outboxKeys: string[] = [];
+    let outboxNotBefore: Date[] = [];
     let promotedKeys: string[] = [];
+    let promotedNotBefore: Date | undefined;
     const unreferenced = { Package: [], PackageScreenshot: [], Profile: [], Release: [], aiJobResult: null };
     const tx = {
       file: {
+        // Rows come back in an order unrelated to the request.
         findMany: async () => {
           calls.push("file-find");
           return [
-            { id: "a", objectKey: "obj/a", ...unreferenced },
-            { id: "shared", objectKey: "obj/shared", ...unreferenced, Package: [{ id: "other-package" }] },
             { id: "b", objectKey: "obj/b", ...unreferenced },
+            { id: "shared", objectKey: "obj/shared", ...unreferenced, Package: [{ id: "other-package" }] },
+            { id: "a", objectKey: "obj/a", ...unreferenced },
           ];
         },
         deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
@@ -376,15 +379,17 @@ describe("legacy storage cleanup contracts", () => {
         },
       },
       aiStorageCleanup: {
-        createMany: async ({ data }: { data: Array<{ objectKey: string; state: string }> }) => {
+        createMany: async ({ data }: { data: Array<{ objectKey: string; state: string; notBefore: Date }> }) => {
           calls.push("outbox-create");
           outboxKeys = data.map((row) => row.objectKey);
+          outboxNotBefore = data.map((row) => row.notBefore);
           expect(data.every((row) => row.state === "writing")).toBe(true);
           return { count: data.length };
         },
-        updateMany: async ({ where }: { where: { objectKey: { in: string[] } } }) => {
+        updateMany: async ({ where, data }: { where: { objectKey: { in: string[] } }; data: { notBefore: Date } }) => {
           calls.push("outbox-promote");
           promotedKeys = where.objectKey.in;
+          promotedNotBefore = data.notBefore;
           return { count: where.objectKey.in.length };
         },
       },
@@ -400,6 +405,7 @@ describe("legacy storage cleanup contracts", () => {
     expect(outboxKeys).toEqual(["obj/a", "obj/b"]);
     expect(promotedKeys).toEqual(["obj/a", "obj/b"]);
     expect(result).toEqual({ deleted: ["a", "b"], retained: ["shared"] });
+    expect(new Set([...outboxNotBefore, promotedNotBefore]).size).toBe(1);
   });
 
   it("refuses a batch with a missing file and skips an empty batch", async () => {

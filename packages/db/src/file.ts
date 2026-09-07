@@ -300,17 +300,21 @@ export async function deleteUnreferencedFilesWithStorageCleanup({
       where: { id: { in: uniqueIds }, userId, aiJobResult: null },
       select: { id: true, objectKey: true, ...fileReferenceSelect },
     });
-    if (files.length !== uniqueIds.length) {
-      const found = new Set(files.map((file) => file.id));
-      const missing = uniqueIds.find((id) => !found.has(id));
-      throw new Error(`Storage file ${missing} was not found`);
+    // Classify in input order so callers never observe the database's row order.
+    const byId = new Map(files.map((file) => [file.id, file]));
+    const retained: string[] = [];
+    const deletable: { id: string; objectKey: string }[] = [];
+    for (const id of uniqueIds) {
+      const file = byId.get(id);
+      if (!file) throw new Error(`Storage file ${id} was not found`);
+      if (hasLiveFileReference(file)) retained.push(id);
+      else deletable.push({ id, objectKey: file.objectKey });
     }
-    const retained = files.filter((file) => hasLiveFileReference(file));
-    const deletable = files.filter((file) => !hasLiveFileReference(file));
     if (deletable.length === 0) {
-      return { deleted: [] as string[], retained: retained.map((file) => file.id) };
+      return { deleted: [] as string[], retained };
     }
 
+    const now = new Date();
     const objectKeys = deletable.map((file) => file.objectKey);
     await tx.aiStorageCleanup.createMany({
       data: objectKeys.map((objectKey) => ({
@@ -318,7 +322,7 @@ export async function deleteUnreferencedFilesWithStorageCleanup({
         aiJobId: null,
         leaseToken: null,
         state: "writing",
-        notBefore: new Date(),
+        notBefore: now,
       })),
     });
     const deleted = await tx.file.deleteMany({
@@ -329,12 +333,9 @@ export async function deleteUnreferencedFilesWithStorageCleanup({
     }
     await tx.aiStorageCleanup.updateMany({
       where: { objectKey: { in: objectKeys }, state: "writing", leaseToken: null },
-      data: { state: "cleanup", notBefore: new Date() },
+      data: { state: "cleanup", notBefore: now },
     });
-    return {
-      deleted: deletable.map((file) => file.id),
-      retained: retained.map((file) => file.id),
-    };
+    return { deleted: deletable.map((file) => file.id), retained };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
