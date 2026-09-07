@@ -76,10 +76,13 @@ Cloudflare route sends desktop API traffic to the dedicated API Worker.
 | `beutl-web-api` | `beutl.beditor.net/api/v{1,2,3}/*` | `pnpm deploy:api` |
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `pnpm deploy:admin` |
 
-Before deploying, read [Deployment configuration](docs/deployment.md) for
-cross-Worker secrets, admin session sharing, Paid AI settings, and required
-Stripe webhook events. The route split and its rollback procedure are recorded
-in [ADR 0002](docs/adr/0002-api-worker-split.md).
+Before deploying, apply pending database migrations with
+`MIGRATE_DATABASE_URL=… pnpm migrate:deploy` (see
+[Database migrations](docs/deployment.md#database-migrations)), and read
+[Deployment configuration](docs/deployment.md) for cross-Worker secrets, admin
+session sharing, Paid AI settings, and required Stripe webhook events. The
+route split and its rollback procedure are recorded in
+[ADR 0002](docs/adr/0002-api-worker-split.md).
 
 ## Documentation
 

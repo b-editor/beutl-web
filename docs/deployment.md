@@ -22,6 +22,99 @@ commit secret values.
 desktop API Workers. The Web Worker issues the JWTs that the API Worker
 validates.
 
+## Database migrations
+
+The schema is versioned in [`apps/web/prisma/migrations`](../apps/web/prisma/migrations)
+and every environment is migrated with Prisma Migrate. Production receives new
+migrations through `prisma migrate deploy`. Do not apply a `migration.sql` by
+hand and do not run `prisma db push`: neither records the migration in
+`_prisma_migrations`, so the next `migrate deploy` would try to apply it again
+and fail on the objects that already exist.
+
+Locally, `prisma migrate dev` creates and applies migrations against
+`DATABASE_URL` in `apps/web/.env`. The commands below never use that URL as a
+target. They take the target from `MIGRATE_DATABASE_URL`, and the drift check
+takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
+so a forgotten variable fails instead of migrating the wrong cluster. Pass
+production URLs on the command line rather than storing them in `.env`.
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm migrate:status` | Show which migrations the target records |
+| `pnpm migrate:diff` | Print the SQL that would bring the target in line with the migration history; exit code 2 means drift |
+| `pnpm migrate:baseline` | One-time: record the history as applied on a database that received it by hand |
+| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history |
+| `pnpm migrate:fresh-cockroach` | Bootstrap an empty Cockroach database (see [Fresh Cockroach bootstrap](stripe-ai-billing-migration.md#fresh-cockroach-bootstrap)) |
+
+Release order: run the migration before deploying the Workers, unless the
+notes for that migration in [Stripe AI billing migration safety](stripe-ai-billing-migration.md)
+require a maintenance cutover, in which case follow that order.
+
+```bash
+MIGRATE_DATABASE_URL='postgresql://user@host:26257/db?sslmode=verify-full' \
+  pnpm migrate:deploy
+```
+
+### One-time baseline of the production database
+
+Production was migrated by applying each `migration.sql` by hand. Its schema
+therefore matches the history, but `_prisma_migrations` does not exist, and
+`migrate deploy` would try to start from `20260302104549_init`. Record the
+history once:
+
+1. Run the baseline. The shadow database must be a dedicated empty database
+   (the development shadow database is fine); it is reset on every run.
+
+   ```bash
+   MIGRATE_DATABASE_URL='…' MIGRATE_SHADOW_DATABASE_URL='…' pnpm migrate:baseline
+   ```
+
+   The command first replays the history into the shadow database and
+   compares production against it. On CockroachDB Cloud every statement is a
+   schema-change job, so the replay takes 20 minutes or more; `SHOW JOBS` on
+   the shadow database shows progress. With no difference it runs
+   `prisma migrate resolve --applied` for every migration and ends with
+   `prisma migrate status`. It is resumable: migrations that are already
+   recorded are kept.
+2. If the command stops because production differs, it has printed the SQL
+   that would bring production in line, followed by a drift fingerprint.
+   Apply that SQL by hand and rerun. If the difference is exactly the content
+   of migrations that were never applied, do not apply them by hand: set
+   `MIGRATE_BASELINE_THROUGH` to the last migration that was applied, rerun,
+   and let `migrate:deploy` apply the rest afterwards. If a reviewed
+   difference is to be kept, rerun with `MIGRATE_BASELINE_ACCEPT_DRIFT` set
+   to the printed fingerprint; the command records the history only when the
+   drift is still exactly that script. `pnpm migrate:diff` runs the same
+   comparison on its own.
+3. Release with `pnpm migrate:deploy` from then on.
+
+#### Known differences kept in production
+
+Production was created by `prisma db push`, so it lacked every `CHECK`
+constraint of the history, used `INT4` where the migration SQL writes `INT`
+(`INT8`), and carried Prisma's default index names. Those were aligned by hand
+on 2026-09-07 with [production-align-2026-09-07.sql](production-align-2026-09-07.sql).
+One difference remains: the history declares
+`DEFAULT gen_random_uuid()` on the `STRING` id columns of `BillingOffer`,
+`BillingRefundAttempt`, `SubscriptionEntitlementHold`, and
+`TopUpCheckoutAttempt`, which CockroachDB accepts in `CREATE TABLE` but not in
+`ALTER COLUMN`. Production carries the equivalent `gen_random_uuid()::STRING`,
+which Prisma reports as four `SET DEFAULT` statements. The baseline accepted
+that drift by fingerprint (`a99f99cc1d024c06`), and `pnpm migrate:diff` keeps
+reporting it.
+
+The comparison covers tables, columns, indexes, foreign keys, and enums. It
+does not cover the `CHECK` constraints or the `schema_locked` state that the
+migration SQL sets by hand (verified against Prisma 7.9: a replayed history
+with 84 `CHECK` constraints diffs cleanly against a schema without them), so
+the `SHOW CREATE TABLE` checks in the billing migration notes remain the
+verification for those.
+
+The replay into the shadow database appends `create_table_with_schema_locked=off`
+to the shadow URL only, because the historical `20260302201320` migration needs
+it on a fresh chain, and first unlocks tables that a previous replay left
+locked. Neither change touches the target database.
+
 ## Admin authentication and session sharing
 
 The admin console can share the Better Auth session with the Web app through

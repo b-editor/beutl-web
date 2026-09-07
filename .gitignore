@@ -43,3 +43,6 @@ next-env.d.ts
 
 .open-next
 .wrangler
+
+# Production connection strings for the migrate:* commands; never commit.
+.env.production
