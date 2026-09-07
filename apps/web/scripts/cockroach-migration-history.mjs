@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const HISTORY_TABLE = "_prisma_migrations";
 
@@ -145,7 +146,9 @@ function databaseKey(connectionString, label) {
       `${label} must name its port explicitly (for example :26257); an omitted port cannot be compared against the other database URLs`,
     );
   }
-  return `${url.hostname.toLowerCase()}:${url.port}${url.pathname}`;
+  // pg decodes the database name, so "/%64efaultdb" and "/defaultdb" are one
+  // database; compare what pg would connect to, not the raw spelling.
+  return `${url.hostname.toLowerCase()}:${url.port}${decodeURIComponent(url.pathname)}`;
 }
 
 /** The shadow database is wiped on every replay; it must be nobody's real database. */
@@ -194,10 +197,21 @@ export function assertVerifiedTls(connectionString, label) {
   if (LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
     return;
   }
-  const mode = url.searchParams.get("sslmode");
-  if (mode !== "verify-full") {
+  // pg honours the last of several sslmode values while URLSearchParams.get()
+  // returns the first, so a repeated parameter could pass here and connect
+  // in plaintext; only a single, unambiguous setting is accepted. The ssl
+  // parameter is refused outright because its precedence has changed across
+  // pg releases.
+  if (url.searchParams.has("ssl")) {
     throw new MigrationHistoryError(
-      `${label} must use sslmode=verify-full (found ${mode ?? "no sslmode"}); the migration commands refuse unverified or plaintext connections to a remote database`,
+      `${label} must not carry an ssl parameter; sslmode=verify-full is the only TLS setting the migration commands accept`,
+    );
+  }
+  const modes = url.searchParams.getAll("sslmode");
+  if (modes.length !== 1 || modes[0] !== "verify-full") {
+    const found = modes.length === 0 ? "no sslmode" : modes.length > 1 ? `sslmode given ${modes.length} times` : `sslmode=${modes[0]}`;
+    throw new MigrationHistoryError(
+      `${label} must use exactly one sslmode=verify-full (found ${found}); the migration commands refuse unverified or plaintext connections to a remote database`,
     );
   }
 }
@@ -231,5 +245,31 @@ export function planDeploy({ names, history }) {
     );
   }
   const applied = new Set(history.applied);
+  // The chain is forward-only: a recorded migration after an unrecorded one
+  // would make deploy run the older one last, after the migrations that may
+  // supersede it. The recorded names must be an exact prefix of the history.
+  const gap = names.slice(0, history.applied.length).find((name) => !applied.has(name));
+  if (gap) {
+    const later = history.applied[history.applied.length - 1];
+    throw new MigrationHistoryError(
+      `MIGRATE_DATABASE_URL records ${later} but not the earlier ${gap}; a gap in the history cannot be deployed over. Repair the record with prisma migrate resolve first`,
+    );
+  }
   return { pending: names.filter((name) => !applied.has(name)) };
+}
+
+const DATA_STATEMENT = /^\s*(INSERT|UPDATE|DELETE|UPSERT|MERGE)\b/i;
+
+/**
+ * Migrations that change rows, not only the schema. A schema comparison
+ * cannot tell whether their effects reached a database, so a baseline has to
+ * be told that an operator checked them.
+ */
+export function findDataMigrations(migrationsDir, names) {
+  return names.filter((name) => {
+    const sql = readFileSync(join(migrationsDir, name, "migration.sql"), "utf8");
+    return sql
+      .split("\n")
+      .some((line) => !line.trimStart().startsWith("--") && DATA_STATEMENT.test(line));
+  });
 }

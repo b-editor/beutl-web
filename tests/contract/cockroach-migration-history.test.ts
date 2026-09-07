@@ -7,6 +7,7 @@ import {
   assertDistinctDatabase,
   assertVerifiedTls,
   driftFingerprint,
+  findDataMigrations,
   inspectMigrationHistory,
   planBaseline,
   planDeploy,
@@ -252,6 +253,15 @@ describe("assertDistinctDatabase", () => {
     ).toThrow("DATABASE_URL must name its port explicitly");
   });
 
+  it("compares the database name pg would connect to, not its spelling", () => {
+    expect(() =>
+      assertDistinctDatabase(
+        "postgresql://root@cluster.example.invalid:26257/%64efaultdb?sslmode=verify-full",
+        [["MIGRATE_DATABASE_URL", target]],
+      ),
+    ).toThrow("same database as MIGRATE_DATABASE_URL");
+  });
+
   it("accepts another database on the same cluster", () => {
     expect(() =>
       assertDistinctDatabase(
@@ -308,8 +318,26 @@ describe("assertVerifiedTls", () => {
     ["sslmode=disable", "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=disable"],
   ])("rejects a remote URL with %s", (_label, url) => {
     expect(() => assertVerifiedTls(url, "MIGRATE_SHADOW_DATABASE_URL")).toThrow(
-      "MIGRATE_SHADOW_DATABASE_URL must use sslmode=verify-full",
+      "MIGRATE_SHADOW_DATABASE_URL must use exactly one sslmode=verify-full",
     );
+  });
+
+  it("rejects a repeated sslmode, which pg resolves to the last value", () => {
+    expect(() =>
+      assertVerifiedTls(
+        "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=verify-full&sslmode=disable",
+        "MIGRATE_DATABASE_URL",
+      ),
+    ).toThrow("sslmode given 2 times");
+  });
+
+  it("rejects an ssl parameter next to sslmode", () => {
+    expect(() =>
+      assertVerifiedTls(
+        "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=verify-full&ssl=0",
+        "MIGRATE_DATABASE_URL",
+      ),
+    ).toThrow("must not carry an ssl parameter");
   });
 
   it("lets a loopback cluster stay plain", () => {
@@ -356,6 +384,15 @@ describe("planDeploy", () => {
     ).toThrow("do not exist locally");
   });
 
+  it("refuses a gap in the recorded history", () => {
+    expect(() =>
+      planDeploy({
+        names,
+        history: { ...healthy, applied: [names[0], names[2]] },
+      }),
+    ).toThrow(`records ${names[2]} but not the earlier ${names[1]}`);
+  });
+
   it("tells an older checkout apart from a foreign database", () => {
     expect(() =>
       planDeploy({
@@ -363,5 +400,23 @@ describe("planDeploy", () => {
         history: { ...healthy, applied: [...names, "20260908000000_newer"] },
       }),
     ).toThrow("ahead of this checkout");
+  });
+});
+
+describe("findDataMigrations", () => {
+  it("keeps only migrations with a row-changing statement outside comments", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "beutl-data-"));
+    try {
+      const write = async (name: string, sql: string) => {
+        await mkdir(join(dir, name));
+        await writeFile(join(dir, name, "migration.sql"), sql);
+      };
+      await write(names[0], `CREATE TABLE "User" ("id" STRING NOT NULL);\n-- UPDATE "User" SET x = 1;\n`);
+      await write(names[1], `ALTER TABLE "User" ADD COLUMN "tags" STRING[];\nUPDATE "User" SET "tags" = {} WHERE "tags" IS NULL;\n`);
+      await write(names[2], `INSERT INTO "AiOperationModel" ("operation") VALUES (x)\nON CONFLICT DO NOTHING;\n`);
+      expect(findDataMigrations(dir, names)).toEqual([names[1], names[2]]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

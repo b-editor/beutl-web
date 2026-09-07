@@ -37,7 +37,8 @@ target. They take the target from `MIGRATE_DATABASE_URL`, and the drift check
 takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
 so a forgotten variable fails instead of migrating the wrong cluster. Both
 URLs must name their port explicitly and, unless they point at a loopback
-cluster, use `sslmode=verify-full`; the commands refuse anything else. Pass
+cluster, carry exactly one `sslmode=verify-full` and no `ssl` parameter;
+the commands refuse anything else. Pass
 production URLs on the command line rather than storing them in `.env`.
 
 | Command | Purpose |
@@ -45,7 +46,7 @@ production URLs on the command line rather than storing them in `.env`.
 | `pnpm migrate:status` | Show which migrations the target records |
 | `pnpm migrate:diff` | Print the SQL that would bring the target in line with the migration history; exit code 2 means drift |
 | `pnpm migrate:baseline` | One-time: record the history as applied on a database that received it by hand |
-| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, or a history from another migration directory |
+| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, a gap in the history, or a history from another migration directory |
 | `pnpm migrate:fresh-cockroach` | Bootstrap an empty Cockroach database (see [Fresh Cockroach bootstrap](stripe-ai-billing-migration.md#fresh-cockroach-bootstrap)) |
 
 Release order: run the migration before deploying the Workers, unless the
@@ -71,8 +72,14 @@ history once:
    MIGRATE_DATABASE_URL='…' MIGRATE_SHADOW_DATABASE_URL='…' pnpm migrate:baseline
    ```
 
-   The command first replays the history into the shadow database and
-   compares production against it. On CockroachDB Cloud every statement is a
+   The command first lists the migrations to record that change rows
+   (`INSERT`, `UPDATE`, `DELETE`) and stops with a fingerprint, because a
+   schema comparison cannot tell whether their data effects reached the
+   database. Check each one by hand: the rows it would have written or
+   removed must already be in the state it produces, or the tables it
+   touches must be empty. Then rerun with `MIGRATE_BASELINE_DATA_VERIFIED`
+   set to that fingerprint. The command then replays the history into the
+   shadow database and compares production against it. On CockroachDB Cloud every statement is a
    schema-change job, so the replay takes 20 minutes or more; `SHOW JOBS` on
    the shadow database shows progress. With no difference it runs
    `prisma migrate resolve --applied` for every migration and ends with
@@ -108,6 +115,18 @@ ran without a wider maintenance window. One difference remains: the history decl
 which Prisma reports as four `SET DEFAULT` statements. The baseline accepted
 that drift by fingerprint (`a99f99cc1d024c06`), and `pnpm migrate:diff` keeps
 reporting it.
+
+The 2026-09-07 baseline predates the data-migration check, so the effects of
+the 21 row-changing migrations were verified by hand against production: the
+tables they rewrite (`CreditAccount`, `CreditTransaction`, `AiJob`,
+`StorageUpload`, `StorageMultipartCleanup`, `SubscriptionEntitlementHold`,
+`StripeCreditReversal`, and every checkout and refund attempt table) were
+empty; `Package.tags` had no `NULL` row; every `Customer` had a
+`StripeCustomerOwnership` row; `PackageScreenshot` had no duplicate order; the
+models seeded by `20260818140000_seed_ai_operation_models` had been registered
+through the admin console instead; and the legacy Pro offer sentinel written
+by `20260811120000_version_paid_ai_billing_offers` was unnecessary because the
+only subscription already references an offer.
 
 The comparison covers tables, columns, indexes, foreign keys, and enums. It
 does not cover the `CHECK` constraints or the `schema_locked` state that the

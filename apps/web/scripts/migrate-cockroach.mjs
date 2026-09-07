@@ -18,6 +18,7 @@ import {
   assertDistinctDatabase,
   assertVerifiedTls,
   driftFingerprint,
+  findDataMigrations,
   inspectMigrationHistory,
   planBaseline,
   planDeploy,
@@ -188,6 +189,7 @@ async function baseline() {
   const shadow = shadowUrl(target);
   const through = process.env.MIGRATE_BASELINE_THROUGH || undefined;
   const acceptedDrift = process.env.MIGRATE_BASELINE_ACCEPT_DRIFT || undefined;
+  const verifiedData = process.env.MIGRATE_BASELINE_DATA_VERIFIED || undefined;
   const names = readMigrationNames(migrationsDir);
   const history = await withClient(
     "MIGRATE_DATABASE_URL",
@@ -203,6 +205,29 @@ async function baseline() {
   if (plan.pending.length === 0) {
     console.log("Nothing to baseline.");
     return runPrisma(["migrate", "status"], { database: target }).status;
+  }
+
+  // Decided before the replay so an operator learns about it in seconds, not
+  // after the twenty-minute drift check.
+  const dataMigrations = findDataMigrations(migrationsDir, plan.pending);
+  if (dataMigrations.length > 0) {
+    const fingerprint = driftFingerprint(dataMigrations.join("\n"));
+    console.log(
+      `${dataMigrations.length} of the ${plan.pending.length} migrations to record change rows, which the schema comparison cannot verify:\n  ${dataMigrations.join("\n  ")}`,
+    );
+    if (verifiedData === fingerprint) {
+      console.log(`Their data effects were verified by the operator (${fingerprint}).`);
+    } else if (verifiedData) {
+      console.error(
+        `Refusing to baseline: MIGRATE_BASELINE_DATA_VERIFIED names ${verifiedData}, but the data migrations to record are ${fingerprint}. Check the list above again.`,
+      );
+      return 2;
+    } else {
+      console.error(
+        `Refusing to baseline: confirm by hand that MIGRATE_DATABASE_URL already carries the data effects of the migrations above (docs/deployment.md describes what to check), then rerun with MIGRATE_BASELINE_DATA_VERIFIED=${fingerprint}.`,
+      );
+      return 2;
+    }
   }
 
   console.log(
