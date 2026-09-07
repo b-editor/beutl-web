@@ -15,9 +15,10 @@ import { join, resolve } from "node:path";
 import pg from "pg";
 import {
   MigrationHistoryError,
+  assertConnectionUrl,
   assertDistinctDatabase,
   assertShadowIsNotTarget,
-  assertVerifiedTls,
+  compareCheckConstraints,
   dataMigrationFingerprint,
   driftFingerprint,
   findDataMigrations,
@@ -48,7 +49,7 @@ function targetUrl() {
     "MIGRATE_DATABASE_URL",
     "set it to the database that should receive the migration history. DATABASE_URL from .env is never used as a target",
   );
-  assertVerifiedTls(target, "MIGRATE_DATABASE_URL");
+  assertConnectionUrl(target, "MIGRATE_DATABASE_URL");
   return target;
 }
 
@@ -57,7 +58,7 @@ function shadowUrl(target) {
     "MIGRATE_SHADOW_DATABASE_URL",
     "the drift check replays prisma/migrations into a disposable Cockroach database",
   );
-  assertVerifiedTls(shadow, "MIGRATE_SHADOW_DATABASE_URL");
+  assertConnectionUrl(shadow, "MIGRATE_SHADOW_DATABASE_URL");
   assertDistinctDatabase(shadow, [
     ["MIGRATE_DATABASE_URL", target],
     ["DATABASE_URL", process.env.DATABASE_URL],
@@ -147,12 +148,28 @@ async function diffAgainstHistory({ target, shadow, migrations }) {
       capture: true,
     },
   );
-  process.stdout.write(stdout);
-  const fingerprint = status === 2 ? driftFingerprint(stdout) : undefined;
+  if (status !== 0 && status !== 2) {
+    process.stdout.write(stdout);
+    return { code: status, fingerprint: undefined };
+  }
+  // Prisma leaves the replayed history in the shadow database; compare what
+  // its diff does not look at.
+  const checkLines = await withClient("MIGRATE_DATABASE_URL", target, (targetClient) =>
+    withClient("MIGRATE_SHADOW_DATABASE_URL", shadow, (shadowClient) =>
+      compareCheckConstraints({ targetClient, shadowClient }),
+    ),
+  );
+  const script =
+    checkLines.length === 0
+      ? stdout
+      : `${stdout.trimEnd()}\n\n-- CHECK constraints (compared from the catalogs; Prisma's diff ignores them)\n${checkLines.join("\n")}\n`;
+  process.stdout.write(script);
+  const code = status === 2 || checkLines.length > 0 ? 2 : 0;
+  const fingerprint = code === 2 ? driftFingerprint(script) : undefined;
   if (fingerprint) {
     console.log(`Drift fingerprint: ${fingerprint}`);
   }
-  return { code: status, fingerprint };
+  return { code, fingerprint };
 }
 
 /** Replay only part of the history by copying it into a scratch directory. */

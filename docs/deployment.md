@@ -37,9 +37,11 @@ target. They take the target from `MIGRATE_DATABASE_URL`, and the drift check
 takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
 so a forgotten variable fails instead of migrating the wrong cluster. Both
 URLs must name their port explicitly, must not move the endpoint through
-query parameters such as `host=` or `port=`, and, unless they point at a
-loopback cluster, must carry exactly one `sslmode=verify-full` and no `ssl`
-parameter; the commands refuse anything else. Before a replay they also
+query parameters such as `host=` or `port=`, must not select a schema other
+than `public` (through `schema=` or a `search_path` in `options=`), and,
+unless they point at a loopback cluster, must carry exactly one
+`sslmode=verify-full` and no `ssl` parameter; every command refuses
+anything else. Before a replay the drift check also
 create an empty, unlocked probe table through the shadow URL, grant it to
 `public`, require the shadow connection to see it, refuse when the target
 connection sees it too (with follower reads switched off for both sessions
@@ -152,12 +154,15 @@ through the admin console instead; and the legacy Pro offer sentinel written
 by `20260811120000_version_paid_ai_billing_offers` was unnecessary because the
 only subscription already references an offer.
 
-The comparison covers tables, columns, indexes, foreign keys, and enums. It
-does not cover the `CHECK` constraints or the `schema_locked` state that the
-migration SQL sets by hand (verified against Prisma 7.9: a replayed history
-with 84 `CHECK` constraints diffs cleanly against a schema without them), so
-the `SHOW CREATE TABLE` checks in the billing migration notes remain the
-verification for those.
+The comparison covers tables, columns, indexes, foreign keys, and enums
+through Prisma's diff, and `CHECK` constraints through a direct comparison of
+the catalogs of the replayed history and the target, because Prisma's diff
+ignores them (verified against Prisma 7.9: a replayed history with 69 `CHECK`
+constraints diffs cleanly against a schema without them). Missing, changed,
+or extra constraints are appended to the drift script and covered by its
+fingerprint. The comparison does not cover the `schema_locked` state that the
+migration SQL sets by hand, so the `SHOW CREATE TABLE` checks in the billing
+migration notes remain the verification for that.
 
 The replay into the shadow database appends `create_table_with_schema_locked=off`
 to the shadow URL only, because the historical `20260302201320` migration needs

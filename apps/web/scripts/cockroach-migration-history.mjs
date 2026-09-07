@@ -290,6 +290,57 @@ export function assertDistinctDatabase(shadowUrl, others) {
   }
 }
 
+/**
+ * Prisma's diff ignores CHECK constraints, so they are compared straight from
+ * the catalogs: the shadow database holds the replayed history and the
+ * target must carry the same constraints. Returns SQL that would align the
+ * target, one statement per line, empty when they agree.
+ */
+export async function compareCheckConstraints({ targetClient, shadowClient }) {
+  const read = async (client) => {
+    const { rows } = await client.query(
+      "SELECT c.relname AS table_name, con.conname AS name, pg_get_constraintdef(con.oid) AS definition FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND con.contype = 'c' ORDER BY c.relname, con.conname",
+    );
+    const map = new Map();
+    for (const row of rows) {
+      map.set(`${row.table_name}.${row.name}`, {
+        table: row.table_name,
+        name: row.name,
+        definition: String(row.definition).replace(/\s+/g, " ").trim(),
+      });
+    }
+    return map;
+  };
+  let expected;
+  let actual;
+  try {
+    [expected, actual] = await Promise.all([read(shadowClient), read(targetClient)]);
+  } catch {
+    throw new MigrationHistoryError(
+      "Unable to read the CHECK constraints of MIGRATE_DATABASE_URL or MIGRATE_SHADOW_DATABASE_URL; refusing to continue",
+    );
+  }
+  const lines = [];
+  for (const [key, constraint] of expected) {
+    const found = actual.get(key);
+    if (found && found.definition === constraint.definition) {
+      continue;
+    }
+    if (found) {
+      lines.push(`ALTER TABLE "${constraint.table}" DROP CONSTRAINT "${constraint.name}";`);
+    }
+    lines.push(
+      `ALTER TABLE "${constraint.table}" ADD CONSTRAINT "${constraint.name}" ${constraint.definition};`,
+    );
+  }
+  for (const [key, constraint] of actual) {
+    if (!expected.has(key)) {
+      lines.push(`ALTER TABLE "${constraint.table}" DROP CONSTRAINT "${constraint.name}";`);
+    }
+  }
+  return lines;
+}
+
 /** Strip anything that looks like a connection string before it reaches a log. */
 export function redactConnectionStrings(text) {
   return String(text).replace(
@@ -319,6 +370,36 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
  * loopback interface may stay plain; every other host must verify the
  * server certificate and its hostname.
  */
+/**
+ * Everything a target or shadow URL has to satisfy before it is used: the
+ * endpoint comes from the authority alone, the port is explicit (pg would
+ * otherwise take PGPORT while Prisma takes its own default), the schema is
+ * the public one that every history query looks at (Prisma honours a
+ * schema= parameter that pg ignores, and options= could move search_path),
+ * and the transport is verified TLS unless the host is loopback.
+ */
+export function assertConnectionUrl(connectionString, label) {
+  const url = new URL(connectionString);
+  assertNoEndpointOverride(url, label);
+  if (!url.port) {
+    throw new MigrationHistoryError(
+      `${label} must name its port explicitly (for example :26257); pg and Prisma fall back to different defaults`,
+    );
+  }
+  const schema = url.searchParams.getAll("schema");
+  if (schema.some((value) => value !== "public")) {
+    throw new MigrationHistoryError(
+      `${label} must not select a schema other than public; the migration commands inspect and migrate the public schema only`,
+    );
+  }
+  if (/search_path/i.test(url.searchParams.get("options") ?? "")) {
+    throw new MigrationHistoryError(
+      `${label} must not set search_path through options; the migration commands inspect and migrate the public schema only`,
+    );
+  }
+  assertVerifiedTls(connectionString, label);
+}
+
 export function assertVerifiedTls(connectionString, label) {
   const url = new URL(connectionString);
   assertNoEndpointOverride(url, label);

@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   MigrationHistoryError,
+  assertConnectionUrl,
   assertDistinctDatabase,
   assertShadowIsNotTarget,
   assertVerifiedTls,
+  compareCheckConstraints,
   dataMigrationFingerprint,
   dataStatements,
   driftFingerprint,
@@ -636,5 +638,67 @@ describe("localChecksums", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("assertConnectionUrl", () => {
+  const good = "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=verify-full";
+
+  it("accepts a complete remote URL and the public schema", () => {
+    expect(() => assertConnectionUrl(good, "MIGRATE_DATABASE_URL")).not.toThrow();
+    expect(() => assertConnectionUrl(`${good}&schema=public`, "MIGRATE_DATABASE_URL")).not.toThrow();
+  });
+
+  it("requires an explicit port on every command, not only the shadow check", () => {
+    expect(() =>
+      assertConnectionUrl("postgresql://root@cluster.example.invalid/defaultdb?sslmode=verify-full", "MIGRATE_DATABASE_URL"),
+    ).toThrow("MIGRATE_DATABASE_URL must name its port explicitly");
+  });
+
+  it("refuses a schema Prisma would honour but pg would not", () => {
+    expect(() => assertConnectionUrl(`${good}&schema=other`, "MIGRATE_DATABASE_URL")).toThrow(
+      "must not select a schema other than public",
+    );
+    expect(() =>
+      assertConnectionUrl(`${good}&options=-c%20search_path%3Dother`, "MIGRATE_DATABASE_URL"),
+    ).toThrow("must not set search_path");
+  });
+
+  it("still applies the endpoint and TLS rules", () => {
+    expect(() => assertConnectionUrl(`${good}&host=x`, "MIGRATE_DATABASE_URL")).toThrow("must not carry host");
+    expect(() =>
+      assertConnectionUrl("postgresql://root@cluster.example.invalid:26257/defaultdb", "MIGRATE_DATABASE_URL"),
+    ).toThrow("exactly one sslmode=verify-full");
+  });
+});
+
+describe("compareCheckConstraints", () => {
+  const row = (table_name: string, name: string, definition: string) => ({ table_name, name, definition });
+
+  it("returns nothing when the target carries the history's constraints", async () => {
+    const rows = [row("T", "T_n_check", "CHECK ((n >= 0))")];
+    await expect(
+      compareCheckConstraints({ targetClient: clientFor({ rows }), shadowClient: clientFor({ rows }) }),
+    ).resolves.toEqual([]);
+  });
+
+  it("emits SQL for missing, changed, and extra constraints", async () => {
+    const shadow = clientFor({ rows: [row("T", "T_k_check", "CHECK ((k IN ('a')))"), row("T", "T_n_check", "CHECK ((n >= 0))")] });
+    const target = clientFor({ rows: [row("T", "T_k_check", "CHECK ((k IN ('a', 'b')))"), row("U", "U_old_check", "CHECK ((x > 0))")] });
+    await expect(compareCheckConstraints({ targetClient: target, shadowClient: shadow })).resolves.toEqual([
+      `ALTER TABLE "T" DROP CONSTRAINT "T_k_check";`,
+      `ALTER TABLE "T" ADD CONSTRAINT "T_k_check" CHECK ((k IN ('a')));`,
+      `ALTER TABLE "T" ADD CONSTRAINT "T_n_check" CHECK ((n >= 0));`,
+      `ALTER TABLE "U" DROP CONSTRAINT "U_old_check";`,
+    ]);
+  });
+
+  it("hides connection and query details", async () => {
+    await expect(
+      compareCheckConstraints({
+        targetClient: { query: async () => { throw new Error("postgresql://secret@example.invalid/p"); } },
+        shadowClient: clientFor({ rows: [] }),
+      }),
+    ).rejects.toThrow("refusing to continue");
   });
 });
