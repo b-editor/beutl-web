@@ -1683,27 +1683,71 @@ export async function countStorageUploadsByUserId({
 // bucket would not let go of the parts. Making it wait out the same day as an
 // upload nobody has touched leaves that storage paid for, and the account's
 // quota spent, for no reason: it is due now.
+// Which stale rows a sweep wants. Every upload gets at least the shortest
+// grace; a large one gets a grace that grows with its size, up to the longest.
+// "due" is everything that is certainly past its grace by size alone plus the
+// rows already handed to cleanup; "graced" is the band of large uploads whose
+// exact deadline the caller must still work out. Listing them separately
+// keeps a run of in-flight large uploads from filling the page and hiding
+// small rows that are already due.
+export type StaleStorageUploadBand =
+  | {
+      kind: "due";
+      // Rows at or below this size are due once older than `before`.
+      sizeAtShortestGrace: bigint;
+      // Rows older than this are due whatever their size.
+      beforeAnySize: Date;
+    }
+  | {
+      kind: "graced";
+      sizeAtShortestGrace: bigint;
+      beforeAnySize: Date;
+    };
+
 export async function listStorageUploadsStartedBefore({
   before,
   now,
   limit,
+  band,
   prisma,
 }: {
   before: Date;
   now: Date;
   limit: number;
+  band?: StaleStorageUploadBand;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  const rows = await db.storageUpload.findMany({
-    where: {
-      AND: [
-        {
+  const staleness =
+    band === undefined
+      ? {
           OR: [
             { completedFileId: null, createdAt: { lt: before } },
             { abandonedAt: { not: null } },
           ],
-        },
+        }
+      : band.kind === "due"
+        ? {
+            OR: [
+              {
+                completedFileId: null,
+                createdAt: { lt: before },
+                size: { lte: band.sizeAtShortestGrace },
+              },
+              { completedFileId: null, createdAt: { lt: band.beforeAnySize } },
+              { abandonedAt: { not: null } },
+            ],
+          }
+        : {
+            completedFileId: null,
+            abandonedAt: null,
+            size: { gt: band.sizeAtShortestGrace },
+            createdAt: { lt: before, gte: band.beforeAnySize },
+          };
+  const rows = await db.storageUpload.findMany({
+    where: {
+      AND: [
+        staleness,
         {
           OR: [
             { cleanupLeaseUntil: null },

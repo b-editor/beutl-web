@@ -80,6 +80,7 @@ export default async function Page(props: {
     offers,
     aiUsage,
     storageQuota,
+    storageTierPrices,
     hasStripeCustomer,
     payments,
     creditPurchases,
@@ -150,6 +151,7 @@ export default async function Page(props: {
         subscriptions={subscriptions}
         offers={offers}
         storageQuota={storageQuota}
+        storageTierPrices={storageTierPrices}
       />
       <AiUsageSection lang={lang} t={t} usage={aiUsage} />
       <PaymentMethodSection t={t} hasStripeCustomer={hasStripeCustomer} />

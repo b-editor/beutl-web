@@ -47,6 +47,12 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 const ABANDON_AFTER_MAX_MILLISECONDS = 6 * 24 * 60 * 60 * 1000;
 const ABANDON_BYTES_PER_SECOND = 1024 * 1024;
 
+// The largest size whose grace is still the shortest one. Anything bigger
+// gets longer, up to ABANDON_AFTER_MAX_MILLISECONDS.
+const ABANDON_SIZE_AT_SHORTEST_GRACE = BigInt(
+  (ABANDON_AFTER_MILLISECONDS / 1000) * ABANDON_BYTES_PER_SECOND,
+);
+
 export function abandonAfterMilliseconds(size: bigint | number): number {
   const seconds = Number(size) / ABANDON_BYTES_PER_SECOND;
   return Math.min(
@@ -253,26 +259,42 @@ export async function abandonStaleStorageUploads(
       console.error("Failed to reconcile unknown storage completions", error);
       return { inspected: 0, finalized: 0, errors: 1 };
     });
-  // 一覧は最短の猶予で引き、大きなファイルはその大きさに応じた猶予が過ぎるまで
-  // 手元で見送る。
-  const stale = await listStorageUploadsStartedBefore({
-    before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
+  // Rows that are certainly due (small and past the shortest grace, older
+  // than the longest grace, or already handed to cleanup) come first and get
+  // the whole page. Large uploads still inside their size-dependent grace are
+  // listed on their own and filtered here, so they can never crowd the due
+  // rows out of the page.
+  const band = {
+    sizeAtShortestGrace: ABANDON_SIZE_AT_SHORTEST_GRACE,
+    beforeAnySize: new Date(now.getTime() - ABANDON_AFTER_MAX_MILLISECONDS),
+  };
+  const before = new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS);
+  const due = await listStorageUploadsStartedBefore({
+    before,
     now,
     limit: MAX_PER_RUN,
+    band: { kind: "due", ...band },
   });
+  const graced =
+    due.length < MAX_PER_RUN
+      ? (
+          await listStorageUploadsStartedBefore({
+            before,
+            now,
+            limit: MAX_PER_RUN,
+            band: { kind: "graced", ...band },
+          })
+        ).filter(
+          (listed) =>
+            listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
+            now.getTime(),
+        )
+      : [];
+  const stale = [...due, ...graced].slice(0, MAX_PER_RUN);
 
   let abandoned = 0;
   let failed = unknownRecovery.errors;
   for (const listed of stale) {
-    // 既に掃除のものになった行 (abandonedAt) は年齢に関係なく片付ける。
-    // 手つかずの大きなアップロードだけ、その大きさぶんの猶予を待つ。
-    if (
-      listed.abandonedAt === null &&
-      listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) >
-        now.getTime()
-    ) {
-      continue;
-    }
     // Dedicated artifacts have no multipart handle. Once their creation lease
     // expires, freeze the exact generation and preserve its delayed object
     // outbox. Never feed uploadId=null into the multipart pre-create path.

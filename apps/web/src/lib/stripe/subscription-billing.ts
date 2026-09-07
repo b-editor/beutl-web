@@ -232,3 +232,43 @@ export function blocksNewSubscriptionCheckout(
     subscription.status !== "incomplete_expired"
   );
 }
+
+export type SubscriptionPriceDescription = {
+  unitAmount: number;
+  currency: string;
+};
+
+// What each tier of a plan costs, for showing before a change that is charged
+// without a Checkout page. The recorded offer is preferred; a Price that has
+// never been sold yet is read from Stripe without being recorded. A tier
+// whose Price cannot be described maps to null, and the caller decides what
+// that means for the action it is offering.
+export async function describeConfiguredSubscriptionPrices(
+  plan: SubscriptionPlanConfig,
+  stripe: Stripe,
+): Promise<ReadonlyMap<string | null, SubscriptionPriceDescription | null>> {
+  const tiers: Array<string | null> =
+    plan.tierIds.length > 0 ? [...plan.tierIds] : [null];
+  const entries = await Promise.all(
+    tiers.map(async (tier): Promise<[string | null, SubscriptionPriceDescription | null]> => {
+      const priceId = plan.currentPriceId(tier);
+      if (!priceId) return [tier, null];
+      try {
+        const persisted = await findBillingOfferByStripePriceId({
+          stripePriceId: priceId,
+        });
+        const offer = persisted ? asPlanOffer(plan, persisted) : null;
+        if (offer && offer.tier === tier) {
+          return [tier, { unitAmount: offer.unitAmount, currency: offer.currency }];
+        }
+        const price = await stripe.prices.retrieve(priceId);
+        const terms = subscriptionTermsFromPrice(plan, price, tier, false);
+        return [tier, { unitAmount: terms.unitAmount, currency: terms.currency }];
+      } catch (error) {
+        console.error(`Could not describe the ${plan.id} Price for tier ${tier}`, error);
+        return [tier, null];
+      }
+    }),
+  );
+  return new Map(entries);
+}

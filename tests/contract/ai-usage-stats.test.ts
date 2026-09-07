@@ -414,11 +414,14 @@ describe("AI usage aggregates", () => {
         billingPeriodStart: periodStart,
         billingPeriodEnd: periodEnd,
         user: {
-          Subscription: {
-            stripeSubscriptionId: "sub-user-held",
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
-          },
+          subscriptions: [
+            {
+              stripeSubscriptionId: "sub-user-held",
+              tier: null,
+              currentPeriodStart: periodStart,
+              currentPeriodEnd: periodEnd,
+            },
+          ],
         },
       },
       {
@@ -427,25 +430,30 @@ describe("AI usage aggregates", () => {
         billingPeriodStart: new Date("2026-06-01T00:00:00.000Z"),
         billingPeriodEnd: new Date("2026-07-01T00:00:00.000Z"),
         user: {
-          Subscription: {
-            stripeSubscriptionId: "sub-user-historical",
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
-          },
+          subscriptions: [
+            {
+              stripeSubscriptionId: "sub-user-historical",
+              tier: null,
+              currentPeriodStart: periodStart,
+              currentPeriodEnd: periodEnd,
+            },
+          ],
         },
       },
     ]);
     Object.assign(memory.prisma.subscriptionEntitlementHold, { findMany });
 
     expect((await countActiveSubscriptions({ now, planId: "pro" })).total).toBe(1);
-    // Holds are looked up by the candidate subscriptions themselves, so a
-    // hold on another plan's subscription of the same user never counts.
+    // Only holds of users with a live row of this plan are loaded; the counts
+    // themselves stay in the database.
     expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           active: true,
-          stripeSubscriptionId: {
-            in: ["sub-user-held", "sub-user-historical"],
+          user: {
+            subscriptions: {
+              some: expect.objectContaining({ planId: "pro" }),
+            },
           },
         }),
       }),
@@ -465,17 +473,24 @@ describe("AI usage aggregates", () => {
         billingOfferId: "offer-1",
       });
     }
-    const findMany = vi.fn().mockResolvedValue([{ userId: "user-deleting" }]);
+    const findMany = vi.fn().mockResolvedValue([
+      { userId: "user-deleting", user: { subscriptions: [{ tier: null }] } },
+    ]);
     Object.assign(memory.prisma.accountDeletionIntent, { findMany });
 
     expect((await countActiveSubscriptions({ now, planId: "pro" })).total).toBe(1);
-    expect(findMany).toHaveBeenCalledWith({
-      where: {
-        expiresAt: { gt: now },
-        userId: { in: ["user-active", "user-deleting"] },
-      },
-      select: { userId: true },
-    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          expiresAt: { gt: now },
+          user: {
+            subscriptions: {
+              some: expect.objectContaining({ planId: "pro" }),
+            },
+          },
+        },
+      }),
+    );
   });
 });
 

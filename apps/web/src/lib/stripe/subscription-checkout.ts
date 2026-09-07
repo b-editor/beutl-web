@@ -42,6 +42,7 @@ import {
   configuredPriceIds,
   type SubscriptionPlanConfig,
 } from "./subscription-plans";
+import { syncSubscriptionFromStripe } from "./subscription-sync";
 
 const BILLING_PATH = "/dashboard/account/billing";
 
@@ -1174,27 +1175,15 @@ export async function changeSubscriptionTier({
     );
   }
 
-  // Same watermark trick as the portal-return sync: reuse the stored event
-  // time so a webhook that already arrived is never overwritten, and advance
-  // only the canonical observation time.
-  await reconcileSubscriptionObservation({
-    userId,
-    stripeSubscriptionId: updated.id,
-    status: updated.status,
-    planId: plan.id,
-    tier,
-    billingOfferId: newOffer.id,
-    ...getSubscriptionPeriod(updated),
-    cancelAtPeriodEnd: isCancellationScheduled(updated),
-    cancelAt: getScheduledCancellationTime(updated),
-    stripeSubscriptionCreatedAt: updated.created
-      ? new Date(updated.created * 1000)
-      : null,
-    stripeEventId: `tier-change:${updated.id}:${newOffer.stripePriceId}`,
-    stripeEventCreatedAt: stored.stripeEventCreatedAt ?? new Date(0),
-    stripeCanonicalObservedAt: new Date(),
-    replaceExistingSubscription: false,
-  });
+  // Persist what Stripe holds now rather than this call's response. Two
+  // changes racing each other both carry a fresh idempotency key, so Stripe
+  // may apply A and then B while A's response is still in flight; recording
+  // A's response would leave the row on a tier the customer no longer has.
+  // The canonical read goes through the portal-return sync, which derives
+  // the tier from the live Price and keeps the stored webhook watermark, so
+  // the webhook for this change still outranks it and settles any read that
+  // was itself overtaken.
+  await syncSubscriptionFromStripe(userId, plan.id);
   return "changed";
 }
 

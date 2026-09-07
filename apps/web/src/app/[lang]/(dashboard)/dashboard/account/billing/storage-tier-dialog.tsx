@@ -3,6 +3,7 @@
 import { Check } from "lucide-react";
 import { useState } from "react";
 import {
+  formatAmount,
   formatBytes,
   STORAGE_TIER_IDS,
   storageTierOf,
@@ -22,26 +23,36 @@ import {
   DialogTrigger,
 } from "@beutl/ui/ui/dialog";
 import { changeStorageTier, createStorageCheckout } from "./storage-actions";
+import type { StorageTierPrices } from "./queries";
 
 // One dialog for picking a storage tier, whether the user is subscribing or
 // switching. The chosen tier travels as a plain form field to the server
 // action, which validates it again and redirects; the dialog only decides
 // which action to post to and keeps the button disabled until a tier is
 // picked.
+//
+// A new subscription goes on to Stripe Checkout, which shows the price before
+// anything is charged. A change does not: the difference is invoiced at once.
+// So the change dialog shows every tier's monthly price and refuses a tier
+// whose price it cannot show.
 export function StorageTierDialog({
   lang,
   currentTier,
   tiers = STORAGE_TIER_IDS,
+  prices,
 }: {
   lang: string;
   // null when the user has no storage subscription yet.
   currentTier: StorageTierId | null;
   tiers?: readonly StorageTierId[];
+  prices: StorageTierPrices;
 }) {
   const { t } = useTranslation(lang);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<StorageTierId | null>(null);
   const changing = currentTier !== null;
+  const canPick = (tier: StorageTierId) =>
+    tier !== currentTier && (!changing || prices[tier] !== null);
 
   return (
     <Dialog
@@ -89,12 +100,14 @@ export function StorageTierDialog({
             {tiers.map((tier) => {
               const isCurrent = tier === currentTier;
               const isSelected = tier === selected;
+              const price = prices[tier];
+              const disabled = !canPick(tier);
               return (
                 <label
                   key={tier}
                   className={[
                     "flex items-center gap-3 rounded-lg border p-4 transition-colors",
-                    isCurrent
+                    disabled
                       ? "cursor-default opacity-60"
                       : "cursor-pointer hover:bg-accent",
                     isSelected ? "border-primary bg-accent" : "",
@@ -105,7 +118,7 @@ export function StorageTierDialog({
                     name="tier"
                     value={tier}
                     checked={isSelected}
-                    disabled={isCurrent}
+                    disabled={disabled}
                     onChange={() => setSelected(tier)}
                     className="sr-only"
                   />
@@ -135,6 +148,22 @@ export function StorageTierDialog({
                       })}
                     </span>
                   </span>
+                  <span className="shrink-0 text-right text-sm">
+                    {price ? (
+                      <>
+                        <span className="font-bold">
+                          {formatAmount(price.unitAmount, price.currency, lang)}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          {t("account:storagePlan.perMonth")}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {t("account:storagePlan.priceUnavailable")}
+                      </span>
+                    )}
+                  </span>
                 </label>
               );
             })}
@@ -147,7 +176,7 @@ export function StorageTierDialog({
             >
               {t("cancel")}
             </Button>
-            <SubmitButton disabled={selected === null}>
+            <SubmitButton disabled={selected === null || !canPick(selected)}>
               {t(
                 changing
                   ? "account:storagePlan.confirmChange"

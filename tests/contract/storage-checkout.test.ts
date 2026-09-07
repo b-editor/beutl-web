@@ -353,7 +353,20 @@ describe("storage plan checkout actions", () => {
   });
 
   describe("changing the tier", () => {
+    // Stripe as the tests see it: the item's Price after the last update.
+    let remotePrice = "price_100";
+
     beforeEach(() => {
+      remotePrice = "price_100";
+      mocks.subscriptionRetrieve.mockImplementation(async () =>
+        stripeSubscription(remotePrice),
+      );
+      mocks.subscriptionUpdate.mockImplementation(
+        async (_id: string, params: { items: { price: string }[] }) => {
+          remotePrice = params.items[0].price;
+          return stripeSubscription(remotePrice);
+        },
+      );
       mocks.getSubscription.mockResolvedValue({
         userId: "user-1",
         stripeSubscriptionId: "sub_storage",
@@ -368,8 +381,6 @@ describe("storage plan checkout actions", () => {
         cancelAtPeriodEnd: false,
         entitlementHeld: false,
       });
-      mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_100"));
-      mocks.subscriptionUpdate.mockResolvedValue(stripeSubscription("price_1tb"));
     });
 
     it("switches the item, invoices the difference now, and records the new tier", async () => {
@@ -398,8 +409,28 @@ describe("storage plan checkout actions", () => {
       );
     });
 
+    it("records the tier Stripe ended on, not the one this call asked for", async () => {
+      // Another change landed between this update and its persistence, so the
+      // canonical read returns 200 GB although this call asked for 1 TB.
+      mocks.subscriptionUpdate.mockImplementation(async () => {
+        remotePrice = "price_200";
+        return stripeSubscription("price_1tb");
+      });
+
+      await expect(changeStorageTier(formWith("1tb"))).rejects.toThrow("NEXT_REDIRECT");
+
+      expect(mocks.reconcileSubscriptionObservation).toHaveBeenCalledWith(
+        expect.objectContaining({ tier: "200gb", billingOfferId: "offer_200gb" }),
+      );
+      expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalledWith(
+        expect.objectContaining({ tier: "1tb" }),
+      );
+    });
+
     it("uses a fresh idempotency key for every change", async () => {
       await expect(changeStorageTier(formWith("1tb"))).rejects.toThrow("NEXT_REDIRECT");
+      // Back on the small tier, the same change is asked for again.
+      remotePrice = "price_100";
       await expect(changeStorageTier(formWith("1tb"))).rejects.toThrow("NEXT_REDIRECT");
       const keys = mocks.subscriptionUpdate.mock.calls.map((call) => call[2].idempotencyKey);
       expect(new Set(keys).size).toBe(2);
@@ -426,7 +457,7 @@ describe("storage plan checkout actions", () => {
         cancelAtPeriodEnd: false,
         entitlementHeld: false,
       });
-      mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_1tb"));
+      remotePrice = "price_1tb";
       mocks.sumFileSizeByUserId.mockResolvedValue(BigInt(150 * GIB));
 
       await expect(changeStorageTier(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
@@ -449,8 +480,7 @@ describe("storage plan checkout actions", () => {
         entitlementHeld: false,
       };
       mocks.getSubscription.mockResolvedValue(oneTerabyte);
-      mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_1tb"));
-      mocks.subscriptionUpdate.mockResolvedValue(stripeSubscription("price_100"));
+      remotePrice = "price_1tb";
       // 60 GiB stored and 50 GiB reserved by an upload in progress do not fit
       // in 100 GiB, even though the stored files alone would.
       mocks.sumFileSizeByUserId.mockResolvedValue(BigInt(60 * GIB));

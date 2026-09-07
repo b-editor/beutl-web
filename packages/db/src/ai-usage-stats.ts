@@ -291,66 +291,89 @@ export async function countActiveSubscriptions({
   prisma?: PrismaTransaction;
 }): Promise<ActiveSubscriptionCounts> {
   const db = prisma ?? await getDb();
-  const candidates = await db.subscription.findMany({
-    where: {
-      status: "active",
-      planId,
-      // A row with no offer was never matched to a Price and is granted
-      // nothing, the same way isActiveSubscription reads it.
-      billingOfferId: {
-        not: null,
-      },
-      currentPeriodEnd: {
-        gt: now,
-      },
-      // A subscription cancelled mid-period stops being entitled at cancelAt,
-      // not at the end of the period it was paid through; counting by
-      // currentPeriodEnd alone reports it as spending against the allowance
-      // for weeks after it stopped being able to.
-      OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
+  const activeWhere = {
+    status: "active",
+    planId,
+    // A row with no offer was never matched to a Price and is granted
+    // nothing, the same way isActiveSubscription reads it.
+    billingOfferId: {
+      not: null,
     },
-    select: {
-      userId: true,
-      tier: true,
-      stripeSubscriptionId: true,
-      currentPeriodStart: true,
-      currentPeriodEnd: true,
+    currentPeriodEnd: {
+      gt: now,
     },
-  });
-  const byTier: Record<string, number> = {};
-  if (candidates.length === 0) return { total: 0, byTier };
-
-  const [holds, deletionIntents] = await Promise.all([
+    // A subscription cancelled mid-period stops being entitled at cancelAt,
+    // not at the end of the period it was paid through; counting by
+    // currentPeriodEnd alone reports it as spending against the allowance
+    // for weeks after it stopped being able to.
+    OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
+  };
+  // The counts stay in the database; only the exclusions (holds and deletion
+  // intents, both rare) are loaded, each with the plan's row of its user so
+  // the identity and overlap checks below can run without a second query.
+  const [grouped, activeHolds, deletionIntents] = await Promise.all([
+    db.subscription.groupBy({
+      by: ["tier"],
+      where: activeWhere,
+      _count: { _all: true },
+    }),
     db.subscriptionEntitlementHold.findMany({
       where: {
         active: true,
-        stripeSubscriptionId: {
-          in: candidates.map((candidate) => candidate.stripeSubscriptionId),
-        },
+        user: { subscriptions: { some: activeWhere } },
       },
       select: {
         userId: true,
         stripeSubscriptionId: true,
         billingPeriodStart: true,
         billingPeriodEnd: true,
+        user: {
+          select: {
+            subscriptions: {
+              where: { planId },
+              select: {
+                stripeSubscriptionId: true,
+                tier: true,
+                currentPeriodStart: true,
+                currentPeriodEnd: true,
+              },
+            },
+          },
+        },
       },
     }),
     db.accountDeletionIntent.findMany({
       where: {
         expiresAt: { gt: now },
-        userId: { in: candidates.map((candidate) => candidate.userId) },
+        user: { subscriptions: { some: activeWhere } },
       },
-      select: { userId: true },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            subscriptions: { where: { planId }, select: { tier: true } },
+          },
+        },
+      },
     }),
   ]);
+
+  const byTier: Record<string, number> = {};
+  let total = 0;
+  for (const group of grouped) {
+    const count = group._count._all;
+    total += count;
+    if (group.tier !== null) {
+      byTier[group.tier] = (byTier[group.tier] ?? 0) + count;
+    }
+  }
 
   // Holds remain as audit records after a period or subscription replacement.
   // Mirror getSubscription's identity and overlap checks so only a hold that
   // currently denies the entitlement is removed from the count.
-  const ineligible = new Set(deletionIntents.map((intent) => intent.userId));
-  const byUser = new Map(candidates.map((candidate) => [candidate.userId, candidate]));
-  for (const hold of holds) {
-    const subscription = byUser.get(hold.userId);
+  const ineligible = new Map<string, string | null>();
+  for (const hold of activeHolds) {
+    const subscription = hold.user.subscriptions[0];
     if (
       !subscription ||
       hold.stripeSubscriptionId !== subscription.stripeSubscriptionId
@@ -367,15 +390,16 @@ export async function countActiveSubscriptions({
     ) {
       continue;
     }
-    ineligible.add(hold.userId);
+    ineligible.set(hold.userId, subscription.tier);
   }
-
-  let total = 0;
-  for (const candidate of candidates) {
-    if (ineligible.has(candidate.userId)) continue;
-    total += 1;
-    if (candidate.tier !== null) {
-      byTier[candidate.tier] = (byTier[candidate.tier] ?? 0) + 1;
+  for (const intent of deletionIntents) {
+    ineligible.set(intent.userId, intent.user.subscriptions[0]?.tier ?? null);
+  }
+  for (const tier of ineligible.values()) {
+    total -= 1;
+    if (tier !== null && byTier[tier] !== undefined) {
+      byTier[tier] -= 1;
+      if (byTier[tier] === 0) delete byTier[tier];
     }
   }
   return { total, byTier };

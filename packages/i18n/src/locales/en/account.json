@@ -137,6 +137,8 @@
     "changeTierTitle": "Change your storage plan",
     "tierOptions": "Available plans",
     "confirmSubscribe": "Subscribe to this plan",
-    "confirmChange": "Switch to this plan"
+    "confirmChange": "Switch to this plan",
+    "perMonth": "per month",
+    "priceUnavailable": "Price unavailable"
   }
 }

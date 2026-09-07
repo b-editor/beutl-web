@@ -38,6 +38,7 @@ import { StorageTierDialog } from "./storage-tier-dialog";
 import type {
   BillingOfferEntry,
   BillingSubscriptionEntry,
+  StorageTierPrices,
 } from "./queries";
 
 const STATUS_LABEL_KEY: Record<AiPlanStatusPresentation, string> = {
@@ -88,12 +89,14 @@ export function PlanSection({
   subscriptions,
   offers,
   storageQuota,
+  storageTierPrices,
 }: {
   lang: string;
   t: Translator;
   subscriptions: BillingSubscriptionEntry[];
   offers: BillingOfferEntry[];
   storageQuota: { tier: StorageTierId | null; quotaBytes: number };
+  storageTierPrices: StorageTierPrices;
 }) {
   const needsAttention = subscriptions.some(
     (subscription) => subscription.status === "needsAttention",
@@ -164,7 +167,11 @@ export function PlanSection({
                 {subscription.product === "storage" &&
                   subscription.status === "active" &&
                   subscription.tier !== null && (
-                    <StorageTierDialog lang={lang} currentTier={subscription.tier} />
+                    <StorageTierDialog
+                      lang={lang}
+                      currentTier={subscription.tier}
+                      prices={storageTierPrices}
+                    />
                   )}
                 <ManageSubscriptionButton t={t} product={subscription.product} />
               </div>
@@ -211,7 +218,12 @@ export function PlanSection({
                         .join(" / ")}
                     </p>
                   </div>
-                  <StorageTierDialog lang={lang} currentTier={null} tiers={offer.tiers} />
+                  <StorageTierDialog
+                    lang={lang}
+                    currentTier={null}
+                    tiers={offer.tiers}
+                    prices={storageTierPrices}
+                  />
                 </div>
               ),
             )}

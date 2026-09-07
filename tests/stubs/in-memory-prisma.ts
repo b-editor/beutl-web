@@ -387,6 +387,52 @@ type StorageUploadRecord = {
   cleanupLeaseToken: string | null;
 };
 
+type SubscriptionWhere = {
+  userId?: string;
+  status?: string | { notIn?: string[] };
+  planId?: string;
+  billingOfferId?: { not: null };
+  currentPeriodEnd?: { gt?: Date };
+  OR?: Array<{ cancelAt?: null | { gt?: Date } }>;
+};
+
+function matchesSubscriptionWhere(
+  subscription: Subscription,
+  where: SubscriptionWhere | undefined,
+): boolean {
+  return (
+    (!where?.userId || subscription.userId === where.userId) &&
+    (where?.status === undefined ||
+      (typeof where.status === "string"
+        ? subscription.status === where.status
+        : !where.status.notIn?.includes(subscription.status))) &&
+    (!where?.planId || subscription.planId === where.planId) &&
+    (!where?.billingOfferId || subscription.billingOfferId !== null) &&
+    (!where?.currentPeriodEnd?.gt ||
+      (subscription.currentPeriodEnd !== null &&
+        subscription.currentPeriodEnd.getTime() >
+          where.currentPeriodEnd.gt.getTime())) &&
+    (!where?.OR ||
+      where.OR.some((clause) =>
+        clause.cancelAt === null
+          ? subscription.cancelAt === null
+          : clause.cancelAt?.gt !== undefined
+            ? subscription.cancelAt instanceof Date &&
+              subscription.cancelAt.getTime() > clause.cancelAt.gt.getTime()
+            : true,
+      ))
+  );
+}
+
+// Relation filter and nested select on a user's subscriptions, as the admin
+// counts use them from a hold or deletion-intent row.
+type UserSubscriptionsRelation = {
+  user?: { subscriptions?: { some?: SubscriptionWhere } };
+};
+type UserSubscriptionsSelect = {
+  user?: { select?: { subscriptions?: { where?: SubscriptionWhere } } };
+};
+
 type StorageUploadWhere = {
   id?: string;
   userId?: string;
@@ -395,12 +441,12 @@ type StorageUploadWhere = {
   uploadId?: string | null;
   name?: string;
   mimeType?: string;
-  size?: bigint;
+  size?: bigint | { lte?: bigint; gt?: bigint };
   partSize?: number;
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
   startState?: string;
-  createdAt?: Date | { lt?: Date };
+  createdAt?: Date | { lt?: Date; gte?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
   completionState?: string | { in?: string[]; not?: string };
@@ -435,15 +481,22 @@ function matchesStorageUploadWhere(
   if (where.uploadId !== undefined && item.uploadId !== where.uploadId) return false;
   if (where.name !== undefined && item.name !== where.name) return false;
   if (where.mimeType !== undefined && item.mimeType !== where.mimeType) return false;
-  if (where.size !== undefined && item.size !== where.size) return false;
+  if (where.size !== undefined) {
+    if (typeof where.size === "bigint") {
+      if (item.size !== where.size) return false;
+    } else {
+      if (where.size.lte !== undefined && item.size > where.size.lte) return false;
+      if (where.size.gt !== undefined && item.size <= where.size.gt) return false;
+    }
+  }
   if (where.partSize !== undefined && item.partSize !== where.partSize) return false;
   if (where.startState !== undefined && item.startState !== where.startState) return false;
   if (where.createdAt instanceof Date) {
     if (item.createdAt.getTime() !== where.createdAt.getTime()) return false;
-  } else if (
-    where.createdAt?.lt &&
-    item.createdAt.getTime() >= where.createdAt.lt.getTime()
-  ) return false;
+  } else if (where.createdAt) {
+    if (where.createdAt.lt && item.createdAt.getTime() >= where.createdAt.lt.getTime()) return false;
+    if (where.createdAt.gte && item.createdAt.getTime() < where.createdAt.gte.getTime()) return false;
+  }
   if (where.creationLeaseToken !== undefined && item.creationLeaseToken !== where.creationLeaseToken) return false;
   if (where.creationLeaseUntil !== undefined) {
     if (
@@ -649,6 +702,30 @@ export function createInMemoryPrisma() {
     billingRefundAttempts: new Map(),
     files: new Map(),
     storageUploads: new Map(),
+  };
+  const subscriptionsOf = (userId: string) =>
+    [...state.subscriptions.values()].filter((row) => row.userId === userId);
+  const userHasSubscription = (
+    userId: string,
+    where: UserSubscriptionsRelation | undefined,
+  ) => {
+    const some = where?.user?.subscriptions?.some;
+    if (!some) return true;
+    return subscriptionsOf(userId).some((row) => matchesSubscriptionWhere(row, some));
+  };
+  const selectUserSubscriptions = (
+    userId: string,
+    select: UserSubscriptionsSelect | undefined,
+  ) => {
+    if (!select?.user) return {};
+    const where = select.user.select?.subscriptions?.where;
+    return {
+      user: {
+        subscriptions: subscriptionsOf(userId)
+          .filter((row) => matchesSubscriptionWhere(row, where))
+          .map((row) => ({ ...row })),
+      },
+    };
   };
 
   const now = () => new Date();
@@ -1038,18 +1115,23 @@ export function createInMemoryPrisma() {
       },
       findMany: async ({
         where,
+        select,
       }: {
-        where?: { userId?: { in: string[] }; expiresAt?: { gt: Date } };
-        select?: Record<string, boolean>;
+        where?: {
+          userId?: { in: string[] };
+          expiresAt?: { gt: Date };
+        } & UserSubscriptionsRelation;
+        select?: { userId?: boolean } & UserSubscriptionsSelect;
       } = {}) =>
         [...state.accountDeletionIntents.values()]
           .filter(
             (item) =>
               (!where?.userId || where.userId.in.includes(item.userId)) &&
               (!where?.expiresAt ||
-                item.expiresAt.getTime() > where.expiresAt.gt.getTime()),
+                item.expiresAt.getTime() > where.expiresAt.gt.getTime()) &&
+              userHasSubscription(item.userId, where),
           )
-          .map((item) => ({ ...item })),
+          .map((item) => ({ ...item, ...selectUserSubscriptions(item.userId, select) })),
     },
     creditAccount: {
       upsert: async ({
@@ -1906,43 +1988,23 @@ export function createInMemoryPrisma() {
       findMany: async ({
         where,
       }: {
-        where?: {
-          userId?: string;
-          status?: string | { notIn?: string[] };
-          planId?: string;
-          billingOfferId?: { not: null };
-          currentPeriodEnd?: { gt?: Date };
-          OR?: Array<{ cancelAt?: null | { gt?: Date } }>;
-        };
+        where?: SubscriptionWhere;
         select?: Record<string, boolean>;
         orderBy?: unknown;
       } = {}) =>
         [...state.subscriptions.values()]
-          .filter(
-            (subscription) =>
-              (!where?.userId || subscription.userId === where.userId) &&
-              (where?.status === undefined ||
-                (typeof where.status === "string"
-                  ? subscription.status === where.status
-                  : !where.status.notIn?.includes(subscription.status))) &&
-              (!where?.planId || subscription.planId === where.planId) &&
-              (!where?.billingOfferId || subscription.billingOfferId !== null) &&
-              (!where?.currentPeriodEnd?.gt ||
-                (subscription.currentPeriodEnd !== null &&
-                  subscription.currentPeriodEnd.getTime() >
-                    where.currentPeriodEnd.gt.getTime())) &&
-              (!where?.OR ||
-                where.OR.some((clause) =>
-                  clause.cancelAt === null
-                    ? subscription.cancelAt === null
-                    : clause.cancelAt?.gt !== undefined
-                      ? subscription.cancelAt instanceof Date &&
-                        subscription.cancelAt.getTime() >
-                          clause.cancelAt.gt.getTime()
-                      : true,
-                )),
-          )
+          .filter((subscription) => matchesSubscriptionWhere(subscription, where))
           .map((subscription) => ({ ...subscription })),
+      groupBy: async ({
+        where,
+        ...args
+      }: GroupByArgs & { where?: SubscriptionWhere }) =>
+        groupRows(
+          [...state.subscriptions.values()].filter((subscription) =>
+            matchesSubscriptionWhere(subscription, where),
+          ) as unknown as Record<string, unknown>[],
+          args,
+        ),
       findFirst: async ({
         where,
       }: {
@@ -3333,15 +3395,18 @@ export function createInMemoryPrisma() {
         orderBy,
       }: {
         where?: StorageUploadWhere;
-        orderBy?: Array<Record<string, "asc" | "desc">>;
+        orderBy?:
+          | Record<string, "asc" | "desc">
+          | Array<Record<string, "asc" | "desc">>;
         take?: number;
       } = {}) => {
         const rows = [...state.storageUploads.values()]
           .filter((item) => matchesStorageUploadWhere(item, where))
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         if (orderBy) {
+          const orders = Array.isArray(orderBy) ? orderBy : [orderBy];
           rows.sort((left, right) => {
-            for (const order of orderBy) {
+            for (const order of orders) {
               const [field, direction] = Object.entries(order)[0];
               const lv = (left as unknown as Record<string, unknown>)[field];
               const rv = (right as unknown as Record<string, unknown>)[field];

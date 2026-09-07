@@ -68,6 +68,9 @@ export async function syncSubscriptionFromStripe(
     return false;
   }
   const stripe = createStripe();
+  // Stamped before the read so two overlapping syncs rank by when they asked
+  // Stripe, not by how long each took to get its answer persisted.
+  const observedAt = new Date();
   let subscription: Stripe.Subscription;
   try {
     subscription = await stripe.subscriptions.retrieve(
@@ -93,7 +96,7 @@ export async function syncSubscriptionFromStripe(
         stripeSubscriptionCreatedAt: null,
         stripeEventId: `${syntheticEventId(stored.stripeSubscriptionId)}:missing`,
         stripeEventCreatedAt: stored.stripeEventCreatedAt ?? new Date(0),
-        stripeCanonicalObservedAt: new Date(),
+        stripeCanonicalObservedAt: observedAt,
         // A portal read must never replace a different subscription that a
         // later webhook has already associated with this user.
         replaceExistingSubscription: false,
@@ -139,7 +142,6 @@ export async function syncSubscriptionFromStripe(
     return false;
   }
 
-  const observedAt = new Date();
   // A canonical read has no Stripe event timestamp. Reuse the stored webhook
   // watermark and advance only canonicalObservedAt. This lets a later read
   // restore a resumed cancellation even when Stripe clears canceled_at, while

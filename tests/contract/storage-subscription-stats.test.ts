@@ -91,13 +91,27 @@ describe("active subscriptions counted per plan and tier", () => {
       subscriptionEntitlementHold: {
         findMany: async () => [
           // A hold on this user's storage subscription: excluded.
-          { userId: "held", stripeSubscriptionId: "sub_held", billingPeriodStart: PAST, billingPeriodEnd: FUTURE },
+          {
+            userId: "held",
+            stripeSubscriptionId: "sub_held",
+            billingPeriodStart: PAST,
+            billingPeriodEnd: FUTURE,
+            user: { subscriptions: [{ stripeSubscriptionId: "sub_held", tier: "100gb", currentPeriodStart: PAST, currentPeriodEnd: FUTURE }] },
+          },
           // A hold on some other subscription (the Pro one): not excluded.
-          { userId: "pro-held", stripeSubscriptionId: "sub_pro", billingPeriodStart: PAST, billingPeriodEnd: FUTURE },
+          {
+            userId: "pro-held",
+            stripeSubscriptionId: "sub_pro",
+            billingPeriodStart: PAST,
+            billingPeriodEnd: FUTURE,
+            user: { subscriptions: [{ stripeSubscriptionId: "sub_pro-held", tier: "100gb", currentPeriodStart: PAST, currentPeriodEnd: FUTURE }] },
+          },
         ],
       },
       accountDeletionIntent: {
-        findMany: async () => [{ userId: "deleting" }],
+        findMany: async () => [
+          { userId: "deleting", user: { subscriptions: [{ tier: "1tb" }] } },
+        ],
       },
     };
 

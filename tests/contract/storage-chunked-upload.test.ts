@@ -660,6 +660,53 @@ describe("uploading a file too large for one request", () => {
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
   });
 
+  it("still reaches a small stale upload behind a page of large ones inside their grace", async () => {
+    // A hundred large uploads that are a day old but, at their size, still
+    // inside their grace period must not fill the sweep's page and hide the
+    // small upload behind them that is already due.
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const template = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "large.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!template.ok) throw new Error(template.reason);
+    const templateRow = state.storageUploads.get(template.upload.id)!;
+    state.storageUploads.delete(templateRow.id);
+    const small = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "small.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(1_000),
+    });
+    if (!small.ok) throw new Error(small.reason);
+    const smallRow = state.storageUploads.get(small.upload.id)!;
+    state.storageUploads.set(smallRow.id, { ...smallRow, createdAt: dayAgo });
+    // Seeded directly: a hundred of these would never pass the quota or the
+    // concurrent-upload cap through startUpload, and the sweep only reads
+    // size and age.
+    for (let index = 0; index < 100; index++) {
+      const id = crypto.randomUUID();
+      state.storageUploads.set(id, {
+        ...templateRow,
+        id,
+        objectKey: `${templateRow.objectKey}-${index}`,
+        size: BigInt(200) * BigInt(1024 ** 3),
+        createdAt: new Date(dayAgo.getTime() - index),
+      });
+    }
+
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 1,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(smallRow.id)).toBe(false);
+    expect(state.storageUploads.size).toBe(100);
+  });
+
   it("keeps active completion fenced, then escalates an expired lease", async () => {
     const started = await startUpload({
       userId: USER_ID,

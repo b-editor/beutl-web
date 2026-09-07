@@ -25,6 +25,11 @@ import {
   type BillingDocuments,
 } from "@/lib/stripe/billing-documents";
 import { createStripe } from "@/lib/stripe/config";
+import {
+  describeConfiguredSubscriptionPrices,
+  type SubscriptionPriceDescription,
+} from "@/lib/stripe/subscription-billing";
+import { subscriptionPlanConfig } from "@/lib/stripe/subscription-plans";
 
 export type BillingSubscriptionEntry = {
   product: BillingProduct;
@@ -41,6 +46,24 @@ export type BillingSubscriptionEntry = {
 export type BillingOfferEntry =
   | { product: "aiPro" }
   | { product: "storage"; tiers: readonly StorageTierId[] };
+
+// 月額。null は価格を取得できなかったティア (env 未設定や Stripe 不達)。
+export type StorageTierPrices = Record<
+  StorageTierId,
+  SubscriptionPriceDescription | null
+>;
+
+// A tier change is charged right away without a Checkout page, so the page
+// must be able to show what each tier costs before offering the change.
+async function retrieveStorageTierPrices(): Promise<StorageTierPrices> {
+  const described = await describeConfiguredSubscriptionPrices(
+    subscriptionPlanConfig("storage"),
+    createStripe(),
+  );
+  return Object.fromEntries(
+    STORAGE_TIER_IDS.map((tier) => [tier, described.get(tier) ?? null]),
+  ) as StorageTierPrices;
+}
 
 const NO_BILLING_DOCUMENTS: BillingDocuments = {
   subscriptionPayments: [],
@@ -83,7 +106,7 @@ export async function retrieveBillingPage(userId: string) {
       getCreditPurchasesByUserId({ userId, prisma }),
       resolveStorageQuota({ userId, prisma }),
     ]);
-  const [packagesById, billingDocuments] = await Promise.all([
+  const [packagesById, billingDocuments, storageTierPrices] = await Promise.all([
     findPackagesForBillingHistory({
       packageIds: payments.map((payment) => payment.packageId),
       prisma,
@@ -92,6 +115,7 @@ export async function retrieveBillingPage(userId: string) {
       stripeCustomerId: customer?.stripeId ?? null,
       userId,
     }),
+    retrieveStorageTierPrices(),
   ]);
 
   const presentation = getAiPlanPresentation(entitlements);
@@ -147,6 +171,7 @@ export async function retrieveBillingPage(userId: string) {
       tier: storageQuota.tier,
       quotaBytes: storageQuota.quotaBytes,
     },
+    storageTierPrices,
     // 支払い方法がまだ 1 つも無いことの目安。顧客が無ければ確実に無い。
     hasStripeCustomer: customer !== null,
     payments,

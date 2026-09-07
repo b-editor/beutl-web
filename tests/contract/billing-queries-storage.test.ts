@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getEntitlementSummary: vi.fn(),
   getDb: vi.fn(),
+  pricesRetrieve: vi.fn(),
   findCustomerByUserId: vi.fn(),
   findPackagesForBillingHistory: vi.fn(),
   getCreditPurchasesByUserId: vi.fn(),
   getUserPaymentHistory: vi.fn(),
   resolveStorageQuota: vi.fn(),
+  findBillingOfferByStripePriceId: vi.fn(),
 }));
 
 vi.mock("@beutl/api/ai/entitlements", () => ({ getEntitlementSummary: mocks.getEntitlementSummary }));
@@ -18,8 +20,11 @@ vi.mock("@beutl/db", () => ({
   getCreditPurchasesByUserId: mocks.getCreditPurchasesByUserId,
   getUserPaymentHistory: mocks.getUserPaymentHistory,
   resolveStorageQuota: mocks.resolveStorageQuota,
+  findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
 }));
-vi.mock("@/lib/stripe/config", () => ({ createStripe: () => ({}) }));
+vi.mock("@/lib/stripe/config", () => ({
+  createStripe: () => ({ prices: { retrieve: mocks.pricesRetrieve } }),
+}));
 vi.mock("@/lib/stripe/billing-documents", () => ({
   retrieveBillingDocuments: vi.fn().mockResolvedValue({
     subscriptionPayments: [],
@@ -51,6 +56,11 @@ describe("billing page storage plan entries", () => {
     mocks.findPackagesForBillingHistory.mockResolvedValue(new Map());
     mocks.getCreditPurchasesByUserId.mockResolvedValue([]);
     mocks.getUserPaymentHistory.mockResolvedValue([]);
+    process.env.STRIPE_STORAGE_PRICE_ID_100GB = "price_100";
+    process.env.STRIPE_STORAGE_PRICE_ID_200GB = "price_200";
+    process.env.STRIPE_STORAGE_PRICE_ID_1TB = "price_1tb";
+    mocks.findBillingOfferByStripePriceId.mockResolvedValue(null);
+    mocks.pricesRetrieve.mockRejectedValue(new Error("Stripe unreachable"));
   });
 
   it("offers every tier to an account without a storage subscription", async () => {
@@ -134,5 +144,54 @@ describe("billing page storage plan entries", () => {
 
     expect(page.subscriptions).toEqual([]);
     expect(page.offers).toContainEqual({ product: "storage", tiers: ["100gb", "200gb", "1tb"] });
+  });
+
+  it("describes each tier's monthly price from the recorded offer, then Stripe", async () => {
+    mocks.resolveStorageQuota.mockResolvedValue({
+      tier: null,
+      quotaBytes: GIB,
+      fileCountLimit: 10_000,
+      subscription: null,
+    });
+    mocks.findBillingOfferByStripePriceId.mockImplementation(async ({ stripePriceId }) =>
+      stripePriceId === "price_100"
+        ? {
+            id: "offer_100gb",
+            kind: "storage",
+            tier: "100gb",
+            stripePriceId,
+            stripeProductId: "prod_100gb",
+            unitAmount: 500,
+            currency: "usd",
+            creditAmount: null,
+            recurringInterval: "month",
+            recurringIntervalCount: 1,
+            checkoutEnabled: true,
+          }
+        : null,
+    );
+    mocks.pricesRetrieve.mockImplementation(async (priceId: string) => {
+      if (priceId !== "price_200") throw new Error("unknown price");
+      return {
+        id: priceId,
+        active: true,
+        type: "recurring",
+        unit_amount: 900,
+        currency: "usd",
+        product: "prod_200gb",
+        recurring: { interval: "month", interval_count: 1 },
+      };
+    });
+
+    const page = await retrieveBillingPage("user-1");
+
+    // The recorded offer wins, an unrecorded Price is read from Stripe, and a
+    // tier that cannot be described is null rather than a failure.
+    expect(page.storageTierPrices).toEqual({
+      "100gb": { unitAmount: 500, currency: "usd" },
+      "200gb": { unitAmount: 900, currency: "usd" },
+      "1tb": null,
+    });
+    expect(mocks.pricesRetrieve).not.toHaveBeenCalledWith("price_100");
   });
 });
