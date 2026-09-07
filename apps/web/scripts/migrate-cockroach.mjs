@@ -16,9 +16,11 @@ import pg from "pg";
 import {
   MigrationHistoryError,
   assertDistinctDatabase,
+  assertVerifiedTls,
   driftFingerprint,
   inspectMigrationHistory,
   planBaseline,
+  planDeploy,
   readMigrationNames,
   redactConnectionStrings,
   unlockPublicTables,
@@ -38,10 +40,12 @@ function requireEnv(name, purpose) {
 }
 
 function targetUrl() {
-  return requireEnv(
+  const target = requireEnv(
     "MIGRATE_DATABASE_URL",
     "set it to the database that should receive the migration history. DATABASE_URL from .env is never used as a target",
   );
+  assertVerifiedTls(target, "MIGRATE_DATABASE_URL");
+  return target;
 }
 
 function shadowUrl(target) {
@@ -49,6 +53,7 @@ function shadowUrl(target) {
     "MIGRATE_SHADOW_DATABASE_URL",
     "the drift check replays prisma/migrations into a disposable Cockroach database",
   );
+  assertVerifiedTls(shadow, "MIGRATE_SHADOW_DATABASE_URL");
   assertDistinctDatabase(shadow, [
     ["MIGRATE_DATABASE_URL", target],
     ["DATABASE_URL", process.env.DATABASE_URL],
@@ -244,16 +249,18 @@ async function baseline() {
 
 async function deploy() {
   const target = targetUrl();
+  const names = readMigrationNames(migrationsDir);
   const history = await withClient(
     "MIGRATE_DATABASE_URL",
     target,
     inspectMigrationHistory,
   );
-  if (history.applied.length === 0) {
-    throw new MigrationHistoryError(
-      "MIGRATE_DATABASE_URL records no applied migrations; run migrate:baseline (existing schema) or migrate:fresh-cockroach (empty database) first",
-    );
-  }
+  const plan = planDeploy({ names, history });
+  console.log(
+    plan.pending.length === 0
+      ? "No pending migrations."
+      : `${plan.pending.length} pending migrations: ${plan.pending.join(", ")}`,
+  );
   return runPrisma(["migrate", "deploy"], { database: target }).status;
 }
 
@@ -266,11 +273,15 @@ if (!command) {
   process.exit(1);
 }
 
+// Let stdout drain before the process ends: process.exit() can cut off a
+// captured drift script or its fingerprint when the output goes to a pipe.
 command().then(
-  (code) => process.exit(code),
+  (code) => {
+    process.exitCode = code;
+  },
   (error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(redactConnectionStrings(message));
-    process.exit(1);
+    process.exitCode = 1;
   },
 );

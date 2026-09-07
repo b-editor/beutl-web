@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   MigrationHistoryError,
   assertDistinctDatabase,
+  assertVerifiedTls,
   driftFingerprint,
   inspectMigrationHistory,
   planBaseline,
+  planDeploy,
   readMigrationNames,
   redactConnectionStrings,
   selectMigrationsThrough,
@@ -222,7 +224,7 @@ describe("assertDistinctDatabase", () => {
   it("rejects the target database even under a different query string", () => {
     expect(() =>
       assertDistinctDatabase(
-        "postgresql://root@CLUSTER.example.invalid/defaultdb?options=-c%20x%3D1",
+        "postgresql://root@CLUSTER.example.invalid:26257/defaultdb?options=-c%20x%3D1",
         [["MIGRATE_DATABASE_URL", target]],
       ),
     ).toThrow("same database as MIGRATE_DATABASE_URL");
@@ -231,10 +233,23 @@ describe("assertDistinctDatabase", () => {
   it("rejects the developer database", () => {
     expect(() =>
       assertDistinctDatabase(target, [
-        ["MIGRATE_DATABASE_URL", "postgresql://root@other.example.invalid/prod"],
+        ["MIGRATE_DATABASE_URL", "postgresql://root@other.example.invalid:26257/prod"],
         ["DATABASE_URL", target],
       ]),
     ).toThrow("same database as DATABASE_URL");
+  });
+
+  it("refuses a URL that omits its port instead of guessing one", () => {
+    expect(() =>
+      assertDistinctDatabase("postgresql://root@cluster.example.invalid/defaultdb", [
+        ["MIGRATE_DATABASE_URL", "postgresql://root@cluster.example.invalid:5432/defaultdb"],
+      ]),
+    ).toThrow("MIGRATE_SHADOW_DATABASE_URL must name its port explicitly");
+    expect(() =>
+      assertDistinctDatabase(target, [
+        ["DATABASE_URL", "postgresql://root@cluster.example.invalid/defaultdb"],
+      ]),
+    ).toThrow("DATABASE_URL must name its port explicitly");
   });
 
   it("accepts another database on the same cluster", () => {
@@ -274,5 +289,79 @@ describe("driftFingerprint", () => {
     expect(driftFingerprint(script.replace("BillingOffer", "Subscription"))).not.toBe(
       driftFingerprint(script),
     );
+  });
+});
+
+describe("assertVerifiedTls", () => {
+  it("accepts a remote URL with sslmode=verify-full", () => {
+    expect(() =>
+      assertVerifiedTls(
+        "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=verify-full",
+        "MIGRATE_DATABASE_URL",
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["no sslmode", "postgresql://root@cluster.example.invalid:26257/defaultdb"],
+    ["sslmode=require", "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=require"],
+    ["sslmode=disable", "postgresql://root@cluster.example.invalid:26257/defaultdb?sslmode=disable"],
+  ])("rejects a remote URL with %s", (_label, url) => {
+    expect(() => assertVerifiedTls(url, "MIGRATE_SHADOW_DATABASE_URL")).toThrow(
+      "MIGRATE_SHADOW_DATABASE_URL must use sslmode=verify-full",
+    );
+  });
+
+  it("lets a loopback cluster stay plain", () => {
+    expect(() =>
+      assertVerifiedTls("postgresql://root@localhost:26257/defaultdb?sslmode=disable", "MIGRATE_DATABASE_URL"),
+    ).not.toThrow();
+    expect(() =>
+      assertVerifiedTls("postgresql://root@127.0.0.1:26257/defaultdb", "MIGRATE_DATABASE_URL"),
+    ).not.toThrow();
+  });
+});
+
+describe("planDeploy", () => {
+  const healthy = { hasApplicationTables: true, applied: names.slice(0, 2), unfinished: [] };
+
+  it("lists the migrations that deploy will apply", () => {
+    expect(planDeploy({ names, history: healthy })).toEqual({ pending: [names[2]] });
+  });
+
+  it("refuses a database without a recorded history", () => {
+    expect(() =>
+      planDeploy({ names, history: { ...healthy, applied: [] } }),
+    ).toThrow("migrate:baseline");
+  });
+
+  it("refuses a history whose application tables are gone", () => {
+    expect(() =>
+      planDeploy({ names, history: { ...healthy, hasApplicationTables: false } }),
+    ).toThrow("no application tables");
+  });
+
+  it("refuses a database with an unfinished migration", () => {
+    expect(() =>
+      planDeploy({ names, history: { ...healthy, unfinished: [names[2]] } }),
+    ).toThrow("unfinished");
+  });
+
+  it("refuses a history from another migration directory", () => {
+    expect(() =>
+      planDeploy({
+        names,
+        history: { ...healthy, applied: ["20250101000000_elsewhere"] },
+      }),
+    ).toThrow("do not exist locally");
+  });
+
+  it("tells an older checkout apart from a foreign database", () => {
+    expect(() =>
+      planDeploy({
+        names,
+        history: { ...healthy, applied: [...names, "20260908000000_newer"] },
+      }),
+    ).toThrow("ahead of this checkout");
   });
 });

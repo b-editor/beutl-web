@@ -1,6 +1,11 @@
 -- Align production with prisma/migrations (generated 2026-09-07 from the replayed history).
 -- One statement per line; each statement is idempotent or a no-op on rerun.
 -- Every table is unlocked for its block and returned to the lock state it had in production.
+-- Each top-level ALTER TABLE is its own schema change; CockroachDB does not make the
+-- DROP CONSTRAINT / ADD CONSTRAINT pairs below atomic. Run this only with writes to
+-- CreditTransaction, Subscription, and BillingOffer paused, or a write landing between the two
+-- statements can leave an orphan or make the ADD fail. On 2026-09-07 those tables held at
+-- most one row and no writer was active.
 
 -- ==== AiJob (production schema_locked=true) ====
 ALTER TABLE "AiJob" SET (schema_locked = false);

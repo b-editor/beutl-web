@@ -136,16 +136,23 @@ export async function unlockPublicTables(client) {
   }
 }
 
-function databaseKey(connectionString) {
+function databaseKey(connectionString, label) {
   const url = new URL(connectionString);
-  return `${url.hostname.toLowerCase()}:${url.port || "26257"}${url.pathname}`;
+  if (!url.port) {
+    // pg fills an omitted port from PGPORT or 5432, so two spellings of one
+    // database could look different here; only explicit ports compare safely.
+    throw new MigrationHistoryError(
+      `${label} must name its port explicitly (for example :26257); an omitted port cannot be compared against the other database URLs`,
+    );
+  }
+  return `${url.hostname.toLowerCase()}:${url.port}${url.pathname}`;
 }
 
 /** The shadow database is wiped on every replay; it must be nobody's real database. */
 export function assertDistinctDatabase(shadowUrl, others) {
-  const shadowKey = databaseKey(shadowUrl);
+  const shadowKey = databaseKey(shadowUrl, "MIGRATE_SHADOW_DATABASE_URL");
   for (const [label, url] of others) {
-    if (url && databaseKey(url) === shadowKey) {
+    if (url && databaseKey(url, label) === shadowKey) {
       throw new MigrationHistoryError(
         `MIGRATE_SHADOW_DATABASE_URL points at the same database as ${label}; the shadow database is reset on every run and must be a dedicated, disposable database`,
       );
@@ -173,4 +180,56 @@ export function driftFingerprint(sql) {
     .filter((line) => line && !line.startsWith("--"))
     .join("\n");
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/**
+ * Migration credentials travel only over verified TLS. A cluster on the
+ * loopback interface may stay plain; every other host must verify the
+ * server certificate and its hostname.
+ */
+export function assertVerifiedTls(connectionString, label) {
+  const url = new URL(connectionString);
+  if (LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
+    return;
+  }
+  const mode = url.searchParams.get("sslmode");
+  if (mode !== "verify-full") {
+    throw new MigrationHistoryError(
+      `${label} must use sslmode=verify-full (found ${mode ?? "no sslmode"}); the migration commands refuse unverified or plaintext connections to a remote database`,
+    );
+  }
+}
+
+/** Refuse to deploy where the history is absent, broken, or from another repository. */
+export function planDeploy({ names, history }) {
+  if (history.applied.length === 0) {
+    throw new MigrationHistoryError(
+      "MIGRATE_DATABASE_URL records no applied migrations; run migrate:baseline (existing schema) or migrate:fresh-cockroach (empty database) first",
+    );
+  }
+  if (!history.hasApplicationTables) {
+    throw new MigrationHistoryError(
+      "MIGRATE_DATABASE_URL records applied migrations but has no application tables; the schema was dropped or the history belongs to another database. Refusing to deploy",
+    );
+  }
+  if (history.unfinished.length > 0) {
+    throw new MigrationHistoryError(
+      `MIGRATE_DATABASE_URL records unfinished migrations (${history.unfinished.join(", ")}); repair them with prisma migrate resolve before deploying`,
+    );
+  }
+  const known = new Set(names);
+  const unknown = history.applied.filter((name) => !known.has(name));
+  if (unknown.length > 0) {
+    const applied = new Set(history.applied);
+    const everyLocalRecorded = names.every((name) => applied.has(name));
+    throw new MigrationHistoryError(
+      everyLocalRecorded
+        ? `MIGRATE_DATABASE_URL is ahead of this checkout: it records ${unknown.join(", ")}, which prisma/migrations does not contain. Update the checkout, or skip migrate:deploy when rolling back an older release`
+        : `MIGRATE_DATABASE_URL records migrations that do not exist locally (${unknown.join(", ")}); its history belongs to a different migration directory. Refusing to deploy`,
+    );
+  }
+  const applied = new Set(history.applied);
+  return { pending: names.filter((name) => !applied.has(name)) };
 }

@@ -35,7 +35,9 @@ Locally, `prisma migrate dev` creates and applies migrations against
 `DATABASE_URL` in `apps/web/.env`. The commands below never use that URL as a
 target. They take the target from `MIGRATE_DATABASE_URL`, and the drift check
 takes a dedicated empty Cockroach database from `MIGRATE_SHADOW_DATABASE_URL`,
-so a forgotten variable fails instead of migrating the wrong cluster. Pass
+so a forgotten variable fails instead of migrating the wrong cluster. Both
+URLs must name their port explicitly and, unless they point at a loopback
+cluster, use `sslmode=verify-full`; the commands refuse anything else. Pass
 production URLs on the command line rather than storing them in `.env`.
 
 | Command | Purpose |
@@ -43,7 +45,7 @@ production URLs on the command line rather than storing them in `.env`.
 | `pnpm migrate:status` | Show which migrations the target records |
 | `pnpm migrate:diff` | Print the SQL that would bring the target in line with the migration history; exit code 2 means drift |
 | `pnpm migrate:baseline` | One-time: record the history as applied on a database that received it by hand |
-| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history |
+| `pnpm migrate:deploy` | Apply pending migrations; refuses a database that records no history, an unfinished migration, or a history from another migration directory |
 | `pnpm migrate:fresh-cockroach` | Bootstrap an empty Cockroach database (see [Fresh Cockroach bootstrap](stripe-ai-billing-migration.md#fresh-cockroach-bootstrap)) |
 
 Release order: run the migration before deploying the Workers, unless the
@@ -94,7 +96,11 @@ Production was created by `prisma db push`, so it lacked every `CHECK`
 constraint of the history, used `INT4` where the migration SQL writes `INT`
 (`INT8`), and carried Prisma's default index names. Those were aligned by hand
 on 2026-09-07 with [production-align-2026-09-07.sql](production-align-2026-09-07.sql).
-One difference remains: the history declares
+That script replaces two foreign keys with separate `DROP` and `ADD`
+statements, which CockroachDB cannot make atomic, so it must run with writes
+to `CreditTransaction`, `Subscription`, and `BillingOffer` paused; on
+2026-09-07 those tables held at most one row and no writer was active, so it
+ran without a wider maintenance window. One difference remains: the history declares
 `DEFAULT gen_random_uuid()` on the `STRING` id columns of `BillingOffer`,
 `BillingRefundAttempt`, `SubscriptionEntitlementHold`, and
 `TopUpCheckoutAttempt`, which CockroachDB accepts in `CREATE TABLE` but not in
