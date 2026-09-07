@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   findCustomerByUserId: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
+  sumStorageUploadSizeByUserId: vi.fn(),
   recordBillingRefundCancellation: vi.fn(),
   scheduleBillingRefundAttempt: vi.fn(),
   startRetryableTransaction: vi.fn(),
@@ -78,6 +79,7 @@ vi.mock("@beutl/db", () => ({
   getSubscription: mocks.getSubscription,
   reconcileSubscriptionObservation: mocks.reconcileSubscriptionObservation,
   sumFileSizeByUserId: mocks.sumFileSizeByUserId,
+  sumStorageUploadSizeByUserId: mocks.sumStorageUploadSizeByUserId,
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,
   startRetryableTransaction: mocks.startRetryableTransaction,
@@ -223,6 +225,7 @@ describe("storage plan checkout actions", () => {
     });
     mocks.reconcileSubscriptionObservation.mockResolvedValue({ applied: true, subscription: null });
     mocks.sumFileSizeByUserId.mockResolvedValue(BigInt(0));
+    mocks.sumStorageUploadSizeByUserId.mockResolvedValue(BigInt(0));
     mocks.startRetryableTransaction.mockImplementation(
       async (callback: (tx: unknown) => Promise<unknown>) => await callback({}),
     );
@@ -428,6 +431,37 @@ describe("storage plan checkout actions", () => {
 
       await expect(changeStorageTier(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
       expect(mocks.subscriptionUpdate).not.toHaveBeenCalled();
+    });
+
+    it("counts uploads still in flight against the smaller tier", async () => {
+      const oneTerabyte = {
+        userId: "user-1",
+        stripeSubscriptionId: "sub_storage",
+        status: "active",
+        planId: "storage",
+        tier: "1tb",
+        billingOfferId: "offer_1tb",
+        stripeEventCreatedAt: new Date(80_000),
+        currentPeriodStart: new Date(100_000),
+        currentPeriodEnd: new Date(200_000),
+        cancelAt: null,
+        cancelAtPeriodEnd: false,
+        entitlementHeld: false,
+      };
+      mocks.getSubscription.mockResolvedValue(oneTerabyte);
+      mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_1tb"));
+      mocks.subscriptionUpdate.mockResolvedValue(stripeSubscription("price_100"));
+      // 60 GiB stored and 50 GiB reserved by an upload in progress do not fit
+      // in 100 GiB, even though the stored files alone would.
+      mocks.sumFileSizeByUserId.mockResolvedValue(BigInt(60 * GIB));
+      mocks.sumStorageUploadSizeByUserId.mockResolvedValue(BigInt(50 * GIB));
+
+      await expect(changeStorageTier(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
+      expect(mocks.subscriptionUpdate).not.toHaveBeenCalled();
+
+      mocks.sumStorageUploadSizeByUserId.mockResolvedValue(BigInt(30 * GIB));
+      await expect(changeStorageTier(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
+      expect(mocks.subscriptionUpdate).toHaveBeenCalledTimes(1);
     });
 
     it("leaves the local row alone when Stripe declines the proration charge", async () => {

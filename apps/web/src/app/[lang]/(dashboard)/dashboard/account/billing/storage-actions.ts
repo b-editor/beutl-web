@@ -15,7 +15,7 @@ import {
 } from "@/lib/stripe/subscription-checkout";
 import { subscriptionPlanConfig } from "@/lib/stripe/subscription-plans";
 import { isStorageTierId, storageTierOf, type StorageTierId } from "@beutl/core";
-import { sumFileSizeByUserId } from "@beutl/db";
+import { sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
 import { redirect } from "next/navigation";
 
 const BILLING_PATH = "/dashboard/account/billing";
@@ -55,7 +55,14 @@ export async function reconcileStorageCheckoutSuccess(
 }
 
 // Downgrading below the current usage is refused so the account does not land
-// in the over-quota state on purpose.
+// in the over-quota state on purpose. Usage is what the upload paths count:
+// completed files plus the bytes reserved by uploads still in flight, so a
+// transfer that is already under way is not refused at completion by a
+// quota that shrank underneath it. An upload that starts or completes in the
+// moment between this check and Stripe's answer is not fenced; the completion
+// path re-reads the quota and refuses what no longer fits, and an account
+// that lands over quota is treated like a lapsed plan (no new uploads,
+// nothing deleted).
 export async function changeStorageTier(formData: FormData): Promise<void> {
   const session = await throwIfUnauth();
   const tier = tierFromForm(formData);
@@ -70,8 +77,11 @@ export async function changeStorageTier(formData: FormData): Promise<void> {
       if (!isStorageTierId(from) || !isStorageTierId(to)) return true;
       const target = storageTierOf(to);
       if (target.quotaBytes >= storageTierOf(from).quotaBytes) return true;
-      const usedBytes = await sumFileSizeByUserId({ userId });
-      return usedBytes <= BigInt(target.quotaBytes);
+      const [storedBytes, underwayBytes] = await Promise.all([
+        sumFileSizeByUserId({ userId }),
+        sumStorageUploadSizeByUserId({ userId }),
+      ]);
+      return storedBytes + underwayBytes <= BigInt(target.quotaBytes);
     },
   });
   switch (outcome) {
