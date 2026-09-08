@@ -195,10 +195,18 @@ export function StorageBatchPanel({
           missing: previous.missing + batch.missing,
           failed: [...previous.failed, ...batch.failed],
         }));
+        const advanced = batch.scanned > 0 && batch.nextCursor !== position;
         position = batch.nextCursor;
         setCursor(position);
         if (batch.done) {
           setState("done");
+          break;
+        }
+        if (!advanced) {
+          // A run that settled nothing would be sent again with the same
+          // cursor; stop rather than keep a slow store busy.
+          setMessage(t("admin:storage.batch.noProgress"));
+          setState("paused");
           break;
         }
         if (!keepRunning || stopRequested.current) {

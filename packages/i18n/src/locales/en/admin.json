@@ -434,7 +434,8 @@
       "progress": "Scanned {{scanned}}, moved {{moved}}, already there {{alreadyThere}}, not found {{missing}}, failed {{failed}}",
       "done": "Every file has been scanned.",
       "paused": "Stopped. Run again to continue from the last file.",
-      "failures": "Failures"
+      "failures": "Failures",
+      "noProgress": "The last run made no progress; the store may be slow or unavailable. Run again to retry from the same file."
     },
     "messages": {
       "moved": "Moved {{name}} from {{from}} to {{to}}.",

@@ -189,6 +189,21 @@ describe("moving one object between stores", () => {
     expect(r2.bucket.delete).not.toHaveBeenCalled();
   });
 
+  it("still removes the fresh copy when it cannot learn whether the file exists", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(8, 21) });
+    const lease = fakeLease();
+    lease.stillExists.mockRejectedValue(new Error("cleanup row is leased"));
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
+      .rejects.toThrow("cleanup row is leased");
+    expect(s3.data.has("key")).toBe(false);
+    expect(r2.data.has("key")).toBe(true);
+
+    s3.bucket.delete.mockRejectedValueOnce(new Error("s3 down"));
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
+      .rejects.toThrow(/that copy is untracked/u);
+  });
+
   it("does nothing at all for a file that is already gone", async () => {
     const s3 = memoryStore("s3");
     const r2 = memoryStore("r2", { key: bytes(8, 17) });
@@ -426,6 +441,20 @@ describe("moving files in bulk", () => {
     expect(asked).toEqual(["file-0", "file-1"]);
   });
 
+  it("settles at least one file even when locating spent the budget", async () => {
+    const all = files(2);
+    const r2 = memoryStore("r2", Object.fromEntries(all.map((file, index) => [file.objectKey, bytes(4, index)])));
+    const s3 = memoryStore("s3");
+    const outcome = await moveStorageObjectsBatch({
+      to: "s3",
+      stores: [s3.store, r2.store],
+      nextPage: pager(all, 10),
+      cursor: undefined,
+      limits: { moves: 10, scanned: 100, milliseconds: 0 },
+    });
+    expect(outcome).toMatchObject({ scanned: 1, moved: 1, nextCursor: "c0", done: false });
+  });
+
   it("stops when the time budget is spent", async () => {
     const all = files(3);
     const r2 = memoryStore("r2", Object.fromEntries(all.map((file, index) => [file.objectKey, bytes(4, index)])));
@@ -437,7 +466,7 @@ describe("moving files in bulk", () => {
       nextPage: pager(all, 10),
       cursor: undefined,
       limits: { moves: 10, scanned: 100, milliseconds: 5 },
-      now: () => (clock += 2),
+      now: () => (clock += 5),
     });
     expect(outcome.done).toBe(false);
     expect(outcome).toMatchObject({ scanned: 1, moved: 1, nextCursor: "c0" });

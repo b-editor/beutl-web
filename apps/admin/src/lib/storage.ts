@@ -33,6 +33,8 @@ export type FileLocation =
   | { kind: "error"; error: string };
 
 const LOCATE_CONCURRENCY = 8;
+const CLEANUP_INTENT_ATTEMPTS = 3;
+const CLEANUP_INTENT_RETRY_MILLISECONDS = 500;
 
 // 一覧の各行について、どのストアに実体があるかを HEAD で確かめる。
 // 1 ページ分 (数十件) を、外部ストアへ同時に投げ過ぎない程度に並列化する。
@@ -74,15 +76,27 @@ export function fileStorageMoveLease(file: { id: string; objectKey: string }): S
     acquire: () => acquireFileStorageMoveLease({ id: file.id, leaseToken }),
     async stillExists() {
       if (await existsFileById({ id: file.id })) return true;
-      await registerAiStorageCleanup({
-        objectKey: file.objectKey,
-        aiJobId: null,
-        state: "cleanup",
-        notBefore: new Date(),
-      }).catch((error) => {
-        console.error("Failed to queue cleanup for a copy of a deleted file", file.objectKey, error);
-      });
-      return false;
+      // The file's own cleanup row may be leased by the sweeper right now;
+      // wait it out briefly. Returning false without a recorded intent would
+      // let the mover treat a one-shot delete as durable.
+      let lastError: unknown;
+      for (let attempt = 0; attempt < CLEANUP_INTENT_ATTEMPTS; attempt++) {
+        try {
+          await registerAiStorageCleanup({
+            objectKey: file.objectKey,
+            aiJobId: null,
+            state: "cleanup",
+            notBefore: new Date(),
+          });
+          return false;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, CLEANUP_INTENT_RETRY_MILLISECONDS * (attempt + 1)));
+        }
+      }
+      throw new Error(
+        `Could not queue cleanup for ${file.objectKey} after its file was deleted: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      );
     },
     async release() {
       await releaseFileStorageMoveLease({ id: file.id, leaseToken }).catch((error) => {

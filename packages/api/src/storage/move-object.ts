@@ -278,13 +278,32 @@ async function moveLocatedObject({
     throw new StorageMoveError("verification-failed", problem);
   }
 
-  if (stillExists && !(await stillExists())) {
-    // The record is gone; its deletion has already swept the stores, so the
-    // copy written since is the only thing left and would otherwise leak.
-    // The caller's stillExists is expected to have queued a durable cleanup
-    // for the key, so a failure here is retried later.
-    await remover(destination)(objectKey);
-    return { kind: "missing" };
+  if (stillExists) {
+    let exists: boolean;
+    try {
+      exists = await stillExists();
+    } catch (error) {
+      // The caller could not tell, or could not queue a durable cleanup for
+      // a deleted file. The fresh copy must not stay behind unnoticed: try to
+      // remove it now, and if that fails too say exactly which key is loose.
+      try {
+        await remover(destination)(objectKey);
+      } catch (removeError) {
+        throw new StorageMoveError(
+          "verification-failed",
+          `${objectKey}: could not confirm the file still exists (${describe(error)}) and the copy in ${to} could not be removed (${describe(removeError)}); that copy is untracked`,
+        );
+      }
+      throw error;
+    }
+    if (!exists) {
+      // The record is gone; its deletion has already swept the stores, so the
+      // copy written since is the only thing left and would otherwise leak.
+      // stillExists has queued a durable cleanup for the key by now, so a
+      // failure of this delete is retried later.
+      await remover(destination)(objectKey);
+      return { kind: "missing" };
+    }
   }
 
   let sourceRemoved = true;
@@ -368,7 +387,7 @@ export async function moveStorageObjectsBatch({
     now() >= deadline;
 
   for (;;) {
-    if (exhausted()) return outcome;
+    if (outcome.scanned > 0 && exhausted()) return outcome;
     const page = await nextPage(outcome.nextCursor);
     if (page.length === 0) {
       outcome.done = true;
@@ -388,7 +407,9 @@ export async function moveStorageObjectsBatch({
       }),
     );
     for (const entry of located) {
-      if (exhausted()) return outcome;
+      // Locating a slow store can spend the whole budget before the first
+      // entry; still settle one so every call advances the cursor.
+      if (outcome.scanned > 0 && exhausted()) return outcome;
       outcome.scanned++;
       outcome.nextCursor = entry.file.cursor;
       if ("error" in entry) {

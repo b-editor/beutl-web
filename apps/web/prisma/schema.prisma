@@ -198,6 +198,8 @@ model File {
 
   @@index([userId])
   @@index([folderId])
+  // 管理画面の一括移動が (createdAt, id) のカーソルで全件を歩くための索引。
+  @@index([createdAt, id])
 }
 
 // ストレージ画面でユーザーがファイルを整理するためのフォルダー。ツリーは親への

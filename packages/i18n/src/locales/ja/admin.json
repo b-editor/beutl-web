@@ -434,7 +434,8 @@
       "progress": "走査 {{scanned}} 件、移動 {{moved}} 件、移動済み {{alreadyThere}} 件、見つからず {{missing}} 件、失敗 {{failed}} 件",
       "done": "すべてのファイルを走査しました。",
       "paused": "停止しました。再実行すると最後のファイルの続きから進みます。",
-      "failures": "失敗"
+      "failures": "失敗",
+      "noProgress": "前回の実行は進みませんでした。ストアが遅いか利用できない可能性があります。再実行すると同じファイルからやり直します。"
     },
     "messages": {
       "moved": "{{name}} を {{from}} から {{to}} へ移動しました。",
