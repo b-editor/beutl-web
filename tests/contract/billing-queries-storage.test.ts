@@ -186,7 +186,7 @@ describe("billing page storage plan entries", () => {
       unit_amount: unitAmount,
       currency: "usd",
       product: `prod_${id}`,
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     });
     mocks.pricesRetrieve.mockImplementation(async (priceId: string) => {
       if (priceId === "price_100") return price(priceId, 500, true);

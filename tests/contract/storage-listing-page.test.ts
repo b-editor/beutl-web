@@ -3,6 +3,7 @@ import {
   countStorageFilesInFolders,
   retrieveStorageFilesPage,
   setDbProvider,
+  STORAGE_FILE_NAME_SCAN_LIMIT,
 } from "@beutl/db";
 import {
   DEFAULT_STORAGE_LISTING,
@@ -192,13 +193,30 @@ describe("storage listing pages", () => {
     expect(await availableStorageFileName({ userId: USER_ID, name: "README" })).toBe("README");
 
     // Never the whole account: the query names the exact name and the
-    // "name (n).ext" pattern and nothing else.
+    // "name (n).ext" pattern and nothing else, and reads a bounded page.
     for (const call of findMany.mock.calls) {
       expect(call[0]).toMatchObject({
         where: expect.objectContaining({ OR: expect.arrayContaining([expect.anything()]) }),
         select: { name: true },
+        take: STORAGE_FILE_NAME_SCAN_LIMIT + 1,
       });
     }
+  });
+
+  it("stops reading names once there are more copies than a page holds", async () => {
+    const { availableStorageFileName } = await import("@beutl/db");
+    file("clip.mp4", { name: "clip.mp4" });
+    for (let index = 1; index <= STORAGE_FILE_NAME_SCAN_LIMIT + 50; index++) {
+      file(`clip-${index}`, { name: `clip (${index}).mp4` });
+    }
+    const findMany = vi.spyOn(memory.prisma.file, "findMany");
+
+    const chosen = await availableStorageFileName({ userId: USER_ID, name: "clip.mp4" });
+
+    expect(chosen).toMatch(/^clip \(.+\)\.mp4$/);
+    expect([...memory.state.files.values()].some((row) => row.name === chosen)).toBe(false);
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany.mock.calls[0][0]).toMatchObject({ take: STORAGE_FILE_NAME_SCAN_LIMIT + 1 });
   });
 
   it("counts the files a folder deletion would take", async () => {

@@ -384,6 +384,7 @@ type StorageUploadRecord = {
   createdAt: Date;
   completedFileId: string | null;
   abandonedAt: Date | null;
+  lastActivityAt?: Date | null;
   startState: string;
   creationLeaseUntil: Date | null;
   creationLeaseToken: string | null;
@@ -459,6 +460,7 @@ type StorageUploadWhere = {
   partSize?: number;
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
+  lastActivityAt?: null | { lt: Date };
   startState?: string;
   createdAt?: Date | { lt?: Date; gte?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
@@ -596,6 +598,14 @@ function matchesStorageUploadWhere(
     item.abandonedAt === null
   ) {
     return false;
+  }
+  if (where.lastActivityAt !== undefined) {
+    const activity = item.lastActivityAt ?? null;
+    if (where.lastActivityAt === null) {
+      if (activity !== null) return false;
+    } else if (activity === null || activity.getTime() >= where.lastActivityAt.lt.getTime()) {
+      return false;
+    }
   }
   if (where.OR && !where.OR.some((candidate) => matchesStorageUploadWhere(item, candidate))) {
     return false;
@@ -3590,22 +3600,13 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-        where: {
-          id?: string;
-          userId?: string;
-          objectKey?: string;
-          visibility?: string;
-          aiJobResult?: null;
-        };
+        where: FileWhere & { objectKey?: string };
         select?: { id?: boolean; objectKey?: boolean };
       }) => {
         const file = [...state.files.values()].find(
           (item) =>
-            (!where.id || item.id === where.id) &&
-            (!where.userId || item.userId === where.userId) &&
-            (!where.objectKey || item.objectKey === where.objectKey) &&
-            (!where.visibility || item.visibility === where.visibility) &&
-            (where.aiJobResult !== null || !aiJobResultForFile(item.id)),
+            matchesFileWhere(item, where) &&
+            (!where.objectKey || item.objectKey === where.objectKey),
         );
         const aiJobResult = file ? aiJobResultForFile(file.id) : null;
         return file

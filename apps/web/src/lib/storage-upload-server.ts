@@ -10,6 +10,7 @@ import {
   renewStorageUploadCompletion,
   claimStorageUploadCreation,
   attachStorageUploadRemote,
+  touchStorageUploadActivity,
   countFilesByUserId,
   countStorageUploadTombstonesByUserId,
   createFile,
@@ -458,6 +459,12 @@ export async function uploadPart({
   // into memory to give it one would defeat the point of splitting the file
   // up at all.
   const part = await multipart.uploadPart(partNumber, body, { contentLength });
+  // The part is in the bucket; tell the stale sweep the upload is alive. A
+  // failed touch costs at most a premature abandonment of a long-idle
+  // upload, never the part itself.
+  await touchStorageUploadActivity({ id: upload.id, userId }).catch((error) => {
+    console.error("Failed to record storage upload activity", upload.id, error);
+  });
   return { ok: true, etag: part.etag };
 }
 

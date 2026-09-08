@@ -402,6 +402,23 @@ export async function createDedicatedStorageFile({
       leaseToken,
       publish,
     });
+    if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
+      // The plan lapsed between the reservation and this commit. The object
+      // is already in the bucket; releasing the reservation queues it for
+      // cleanup and frees the slot, and the caller reports the refusal the
+      // same way a refused reservation is reported.
+      await releaseDedicatedStorageReservation({
+        id: reservation.reservation.id,
+        userId,
+        objectKey,
+        leaseToken,
+        expectedLeaseUntil: leaseUntil,
+        now: new Date(),
+      });
+      return outcome.kind === "overQuota"
+        ? { kind: "overQuota" as const }
+        : { kind: "tooManyFiles" as const };
+    }
     if (outcome.kind !== "created") {
       throw new Error("Dedicated storage reservation changed before File commit");
     }

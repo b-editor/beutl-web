@@ -169,10 +169,19 @@ export async function findFileForApi({
   return file;
 }
 
+// How many colliding names are worth reading to pick the next "(n)". Past
+// this the account has that many copies of one basename, and any free name
+// will do.
+export const STORAGE_FILE_NAME_SCAN_LIMIT = 500;
+const STORAGE_FILE_NAME_PROBES = 8;
+
 // The name a new file gets: the one asked for, or "name (n).ext" once that is
 // taken, the way the screen has always done. Only names that could collide
-// are read, so an account holding many files does not pay for a listing of
-// all of them on every upload.
+// are read, and never more than a bounded page of them: with more copies
+// than that, the next number is taken from a count kept in the database and
+// probed a few times, and a random suffix ends the search when even those
+// are taken. An account holding many files, or many copies of one name,
+// never pays for a listing of them on every upload.
 export async function availableStorageFileName({
   userId,
   name,
@@ -185,23 +194,37 @@ export async function availableStorageFileName({
   const db = prisma ?? await getDb();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   const stem = extension ? name.slice(0, -extension.length) : name;
+  const colliding = {
+    userId,
+    aiJobResult: null,
+    OR: [
+      { name },
+      { name: { startsWith: `${stem} (`, endsWith: extension } },
+    ],
+  } satisfies Prisma.FileWhereInput;
   const rows = await db.file.findMany({
-    where: {
-      userId,
-      aiJobResult: null,
-      OR: [
-        { name },
-        { name: { startsWith: `${stem} (`, endsWith: extension } },
-      ],
-    },
+    where: colliding,
     select: { name: true },
+    take: STORAGE_FILE_NAME_SCAN_LIMIT + 1,
   });
   const taken = new Set(rows.map((row) => row.name));
   if (!taken.has(name)) return name;
-  for (let index = 1; ; index++) {
-    const candidate = `${stem} (${index})${extension}`;
-    if (!taken.has(candidate)) return candidate;
+  if (rows.length <= STORAGE_FILE_NAME_SCAN_LIMIT) {
+    for (let index = 1; ; index++) {
+      const candidate = `${stem} (${index})${extension}`;
+      if (!taken.has(candidate)) return candidate;
+    }
   }
+  const count = await db.file.count({ where: colliding });
+  for (let index = count; index < count + STORAGE_FILE_NAME_PROBES; index++) {
+    const candidate = `${stem} (${index})${extension}`;
+    const exists = await db.file.findFirst({
+      where: { userId, name: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
+  }
+  return `${stem} (${crypto.randomUUID().slice(0, 8)})${extension}`;
 }
 
 export async function createFile({

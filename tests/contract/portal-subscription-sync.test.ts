@@ -68,7 +68,7 @@ function stripeSubscription(overrides: Record<string, unknown> = {}) {
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
         },
       ],
@@ -260,7 +260,7 @@ describe("customer portal subscription sync", () => {
                 product: "prod_pro",
                 unit_amount: 2_000,
                 currency: "usd",
-                recurring: { interval: "month", interval_count: 1 },
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
               },
             },
           ],
@@ -292,7 +292,7 @@ describe("customer portal subscription sync", () => {
       product: "prod_pro",
       unit_amount: 2_000,
       currency: "usd",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     });
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({
@@ -310,7 +310,7 @@ describe("customer portal subscription sync", () => {
                 product: "prod_pro",
                 unit_amount: 2_000,
                 currency: "usd",
-                recurring: { interval: "month", interval_count: 1 },
+                recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
               },
             },
           ],

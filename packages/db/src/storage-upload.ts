@@ -1,4 +1,6 @@
+import { countFilesByUserId, sumFileSizeByUserId } from "./file";
 import { getDb } from "./provider";
+import { resolveStorageQuota } from "./storage-quota";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
@@ -258,9 +260,32 @@ export async function renewDedicatedStorageReservation({
     data: {
       creationLeaseUntil: leaseUntil,
       completionLeaseUntil: leaseUntil,
+      lastActivityAt: now,
     },
   } as never);
   return renewed.count === 1;
+}
+
+// A part arrived (or a dedicated write is still being renewed): the upload
+// is not abandoned, whatever its age. The stale sweep measures idleness from
+// this, falling back to createdAt for a row that never saw a part.
+export async function touchStorageUploadActivity({
+  id,
+  userId,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const touched = await db.storageUpload.updateMany({
+    where: { id, userId, completedFileId: null, abandonedAt: null },
+    data: { lastActivityAt: now },
+  } as never);
+  return touched.count === 1;
 }
 
 export async function recordDedicatedStorageWriteUnknown({
@@ -394,6 +419,21 @@ export async function commitDedicatedStorageReservation({
       reservation.abandonedAt ||
       (leaseToken !== undefined && reservation.creationLeaseToken !== leaseToken)
     ) return { kind: "changed" as const };
+    // The plan may have lapsed or been held since the reservation was taken.
+    // Read the quota again here, as the multipart finalizer does, and refuse
+    // what no longer fits; the caller releases the reservation, which queues
+    // the object it already wrote for cleanup.
+    const [quota, stored, files] = await Promise.all([
+      resolveStorageQuota({ userId, prisma: tx }),
+      sumFileSizeByUserId({ userId, prisma: tx }),
+      countFilesByUserId({ userId, prisma: tx }),
+    ]);
+    if (stored + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
+      return { kind: "overQuota" as const };
+    }
+    if (files >= quota.fileCountLimit) {
+      return { kind: "tooManyFiles" as const };
+    }
     const created = await tx.file.create({
       data: {
         id: fileId,
@@ -1757,86 +1797,37 @@ export async function countStorageUploadsByUserId({
 // bucket would not let go of the parts. Making it wait out the same day as an
 // upload nobody has touched leaves that storage paid for, and the account's
 // quota spent, for no reason: it is due now.
-// Which stale rows a sweep wants. Every upload gets at least the shortest
-// grace; a large one gets a grace that grows with its size, up to the longest.
-// "due" is everything that is certainly past its grace by size alone plus the
-// rows already handed to cleanup. "graced" is the band of large uploads whose
-// deadline depends on their size: the caller cuts that band into size
-// buckets, each with the deadline of its smallest member, so the query only
-// returns rows that are due or within one bucket of being due. Listing the
-// bands separately keeps in-flight large uploads from filling the page and
-// hiding small rows that are already due.
-export type StaleStorageUploadBand =
-  | {
-      kind: "due";
-      // Rows at or below this size are due once older than `before`.
-      sizeAtShortestGrace: bigint;
-      // Rows older than this are due whatever their size.
-      beforeAnySize: Date;
-    }
-  | {
-      kind: "graced";
-      beforeAnySize: Date;
-      // Ascending, contiguous. `sizeLte: null` is the open-ended last bucket.
-      buckets: readonly {
-        sizeGt: bigint;
-        sizeLte: bigint | null;
-        // Rows in this bucket started before this may be due.
-        before: Date;
-      }[];
-    };
-
+// The stale rows a sweep wants: uploads that have been idle since `before`
+// (no part since then, or never a part and started before then) and rows
+// already handed to cleanup. Idleness rather than age, so an upload that is
+// still receiving parts is never abandoned however large it is.
 export async function listStorageUploadsStartedBefore({
   before,
   now,
   limit,
-  band,
   prisma,
 }: {
   before: Date;
   now: Date;
   limit: number;
-  band?: StaleStorageUploadBand;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  const staleness =
-    band === undefined
-      ? {
-          OR: [
-            { completedFileId: null, createdAt: { lt: before } },
-            { abandonedAt: { not: null } },
-          ],
-        }
-      : band.kind === "due"
-        ? {
-            OR: [
-              {
-                completedFileId: null,
-                createdAt: { lt: before },
-                size: { lte: band.sizeAtShortestGrace },
-              },
-              { completedFileId: null, createdAt: { lt: band.beforeAnySize } },
-              { abandonedAt: { not: null } },
-            ],
-          }
-        : {
-            completedFileId: null,
-            abandonedAt: null,
-            // Rows older than beforeAnySize belong to the due band.
-            createdAt: { gte: band.beforeAnySize },
-            OR: band.buckets.map((bucket) => ({
-              size: {
-                gt: bucket.sizeGt,
-                ...(bucket.sizeLte === null ? {} : { lte: bucket.sizeLte }),
-              },
-              createdAt: { lt: bucket.before },
-            })),
-          };
   const rows = await db.storageUpload.findMany({
     where: {
       AND: [
-        staleness,
+        {
+          OR: [
+            {
+              completedFileId: null,
+              OR: [
+                { lastActivityAt: { lt: before } },
+                { lastActivityAt: null, createdAt: { lt: before } },
+              ],
+            },
+            { abandonedAt: { not: null } },
+          ],
+        },
         {
           OR: [
             { cleanupLeaseUntil: null },

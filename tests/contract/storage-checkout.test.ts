@@ -127,7 +127,7 @@ function stripePrice(priceId: string) {
     unit_amount: 500,
     currency: "usd",
     product: `prod_${TIER_BY_PRICE[priceId]}`,
-    recurring: { interval: "month", interval_count: 1 },
+    recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
   };
 }
 
@@ -281,6 +281,16 @@ describe("storage plan checkout actions", () => {
     await expect(createStorageCheckout(formWith("100gb"))).rejects.toThrow("Stripe unreachable");
   });
 
+  it("treats a metered Price as unavailable", async () => {
+    mocks.pricesRetrieve.mockImplementation(async (priceId: string) => ({
+      ...stripePrice(priceId),
+      recurring: { interval: "month", interval_count: 1, usage_type: "metered" },
+    }));
+    await expect(createStorageCheckout(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.activateBillingOffer).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown tier before touching Stripe", async () => {
     await expect(createStorageCheckout(formWith("5tb"))).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.pricesRetrieve).not.toHaveBeenCalled();
@@ -301,7 +311,7 @@ describe("storage plan checkout actions", () => {
           id: "sub_pro",
           status: "active",
           items: {
-            data: [{ quantity: 1, price: { id: "price_pro", recurring: { interval: "month", interval_count: 1 } } }],
+            data: [{ quantity: 1, price: { id: "price_pro", recurring: { interval: "month", interval_count: 1, usage_type: "licensed" } } }],
           },
         },
       ],

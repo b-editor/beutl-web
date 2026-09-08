@@ -351,6 +351,16 @@ Use the following order for every environment:
    runtimes report the new schema and the verification queries above have been
    recorded in the deployment log.
 
+## Stale uploads are measured by idleness
+
+`20260908020000_add_storage_upload_activity` adds `StorageUpload.lastActivityAt`
+(additive, replayable, no maintenance window). Every part that lands, and
+every renewal of a dedicated write lease, stamps it; the stale sweep abandons
+an upload only after 24 hours without one, falling back to `createdAt` for a
+row that never received a part (existing rows keep `NULL`). A slow transfer
+that is still receiving parts is therefore never abandoned, whatever its
+size; the bucket's seven-day lifecycle rule remains the last line of defence.
+
 ## Durable top-up Checkout recovery
 
 `20260826050000_harden_topup_checkout_recovery` gives each user one nullable,

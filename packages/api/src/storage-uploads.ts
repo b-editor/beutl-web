@@ -22,7 +22,6 @@ import {
   sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
-import { STORAGE_MAX_FILE_BYTES } from "@beutl/core";
 import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
 export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
@@ -41,61 +40,12 @@ export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 // can no longer take a receipt — so whatever is left in the bucket is this
 // sweep's to throw away.
 //
-// Long enough that a slow upload is never mistaken for an abandoned one. A
-// 1 GiB file gets a day; a larger one gets as long as sending it at 1 MiB/s
-// would take, up to six days so the bucket's own seven-day lifecycle rule
-// remains the last line of defence (see apps/web/r2-lifecycle.json).
-const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
-const ABANDON_AFTER_MAX_MILLISECONDS = 6 * 24 * 60 * 60 * 1000;
-const ABANDON_BYTES_PER_SECOND = 1024 * 1024;
-
-// The largest size whose grace is still the shortest one. Anything bigger
-// gets longer, up to ABANDON_AFTER_MAX_MILLISECONDS.
-const ABANDON_SIZE_AT_SHORTEST_GRACE = BigInt(
-  (ABANDON_AFTER_MILLISECONDS / 1000) * ABANDON_BYTES_PER_SECOND,
-);
-// The graced band is queried in size buckets this wide, each with the
-// deadline of its smallest member, so the database returns only rows that
-// are due or become due within the hour. A wider bucket over-fetches more
-// near-due rows; a narrower one adds clauses to the query.
-const ABANDON_GRACE_BUCKET_MILLISECONDS = 60 * 60 * 1000;
-
-export function abandonAfterMilliseconds(size: bigint | number): number {
-  const seconds = Number(size) / ABANDON_BYTES_PER_SECOND;
-  return Math.min(
-    ABANDON_AFTER_MAX_MILLISECONDS,
-    Math.max(ABANDON_AFTER_MILLISECONDS, Math.ceil(seconds * 1000)),
-  );
-}
-
-// The size buckets of the graced band at `now`. A row of size s has the
-// deadline createdAt + grace(s); grace grows with size, so every row in a
-// bucket (lo, hi] is due no later than createdAt + grace(hi) and no earlier
-// than createdAt + grace(lo). Querying each bucket with grace(lo) returns a
-// superset of the due rows that the caller trims by the exact deadline. The
-// last bucket is open-ended: a row above the largest file the routes admit
-// still has a grace of at least grace(STORAGE_MAX_FILE_BYTES).
-function gracedAbandonBuckets(now: Date) {
-  const bucketBytes = BigInt(
-    (ABANDON_GRACE_BUCKET_MILLISECONDS / 1000) * ABANDON_BYTES_PER_SECOND,
-  );
-  const largest = BigInt(STORAGE_MAX_FILE_BYTES);
-  const buckets: { sizeGt: bigint; sizeLte: bigint | null; before: Date }[] = [];
-  for (let lo = ABANDON_SIZE_AT_SHORTEST_GRACE; lo < largest; lo += bucketBytes) {
-    const hi = lo + bucketBytes < largest ? lo + bucketBytes : largest;
-    buckets.push({
-      sizeGt: lo,
-      sizeLte: hi,
-      before: new Date(now.getTime() - abandonAfterMilliseconds(lo)),
-    });
-  }
-  buckets.push({
-    sizeGt: largest,
-    sizeLte: null,
-    before: new Date(now.getTime() - abandonAfterMilliseconds(largest)),
-  });
-  return buckets;
-}
+// How long an upload may go without a part before it is given up. Idleness,
+// not age: a part arriving refreshes the deadline, so a slow transfer that
+// is still making progress is never mistaken for an abandoned one, however
+// large it is. The bucket's own seven-day lifecycle rule (see
+// apps/web/r2-lifecycle.json) remains the last line of defence.
+const ABANDON_AFTER_IDLE_MILLISECONDS = 24 * 60 * 60 * 1000;
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
@@ -322,44 +272,11 @@ export async function abandonStaleStorageUploads(
       console.error("Failed to reconcile unknown storage completions", error);
       return { inspected: 0, finalized: 0, errors: 1 };
     });
-  // Rows that are certainly due (small and past the shortest grace, older
-  // than the longest grace, or already handed to cleanup) come first and get
-  // the whole page. Large uploads inside their size-dependent grace are
-  // queried by size bucket, each bucket with its own deadline, so the
-  // database hands back only rows that are due or within an hour of it and
-  // an older upload that is not yet due can never hide a newer one that is.
-  const beforeAnySize = new Date(now.getTime() - ABANDON_AFTER_MAX_MILLISECONDS);
-  const before = new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS);
-  const due = await listStorageUploadsStartedBefore({
-    before,
+  const stale = await listStorageUploadsStartedBefore({
+    before: new Date(now.getTime() - ABANDON_AFTER_IDLE_MILLISECONDS),
     now,
     limit: MAX_PER_RUN,
-    band: {
-      kind: "due",
-      sizeAtShortestGrace: ABANDON_SIZE_AT_SHORTEST_GRACE,
-      beforeAnySize,
-    },
   });
-  const graced =
-    due.length < MAX_PER_RUN
-      ? (
-          await listStorageUploadsStartedBefore({
-            before,
-            now,
-            limit: MAX_PER_RUN,
-            band: {
-              kind: "graced",
-              beforeAnySize,
-              buckets: gracedAbandonBuckets(now),
-            },
-          })
-        ).filter(
-          (listed) =>
-            listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
-            now.getTime(),
-        )
-      : [];
-  const stale = [...due, ...graced].slice(0, MAX_PER_RUN);
 
   let abandoned = 0;
   let failed = unknownRecovery.errors;

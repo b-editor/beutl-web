@@ -248,6 +248,8 @@ model StorageUpload {
   // 掃除が「この行のパートは自分が捨てる」と宣言した時刻。設定された行にはもう
   // 控えを書けない——書けてしまうと、掃除が消したオブジェクトを File が指す。
   abandonedAt     DateTime?
+  // 最後にパートが届いた (専用書き込みならリースを更新した) 時刻。放置判定の起点。
+  lastActivityAt  DateTime?
   // Keep the database default active until every old writer is retired. New
   // intent rows set this field explicitly; a later contract migration can
   // switch the default once the rolling-deploy window has closed.
@@ -281,6 +283,7 @@ model StorageUpload {
   @@index([completionState, completionRetryNotBefore])
   @@index([completionState, unknownProbeNotBefore])
   @@index([abandonedAt, cleanupLeaseUntil])
+  @@index([completedFileId, lastActivityAt])
 }
 
 model Package {

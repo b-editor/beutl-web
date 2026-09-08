@@ -90,7 +90,7 @@ function proSubscription({
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
           current_period_start: created,
           current_period_end: created + 2_592_000,

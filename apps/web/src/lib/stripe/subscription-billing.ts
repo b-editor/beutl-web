@@ -55,13 +55,16 @@ export function subscriptionTermsFromPrice(
       `Stripe Price ${price.id} is not a valid fixed-price billing offer`,
     );
   }
+  // Licensed only: a metered Price is billed by usage reports this app never
+  // sends, so it would show a flat amount and invoice something else.
   if (
     price.type !== "recurring" ||
     price.recurring?.interval !== "month" ||
-    price.recurring.interval_count !== 1
+    price.recurring.interval_count !== 1 ||
+    price.recurring.usage_type !== "licensed"
   ) {
     throw new Error(
-      `${plan.priceEnvName(tier)} must identify a monthly recurring Price`,
+      `${plan.priceEnvName(tier)} must identify a monthly licensed recurring Price`,
     );
   }
   return {

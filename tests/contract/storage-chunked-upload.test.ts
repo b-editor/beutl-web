@@ -660,95 +660,46 @@ describe("uploading a file too large for one request", () => {
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
   });
 
-  it("still reaches a small stale upload behind a page of large ones inside their grace", async () => {
-    // A hundred large uploads that are a day old but, at their size, still
-    // inside their grace period must not fill the sweep's page and hide the
-    // small upload behind them that is already due.
-    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    const template = await startUpload({
+  it("keeps an upload that is still receiving parts, however old it is", async () => {
+    // Started thirty hours ago, but a part landed an hour ago: alive. Once a
+    // day passes without a part, it is abandoned like any other.
+    const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
-      name: "large.bin",
+      name: "slow.bin",
       mimeType: "application/octet-stream",
-      size: BigInt(1_000),
+      size: BigInt(4_000),
     });
-    if (!template.ok) throw new Error(template.reason);
-    const templateRow = state.storageUploads.get(template.upload.id)!;
-    state.storageUploads.delete(templateRow.id);
-    const small = await startUpload({
-      userId: USER_ID,
-      id: crypto.randomUUID(),
-      name: "small.bin",
-      mimeType: "application/octet-stream",
-      size: BigInt(1_000),
-    });
-    if (!small.ok) throw new Error(small.reason);
-    const smallRow = state.storageUploads.get(small.upload.id)!;
-    state.storageUploads.set(smallRow.id, { ...smallRow, createdAt: dayAgo });
-    // Seeded directly: a hundred of these would never pass the quota or the
-    // concurrent-upload cap through startUpload, and the sweep only reads
-    // size and age.
-    for (let index = 0; index < 100; index++) {
-      const id = crypto.randomUUID();
-      state.storageUploads.set(id, {
-        ...templateRow,
-        id,
-        objectKey: `${templateRow.objectKey}-${index}`,
-        size: BigInt(200) * BigInt(1024 ** 3),
-        createdAt: new Date(dayAgo.getTime() - index),
-      });
-    }
-
-    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
-      abandoned: 1,
-      failed: 0,
-    });
-    expect(state.storageUploads.has(smallRow.id)).toBe(false);
-    expect(state.storageUploads.size).toBe(100);
-  });
-
-  it("reaches a large upload that is due behind older ones that are not", async () => {
-    // Every row here is above the size whose grace is the shortest, so all of
-    // them sit in the graced band. A hundred 156 GiB uploads started 30 hours
-    // ago are inside their 44-hour grace and would fill a page ordered by age;
-    // the 85 GiB upload started 25 hours ago is past its 24.2-hour grace and
-    // sits behind them. The band is queried by size bucket, each with its own
-    // deadline, so the older rows are never returned in the first place.
-    const template = await startUpload({
-      userId: USER_ID,
-      id: crypto.randomUUID(),
-      name: "large.bin",
-      mimeType: "application/octet-stream",
-      size: BigInt(1_000),
-    });
-    if (!template.ok) throw new Error(template.reason);
-    const templateRow = state.storageUploads.get(template.upload.id)!;
-    state.storageUploads.delete(templateRow.id);
+    if (!started.ok) throw new Error(started.reason);
     const hour = 60 * 60 * 1000;
-    for (let index = 0; index < 100; index++) {
-      const id = crypto.randomUUID();
-      state.storageUploads.set(id, {
-        ...templateRow,
-        id,
-        objectKey: `${templateRow.objectKey}-${index}`,
-        size: BigInt(156) * BigInt(1024 ** 3),
-        createdAt: new Date(Date.now() - 30 * hour - index),
-      });
-    }
-    state.storageUploads.set("due-85", {
-      ...templateRow,
-      id: "due-85",
-      objectKey: `${templateRow.objectKey}-due`,
-      size: BigInt(85) * BigInt(1024 ** 3),
-      createdAt: new Date(Date.now() - 25 * hour),
+    const row = state.storageUploads.get(started.upload.id)!;
+    state.storageUploads.set(row.id, { ...row, createdAt: new Date(Date.now() - 30 * hour) });
+    await uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
     });
+    expect(state.storageUploads.get(row.id)?.lastActivityAt?.getTime()).toBeGreaterThan(
+      Date.now() - hour,
+    );
 
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(row.id)).toBe(true);
+
+    state.storageUploads.set(row.id, {
+      ...state.storageUploads.get(row.id)!,
+      lastActivityAt: new Date(Date.now() - 25 * hour),
+    });
     await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
       abandoned: 1,
       failed: 0,
     });
-    expect(state.storageUploads.has("due-85")).toBe(false);
-    expect(state.storageUploads.size).toBe(100);
+    expect(state.storageUploads.has(row.id)).toBe(false);
   });
 
   it("keeps active completion fenced, then escalates an expired lease", async () => {

@@ -31,7 +31,7 @@ function proPrice(overrides: Record<string, unknown> = {}) {
     id: PRO_PRICE_ID,
     unit_amount: 1980,
     currency: "usd",
-    recurring: { interval: "month", interval_count: 1 },
+    recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     ...overrides,
   };
 }
@@ -164,7 +164,7 @@ describe("admin Stripe price resolution", () => {
     [
       "a Pro price that is not billed monthly",
       stripeResponse(
-        proPrice({ recurring: { interval: "year", interval_count: 1 } }),
+        proPrice({ recurring: { interval: "year", interval_count: 1, usage_type: "licensed" } }),
       ),
       "notFound",
     ],

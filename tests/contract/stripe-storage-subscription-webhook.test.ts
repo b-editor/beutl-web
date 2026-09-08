@@ -117,7 +117,7 @@ function subscription({
             product: `prod_${tier}`,
             unit_amount: 500,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
           current_period_start: created,
           current_period_end: created + 2_592_000,
@@ -193,7 +193,7 @@ describe("subscription webhook for the storage plan", () => {
       product: "prod_pro",
       unit_amount: 2_000,
       currency: "usd",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     };
     mocks.findBillingOfferByStripePriceId.mockResolvedValue({
       id: "offer_pro",
@@ -283,7 +283,7 @@ describe("subscription webhook for the storage plan", () => {
       product: "prod_200gb",
       unit_amount: 400,
       currency: "usd",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     });
     mocks.registerHistoricalBillingOffer.mockImplementation(async ({ terms }) => ({
       ...terms,
@@ -296,7 +296,7 @@ describe("subscription webhook for the storage plan", () => {
       product: "prod_200gb",
       unit_amount: 400,
       currency: "usd",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     };
     sub.metadata = { ...OWNER, planId: "storage" };
     mocks.retrieveSubscription.mockResolvedValue(sub);

@@ -151,7 +151,7 @@ describe("AI checkout actions", () => {
             unit_amount: 2_000,
             currency: "usd",
             product: "prod_pro",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           }
         : {
             id: priceId,
@@ -987,7 +987,7 @@ describe("AI checkout actions", () => {
       unit_amount: 2_000,
       currency: "usd",
       product: "prod_pro_v2",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     });
     mocks.getOrCreateSubscriptionCheckoutAttempt.mockResolvedValue({
       userId: "user-1",
@@ -1181,7 +1181,7 @@ describe("AI checkout actions", () => {
               product: "prod_old",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
           }],
         },
@@ -1349,7 +1349,7 @@ describe("AI checkout actions", () => {
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
         }],
       },
@@ -1434,7 +1434,7 @@ describe("AI checkout actions", () => {
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
         }],
       },
@@ -1507,7 +1507,7 @@ describe("AI checkout actions", () => {
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
         }],
       },
@@ -1539,7 +1539,7 @@ describe("AI checkout actions", () => {
                 quantity: 1,
                 price: {
                   id: "price_pro",
-                  recurring: { interval: "month", interval_count: 1 },
+                  recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
                 },
               },
             ],
@@ -1570,7 +1570,7 @@ describe("AI checkout actions", () => {
                   quantity: 1,
                   price: {
                     id: "price_pro",
-                    recurring: { interval: "month", interval_count: 1 },
+                    recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
                   },
                 },
               ],
@@ -1612,7 +1612,7 @@ describe("AI checkout actions", () => {
                 quantity: 1,
                 price: {
                   id: "price_pro",
-                  recurring: { interval: "month", interval_count: 1 },
+                  recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
                 },
               },
             ],
