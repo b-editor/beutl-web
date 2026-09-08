@@ -53,6 +53,15 @@ function memoryStore(provider: StorageProvider, objects: Record<string, Uint8Arr
   return { store, bucket, data };
 }
 
+function fakeLease(acquire: "acquired" | "busy" | "gone" = "acquired", exists = true) {
+  const lease = {
+    acquire: vi.fn(async () => acquire),
+    stillExists: vi.fn(async () => exists),
+    release: vi.fn(async () => undefined),
+  };
+  return lease;
+}
+
 describe("moving one object between stores", () => {
   it("copies, verifies, then deletes the source", async () => {
     const payload = bytes(4096, 1);
@@ -96,9 +105,9 @@ describe("moving one object between stores", () => {
     expect(s3.data.get("key")).toEqual(payload);
   });
 
-  it("keeps both copies when the destination copy has the wrong size", async () => {
+  it("keeps both copies when neither agrees with the record", async () => {
     const s3 = memoryStore("s3", { key: bytes(4, 4) });
-    const r2 = memoryStore("r2", { key: bytes(8, 4) });
+    const r2 = memoryStore("r2", { key: bytes(6, 4) });
     await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
       .rejects.toMatchObject({ name: "StorageMoveError", reason: "size-mismatch" });
     expect(r2.data.has("key")).toBe(true);
@@ -114,13 +123,16 @@ describe("moving one object between stores", () => {
     expect(r2.data.has("key")).toBe(true);
   });
 
-  it("does not remove a leftover when the destination copy cannot be measured", async () => {
+  it("never removes the source while the destination copy cannot be measured", async () => {
     const s3 = memoryStore("s3", { key: bytes(8, 10) });
     const r2 = memoryStore("r2", { key: bytes(8, 10) });
     s3.bucket.head.mockResolvedValue({ size: undefined });
+    // The unmeasurable copy is replaced from the good source, but the fresh
+    // copy cannot be verified either, so it is discarded and the source stays.
     await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
-      .rejects.toMatchObject({ reason: "size-mismatch" });
+      .rejects.toMatchObject({ reason: "verification-failed" });
     expect(r2.data.has("key")).toBe(true);
+    expect(r2.bucket.delete).not.toHaveBeenCalled();
   });
 
   it("keeps the last copy when the destination vanished before the leftover was removed", async () => {
@@ -169,7 +181,7 @@ describe("moving one object between stores", () => {
       to: "s3",
       stores: [s3.store, r2.store],
       expectedSize: 8,
-      claim: async () => "gone",
+      lease: fakeLease("acquired", false),
     });
     expect(outcome).toEqual({ kind: "missing" });
     expect(s3.data.has("key")).toBe(false);
@@ -177,34 +189,68 @@ describe("moving one object between stores", () => {
     expect(r2.bucket.delete).not.toHaveBeenCalled();
   });
 
-  it("deletes nothing when another move holds the claim", async () => {
+  it("does nothing at all for a file that is already gone", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(8, 17) });
+    const lease = fakeLease("gone");
+    expect(await moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
+      .toEqual({ kind: "missing" });
+    expect(s3.bucket.put).not.toHaveBeenCalled();
+    expect(lease.release).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing while another move holds the lease", async () => {
     const payload = bytes(8, 15);
     const s3 = memoryStore("s3");
     const r2 = memoryStore("r2", { key: payload });
-    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, claim: async () => "lost" }))
+    const lease = fakeLease("busy");
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
       .rejects.toMatchObject({ reason: "contended" });
-    // The copy stays for whichever move won; the source is untouched.
-    expect(s3.data.get("key")).toEqual(payload);
-    expect(r2.data.get("key")).toEqual(payload);
-
-    const both = memoryStore("s3", { key: payload });
-    const claim = vi.fn(async () => "lost" as const);
-    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [both.store, r2.store], expectedSize: 8, claim }))
-      .rejects.toMatchObject({ reason: "contended" });
-    expect(claim).toHaveBeenCalledTimes(1);
-    expect(r2.data.has("key")).toBe(true);
+    expect(s3.bucket.put).not.toHaveBeenCalled();
     expect(r2.bucket.delete).not.toHaveBeenCalled();
+    expect(r2.bucket.head).not.toHaveBeenCalled();
+    expect(lease.release).not.toHaveBeenCalled();
   });
 
-  it("claims exactly once before the first deletion of a leftover", async () => {
+  it("holds the lease from before the first lookup until after the last delete", async () => {
     const payload = bytes(8, 16);
     const s3 = memoryStore("s3", { key: payload });
     const r2 = memoryStore("r2", { key: payload });
-    const claim = vi.fn(async () => "claimed" as const);
-    expect(await moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, claim }))
+    const lease = fakeLease();
+    expect(await moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
       .toEqual({ kind: "already-there", to: "s3", removedFrom: ["r2"] });
-    expect(claim).toHaveBeenCalledTimes(1);
-    expect(claim.mock.invocationCallOrder[0]).toBeLessThan(r2.bucket.delete.mock.invocationCallOrder[0]);
+    expect(lease.acquire.mock.invocationCallOrder[0]).toBeLessThan(r2.bucket.head.mock.invocationCallOrder[0]);
+    expect(lease.release.mock.invocationCallOrder[0]).toBeGreaterThan(r2.bucket.delete.mock.invocationCallOrder[0]);
+    expect(lease.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the lease when the move fails", async () => {
+    const s3 = memoryStore("s3", { key: bytes(4, 18) });
+    const r2 = memoryStore("r2", { key: bytes(6, 18) });
+    const lease = fakeLease();
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
+      .rejects.toBeInstanceOf(StorageMoveError);
+    expect(lease.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces an unverified destination copy with a fresh one from a good source", async () => {
+    const good = bytes(8, 19);
+    const s3 = memoryStore("s3", { key: bytes(4, 19) });
+    const r2 = memoryStore("r2", { key: good });
+    expect(await moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
+      .toMatchObject({ kind: "moved", from: "r2", to: "s3", size: 8, sourceRemoved: true });
+    expect(s3.data.get("key")).toEqual(good);
+    expect(r2.data.has("key")).toBe(false);
+  });
+
+  it("reports a bad copy it could not remove", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(16, 20) });
+    s3.bucket.head.mockResolvedValueOnce(null).mockResolvedValue({ size: 15 });
+    s3.bucket.delete.mockRejectedValueOnce(new Error("s3 down"));
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 16 }))
+      .rejects.toThrow(/removing that copy failed as well \(s3 down\)/u);
+    expect(r2.data.has("key")).toBe(true);
   });
 
   it("reports an object that no store holds", async () => {
@@ -269,7 +315,6 @@ describe("moving files in bulk", () => {
       objectKey: `key-${index}`,
       size: 4,
       mimeType: "application/octet-stream",
-      updatedAt: new Date("2026-09-01T00:00:00.000Z"),
       cursor: `c${index}`,
     }));
   }
@@ -371,9 +416,9 @@ describe("moving files in bulk", () => {
       nextPage: pager(all, 5),
       cursor: undefined,
       limits: { moves: 10, scanned: 2, milliseconds: 60_000 },
-      claim: async (file) => {
+      lease: (file) => {
         asked.push(file.id);
-        return "claimed";
+        return fakeLease();
       },
     });
     expect(outcome).toMatchObject({ scanned: 2, moved: 2, nextCursor: "c1", done: false });

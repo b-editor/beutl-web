@@ -4,10 +4,17 @@ import {
   resolveStorageStores,
   STORAGE_PROVIDERS,
   type ObjectLocation,
+  type StorageMoveLease,
   type StorageProvider,
   type StorageStore,
   type StorageStores,
 } from "@beutl/api";
+import {
+  acquireFileStorageMoveLease,
+  existsFileById,
+  registerAiStorageCleanup,
+  releaseFileStorageMoveLease,
+} from "@beutl/db";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 // 管理画面は Web と同じストレージ設定 (BEUTL_R2_BUCKET / BEUTL_S3_*) を持つ。
@@ -56,6 +63,33 @@ export async function locateFiles(
     Array.from({ length: Math.min(LOCATE_CONCURRENCY, queue.length) }, worker),
   );
   return result;
+}
+
+// 移動 1 件が持つ File 行のリース。isolate を跨いだ同時移動を排他し、移動中に
+// ファイルが消されていたら、その鍵のオブジェクト削除を耐久的な後始末に載せる
+// (行の削除が両ストアを掃除した後に着地したコピーを、後から確実に消すため)。
+export function fileStorageMoveLease(file: { id: string; objectKey: string }): StorageMoveLease {
+  const leaseToken = crypto.randomUUID();
+  return {
+    acquire: () => acquireFileStorageMoveLease({ id: file.id, leaseToken }),
+    async stillExists() {
+      if (await existsFileById({ id: file.id })) return true;
+      await registerAiStorageCleanup({
+        objectKey: file.objectKey,
+        aiJobId: null,
+        state: "cleanup",
+        notBefore: new Date(),
+      }).catch((error) => {
+        console.error("Failed to queue cleanup for a copy of a deleted file", file.objectKey, error);
+      });
+      return false;
+    },
+    async release() {
+      await releaseFileStorageMoveLease({ id: file.id, leaseToken }).catch((error) => {
+        console.error("Failed to release a storage move lease; it expires on its own", file.id, error);
+      });
+    },
+  };
 }
 
 // 一括移動の走査位置。(createdAt, id) をクライアントが持ち回れる文字列にする。

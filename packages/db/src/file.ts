@@ -654,34 +654,71 @@ const adminFileSelect = {
   mimeType: true,
   objectKey: true,
   createdAt: true,
-  updatedAt: true,
   user: { select: { id: true, email: true, name: true } },
 } as const;
 
-export type StorageMoveClaim = "claimed" | "lost" | "gone";
+// ストア間の移動が持つ排他リース。取れるのは誰も持っていないか期限切れのとき
+// だけで、持っている間は別の isolate の移動が同じファイルに触れない。
+export const FILE_STORAGE_MOVE_LEASE_MILLISECONDS = 30 * 60 * 1000;
 
-// ストア間の移動で「削除してよいのはこの呼び出しだけ」を取るための CAS。
-// updatedAt を期待値付きで進めるので、別の isolate で同じファイルを動かして
-// いる移動や、その間の改名・削除があれば負ける。負けた側は何も消さない。
-export async function claimFileForStorageMove({
+export async function acquireFileStorageMoveLease({
   id,
-  expectedUpdatedAt,
+  leaseToken,
   now = new Date(),
+  leaseMilliseconds = FILE_STORAGE_MOVE_LEASE_MILLISECONDS,
   prisma,
 }: {
   id: string;
-  expectedUpdatedAt: Date;
+  leaseToken: string;
   now?: Date;
+  leaseMilliseconds?: number;
   prisma?: PrismaTransaction;
-}): Promise<StorageMoveClaim> {
+}): Promise<"acquired" | "busy" | "gone"> {
   const db = prisma ?? (await getDb());
   const updated = await db.file.updateMany({
-    where: { id, updatedAt: expectedUpdatedAt },
-    data: { updatedAt: now },
+    where: {
+      id,
+      OR: [
+        { storageMoveLeaseUntil: null },
+        { storageMoveLeaseUntil: { lte: now } },
+      ],
+    },
+    data: {
+      storageMoveLeaseToken: leaseToken,
+      storageMoveLeaseUntil: new Date(now.getTime() + leaseMilliseconds),
+    },
   });
-  if (updated.count === 1) return "claimed";
+  if (updated.count === 1) return "acquired";
   const exists = await db.file.findUnique({ where: { id }, select: { id: true } });
-  return exists ? "lost" : "gone";
+  return exists ? "busy" : "gone";
+}
+
+export async function releaseFileStorageMoveLease({
+  id,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  leaseToken: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const released = await db.file.updateMany({
+    where: { id, storageMoveLeaseToken: leaseToken },
+    data: { storageMoveLeaseToken: null, storageMoveLeaseUntil: null },
+  });
+  return released.count === 1;
+}
+
+export async function existsFileById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  return (await db.file.findUnique({ where: { id }, select: { id: true } })) !== null;
 }
 
 export type AdminFileOrder = "asc" | "desc";

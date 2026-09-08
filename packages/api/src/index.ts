@@ -50,6 +50,7 @@ export type {
   MoveBatchOutcome,
   MoveOutcome,
   ObjectLocation,
+  StorageMoveLease,
 } from "./storage/move-object";
 export { createLayeredBucket } from "./storage/layered-bucket";
 export type { StorageStreamOptions } from "./ai/r2-provider";

@@ -191,6 +191,10 @@ model File {
   // 中身ごと消すときはアプリ側がストレージの後始末付きで先に消す。
   folderId          String?
   folder            StorageFolder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  // 管理画面がストア間でオブジェクトを移す間だけ持つリース。isolate を跨いで
+  // 同じファイルの移動が同時に走らないようにする。期限切れは取り直せる。
+  storageMoveLeaseToken String?
+  storageMoveLeaseUntil DateTime?
 
   @@index([userId])
   @@index([folderId])

@@ -68,6 +68,12 @@ services that copy its behaviour) answers a GET or HEAD of a missing key with
 adapter treats only `404` as "not here", so without that permission an object
 that lives in the other store is reported as an error rather than read from it.
 
+Use a bucket without versioning. A delete on a versioned bucket only writes a
+delete marker, while the cleanup outboxes and the storage console take a
+successful delete as the object being gone; the noncurrent versions would
+then stay stored and billed with nothing tracking them. If versioning cannot
+be turned off, add a lifecycle rule that expires noncurrent versions promptly.
+
 Uploads stream each part straight from the browser request to the service with
 an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`). This has been
 verified against MinIO, and R2 and AWS S3 document support for it; check
@@ -91,15 +97,17 @@ objects across and remove the other provider's configuration once the
 transition is over. `/admin/storage` in the admin console lists files with the
 store each object was found in, moves a single file, and moves files in bulk
 from the oldest onwards; each bulk run is bounded and resumes from where the
-previous one stopped. A move copies the object, checks the copy's size against
-the File record, and only then deletes the source; each moved file is written
-to the audit log. A half-configured provider is an error rather than a
+previous one stopped. A move holds a lease on the File record for its
+duration (the same file cannot be moved from two places at once), copies the
+object, checks the copy's size against the File record, and only then
+deletes the source; each moved file is written to the audit log. A half-configured provider is an error rather than a
 skipped fallback, so a stale `BEUTL_S3_*` value must be removed completely.
 
 Multipart uploads in flight at the moment of the switch belong to the old
 store. Their completion and abort are retried against it when the primary
 does not know the upload id, but a part cannot be resent, so a browser that
-was mid-upload fails that part and starts the upload again on the primary.
+was mid-upload sees that upload fail and the user has to start it again;
+the new upload then goes to the primary.
 
 ## Admin authentication and session sharing
 

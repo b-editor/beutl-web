@@ -3,11 +3,7 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
-import {
-  claimFileForStorageMove,
-  findFileForAdminById,
-  listFilesForAdminAfter,
-} from "@beutl/db";
+import { findFileForAdminById, listFilesForAdminAfter } from "@beutl/db";
 import {
   moveStorageObject,
   moveStorageObjectsBatch,
@@ -21,6 +17,7 @@ import { adminAction } from "@/lib/auth-guard";
 import {
   decodeFileCursor,
   encodeFileCursor,
+  fileStorageMoveLease,
   getStorageStores,
   isStorageProvider,
 } from "@/lib/storage";
@@ -94,7 +91,7 @@ export async function moveFileToProvider(
         contentType: file.mimeType,
         // One move at a time per file, across isolates; a file deleted while
         // its copy was in flight must not come back.
-        claim: () => claimFileForStorageMove({ id: file.id, expectedUpdatedAt: file.updatedAt }),
+        lease: fileStorageMoveLease(file),
       });
       if (outcome.kind === "moved") {
         await recordMove({ operatorUserId: session.user.id, file, outcome });
@@ -174,13 +171,12 @@ export async function moveFilesBatch(
             objectKey: row.objectKey,
             size: Number(row.size),
             mimeType: row.mimeType,
-            updatedAt: row.updatedAt,
             cursor: encodeFileCursor(row),
           }));
         },
         onObjectChanged: (file, outcome) =>
           recordMove({ operatorUserId: session.user.id, file, outcome }),
-        claim: (file) => claimFileForStorageMove({ id: file.id, expectedUpdatedAt: file.updatedAt }),
+        lease: fileStorageMoveLease,
       });
       return { success: true, data: outcome };
     } catch (error) {
