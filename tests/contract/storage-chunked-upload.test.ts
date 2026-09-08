@@ -707,12 +707,13 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(100);
   });
 
-  it("walks past large uploads not yet due to reach a newer one that is", async () => {
+  it("reaches a large upload that is due behind older ones that are not", async () => {
     // Every row here is above the size whose grace is the shortest, so all of
     // them sit in the graced band. A hundred 156 GiB uploads started 30 hours
-    // ago are inside their 44-hour grace and fill the first page; the 85 GiB
-    // upload started 25 hours ago is past its 24.2-hour grace and sits behind
-    // them in age order.
+    // ago are inside their 44-hour grace and would fill a page ordered by age;
+    // the 85 GiB upload started 25 hours ago is past its 24.2-hour grace and
+    // sits behind them. The band is queried by size bucket, each with its own
+    // deadline, so the older rows are never returned in the first place.
     const template = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),

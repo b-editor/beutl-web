@@ -5,15 +5,19 @@ import {
   unauthorizedResponse,
 } from "@/lib/internal-request";
 import { cancelUpload, finishUpload } from "@/lib/storage-upload-server";
-import { STORAGE_MULTIPART_MAX_PARTS } from "@beutl/core";
+import {
+  MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES,
+  STORAGE_MULTIPART_MAX_PARTS,
+  STORAGE_UPLOAD_ETAG_MAX_LENGTH,
+} from "@beutl/core";
 
 // The bucket's own ceiling on parts is the most any upload can have.
 const MAX_PART_COUNT = STORAGE_MULTIPART_MAX_PARTS;
-const MAX_ETAG_LENGTH = 256;
-// A completion names every part. Ten thousand entries of a quoted etag plus
-// a part number is a few megabytes, so size the body limit from the same
-// numbers instead of a round figure that silently caps the part count.
-const MAX_CONTROL_BODY_BYTES = MAX_PART_COUNT * (MAX_ETAG_LENGTH + 64);
+const MAX_ETAG_LENGTH = STORAGE_UPLOAD_ETAG_MAX_LENGTH;
+// A completion names every part, so the body limit is sized from the part
+// count. It is the same constant the Worker's outer body guard applies, so
+// what the route can read is what the Worker lets through.
+const MAX_CONTROL_BODY_BYTES = MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES;
 
 // Finishing an upload, or giving it up.
 //

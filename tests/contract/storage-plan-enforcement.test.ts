@@ -230,4 +230,36 @@ describe("storage plan enforcement on uploads", () => {
     expect(outcome.finalized).toBe(1);
     expect([...memory.state.files.values()][0]?.size).toBe(2 * GIB);
   });
+
+  it("cleans up an unknown completion the lapsed plan can no longer hold", async () => {
+    subscribe("100gb");
+    const started = await start(BigInt(2 * GIB));
+    if (!started.ok) throw new Error(started.reason);
+    const row = memory.state.storageUploads.get(started.upload.id)!;
+    memory.state.storageUploads.set(row.id, {
+      ...row,
+      completionState: "unknown",
+      unknownProbeNotBefore: new Date(Date.now() - 1_000),
+      unknownProbeLeaseToken: null,
+      completionLeaseUntil: null,
+      completionLeaseToken: null,
+    });
+    // The plan lapses before the probe sees the assembled 2 GiB object.
+    subscribe("100gb", { currentPeriodEnd: PAST });
+    bucket.head.mockResolvedValue({ key: row.objectKey, size: 2 * GIB } as never);
+
+    const outcome = await reconcileUnknownStorageUploadCompletions();
+
+    expect(outcome).toMatchObject({ finalized: 0, abandoned: 1, errors: 0 });
+    // No receipt, no row holding the reservation, and the object queued for
+    // deletion rather than probed again on every run.
+    expect(memory.state.files.size).toBe(0);
+    expect(memory.state.storageUploads.has(row.id)).toBe(false);
+    expect(memory.state.aiStorageCleanups.get(row.objectKey)).toMatchObject({
+      state: "cleanup",
+    });
+    expect(await reconcileUnknownStorageUploadCompletions()).toMatchObject({
+      inspected: 0,
+    });
+  });
 });

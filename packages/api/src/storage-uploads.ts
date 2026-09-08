@@ -1,4 +1,5 @@
 import {
+  abandonBlockedUnknownStorageUploadCompletion,
   claimStorageMultipartCleanup,
   claimStorageUploadForAbandon,
   countFilesByUserId,
@@ -13,7 +14,6 @@ import {
   markStorageUploadCompleted,
   recordStorageMultipartCleanupFailure,
   listStorageUploadsStartedBefore,
-  type StaleStorageUploadCursor,
   escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
   resolveStorageQuota,
@@ -22,6 +22,7 @@ import {
   sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
+import { STORAGE_MAX_FILE_BYTES } from "@beutl/core";
 import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
 export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
@@ -53,6 +54,11 @@ const ABANDON_BYTES_PER_SECOND = 1024 * 1024;
 const ABANDON_SIZE_AT_SHORTEST_GRACE = BigInt(
   (ABANDON_AFTER_MILLISECONDS / 1000) * ABANDON_BYTES_PER_SECOND,
 );
+// The graced band is queried in size buckets this wide, each with the
+// deadline of its smallest member, so the database returns only rows that
+// are due or become due within the hour. A wider bucket over-fetches more
+// near-due rows; a narrower one adds clauses to the query.
+const ABANDON_GRACE_BUCKET_MILLISECONDS = 60 * 60 * 1000;
 
 export function abandonAfterMilliseconds(size: bigint | number): number {
   const seconds = Number(size) / ABANDON_BYTES_PER_SECOND;
@@ -61,13 +67,40 @@ export function abandonAfterMilliseconds(size: bigint | number): number {
     Math.max(ABANDON_AFTER_MILLISECONDS, Math.ceil(seconds * 1000)),
   );
 }
+
+// The size buckets of the graced band at `now`. A row of size s has the
+// deadline createdAt + grace(s); grace grows with size, so every row in a
+// bucket (lo, hi] is due no later than createdAt + grace(hi) and no earlier
+// than createdAt + grace(lo). Querying each bucket with grace(lo) returns a
+// superset of the due rows that the caller trims by the exact deadline. The
+// last bucket is open-ended: a row above the largest file the routes admit
+// still has a grace of at least grace(STORAGE_MAX_FILE_BYTES).
+function gracedAbandonBuckets(now: Date) {
+  const bucketBytes = BigInt(
+    (ABANDON_GRACE_BUCKET_MILLISECONDS / 1000) * ABANDON_BYTES_PER_SECOND,
+  );
+  const largest = BigInt(STORAGE_MAX_FILE_BYTES);
+  const buckets: { sizeGt: bigint; sizeLte: bigint | null; before: Date }[] = [];
+  for (let lo = ABANDON_SIZE_AT_SHORTEST_GRACE; lo < largest; lo += bucketBytes) {
+    const hi = lo + bucketBytes < largest ? lo + bucketBytes : largest;
+    buckets.push({
+      sizeGt: lo,
+      sizeLte: hi,
+      before: new Date(now.getTime() - abandonAfterMilliseconds(lo)),
+    });
+  }
+  buckets.push({
+    sizeGt: largest,
+    sizeLte: null,
+    before: new Date(now.getTime() - abandonAfterMilliseconds(largest)),
+  });
+  return buckets;
+}
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 const STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 const MAX_PER_RUN = 100;
-// How far one run walks the band of large uploads inside their grace.
-const MAX_GRACED_PAGES_PER_RUN = 10;
 
 export async function reconcileStorageMultipartCleanups(
   now: Date = new Date(),
@@ -147,9 +180,10 @@ export async function reconcileStorageMultipartCleanups(
 
 export async function reconcileUnknownStorageUploadCompletions(
   limit: number = MAX_PER_RUN,
-): Promise<{ inspected: number; finalized: number; errors: number }> {
+): Promise<{ inspected: number; finalized: number; abandoned: number; errors: number }> {
   const uploads = await listUnknownStorageUploadCompletions({ limit, now: new Date() });
   let finalized = 0;
+  let abandoned = 0;
   let errors = 0;
 
   for (const listed of uploads) {
@@ -215,7 +249,32 @@ export async function reconcileUnknownStorageUploadCompletions(
           stored + actual > BigInt(quota.quotaBytes) ||
           files >= quota.fileCountLimit
         ) {
-          return "blocked" as const;
+          // The object exists but the account can no longer hold it: the plan
+          // lapsed between the completion and this probe. Leaving the row
+          // unknown would keep the object, and its reservation, forever and
+          // probe it every run; the sweep never touches unknown rows and the
+          // bucket lifecycle only collects unfinished multiparts. Treat it as
+          // finalizeUpload treats an over-quota completion: the object goes
+          // to cleanup and the row goes away.
+          const cleanupAt = new Date();
+          if (
+            !await abandonBlockedUnknownStorageUploadCompletion({
+              id: current.id,
+              userId: current.userId,
+              objectKey: current.objectKey,
+              uploadId: current.uploadId,
+              expectedRevision: current.completionRevision,
+              unknownProbeLeaseToken: current.unknownProbeLeaseToken!,
+              now: cleanupAt,
+              objectCleanupNotBefore: new Date(
+                cleanupAt.getTime() + STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+              ),
+              prisma,
+            })
+          ) {
+            return "blocked" as const;
+          }
+          return "abandoned" as const;
         }
 
         const created = await createFile({
@@ -239,13 +298,14 @@ export async function reconcileUnknownStorageUploadCompletions(
         return "finalized" as const;
       });
       if (outcome === "finalized") finalized++;
+      if (outcome === "abandoned") abandoned++;
     } catch (error) {
       errors++;
       console.error("Failed to persist an unknown storage completion receipt", candidate.id, error);
     }
   }
 
-  return { inspected: uploads.length, finalized, errors };
+  return { inspected: uploads.length, finalized, abandoned, errors };
 }
 
 export async function abandonStaleStorageUploads(
@@ -264,50 +324,41 @@ export async function abandonStaleStorageUploads(
     });
   // Rows that are certainly due (small and past the shortest grace, older
   // than the longest grace, or already handed to cleanup) come first and get
-  // the whole page. Large uploads still inside their size-dependent grace are
-  // listed on their own and filtered here, so they can never crowd the due
-  // rows out of the page.
-  const band = {
-    sizeAtShortestGrace: ABANDON_SIZE_AT_SHORTEST_GRACE,
-    beforeAnySize: new Date(now.getTime() - ABANDON_AFTER_MAX_MILLISECONDS),
-  };
+  // the whole page. Large uploads inside their size-dependent grace are
+  // queried by size bucket, each bucket with its own deadline, so the
+  // database hands back only rows that are due or within an hour of it and
+  // an older upload that is not yet due can never hide a newer one that is.
+  const beforeAnySize = new Date(now.getTime() - ABANDON_AFTER_MAX_MILLISECONDS);
   const before = new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS);
   const due = await listStorageUploadsStartedBefore({
     before,
     now,
     limit: MAX_PER_RUN,
-    band: { kind: "due", ...band },
+    band: {
+      kind: "due",
+      sizeAtShortestGrace: ABANDON_SIZE_AT_SHORTEST_GRACE,
+      beforeAnySize,
+    },
   });
-  // The graced band is ordered by age, and an older upload can still be inside
-  // its grace while a newer, smaller one is already due. Pages are walked past
-  // the rows that are not yet due until the run is full or the band is
-  // exhausted, within a bound so one run cannot scan without end.
-  const graced = [];
-  let after: StaleStorageUploadCursor | undefined;
-  for (
-    let page = 0;
-    page < MAX_GRACED_PAGES_PER_RUN && due.length + graced.length < MAX_PER_RUN;
-    page++
-  ) {
-    const rows = await listStorageUploadsStartedBefore({
-      before,
-      now,
-      limit: MAX_PER_RUN,
-      band: { kind: "graced", ...band },
-      after,
-    });
-    for (const listed of rows) {
-      if (
-        listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
-        now.getTime()
-      ) {
-        graced.push(listed);
-      }
-    }
-    if (rows.length < MAX_PER_RUN) break;
-    const last = rows[rows.length - 1];
-    after = { createdAt: last.createdAt, id: last.id };
-  }
+  const graced =
+    due.length < MAX_PER_RUN
+      ? (
+          await listStorageUploadsStartedBefore({
+            before,
+            now,
+            limit: MAX_PER_RUN,
+            band: {
+              kind: "graced",
+              beforeAnySize,
+              buckets: gracedAbandonBuckets(now),
+            },
+          })
+        ).filter(
+          (listed) =>
+            listed.createdAt.getTime() + abandonAfterMilliseconds(listed.size) <=
+            now.getTime(),
+        )
+      : [];
   const stale = [...due, ...graced].slice(0, MAX_PER_RUN);
 
   let abandoned = 0;

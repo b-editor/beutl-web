@@ -434,7 +434,7 @@ type UserSubscriptionsSelect = {
 };
 
 type StorageUploadWhere = {
-  id?: string | { gt: string };
+  id?: string;
   userId?: string;
   objectKey?: string;
   reservationKind?: "multipart" | "dedicated";
@@ -446,7 +446,7 @@ type StorageUploadWhere = {
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
   startState?: string;
-  createdAt?: Date | { lt?: Date; gte?: Date; gt?: Date };
+  createdAt?: Date | { lt?: Date; gte?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
   completionState?: string | { in?: string[]; not?: string };
@@ -471,11 +471,7 @@ function matchesStorageUploadWhere(
   where: StorageUploadWhere | undefined,
 ): boolean {
   if (!where) return true;
-  if (where.id !== undefined) {
-    if (typeof where.id === "string") {
-      if (item.id !== where.id) return false;
-    } else if (!(item.id > where.id.gt)) return false;
-  }
+  if (where.id !== undefined && item.id !== where.id) return false;
   if (where.userId !== undefined && item.userId !== where.userId) return false;
   if (where.objectKey !== undefined && item.objectKey !== where.objectKey) return false;
   if (
@@ -500,7 +496,6 @@ function matchesStorageUploadWhere(
   } else if (where.createdAt) {
     if (where.createdAt.lt && item.createdAt.getTime() >= where.createdAt.lt.getTime()) return false;
     if (where.createdAt.gte && item.createdAt.getTime() < where.createdAt.gte.getTime()) return false;
-    if (where.createdAt.gt && item.createdAt.getTime() <= where.createdAt.gt.getTime()) return false;
   }
   if (where.creationLeaseToken !== undefined && item.creationLeaseToken !== where.creationLeaseToken) return false;
   if (where.creationLeaseUntil !== undefined) {
@@ -3575,6 +3570,8 @@ export function createInMemoryPrisma() {
       },
       findMany: async ({
         where,
+        orderBy,
+        take,
       }: {
         where?: {
           id?: { in: string[] };
@@ -3582,15 +3579,25 @@ export function createInMemoryPrisma() {
           aiJobResult?: null;
         };
         select?: Record<string, boolean>;
+        orderBy?: { createdAt?: "asc" | "desc" };
+        take?: number;
       }) => {
-        return [...state.files.values()]
-          .filter(
-            (file) =>
-              (!where?.id || where.id.in.includes(file.id)) &&
-              (!where?.userId || file.userId === where.userId) &&
-              (where?.aiJobResult !== null || !aiJobResultForFile(file.id)),
-          )
-          .map((file) => ({ ...file }));
+        const rows = [...state.files.values()].filter(
+          (file) =>
+            (!where?.id || where.id.in.includes(file.id)) &&
+            (!where?.userId || file.userId === where.userId) &&
+            (where?.aiJobResult !== null || !aiJobResultForFile(file.id)),
+        );
+        if (orderBy?.createdAt) {
+          const direction = orderBy.createdAt === "desc" ? -1 : 1;
+          rows.sort(
+            (left, right) =>
+              direction * (left.createdAt.getTime() - right.createdAt.getTime()),
+          );
+        }
+        return (take === undefined ? rows : rows.slice(0, take)).map((file) => ({
+          ...file,
+        }));
       },
       delete: async ({ where }: { where: { id: string } }) => {
         const file = state.files.get(where.id);

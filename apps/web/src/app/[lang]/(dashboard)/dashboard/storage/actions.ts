@@ -1,5 +1,7 @@
 "use server";
 
+import { STORAGE_LIST_MAX_FILES } from "@beutl/core";
+
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
 import type { ActionResult } from "@beutl/core";
@@ -315,6 +317,7 @@ export async function retrieveFiles() {
   const session = await throwIfUnauth();
   return await retrieveStorageFilesByUserId({
     userId: session?.user?.id,
+    limit: STORAGE_LIST_MAX_FILES,
   });
 }
 

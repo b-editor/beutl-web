@@ -482,11 +482,16 @@ export async function retrieveFileNamesAndSizesByUserId({
   });
 }
 
+// 新しいものから `limit` 本。画面は一覧を丸ごと受け取るので、有料ティアの本数
+// まで載せるとページが持たない。全体の本数と合計サイズは別に数える
+// (countFilesByUserId / sumFileSizeByUserId)。
 export async function retrieveStorageFilesByUserId({
   userId,
+  limit,
   prisma,
 }: {
   userId?: string;
+  limit?: number;
   prisma?: PrismaTransaction;
 }) {
   if (!userId) return [];
@@ -507,6 +512,7 @@ export async function retrieveStorageFilesByUserId({
       folderId: true,
     },
     orderBy: { createdAt: "desc" },
+    ...(limit === undefined ? {} : { take: limit }),
   });
 }
 
