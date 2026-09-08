@@ -660,6 +660,59 @@ describe("uploading a file too large for one request", () => {
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
   });
 
+  it("records activity before a part is sent, and refuses the part once the sweep owns the row", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "fenced.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    expect(row.lastActivityAt ?? null).toBeNull();
+
+    // By the time the bucket sees the part, the row already says the upload
+    // is alive; the fence is not an afterthought of a successful put.
+    const resume = bucket.resumeMultipartUpload;
+    let activityWhenSent: Date | null | undefined;
+    vi.spyOn(bucket, "resumeMultipartUpload").mockImplementationOnce((key, uploadId) => {
+      const real = resume(key, uploadId);
+      return {
+        ...real,
+        uploadPart: async (partNumber: number, body: ReadableStream<Uint8Array>) => {
+          activityWhenSent = state.storageUploads.get(row.id)?.lastActivityAt;
+          return await real.uploadPart(partNumber, body);
+        },
+      };
+    });
+    await expect(uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
+    })).resolves.toMatchObject({ ok: true });
+    expect(activityWhenSent).toBeInstanceOf(Date);
+
+    // The sweep claimed the row: the touch fails and nothing is sent.
+    state.storageUploads.set(row.id, {
+      ...state.storageUploads.get(row.id)!,
+      abandonedAt: null,
+      lastActivityAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    });
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toMatchObject({ abandoned: 1 });
+    const sends = bucket.resumeMultipartUpload.mock.calls.length;
+    await expect(uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
+    })).resolves.toEqual({ ok: false, reason: "uploadNotFound" });
+    expect(bucket.resumeMultipartUpload.mock.calls.length).toBe(sends);
+  });
+
   it("keeps an upload that is still receiving parts, however old it is", async () => {
     // Started thirty hours ago, but a part landed an hour ago: alive. Once a
     // day passes without a part, it is abandoned like any other.

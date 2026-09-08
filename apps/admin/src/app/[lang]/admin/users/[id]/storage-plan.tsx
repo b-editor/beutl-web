@@ -4,7 +4,7 @@ import {
   resolveStorageQuota,
   sumFileSizeByUserId,
 } from "@beutl/db";
-import { effectiveSubscriptionEnd, formatBytes } from "@beutl/core";
+import { effectiveSubscriptionEnd, formatBytes, isStorageTierId } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Progress } from "@beutl/ui/ui/progress";
@@ -27,8 +27,12 @@ export async function StoragePlanSection({
     countFilesByUserId({ userId, prisma }),
   ]);
   const used = Number(usedBytes);
-  const isActive = quota.tier !== null;
   const subscription = quota.subscription;
+  // The tier the customer subscribed to, whether or not it grants anything
+  // right now (past_due, a refund hold); the effective quota below is what is
+  // enforced and may have fallen back to free.
+  const subscribedTier = isStorageTierId(subscription?.tier) ? subscription!.tier : null;
+  const entitled = quota.tier !== null;
   const periodEnd = subscription ? effectiveSubscriptionEnd(subscription) : null;
   const usedPercent = Math.min(
     100,
@@ -39,9 +43,9 @@ export async function StoragePlanSection({
     <section className="rounded-lg border bg-card p-6">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h2 className="text-lg font-semibold">{t("admin:storage.plan")}</h2>
-        <Badge variant={isActive ? "default" : "outline"}>
-          {isActive
-            ? t(`admin:storage.tiers.${quota.tier}`)
+        <Badge variant={entitled ? "default" : "outline"}>
+          {subscribedTier
+            ? t(`admin:storage.tiers.${subscribedTier}`)
             : t("admin:storage.free")}
         </Badge>
         {subscription?.status && (
@@ -69,7 +73,13 @@ export async function StoragePlanSection({
         <div>
           <dt className="text-muted-foreground">{t("admin:storage.status")}</dt>
           <dd className="font-medium">
-            {t(isActive ? "admin:storage.planActive" : "admin:storage.planNone")}
+            {t(
+              entitled
+                ? "admin:storage.planActive"
+                : subscribedTier
+                  ? "admin:storage.planHeld"
+                  : "admin:storage.planNone",
+            )}
           </dd>
         </div>
         <div>

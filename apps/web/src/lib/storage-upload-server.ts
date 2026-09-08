@@ -450,6 +450,16 @@ export async function uploadPart({
   }
   if (!upload.uploadId) return { ok: false, reason: "uploadFailed" };
 
+  // Fence the stale sweep before the part goes anywhere. The touch is a
+  // compare-and-set against a row the sweep has not claimed: if the sweep
+  // got there first the touch fails and the part is refused, and if the
+  // touch lands first the sweep's claim, which compares the activity it
+  // listed, fails instead. Either way an ETag never comes back for parts
+  // the sweep is about to throw away.
+  if (!await touchStorageUploadActivity({ id: upload.id, userId })) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
+
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
     upload.uploadId,
@@ -459,12 +469,6 @@ export async function uploadPart({
   // into memory to give it one would defeat the point of splitting the file
   // up at all.
   const part = await multipart.uploadPart(partNumber, body, { contentLength });
-  // The part is in the bucket; tell the stale sweep the upload is alive. A
-  // failed touch costs at most a premature abandonment of a long-idle
-  // upload, never the part itself.
-  await touchStorageUploadActivity({ id: upload.id, userId }).catch((error) => {
-    console.error("Failed to record storage upload activity", upload.id, error);
-  });
   return { ok: true, etag: part.etag };
 }
 

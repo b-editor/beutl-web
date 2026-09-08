@@ -1,4 +1,4 @@
-import { countFilesByUserId, sumFileSizeByUserId } from "./file";
+import { countFilesByUserId, storedMimeType, sumFileSizeByUserId } from "./file";
 import { getDb } from "./provider";
 import { resolveStorageQuota } from "./storage-quota";
 import {
@@ -266,9 +266,11 @@ export async function renewDedicatedStorageReservation({
   return renewed.count === 1;
 }
 
-// A part arrived (or a dedicated write is still being renewed): the upload
-// is not abandoned, whatever its age. The stale sweep measures idleness from
-// this, falling back to createdAt for a row that never saw a part.
+// A part is about to be sent (or a dedicated write is still being renewed):
+// the upload is not abandoned, whatever its age. The stale sweep measures
+// idleness from this, falling back to createdAt for a row that never saw a
+// part, and its claim compares the value it listed, so a touch that lands
+// first defeats the claim and a claim that lands first fails this touch.
 export async function touchStorageUploadActivity({
   id,
   userId,
@@ -440,7 +442,7 @@ export async function commitDedicatedStorageReservation({
         objectKey: reservation.objectKey,
         name: reservation.name,
         size: reservation.size,
-        mimeType: reservation.mimeType.trim(),
+        mimeType: storedMimeType(reservation.mimeType),
         userId: reservation.userId,
         visibility: "DEDICATED",
         ...(sha256 ? { sha256 } : {}),
@@ -1535,6 +1537,10 @@ export type StorageUploadAbandonExpectation =
     abandonedAt: Date | null;
     cleanupLeaseUntil: Date | null;
     cleanupLeaseToken: string | null;
+    // The activity the caller saw. A sweep that lists an idle row must not
+    // claim it once a part has touched it since; a caller that holds a
+    // completion lease does not care and leaves this out.
+    lastActivityAt?: Date | null;
   };
 
 export async function claimStorageUploadForAbandon({
@@ -1605,6 +1611,9 @@ export async function claimStorageUploadForAbandon({
       completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: expected.cleanupLeaseUntil,
       cleanupLeaseToken: expected.cleanupLeaseToken,
+      ...(expected.lastActivityAt === undefined
+        ? {}
+        : { lastActivityAt: expected.lastActivityAt }),
       AND: [
         {
           OR: [

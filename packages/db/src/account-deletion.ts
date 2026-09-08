@@ -324,7 +324,13 @@ export type AdminAccountDeletionReservation =
   | { status: "reserved" }
   | {
       status: "blocked";
-      reason: "already-authorized" | "subscription" | "checkout" | "customer" | "provisioning";
+      reason: "already-authorized" | "checkout" | "customer" | "provisioning";
+    }
+  | {
+      status: "blocked";
+      reason: "subscription";
+      // The plan whose subscription must be cancelled first.
+      planId: string;
     };
 
 /**

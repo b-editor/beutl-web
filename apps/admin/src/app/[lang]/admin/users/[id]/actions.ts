@@ -147,15 +147,16 @@ export async function deleteUser({
       await reserveAdminAccountDeletion({ userId, prisma: tx }),
     );
     if (reservation.status !== "reserved") {
-      const message = {
-        "already-authorized": "Account deletion is already in progress",
-        subscription:
-          "Cancel this user's Pro subscription before deleting the account",
-        checkout:
-          "Resolve this user's pending Pro checkout before deleting the account",
-        customer: "Close this user's Stripe customer before deleting the account",
-        provisioning: "Wait for this user's Stripe customer provisioning to settle",
-      }[reservation.reason];
+      const message =
+        reservation.reason === "subscription"
+          ? `Cancel this user's ${subscriptionPlanLabel(reservation.planId)} subscription before deleting the account`
+          : {
+              "already-authorized": "Account deletion is already in progress",
+              checkout:
+                "Resolve this user's pending subscription checkout before deleting the account",
+              customer: "Close this user's Stripe customer before deleting the account",
+              provisioning: "Wait for this user's Stripe customer provisioning to settle",
+            }[reservation.reason];
       return { success: false, message };
     }
     const intent = await findAccountDeletionIntentByUserId({ userId });

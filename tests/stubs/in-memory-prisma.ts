@@ -460,7 +460,7 @@ type StorageUploadWhere = {
   partSize?: number;
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
-  lastActivityAt?: null | { lt: Date };
+  lastActivityAt?: Date | null | { lt: Date };
   startState?: string;
   createdAt?: Date | { lt?: Date; gte?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
@@ -603,6 +603,8 @@ function matchesStorageUploadWhere(
     const activity = item.lastActivityAt ?? null;
     if (where.lastActivityAt === null) {
       if (activity !== null) return false;
+    } else if (where.lastActivityAt instanceof Date) {
+      if (activity === null || activity.getTime() !== where.lastActivityAt.getTime()) return false;
     } else if (activity === null || activity.getTime() >= where.lastActivityAt.lt.getTime()) {
       return false;
     }

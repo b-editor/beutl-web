@@ -354,6 +354,9 @@ export async function abandonStaleStorageUploads(
           reservationKind: listed.reservationKind,
           cleanupLeaseUntil: listed.cleanupLeaseUntil,
           cleanupLeaseToken: listed.cleanupLeaseToken,
+          // A part that touched the row since it was listed makes this
+          // claim fail rather than abort an upload that just came alive.
+          lastActivityAt: listed.lastActivityAt,
         },
       });
     } catch (error) {

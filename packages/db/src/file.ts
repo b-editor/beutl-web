@@ -176,12 +176,12 @@ export const STORAGE_FILE_NAME_SCAN_LIMIT = 500;
 const STORAGE_FILE_NAME_PROBES = 8;
 
 // The name a new file gets: the one asked for, or "name (n).ext" once that is
-// taken, the way the screen has always done. Only names that could collide
-// are read, and never more than a bounded page of them: with more copies
-// than that, the next number is taken from a count kept in the database and
-// probed a few times, and a random suffix ends the search when even those
-// are taken. An account holding many files, or many copies of one name,
-// never pays for a listing of them on every upload.
+// taken, the way the screen has always done. The exact name is checked with
+// one lookup; the suffixed copies are read as a bounded page, and with more
+// copies than that the next number is taken from a count kept in the
+// database and probed a few times, with a random suffix ending the search
+// when even those are taken. An account holding many files, or many copies
+// of one name, never pays for a listing of them on every upload.
 export async function availableStorageFileName({
   userId,
   name,
@@ -192,31 +192,34 @@ export async function availableStorageFileName({
   prisma?: PrismaTransaction;
 }): Promise<string> {
   const db = prisma ?? await getDb();
+  // The exact name is asked about on its own: a bounded, unordered page of
+  // suffixed copies is not guaranteed to contain it.
+  const exact = await db.file.findFirst({
+    where: { userId, aiJobResult: null, name },
+    select: { id: true },
+  });
+  if (!exact) return name;
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   const stem = extension ? name.slice(0, -extension.length) : name;
-  const colliding = {
+  const suffixed = {
     userId,
     aiJobResult: null,
-    OR: [
-      { name },
-      { name: { startsWith: `${stem} (`, endsWith: extension } },
-    ],
+    name: { startsWith: `${stem} (`, endsWith: extension },
   } satisfies Prisma.FileWhereInput;
   const rows = await db.file.findMany({
-    where: colliding,
+    where: suffixed,
     select: { name: true },
     take: STORAGE_FILE_NAME_SCAN_LIMIT + 1,
   });
   const taken = new Set(rows.map((row) => row.name));
-  if (!taken.has(name)) return name;
   if (rows.length <= STORAGE_FILE_NAME_SCAN_LIMIT) {
     for (let index = 1; ; index++) {
       const candidate = `${stem} (${index})${extension}`;
       if (!taken.has(candidate)) return candidate;
     }
   }
-  const count = await db.file.count({ where: colliding });
-  for (let index = count; index < count + STORAGE_FILE_NAME_PROBES; index++) {
+  const count = await db.file.count({ where: suffixed });
+  for (let index = count + 1; index <= count + STORAGE_FILE_NAME_PROBES; index++) {
     const candidate = `${stem} (${index})${extension}`;
     const exists = await db.file.findFirst({
       where: { userId, name: candidate },
@@ -225,6 +228,15 @@ export async function availableStorageFileName({
     if (!exists) return candidate;
   }
   return `${stem} (${crypto.randomUUID().slice(0, 8)})${extension}`;
+}
+
+// A MIME type as stored: served as given, but without stray whitespace at the
+// ends or around the ";" that starts a parameter. RFC 2045 allows that
+// whitespace, and the screen's classification drops it; storing it would put
+// "application/pdf ; charset=binary" under "other" in the listing's kind
+// filter while the screen calls it a document.
+export function storedMimeType(mimeType: string): string {
+  return mimeType.trim().replace(/\s*;\s*/gu, ";");
 }
 
 export async function createFile({
@@ -252,9 +264,7 @@ export async function createFile({
       objectKey,
       name,
       size,
-      // Stored as served, but without stray whitespace, so the listing's
-      // kind filter and the screen's classification agree.
-      mimeType: mimeType.trim(),
+      mimeType: storedMimeType(mimeType),
       userId,
       visibility,
       sha256,

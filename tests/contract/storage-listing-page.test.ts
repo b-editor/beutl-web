@@ -167,7 +167,7 @@ describe("storage listing pages", () => {
     expect(await order({ sort: "createdAt", descending: false })).toEqual(["b", "a", "c"]);
   });
 
-  it("stores a MIME type without stray whitespace", async () => {
+  it("stores a MIME type without stray whitespace, including around parameters", async () => {
     const { createFile } = await import("@beutl/db");
     const created = await createFile({
       userId: USER_ID,
@@ -178,6 +178,24 @@ describe("storage listing pages", () => {
       visibility: "PRIVATE",
     });
     expect(created.mimeType).toBe("image/png");
+
+    // RFC 2045 allows whitespace around ";"; the screen's classifier drops
+    // it, so it is dropped on the way in and the kind filter agrees.
+    const manual = await createFile({
+      userId: USER_ID,
+      name: "manual.pdf",
+      objectKey: "manual",
+      size: 1,
+      mimeType: "application/pdf ; charset=binary",
+      visibility: "PRIVATE",
+    });
+    expect(manual.mimeType).toBe("application/pdf;charset=binary");
+    const documents = await retrieveStorageFilesPage({
+      userId: USER_ID,
+      listing: listing({ kind: "document" }),
+      pageSize: 24,
+    });
+    expect(documents.files.map((row) => row.id)).toContain(manual.id);
   });
 
   it("names a new file after only the names that could collide", async () => {
@@ -192,15 +210,33 @@ describe("storage listing pages", () => {
     expect(await availableStorageFileName({ userId: USER_ID, name: "fresh.mp4" })).toBe("fresh.mp4");
     expect(await availableStorageFileName({ userId: USER_ID, name: "README" })).toBe("README");
 
-    // Never the whole account: the query names the exact name and the
-    // "name (n).ext" pattern and nothing else, and reads a bounded page.
+    // Never the whole account: the page names the "name (n).ext" pattern and
+    // nothing else, and is bounded.
     for (const call of findMany.mock.calls) {
       expect(call[0]).toMatchObject({
-        where: expect.objectContaining({ OR: expect.arrayContaining([expect.anything()]) }),
+        where: expect.objectContaining({ name: expect.objectContaining({ startsWith: "clip (" }) }),
         select: { name: true },
         take: STORAGE_FILE_NAME_SCAN_LIMIT + 1,
       });
     }
+  });
+
+  it("decides the exact name on its own, not from the bounded page", async () => {
+    const { availableStorageFileName } = await import("@beutl/db");
+    // More suffixed copies than the page holds, and the base name taken: the
+    // base must not be handed out again just because the page missed it.
+    file("clip.mp4", { name: "clip.mp4" });
+    for (let index = 1; index <= STORAGE_FILE_NAME_SCAN_LIMIT + 50; index++) {
+      file(`clip-${index}`, { name: `clip (${index}).mp4` });
+    }
+    const chosen = await availableStorageFileName({ userId: USER_ID, name: "clip.mp4" });
+    expect(chosen).not.toBe("clip.mp4");
+    expect([...memory.state.files.values()].some((row) => row.name === chosen)).toBe(false);
+
+    // And a free base name is handed out without reading any copies at all.
+    const findMany = vi.spyOn(memory.prisma.file, "findMany");
+    expect(await availableStorageFileName({ userId: USER_ID, name: "other.mp4" })).toBe("other.mp4");
+    expect(findMany).not.toHaveBeenCalled();
   });
 
   it("stops reading names once there are more copies than a page holds", async () => {
