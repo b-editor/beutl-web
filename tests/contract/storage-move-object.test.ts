@@ -161,6 +161,22 @@ describe("moving one object between stores", () => {
     expect(r2.data.has("key")).toBe(true);
   });
 
+  it("drops the fresh copy when the file was deleted while it was in flight", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(8, 14) });
+    const outcome = await moveStorageObject({
+      objectKey: "key",
+      to: "s3",
+      stores: [s3.store, r2.store],
+      expectedSize: 8,
+      stillWanted: async () => false,
+    });
+    expect(outcome).toEqual({ kind: "missing" });
+    expect(s3.data.has("key")).toBe(false);
+    // The file's own deletion is what sweeps the source; the move leaves it.
+    expect(r2.bucket.delete).not.toHaveBeenCalled();
+  });
+
   it("reports an object that no store holds", async () => {
     const s3 = memoryStore("s3");
     const r2 = memoryStore("r2");
@@ -311,6 +327,27 @@ describe("moving files in bulk", () => {
     });
     expect(second).toMatchObject({ moved: 4, scanned: 4, nextCursor: undefined, done: true });
     expect(s3.data.size).toBe(6);
+  });
+
+  it("looks up no more files than the scan limit allows", async () => {
+    const all = files(5);
+    const r2 = memoryStore("r2", Object.fromEntries(all.map((file, index) => [file.objectKey, bytes(4, index)])));
+    const s3 = memoryStore("s3");
+    const asked: string[] = [];
+    const outcome = await moveStorageObjectsBatch({
+      to: "s3",
+      stores: [s3.store, r2.store],
+      nextPage: pager(all, 5),
+      cursor: undefined,
+      limits: { moves: 10, scanned: 2, milliseconds: 60_000 },
+      stillWanted: async (file) => {
+        asked.push(file.id);
+        return true;
+      },
+    });
+    expect(outcome).toMatchObject({ scanned: 2, moved: 2, nextCursor: "c1", done: false });
+    expect(r2.bucket.head).toHaveBeenCalledTimes(2 + 2);
+    expect(asked).toEqual(["file-0", "file-1"]);
   });
 
   it("stops when the time budget is spent", async () => {

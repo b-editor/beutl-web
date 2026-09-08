@@ -15,6 +15,14 @@ const accessKeyId = process.env.BEUTL_S3_TEST_ACCESS_KEY_ID;
 const secretAccessKey = process.env.BEUTL_S3_TEST_SECRET_ACCESS_KEY;
 const configured = Boolean(endpoint && bucketName && accessKeyId && secretAccessKey);
 
+// Signed requests and object bytes travel in clear over http; a local service
+// is the only place that is acceptable without saying so explicitly.
+function insecureHttpAllowed(url: string): boolean {
+  if (process.env.BEUTL_S3_TEST_ALLOW_INSECURE_HTTP === "true") return true;
+  const { protocol, hostname } = new URL(url);
+  return protocol === "https:" || ["127.0.0.1", "localhost", "[::1]", "::1"].includes(hostname);
+}
+
 function liveBucket() {
   return createS3CompatibleBucket({
     endpoint: endpoint!,
@@ -23,7 +31,7 @@ function liveBucket() {
     secretAccessKey: secretAccessKey!,
     region: process.env.BEUTL_S3_TEST_REGION,
     forcePathStyle: process.env.BEUTL_S3_TEST_FORCE_PATH_STYLE !== "false",
-    allowInsecureHttp: true,
+    allowInsecureHttp: insecureHttpAllowed(endpoint!),
   });
 }
 

@@ -109,19 +109,25 @@ export async function moveStorageObject({
   stores,
   expectedSize,
   contentType,
+  stillWanted,
 }: {
   objectKey: string;
   to: StorageProvider;
   stores: readonly StorageStore[];
   expectedSize?: number;
   contentType?: string;
+  /** Asked after the copy is verified and before the source is deleted. The
+   * file may have been deleted while the copy was in flight, in which case
+   * its deletion already removed every copy that existed at the time and the
+   * fresh copy must not survive it. */
+  stillWanted?: () => Promise<boolean>;
 }): Promise<MoveOutcome> {
   const destination = stores.find((store) => store.provider === to);
   if (!destination) {
     throw new StorageMoveError("no-destination", `The ${to} store is not configured`);
   }
   return await serialized(objectKey, () =>
-    moveLocatedObject({ objectKey, to, stores, destination, expectedSize, contentType }),
+    moveLocatedObject({ objectKey, to, stores, destination, expectedSize, contentType, stillWanted }),
   );
 }
 
@@ -132,6 +138,7 @@ async function moveLocatedObject({
   destination,
   expectedSize,
   contentType,
+  stillWanted,
 }: {
   objectKey: string;
   to: StorageProvider;
@@ -139,6 +146,7 @@ async function moveLocatedObject({
   destination: StorageStore;
   expectedSize?: number;
   contentType?: string;
+  stillWanted?: () => Promise<boolean>;
 }): Promise<MoveOutcome> {
   const locations = await locateStorageObject(objectKey, stores);
   const atDestination = locations.find((location) => location.provider === to);
@@ -218,6 +226,13 @@ async function moveLocatedObject({
     );
   }
 
+  if (stillWanted && !(await stillWanted())) {
+    // The record is gone; its deletion has already swept the stores, so the
+    // copy written since is the only thing left and would otherwise leak.
+    await remover(destination)(objectKey);
+    return { kind: "missing" };
+  }
+
   let sourceRemoved = true;
   try {
     await remover(source)(objectKey);
@@ -262,6 +277,7 @@ export async function moveStorageObjectsBatch({
   cursor,
   limits,
   onObjectChanged,
+  stillWanted,
   now = () => Date.now(),
 }: {
   to: StorageProvider;
@@ -275,6 +291,8 @@ export async function moveStorageObjectsBatch({
     file: MovableFile,
     outcome: Extract<MoveOutcome, { kind: "moved" | "already-there" }>,
   ) => Promise<void>;
+  /** See moveStorageObject; asked per file before its source is deleted. */
+  stillWanted?: (file: MovableFile) => Promise<boolean>;
   now?: () => number;
 }): Promise<MoveBatchOutcome> {
   if (!stores.some((store) => store.provider === to)) {
@@ -303,8 +321,11 @@ export async function moveStorageObjectsBatch({
       outcome.nextCursor = undefined;
       return outcome;
     }
+    // Only as many files as the scan limit still allows are looked up; the
+    // rest of the page is reached again through the cursor.
+    const remaining = Math.max(0, limits.scanned - outcome.scanned);
     const located = await Promise.all(
-      page.map(async (file) => {
+      page.slice(0, remaining).map(async (file) => {
         try {
           return { file, locations: await locateStorageObject(file.objectKey, stores) };
         } catch (error) {
@@ -337,6 +358,7 @@ export async function moveStorageObjectsBatch({
           stores,
           expectedSize: entry.file.size,
           contentType: entry.file.mimeType,
+          stillWanted: stillWanted ? () => stillWanted(entry.file) : undefined,
         });
         if (result.kind === "moved") {
           outcome.moved++;

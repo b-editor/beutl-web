@@ -88,6 +88,8 @@ export async function moveFileToProvider(
         stores,
         expectedSize: Number(file.size),
         contentType: file.mimeType,
+        // A file deleted while its copy was in flight must not come back.
+        stillWanted: async () => (await findFileForAdminById({ id: file.id })) !== null,
       });
       if (outcome.kind === "moved") {
         await recordMove({ operatorUserId: session.user.id, file, outcome });
@@ -172,6 +174,7 @@ export async function moveFilesBatch(
         },
         onObjectChanged: (file, outcome) =>
           recordMove({ operatorUserId: session.user.id, file, outcome }),
+        stillWanted: async (file) => (await findFileForAdminById({ id: file.id })) !== null,
       });
       return { success: true, data: outcome };
     } catch (error) {
