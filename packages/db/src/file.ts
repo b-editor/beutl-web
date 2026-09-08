@@ -693,6 +693,29 @@ export async function acquireFileStorageMoveLease({
   return exists ? "busy" : "gone";
 }
 
+// 持っているリースを確かめて延ばす。期限切れや別の持ち主なら false。
+// 移動は何かを消す直前に必ずこれを通し、負けていれば何も消さない。
+export async function renewFileStorageMoveLease({
+  id,
+  leaseToken,
+  now = new Date(),
+  leaseMilliseconds = FILE_STORAGE_MOVE_LEASE_MILLISECONDS,
+  prisma,
+}: {
+  id: string;
+  leaseToken: string;
+  now?: Date;
+  leaseMilliseconds?: number;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const renewed = await db.file.updateMany({
+    where: { id, storageMoveLeaseToken: leaseToken, storageMoveLeaseUntil: { gt: now } },
+    data: { storageMoveLeaseUntil: new Date(now.getTime() + leaseMilliseconds) },
+  });
+  return renewed.count === 1;
+}
+
 export async function releaseFileStorageMoveLease({
   id,
   leaseToken,

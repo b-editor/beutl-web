@@ -14,6 +14,7 @@ import {
   existsFileById,
   registerAiStorageCleanup,
   releaseFileStorageMoveLease,
+  renewFileStorageMoveLease,
 } from "@beutl/db";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
@@ -74,6 +75,7 @@ export function fileStorageMoveLease(file: { id: string; objectKey: string }): S
   const leaseToken = crypto.randomUUID();
   return {
     acquire: () => acquireFileStorageMoveLease({ id: file.id, leaseToken }),
+    confirm: () => renewFileStorageMoveLease({ id: file.id, leaseToken }),
     async stillExists() {
       if (await existsFileById({ id: file.id })) return true;
       // The file's own cleanup row may be leased by the sweeper right now;

@@ -56,6 +56,7 @@ function memoryStore(provider: StorageProvider, objects: Record<string, Uint8Arr
 function fakeLease(acquire: "acquired" | "busy" | "gone" = "acquired", exists = true) {
   const lease = {
     acquire: vi.fn(async () => acquire),
+    confirm: vi.fn(async () => true),
     stillExists: vi.fn(async () => exists),
     release: vi.fn(async () => undefined),
   };
@@ -239,6 +240,30 @@ describe("moving one object between stores", () => {
     expect(lease.release).toHaveBeenCalledTimes(1);
   });
 
+  it("confirms the lease right before each delete and deletes nothing once it is lost", async () => {
+    const payload = bytes(8, 22);
+    const s3 = memoryStore("s3", { key: payload });
+    const r2 = memoryStore("r2", { key: payload });
+    const lease = fakeLease();
+    lease.confirm.mockResolvedValueOnce(false);
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, lease }))
+      .rejects.toMatchObject({ reason: "contended" });
+    expect(r2.bucket.delete).not.toHaveBeenCalled();
+    expect(s3.bucket.delete).not.toHaveBeenCalled();
+    expect(lease.release).toHaveBeenCalledTimes(1);
+
+    const s3Fresh = memoryStore("s3");
+    const source = memoryStore("r2", { key: payload });
+    const lost = fakeLease();
+    lost.confirm.mockResolvedValue(false);
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3Fresh.store, source.store], expectedSize: 8, lease: lost }))
+      .rejects.toMatchObject({ reason: "contended" });
+    // The copy landed and was verified, but the source stays for the lease's new owner.
+    expect(s3Fresh.data.get("key")).toEqual(payload);
+    expect(source.data.get("key")).toEqual(payload);
+    expect(lost.confirm.mock.invocationCallOrder[0]).toBeGreaterThan(s3Fresh.bucket.put.mock.invocationCallOrder[0]);
+  });
+
   it("releases the lease when the move fails", async () => {
     const s3 = memoryStore("s3", { key: bytes(4, 18) });
     const r2 = memoryStore("r2", { key: bytes(6, 18) });
@@ -340,6 +365,23 @@ describe("moving files in bulk", () => {
       return all.slice(start, start + pageSize);
     };
   }
+
+  it("does not count a destination copy of the wrong size as settled", async () => {
+    const all = files(1);
+    const r2 = memoryStore("r2");
+    const s3 = memoryStore("s3", { "key-0": bytes(3, 0) });
+    const outcome = await moveStorageObjectsBatch({
+      to: "s3",
+      stores: [s3.store, r2.store],
+      nextPage: pager(all, 10),
+      cursor: undefined,
+      limits: { moves: 10, scanned: 100, milliseconds: 60_000 },
+    });
+    expect(outcome.alreadyThere).toBe(0);
+    expect(outcome.failed).toEqual([
+      { id: "file-0", name: "file 0", error: expect.stringContaining("not the recorded 4") },
+    ]);
+  });
 
   it("moves what is not yet at the destination and skips what is", async () => {
     const all = files(5);

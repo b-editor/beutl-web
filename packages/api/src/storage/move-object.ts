@@ -30,9 +30,16 @@ export type MoveOutcome =
  */
 export type StorageMoveLease = {
   acquire(): Promise<"acquired" | "busy" | "gone">;
+  /** Verify this move still holds the lease and extend it. Asked right
+   * before anything is deleted and periodically while a copy is in flight;
+   * false means the lease expired or was taken, and nothing may be deleted. */
+  confirm(): Promise<boolean>;
   stillExists(): Promise<boolean>;
   release(): Promise<void>;
 };
+
+// How often a copy in flight renews the lease it holds.
+const LEASE_HEARTBEAT_MILLISECONDS = 60 * 1000;
 
 export class StorageMoveError extends Error {
   readonly reason:
@@ -156,6 +163,7 @@ export async function moveStorageObject({
         expectedSize,
         contentType,
         stillExists: lease?.stillExists,
+        confirm: lease?.confirm,
       });
     } finally {
       await lease?.release();
@@ -171,6 +179,7 @@ async function moveLocatedObject({
   expectedSize,
   contentType,
   stillExists,
+  confirm,
 }: {
   objectKey: string;
   to: StorageProvider;
@@ -179,7 +188,19 @@ async function moveLocatedObject({
   expectedSize?: number;
   contentType?: string;
   stillExists?: () => Promise<boolean>;
+  confirm?: () => Promise<boolean>;
 }): Promise<MoveOutcome> {
+  // Nothing is deleted by a move whose lease has lapsed: another move may
+  // hold it by now and rely on the copy this one is about to remove.
+  const deleteFrom = async (store: StorageStore): Promise<void> => {
+    if (confirm && !(await confirm())) {
+      throw new StorageMoveError(
+        "contended",
+        `${objectKey}: the move lease was lost before ${store.provider} could be cleaned up; nothing was deleted`,
+      );
+    }
+    await remover(store)(objectKey);
+  };
   const locations = await locateStorageObject(objectKey, stores);
   let atDestination = locations.find((location) => location.provider === to);
   const elsewhere = locations.filter((location) => location.provider !== to);
@@ -193,12 +214,22 @@ async function moveLocatedObject({
     // A copy an earlier move wrote but never verified, next to a source that
     // does match the record. It would shadow the good copy on reads, so it
     // is replaced: removed here, then copied afresh below.
-    await remover(destination)(objectKey);
+    await deleteFrom(destination);
     atDestination = undefined;
   }
 
   if (atDestination) {
-    if (elsewhere.length === 0) return { kind: "already-there", to, removedFrom: [] };
+    if (elsewhere.length === 0) {
+      // The only copy there is. It counts as settled only when it is measured
+      // and matches the record; otherwise there is nothing to repair it from.
+      if (!measuredAgainstRecord(atDestination.size, expectedSize)) {
+        throw new StorageMoveError(
+          "size-mismatch",
+          `${objectKey} in ${to} is ${atDestination.size ?? "of unknown size"}, not the recorded ${expectedSize}, and no other store holds a copy`,
+        );
+      }
+      return { kind: "already-there", to, removedFrom: [] };
+    }
     // A copy that a previous move left behind. Only remove it once the
     // destination copy is measured and, when the record says how large the
     // object is, agrees with it.
@@ -220,7 +251,7 @@ async function moveLocatedObject({
           `${objectKey} in ${to} changed while its copy in ${location.provider} was about to be removed`,
         );
       }
-      await remover(store)(objectKey);
+      await deleteFrom(store);
       removedFrom.push(location.provider);
     }
     return { kind: "already-there", to, removedFrom };
@@ -256,10 +287,13 @@ async function moveLocatedObject({
   }
   const body: ArrayBuffer | ReadableStream =
     object.body ?? (object.arrayBuffer ? await object.arrayBuffer() : new ArrayBuffer(0));
-  await destination.bucket.put(objectKey, body, {
-    httpMetadata: contentType ? { contentType } : undefined,
-    contentLength: size,
-  });
+  await withLeaseHeartbeat(
+    destination.bucket.put(objectKey, body, {
+      httpMetadata: contentType ? { contentType } : undefined,
+      contentLength: size,
+    }),
+    confirm,
+  );
 
   const copied = await inspector(destination)(objectKey);
   if (!copied || !measuredAs(copied.size, size)) {
@@ -268,7 +302,7 @@ async function moveLocatedObject({
     // source on reads until the next run replaces it.
     const problem = `${objectKey} was copied to ${to} but reads back as ${copied?.size ?? "absent"} rather than ${size} bytes`;
     try {
-      await remover(destination)(objectKey);
+      await deleteFrom(destination);
     } catch (error) {
       throw new StorageMoveError(
         "verification-failed",
@@ -287,7 +321,7 @@ async function moveLocatedObject({
       // a deleted file. The fresh copy must not stay behind unnoticed: try to
       // remove it now, and if that fails too say exactly which key is loose.
       try {
-        await remover(destination)(objectKey);
+        await deleteFrom(destination);
       } catch (removeError) {
         throw new StorageMoveError(
           "verification-failed",
@@ -300,7 +334,8 @@ async function moveLocatedObject({
       // The record is gone; its deletion has already swept the stores, so the
       // copy written since is the only thing left and would otherwise leak.
       // stillExists has queued a durable cleanup for the key by now, so a
-      // failure of this delete is retried later.
+      // failure of this delete is retried later. The lease cannot be
+      // confirmed against a deleted row, so this delete is not fenced.
       await remover(destination)(objectKey);
       return { kind: "missing" };
     }
@@ -308,8 +343,9 @@ async function moveLocatedObject({
 
   let sourceRemoved = true;
   try {
-    await remover(source)(objectKey);
+    await deleteFrom(source);
   } catch (error) {
+    if (error instanceof StorageMoveError) throw error;
     console.error(`Moved ${objectKey} to ${to} but could not delete it from ${source.provider}`, error);
     sourceRemoved = false;
   }
@@ -416,8 +452,13 @@ export async function moveStorageObjectsBatch({
         outcome.failed.push({ id: entry.file.id, name: entry.file.name, error: describe(entry.error) });
         continue;
       }
+      // Only a destination copy that is measured and matches the record
+      // counts as settled; anything else goes through the mover, which
+      // either repairs it or reports why it cannot.
       const settled =
-        entry.locations.length === 1 && entry.locations[0].provider === to;
+        entry.locations.length === 1 &&
+        entry.locations[0].provider === to &&
+        measuredAgainstRecord(entry.locations[0].size, entry.file.size);
       if (settled) {
         outcome.alreadyThere++;
         continue;
@@ -464,4 +505,28 @@ export async function moveStorageObjectsBatch({
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Keep the lease alive while a long copy is in flight. A failed renewal is
+// not acted on here: the copy cannot be cancelled midway, and the confirm
+// before the next delete refuses to proceed without the lease.
+async function withLeaseHeartbeat<T>(
+  work: Promise<T>,
+  confirm: (() => Promise<boolean>) | undefined,
+): Promise<T> {
+  if (!confirm) return await work;
+  let stopped = false;
+  const heartbeat = (async () => {
+    while (!stopped) {
+      await new Promise((resolve) => setTimeout(resolve, LEASE_HEARTBEAT_MILLISECONDS));
+      if (stopped) break;
+      await confirm().catch(() => false);
+    }
+  })();
+  try {
+    return await work;
+  } finally {
+    stopped = true;
+    void heartbeat;
+  }
 }
