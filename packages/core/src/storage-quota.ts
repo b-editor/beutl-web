@@ -28,11 +28,6 @@ export const STORAGE_UPLOAD_FINISH_BODY_BYTES =
 export const STORAGE_MAX_FILE_BYTES =
   STORAGE_MULTIPART_MAX_PARTS * STORAGE_UPLOAD_PART_BYTES;
 
-// ストレージ画面が一度に載せる本数。画面は一覧を丸ごと受け取って手元で並べ替え・
-// 検索・ページ送りするので、有料ティアの本数上限をそのまま載せるとページも
-// ブラウザも持たない。新しいものからこの本数だけ載せ、超えたぶんは注記で伝える。
-export const STORAGE_LIST_MAX_FILES = 10_000;
-
 // 無料枠の 1 ユーザーあたりのファイル数の上限。容量だけでは本数を縛れない——1 バイトの
 // ファイルを順に完成させれば、容量の枠の内側で R2 のオブジェクトと DB の行を
 // 際限なく増やせる。増えて困るのは容量ではなくその数のほうなので、別に限る。

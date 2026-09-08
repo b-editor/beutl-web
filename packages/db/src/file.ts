@@ -1,3 +1,10 @@
+import {
+  ARCHIVE_MIME_TYPES,
+  DOCUMENT_MIME_TYPES,
+  type FileKind,
+  type StorageListingParams,
+} from "@beutl/core";
+import type { Prisma } from "@prisma/client";
 import { getDb } from "./provider";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
@@ -482,16 +489,11 @@ export async function retrieveFileNamesAndSizesByUserId({
   });
 }
 
-// 新しいものから `limit` 本。画面は一覧を丸ごと受け取るので、有料ティアの本数
-// まで載せるとページが持たない。全体の本数と合計サイズは別に数える
-// (countFilesByUserId / sumFileSizeByUserId)。
 export async function retrieveStorageFilesByUserId({
   userId,
-  limit,
   prisma,
 }: {
   userId?: string;
-  limit?: number;
   prisma?: PrismaTransaction;
 }) {
   if (!userId) return [];
@@ -512,7 +514,104 @@ export async function retrieveStorageFilesByUserId({
       folderId: true,
     },
     orderBy: { createdAt: "desc" },
-    ...(limit === undefined ? {} : { take: limit }),
+  });
+}
+
+const STORAGE_FILE_SELECT = {
+  id: true,
+  name: true,
+  size: true,
+  mimeType: true,
+  visibility: true,
+  createdAt: true,
+  folderId: true,
+} satisfies Prisma.FileSelect;
+
+// 画面の「種類」フィルタを DB の条件に。判定は core の fileKind と同じ順序で、
+// 「その他」は他のどれにも当たらないもの。
+function storageFileKindWhere(kind: FileKind): Prisma.FileWhereInput {
+  const insensitive = "insensitive" as const;
+  const named: Record<Exclude<FileKind, "other">, Prisma.FileWhereInput> = {
+    image: { mimeType: { startsWith: "image/", mode: insensitive } },
+    video: { mimeType: { startsWith: "video/", mode: insensitive } },
+    audio: { mimeType: { startsWith: "audio/", mode: insensitive } },
+    archive: { mimeType: { in: [...ARCHIVE_MIME_TYPES], mode: insensitive } },
+    document: {
+      OR: [
+        { mimeType: { startsWith: "text/", mode: insensitive } },
+        { mimeType: { in: [...DOCUMENT_MIME_TYPES], mode: insensitive } },
+      ],
+    },
+  };
+  if (kind === "other") return { NOT: Object.values(named) };
+  return named[kind];
+}
+
+export type StorageFileListingPage = {
+  files: Prisma.FileGetPayload<{ select: typeof STORAGE_FILE_SELECT }>[];
+  total: number;
+  // 要求より後ろのページが無ければ最後のページに寄せる。
+  page: number;
+  pageCount: number;
+};
+
+// 一覧の 1 ページ。検索中はフォルダーを問わず全体から、そうでなければそのフォルダー
+// 直下だけ。並び順には id を添えて、同じ値が並んでもページの境目で行が二重に
+// 出たり抜けたりしないようにする。
+export async function retrieveStorageFilesPage({
+  userId,
+  listing,
+  pageSize,
+  prisma,
+}: {
+  userId: string;
+  listing: StorageListingParams;
+  pageSize: number;
+  prisma?: PrismaTransaction;
+}): Promise<StorageFileListingPage> {
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+    throw new RangeError("Storage listing page size must be a positive integer");
+  }
+  const db = prisma ?? await getDb();
+  const query = listing.query.trim();
+  const where: Prisma.FileWhereInput = {
+    userId,
+    aiJobResult: null,
+    ...(query.length > 0
+      ? { name: { contains: query, mode: "insensitive" } }
+      : { folderId: listing.folderId }),
+    ...(listing.kind ? storageFileKindWhere(listing.kind) : {}),
+    ...(listing.visibility ? { visibility: listing.visibility } : {}),
+  };
+  const total = await db.file.count({ where });
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, listing.page), pageCount);
+  const direction = listing.descending ? "desc" : "asc";
+  const files = await db.file.findMany({
+    where,
+    select: STORAGE_FILE_SELECT,
+    orderBy: [{ [listing.sort]: direction }, { id: "asc" }],
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  });
+  return { files, total, page, pageCount };
+}
+
+// フォルダー削除の確認に出す本数。画面は一覧を 1 ページしか持っていないので、
+// 木の下にあるファイルは数えてもらう。
+export async function countStorageFilesInFolders({
+  userId,
+  folderIds,
+  prisma,
+}: {
+  userId: string;
+  folderIds: readonly string[];
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  if (folderIds.length === 0) return 0;
+  const db = prisma ?? await getDb();
+  return await db.file.count({
+    where: { userId, aiJobResult: null, folderId: { in: [...folderIds] } },
   });
 }
 

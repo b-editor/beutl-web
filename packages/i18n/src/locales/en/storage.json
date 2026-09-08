@@ -154,5 +154,5 @@
   "fileCountOfLimit": "{{count, number}} of {{limit, number}} files",
   "fullSubscribed": "Your storage is full. Change your plan or delete files you no longer need.",
   "overFreeQuota": "Your storage plan has ended and you are over the free quota. Existing files stay available to open and delete, but new uploads are refused until there is room.",
-  "listTruncated": "Showing the newest {{shown, number}} of {{total, number}} files. Older files are not listed here."
+  "countingFolderContents": "Counting contents…"
 }

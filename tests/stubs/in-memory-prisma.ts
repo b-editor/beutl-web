@@ -315,6 +315,20 @@ type FileRecord = {
   visibility: string;
   createdAt: Date;
   updatedAt: Date;
+  folderId?: string | null;
+};
+
+// The listing query's where clause, as the stub understands it.
+type FileWhere = {
+  id?: string | { in: string[] };
+  userId?: string;
+  aiJobResult?: null;
+  folderId?: string | null | { in: string[] };
+  name?: { contains: string; mode?: "insensitive" };
+  mimeType?: { startsWith?: string; in?: string[]; mode?: "insensitive" };
+  visibility?: string;
+  OR?: FileWhere[];
+  NOT?: FileWhere | FileWhere[];
 };
 
 type BillingOffer = {
@@ -991,6 +1005,40 @@ export function createInMemoryPrisma() {
   const subscriptionKey = (userId: string, planId: string) => `${userId}:${planId}`;
   const aiJobResultForFile = (fileId: string) =>
     [...state.aiJobs.values()].find((job) => job.resultFileId === fileId);
+  const matchesFileWhere = (file: FileRecord, where: FileWhere | undefined): boolean => {
+    if (!where) return true;
+    if (where.id !== undefined) {
+      if (typeof where.id === "string" ? file.id !== where.id : !where.id.in.includes(file.id)) return false;
+    }
+    if (where.userId !== undefined && file.userId !== where.userId) return false;
+    if (where.aiJobResult === null && aiJobResultForFile(file.id)) return false;
+    if (where.folderId !== undefined) {
+      const folderId = file.folderId ?? null;
+      if (where.folderId === null) {
+        if (folderId !== null) return false;
+      } else if (typeof where.folderId === "string") {
+        if (folderId !== where.folderId) return false;
+      } else if (folderId === null || !where.folderId.in.includes(folderId)) return false;
+    }
+    if (where.name?.contains !== undefined) {
+      const haystack = where.name.mode === "insensitive" ? file.name.toLowerCase() : file.name;
+      const needle = where.name.mode === "insensitive" ? where.name.contains.toLowerCase() : where.name.contains;
+      if (!haystack.includes(needle)) return false;
+    }
+    if (where.mimeType !== undefined) {
+      const fold = (value: string) => (where.mimeType?.mode === "insensitive" ? value.toLowerCase() : value);
+      const type = fold(file.mimeType);
+      if (where.mimeType.startsWith !== undefined && !type.startsWith(fold(where.mimeType.startsWith))) return false;
+      if (where.mimeType.in !== undefined && !where.mimeType.in.map(fold).includes(type)) return false;
+    }
+    if (where.visibility !== undefined && file.visibility !== where.visibility) return false;
+    if (where.OR && !where.OR.some((clause) => matchesFileWhere(file, clause))) return false;
+    if (where.NOT !== undefined) {
+      const clauses = Array.isArray(where.NOT) ? where.NOT : [where.NOT];
+      if (clauses.some((clause) => matchesFileWhere(file, clause))) return false;
+    }
+    return true;
+  };
   const projectSelectedFields = (
     record: Record<string, unknown>,
     selection: unknown,
@@ -3509,14 +3557,10 @@ export function createInMemoryPrisma() {
         state.files.set(record.id, record);
         return { ...record };
       },
-      count: async (
-        { where }: { where?: { userId?: string; aiJobResult?: null } } = {},
-      ) => {
+      count: async ({ where }: { where?: FileWhere } = {}) => {
         let total = 0;
         for (const item of state.files.values()) {
-          if (where?.userId && item.userId !== where.userId) continue;
-          if (where?.aiJobResult === null && aiJobResultForFile(item.id)) continue;
-          total++;
+          if (matchesFileWhere(item, where)) total++;
         }
         return total;
       },
@@ -3571,33 +3615,41 @@ export function createInMemoryPrisma() {
       findMany: async ({
         where,
         orderBy,
+        skip,
         take,
       }: {
-        where?: {
-          id?: { in: string[] };
-          userId?: string;
-          aiJobResult?: null;
-        };
+        where?: FileWhere;
         select?: Record<string, boolean>;
-        orderBy?: { createdAt?: "asc" | "desc" };
+        orderBy?:
+          | Record<string, "asc" | "desc">
+          | Array<Record<string, "asc" | "desc">>;
+        skip?: number;
         take?: number;
       }) => {
-        const rows = [...state.files.values()].filter(
-          (file) =>
-            (!where?.id || where.id.in.includes(file.id)) &&
-            (!where?.userId || file.userId === where.userId) &&
-            (where?.aiJobResult !== null || !aiJobResultForFile(file.id)),
+        const rows = [...state.files.values()].filter((file) =>
+          matchesFileWhere(file, where),
         );
-        if (orderBy?.createdAt) {
-          const direction = orderBy.createdAt === "desc" ? -1 : 1;
-          rows.sort(
-            (left, right) =>
-              direction * (left.createdAt.getTime() - right.createdAt.getTime()),
-          );
+        if (orderBy) {
+          const orders = Array.isArray(orderBy) ? orderBy : [orderBy];
+          rows.sort((left, right) => {
+            for (const order of orders) {
+              const [field, direction] = Object.entries(order)[0];
+              const lv = (left as unknown as Record<string, unknown>)[field];
+              const rv = (right as unknown as Record<string, unknown>)[field];
+              const compared =
+                lv instanceof Date && rv instanceof Date
+                  ? lv.getTime() - rv.getTime()
+                  : typeof lv === "string" && typeof rv === "string"
+                    ? lv.localeCompare(rv)
+                    : Number(lv ?? 0) - Number(rv ?? 0);
+              if (compared !== 0) return direction === "desc" ? -compared : compared;
+            }
+            return 0;
+          });
         }
-        return (take === undefined ? rows : rows.slice(0, take)).map((file) => ({
-          ...file,
-        }));
+        const from = skip ?? 0;
+        const to = take === undefined ? rows.length : from + take;
+        return rows.slice(from, to).map((file) => ({ ...file }));
       },
       delete: async ({ where }: { where: { id: string } }) => {
         const file = state.files.get(where.id);
@@ -3651,15 +3703,12 @@ export function createInMemoryPrisma() {
         where,
         data,
       }: {
-        where: { id?: string; aiJobResult?: null };
-        data: Partial<Pick<FileRecord, "visibility">>;
+        where: FileWhere;
+        data: Partial<Pick<FileRecord, "visibility" | "folderId">>;
       }) => {
         let count = 0;
         for (const [id, file] of state.files) {
-          if (
-            (!where.id || id === where.id) &&
-            (where.aiJobResult !== null || !aiJobResultForFile(id))
-          ) {
+          if (matchesFileWhere(file, where)) {
             state.files.set(id, { ...file, ...data, updatedAt: now() });
             count++;
           }

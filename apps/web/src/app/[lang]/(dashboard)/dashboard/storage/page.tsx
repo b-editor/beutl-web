@@ -1,4 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
+import { parseStorageListingParams } from "@beutl/core";
 import {
   countFilesByUserId,
   getDb,
@@ -6,31 +7,45 @@ import {
   sumFileSizeByUserId,
 } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
-import { Alert, AlertDescription } from "@beutl/ui/ui/alert";
-import { Info } from "lucide-react";
-import { retrieveFiles, retrieveFolders } from "./actions";
+import { retrieveFilesPage, retrieveFolders } from "./actions";
 import { List } from "./list";
 import { StorageUsage } from "./usage";
 
-export default async function Page(props: { params: Promise<{ lang: string }> }) {
-  const { lang } = await props.params;
+export default async function Page(props: {
+  params: Promise<{ lang: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ lang }, searchParams] = await Promise.all([
+    props.params,
+    props.searchParams,
+  ]);
 
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
   const userId = session.user.id;
   const prisma = await getDb();
-  // The listing is bounded (the newest STORAGE_LIST_MAX_FILES), so the usage
-  // line is summed in the database rather than over what happens to be on the
-  // page. The upload paths also count reservations of uploads in flight, so
-  // the bar can refuse a little before it reads 100%.
-  const [files, folders, quota, usedBytes, fileCount] = await Promise.all([
-    retrieveFiles(),
-    retrieveFolders(),
+  // The folder tree is small and the screen needs all of it (breadcrumbs,
+  // moving, the location of search results); files come one page at a time,
+  // as the URL asks. A folder the user does not have is read as the root.
+  const folders = await retrieveFolders();
+  const requested = parseStorageListingParams(searchParams);
+  const listing = {
+    ...requested,
+    folderId:
+      requested.folderId !== null &&
+      folders.some((folder) => folder.id === requested.folderId)
+        ? requested.folderId
+        : null,
+  };
+  // The usage line is summed in the database; the upload paths also count
+  // reservations of uploads in flight, so the bar can refuse a little before
+  // it reads 100%.
+  const [page, quota, usedBytes, fileCount] = await Promise.all([
+    retrieveFilesPage(listing),
     resolveStorageQuota({ userId, prisma }),
     sumFileSizeByUserId({ userId, prisma }),
     countFilesByUserId({ userId, prisma }),
   ]);
-  const truncated = fileCount > files.length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -43,22 +58,16 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
           quota={quota}
         />
       </div>
-      {truncated && (
-        <Alert>
-          <Info className="h-4 w-4" />
-          <AlertDescription>
-            {t("storage:listTruncated", {
-              shown: files.length,
-              total: fileCount,
-            })}
-          </AlertDescription>
-        </Alert>
-      )}
       <List
-        data={files}
+        files={page.files}
+        total={page.total}
+        page={page.page}
+        pageCount={page.pageCount}
+        listing={listing}
         folders={folders}
+        totalFiles={fileCount}
         lang={lang}
-        userId={session.user.id}
+        userId={userId}
       />
     </div>
   );

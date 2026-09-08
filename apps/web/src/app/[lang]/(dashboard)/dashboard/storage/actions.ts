@@ -1,13 +1,16 @@
 "use server";
 
-import { STORAGE_LIST_MAX_FILES } from "@beutl/core";
-
 import { revalidatePath } from "next/cache";
 import { authenticated, throwIfUnauth } from "@/lib/auth-guard";
-import type { ActionResult } from "@beutl/core";
+import {
+  STORAGE_LIST_PAGE_SIZE,
+  type ActionResult,
+  type StorageListingParams,
+} from "@beutl/core";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import {
+  countStorageFilesInFolders,
   createStorageFolder,
   deleteStorageFolderTree,
   deleteUserFilesWithStorageCleanup,
@@ -15,7 +18,7 @@ import {
   moveStorageFolder,
   renameStorageFolder,
   retrieveFilesByIdsAndUserId,
-  retrieveStorageFilesByUserId,
+  retrieveStorageFilesPage,
   retrieveStorageFoldersByUserId,
   updateFileName,
   updateFileVisibility,
@@ -313,11 +316,25 @@ export async function deleteFolder(id: string): Promise<ActionResult> {
   });
 }
 
-export async function retrieveFiles() {
+// One page of the listing the URL asks for. The page component calls this
+// on the server; the screen changes the URL to ask for another page.
+export async function retrieveFilesPage(listing: StorageListingParams) {
   const session = await throwIfUnauth();
-  return await retrieveStorageFilesByUserId({
-    userId: session?.user?.id,
-    limit: STORAGE_LIST_MAX_FILES,
+  return await retrieveStorageFilesPage({
+    userId: session.user.id,
+    listing,
+    pageSize: STORAGE_LIST_PAGE_SIZE,
+  });
+}
+
+// How many files a folder deletion would take with it. The screen holds one
+// page of files, so it cannot count the tree itself; the ids are the folder
+// and everything under it, which the screen does know.
+export async function countFilesInFolders(folderIds: string[]): Promise<number> {
+  const session = await throwIfUnauth();
+  return await countStorageFilesInFolders({
+    userId: session.user.id,
+    folderIds: folderIds.filter((id) => typeof id === "string" && id.length > 0),
   });
 }
 

@@ -2,6 +2,7 @@
 
 import {
   changeFileVisibility,
+  countFilesInFolders,
   createFolder,
   deleteFile,
   deleteFolder,
@@ -11,15 +12,12 @@ import {
   renameFolder,
 } from "./actions";
 import {
-  type ColumnFiltersState,
+  type PaginationState,
   type Row,
   type RowSelectionState,
   type SortingState,
   flexRender,
   getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
 import {
@@ -76,9 +74,19 @@ import {
 } from "@beutl/ui/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { TooltipProvider } from "@beutl/ui/ui/tooltip";
-import { cn, formatDateTime } from "@beutl/core";
-import type { ActionResult } from "@beutl/core";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  cn,
+  formatDateTime,
+  STORAGE_LIST_PAGE_SIZE,
+  storageListingSearch,
+  storageListingSearching,
+  type ActionResult,
+  type FileKind,
+  type StorageListingParams,
+  type StorageListSortField,
+  type StorageListVisibility,
+} from "@beutl/core";
+import { usePathname, useRouter } from "next/navigation";
 import {
   type DragEvent,
   Fragment,
@@ -91,6 +99,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  useTransition,
 } from "react";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
@@ -121,7 +130,10 @@ import { DetailsPanel } from "./details-panel";
 import { NameDialog } from "./name-dialog";
 import { MoveDialog } from "./move-dialog";
 
-const PAGE_SIZE = 24;
+const PAGE_SIZE = STORAGE_LIST_PAGE_SIZE;
+// Typing in the search box changes the URL, and with it the page the server
+// renders; wait for a pause so each keystroke is not a request.
+const SEARCH_DEBOUNCE_MILLISECONDS = 300;
 // The shared table pads cells for forms; a file list wants the tighter rows of
 // a file manager, so the storage screen overrides the vertical padding here.
 const HEAD_CLASS = "h-10";
@@ -132,7 +144,7 @@ const VIEW_STORAGE_KEY = "beutl.storage.view";
 const DRAG_TYPE = "application/x-beutl-storage";
 
 type ViewMode = "grid" | "list";
-type SortField = "name" | "size" | "createdAt";
+type SortField = StorageListSortField;
 type DragPayload = { files: string[]; folders: string[] };
 type UploadStatus = {
   name: string;
@@ -309,14 +321,29 @@ function SortChip({
   );
 }
 
+// The screen shows one page of files, fetched by the server for the listing
+// the URL describes (folder, search, filters, sort, page). Every one of those
+// is changed by changing the URL; the folder tree is complete on the client.
 export function List({
-  data,
+  files,
+  total,
+  page,
+  pageCount,
+  listing,
   folders,
+  totalFiles,
   lang,
   userId,
 }: {
-  data: StorageFile[];
+  files: StorageFile[];
+  // Files matching the listing, across all its pages.
+  total: number;
+  page: number;
+  pageCount: number;
+  listing: StorageListingParams;
   folders: StorageFolder[];
+  // Every file the account holds, for the empty state.
+  totalFiles: number;
   lang: string;
   userId: string;
 }) {
@@ -324,8 +351,8 @@ export function List({
   const { toast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const isLarge = useMediaQuery("(min-width: 1024px)");
+  const data = files;
 
   // ---- folder tree -------------------------------------------------------
   const foldersById = useMemo(
@@ -359,10 +386,9 @@ export function List({
     for (const list of map.values()) list.sort(byName);
     return map;
   }, [folders, parentOf]);
-  const requestedFolderId = searchParams?.get("folder") ?? null;
   const currentFolderId =
-    requestedFolderId !== null && foldersById.has(requestedFolderId)
-      ? requestedFolderId
+    listing.folderId !== null && foldersById.has(listing.folderId)
+      ? listing.folderId
       : null;
   const currentFolderRef = useRef(currentFolderId);
   useEffect(() => {
@@ -421,11 +447,7 @@ export function List({
     [childFolders],
   );
 
-  // ---- table state -------------------------------------------------------
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "createdAt", desc: true },
-  ]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  // ---- listing state (the URL) -------------------------------------------
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [view, setView] = useState<ViewMode>("grid");
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -433,30 +455,110 @@ export function List({
     const stored = readStoredView();
     if (stored) setView(stored);
   }, []);
-
-  const filterValue = (id: string): string =>
-    (columnFilters.find((filter) => filter.id === id)?.value as
-      | string
-      | undefined) ?? "";
-  const setFilter = (id: string, value: string | undefined) =>
-    setColumnFilters((current) => [
-      ...current.filter((filter) => filter.id !== id),
-      ...(value ? [{ id, value }] : []),
-    ]);
-  const query = filterValue("name");
-  const kindFilter = filterValue("kind") || "all";
-  const visibilityFilter = filterValue("visibility") || "all";
-  const searching = query.trim().length > 0;
+  // True while the server is rendering the page for a new URL; the content
+  // dims rather than disappears, so a slow page does not flash empty.
+  const [navigating, startNavigation] = useTransition();
+  const query = listing.query;
+  const kindFilter: FileKind | "all" = listing.kind ?? "all";
+  const visibilityFilter: StorageListVisibility | "all" = listing.visibility ?? "all";
+  const searching = storageListingSearching(listing);
   const filtersActive = kindFilter !== "all" || visibilityFilter !== "all";
-
-  // Search looks everywhere, the way Drive does; otherwise only this folder.
-  const tableData = useMemo(
-    () =>
-      searching
-        ? data
-        : data.filter((file) => folderOf(file) === currentFolderId),
-    [data, searching, currentFolderId, folderOf],
+  const sorting = useMemo<SortingState>(
+    () => [{ id: listing.sort, desc: listing.descending }],
+    [listing.sort, listing.descending],
   );
+
+  // Ask the server for another listing. Anything but a page turn starts over
+  // at the first page, and the selection is page-scoped so it is dropped.
+  // Opening a folder or turning a page is a history entry, so the back
+  // button walks them again; a search keystroke or filter change replaces
+  // the entry instead of stacking one per change.
+  const navigate = useCallback(
+    (next: Partial<StorageListingParams>, mode: "push" | "replace" = "push") => {
+      const target: StorageListingParams = {
+        ...listing,
+        ...next,
+        page: next.page ?? 1,
+      };
+      const url = `${pathname}${storageListingSearch(target)}`;
+      setRowSelection({});
+      startNavigation(() => {
+        if (mode === "replace") router.replace(url);
+        else router.push(url);
+      });
+    },
+    [listing, pathname, router],
+  );
+  const navigateToFolder = useCallback(
+    (folderId: string | null) => navigate({ folderId, query: "" }),
+    [navigate],
+  );
+  const setSorting = useCallback(
+    (updater: SortingState | ((current: SortingState) => SortingState)) => {
+      const next = typeof updater === "function" ? updater(sorting) : updater;
+      const [first] = next;
+      if (!first) return;
+      navigate({ sort: first.id as SortField, descending: first.desc });
+    },
+    [navigate, sorting],
+  );
+  const setPagination = useCallback(
+    (
+      updater:
+        | PaginationState
+        | ((current: PaginationState) => PaginationState),
+    ) => {
+      const current = { pageIndex: page - 1, pageSize: PAGE_SIZE };
+      const next = typeof updater === "function" ? updater(current) : updater;
+      if (next.pageIndex !== current.pageIndex) navigate({ page: next.pageIndex + 1 });
+    },
+    [navigate, page],
+  );
+  const setKindFilter = (value: string) =>
+    navigate({ kind: value === "all" ? null : (value as FileKind) }, "replace");
+  const setVisibilityFilter = (value: string) =>
+    navigate(
+      { visibility: value === "all" ? null : (value as StorageListVisibility) },
+      "replace",
+    );
+  const clearFilters = () => navigate({ kind: null, visibility: null }, "replace");
+
+  // The search box is typed into locally and the URL follows after a pause.
+  // When the URL changes for another reason (back button, clearing), the box
+  // follows the URL.
+  const [searchText, setSearchText] = useState(listing.query);
+  useEffect(() => {
+    setSearchText(listing.query);
+  }, [listing.query]);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+  const changeSearch = (value: string) => {
+    setSearchText(value);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null;
+      navigateRef.current({ query: value }, "replace");
+    }, SEARCH_DEBOUNCE_MILLISECONDS);
+  };
+  const clearSearch = () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = null;
+    setSearchText("");
+    navigate({ query: "" }, "replace");
+  };
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
+
+  // The server already scoped the files (this folder, or everywhere while
+  // searching); folders are all here, so they are scoped the same way locally.
+  const tableData = data;
   const visibleFolders = useMemo(() => {
     if (!searching) return childFolders.get(currentFolderId) ?? [];
     const needle = query.trim().toLowerCase();
@@ -464,27 +566,6 @@ export function List({
       .filter((folder) => folder.name.toLowerCase().includes(needle))
       .sort(byName);
   }, [searching, childFolders, currentFolderId, folders, query]);
-
-  // Every file and folder is already on the client, so opening a folder is a
-  // URL change and nothing else. Next.js integrates the native pushState with
-  // its router (14.1+), so useSearchParams above sees the new "folder" value
-  // and the back button walks the folders again; router.push would instead
-  // refetch the whole page from the server for each step.
-  const navigateToFolder = useCallback(
-    (folderId: string | null) => {
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (folderId) params.set("folder", folderId);
-      else params.delete("folder");
-      const search = params.toString();
-      window.history.pushState(
-        null,
-        "",
-        search ? `${pathname}?${search}` : pathname,
-      );
-      setRowSelection({});
-    },
-    [searchParams, pathname],
-  );
 
   // ---- requests ----------------------------------------------------------
   const [pendingOps, setPendingOps] = useState(0);
@@ -786,29 +867,32 @@ export function List({
       }),
     [lang, busy, handlers, hasSelection, locationOf],
   );
+  // Sorting, filtering, and paging happen on the server; the table only
+  // renders the page it was given and reports the user's wishes to the URL.
   const table = useReactTable({
     data: tableData,
     columns,
     getRowId: (file) => file.id,
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
+    pageCount,
+    rowCount: total,
     onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
+    onPaginationChange: setPagination,
     onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: PAGE_SIZE } },
     state: {
       sorting,
-      columnFilters,
+      pagination: { pageIndex: page - 1, pageSize: PAGE_SIZE },
       rowSelection,
       columnVisibility: { kind: false, location: searching },
     },
   });
   const fileRows = table.getRowModel().rows;
-  const filteredCount = table.getFilteredRowModel().rows.length;
+  const filteredCount = total;
   const selectedFiles = useMemo(
-    () => table.getFilteredSelectedRowModel().rows.map((row) => row.original),
+    () => table.getSelectedRowModel().rows.map((row) => row.original),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [table, rowSelection, tableData],
   );
@@ -1060,22 +1144,45 @@ export function List({
         setConfirmDeleteFolder(null);
       });
   };
-  const subtreeCounts = (folder: StorageFolder) => {
-    const ids = subtreeIds(folder.id);
-    let files = 0;
-    for (const file of data) {
-      if (file.folderId !== null && ids.has(file.folderId)) files += 1;
+  // Only one page of files is here, so the files under a folder are counted
+  // by the server when the confirmation opens; the folders are all known.
+  const [folderDeleteCounts, setFolderDeleteCounts] = useState<{
+    folderId: string;
+    folders: number;
+    files: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!confirmDeleteFolder) {
+      setFolderDeleteCounts(null);
+      return;
     }
-    return { folders: ids.size - 1, files };
-  };
+    const folder = confirmDeleteFolder;
+    const ids = subtreeIds(folder.id);
+    let cancelled = false;
+    countFilesInFolders([...ids])
+      .then((files) => {
+        if (!cancelled) {
+          setFolderDeleteCounts({ folderId: folder.id, folders: ids.size - 1, files });
+        }
+      })
+      .catch(() => {
+        // The count is informational; the deletion itself reports what it did.
+        if (!cancelled) {
+          setFolderDeleteCounts({ folderId: folder.id, folders: ids.size - 1, files: 0 });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmDeleteFolder, subtreeIds]);
 
   // ---- rendering ---------------------------------------------------------
-  const { pageIndex, pageSize } = table.getState().pagination;
-  const pageCount = table.getPageCount();
+  const pageIndex = page - 1;
+  const pageSize = PAGE_SIZE;
   const rangeFrom = filteredCount === 0 ? 0 : pageIndex * pageSize + 1;
   const rangeTo = Math.min(filteredCount, (pageIndex + 1) * pageSize);
   const visibleColumnCount = table.getVisibleLeafColumns().length;
-  const rootEmpty = data.length === 0 && folders.length === 0;
+  const rootEmpty = totalFiles === 0 && folders.length === 0;
   const nothingHere = visibleFolders.length === 0 && filteredCount === 0;
   const gridClass = cn(
     "grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4",
@@ -1091,8 +1198,6 @@ export function List({
     { value: "PRIVATE", label: t("storage:private") },
     { value: "DEDICATED", label: t("storage:dedicated") },
   ];
-  const clearFilters = () => setColumnFilters([]);
-
   const uploadButton = (
     <Button type="button" onClick={() => void handleUploadClick()} disabled={busy}>
       <Upload className="h-4 w-4" aria-hidden />
@@ -1176,7 +1281,12 @@ export function List({
             ? t("storage:noMatchingFiles", { query: query.trim(), ...RAW })
             : t("storage:noFilesForFilter")}
         </span>
-        <Button type="button" variant="link" size="sm" onClick={clearFilters}>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          onClick={searching ? clearSearch : clearFilters}
+        >
           {searching ? t("storage:clearSearch") : t("storage:clearFilters")}
         </Button>
       </div>
@@ -1488,14 +1598,14 @@ export function List({
             <Input
               placeholder={t("storage:searchPlaceholder")}
               aria-label={t("storage:searchPlaceholder")}
-              value={query}
-              onChange={(event) => setFilter("name", event.target.value || undefined)}
+              value={searchText}
+              onChange={(event) => changeSearch(event.target.value)}
               className="pl-9 pr-9"
             />
-            {query && (
+            {searchText && (
               <button
                 type="button"
-                onClick={() => setFilter("name", undefined)}
+                onClick={clearSearch}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:text-foreground"
                 aria-label={t("storage:clearSearch")}
               >
@@ -1554,21 +1664,19 @@ export function List({
               label={t("storage:filterKind")}
               value={kindFilter}
               options={kindOptions}
-              onChange={(value) => setFilter("kind", value === "all" ? undefined : value)}
+              onChange={setKindFilter}
             />
             <FilterChip
               label={t("storage:filterVisibility")}
               value={visibilityFilter}
               options={visibilityOptions}
-              onChange={(value) =>
-                setFilter("visibility", value === "all" ? undefined : value)
-              }
+              onChange={setVisibilityFilter}
             />
             {view === "grid" && (
               <SortChip
                 lang={lang}
                 sorting={sorting[0]}
-                onChange={(field, desc) => setSorting([{ id: field, desc }])}
+                onChange={(field, desc) => navigate({ sort: field, descending: desc })}
               />
             )}
           </div>
@@ -1609,7 +1717,12 @@ export function List({
                 {t("storage:searchEverywhere")}
               </p>
             )}
-            {content}
+            <div
+              aria-busy={navigating}
+              className={cn("transition-opacity", navigating && "opacity-60")}
+            >
+              {content}
+            </div>
             {!rootEmpty && filteredCount > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
                 <span className="tabular-nums">
@@ -1625,8 +1738,8 @@ export function List({
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => table.previousPage()}
-                      disabled={!table.getCanPreviousPage()}
+                      onClick={() => navigate({ page: page - 1 })}
+                      disabled={page <= 1 || navigating}
                     >
                       <ChevronLeft className="h-4 w-4" aria-hidden />
                       {t("storage:previousPage")}
@@ -1638,8 +1751,8 @@ export function List({
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => table.nextPage()}
-                      disabled={!table.getCanNextPage()}
+                      onClick={() => navigate({ page: page + 1 })}
+                      disabled={page >= pageCount || navigating}
                     >
                       {t("storage:nextPage")}
                       <ChevronRight className="h-4 w-4" aria-hidden />
@@ -1723,11 +1836,14 @@ export function List({
               <AlertDialogTitle>{t("storage:deleteFolderTitle")}</AlertDialogTitle>
               <AlertDialogDescription>
                 {confirmDeleteFolder &&
-                  t("storage:deleteFolderConfirmation", {
-                    name: confirmDeleteFolder.name,
-                    ...subtreeCounts(confirmDeleteFolder),
-                    ...RAW,
-                  })}
+                  (folderDeleteCounts?.folderId === confirmDeleteFolder.id
+                    ? t("storage:deleteFolderConfirmation", {
+                        name: confirmDeleteFolder.name,
+                        folders: folderDeleteCounts.folders,
+                        files: folderDeleteCounts.files,
+                        ...RAW,
+                      })
+                    : t("storage:countingFolderContents"))}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
