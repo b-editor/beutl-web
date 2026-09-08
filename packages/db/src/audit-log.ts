@@ -61,6 +61,7 @@ export const auditLogActions = {
     storageUploadInterventionResumed: "admin.storageUploadInterventionResumed",
     storageUploadInterventionTerminalized: "admin.storageUploadInterventionTerminalized",
     packagePaymentRefundInterventionResumed: "admin.packagePaymentRefundInterventionResumed",
+    storageObjectMoved: "admin.storageObjectMoved",
   },
 } as const;
 

@@ -4,7 +4,7 @@ import {
   findFileForContentAccess,
 } from "@beutl/db";
 import { tryGetUserIdFromHeaders } from "@beutl/api";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/lib/better-auth";
 import {
@@ -52,7 +52,10 @@ export async function GET(
   });
 
   if (access.outcome === "allowed") {
-    const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+    const bucket = getR2Bucket();
+    if (!bucket.get) {
+      throw new Error("The configured storage bucket cannot read objects");
+    }
     const object = await bucket.get(file.objectKey);
     if (!object) {
       return NextResponse.json(
@@ -67,9 +70,15 @@ export async function GET(
     }
 
     const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
-    return new NextResponse(object.body, {
+    const body = object.body ?? (object.arrayBuffer ? await object.arrayBuffer() : null);
+    if (body === null) {
+      throw new Error(`Storage object ${file.objectKey} cannot be read`);
+    }
+    return new NextResponse(body, {
       headers: {
-        "Content-Length": object.size.toString(),
+        ...(typeof object.size === "number"
+          ? { "Content-Length": object.size.toString() }
+          : {}),
         ...deliveryHeaders,
         "Content-Disposition": contentDisposition(
           deliveryHeaders["Content-Disposition"],

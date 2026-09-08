@@ -1,5 +1,5 @@
-import { createRequire } from "node:module";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 
 const dbMocks = vi.hoisted(() => ({
   findFileForContentAccess: vi.fn(),
@@ -30,16 +30,7 @@ type ContentGet =
 let GET: ContentGet;
 
 beforeAll(async () => {
-  const requireFromWeb = createRequire(
-    new URL("../../apps/web/package.json", import.meta.url),
-  );
-  vi.doMock(requireFromWeb.resolve("@opennextjs/cloudflare"), () => ({
-    getCloudflareContext: () => ({
-      env: {
-        BEUTL_R2_BUCKET: bucketMocks,
-      },
-    }),
-  }));
+  setR2BucketProvider(() => bucketMocks as never);
   ({ GET } = await import(
     "../../apps/web/src/app/api/contents/[fileId]/route"
   ));

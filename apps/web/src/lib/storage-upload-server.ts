@@ -473,11 +473,11 @@ export async function uploadPart({
     upload.objectKey,
     upload.uploadId,
   );
-  // Handed on exactly as it arrived. The bucket takes a stream only when it can
-  // know its length, which the request body carries and a stream wrapped around
-  // it would not — reading the part into memory to give it one would defeat the
-  // point of splitting the file up at all.
-  const part = await multipart.uploadPart(partNumber, body);
+  // Handed on exactly as it arrived, with the length the request declared. The
+  // bucket takes a stream only when it can know its length — reading the part
+  // into memory to give it one would defeat the point of splitting the file
+  // up at all.
+  const part = await multipart.uploadPart(partNumber, body, { contentLength });
   return { ok: true, etag: part.etag };
 }
 

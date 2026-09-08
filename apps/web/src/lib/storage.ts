@@ -15,6 +15,7 @@ import {
   renewDedicatedStorageReservation,
   retrieveFilesByUserId,
 } from "@beutl/db";
+import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const DEDICATED_STORAGE_WRITE_DEADLINE_MILLISECONDS = 30 * 1000;
@@ -77,7 +78,7 @@ export async function deleteStorageFile({
   // remote delete after the transaction is known to have committed.
   if (prisma) return record;
 
-  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  const bucket = getR2Bucket();
   try {
     if (!bucket.delete) throw new Error("The configured bucket cannot delete objects");
     await bucket.delete(record.objectKey);
@@ -137,7 +138,7 @@ export async function createStorageFile({
   const array = await file.arrayBuffer();
   const objectKey = crypto.randomUUID();
   await registerAiStorageCleanup({ objectKey, aiJobId: null, state: "writing", notBefore: new Date(Date.now() + 15 * 60_000) });
-  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  const bucket = getR2Bucket();
   // The File record below is what callers commit against, so the object has to exist
   // first — an unawaited write can reject, or outlive the request, after they succeed.
   await bucket.put(objectKey, array);
@@ -223,7 +224,7 @@ export async function createDedicatedStorageFile({
     }).catch(() => undefined);
     throw error;
   }
-  const bucket = getCloudflareContext().env.BEUTL_R2_BUCKET;
+  const bucket = getR2Bucket();
   let hashHex: string;
   try {
     const hashBuffer = await crypto.subtle.digest("SHA-256", array);

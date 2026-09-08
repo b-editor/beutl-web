@@ -644,3 +644,92 @@ export async function createFileAndSettleStorageWrite({
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
+
+// 管理画面のストレージ一覧。所有者を引けるようにし、古い順を既定にする
+// (プロバイダ切替前のファイルほど古いので、移動の対象を先頭に出す)。
+const adminFileSelect = {
+  id: true,
+  name: true,
+  size: true,
+  mimeType: true,
+  objectKey: true,
+  createdAt: true,
+  user: { select: { id: true, email: true, name: true } },
+} as const;
+
+export type AdminFileOrder = "asc" | "desc";
+
+export async function listFilesForAdmin({
+  query,
+  page,
+  pageSize,
+  order = "asc",
+  prisma,
+}: {
+  query?: string;
+  page: number;
+  pageSize: number;
+  order?: AdminFileOrder;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  const queryMode = "insensitive" as const;
+  const where =
+    query && query.length > 0
+      ? {
+          OR: [
+            { name: { contains: query, mode: queryMode } },
+            { user: { email: { contains: query, mode: queryMode } } },
+          ],
+        }
+      : {};
+  const [items, total] = await Promise.all([
+    db.file.findMany({
+      where,
+      select: adminFileSelect,
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: order }, { id: order }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.file.count({ where }),
+  ]);
+  return { items, total };
+}
+
+// 一括移動の走査。(createdAt, id) の位置から古い順に次の一連を返す。
+export async function listFilesForAdminAfter({
+  after,
+  limit,
+  prisma,
+}: {
+  after?: { createdAt: Date; id: string };
+  limit: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.file.findMany({
+    where: after
+      ? {
+          OR: [
+            { createdAt: { gt: after.createdAt } },
+            { createdAt: after.createdAt, id: { gt: after.id } },
+          ],
+        }
+      : {},
+    select: adminFileSelect,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+}
+
+export async function findFileForAdminById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.file.findUnique({ where: { id }, select: adminFileSelect });
+}

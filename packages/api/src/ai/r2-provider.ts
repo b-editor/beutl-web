@@ -1,13 +1,24 @@
-// R2 bucket injection point shared by the standalone Worker and OpenNext.
+// Storage bucket injection point shared by the standalone Worker and OpenNext.
+// The shape is the R2 binding's; storage/s3-compatible-bucket.ts adapts S3
+// compatible services to it, and storage/bucket-from-env.ts picks which one
+// the configuration names.
 // Keep this module dependency-free: instrumentation imports it during Worker
 // startup, before any API route or AI provider implementation is needed.
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
+
+/**
+ * A stream body must reach the service with a known length: S3 compatible
+ * services reject chunked uploads, and R2 refuses a stream of unknown length.
+ * workerd carries the length of an incoming request body along; anywhere
+ * else, pass `contentLength` with the stream.
+ */
+export type StorageStreamOptions = { contentLength?: number };
 
 export type R2BucketLike = {
   put(
     key: string,
     value: ArrayBuffer | ReadableStream | string,
-    options?: { httpMetadata?: { contentType?: string } },
+    options?: { httpMetadata?: { contentType?: string } } & StorageStreamOptions,
   ): Promise<unknown>;
   get?(key: string): Promise<{
     body?: ReadableStream<Uint8Array>;
@@ -27,6 +38,7 @@ export type R2BucketLike = {
     uploadPart(
       partNumber: number,
       value: ReadableStream<Uint8Array>,
+      options?: StorageStreamOptions,
     ): Promise<{ partNumber: number; etag: string }>;
     complete(
       parts: { partNumber: number; etag: string }[],

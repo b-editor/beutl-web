@@ -22,6 +22,76 @@ commit secret values.
 desktop API Workers. The Web Worker issues the JWTs that the API Worker
 validates.
 
+## Object storage
+
+User files and AI outputs live in one object store that the Web Worker and the
+desktop API Worker share. Both Workers must be configured for the same bucket:
+the Web Worker writes uploads that the API Worker's scheduled reconcilers
+inspect and clean up, and either Worker may serve or delete an object the
+other one wrote. The admin Worker takes the same configuration so that
+`/admin/storage` can show where each file's object lives and move it.
+
+`BEUTL_STORAGE_PROVIDER` selects the implementation:
+
+| Value | Storage | Configuration |
+| --- | --- | --- |
+| `r2` (default when unset) | Cloudflare R2 through the `BEUTL_R2_BUCKET` binding | `r2_buckets` in each `wrangler.jsonc` |
+| `s3` | Any S3 compatible service over signed HTTPS | `BEUTL_S3_*` vars and secrets below |
+
+### S3 compatible storage
+
+Set `BEUTL_STORAGE_PROVIDER=s3` on both Workers together with:
+
+- `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,
+  `https://<account>.r2.cloudflarestorage.com`, or an endpoint with a path
+  prefix. Workers fetch with `global_fetch_strictly_public`, so the endpoint
+  must be publicly reachable.
+- `BEUTL_S3_BUCKET`: the bucket name.
+- `BEUTL_S3_ACCESS_KEY_ID` and `BEUTL_S3_SECRET_ACCESS_KEY`: store both with
+  `wrangler secret put`. `BEUTL_S3_SESSION_TOKEN` is optional for temporary
+  credentials.
+- `BEUTL_S3_REGION`: the signing region. It defaults to `auto`, which R2 and
+  MinIO accept; AWS S3, Backblaze B2, and Wasabi need their real region.
+- `BEUTL_S3_FORCE_PATH_STYLE`: `true` (default) requests
+  `https://endpoint/bucket/key`; `false` requests `https://bucket.endpoint/key`.
+
+The credential needs `GetObject`, `PutObject`, `DeleteObject`, and the
+multipart upload permissions (`CreateMultipartUpload`, `UploadPart`,
+`CompleteMultipartUpload`, `AbortMultipartUpload`) on the bucket. Objects are
+addressed by key only; no bucket listing is performed.
+
+Uploads stream each part straight from the browser request to the service with
+an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`), which every
+common S3 compatible service accepts over HTTPS. Configure the bucket to abort
+incomplete multipart uploads after 7 days, matching the R2 lifecycle rule that
+`pnpm verify:r2-lifecycle` checks, so that an upload id whose owner never
+returned is not paid for indefinitely.
+
+### Switching providers
+
+`BEUTL_STORAGE_PROVIDER` only decides where new objects are written. When the
+other provider is configured as well (the `BEUTL_R2_BUCKET` binding for R2,
+the `BEUTL_S3_*` values for S3), an object the primary does not hold is read
+from the other store, and a delete is issued to both. Objects stored before
+the switch therefore stay reachable without being copied: to move new uploads
+to S3 while existing files keep coming from R2, set `BEUTL_STORAGE_PROVIDER=s3`
+and leave the R2 binding in place. The same rule covers moving back.
+
+A read that misses the primary costs one extra request, so move the old
+objects across and remove the other provider's configuration once the
+transition is over. `/admin/storage` in the admin console lists files with the
+store each object was found in, moves a single file, and moves files in bulk
+from the oldest onwards; each bulk run is bounded and resumes from where the
+previous one stopped. A move copies the object, checks the copy's size against
+the File record, and only then deletes the source; each moved file is written
+to the audit log. A half-configured provider is an error rather than a
+skipped fallback, so a stale `BEUTL_S3_*` value must be removed completely.
+
+Multipart uploads in flight at the moment of the switch belong to the old
+store. Their completion and abort are retried against it when the primary
+does not know the upload id, but a part cannot be resent, so a browser that
+was mid-upload fails that part and starts the upload again on the primary.
+
 ## Admin authentication and session sharing
 
 The admin console can share the Better Auth session with the Web app through

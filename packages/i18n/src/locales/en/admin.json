@@ -4,6 +4,7 @@
     "users": "Users",
     "feedback": "Feedback",
     "ai": "AI",
+    "storage": "Storage",
     "auditLog": "Audit log",
     "signOut": "Sign out"
   },
@@ -383,6 +384,68 @@
       "saveSuccess": "Saved {{total}} settings",
       "saveFailed": "Failed to save the settings",
       "saveConflict": "The AI model settings changed elsewhere. Reload and review before saving."
+    }
+  },
+  "storage": {
+    "title": "Storage",
+    "description": "Where each file's object lives and how to move it between the configured stores. New uploads go to the primary store; a file missing from the primary is served from the other store.",
+    "stores": {
+      "heading": "Configured stores",
+      "primary": "Primary (new uploads)",
+      "fallback": "Also read from",
+      "none": "Not configured",
+      "configError": "Storage is not configured correctly: {{error}}"
+    },
+    "providers": {
+      "r2": "R2",
+      "s3": "S3"
+    },
+    "search": {
+      "placeholder": "Search by file name or owner email",
+      "submit": "Search",
+      "order": "Order",
+      "oldestFirst": "Oldest first",
+      "newestFirst": "Newest first"
+    },
+    "columns": {
+      "name": "File",
+      "owner": "Owner",
+      "size": "Size",
+      "createdAt": "Created",
+      "location": "Location",
+      "actions": "Actions"
+    },
+    "location": {
+      "missing": "Not found",
+      "unknown": "Could not check: {{error}}"
+    },
+    "noResults": "No files found",
+    "moveTo": "Move to {{provider}}",
+    "moving": "Moving",
+    "batch": {
+      "heading": "Move files in bulk",
+      "description": "Scans files from the oldest and moves every object that is not yet in the destination. Each run is bounded; keep running to continue from where the last run stopped.",
+      "destination": "Destination",
+      "run": "Move next batch",
+      "keepRunning": "Keep running until every file has been scanned",
+      "stop": "Stop after this batch",
+      "reset": "Start over from the oldest file",
+      "running": "Running",
+      "progress": "Scanned {{scanned}}, moved {{moved}}, already there {{alreadyThere}}, not found {{missing}}, failed {{failed}}",
+      "done": "Every file has been scanned.",
+      "paused": "Stopped. Run again to continue from the last file.",
+      "failures": "Failures"
+    },
+    "messages": {
+      "moved": "Moved {{name}} from {{from}} to {{to}}.",
+      "movedSourceLeft": "Copied {{name}} to {{to}}, but the copy in {{from}} could not be removed. Run the move again to remove it.",
+      "alreadyThere": "{{name}} is already in {{to}}.",
+      "missing": "No object was found for {{name}} in any store.",
+      "invalidInput": "Invalid request.",
+      "notConfigured": "That store is not configured.",
+      "unauthenticated": "You are signed out. Sign in again.",
+      "forbidden": "This account does not have administrator access.",
+      "failed": "The move failed."
     }
   },
   "category": {

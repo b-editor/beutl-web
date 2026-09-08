@@ -42,6 +42,10 @@
       "binding": "NEXT_INC_CACHE_R2_BUCKET",
       "bucket_name": "beutl-web-inc-cache",
     },
+    // MUST MATCH beutl-web-api (packages/api/wrangler.jsonc).
+    // BEUTL_STORAGE_PROVIDER=s3 (vars) + BEUTL_S3_* (vars/secrets) sends new
+    // objects to S3 compatible storage; keep this binding so objects already in
+    // R2 stay readable. See docs/deployment.md#object-storage.
     {
       "binding": "BEUTL_R2_BUCKET",
       "bucket_name": "beutl-dev",
