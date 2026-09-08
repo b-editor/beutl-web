@@ -4,6 +4,7 @@
     "users": "ユーザー",
     "feedback": "フィードバック",
     "ai": "AI",
+    "storage": "ストレージ",
     "auditLog": "監査ログ",
     "signOut": "サインアウト"
   },
@@ -383,6 +384,69 @@
       "saveSuccess": "{{total}} 件の設定を保存しました",
       "saveFailed": "設定の保存に失敗しました",
       "saveConflict": "AI モデル設定が別の管理者によって変更されました。再読み込みして内容を確認してから保存してください。"
+    }
+  },
+  "storage": {
+    "title": "ストレージ",
+    "description": "各ファイルの実体がどのストアにあるかを確認し、設定済みのストア間で移動します。新しいアップロードは主ストアに保存され、主ストアに無いファイルはもう一方のストアから配信されます。",
+    "stores": {
+      "heading": "設定済みのストア",
+      "primary": "主ストア (新規アップロード先)",
+      "fallback": "読み取りの代替",
+      "none": "未設定",
+      "configError": "ストレージの設定に問題があります: {{error}}"
+    },
+    "providers": {
+      "r2": "R2",
+      "s3": "S3"
+    },
+    "search": {
+      "placeholder": "ファイル名または所有者のメールアドレスで検索",
+      "submit": "検索",
+      "order": "並び順",
+      "oldestFirst": "古い順",
+      "newestFirst": "新しい順"
+    },
+    "columns": {
+      "name": "ファイル",
+      "owner": "所有者",
+      "size": "サイズ",
+      "createdAt": "作成日",
+      "location": "所在",
+      "actions": "操作"
+    },
+    "location": {
+      "missing": "見つかりません",
+      "unknown": "確認できません: {{error}}"
+    },
+    "noResults": "ファイルが見つかりません",
+    "moveTo": "{{provider}} へ移動",
+    "moving": "移動中",
+    "batch": {
+      "heading": "まとめて移動",
+      "description": "古いファイルから順に走査し、移動先にまだ無いオブジェクトを移します。1 回の実行には上限があり、続けて実行すると前回の続きから進みます。",
+      "destination": "移動先",
+      "run": "次の一連を移動",
+      "keepRunning": "すべてのファイルを走査し終えるまで続ける",
+      "stop": "この一連で止める",
+      "reset": "最も古いファイルからやり直す",
+      "running": "実行中",
+      "progress": "走査 {{scanned}} 件、移動 {{moved}} 件、移動済み {{alreadyThere}} 件、見つからず {{missing}} 件、失敗 {{failed}} 件",
+      "done": "すべてのファイルを走査しました。",
+      "paused": "停止しました。再実行すると最後のファイルの続きから進みます。",
+      "failures": "失敗",
+      "noProgress": "前回の実行は進みませんでした。ストアが遅いか利用できない可能性があります。再実行すると同じファイルからやり直します。"
+    },
+    "messages": {
+      "moved": "{{name}} を {{from}} から {{to}} へ移動しました。",
+      "movedSourceLeft": "{{name}} を {{to}} へコピーしましたが、{{from}} 側の削除に失敗しました。もう一度移動を実行すると削除されます。",
+      "alreadyThere": "{{name}} は既に {{to}} にあります。",
+      "missing": "{{name}} のオブジェクトはどのストアにも見つかりません。",
+      "invalidInput": "不正な要求です。",
+      "notConfigured": "そのストアは設定されていません。",
+      "unauthenticated": "サインアウトしています。もう一度サインインしてください。",
+      "forbidden": "このアカウントには管理者権限がありません。",
+      "failed": "移動に失敗しました。"
     }
   },
   "category": {

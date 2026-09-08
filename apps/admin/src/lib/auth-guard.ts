@@ -29,7 +29,7 @@ const getSession = cache(async () => {
 // 認証だけを見る関数を外に出すのは管理者判定込みの adminAction / requireAdmin だけ。
 // Generic in what the action returns so a read-only lookup can hand back the
 // data it found; the union keeps the refusals, which carry no payload.
-export async function adminAction<T extends ActionResult>(
+export async function adminAction<T extends ActionResult<unknown>>(
   fnc: (session: SafeSession) => Promise<T>,
 ): Promise<T | ActionResult> {
   const result = await getSession();

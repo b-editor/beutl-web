@@ -3,6 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { setDbProvider } from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
+import { resolveStorageBucket } from "@beutl/api/storage/bucket-from-env";
 import { after } from "next/server";
 import { cache } from "react";
 
@@ -32,14 +33,9 @@ const getPrismaClient = cache(createPrismaClient);
 
 setDbProvider(getPrismaClient);
 
-// AI 出力の保存先 (R2) を @beutl/api のストレージ層に登録する。
-// getCloudflareContext はリクエストコンテキストでのみ利用可能なため遅延実行する。
-setR2BucketProvider(() => {
-  const { env } = getCloudflareContext();
-  if (!env.BEUTL_R2_BUCKET) {
-    throw new Error("BEUTL_R2_BUCKET binding not found");
-  }
-  return env.BEUTL_R2_BUCKET;
-});
+// ファイルと AI 出力の保存先 (R2 か S3 互換ストレージ) を @beutl/api の
+// ストレージ層に登録する。getCloudflareContext はリクエストコンテキストでのみ
+// 利用可能なため遅延実行する。
+setR2BucketProvider(() => resolveStorageBucket(getCloudflareContext().env));
 
 export type { PrismaClient };

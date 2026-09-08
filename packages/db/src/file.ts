@@ -644,3 +644,179 @@ export async function createFileAndSettleStorageWrite({
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
+
+// 管理画面のストレージ一覧。所有者を引けるようにし、古い順を既定にする
+// (プロバイダ切替前のファイルほど古いので、移動の対象を先頭に出す)。
+const adminFileSelect = {
+  id: true,
+  name: true,
+  size: true,
+  mimeType: true,
+  objectKey: true,
+  createdAt: true,
+  user: { select: { id: true, email: true, name: true } },
+} as const;
+
+// ストア間の移動が持つ排他リース。取れるのは誰も持っていないか期限切れのとき
+// だけで、持っている間は別の isolate の移動が同じファイルに触れない。
+export const FILE_STORAGE_MOVE_LEASE_MILLISECONDS = 30 * 60 * 1000;
+
+export async function acquireFileStorageMoveLease({
+  id,
+  leaseToken,
+  now = new Date(),
+  leaseMilliseconds = FILE_STORAGE_MOVE_LEASE_MILLISECONDS,
+  prisma,
+}: {
+  id: string;
+  leaseToken: string;
+  now?: Date;
+  leaseMilliseconds?: number;
+  prisma?: PrismaTransaction;
+}): Promise<"acquired" | "busy" | "gone"> {
+  const db = prisma ?? (await getDb());
+  const updated = await db.file.updateMany({
+    where: {
+      id,
+      OR: [
+        { storageMoveLeaseUntil: null },
+        { storageMoveLeaseUntil: { lte: now } },
+      ],
+    },
+    data: {
+      storageMoveLeaseToken: leaseToken,
+      storageMoveLeaseUntil: new Date(now.getTime() + leaseMilliseconds),
+    },
+  });
+  if (updated.count === 1) return "acquired";
+  const exists = await db.file.findUnique({ where: { id }, select: { id: true } });
+  return exists ? "busy" : "gone";
+}
+
+// 持っているリースを確かめて延ばす。期限切れや別の持ち主なら false。
+// 移動は何かを消す直前に必ずこれを通し、負けていれば何も消さない。
+export async function renewFileStorageMoveLease({
+  id,
+  leaseToken,
+  now = new Date(),
+  leaseMilliseconds = FILE_STORAGE_MOVE_LEASE_MILLISECONDS,
+  prisma,
+}: {
+  id: string;
+  leaseToken: string;
+  now?: Date;
+  leaseMilliseconds?: number;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const renewed = await db.file.updateMany({
+    where: { id, storageMoveLeaseToken: leaseToken, storageMoveLeaseUntil: { gt: now } },
+    data: { storageMoveLeaseUntil: new Date(now.getTime() + leaseMilliseconds) },
+  });
+  return renewed.count === 1;
+}
+
+export async function releaseFileStorageMoveLease({
+  id,
+  leaseToken,
+  prisma,
+}: {
+  id: string;
+  leaseToken: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const released = await db.file.updateMany({
+    where: { id, storageMoveLeaseToken: leaseToken },
+    data: { storageMoveLeaseToken: null, storageMoveLeaseUntil: null },
+  });
+  return released.count === 1;
+}
+
+export async function existsFileById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  return (await db.file.findUnique({ where: { id }, select: { id: true } })) !== null;
+}
+
+export type AdminFileOrder = "asc" | "desc";
+
+export async function listFilesForAdmin({
+  query,
+  page,
+  pageSize,
+  order = "asc",
+  prisma,
+}: {
+  query?: string;
+  page: number;
+  pageSize: number;
+  order?: AdminFileOrder;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  const queryMode = "insensitive" as const;
+  const where =
+    query && query.length > 0
+      ? {
+          OR: [
+            { name: { contains: query, mode: queryMode } },
+            { user: { email: { contains: query, mode: queryMode } } },
+          ],
+        }
+      : {};
+  const [items, total] = await Promise.all([
+    db.file.findMany({
+      where,
+      select: adminFileSelect,
+      // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
+      orderBy: [{ createdAt: order }, { id: order }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.file.count({ where }),
+  ]);
+  return { items, total };
+}
+
+// 一括移動の走査。(createdAt, id) の位置から古い順に次の一連を返す。
+export async function listFilesForAdminAfter({
+  after,
+  limit,
+  prisma,
+}: {
+  after?: { createdAt: Date; id: string };
+  limit: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.file.findMany({
+    where: after
+      ? {
+          OR: [
+            { createdAt: { gt: after.createdAt } },
+            { createdAt: after.createdAt, id: { gt: after.id } },
+          ],
+        }
+      : {},
+    select: adminFileSelect,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+}
+
+export async function findFileForAdminById({
+  id,
+  prisma,
+}: {
+  id: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? (await getDb());
+  return await db.file.findUnique({ where: { id }, select: adminFileSelect });
+}

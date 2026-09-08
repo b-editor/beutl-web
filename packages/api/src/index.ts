@@ -29,6 +29,36 @@ export {
   isTerminalMultipartAbortError,
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
+export {
+  configuredStorageProviders,
+  createStorageBucket,
+  createStorageStores,
+  resolveStorageBucket,
+  resolveStorageStores,
+  storageProviderOf,
+  STORAGE_PROVIDERS,
+} from "./storage/bucket-from-env";
+export type { StorageProvider, StorageStore, StorageStores } from "./storage/bucket-from-env";
+export {
+  locateStorageObject,
+  moveStorageObject,
+  moveStorageObjectsBatch,
+  StorageMoveError,
+} from "./storage/move-object";
+export type {
+  MovableFile,
+  MoveBatchOutcome,
+  MoveOutcome,
+  ObjectLocation,
+  StorageMoveLease,
+} from "./storage/move-object";
+export { createLayeredBucket } from "./storage/layered-bucket";
+export type { StorageStreamOptions } from "./ai/r2-provider";
+export {
+  createS3CompatibleBucket,
+  S3StorageError,
+} from "./storage/s3-compatible-bucket";
+export type { S3CompatibleBucketOptions } from "./storage/s3-compatible-bucket";
 export { closeStripeCustomerForAdminAccountDeletion } from "./account-deletion-stripe";
 export {
   discoverPackageCheckoutAttempt,

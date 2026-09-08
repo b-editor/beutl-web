@@ -38,6 +38,10 @@
       "id": "34ad44345f2f45ea97c3608b0567a878"
     }
   ],
+  // MUST MATCH beutl-web: both Workers read and write the same objects.
+  // BEUTL_STORAGE_PROVIDER=s3 (vars) + BEUTL_S3_* (vars/secrets) sends new
+  // objects to S3 compatible storage; keep this binding so objects already in
+  // R2 stay readable. See docs/deployment.md#object-storage.
   "r2_buckets": [
     {
       "binding": "BEUTL_R2_BUCKET",

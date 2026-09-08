@@ -25,6 +25,7 @@ import {
   abandonStaleStorageUploads,
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
+import { resolveStorageBucket } from "./storage/bucket-from-env";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -44,7 +45,17 @@ export interface Env {
   BEUTL_LATEST_VERSION?: string;
   BEUTL_REQUIRED_VERSION?: string;
   ADMIN_USER_IDS?: string;
+  // オブジェクトストレージ。既定は R2 バインディング。BEUTL_STORAGE_PROVIDER=s3
+  // のときは BEUTL_S3_* から S3 互換ストレージへ接続する (docs/deployment.md)。
   BEUTL_R2_BUCKET?: R2BucketLike;
+  BEUTL_STORAGE_PROVIDER?: string;
+  BEUTL_S3_ENDPOINT?: string;
+  BEUTL_S3_BUCKET?: string;
+  BEUTL_S3_REGION?: string;
+  BEUTL_S3_ACCESS_KEY_ID?: string;
+  BEUTL_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_S3_SESSION_TOKEN?: string;
+  BEUTL_S3_FORCE_PATH_STYLE?: string;
   STRIPE_SECRET_KEY?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_WEBHOOK_SECRET?: string;
@@ -79,9 +90,9 @@ function configureRuntime(env: Env): void {
     }
   }
   setDbProvider(createProvider(env));
-  if (env.BEUTL_R2_BUCKET) {
-    setR2BucketProvider(() => env.BEUTL_R2_BUCKET as R2BucketLike);
-  }
+  // 解決は最初のストレージ呼び出しまで遅らせる。ストレージを使わない
+  // ルートまで設定不備で落とさないため。
+  setR2BucketProvider(() => resolveStorageBucket(env));
 }
 
 // Only GET and HEAD are bodyless. Other methods may carry a body that the

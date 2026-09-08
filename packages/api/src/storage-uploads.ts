@@ -24,6 +24,9 @@ import {
   STORAGE_QUOTA_BYTES,
 } from "@beutl/core";
 import { getR2Bucket } from "./ai/storage";
+import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
+
+export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
 // Giving up on uploads nobody finished.
 //
@@ -47,16 +50,6 @@ const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 const STORAGE_UPLOAD_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 const MAX_PER_RUN = 100;
-
-export function isTerminalMultipartAbortError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const record = error as Record<string, unknown>;
-  const code = String(record.code ?? record.name ?? "").toLowerCase();
-  if (code === "nosuchupload") return true;
-  return /(?:\(\s*10024\s*\)|\b10024)\s*$/u.test(
-    String(record.message ?? error),
-  );
-}
 
 export async function reconcileStorageMultipartCleanups(
   now: Date = new Date(),

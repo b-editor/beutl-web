@@ -30,8 +30,13 @@ describe("Cloudflare Worker memory footprint", () => {
 
     expect(apiPackage.exports?.["./ai/r2-provider"])
       .toBe("./src/ai/r2-provider.ts");
+    expect(apiPackage.exports?.["./storage/bucket-from-env"])
+      .toBe("./src/storage/bucket-from-env.ts");
     expect(prisma).toContain(
       'import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";',
+    );
+    expect(prisma).toContain(
+      'import { resolveStorageBucket } from "@beutl/api/storage/bucket-from-env";',
     );
     expect(prisma).not.toMatch(/from "@beutl\/api"/u);
     expect(provider).not.toMatch(/^import\s/mu);
