@@ -105,6 +105,62 @@ describe("moving one object between stores", () => {
     expect(s3.data.has("key")).toBe(true);
   });
 
+  it("treats an unmeasurable destination copy as unverified", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(16, 9) });
+    s3.bucket.head.mockResolvedValueOnce(null).mockResolvedValue({ size: undefined });
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 16 }))
+      .rejects.toMatchObject({ reason: "verification-failed" });
+    expect(r2.data.has("key")).toBe(true);
+  });
+
+  it("does not remove a leftover when the destination copy cannot be measured", async () => {
+    const s3 = memoryStore("s3", { key: bytes(8, 10) });
+    const r2 = memoryStore("r2", { key: bytes(8, 10) });
+    s3.bucket.head.mockResolvedValue({ size: undefined });
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
+      .rejects.toMatchObject({ reason: "size-mismatch" });
+    expect(r2.data.has("key")).toBe(true);
+  });
+
+  it("keeps the last copy when the destination vanished before the leftover was removed", async () => {
+    const s3 = memoryStore("s3", { key: bytes(8, 11) });
+    const r2 = memoryStore("r2", { key: bytes(8, 11) });
+    s3.bucket.head.mockResolvedValueOnce({ size: 8 }).mockResolvedValueOnce(null);
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
+      .rejects.toMatchObject({ reason: "verification-failed" });
+    expect(r2.data.has("key")).toBe(true);
+    expect(r2.bucket.delete).not.toHaveBeenCalled();
+  });
+
+  it("runs opposing moves of one object one after the other", async () => {
+    const payload = bytes(8, 12);
+    const s3 = memoryStore("s3", { key: payload });
+    const r2 = memoryStore("r2", { key: payload });
+    const stores = [s3.store, r2.store];
+    const [toS3, toR2] = await Promise.all([
+      moveStorageObject({ objectKey: "key", to: "s3", stores, expectedSize: 8 }),
+      moveStorageObject({ objectKey: "key", to: "r2", stores, expectedSize: 8 }),
+    ]);
+    expect(toS3).toEqual({ kind: "already-there", to: "s3", removedFrom: ["r2"] });
+    expect(toR2).toMatchObject({ kind: "moved", from: "s3", to: "r2", sourceRemoved: true });
+    expect(r2.data.get("key")).toEqual(payload);
+    expect(s3.data.has("key")).toBe(false);
+  });
+
+  it("refuses a source that changed size between HEAD and GET", async () => {
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: bytes(8, 13) });
+    r2.bucket.get.mockImplementationOnce(async () => ({
+      size: 9,
+      body: new ReadableStream<Uint8Array>({ start: (c) => { c.enqueue(bytes(9, 13)); c.close(); } }),
+    }));
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8 }))
+      .rejects.toMatchObject({ reason: "size-mismatch" });
+    expect(s3.bucket.put).not.toHaveBeenCalled();
+    expect(r2.data.has("key")).toBe(true);
+  });
+
   it("reports an object that no store holds", async () => {
     const s3 = memoryStore("s3");
     const r2 = memoryStore("r2");
@@ -190,7 +246,7 @@ describe("moving files in bulk", () => {
       nextPage: pager(all, 2),
       cursor: undefined,
       limits: { moves: 10, scanned: 100, milliseconds: 60_000 },
-      onMoved: async (file) => {
+      onObjectChanged: async (file) => {
         moved.push(file.id);
       },
     });
@@ -209,19 +265,42 @@ describe("moving files in bulk", () => {
     expect(r2.data.size).toBe(0);
   });
 
+  it("reports a leftover copy it removed along the way", async () => {
+    const all = files(1);
+    const r2 = memoryStore("r2", { "key-0": bytes(4, 0) });
+    const s3 = memoryStore("s3", { "key-0": bytes(4, 0) });
+    const changed: string[] = [];
+    const outcome = await moveStorageObjectsBatch({
+      to: "s3",
+      stores: [s3.store, r2.store],
+      nextPage: pager(all, 10),
+      cursor: undefined,
+      limits: { moves: 10, scanned: 100, milliseconds: 60_000 },
+      onObjectChanged: async (file, result) => {
+        changed.push(`${file.id}:${result.kind}`);
+      },
+    });
+    expect(outcome).toMatchObject({ moved: 0, alreadyThere: 1, done: true });
+    expect(changed).toEqual(["file-0:already-there"]);
+    expect(r2.data.size).toBe(0);
+  });
+
   it("stops at the move limit and hands back where to resume", async () => {
     const all = files(6);
     const r2 = memoryStore("r2", Object.fromEntries(all.map((file, index) => [file.objectKey, bytes(4, index)])));
     const s3 = memoryStore("s3");
+    const pages = vi.fn(pager(all, 2));
 
     const first = await moveStorageObjectsBatch({
       to: "s3",
       stores: [s3.store, r2.store],
-      nextPage: pager(all, 4),
+      nextPage: pages,
       cursor: undefined,
       limits: { moves: 2, scanned: 100, milliseconds: 60_000 },
     });
     expect(first).toMatchObject({ moved: 2, scanned: 2, nextCursor: "c1", done: false });
+    // The limit was reached on the last file of a page; no further page is read.
+    expect(pages).toHaveBeenCalledTimes(1);
 
     const second = await moveStorageObjectsBatch({
       to: "s3",
@@ -245,11 +324,10 @@ describe("moving files in bulk", () => {
       nextPage: pager(all, 10),
       cursor: undefined,
       limits: { moves: 10, scanned: 100, milliseconds: 5 },
-      now: () => (clock += 3),
+      now: () => (clock += 2),
     });
     expect(outcome.done).toBe(false);
-    expect(outcome.scanned).toBeLessThan(3);
-    expect(outcome.nextCursor).toBeDefined();
+    expect(outcome).toMatchObject({ scanned: 1, moved: 1, nextCursor: "c0" });
   });
 
   it("records a failure and carries on with the next file", async () => {

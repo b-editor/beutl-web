@@ -74,6 +74,28 @@ function sizeAgrees(observed: number | undefined, expected: number | undefined):
   return observed === undefined || expected === undefined || observed === expected;
 }
 
+// A copy whose size cannot be read is not a verified copy.
+function measuredAs(observed: number | undefined, expected: number): boolean {
+  return observed === expected;
+}
+
+// Two moves of the same object in one isolate run one after the other, so an
+// opposing pair cannot each delete the copy the other relies on. Separate
+// isolates still race across the short window between the final check and
+// the delete; the check below narrows it.
+const inFlight = new Map<string, Promise<unknown>>();
+
+async function serialized<T>(objectKey: string, run: () => Promise<T>): Promise<T> {
+  const previous = inFlight.get(objectKey) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(run);
+  inFlight.set(objectKey, current);
+  try {
+    return await current;
+  } finally {
+    if (inFlight.get(objectKey) === current) inFlight.delete(objectKey);
+  }
+}
+
 /**
  * Move one object into the `to` store from wherever it currently is.
  *
@@ -98,6 +120,26 @@ export async function moveStorageObject({
   if (!destination) {
     throw new StorageMoveError("no-destination", `The ${to} store is not configured`);
   }
+  return await serialized(objectKey, () =>
+    moveLocatedObject({ objectKey, to, stores, destination, expectedSize, contentType }),
+  );
+}
+
+async function moveLocatedObject({
+  objectKey,
+  to,
+  stores,
+  destination,
+  expectedSize,
+  contentType,
+}: {
+  objectKey: string;
+  to: StorageProvider;
+  stores: readonly StorageStore[];
+  destination: StorageStore;
+  expectedSize?: number;
+  contentType?: string;
+}): Promise<MoveOutcome> {
   const locations = await locateStorageObject(objectKey, stores);
   const atDestination = locations.find((location) => location.provider === to);
   const elsewhere = locations.filter((location) => location.provider !== to);
@@ -105,16 +147,26 @@ export async function moveStorageObject({
   if (atDestination) {
     if (elsewhere.length === 0) return { kind: "already-there", to, removedFrom: [] };
     // A copy that a previous move left behind. Only remove it once the
-    // destination copy is known to be the right size.
-    if (!sizeAgrees(atDestination.size, expectedSize)) {
+    // destination copy is measured and, when the record says how large the
+    // object is, agrees with it.
+    if (atDestination.size === undefined || !sizeAgrees(atDestination.size, expectedSize)) {
       throw new StorageMoveError(
         "size-mismatch",
-        `${objectKey} in ${to} is ${atDestination.size} bytes, not the recorded ${expectedSize}`,
+        `${objectKey} in ${to} is ${atDestination.size ?? "of unknown size"}, not the recorded ${expectedSize}`,
       );
     }
     const removedFrom: StorageProvider[] = [];
     for (const location of elsewhere) {
       const store = stores.find((candidate) => candidate.provider === location.provider)!;
+      // An opposing move may have taken the destination copy since it was
+      // located; never remove the last copy.
+      const stillThere = await inspector(destination)(objectKey);
+      if (!stillThere || !measuredAs(stillThere.size, atDestination.size)) {
+        throw new StorageMoveError(
+          "verification-failed",
+          `${objectKey} in ${to} changed while its copy in ${location.provider} was about to be removed`,
+        );
+      }
       await remover(store)(objectKey);
       removedFrom.push(location.provider);
     }
@@ -139,11 +191,14 @@ export async function moveStorageObject({
 
   const object = await source.bucket.get(objectKey);
   if (!object) return { kind: "missing" };
-  const size = object.size ?? sourceLocation.size ?? expectedSize;
-  if (size === undefined) {
+  const size = object.size ?? sourceLocation.size;
+  // The object may have been replaced between HEAD and GET; what is copied
+  // must be what the record describes.
+  if (size === undefined || !sizeAgrees(size, expectedSize)) {
+    await object.body?.cancel().catch(() => undefined);
     throw new StorageMoveError(
       "size-mismatch",
-      `${objectKey} in ${source.provider} has no measurable size`,
+      `${objectKey} in ${source.provider} reads as ${size ?? "an unknown size"}, not the recorded ${expectedSize}`,
     );
   }
   const body: ArrayBuffer | ReadableStream =
@@ -154,7 +209,7 @@ export async function moveStorageObject({
   });
 
   const copied = await inspector(destination)(objectKey);
-  if (!copied || !sizeAgrees(copied.size, size)) {
+  if (!copied || !measuredAs(copied.size, size)) {
     // Leave the source untouched and do not keep a copy of unknown shape.
     await remover(destination)(objectKey).catch(() => undefined);
     throw new StorageMoveError(
@@ -206,7 +261,7 @@ export async function moveStorageObjectsBatch({
   nextPage,
   cursor,
   limits,
-  onMoved,
+  onObjectChanged,
   now = () => Date.now(),
 }: {
   to: StorageProvider;
@@ -214,7 +269,12 @@ export async function moveStorageObjectsBatch({
   nextPage: (cursor: string | undefined) => Promise<MovableFile[]>;
   cursor: string | undefined;
   limits: { moves: number; scanned: number; milliseconds: number };
-  onMoved?: (file: MovableFile, outcome: Extract<MoveOutcome, { kind: "moved" }>) => Promise<void>;
+  /** Called for every outcome that deleted something: a move, or a leftover
+   * copy removed from another store. Nothing is reported for a no-op. */
+  onObjectChanged?: (
+    file: MovableFile,
+    outcome: Extract<MoveOutcome, { kind: "moved" | "already-there" }>,
+  ) => Promise<void>;
   now?: () => number;
 }): Promise<MoveBatchOutcome> {
   if (!stores.some((store) => store.provider === to)) {
@@ -236,6 +296,7 @@ export async function moveStorageObjectsBatch({
     now() >= deadline;
 
   for (;;) {
+    if (exhausted()) return outcome;
     const page = await nextPage(outcome.nextCursor);
     if (page.length === 0) {
       outcome.done = true;
@@ -279,9 +340,10 @@ export async function moveStorageObjectsBatch({
         });
         if (result.kind === "moved") {
           outcome.moved++;
-          await onMoved?.(entry.file, result);
+          await onObjectChanged?.(entry.file, result);
         } else if (result.kind === "already-there") {
           outcome.alreadyThere++;
+          if (result.removedFrom.length > 0) await onObjectChanged?.(entry.file, result);
         } else {
           outcome.missing++;
         }

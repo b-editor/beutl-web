@@ -239,13 +239,14 @@ describe("S3 compatible bucket adapter", () => {
   });
 
   it("treats an error document behind a 200 completion as a failure", async () => {
-    respond(xml("  <Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>"));
+    respond(xml("  <Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum allowed size</Message></Error>"));
     const handle = bucket().resumeMultipartUpload!("k", "up");
     await expect(handle.complete([{ partNumber: 1, etag: "e1" }])).rejects.toMatchObject({
       name: "S3StorageError",
-      code: "InternalError",
+      code: "EntityTooSmall",
       operation: "completeMultipartUpload",
     });
+    expect(recorded).toHaveLength(1);
   });
 
   it("aborts, and reports a forgotten upload the way the reconcilers expect", async () => {
@@ -271,5 +272,51 @@ describe("S3 compatible bucket adapter", () => {
 
   it("rejects an endpoint that is not an http(s) URL", () => {
     expect(() => bucket({ endpoint: "ftp://files.example.test" })).toThrow(/http\(s\)/u);
+  });
+
+  it("refuses a plain http endpoint unless insecure transport is allowed", async () => {
+    expect(() => bucket({ endpoint: "http://minio.local:9000" })).toThrow(/not https/u);
+    respond(new Response(null, { status: 200 }));
+    await bucket({ endpoint: "http://minio.local:9000", allowInsecureHttp: true }).put("k", "v");
+    expect(recorded[0].url.toString()).toBe("http://minio.local:9000/beutl/k");
+  });
+
+  it("refuses keys with dot segments instead of letting the URL rewrite them", async () => {
+    const s3 = bucket();
+    await expect(s3.put("archive/../current", "v")).rejects.toThrow(/Unsupported object key/u);
+    await expect(s3.head!("./a")).rejects.toThrow(/Unsupported object key/u);
+    await expect(s3.get!("a//b")).rejects.toThrow(/Unsupported object key/u);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("reports the service error code when HEAD is refused", async () => {
+    respond(new Response(null, { status: 403 }));
+    await expect(bucket().head!("k")).rejects.toMatchObject({
+      name: "S3StorageError",
+      operation: "head",
+      status: 403,
+    });
+  });
+
+  it("omits the etag of a put the service did not tag", async () => {
+    respond(new Response(null, { status: 200 }));
+    expect(await bucket().put("k", "v")).toEqual({ key: "k" });
+  });
+
+  it("never repeats a multipart initiation", async () => {
+    respond(new Response(null, { status: 503 }));
+    await expect(bucket().createMultipartUpload!("k")).rejects.toMatchObject({ status: 503 });
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("retries a completion whose 200 body carries a transient error", async () => {
+    respond(
+      xml("<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>"),
+      xml("<CompleteMultipartUploadResult><ETag>\"final\"</ETag></CompleteMultipartUploadResult>"),
+      new Response(null, { status: 200, headers: { "content-length": "3" } }),
+    );
+    const handle = bucket().resumeMultipartUpload!("k", "up");
+    expect(await handle.complete([{ partNumber: 1, etag: "e1" }])).toEqual({ size: 3 });
+    expect(recorded.filter((request) => request.method === "POST")).toHaveLength(2);
   });
 });

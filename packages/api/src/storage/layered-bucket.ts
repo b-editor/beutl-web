@@ -41,8 +41,15 @@ export function createLayeredBucket({
   if (primary.delete) {
     const remove = primary.delete.bind(primary);
     bucket.delete = async (key) => {
-      await remove(key);
-      if (fallback.delete) await fallback.delete(key);
+      if (!fallback.delete) {
+        await remove(key);
+        return;
+      }
+      // Both deletes always run: an unreachable primary must not leave the
+      // fallback's copy behind, and deleting a missing key succeeds anyway.
+      const results = await Promise.allSettled([remove(key), fallback.delete(key)]);
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     };
   }
 
@@ -76,11 +83,25 @@ export function createLayeredBucket({
           }
         }
       };
+      // Some services answer an abort for an id they never issued with a
+      // plain success (MinIO does), which would hide the stale handle in the
+      // other store. Abort reaches both stores; it succeeds when either one
+      // still knew the upload, and reports the primary's error when neither.
+      const abortBoth = async (): Promise<void> => {
+        const [viaPrimary, viaFallback] = await Promise.allSettled([first.abort(), second.abort()]);
+        for (const result of [viaPrimary, viaFallback]) {
+          if (result.status === "rejected" && !isTerminalMultipartAbortError(result.reason)) {
+            throw result.reason;
+          }
+        }
+        if (viaPrimary.status === "fulfilled" || viaFallback.status === "fulfilled") return;
+        throw viaPrimary.reason;
+      };
       return {
         uploadPart: (partNumber, value, options) =>
           first.uploadPart(partNumber, value, options),
         complete: (parts) => orFallback((handle) => handle.complete(parts)),
-        abort: () => orFallback((handle) => handle.abort()),
+        abort: abortBoth,
       };
     };
   }

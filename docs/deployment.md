@@ -40,20 +40,24 @@ other one wrote. The admin Worker takes the same configuration so that
 
 ### S3 compatible storage
 
-Set `BEUTL_STORAGE_PROVIDER=s3` on both Workers together with:
+Set `BEUTL_STORAGE_PROVIDER=s3` on all three Workers (Web, desktop API, and
+admin) together with:
 
 - `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,
   `https://<account>.r2.cloudflarestorage.com`, or an endpoint with a path
   prefix. Workers fetch with `global_fetch_strictly_public`, so the endpoint
   must be publicly reachable.
 - `BEUTL_S3_BUCKET`: the bucket name.
-- `BEUTL_S3_ACCESS_KEY_ID` and `BEUTL_S3_SECRET_ACCESS_KEY`: store both with
-  `wrangler secret put`. `BEUTL_S3_SESSION_TOKEN` is optional for temporary
-  credentials.
+- `BEUTL_S3_ACCESS_KEY_ID`, `BEUTL_S3_SECRET_ACCESS_KEY`, and, for temporary
+  credentials, `BEUTL_S3_SESSION_TOKEN`: all three are credentials and must be
+  stored with `wrangler secret put`, never as `vars`.
 - `BEUTL_S3_REGION`: the signing region. It defaults to `auto`, which R2 and
   MinIO accept; AWS S3, Backblaze B2, and Wasabi need their real region.
 - `BEUTL_S3_FORCE_PATH_STYLE`: `true` (default) requests
   `https://endpoint/bucket/key`; `false` requests `https://bucket.endpoint/key`.
+- `BEUTL_S3_ALLOW_INSECURE_HTTP`: an `http://` endpoint is refused unless this
+  is `true`. Signed requests carry the credentials and the object data, so
+  this is for a local MinIO during development only.
 
 The credential needs `GetObject`, `PutObject`, `DeleteObject`, and the
 multipart upload permissions (`CreateMultipartUpload`, `UploadPart`,
@@ -61,8 +65,9 @@ multipart upload permissions (`CreateMultipartUpload`, `UploadPart`,
 addressed by key only; no bucket listing is performed.
 
 Uploads stream each part straight from the browser request to the service with
-an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`), which every
-common S3 compatible service accepts over HTTPS. Configure the bucket to abort
+an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`). This has been
+verified against MinIO, and R2 and AWS S3 document support for it; check
+another provider accepts it before relying on it. Configure the bucket to abort
 incomplete multipart uploads after 7 days, matching the R2 lifecycle rule that
 `pnpm verify:r2-lifecycle` checks, so that an upload id whose owner never
 returned is not paid for indefinitely.

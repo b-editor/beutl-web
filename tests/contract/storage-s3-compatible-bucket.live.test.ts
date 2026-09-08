@@ -23,6 +23,7 @@ function liveBucket() {
     secretAccessKey: secretAccessKey!,
     region: process.env.BEUTL_S3_TEST_REGION,
     forcePathStyle: process.env.BEUTL_S3_TEST_FORCE_PATH_STYLE !== "false",
+    allowInsecureHttp: true,
   });
 }
 

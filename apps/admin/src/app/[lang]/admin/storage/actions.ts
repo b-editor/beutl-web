@@ -9,6 +9,7 @@ import {
   moveStorageObjectsBatch,
   StorageMoveError,
   type MoveBatchOutcome,
+  type MoveOutcome,
   type MovableFile,
   type StorageProvider,
 } from "@beutl/api";
@@ -31,26 +32,26 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Every outcome that deleted a copy is recorded, including the removal of a
+// leftover copy when the object was already at the destination.
 async function recordMove({
   operatorUserId,
   file,
-  from,
-  to,
-  size,
-  sourceRemoved,
+  outcome,
 }: {
   operatorUserId: string;
   file: { id: string; objectKey: string };
-  from: StorageProvider;
-  to: StorageProvider;
-  size: number;
-  sourceRemoved: boolean;
+  outcome: Extract<MoveOutcome, { kind: "moved" | "already-there" }>;
 }): Promise<void> {
+  const details =
+    outcome.kind === "moved"
+      ? `fileId: ${file.id}, objectKey: ${file.objectKey}, from: ${outcome.from}, to: ${outcome.to}, size: ${outcome.size}${outcome.sourceRemoved ? "" : ", sourceRemoved: false"}`
+      : `fileId: ${file.id}, objectKey: ${file.objectKey}, to: ${outcome.to}, leftoverRemovedFrom: ${outcome.removedFrom.join("+")}`;
   try {
     await addAuditLog({
       userId: operatorUserId,
       action: auditLogActions.admin.storageObjectMoved,
-      details: `fileId: ${file.id}, objectKey: ${file.objectKey}, from: ${from}, to: ${to}, size: ${size}${sourceRemoved ? "" : ", sourceRemoved: false"}`,
+      details,
     });
   } catch (error) {
     // The object has moved either way; a lost audit row must not undo that.
@@ -89,7 +90,7 @@ export async function moveFileToProvider(
         contentType: file.mimeType,
       });
       if (outcome.kind === "moved") {
-        await recordMove({ operatorUserId: session.user.id, file, ...outcome });
+        await recordMove({ operatorUserId: session.user.id, file, outcome });
         return {
           success: true,
           message: t(
@@ -101,6 +102,9 @@ export async function moveFileToProvider(
         };
       }
       if (outcome.kind === "already-there") {
+        if (outcome.removedFrom.length > 0) {
+          await recordMove({ operatorUserId: session.user.id, file, outcome });
+        }
         return {
           success: true,
           message: t("admin:storage.messages.alreadyThere", {
@@ -166,8 +170,8 @@ export async function moveFilesBatch(
             cursor: encodeFileCursor(row),
           }));
         },
-        onMoved: (file, result) =>
-          recordMove({ operatorUserId: session.user.id, file, ...result }),
+        onObjectChanged: (file, outcome) =>
+          recordMove({ operatorUserId: session.user.id, file, outcome }),
       });
       return { success: true, data: outcome };
     } catch (error) {

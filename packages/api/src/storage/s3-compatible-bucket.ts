@@ -16,6 +16,9 @@ export type S3CompatibleBucketOptions = {
   sessionToken?: string;
   /** `https://endpoint/bucket/key` (既定) か `https://bucket.endpoint/key` か。 */
   forcePathStyle?: boolean;
+  /** 署名済み要求と資格情報を平文で送ることになるので、ローカルの MinIO など
+   * 開発用途に限って明示的に許す。 */
+  allowInsecureHttp?: boolean;
   fetch?: typeof globalThis.fetch;
 };
 
@@ -65,9 +68,16 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+// URL.pathname collapses "." and ".." segments, so a key containing them
+// would address a different object than the one recorded. No key this
+// service issues has such a segment; refuse rather than silently rewrite.
 function encodeObjectKey(key: string): string {
   if (key.length === 0) throw new TypeError("An object key must not be empty");
-  return key.split("/").map(encodeURIComponent).join("/");
+  const segments = key.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new TypeError(`Unsupported object key: ${key}`);
+  }
+  return segments.map(encodeURIComponent).join("/");
 }
 
 function decodeXmlEntities(value: string): string {
@@ -166,6 +176,17 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+// Error codes S3 documents as transient. Anything else in a 200 completion
+// body describes the request itself and will not pass on a retry.
+const RETRYABLE_ERROR_CODES = new Set([
+  "InternalError",
+  "ServiceUnavailable",
+  "SlowDown",
+  "RequestTimeout",
+  "Throttling",
+  "ThrottlingException",
+]);
+
 // workerd exposes FixedLengthStream, whose length it turns into Content-Length
 // on the outgoing request. Elsewhere (Node, for `next dev` and tests) fetch
 // sends a stream chunked unless the header is given explicitly.
@@ -205,6 +226,11 @@ export function createS3CompatibleBucket(
   if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
     throw new TypeError(
       `The S3 endpoint must be an http(s) URL, received ${options.endpoint}`,
+    );
+  }
+  if (endpoint.protocol === "http:" && !options.allowInsecureHttp) {
+    throw new TypeError(
+      `The S3 endpoint ${options.endpoint} is not https; set allowInsecureHttp only for local development`,
     );
   }
   if (options.bucket.length === 0 || options.bucket.includes("/")) {
@@ -254,15 +280,18 @@ export function createS3CompatibleBucket(
     url,
     headers,
     body,
+    retry = true,
   }: {
     method: string;
     url: URL;
     headers?: Record<string, string>;
     body?: BucketValue;
+    /** Whether a transient failure may be tried again. A stream can be sent
+     * once, and a request whose success creates something the caller must
+     * be told about (a multipart upload id) must not be repeated blindly. */
+    retry?: boolean;
   }): Promise<Response> {
-    // A stream can be sent once, so only buffered bodies get another attempt.
-    const attempts =
-      body instanceof ReadableStream ? 1 : RETRY_ATTEMPTS;
+    const attempts = retry && !(body instanceof ReadableStream) ? RETRY_ATTEMPTS : 1;
     for (let attempt = 1; ; attempt++) {
       const request = await client.sign(url.toString(), {
         method,
@@ -291,11 +320,12 @@ export function createS3CompatibleBucket(
       method: "HEAD",
       url: objectUrl(key),
     });
-    await response.body?.cancel().catch(() => undefined);
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      throw new S3StorageError({ operation: "head", key, status: response.status });
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
     }
+    if (!response.ok) throw await failure("head", key, response);
+    await response.body?.cancel().catch(() => undefined);
     return { size: contentLengthOf(response) };
   }
 
@@ -337,23 +367,32 @@ export function createS3CompatibleBucket(
             )
             .join("") +
           "</CompleteMultipartUpload>";
-        const response = await send({
-          method: "POST",
-          url: objectUrl(key, query),
-          headers: { "content-type": "application/xml" },
-          body,
-        });
-        if (!response.ok) {
-          throw await failure("completeMultipartUpload", key, response);
-        }
+        let response: Response;
+        let text: string;
         // S3 は結合に時間がかかると 200 を返した後で本文に <Error> を書く。
-        const text = await response.text();
-        if (hasXmlElement(text, "Error")) {
+        // その中身が一時的な失敗なら、HTTP 5xx と同じように送り直す。
+        for (let attempt = 1; ; attempt++) {
+          response = await send({
+            method: "POST",
+            url: objectUrl(key, query),
+            headers: { "content-type": "application/xml" },
+            body,
+          });
+          if (!response.ok) {
+            throw await failure("completeMultipartUpload", key, response);
+          }
+          text = await response.text();
+          if (!hasXmlElement(text, "Error")) break;
+          const code = xmlText(text, "Code");
+          if (attempt < RETRY_ATTEMPTS && code !== undefined && RETRYABLE_ERROR_CODES.has(code)) {
+            await sleep(RETRY_BASE_MILLISECONDS * 2 ** (attempt - 1) * Math.random());
+            continue;
+          }
           throw new S3StorageError({
             operation: "completeMultipartUpload",
             key,
             status: response.status,
-            code: xmlText(text, "Code"),
+            code,
             detail: xmlText(text, "Message"),
           });
         }
@@ -406,7 +445,8 @@ export function createS3CompatibleBucket(
       });
       if (!response.ok) throw await failure("put", key, response);
       await response.body?.cancel().catch(() => undefined);
-      return { key, etag: stripEtagQuotes(response.headers.get("etag") ?? "") };
+      const etag = response.headers.get("etag");
+      return etag === null ? { key } : { key, etag: stripEtagQuotes(etag) };
     },
     async get(key) {
       const response = await send({
@@ -439,10 +479,13 @@ export function createS3CompatibleBucket(
     head,
     async createMultipartUpload(key, createOptions) {
       const contentType = createOptions?.httpMetadata?.contentType;
+      // A repeated initiation whose first answer was lost would leave an
+      // upload id nobody can abort, so this request is never tried twice.
       const response = await send({
         method: "POST",
         url: objectUrl(key, "?uploads"),
         headers: contentType ? { "content-type": contentType } : undefined,
+        retry: false,
       });
       if (!response.ok) throw await failure("createMultipartUpload", key, response);
       const text = await response.text();

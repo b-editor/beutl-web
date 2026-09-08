@@ -115,6 +115,12 @@ describe("choosing the storage provider from the environment", () => {
     expect(createStorageBucket({ BEUTL_R2_BUCKET: binding })).toBe(binding);
   });
 
+  it("only allows a plain http endpoint when the setting says so", () => {
+    const insecure = { ...s3Env, BEUTL_S3_ENDPOINT: "http://minio.local:9000" };
+    expect(() => createStorageBucket(insecure)).toThrow(/not https/u);
+    expect(() => createStorageBucket({ ...insecure, BEUTL_S3_ALLOW_INSECURE_HTTP: "true" })).not.toThrow();
+  });
+
   it("refuses a half-configured fallback rather than skipping it", () => {
     expect(() => createStorageBucket({ BEUTL_R2_BUCKET: binding, BEUTL_S3_ENDPOINT: "https://s3.example.test" }))
       .toThrow(/BEUTL_S3_BUCKET is required/u);

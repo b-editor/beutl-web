@@ -34,6 +34,7 @@ const S3_KEYS = {
   secretAccessKey: "BEUTL_S3_SECRET_ACCESS_KEY",
   sessionToken: "BEUTL_S3_SESSION_TOKEN",
   forcePathStyle: "BEUTL_S3_FORCE_PATH_STYLE",
+  allowInsecureHttp: "BEUTL_S3_ALLOW_INSECURE_HTTP",
 } as const;
 
 // Worker の vars/secrets は env に、`next dev` の .env は process.env にしか
@@ -90,6 +91,7 @@ function s3Bucket(env: object): R2BucketLike {
     secretAccessKey: requireString(env, S3_KEYS.secretAccessKey),
     sessionToken: readString(env, S3_KEYS.sessionToken),
     forcePathStyle: readBoolean(env, S3_KEYS.forcePathStyle, true),
+    allowInsecureHttp: readBoolean(env, S3_KEYS.allowInsecureHttp, false),
   });
 }
 

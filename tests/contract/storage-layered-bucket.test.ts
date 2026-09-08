@@ -70,13 +70,17 @@ describe("a bucket layered over the store objects used to live in", () => {
     expect(fallback.bucket.get).not.toHaveBeenCalled();
   });
 
-  it("deletes from both stores", async () => {
+  it("deletes from both stores even when one of them fails", async () => {
     await layered.delete!("k");
     expect(primary.bucket.delete).toHaveBeenCalledWith("k");
     expect(fallback.bucket.delete).toHaveBeenCalledWith("k");
 
     fallback.bucket.delete.mockRejectedValueOnce(new Error("fallback down"));
     await expect(layered.delete!("k")).rejects.toThrow("fallback down");
+
+    primary.bucket.delete.mockRejectedValueOnce(new Error("primary down"));
+    await expect(layered.delete!("k")).rejects.toThrow("primary down");
+    expect(fallback.bucket.delete).toHaveBeenCalledTimes(3);
   });
 
   it("finishes or abandons a handle the primary never opened", async () => {
@@ -89,6 +93,18 @@ describe("a bucket layered over the store objects used to live in", () => {
     primary.handle.abort.mockRejectedValueOnce(missing());
     await expect(handle.abort()).resolves.toBeUndefined();
     expect(fallback.handle.abort).toHaveBeenCalled();
+  });
+
+  it("aborts in both stores even when the primary claims success", async () => {
+    // MinIO answers 204 for an id it never issued; the stale R2 handle must
+    // still be aborted.
+    const handle = layered.resumeMultipartUpload!("k", "old-upload");
+    await expect(handle.abort()).resolves.toBeUndefined();
+    expect(primary.handle.abort).toHaveBeenCalledTimes(1);
+    expect(fallback.handle.abort).toHaveBeenCalledTimes(1);
+
+    fallback.handle.abort.mockRejectedValueOnce(new Error("fallback down"));
+    await expect(handle.abort()).rejects.toThrow("fallback down");
   });
 
   it("reports the primary's terminal error when neither store knows the handle", async () => {
