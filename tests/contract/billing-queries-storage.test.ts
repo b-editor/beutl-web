@@ -172,52 +172,36 @@ describe("billing page storage plan entries", () => {
     expect(page.offers).toContainEqual({ product: "storage", tiers: ["100gb", "200gb", "1tb"] });
   });
 
-  it("describes each tier's monthly price from the recorded offer, then Stripe", async () => {
+  it("describes only the tiers whose Price could be sold right now", async () => {
     mocks.resolveStorageQuota.mockResolvedValue({
       tier: null,
       quotaBytes: GIB,
       fileCountLimit: 10_000,
       subscription: null,
     });
-    mocks.findBillingOfferByStripePriceId.mockImplementation(async ({ stripePriceId }) =>
-      stripePriceId === "price_100"
-        ? {
-            id: "offer_100gb",
-            kind: "storage",
-            tier: "100gb",
-            stripePriceId,
-            stripeProductId: "prod_100gb",
-            unitAmount: 500,
-            currency: "usd",
-            creditAmount: null,
-            recurringInterval: "month",
-            recurringIntervalCount: 1,
-            checkoutEnabled: true,
-          }
-        : null,
-    );
+    const price = (id: string, unitAmount: number, active: boolean) => ({
+      id,
+      active,
+      type: "recurring",
+      unit_amount: unitAmount,
+      currency: "usd",
+      product: `prod_${id}`,
+      recurring: { interval: "month", interval_count: 1 },
+    });
     mocks.pricesRetrieve.mockImplementation(async (priceId: string) => {
-      if (priceId !== "price_200") throw new Error("unknown price");
-      return {
-        id: priceId,
-        active: true,
-        type: "recurring",
-        unit_amount: 900,
-        currency: "usd",
-        product: "prod_200gb",
-        recurring: { interval: "month", interval_count: 1 },
-      };
+      if (priceId === "price_100") return price(priceId, 500, true);
+      // Archived in the Stripe Dashboard: activation would refuse it, so the
+      // dialog must not offer it either.
+      if (priceId === "price_200") return price(priceId, 900, false);
+      throw new Error("unknown price");
     });
 
     const page = await retrieveBillingPage("user-1");
 
-    // The recorded offer wins, an unrecorded Price is read from Stripe, and a
-    // tier that cannot be described is null rather than a failure.
     expect(page.storageTierPrices).toEqual({
       "100gb": { unitAmount: 500, currency: "usd" },
-      "200gb": { unitAmount: 900, currency: "usd" },
+      "200gb": null,
       "1tb": null,
     });
-    expect(mocks.pricesRetrieve).not.toHaveBeenCalledWith("price_100");
   });
 });

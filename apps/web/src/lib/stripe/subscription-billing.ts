@@ -9,6 +9,7 @@ import {
   type BillingOfferTerms,
 } from "@beutl/db";
 import type Stripe from "stripe";
+import { isStripeResourceMissingError } from "./errors";
 import { getExpandableId } from "./ownership";
 import {
   configuredPriceOf,
@@ -76,6 +77,17 @@ export function subscriptionTermsFromPrice(
   };
 }
 
+// The plan's current Price for a tier cannot be sold right now: the env is not
+// set, the Price is gone, archived, or not a monthly recurring one. The
+// actions turn this into a notice rather than a server error; anything else
+// (Stripe unreachable, a bad response) is still an error.
+export class SubscriptionOfferUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "SubscriptionOfferUnavailableError";
+  }
+}
+
 // 現行の Price を読んで販売用 offer として記録する。チェックアウトの入口。
 export async function activateConfiguredSubscriptionOffer(
   plan: SubscriptionPlanConfig,
@@ -84,15 +96,32 @@ export async function activateConfiguredSubscriptionOffer(
 ): Promise<SubscriptionOfferRecord> {
   const priceId = plan.currentPriceId(tier);
   if (!priceId) {
-    throw new Error(`${plan.priceEnvName(tier)} is not set`);
+    throw new SubscriptionOfferUnavailableError(
+      `${plan.priceEnvName(tier)} is not set`,
+    );
   }
-  const price = await stripe.prices.retrieve(priceId);
-  const offer = asPlanOffer(
-    plan,
-    await activateBillingOffer({
-      terms: subscriptionTermsFromPrice(plan, price, tier, true),
-    }),
-  );
+  let price: Stripe.Price;
+  try {
+    price = await stripe.prices.retrieve(priceId);
+  } catch (error) {
+    if (isStripeResourceMissingError(error)) {
+      throw new SubscriptionOfferUnavailableError(
+        `Stripe Price ${priceId} no longer exists`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  let terms: BillingOfferTerms;
+  try {
+    terms = subscriptionTermsFromPrice(plan, price, tier, true);
+  } catch (error) {
+    throw new SubscriptionOfferUnavailableError(
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+  }
+  const offer = asPlanOffer(plan, await activateBillingOffer({ terms }));
   if (!offer) {
     throw new Error(`Stripe Price ${priceId} did not persist as a ${plan.id} offer`);
   }
@@ -239,10 +268,11 @@ export type SubscriptionPriceDescription = {
 };
 
 // What each tier of a plan costs, for showing before a change that is charged
-// without a Checkout page. The recorded offer is preferred; a Price that has
-// never been sold yet is read from Stripe without being recorded. A tier
-// whose Price cannot be described maps to null, and the caller decides what
-// that means for the action it is offering.
+// without a Checkout page. A tier is described only when it could actually
+// be sold: the Price is read from Stripe and held to the same rules
+// activation applies (present, active, monthly), so a tier the dialog offers
+// is one the action behind it can activate. A tier that cannot be described
+// maps to null.
 export async function describeConfiguredSubscriptionPrices(
   plan: SubscriptionPlanConfig,
   stripe: Stripe,
@@ -254,15 +284,8 @@ export async function describeConfiguredSubscriptionPrices(
       const priceId = plan.currentPriceId(tier);
       if (!priceId) return [tier, null];
       try {
-        const persisted = await findBillingOfferByStripePriceId({
-          stripePriceId: priceId,
-        });
-        const offer = persisted ? asPlanOffer(plan, persisted) : null;
-        if (offer && offer.tier === tier) {
-          return [tier, { unitAmount: offer.unitAmount, currency: offer.currency }];
-        }
         const price = await stripe.prices.retrieve(priceId);
-        const terms = subscriptionTermsFromPrice(plan, price, tier, false);
+        const terms = subscriptionTermsFromPrice(plan, price, tier, true);
         return [tier, { unitAmount: terms.unitAmount, currency: terms.currency }];
       } catch (error) {
         console.error(`Could not describe the ${plan.id} Price for tier ${tier}`, error);

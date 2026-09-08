@@ -262,6 +262,25 @@ describe("storage plan checkout actions", () => {
     expect(mocks.checkoutCreate).not.toHaveBeenCalled();
   });
 
+  it("answers an archived Price with the unavailable notice, not an error", async () => {
+    // The Price was archived in Stripe after the page was rendered.
+    mocks.pricesRetrieve.mockImplementation(async (priceId: string) => ({
+      ...stripePrice(priceId),
+      active: priceId !== "price_1tb",
+    }));
+    await expect(createStorageCheckout(formWith("1tb"))).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.activateBillingOffer).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+
+    mocks.pricesRetrieve.mockRejectedValue({ statusCode: 404, code: "resource_missing" });
+    await expect(createStorageCheckout(formWith("100gb"))).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+
+    // Anything else Stripe says is still an error, not a notice.
+    mocks.pricesRetrieve.mockRejectedValue(new Error("Stripe unreachable"));
+    await expect(createStorageCheckout(formWith("100gb"))).rejects.toThrow("Stripe unreachable");
+  });
+
   it("rejects an unknown tier before touching Stripe", async () => {
     await expect(createStorageCheckout(formWith("5tb"))).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.pricesRetrieve).not.toHaveBeenCalled();
