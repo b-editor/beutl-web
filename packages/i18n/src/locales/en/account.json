@@ -139,6 +139,7 @@
     "confirmSubscribe": "Subscribe to this plan",
     "confirmChange": "Switch to this plan",
     "perMonth": "per month",
-    "priceUnavailable": "Price unavailable"
+    "priceUnavailable": "Price unavailable",
+    "tierUnavailable": "That plan is not available right now. Please try again later."
   }
 }

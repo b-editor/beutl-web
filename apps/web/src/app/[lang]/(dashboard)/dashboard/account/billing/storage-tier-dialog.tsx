@@ -31,10 +31,11 @@ import type { StorageTierPrices } from "./queries";
 // which action to post to and keeps the button disabled until a tier is
 // picked.
 //
-// A new subscription goes on to Stripe Checkout, which shows the price before
-// anything is charged. A change does not: the difference is invoiced at once.
-// So the change dialog shows every tier's monthly price and refuses a tier
-// whose price it cannot show.
+// Every tier shows its monthly price. A new subscription goes on to Stripe
+// Checkout, which shows the price again before anything is charged; a change
+// does not, since the difference is invoiced at once. A tier whose price
+// cannot be shown cannot be chosen either way: its Price is not configured,
+// so the action behind the button would fail.
 export function StorageTierDialog({
   lang,
   currentTier,
@@ -52,7 +53,7 @@ export function StorageTierDialog({
   const [selected, setSelected] = useState<StorageTierId | null>(null);
   const changing = currentTier !== null;
   const canPick = (tier: StorageTierId) =>
-    tier !== currentTier && (!changing || prices[tier] !== null);
+    tier !== currentTier && prices[tier] !== null;
 
   return (
     <Dialog

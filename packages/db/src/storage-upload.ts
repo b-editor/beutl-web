@@ -400,7 +400,7 @@ export async function commitDedicatedStorageReservation({
         objectKey: reservation.objectKey,
         name: reservation.name,
         size: reservation.size,
-        mimeType: reservation.mimeType,
+        mimeType: reservation.mimeType.trim(),
         userId: reservation.userId,
         visibility: "DEDICATED",
         ...(sha256 ? { sha256 } : {}),

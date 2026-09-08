@@ -88,6 +88,7 @@ describe("billing page storage plan entries", () => {
       fileCountLimit: 100_000,
       subscription: {
         status: "active",
+        tier: "200gb",
         cancelAtPeriodEnd: false,
         cancelAt: null,
         currentPeriodEnd: FUTURE,
@@ -116,6 +117,7 @@ describe("billing page storage plan entries", () => {
       fileCountLimit: 100_000,
       subscription: {
         status: "active",
+        tier: "100gb",
         cancelAtPeriodEnd: true,
         cancelAt,
         currentPeriodEnd: FUTURE,
@@ -130,6 +132,30 @@ describe("billing page storage plan entries", () => {
       currentPeriodEnd: cancelAt.toISOString(),
       showCancellationNotice: true,
     });
+  });
+
+  it("keeps the subscribed tier on a subscription that grants nothing right now", async () => {
+    // past_due: the row still names its tier, the quota has fallen back to
+    // free, and the customer is asked to sort the payment out.
+    mocks.resolveStorageQuota.mockResolvedValue({
+      tier: null,
+      quotaBytes: GIB,
+      fileCountLimit: 10_000,
+      subscription: {
+        status: "past_due",
+        tier: "200gb",
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        currentPeriodEnd: FUTURE,
+      },
+    });
+
+    const page = await retrieveBillingPage("user-1");
+
+    expect(page.subscriptions).toEqual([
+      expect.objectContaining({ product: "storage", tier: "200gb", status: "needsAttention" }),
+    ]);
+    expect(page.storageQuota).toEqual({ tier: null, quotaBytes: GIB });
   });
 
   it("offers the plan again once a subscription has lapsed", async () => {

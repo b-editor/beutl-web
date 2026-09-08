@@ -368,13 +368,14 @@ export async function reserveAdminAccountDeletion({
       where: { userId },
       select: { stripeId: true },
     });
-    // Any plan's live subscription blocks deletion until it is settled.
+    // Any plan's live subscription blocks deletion until it is settled; the
+    // plan is named so the administrator is told what to cancel.
     const subscription = await tx.subscription.findFirst({
       where: { userId, status: { notIn: ["canceled", "incomplete_expired"] } },
-      select: { status: true },
+      select: { status: true, planId: true },
     });
     if (subscription) {
-      return { status: "blocked", reason: "subscription" } as const;
+      return { status: "blocked", reason: "subscription", planId: subscription.planId } as const;
     }
     await tx.accountDeletionIntent.upsert({
       where: { identifier_tokenHash: { identifier, tokenHash } },

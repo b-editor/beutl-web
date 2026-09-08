@@ -169,20 +169,39 @@ export async function findFileForApi({
   return file;
 }
 
-export async function retrieveFilesByUserId({
+// The name a new file gets: the one asked for, or "name (n).ext" once that is
+// taken, the way the screen has always done. Only names that could collide
+// are read, so an account holding many files does not pay for a listing of
+// all of them on every upload.
+export async function availableStorageFileName({
   userId,
+  name,
   prisma,
 }: {
   userId: string;
+  name: string;
   prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return await db.file.findMany({
+}): Promise<string> {
+  const db = prisma ?? await getDb();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  const stem = extension ? name.slice(0, -extension.length) : name;
+  const rows = await db.file.findMany({
     where: {
-      userId: userId,
+      userId,
       aiJobResult: null,
+      OR: [
+        { name },
+        { name: { startsWith: `${stem} (`, endsWith: extension } },
+      ],
     },
+    select: { name: true },
   });
+  const taken = new Set(rows.map((row) => row.name));
+  if (!taken.has(name)) return name;
+  for (let index = 1; ; index++) {
+    const candidate = `${stem} (${index})${extension}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 export async function createFile({
@@ -210,7 +229,9 @@ export async function createFile({
       objectKey,
       name,
       size,
-      mimeType,
+      // Stored as served, but without stray whitespace, so the listing's
+      // kind filter and the screen's classification agree.
+      mimeType: mimeType.trim(),
       userId,
       visibility,
       sha256,
@@ -365,6 +386,7 @@ export async function deleteUserFilesWithStorageCleanup({
       where: { id: { in: uniqueIds }, userId, aiJobResult: null },
       select: {
         id: true,
+        objectKey: true,
         visibility: true,
         ...fileReferenceSelect,
       },
@@ -380,13 +402,31 @@ export async function deleteUserFilesWithStorageCleanup({
       return { kind: "inUse" as const };
     }
 
-    const records = [];
-    for (const fileId of uniqueIds) {
-      records.push(
-        await deleteFileWithStorageCleanup({ fileId, userId, prisma: tx }),
-      );
+    // One outbox write and one delete for the whole set, so the statement
+    // count does not grow with the selection: the same shape as the
+    // unreferenced bulk delete, with the exact-set check above kept.
+    const now = new Date();
+    const objectKeys = files.map((file) => file.objectKey);
+    await tx.aiStorageCleanup.createMany({
+      data: objectKeys.map((objectKey) => ({
+        objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "writing",
+        notBefore: now,
+      })),
+    });
+    const deleted = await tx.file.deleteMany({
+      where: { id: { in: uniqueIds }, userId, aiJobResult: null },
+    });
+    if (deleted.count !== uniqueIds.length) {
+      throw new Error("Storage files changed before deletion");
     }
-    return { kind: "deleted" as const, records };
+    await tx.aiStorageCleanup.updateMany({
+      where: { objectKey: { in: objectKeys }, state: "writing", leaseToken: null },
+      data: { state: "cleanup", notBefore: now },
+    });
+    return { kind: "deleted" as const, records: files };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
@@ -469,26 +509,6 @@ export async function updateFileName({
   return result.count === 1;
 }
 
-export async function retrieveFileNamesAndSizesByUserId({
-  userId,
-  prisma,
-}: {
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.file.findMany({
-    where: {
-      userId,
-      aiJobResult: null,
-    },
-    select: {
-      size: true,
-      name: true,
-    },
-  });
-}
-
 export async function retrieveStorageFilesByUserId({
   userId,
   prisma,
@@ -528,18 +548,24 @@ const STORAGE_FILE_SELECT = {
 } satisfies Prisma.FileSelect;
 
 // 画面の「種類」フィルタを DB の条件に。判定は core の fileKind と同じ順序で、
-// 「その他」は他のどれにも当たらないもの。
+// 「その他」は他のどれにも当たらないもの。fileKind は "; charset=..." の
+// パラメータを落として比べるので、完全一致の種類はパラメータ付きも受ける。
 function storageFileKindWhere(kind: FileKind): Prisma.FileWhereInput {
   const insensitive = "insensitive" as const;
+  const exactly = (types: readonly string[]): Prisma.FileWhereInput[] =>
+    types.flatMap((type) => [
+      { mimeType: { equals: type, mode: insensitive } },
+      { mimeType: { startsWith: `${type};`, mode: insensitive } },
+    ]);
   const named: Record<Exclude<FileKind, "other">, Prisma.FileWhereInput> = {
     image: { mimeType: { startsWith: "image/", mode: insensitive } },
     video: { mimeType: { startsWith: "video/", mode: insensitive } },
     audio: { mimeType: { startsWith: "audio/", mode: insensitive } },
-    archive: { mimeType: { in: [...ARCHIVE_MIME_TYPES], mode: insensitive } },
+    archive: { OR: exactly(ARCHIVE_MIME_TYPES) },
     document: {
       OR: [
         { mimeType: { startsWith: "text/", mode: insensitive } },
-        { mimeType: { in: [...DOCUMENT_MIME_TYPES], mode: insensitive } },
+        ...exactly(DOCUMENT_MIME_TYPES),
       ],
     },
   };

@@ -13,9 +13,10 @@ import {
   recordLateDedicatedStorageWriteResult,
   releaseDedicatedStorageReservation,
   renewDedicatedStorageReservation,
+  availableStorageFileName,
   resolveStorageQuota,
-  retrieveFilesByUserId,
   startRetryableTransaction,
+  sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
@@ -104,12 +105,7 @@ export async function calcTotalFileSize({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const files = await retrieveFilesByUserId({ userId, prisma });
-  let totalSize = BigInt(0);
-  for (const file of files) {
-    totalSize += BigInt(file.size);
-  }
-  return totalSize;
+  return await sumFileSizeByUserId({ userId, prisma });
 }
 
 /**
@@ -127,15 +123,7 @@ export async function createStorageFile({
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
   userId: string;
 }) {
-  const files = await retrieveFilesByUserId({ userId });
-
-  let filename = file.name;
-  const ext = file.name.split(".").pop();
-  for (let i = 1; files.some((f) => f.name === filename); i++) {
-    filename = ext
-      ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-      : `${file.name} (${i})`;
-  }
+  const filename = await availableStorageFileName({ userId, name: file.name });
 
   const array = await file.arrayBuffer();
   const objectKey = crypto.randomUUID();
@@ -190,12 +178,8 @@ export async function createDedicatedStorageFile({
   quota?: { quotaBytes: bigint; fileCountLimit: number };
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
-  const files = await retrieveFilesByUserId({ userId });
-  let filename = file.name;
-  const ext = file.name.split(".").pop();
-  for (let i = 1; files.some((f) => f.name === filename); i++) {
-    filename = ext ? file.name.replace(`.${ext}`, ` (${i}).${ext}`) : `${file.name} (${i})`;
-  }
+  // Only the names that could collide are read; see availableStorageFileName.
+  const filename = await availableStorageFileName({ userId, name: file.name });
   const objectKey = crypto.randomUUID();
   const reservationInput = {
     userId,

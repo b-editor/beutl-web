@@ -72,7 +72,10 @@ export default async function Page(props: {
         ? ("failed" as const)
         : searchParams.tier === "over-quota"
           ? ("over-quota" as const)
-          : null;
+          : searchParams.tier === "unavailable" ||
+              searchParams.checkout === "unavailable"
+            ? ("unavailable" as const)
+            : null;
 
   const { t } = await getTranslation(lang);
   const {
@@ -124,14 +127,18 @@ export default async function Page(props: {
           </AlertDescription>
         </Alert>
       )}
-      {(tierNotice === "failed" || tierNotice === "over-quota") && (
+      {(tierNotice === "failed" ||
+        tierNotice === "over-quota" ||
+        tierNotice === "unavailable") && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
             {t(
               tierNotice === "failed"
                 ? "account:storagePlan.tierChangeFailed"
-                : "account:storagePlan.downgradeBlocked",
+                : tierNotice === "over-quota"
+                  ? "account:storagePlan.downgradeBlocked"
+                  : "account:storagePlan.tierUnavailable",
             )}
           </AlertDescription>
         </Alert>

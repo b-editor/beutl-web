@@ -23,14 +23,21 @@ export async function StorageUsage({
 }) {
   const { t } = await getTranslation(lang);
   const ratio = Math.min(usedBytes / quota.quotaBytes, 1);
+  const fileRatio = Math.min(fileCount / quota.fileCountLimit, 1);
   const remainingBytes = Math.max(quota.quotaBytes - usedBytes, 0);
+  const remainingFiles = Math.max(quota.fileCountLimit - fileCount, 0);
+  // Uploads are refused on either limit, so the state reads whichever is
+  // closer: many small files fill the slots long before the bytes.
+  const limitedBy = fileRatio > ratio ? "files" : "bytes";
+  const tightest = Math.max(ratio, fileRatio);
   // over は失効後に無料枠を超えている状態。full と同じ色だが文言が違う。
   const level =
-    usedBytes > quota.quotaBytes && quota.tier === null
+    (usedBytes > quota.quotaBytes || fileCount > quota.fileCountLimit) &&
+    quota.tier === null
       ? "over"
-      : ratio >= 1
+      : tightest >= 1
         ? "full"
-        : ratio >= WARNING_RATIO
+        : tightest >= WARNING_RATIO
           ? "warning"
           : "ok";
   const usage = t("storage:storageUsage", {
@@ -69,7 +76,15 @@ export async function StorageUsage({
         </Badge>
         <span>{usage}</span>
         <span aria-hidden>·</span>
-        <span>
+        <span
+          className={cn(
+            level !== "ok" &&
+              limitedBy === "files" &&
+              (level === "warning"
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-destructive"),
+          )}
+        >
           {t("storage:fileCountOfLimit", {
             count: fileCount,
             limit: quota.fileCountLimit,
@@ -91,15 +106,27 @@ export async function StorageUsage({
               : "text-destructive",
           )}
         >
-          {level === "over"
-            ? t("storage:overFreeQuota")
-            : level === "full"
-              ? t(quota.tier === null ? "storage:full" : "storage:fullSubscribed")
-              : t("storage:almostFull")}
+          {limitedBy === "files"
+            ? level === "over"
+              ? t("storage:overFreeFileCount")
+              : level === "full"
+                ? t(
+                    quota.tier === null
+                      ? "storage:fileCountFull"
+                      : "storage:fileCountFullSubscribed",
+                  )
+                : t("storage:fileCountAlmostFull")
+            : level === "over"
+              ? t("storage:overFreeQuota")
+              : level === "full"
+                ? t(quota.tier === null ? "storage:full" : "storage:fullSubscribed")
+                : t("storage:almostFull")}
           {level === "warning" && (
             <>
               <span aria-hidden> </span>
-              {t("storage:remaining", { remaining: formatBytes(remainingBytes) })}
+              {limitedBy === "files"
+                ? t("storage:filesRemaining", { count: remainingFiles })
+                : t("storage:remaining", { remaining: formatBytes(remainingBytes) })}
             </>
           )}
           <span aria-hidden> </span>

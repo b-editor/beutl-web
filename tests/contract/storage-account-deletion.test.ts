@@ -107,10 +107,12 @@ describe("storage plan and account deletion", () => {
   });
 
   it("blocks an administrator deletion while a storage subscription is live", async () => {
-    const { tx } = fakeTransaction({ storageSubscription: { status: "active" } });
+    const { tx } = fakeTransaction({ storageSubscription: { status: "active", planId: "storage" } });
+    // The plan is named so the administrator is told to cancel the storage
+    // subscription, not a Pro one the user may not have.
     await expect(
       reserveAdminAccountDeletion({ userId: "user-1", now: NOW, prisma: tx as never }),
-    ).resolves.toEqual({ status: "blocked", reason: "subscription" });
+    ).resolves.toEqual({ status: "blocked", reason: "subscription", planId: "storage" });
 
     const settled = fakeTransaction({ storageSubscription: { status: "canceled" } });
     await expect(

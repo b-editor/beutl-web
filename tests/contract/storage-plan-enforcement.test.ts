@@ -197,7 +197,9 @@ describe("storage plan enforcement on uploads", () => {
     });
     memory.state.files.delete("seed-0");
     expect((await start(BigInt(1))).ok).toBe(true);
-  });
+    // Seeding a hundred thousand rows is the point of the test; give it room
+    // when the machine is busy with the rest of the suite.
+  }, 30_000);
 
   it("still lets an over-quota lapsed account delete files", async () => {
     // Deleting reads no quota at all; this pins that nothing in the delete

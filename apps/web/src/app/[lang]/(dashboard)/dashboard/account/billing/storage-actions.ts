@@ -25,10 +25,18 @@ function tierFromForm(formData: FormData): StorageTierId | null {
   return isStorageTierId(tier) ? tier : null;
 }
 
+// A tier whose Price is not configured is not for sale. The dialog does not
+// offer it, but the form field is the client's, so the action checks again
+// and answers with a notice instead of a server error.
+function tierForSale(tier: StorageTierId): boolean {
+  return subscriptionPlanConfig("storage").currentPriceId(tier) !== undefined;
+}
+
 export async function createStorageCheckout(formData: FormData): Promise<void> {
   const session = await throwIfUnauth();
   const tier = tierFromForm(formData);
   if (!tier) redirect(BILLING_PATH);
+  if (!tierForSale(tier)) redirect(`${BILLING_PATH}?checkout=unavailable`);
   const customerId = await createOrRetrieveOwnedCustomerId({
     email: session.user.email as string,
     userId: session.user.id,
@@ -67,6 +75,7 @@ export async function changeStorageTier(formData: FormData): Promise<void> {
   const session = await throwIfUnauth();
   const tier = tierFromForm(formData);
   if (!tier) redirect(BILLING_PATH);
+  if (!tierForSale(tier)) redirect(`${BILLING_PATH}?tier=unavailable`);
   const userId = session.user.id;
   const outcome = await changeSubscriptionTier({
     stripe: createStripe(),

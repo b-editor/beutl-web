@@ -4,6 +4,7 @@ import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import {
   STORAGE_TIER_IDS,
   effectiveSubscriptionEnd,
+  isStorageTierId,
   type StorageTierId,
 } from "@beutl/core";
 import {
@@ -148,7 +149,10 @@ export async function retrieveBillingPage(userId: string) {
   if (storagePresentation.canManageSubscription && storageSubscription) {
     subscriptions.push({
       product: "storage",
-      tier: storageQuota.tier ?? null,
+      // The tier the customer subscribed to, whether or not it is granting
+      // anything right now (past_due, a refund hold). The effective quota is
+      // reported separately in storageQuota.
+      tier: isStorageTierId(storageSubscription.tier) ? storageSubscription.tier : null,
       status: storagePresentation.status,
       currentPeriodEnd:
         storagePresentation.showCurrentPeriodEnd && storageEnd

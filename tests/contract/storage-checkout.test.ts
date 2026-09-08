@@ -255,6 +255,13 @@ describe("storage plan checkout actions", () => {
     );
   });
 
+  it("refuses a tier whose Price is not configured before touching Stripe", async () => {
+    delete process.env.STRIPE_STORAGE_PRICE_ID_1TB;
+    await expect(createStorageCheckout(formWith("1tb"))).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.pricesRetrieve).not.toHaveBeenCalled();
+    expect(mocks.checkoutCreate).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown tier before touching Stripe", async () => {
     await expect(createStorageCheckout(formWith("5tb"))).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.pricesRetrieve).not.toHaveBeenCalled();

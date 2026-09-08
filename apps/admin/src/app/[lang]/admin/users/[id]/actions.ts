@@ -14,6 +14,7 @@ import {
   findAccountDeletionIntentByUserId,
   findCustomerByUserId,
   getSubscription,
+  listSubscriptionsByUserId,
   isUniqueConstraintViolation,
   prepareAccountDeletionOutboxes,
   reserveAdminAccountDeletion,
@@ -28,6 +29,12 @@ import {
   loadAiSettings,
   PRO_PLAN,
 } from "@beutl/api";
+import { isActiveSubscription, isSubscriptionPlanId } from "@beutl/core";
+
+// How a plan is called in a message to an administrator.
+function subscriptionPlanLabel(planId: string): string {
+  return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
+}
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
@@ -164,7 +171,7 @@ export async function deleteUser({
       return { success: false, message: "Stripe customer ownership could not be verified" };
     }
     if (closure.status === "active-subscription") {
-      return { success: false, message: "Cancel this user's Pro subscription before deleting the account" };
+      return { success: false, message: "Cancel this user's active Stripe subscriptions before deleting the account" };
     }
 
     const result = await startRetryableTransaction(async (tx) => {
@@ -180,9 +187,13 @@ export async function deleteUser({
       ) {
         return { status: "blocked" as const, reason: "customer" as const };
       }
-      const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma: tx });
-      if (subscription && isActiveProSubscription(subscription)) {
-        return { status: "blocked" as const, reason: "subscription" as const };
+      // Any plan still granting something blocks deletion, and the plan is
+      // named so the administrator knows which subscription to cancel.
+      const live = (await listSubscriptionsByUserId({ userId, prisma: tx })).find(
+        (row) => isSubscriptionPlanId(row.planId) && isActiveSubscription(row, row.planId),
+      );
+      if (live) {
+        return { status: "blocked" as const, reason: "subscription" as const, planId: live.planId };
       }
       const provisioning = await tx.stripeCustomerProvisioning.findFirst({
         where: {
@@ -222,14 +233,15 @@ export async function deleteUser({
       return { status: "deleted" as const };
     });
     if (result.status === "blocked") {
-      const message = {
-        subscription:
-          "Cancel this user's Pro subscription before deleting the account",
-        checkout:
-          "Resolve this user's pending Pro checkout before deleting the account",
-        customer: "Close this user's Stripe customer before deleting the account",
-        provisioning: "Wait for this user's Stripe customer provisioning to settle",
-      }[result.reason];
+      const message =
+        result.reason === "subscription"
+          ? `Cancel this user's ${subscriptionPlanLabel(result.planId)} subscription before deleting the account`
+          : {
+              checkout:
+                "Resolve this user's pending subscription checkout before deleting the account",
+              customer: "Close this user's Stripe customer before deleting the account",
+              provisioning: "Wait for this user's Stripe customer provisioning to settle",
+            }[result.reason];
       return { success: false, message };
     }
     if (result.status === "already-completed") return { success: true };

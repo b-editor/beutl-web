@@ -176,9 +176,34 @@ async function folderSubtree(
   return ids;
 }
 
+// How many files one transaction of a folder deletion takes with it. A
+// folder may hold as many files as the account is allowed, and one
+// transaction over all of them would outgrow the statement and time limits.
+export const STORAGE_FOLDER_DELETE_BATCH = 200;
+
+// A file the bulk delete would refuse: dedicated, or still pointed at from a
+// package, screenshot, profile, or release.
+const FILE_IN_USE_WHERE = {
+  OR: [
+    { visibility: "DEDICATED" as const },
+    { Package: { some: {} } },
+    { PackageScreenshot: { some: {} } },
+    { Profile: { some: {} } },
+    { Release: { some: {} } },
+  ],
+};
+
 // Deleting a folder deletes what is inside it, the way a desktop folder does.
-// The files go through the same cleanup path as a bulk delete, so an in-use
-// file anywhere in the tree stops the whole operation before anything is lost.
+// The files go through the same cleanup path as a bulk delete. An in-use file
+// anywhere in the tree stops the whole operation before anything is lost:
+// the tree is checked for one first, then the files go in bounded batches,
+// each in its own transaction, and the folder row last. A file that comes
+// into use between the check and its batch stops the deletion there; what
+// was already deleted stays deleted, and deleting the folder again finishes
+// the job once the file is released.
+//
+// Given a transaction, everything runs inside it, unbatched; only the
+// screen's action, which passes none, deletes trees of any size.
 export async function deleteStorageFolderTree({
   folderId,
   userId,
@@ -188,30 +213,54 @@ export async function deleteStorageFolderTree({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const run = async (tx: PrismaTransaction) => {
+  const transact = <T>(run: (tx: PrismaTransaction) => Promise<T>): Promise<T> =>
+    prisma ? run(prisma) : startRetryableTransaction(run);
+
+  const plan = await transact(async (tx) => {
     if (!(await folderBelongsToUser(tx, folderId, userId))) {
       return { kind: "notFound" as const };
     }
     const folderIds = await folderSubtree(tx, folderId, userId);
-    const files: { id: string }[] = await tx.file.findMany({
-      where: { folderId: { in: folderIds }, userId, aiJobResult: null },
-      select: { id: true },
+    const inUse = await tx.file.count({
+      where: { folderId: { in: folderIds }, userId, aiJobResult: null, ...FILE_IN_USE_WHERE },
     });
-    if (files.length > 0) {
-      const outcome = await deleteUserFilesWithStorageCleanup({
-        fileIds: files.map((file) => file.id),
+    if (inUse > 0) return { kind: "inUse" as const };
+    return { kind: "ready" as const, folderIds };
+  });
+  if (plan.kind !== "ready") return { kind: plan.kind };
+
+  let fileCount = 0;
+  for (;;) {
+    const outcome = await transact(async (tx) => {
+      const batch: { id: string }[] = await tx.file.findMany({
+        where: { folderId: { in: plan.folderIds }, userId, aiJobResult: null },
+        select: { id: true },
+        orderBy: { id: "asc" },
+        take: STORAGE_FOLDER_DELETE_BATCH,
+      });
+      if (batch.length === 0) return { kind: "drained" as const };
+      const deleted = await deleteUserFilesWithStorageCleanup({
+        fileIds: batch.map((file) => file.id),
         userId,
         prisma: tx,
       });
-      if (outcome.kind !== "deleted") return { kind: outcome.kind };
-    }
-    // Child folders go with the parent through the cascade.
-    await tx.storageFolder.delete({ where: { id: folderId } });
-    return {
-      kind: "deleted" as const,
-      fileCount: files.length,
-      folderCount: folderIds.length,
-    };
+      return deleted.kind === "deleted"
+        ? { kind: "deleted" as const, count: batch.length }
+        : { kind: deleted.kind };
+    });
+    if (outcome.kind === "drained") break;
+    if (outcome.kind !== "deleted") return { kind: outcome.kind };
+    fileCount += outcome.count;
+  }
+
+  await transact(async (tx) => {
+    // Child folders go with the parent through the cascade; a file that
+    // arrived after the last batch is moved to the root by the same cascade.
+    await tx.storageFolder.deleteMany({ where: { id: folderId, userId } });
+  });
+  return {
+    kind: "deleted" as const,
+    fileCount,
+    folderCount: plan.folderIds.length,
   };
-  return prisma ? run(prisma) : startRetryableTransaction(run);
 }

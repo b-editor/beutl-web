@@ -23,8 +23,7 @@ import {
   enqueueStorageMultipartCleanup,
   markStorageUploadCompleted,
   recordStorageUploadRemoteAfterAttachFailure,
-  type PrismaTransaction,
-  retrieveFileNamesAndSizesByUserId,
+  availableStorageFileName,
   startRetryableTransaction,
   settleTerminalClaimedStorageUpload,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
@@ -98,29 +97,7 @@ function bucket() {
 // user input is a path the user chooses inside the bucket.
 // A second file of the same name becomes "clip (1).mp4" rather than replacing
 // the first, which is what the screen did before an upload came in parts.
-async function availableName({
-  userId,
-  name,
-  prisma,
-}: {
-  userId: string;
-  name: string;
-  prisma?: PrismaTransaction;
-}): Promise<string> {
-  const taken = new Set(
-    (await retrieveFileNamesAndSizesByUserId({ userId, prisma })).map(
-      (file) => file.name,
-    ),
-  );
-  if (!taken.has(name)) return name;
-
-  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
-  const stem = extension ? name.slice(0, -extension.length) : name;
-  for (let index = 1; ; index++) {
-    const candidate = `${stem} (${index})${extension}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
+const availableName = availableStorageFileName;
 
 // What the part at this position may carry: a whole part, except the last one,
 // which carries only what is left of the declared size.

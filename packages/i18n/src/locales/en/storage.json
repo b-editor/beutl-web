@@ -154,5 +154,10 @@
   "fileCountOfLimit": "{{count, number}} of {{limit, number}} files",
   "fullSubscribed": "Your storage is full. Change your plan or delete files you no longer need.",
   "overFreeQuota": "Your storage plan has ended and you are over the free quota. Existing files stay available to open and delete, but new uploads are refused until there is room.",
-  "countingFolderContents": "Counting contents…"
+  "countingFolderContents": "Counting contents…",
+  "fileCountAlmostFull": "You are running out of file slots. Delete files you no longer need to make room for new uploads.",
+  "fileCountFull": "You have reached the file limit. Delete files you no longer need before uploading more.",
+  "fileCountFullSubscribed": "You have reached the file limit. Change your plan or delete files you no longer need.",
+  "overFreeFileCount": "Your storage plan has ended and you have more files than the free plan allows. Existing files stay available to open and delete, but new uploads are refused until you are under the limit.",
+  "filesRemaining": "{{count, number}} files left"
 }

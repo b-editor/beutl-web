@@ -139,6 +139,7 @@
     "confirmSubscribe": "このプランに加入",
     "confirmChange": "このプランに変更",
     "perMonth": "/ 月",
-    "priceUnavailable": "価格を取得できませんでした"
+    "priceUnavailable": "価格を取得できませんでした",
+    "tierUnavailable": "そのプランは現在申し込めません。時間をおいてもう一度お試しください。"
   }
 }

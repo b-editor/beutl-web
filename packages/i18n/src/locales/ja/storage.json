@@ -154,5 +154,10 @@
   "fileCountOfLimit": "{{count, number}} / {{limit, number}} 件のファイル",
   "fullSubscribed": "容量の上限に達しています。プランを変更するか、不要なファイルを削除してください。",
   "overFreeQuota": "ストレージプランが終了し、使用量が無料枠を超えています。既存のファイルは引き続き開いたり削除したりできますが、空きができるまで新しいアップロードはできません。",
-  "countingFolderContents": "内容を数えています…"
+  "countingFolderContents": "内容を数えています…",
+  "fileCountAlmostFull": "ファイル数が上限に近づいています。不要なファイルを削除すると、新しいファイルをアップロードできます。",
+  "fileCountFull": "ファイル数の上限に達しています。新しいファイルをアップロードするには、不要なファイルを削除してください。",
+  "fileCountFullSubscribed": "ファイル数の上限に達しています。プランを変更するか、不要なファイルを削除してください。",
+  "overFreeFileCount": "ストレージプランが終了し、ファイル数が無料枠を超えています。既存のファイルは引き続き開いたり削除したりできますが、上限を下回るまで新しいアップロードはできません。",
+  "filesRemaining": "残り {{count, number}} 件"
 }

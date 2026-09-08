@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countStorageFilesInFolders,
   retrieveStorageFilesPage,
@@ -136,9 +136,12 @@ describe("storage listing pages", () => {
         .map((row) => row.id)
         .sort();
 
+    // Parameters and case are ignored, as fileKind ignores them on the screen.
+    file("manual", { mimeType: "application/pdf; charset=binary" });
+    file("tarball", { mimeType: "APPLICATION/GZIP" });
     expect(await ids({ kind: "image" })).toEqual(["photo"]);
-    expect(await ids({ kind: "document" })).toEqual(["notes", "sheet"]);
-    expect(await ids({ kind: "archive" })).toEqual(["bundle"]);
+    expect(await ids({ kind: "document" })).toEqual(["manual", "notes", "sheet"]);
+    expect(await ids({ kind: "archive" })).toEqual(["bundle", "tarball"]);
     expect(await ids({ kind: "other" })).toEqual(["blob"]);
     expect(await ids({ visibility: "PUBLIC" })).toEqual(["movie"]);
     expect(await ids({ kind: "video", visibility: "PRIVATE" })).toEqual([]);
@@ -161,6 +164,41 @@ describe("storage listing pages", () => {
     expect(await order({ sort: "name", descending: false })).toEqual(["a", "b", "c"]);
     expect(await order({ sort: "size", descending: true })).toEqual(["b", "a", "c"]);
     expect(await order({ sort: "createdAt", descending: false })).toEqual(["b", "a", "c"]);
+  });
+
+  it("stores a MIME type without stray whitespace", async () => {
+    const { createFile } = await import("@beutl/db");
+    const created = await createFile({
+      userId: USER_ID,
+      name: "spaced.png",
+      objectKey: "spaced",
+      size: 1,
+      mimeType: "  image/png ",
+      visibility: "PRIVATE",
+    });
+    expect(created.mimeType).toBe("image/png");
+  });
+
+  it("names a new file after only the names that could collide", async () => {
+    const { availableStorageFileName } = await import("@beutl/db");
+    file("clip.mp4", { name: "clip.mp4" });
+    file("clip (1).mp4", { name: "clip (1).mp4" });
+    file("clip.txt", { name: "clip.txt" });
+    file("unrelated", { name: "unrelated.mp4" });
+    const findMany = vi.spyOn(memory.prisma.file, "findMany");
+
+    expect(await availableStorageFileName({ userId: USER_ID, name: "clip.mp4" })).toBe("clip (2).mp4");
+    expect(await availableStorageFileName({ userId: USER_ID, name: "fresh.mp4" })).toBe("fresh.mp4");
+    expect(await availableStorageFileName({ userId: USER_ID, name: "README" })).toBe("README");
+
+    // Never the whole account: the query names the exact name and the
+    // "name (n).ext" pattern and nothing else.
+    for (const call of findMany.mock.calls) {
+      expect(call[0]).toMatchObject({
+        where: expect.objectContaining({ OR: expect.arrayContaining([expect.anything()]) }),
+        select: { name: true },
+      });
+    }
   });
 
   it("counts the files a folder deletion would take", async () => {

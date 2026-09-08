@@ -324,8 +324,8 @@ type FileWhere = {
   userId?: string;
   aiJobResult?: null;
   folderId?: string | null | { in: string[] };
-  name?: { contains: string; mode?: "insensitive" };
-  mimeType?: { startsWith?: string; in?: string[]; mode?: "insensitive" };
+  name?: string | { contains?: string; startsWith?: string; endsWith?: string; mode?: "insensitive" };
+  mimeType?: { equals?: string; startsWith?: string; in?: string[]; mode?: "insensitive" };
   visibility?: string;
   OR?: FileWhere[];
   NOT?: FileWhere | FileWhere[];
@@ -1020,14 +1020,21 @@ export function createInMemoryPrisma() {
         if (folderId !== where.folderId) return false;
       } else if (folderId === null || !where.folderId.in.includes(folderId)) return false;
     }
-    if (where.name?.contains !== undefined) {
-      const haystack = where.name.mode === "insensitive" ? file.name.toLowerCase() : file.name;
-      const needle = where.name.mode === "insensitive" ? where.name.contains.toLowerCase() : where.name.contains;
-      if (!haystack.includes(needle)) return false;
+    if (where.name !== undefined) {
+      if (typeof where.name === "string") {
+        if (file.name !== where.name) return false;
+      } else {
+        const fold = (value: string) => (where.name && typeof where.name === "object" && where.name.mode === "insensitive" ? value.toLowerCase() : value);
+        const haystack = fold(file.name);
+        if (where.name.contains !== undefined && !haystack.includes(fold(where.name.contains))) return false;
+        if (where.name.startsWith !== undefined && !haystack.startsWith(fold(where.name.startsWith))) return false;
+        if (where.name.endsWith !== undefined && !haystack.endsWith(fold(where.name.endsWith))) return false;
+      }
     }
     if (where.mimeType !== undefined) {
       const fold = (value: string) => (where.mimeType?.mode === "insensitive" ? value.toLowerCase() : value);
       const type = fold(file.mimeType);
+      if (where.mimeType.equals !== undefined && type !== fold(where.mimeType.equals)) return false;
       if (where.mimeType.startsWith !== undefined && !type.startsWith(fold(where.mimeType.startsWith))) return false;
       if (where.mimeType.in !== undefined && !where.mimeType.in.map(fold).includes(type)) return false;
     }
