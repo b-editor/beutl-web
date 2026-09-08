@@ -169,12 +169,42 @@ describe("moving one object between stores", () => {
       to: "s3",
       stores: [s3.store, r2.store],
       expectedSize: 8,
-      stillWanted: async () => false,
+      claim: async () => "gone",
     });
     expect(outcome).toEqual({ kind: "missing" });
     expect(s3.data.has("key")).toBe(false);
     // The file's own deletion is what sweeps the source; the move leaves it.
     expect(r2.bucket.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when another move holds the claim", async () => {
+    const payload = bytes(8, 15);
+    const s3 = memoryStore("s3");
+    const r2 = memoryStore("r2", { key: payload });
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, claim: async () => "lost" }))
+      .rejects.toMatchObject({ reason: "contended" });
+    // The copy stays for whichever move won; the source is untouched.
+    expect(s3.data.get("key")).toEqual(payload);
+    expect(r2.data.get("key")).toEqual(payload);
+
+    const both = memoryStore("s3", { key: payload });
+    const claim = vi.fn(async () => "lost" as const);
+    await expect(moveStorageObject({ objectKey: "key", to: "s3", stores: [both.store, r2.store], expectedSize: 8, claim }))
+      .rejects.toMatchObject({ reason: "contended" });
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(r2.data.has("key")).toBe(true);
+    expect(r2.bucket.delete).not.toHaveBeenCalled();
+  });
+
+  it("claims exactly once before the first deletion of a leftover", async () => {
+    const payload = bytes(8, 16);
+    const s3 = memoryStore("s3", { key: payload });
+    const r2 = memoryStore("r2", { key: payload });
+    const claim = vi.fn(async () => "claimed" as const);
+    expect(await moveStorageObject({ objectKey: "key", to: "s3", stores: [s3.store, r2.store], expectedSize: 8, claim }))
+      .toEqual({ kind: "already-there", to: "s3", removedFrom: ["r2"] });
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(claim.mock.invocationCallOrder[0]).toBeLessThan(r2.bucket.delete.mock.invocationCallOrder[0]);
   });
 
   it("reports an object that no store holds", async () => {
@@ -239,6 +269,7 @@ describe("moving files in bulk", () => {
       objectKey: `key-${index}`,
       size: 4,
       mimeType: "application/octet-stream",
+      updatedAt: new Date("2026-09-01T00:00:00.000Z"),
       cursor: `c${index}`,
     }));
   }
@@ -340,9 +371,9 @@ describe("moving files in bulk", () => {
       nextPage: pager(all, 5),
       cursor: undefined,
       limits: { moves: 10, scanned: 2, milliseconds: 60_000 },
-      stillWanted: async (file) => {
+      claim: async (file) => {
         asked.push(file.id);
-        return true;
+        return "claimed";
       },
     });
     expect(outcome).toMatchObject({ scanned: 2, moved: 2, nextCursor: "c1", done: false });
@@ -365,6 +396,32 @@ describe("moving files in bulk", () => {
     });
     expect(outcome.done).toBe(false);
     expect(outcome).toMatchObject({ scanned: 1, moved: 1, nextCursor: "c0" });
+  });
+
+  it("reports a copy whose source could not be removed as unfinished", async () => {
+    const all = files(1);
+    const r2 = memoryStore("r2", { "key-0": bytes(4, 0) });
+    const s3 = memoryStore("s3");
+    r2.bucket.delete.mockRejectedValueOnce(new Error("r2 down"));
+    const changed: string[] = [];
+    const outcome = await moveStorageObjectsBatch({
+      to: "s3",
+      stores: [s3.store, r2.store],
+      nextPage: pager(all, 10),
+      cursor: undefined,
+      limits: { moves: 10, scanned: 100, milliseconds: 60_000 },
+      onObjectChanged: async (file, result) => {
+        changed.push(`${file.id}:${result.kind}`);
+      },
+    });
+    expect(outcome.moved).toBe(0);
+    expect(outcome.failed).toEqual([
+      { id: "file-0", name: "file 0", error: expect.stringContaining("could not be removed") },
+    ]);
+    expect(outcome.done).toBe(true);
+    // The copy did land and is audited even though the batch reports it unfinished.
+    expect(changed).toEqual(["file-0:moved"]);
+    expect(s3.data.has("key-0")).toBe(true);
   });
 
   it("records a failure and carries on with the next file", async () => {

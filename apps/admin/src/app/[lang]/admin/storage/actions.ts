@@ -3,7 +3,11 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
-import { findFileForAdminById, listFilesForAdminAfter } from "@beutl/db";
+import {
+  claimFileForStorageMove,
+  findFileForAdminById,
+  listFilesForAdminAfter,
+} from "@beutl/db";
 import {
   moveStorageObject,
   moveStorageObjectsBatch,
@@ -88,8 +92,9 @@ export async function moveFileToProvider(
         stores,
         expectedSize: Number(file.size),
         contentType: file.mimeType,
-        // A file deleted while its copy was in flight must not come back.
-        stillWanted: async () => (await findFileForAdminById({ id: file.id })) !== null,
+        // One move at a time per file, across isolates; a file deleted while
+        // its copy was in flight must not come back.
+        claim: () => claimFileForStorageMove({ id: file.id, expectedUpdatedAt: file.updatedAt }),
       });
       if (outcome.kind === "moved") {
         await recordMove({ operatorUserId: session.user.id, file, outcome });
@@ -169,12 +174,13 @@ export async function moveFilesBatch(
             objectKey: row.objectKey,
             size: Number(row.size),
             mimeType: row.mimeType,
+            updatedAt: row.updatedAt,
             cursor: encodeFileCursor(row),
           }));
         },
         onObjectChanged: (file, outcome) =>
           recordMove({ operatorUserId: session.user.id, file, outcome }),
-        stillWanted: async (file) => (await findFileForAdminById({ id: file.id })) !== null,
+        claim: (file) => claimFileForStorageMove({ id: file.id, expectedUpdatedAt: file.updatedAt }),
       });
       return { success: true, data: outcome };
     } catch (error) {

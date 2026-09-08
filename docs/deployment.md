@@ -61,8 +61,12 @@ admin) together with:
 
 The credential needs `GetObject`, `PutObject`, `DeleteObject`, and the
 multipart upload permissions (`CreateMultipartUpload`, `UploadPart`,
-`CompleteMultipartUpload`, `AbortMultipartUpload`) on the bucket. Objects are
-addressed by key only; no bucket listing is performed.
+`CompleteMultipartUpload`, `AbortMultipartUpload`) on the objects, plus
+`ListBucket` on the bucket itself. Nothing lists the bucket, but AWS S3 (and
+services that copy its behaviour) answers a GET or HEAD of a missing key with
+`403 AccessDenied` instead of `404` when the principal lacks `ListBucket`; the
+adapter treats only `404` as "not here", so without that permission an object
+that lives in the other store is reported as an error rather than read from it.
 
 Uploads stream each part straight from the browser request to the service with
 an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`). This has been

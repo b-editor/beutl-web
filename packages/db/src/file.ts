@@ -654,8 +654,35 @@ const adminFileSelect = {
   mimeType: true,
   objectKey: true,
   createdAt: true,
+  updatedAt: true,
   user: { select: { id: true, email: true, name: true } },
 } as const;
+
+export type StorageMoveClaim = "claimed" | "lost" | "gone";
+
+// ストア間の移動で「削除してよいのはこの呼び出しだけ」を取るための CAS。
+// updatedAt を期待値付きで進めるので、別の isolate で同じファイルを動かして
+// いる移動や、その間の改名・削除があれば負ける。負けた側は何も消さない。
+export async function claimFileForStorageMove({
+  id,
+  expectedUpdatedAt,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  expectedUpdatedAt: Date;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<StorageMoveClaim> {
+  const db = prisma ?? (await getDb());
+  const updated = await db.file.updateMany({
+    where: { id, updatedAt: expectedUpdatedAt },
+    data: { updatedAt: now },
+  });
+  if (updated.count === 1) return "claimed";
+  const exists = await db.file.findUnique({ where: { id }, select: { id: true } });
+  return exists ? "lost" : "gone";
+}
 
 export type AdminFileOrder = "asc" | "desc";
 

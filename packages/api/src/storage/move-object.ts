@@ -22,11 +22,14 @@ export type MoveOutcome =
   | { kind: "already-there"; to: StorageProvider; removedFrom: StorageProvider[] }
   | { kind: "missing" };
 
+export type StorageMoveClaim = "claimed" | "lost" | "gone";
+
 export class StorageMoveError extends Error {
   readonly reason:
     | "no-destination"
     | "size-mismatch"
     | "verification-failed"
+    | "contended"
     | "unsupported";
 
   constructor(reason: StorageMoveError["reason"], message: string) {
@@ -79,10 +82,9 @@ function measuredAs(observed: number | undefined, expected: number): boolean {
   return observed === expected;
 }
 
-// Two moves of the same object in one isolate run one after the other, so an
-// opposing pair cannot each delete the copy the other relies on. Separate
-// isolates still race across the short window between the final check and
-// the delete; the check below narrows it.
+// Two moves of the same object in one isolate run one after the other. Across
+// isolates the caller's `claim` is what serializes them: a durable
+// compare-and-set that exactly one move wins before anything is deleted.
 const inFlight = new Map<string, Promise<unknown>>();
 
 async function serialized<T>(objectKey: string, run: () => Promise<T>): Promise<T> {
@@ -109,26 +111,44 @@ export async function moveStorageObject({
   stores,
   expectedSize,
   contentType,
-  stillWanted,
+  claim,
 }: {
   objectKey: string;
   to: StorageProvider;
   stores: readonly StorageStore[];
   expectedSize?: number;
   contentType?: string;
-  /** Asked after the copy is verified and before the source is deleted. The
-   * file may have been deleted while the copy was in flight, in which case
-   * its deletion already removed every copy that existed at the time and the
-   * fresh copy must not survive it. */
-  stillWanted?: () => Promise<boolean>;
+  /**
+   * Asked once, right before the move deletes anything. It must be a durable
+   * compare-and-set on the file's record: "claimed" when this move won the
+   * right to delete, "lost" when another move (or an edit of the record)
+   * got there first, and "gone" when the record no longer exists. A file
+   * deleted while the copy was in flight has had every earlier copy swept
+   * by that deletion, so a fresh copy must not survive it.
+   */
+  claim?: () => Promise<StorageMoveClaim>;
 }): Promise<MoveOutcome> {
   const destination = stores.find((store) => store.provider === to);
   if (!destination) {
     throw new StorageMoveError("no-destination", `The ${to} store is not configured`);
   }
   return await serialized(objectKey, () =>
-    moveLocatedObject({ objectKey, to, stores, destination, expectedSize, contentType, stillWanted }),
+    moveLocatedObject({ objectKey, to, stores, destination, expectedSize, contentType, claim }),
   );
+}
+
+async function claimOrThrow(
+  claim: (() => Promise<StorageMoveClaim>) | undefined,
+  objectKey: string,
+): Promise<"claimed" | "gone"> {
+  const outcome = (await claim?.()) ?? "claimed";
+  if (outcome === "lost") {
+    throw new StorageMoveError(
+      "contended",
+      `${objectKey} is being moved or edited elsewhere; nothing was deleted`,
+    );
+  }
+  return outcome;
 }
 
 async function moveLocatedObject({
@@ -138,7 +158,7 @@ async function moveLocatedObject({
   destination,
   expectedSize,
   contentType,
-  stillWanted,
+  claim,
 }: {
   objectKey: string;
   to: StorageProvider;
@@ -146,7 +166,7 @@ async function moveLocatedObject({
   destination: StorageStore;
   expectedSize?: number;
   contentType?: string;
-  stillWanted?: () => Promise<boolean>;
+  claim?: () => Promise<StorageMoveClaim>;
 }): Promise<MoveOutcome> {
   const locations = await locateStorageObject(objectKey, stores);
   const atDestination = locations.find((location) => location.provider === to);
@@ -163,11 +183,14 @@ async function moveLocatedObject({
         `${objectKey} in ${to} is ${atDestination.size ?? "of unknown size"}, not the recorded ${expectedSize}`,
       );
     }
+    // Exactly one move may delete: an opposing move in another isolate that
+    // also saw both copies loses the claim and leaves them alone.
+    if ((await claimOrThrow(claim, objectKey)) === "gone") return { kind: "missing" };
     const removedFrom: StorageProvider[] = [];
     for (const location of elsewhere) {
       const store = stores.find((candidate) => candidate.provider === location.provider)!;
-      // An opposing move may have taken the destination copy since it was
-      // located; never remove the last copy.
+      // Never remove the last copy: check the destination copy once more
+      // right before deleting.
       const stillThere = await inspector(destination)(objectKey);
       if (!stillThere || !measuredAs(stillThere.size, atDestination.size)) {
         throw new StorageMoveError(
@@ -226,7 +249,7 @@ async function moveLocatedObject({
     );
   }
 
-  if (stillWanted && !(await stillWanted())) {
+  if ((await claimOrThrow(claim, objectKey)) === "gone") {
     // The record is gone; its deletion has already swept the stores, so the
     // copy written since is the only thing left and would otherwise leak.
     await remover(destination)(objectKey);
@@ -249,6 +272,8 @@ export type MovableFile = {
   objectKey: string;
   size: number;
   mimeType: string;
+  /** The record's version the claim compares against. */
+  updatedAt: Date;
   /** Opaque position of this file in the scan, handed back as `nextCursor`. */
   cursor: string;
 };
@@ -277,7 +302,7 @@ export async function moveStorageObjectsBatch({
   cursor,
   limits,
   onObjectChanged,
-  stillWanted,
+  claim,
   now = () => Date.now(),
 }: {
   to: StorageProvider;
@@ -291,8 +316,8 @@ export async function moveStorageObjectsBatch({
     file: MovableFile,
     outcome: Extract<MoveOutcome, { kind: "moved" | "already-there" }>,
   ) => Promise<void>;
-  /** See moveStorageObject; asked per file before its source is deleted. */
-  stillWanted?: (file: MovableFile) => Promise<boolean>;
+  /** See moveStorageObject; asked per file before anything is deleted. */
+  claim?: (file: MovableFile) => Promise<StorageMoveClaim>;
   now?: () => number;
 }): Promise<MoveBatchOutcome> {
   if (!stores.some((store) => store.provider === to)) {
@@ -358,11 +383,22 @@ export async function moveStorageObjectsBatch({
           stores,
           expectedSize: entry.file.size,
           contentType: entry.file.mimeType,
-          stillWanted: stillWanted ? () => stillWanted(entry.file) : undefined,
+          claim: claim ? () => claim(entry.file) : undefined,
         });
         if (result.kind === "moved") {
-          outcome.moved++;
           await onObjectChanged?.(entry.file, result);
+          if (result.sourceRemoved) {
+            outcome.moved++;
+          } else {
+            // The copy is in place, but the old store still holds one. Report
+            // it as unfinished so the old store is not decommissioned on the
+            // strength of a clean-looking batch; the next run removes it.
+            outcome.failed.push({
+              id: entry.file.id,
+              name: entry.file.name,
+              error: `copied to ${to} but the copy in ${result.from} could not be removed; run again`,
+            });
+          }
         } else if (result.kind === "already-there") {
           outcome.alreadyThere++;
           if (result.removedFrom.length > 0) await onObjectChanged?.(entry.file, result);
