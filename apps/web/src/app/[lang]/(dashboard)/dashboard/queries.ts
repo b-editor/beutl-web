@@ -1,6 +1,11 @@
 import "server-only";
 
-import { getDb, resolveStorageQuota, sumFileSizeByUserId } from "@beutl/db";
+import {
+  countFilesByUserId,
+  getDb,
+  resolveStorageQuota,
+  sumFileSizeByUserId,
+} from "@beutl/db";
 import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import { retrievePackages } from "./library/actions";
 
@@ -10,9 +15,12 @@ export const LIBRARY_PREVIEW_COUNT = 6;
 export async function retrieveDashboardOverview(userId: string) {
   // Explicitly share the render-scoped PrismaClient across all overview reads.
   const prisma = await getDb();
-  const [libraryPackages, storageUsedBytes, storageQuota, entitlements] = await Promise.all([
+  const [libraryPackages, storageUsedBytes, storageFileCount, storageQuota, entitlements] = await Promise.all([
     retrievePackages(userId, { prisma, take: LIBRARY_PREVIEW_COUNT }),
     sumFileSizeByUserId({ userId, prisma }),
+    // Uploads are refused on the file limit as well as the byte quota, so the
+    // overview's warning has to see both.
+    countFilesByUserId({ userId, prisma }),
     // 主キー 1 読み。読めなければ無料枠に落とすのではなくページごと失敗させる
     // (有料の人を超過扱いで描くほうが悪い)。
     resolveStorageQuota({ userId, prisma }),
@@ -25,5 +33,5 @@ export async function retrieveDashboardOverview(userId: string) {
     }),
   ]);
 
-  return { libraryPackages, storageUsedBytes, storageQuota, entitlements };
+  return { libraryPackages, storageUsedBytes, storageFileCount, storageQuota, entitlements };
 }

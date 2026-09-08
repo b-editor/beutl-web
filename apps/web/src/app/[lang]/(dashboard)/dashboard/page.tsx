@@ -14,15 +14,23 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const session = await authOrSignIn();
   const { t } = await getTranslation(lang);
-  const { libraryPackages, storageUsedBytes, storageQuota, entitlements } =
-    await retrieveDashboardOverview(session.user.id);
+  const {
+    libraryPackages,
+    storageUsedBytes,
+    storageFileCount,
+    storageQuota,
+    entitlements,
+  } = await retrieveDashboardOverview(session.user.id);
 
   // File.size は BigInt。上限は最大でも 1TiB = 2^40 なので Number 化しても精度は落ちない。
   const usedBytes = Number(storageUsedBytes);
   const storageRatio = usedBytes / storageQuota.quotaBytes;
+  const fileRatio = storageFileCount / storageQuota.fileCountLimit;
+  // アップロードは容量とファイル数のどちらでも断られるので、近いほうで判定する。
   // 無料枠で残りが 1 割を切ったら、加入の導線を出す。
-  const storageLevel =
-    storageRatio >= 1 ? "full" : storageRatio >= 0.9 ? "warning" : "ok";
+  const storageLimitedBy = fileRatio > storageRatio ? "files" : "bytes";
+  const tightest = Math.max(storageRatio, fileRatio);
+  const storageLevel = tightest >= 1 ? "full" : tightest >= 0.9 ? "warning" : "ok";
   const showStorageUpgrade = storageQuota.tier === null && storageLevel !== "ok";
   // entitlements が null なのは残高を読めなかったときだけ。数値は出さず、
   // AI のページ側で実際の状態を出す。
@@ -82,9 +90,13 @@ export default async function Page(props: {
                 }
               >
                 {t(
-                  storageLevel === "full"
-                    ? "dashboard:overview.storageFull"
-                    : "dashboard:overview.storageAlmostFull",
+                  storageLimitedBy === "files"
+                    ? storageLevel === "full"
+                      ? "dashboard:overview.storageFilesFull"
+                      : "dashboard:overview.storageFilesAlmostFull"
+                    : storageLevel === "full"
+                      ? "dashboard:overview.storageFull"
+                      : "dashboard:overview.storageAlmostFull",
                 )}
               </span>
               <Link

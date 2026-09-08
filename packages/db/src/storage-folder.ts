@@ -216,7 +216,7 @@ export async function deleteStorageFolderTree({
   const transact = <T>(run: (tx: PrismaTransaction) => Promise<T>): Promise<T> =>
     prisma ? run(prisma) : startRetryableTransaction(run);
 
-  const plan = await transact(async (tx) => {
+  const preflight = await transact(async (tx) => {
     if (!(await folderBelongsToUser(tx, folderId, userId))) {
       return { kind: "notFound" as const };
     }
@@ -225,15 +225,25 @@ export async function deleteStorageFolderTree({
       where: { folderId: { in: folderIds }, userId, aiJobResult: null, ...FILE_IN_USE_WHERE },
     });
     if (inUse > 0) return { kind: "inUse" as const };
-    return { kind: "ready" as const, folderIds };
+    return { kind: "ready" as const };
   });
-  if (plan.kind !== "ready") return { kind: plan.kind };
+  if (preflight.kind !== "ready") return preflight;
 
   let fileCount = 0;
   for (;;) {
     const outcome = await transact(async (tx) => {
+      // The tree is read again inside every batch, in the transaction that
+      // deletes from it. A folder moved out of the tree while the deletion
+      // runs is no longer part of it, so its files are left alone; one moved
+      // in is picked up. Under serializable isolation a move committing
+      // during a batch conflicts with that batch's read and one of the two
+      // retries, so a batch never acts on a tree it did not see.
+      if (!(await folderBelongsToUser(tx, folderId, userId))) {
+        return { kind: "notFound" as const };
+      }
+      const folderIds = await folderSubtree(tx, folderId, userId);
       const batch: { id: string }[] = await tx.file.findMany({
-        where: { folderId: { in: plan.folderIds }, userId, aiJobResult: null },
+        where: { folderId: { in: folderIds }, userId, aiJobResult: null },
         select: { id: true },
         orderBy: { id: "asc" },
         take: STORAGE_FOLDER_DELETE_BATCH,
@@ -253,14 +263,12 @@ export async function deleteStorageFolderTree({
     fileCount += outcome.count;
   }
 
-  await transact(async (tx) => {
+  const folderCount = await transact(async (tx) => {
+    const folderIds = await folderSubtree(tx, folderId, userId);
     // Child folders go with the parent through the cascade; a file that
     // arrived after the last batch is moved to the root by the same cascade.
     await tx.storageFolder.deleteMany({ where: { id: folderId, userId } });
+    return folderIds.length;
   });
-  return {
-    kind: "deleted" as const,
-    fileCount,
-    folderCount: plan.folderIds.length,
-  };
+  return { kind: "deleted" as const, fileCount, folderCount };
 }

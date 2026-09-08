@@ -361,6 +361,16 @@ row that never received a part (existing rows keep `NULL`). A slow transfer
 that is still receiving parts is therefore never abandoned, whatever its
 size; the bucket's seven-day lifecycle rule remains the last line of defence.
 
+## Stored MIME types are normalized
+
+The storage screen's kind filter runs in the database and matches a MIME
+type either exactly or followed by `;` and parameters, which is what the
+screen's classifier reduces a value to. Files are written through
+`storedMimeType` (ends trimmed, whitespace around `;` removed), and
+`20260909020000_normalize_file_mime_types` applies the same rule to rows
+stored before it existed. Data only, replayable, no maintenance window; a
+served `Content-Type` keeps its meaning.
+
 ## Durable top-up Checkout recovery
 
 `20260826050000_harden_topup_checkout_recovery` gives each user one nullable,

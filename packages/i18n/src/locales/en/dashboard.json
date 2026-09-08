@@ -22,7 +22,9 @@
     "viewAll": "View all",
     "storageAlmostFull": "Almost out of space",
     "storageFull": "Storage is full",
-    "storageQuota": "{{used}} of {{quota}}"
+    "storageQuota": "{{used}} of {{quota}}",
+    "storageFilesAlmostFull": "Almost out of file slots",
+    "storageFilesFull": "File limit reached"
   },
   "ai": {
     "title": "AI",
