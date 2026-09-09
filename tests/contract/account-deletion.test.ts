@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   authorizeAccountDeletion: vi.fn(),
   closeStripeCustomerForAccountDeletion: vi.fn(),
   deleteUserById: vi.fn(),
+  drainUserStorageFiles: vi.fn(),
   enqueueUserStorageCleanups: vi.fn(),
   findAccountDeletionIntent: vi.fn(),
   prepareAccountDeletionOutboxes: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@beutl/db", () => ({
   deleteUserById: mocks.deleteUserById,
+  drainUserStorageFiles: mocks.drainUserStorageFiles,
   enqueueUserStorageCleanups: mocks.enqueueUserStorageCleanups,
   findAccountDeletionIntent: mocks.findAccountDeletionIntent,
   prepareAccountDeletionOutboxes: mocks.prepareAccountDeletionOutboxes,
@@ -64,6 +66,7 @@ describe("resumable account deletion", () => {
       unboundCheckoutRecoveries: 0,
       customerProvisioningRecoveries: 0,
     });
+    mocks.drainUserStorageFiles.mockResolvedValue({ kind: "drained", fileCount: 0 });
   });
 
   it("durably authorizes before Stripe and deletes locally only after closure", async () => {
@@ -86,6 +89,15 @@ describe("resumable account deletion", () => {
     expect(
       mocks.closeStripeCustomerForAccountDeletion.mock.invocationCallOrder[0],
     ).toBeLessThan(mocks.deleteUserById.mock.invocationCallOrder[0]);
+    // The plain files are drained after Stripe is closed and before the
+    // cascade, outside its transaction.
+    expect(mocks.drainUserStorageFiles).toHaveBeenCalledWith({ userId: "user-1" });
+    expect(
+      mocks.closeStripeCustomerForAccountDeletion.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.drainUserStorageFiles.mock.invocationCallOrder[0]);
+    expect(mocks.drainUserStorageFiles.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.startRetryableTransaction.mock.invocationCallOrder[0],
+    );
     expect(mocks.enqueueUserStorageCleanups).toHaveBeenCalledWith({
       userId: "user-1",
       prisma: { transaction: true },
@@ -161,6 +173,7 @@ describe("resumable account deletion", () => {
     await expect(
       deleteUser("confirmation-token", "owner@example.com"),
     ).rejects.toThrow("Stripe customer ownership could not be verified");
+    expect(mocks.drainUserStorageFiles).not.toHaveBeenCalled();
     expect(mocks.enqueueUserStorageCleanups).not.toHaveBeenCalled();
     expect(mocks.prepareAccountDeletionOutboxes).not.toHaveBeenCalled();
     expect(mocks.deleteUserById).not.toHaveBeenCalled();
@@ -177,6 +190,7 @@ describe("resumable account deletion", () => {
       deleteUser("bad-token", "owner@example.com"),
     ).rejects.toThrow(message);
     expect(mocks.closeStripeCustomerForAccountDeletion).not.toHaveBeenCalled();
+    expect(mocks.drainUserStorageFiles).not.toHaveBeenCalled();
     expect(mocks.prepareAccountDeletionOutboxes).not.toHaveBeenCalled();
     expect(mocks.deleteUserById).not.toHaveBeenCalled();
   });

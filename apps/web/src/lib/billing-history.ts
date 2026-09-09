@@ -120,7 +120,9 @@ export function buildBillingHistory({
       id: payment.id,
       kind: "subscription",
       paidAt: payment.paidAt,
-      product: formatBillingProductLabel(t, payment.product),
+      product: formatBillingProductLabel(t, payment.product, {
+        tier: payment.tier,
+      }),
       detail: t("account:billing.subscriptionPeriod", {
         start: formatDate(payment.periodStart, lang),
         end: formatDate(payment.periodEnd, lang),

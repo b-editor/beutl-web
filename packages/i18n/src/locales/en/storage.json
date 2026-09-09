@@ -140,5 +140,24 @@
     "fileNotFound": "That file is no longer there.",
     "tooManyUploads": "Too many uploads are already going. Wait for one to finish and try again.",
     "tooManyFiles": "You have reached the limit on how many files you can store. Delete some and try again."
-  }
+  },
+  "plan": {
+    "free": "Free plan",
+    "tier": {
+      "100gb": "100 GB plan",
+      "200gb": "200 GB plan",
+      "1tb": "1 TB plan"
+    }
+  },
+  "upgrade": "Get more storage",
+  "changePlan": "Change plan",
+  "fileCountOfLimit": "{{count, number}} of {{limit, number}} files",
+  "fullSubscribed": "Your storage is full. Change your plan or delete files you no longer need.",
+  "overFreeQuota": "Your storage plan has ended and you are over the free quota. Existing files stay available to open and delete, but new uploads are refused until there is room.",
+  "countingFolderContents": "Counting contents…",
+  "fileCountAlmostFull": "You are running out of file slots. Delete files you no longer need to make room for new uploads.",
+  "fileCountFull": "You have reached the file limit. Delete files you no longer need before uploading more.",
+  "fileCountFullSubscribed": "You have reached the file limit. Change your plan or delete files you no longer need.",
+  "overFreeFileCount": "Your storage plan has ended and you have more files than the free plan allows. Existing files stay available to open and delete, but new uploads are refused until you are under the limit.",
+  "filesRemaining": "{{count, number}} files left"
 }

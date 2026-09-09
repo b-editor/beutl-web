@@ -2,7 +2,7 @@ import {
   findCreditAccount,
   findTopUpCheckoutIntervention,
   getDb,
-  getSubscriptionByUserId,
+  getSubscription,
   listRecentAiJobsByUserId,
   listRecentCreditTransactionsByUserId,
   usagePeriodsEqual,
@@ -10,6 +10,7 @@ import {
 import {
   getMonthlyUsageRemaining,
   isActiveProSubscription,
+  PRO_PLAN,
   loadAiSettings,
   toAiBalanceSnapshot,
   toUsedPercent,
@@ -48,7 +49,7 @@ export async function AiPlanSection({
   const [account, subscription, jobs, transactions, settings, intervention] =
     await Promise.all([
       findCreditAccount({ userId, prisma }),
-      getSubscriptionByUserId({ userId, prisma }),
+      getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
       listRecentAiJobsByUserId({ userId, limit: RECENT_LIMIT, prisma }),
       listRecentCreditTransactionsByUserId({
         userId,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
-import { STORAGE_QUOTA_BYTES } from "@beutl/core";
+import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // What the bucket does with an upload that arrives in parts. The tests below
@@ -256,7 +256,7 @@ describe("storage upload consistency", () => {
 
   it("keeps an over-quota row when cleanup delete is unavailable", async () => {
     const uploadId = await begin();
-    state.files.set("existing-large", { id: "existing-large", name: "large", size: STORAGE_QUOTA_BYTES, mimeType: "application/octet-stream", objectKey: "existing-large", userId: USER_ID, visibility: "PRIVATE", sha256: null, createdAt: new Date(), updatedAt: new Date() });
+    state.files.set("existing-large", { id: "existing-large", name: "large", size: STORAGE_FREE_QUOTA_BYTES, mimeType: "application/octet-stream", objectKey: "existing-large", userId: USER_ID, visibility: "PRIVATE", sha256: null, createdAt: new Date(), updatedAt: new Date() });
     setR2BucketProvider(() => ({ ...bucket, delete: undefined }) as never);
     await expect(finishUpload({ userId: USER_ID, uploadId, parts: [{ partNumber: 1, etag: "etag-1" }] })).resolves.toEqual({ ok: false, reason: "insufficientStorageSpace" });
     expect(state.storageUploads.size).toBe(1);

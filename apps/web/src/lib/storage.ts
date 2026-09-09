@@ -13,7 +13,10 @@ import {
   recordLateDedicatedStorageWriteResult,
   releaseDedicatedStorageReservation,
   renewDedicatedStorageReservation,
-  retrieveFilesByUserId,
+  availableStorageFileName,
+  resolveStorageQuota,
+  startRetryableTransaction,
+  sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
@@ -102,12 +105,7 @@ export async function calcTotalFileSize({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const files = await retrieveFilesByUserId({ userId, prisma });
-  let totalSize = BigInt(0);
-  for (const file of files) {
-    totalSize += BigInt(file.size);
-  }
-  return totalSize;
+  return await sumFileSizeByUserId({ userId, prisma });
 }
 
 /**
@@ -125,15 +123,7 @@ export async function createStorageFile({
   visibility: "PUBLIC" | "PRIVATE" | "DEDICATED";
   userId: string;
 }) {
-  const files = await retrieveFilesByUserId({ userId });
-
-  let filename = file.name;
-  const ext = file.name.split(".").pop();
-  for (let i = 1; files.some((f) => f.name === filename); i++) {
-    filename = ext
-      ? file.name.replace(`.${ext}`, ` (${i}).${ext}`)
-      : `${file.name} (${i})`;
-  }
+  const filename = await availableStorageFileName({ userId, name: file.name });
 
   const array = await file.arrayBuffer();
   const objectKey = crypto.randomUUID();
@@ -173,37 +163,43 @@ export async function createStorageFile({
 
 /** Dedicated developer artifacts use the same transactional quota invariant as
  * multipart uploads. A durable reservation is committed before the provider
- * put, and the File commit consumes that reservation atomically. */
+ * put, and the File commit consumes that reservation atomically.
+ *
+ * The quota normally comes from the account's storage plan, read inside the
+ * reservation transaction. Tests pass an explicit override. */
 export async function createDedicatedStorageFile({
   file,
   userId,
-  quotaBytes,
-  fileCountLimit,
+  quota,
   publish,
 }: {
   file: File;
   userId: string;
-  quotaBytes: bigint;
-  fileCountLimit: number;
+  quota?: { quotaBytes: bigint; fileCountLimit: number };
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
-  const files = await retrieveFilesByUserId({ userId });
-  let filename = file.name;
-  const ext = file.name.split(".").pop();
-  for (let i = 1; files.some((f) => f.name === filename); i++) {
-    filename = ext ? file.name.replace(`.${ext}`, ` (${i}).${ext}`) : `${file.name} (${i})`;
-  }
+  // Only the names that could collide are read; see availableStorageFileName.
+  const filename = await availableStorageFileName({ userId, name: file.name });
   const objectKey = crypto.randomUUID();
-  const reservation = await createDedicatedStorageReservation({
+  const reservationInput = {
     userId,
     id: crypto.randomUUID(),
     objectKey,
     name: filename,
     mimeType: file.type || "application/octet-stream",
     size: BigInt(file.size),
-    quotaBytes,
-    fileCountLimit,
-  });
+  };
+  const reservation = quota
+    ? await createDedicatedStorageReservation({ ...reservationInput, ...quota })
+    : await startRetryableTransaction(async (tx) => {
+        const resolved = await resolveStorageQuota({ userId, prisma: tx });
+        return await createDedicatedStorageReservation({
+          ...reservationInput,
+          quotaBytes: BigInt(resolved.quotaBytes),
+          fileCountLimit: resolved.fileCountLimit,
+          prisma: tx,
+        });
+      });
   if (reservation.kind !== "reserved") return reservation;
   const leaseToken = reservation.reservation.creationLeaseToken;
   let leaseUntil = reservation.reservation.creationLeaseUntil;
@@ -406,6 +402,23 @@ export async function createDedicatedStorageFile({
       leaseToken,
       publish,
     });
+    if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
+      // The plan lapsed between the reservation and this commit. The object
+      // is already in the bucket; releasing the reservation queues it for
+      // cleanup and frees the slot, and the caller reports the refusal the
+      // same way a refused reservation is reported.
+      await releaseDedicatedStorageReservation({
+        id: reservation.reservation.id,
+        userId,
+        objectKey,
+        leaseToken,
+        expectedLeaseUntil: leaseUntil,
+        now: new Date(),
+      });
+      return outcome.kind === "overQuota"
+        ? { kind: "overQuota" as const }
+        : { kind: "tooManyFiles" as const };
+    }
     if (outcome.kind !== "created") {
       throw new Error("Dedicated storage reservation changed before File commit");
     }

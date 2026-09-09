@@ -26,7 +26,7 @@ vi.mock("@beutl/db", async (importOriginal) => {
     claimStripeCheckoutCleanup: dbMocks.claimCleanup,
     claimDetachedPackageCheckoutAttempt: dbMocks.claimPackageDetached,
     claimPackageCheckoutInterventions: dbMocks.claimPackageInterventions,
-    claimDetachedProCheckoutAttempts: dbMocks.claimProDetached,
+    claimDetachedSubscriptionCheckoutAttempts: dbMocks.claimProDetached,
     getPackageCheckoutResolution: dbMocks.getPackageResolution,
     packageCheckoutResolutionRefundState: dbMocks.packageResolutionState,
     schedulePackageCheckoutResolutionRefunds: dbMocks.schedulePackageResolutionRefunds,

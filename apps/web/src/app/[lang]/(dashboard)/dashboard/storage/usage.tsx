@@ -1,29 +1,59 @@
 import { Progress } from "@beutl/ui/ui/progress";
-import { cn, formatBytes, STORAGE_QUOTA_BYTES } from "@beutl/core";
+import { Badge } from "@beutl/ui/ui/badge";
+import { cn, formatBytes, type StorageQuota } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
+import Link from "next/link";
 
 // 残りが 1 割を切ったら警告し、使い切ったら赤にする。
 const WARNING_RATIO = 0.9;
 
 // 一覧の脇に添える一行。数字を大きく見せる場所ではないので、細いバーと小さな
-// 説明文だけにし、空きが少ないときだけ色と一文で目を引く。
+// 説明文だけにし、空きが少ないときだけ色と一文で目を引く。無料枠の人には
+// プランへの導線を添える。
 export async function StorageUsage({
   lang,
   usedBytes,
   fileCount,
+  quota,
 }: {
   lang: string;
   usedBytes: number;
   fileCount: number;
+  quota: StorageQuota;
 }) {
   const { t } = await getTranslation(lang);
-  const ratio = Math.min(usedBytes / STORAGE_QUOTA_BYTES, 1);
-  const remainingBytes = Math.max(STORAGE_QUOTA_BYTES - usedBytes, 0);
-  const level = ratio >= 1 ? "full" : ratio >= WARNING_RATIO ? "warning" : "ok";
+  const ratio = Math.min(usedBytes / quota.quotaBytes, 1);
+  const fileRatio = Math.min(fileCount / quota.fileCountLimit, 1);
+  const remainingBytes = Math.max(quota.quotaBytes - usedBytes, 0);
+  const remainingFiles = Math.max(quota.fileCountLimit - fileCount, 0);
+  // Uploads are refused on either limit, so the state reads whichever is
+  // closer: many small files fill the slots long before the bytes.
+  const limitedBy = fileRatio > ratio ? "files" : "bytes";
+  const tightest = Math.max(ratio, fileRatio);
+  // over は失効後に無料枠を超えている状態。full と同じ色だが文言が違う。
+  const level =
+    (usedBytes > quota.quotaBytes || fileCount > quota.fileCountLimit) &&
+    quota.tier === null
+      ? "over"
+      : tightest >= 1
+        ? "full"
+        : tightest >= WARNING_RATIO
+          ? "warning"
+          : "ok";
   const usage = t("storage:storageUsage", {
     used: formatBytes(usedBytes),
-    quota: formatBytes(STORAGE_QUOTA_BYTES),
+    quota: formatBytes(quota.quotaBytes),
   });
+  const billingHref = `/${lang}/dashboard/account/billing`;
+  const upgradeLink = (
+    <Link
+      href={billingHref}
+      prefetch={false}
+      className="font-medium text-primary hover:underline"
+    >
+      {t(quota.tier === null ? "storage:upgrade" : "storage:changePlan")}
+    </Link>
+  );
 
   return (
     <div className="flex flex-col gap-1.5" aria-label={usage}>
@@ -33,30 +63,74 @@ export async function StorageUsage({
         className={cn(
           "h-1.5 max-w-xs",
           level === "warning" && "[&>div]:bg-amber-500",
-          level === "full" && "[&>div]:bg-destructive",
+          (level === "full" || level === "over") && "[&>div]:bg-destructive",
         )}
       />
-      <p className="text-xs text-muted-foreground tabular-nums">
-        {usage}
-        <span aria-hidden> · </span>
-        {t("storage:fileCount", { count: fileCount })}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
+        <Badge variant="secondary" className="font-normal">
+          {t(
+            quota.tier === null
+              ? "storage:plan.free"
+              : `storage:plan.tier.${quota.tier}`,
+          )}
+        </Badge>
+        <span>{usage}</span>
+        <span aria-hidden>·</span>
+        <span
+          className={cn(
+            level !== "ok" &&
+              limitedBy === "files" &&
+              (level === "warning"
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-destructive"),
+          )}
+        >
+          {t("storage:fileCountOfLimit", {
+            count: fileCount,
+            limit: quota.fileCountLimit,
+          })}
+        </span>
+        {level === "ok" && quota.tier === null && (
+          <>
+            <span aria-hidden>·</span>
+            {upgradeLink}
+          </>
+        )}
       </p>
       {level !== "ok" && (
         <p
           className={cn(
             "text-xs",
-            level === "full"
-              ? "text-destructive"
-              : "text-amber-700 dark:text-amber-400",
+            level === "warning"
+              ? "text-amber-700 dark:text-amber-400"
+              : "text-destructive",
           )}
         >
-          {level === "full" ? t("storage:full") : t("storage:almostFull")}
+          {limitedBy === "files"
+            ? level === "over"
+              ? t("storage:overFreeFileCount")
+              : level === "full"
+                ? t(
+                    quota.tier === null
+                      ? "storage:fileCountFull"
+                      : "storage:fileCountFullSubscribed",
+                  )
+                : t("storage:fileCountAlmostFull")
+            : level === "over"
+              ? t("storage:overFreeQuota")
+              : level === "full"
+                ? t(quota.tier === null ? "storage:full" : "storage:fullSubscribed")
+                : t("storage:almostFull")}
           {level === "warning" && (
             <>
               <span aria-hidden> </span>
-              {t("storage:remaining", { remaining: formatBytes(remainingBytes) })}
+              {limitedBy === "files"
+                ? t("storage:filesRemaining", { count: remainingFiles })
+                : t("storage:remaining", { remaining: formatBytes(remainingBytes) })}
             </>
           )}
+          <span aria-hidden> </span>
+          {upgradeLink}
         </p>
       )}
     </div>

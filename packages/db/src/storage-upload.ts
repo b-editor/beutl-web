@@ -1,4 +1,6 @@
+import { countFilesByUserId, storedMimeType, sumFileSizeByUserId } from "./file";
 import { getDb } from "./provider";
+import { resolveStorageQuota } from "./storage-quota";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
@@ -258,9 +260,34 @@ export async function renewDedicatedStorageReservation({
     data: {
       creationLeaseUntil: leaseUntil,
       completionLeaseUntil: leaseUntil,
+      lastActivityAt: now,
     },
   } as never);
   return renewed.count === 1;
+}
+
+// A part is about to be sent (or a dedicated write is still being renewed):
+// the upload is not abandoned, whatever its age. The stale sweep measures
+// idleness from this, falling back to createdAt for a row that never saw a
+// part, and its claim compares the value it listed, so a touch that lands
+// first defeats the claim and a claim that lands first fails this touch.
+export async function touchStorageUploadActivity({
+  id,
+  userId,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? (await getDb());
+  const touched = await db.storageUpload.updateMany({
+    where: { id, userId, completedFileId: null, abandonedAt: null },
+    data: { lastActivityAt: now },
+  } as never);
+  return touched.count === 1;
 }
 
 export async function recordDedicatedStorageWriteUnknown({
@@ -394,13 +421,28 @@ export async function commitDedicatedStorageReservation({
       reservation.abandonedAt ||
       (leaseToken !== undefined && reservation.creationLeaseToken !== leaseToken)
     ) return { kind: "changed" as const };
+    // The plan may have lapsed or been held since the reservation was taken.
+    // Read the quota again here, as the multipart finalizer does, and refuse
+    // what no longer fits; the caller releases the reservation, which queues
+    // the object it already wrote for cleanup.
+    const [quota, stored, files] = await Promise.all([
+      resolveStorageQuota({ userId, prisma: tx }),
+      sumFileSizeByUserId({ userId, prisma: tx }),
+      countFilesByUserId({ userId, prisma: tx }),
+    ]);
+    if (stored + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
+      return { kind: "overQuota" as const };
+    }
+    if (files >= quota.fileCountLimit) {
+      return { kind: "tooManyFiles" as const };
+    }
     const created = await tx.file.create({
       data: {
         id: fileId,
         objectKey: reservation.objectKey,
         name: reservation.name,
         size: reservation.size,
-        mimeType: reservation.mimeType,
+        mimeType: storedMimeType(reservation.mimeType),
         userId: reservation.userId,
         visibility: "DEDICATED",
         ...(sha256 ? { sha256 } : {}),
@@ -1214,6 +1256,60 @@ export async function deleteClaimedStorageUpload({
   return deleted.count === 1;
 }
 
+// Queue a delayed deletion of an object and make sure nothing else holds it.
+// False when a live lease already owns the object's cleanup; the caller then
+// leaves its row for a later pass.
+async function scheduleDelayedObjectCleanup(
+  tx: PrismaTransaction,
+  { objectKey, now, notBefore }: { objectKey: string; now: Date; notBefore: Date },
+): Promise<boolean> {
+  await tx.aiStorageCleanup.createMany({
+    data: [{
+      objectKey,
+      aiJobId: null,
+      leaseToken: null,
+      state: "cleanup",
+      notBefore,
+    }],
+    skipDuplicates: true,
+  });
+  const cleanup = await tx.aiStorageCleanup.findFirst({
+    where: { objectKey },
+    select: {
+      objectKey: true,
+      leaseToken: true,
+      notBefore: true,
+    },
+  });
+  if (!cleanup) {
+    throw new Error(`Object cleanup ${objectKey} was not persisted`);
+  }
+  if (cleanup.leaseToken && cleanup.notBefore.getTime() > now.getTime()) {
+    return false;
+  }
+
+  const delayedUntil = cleanup.notBefore.getTime() > notBefore.getTime()
+    ? cleanup.notBefore
+    : notBefore;
+  const delayed = await tx.aiStorageCleanup.updateMany({
+    where: {
+      objectKey,
+      leaseToken: cleanup.leaseToken,
+      notBefore: cleanup.notBefore,
+    },
+    data: {
+      aiJobId: null,
+      leaseToken: null,
+      state: "cleanup",
+      notBefore: delayedUntil,
+    },
+  });
+  if (delayed.count !== 1) {
+    throw new Error(`Object cleanup ${objectKey} changed before it was delayed`);
+  }
+  return true;
+}
+
 /**
  * Replace a terminal multipart handle with a delayed object cleanup, then drop
  * only that claimed upload generation. The transaction closes the interval in
@@ -1240,56 +1336,13 @@ export async function settleTerminalClaimedStorageUpload({
   }
 
   const run = async (tx: PrismaTransaction): Promise<boolean> => {
-    await tx.aiStorageCleanup.createMany({
-      data: [{
-        objectKey: expected.objectKey,
-        aiJobId: null,
-        leaseToken: null,
-        state: "cleanup",
-        notBefore: objectCleanupNotBefore,
-      }],
-      skipDuplicates: true,
-    });
-    const cleanup = await tx.aiStorageCleanup.findFirst({
-      where: { objectKey: expected.objectKey },
-      select: {
-        objectKey: true,
-        leaseToken: true,
-        notBefore: true,
-      },
-    });
-    if (!cleanup) {
-      throw new Error(
-        `Object cleanup ${expected.objectKey} was not persisted`,
-      );
-    }
     if (
-      cleanup.leaseToken &&
-      cleanup.notBefore.getTime() > now.getTime()
-    ) return false;
-
-    const delayedUntil = cleanup.notBefore.getTime() >
-        objectCleanupNotBefore.getTime()
-      ? cleanup.notBefore
-      : objectCleanupNotBefore;
-    const delayed = await tx.aiStorageCleanup.updateMany({
-      where: {
+      !await scheduleDelayedObjectCleanup(tx, {
         objectKey: expected.objectKey,
-        leaseToken: cleanup.leaseToken,
-        notBefore: cleanup.notBefore,
-      },
-      data: {
-        aiJobId: null,
-        leaseToken: null,
-        state: "cleanup",
-        notBefore: delayedUntil,
-      },
-    });
-    if (delayed.count !== 1) {
-      throw new Error(
-        `Object cleanup ${expected.objectKey} changed before it was delayed`,
-      );
-    }
+        now,
+        notBefore: objectCleanupNotBefore,
+      })
+    ) return false;
 
     const deleted = await tx.storageUpload.deleteMany({
       where: {
@@ -1324,6 +1377,69 @@ export async function settleTerminalClaimedStorageUpload({
     return true;
   };
 
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
+}
+
+// An unknown completion whose object turned up but no longer fits the quota
+// (the plan lapsed between the completion and this probe). The object is
+// confirmed present and nothing else will publish it, so hand it to the
+// delayed object cleanup and drop the row in the same transaction: the
+// reservation ends now, the bytes go a little later. The row is matched by
+// the probe lease this reconciler holds, so a concurrent operator action on
+// the same row makes this a no-op rather than a second cleanup.
+export async function abandonBlockedUnknownStorageUploadCompletion({
+  id,
+  userId,
+  objectKey,
+  uploadId,
+  expectedRevision,
+  unknownProbeLeaseToken,
+  now,
+  objectCleanupNotBefore,
+  prisma,
+}: {
+  id: string;
+  userId: string;
+  objectKey: string;
+  uploadId: string | null;
+  expectedRevision: number;
+  unknownProbeLeaseToken: string;
+  now: Date;
+  objectCleanupNotBefore: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  if (objectCleanupNotBefore.getTime() <= now.getTime()) {
+    throw new RangeError("Blocked completion object cleanup must be delayed");
+  }
+  if (unknownProbeLeaseToken.length === 0) {
+    throw new RangeError("Blocked completion cleanup needs the probe lease");
+  }
+  const run = async (tx: PrismaTransaction): Promise<boolean> => {
+    if (
+      !await scheduleDelayedObjectCleanup(tx, {
+        objectKey,
+        now,
+        notBefore: objectCleanupNotBefore,
+      })
+    ) return false;
+    const deleted = await tx.storageUpload.deleteMany({
+      where: {
+        id,
+        userId,
+        objectKey,
+        uploadId,
+        completedFileId: null,
+        abandonedAt: null,
+        completionState: "unknown",
+        completionRevision: expectedRevision,
+        unknownProbeLeaseToken,
+      },
+    } as never);
+    if (deleted.count !== 1) {
+      throw new Error(`Unknown storage completion ${id} changed before cleanup`);
+    }
+    return true;
+  };
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
@@ -1421,6 +1537,10 @@ export type StorageUploadAbandonExpectation =
     abandonedAt: Date | null;
     cleanupLeaseUntil: Date | null;
     cleanupLeaseToken: string | null;
+    // The activity the caller saw. A sweep that lists an idle row must not
+    // claim it once a part has touched it since; a caller that holds a
+    // completion lease does not care and leaves this out.
+    lastActivityAt?: Date | null;
   };
 
 export async function claimStorageUploadForAbandon({
@@ -1491,6 +1611,9 @@ export async function claimStorageUploadForAbandon({
       completionRetryNotBefore: expected.completionRetryNotBefore,
       cleanupLeaseUntil: expected.cleanupLeaseUntil,
       cleanupLeaseToken: expected.cleanupLeaseToken,
+      ...(expected.lastActivityAt === undefined
+        ? {}
+        : { lastActivityAt: expected.lastActivityAt }),
       AND: [
         {
           OR: [
@@ -1683,6 +1806,10 @@ export async function countStorageUploadsByUserId({
 // bucket would not let go of the parts. Making it wait out the same day as an
 // upload nobody has touched leaves that storage paid for, and the account's
 // quota spent, for no reason: it is due now.
+// The stale rows a sweep wants: uploads that have been idle since `before`
+// (no part since then, or never a part and started before then) and rows
+// already handed to cleanup. Idleness rather than age, so an upload that is
+// still receiving parts is never abandoned however large it is.
 export async function listStorageUploadsStartedBefore({
   before,
   now,
@@ -1700,7 +1827,13 @@ export async function listStorageUploadsStartedBefore({
       AND: [
         {
           OR: [
-            { completedFileId: null, createdAt: { lt: before } },
+            {
+              completedFileId: null,
+              OR: [
+                { lastActivityAt: { lt: before } },
+                { lastActivityAt: null, createdAt: { lt: before } },
+              ],
+            },
             { abandonedAt: { not: null } },
           ],
         },

@@ -1,3 +1,5 @@
+// サブスクリプションのチェックアウト試行。ユーザー × プランで 1 行。AI Pro も
+// ストレージも同じ手続きで、cleanup の kind にはプラン ID が入る。
 import { getDb } from "./provider";
 import {
   startRetryableTransaction,
@@ -5,8 +7,10 @@ import {
 } from "./transaction";
 import { scheduleStripeCheckoutCleanup } from "./stripe-checkout-cleanup";
 
-export async function getOrCreateProCheckoutAttempt({
+export async function getOrCreateSubscriptionCheckoutAttempt({
   userId,
+  planId,
+  tier = null,
   billingOfferId,
   now,
   expiresAt,
@@ -15,6 +19,8 @@ export async function getOrCreateProCheckoutAttempt({
   prisma,
 }: {
   userId: string;
+  planId: string;
+  tier?: string | null;
   billingOfferId: string;
   now: Date;
   expiresAt: Date;
@@ -31,8 +37,8 @@ export async function getOrCreateProCheckoutAttempt({
       throw new Error("Account deletion is already authorized");
     }
 
-    const existing = await tx.proCheckoutAttempt.findUnique({
-      where: { userId },
+    const existing = await tx.subscriptionCheckoutAttempt.findUnique({
+      where: { userId_planId: { userId, planId } },
     });
     const settledDeletionTombstone = existing?.accountDeletionAt !== null &&
       existing?.accountDeletionAt !== undefined &&
@@ -54,10 +60,12 @@ export async function getOrCreateProCheckoutAttempt({
       return existing;
     }
 
-    return await tx.proCheckoutAttempt.upsert({
-      where: { userId },
+    return await tx.subscriptionCheckoutAttempt.upsert({
+      where: { userId_planId: { userId, planId } },
       create: {
         userId,
+        planId,
+        tier,
         billingOfferId,
         checkoutKey: crypto.randomUUID(),
         customerId,
@@ -66,6 +74,7 @@ export async function getOrCreateProCheckoutAttempt({
       },
       update: {
         checkoutKey: crypto.randomUUID(),
+        tier,
         billingOfferId,
         stripeCheckoutSessionId: null,
         ...(customerId ? { customerId } : {}),
@@ -89,7 +98,7 @@ export async function getOrCreateProCheckoutAttempt({
   return await startRetryableTransaction(run);
 }
 
-export async function findProCheckoutAttemptBySessionId({
+export async function findSubscriptionCheckoutAttemptBySessionId({
   userId,
   stripeCheckoutSessionId,
   prisma,
@@ -99,13 +108,14 @@ export async function findProCheckoutAttemptBySessionId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  return await db.proCheckoutAttempt.findFirst({
+  return await db.subscriptionCheckoutAttempt.findFirst({
     where: { userId, stripeCheckoutSessionId },
   });
 }
 
-export async function bindProCheckoutSession({
+export async function bindSubscriptionCheckoutSession({
   userId,
+  planId,
   checkoutKey,
   stripeCheckoutSessionId,
   expiresAt,
@@ -113,6 +123,7 @@ export async function bindProCheckoutSession({
   prisma,
 }: {
   userId: string;
+  planId: string;
   checkoutKey: string;
   stripeCheckoutSessionId: string;
   expiresAt: Date;
@@ -120,8 +131,8 @@ export async function bindProCheckoutSession({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
-    const current = await tx.proCheckoutAttempt.findUnique({
-      where: { userId },
+    const current = await tx.subscriptionCheckoutAttempt.findUnique({
+      where: { userId_planId: { userId, planId } },
     });
     const deletionIntent = await tx.accountDeletionIntent.findFirst({
       where: { userId, expiresAt: { gt: now } },
@@ -136,9 +147,10 @@ export async function bindProCheckoutSession({
         (current.stripeCheckoutSessionId === null ||
           current.stripeCheckoutSessionId === stripeCheckoutSessionId)
       ) {
-        await tx.proCheckoutAttempt.updateMany({
+        await tx.subscriptionCheckoutAttempt.updateMany({
           where: {
             userId,
+            planId,
             checkoutKey,
             ...(current.stripeCheckoutSessionId === null
               ? { stripeCheckoutSessionId: null }
@@ -157,7 +169,7 @@ export async function bindProCheckoutSession({
           await scheduleStripeCheckoutCleanup({
             sessionId: stripeCheckoutSessionId,
             userId,
-            kind: "pro",
+            kind: planId,
             customerId,
             billingOfferId: current?.billingOfferId,
             prisma: tx,
@@ -175,9 +187,10 @@ export async function bindProCheckoutSession({
     if (current.stripeCheckoutSessionId !== null) {
       return "superseded" as const;
     }
-    const updated = await tx.proCheckoutAttempt.updateMany({
+    const updated = await tx.subscriptionCheckoutAttempt.updateMany({
       where: {
         userId,
+        planId,
         checkoutKey,
         stripeCheckoutSessionId: null,
       },
@@ -191,50 +204,53 @@ export async function bindProCheckoutSession({
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
-export async function setProCheckoutAttemptParams({ userId, checkoutKey, paramsJson, prisma }: { userId: string; checkoutKey: string; paramsJson: string; prisma?: PrismaTransaction }) {
+export async function setSubscriptionCheckoutAttemptParams({ userId, checkoutKey, paramsJson, prisma }: { userId: string; checkoutKey: string; paramsJson: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.proCheckoutAttempt.updateMany({ where: { userId, checkoutKey, stripeCheckoutSessionId: null, accountDeletionAt: null }, data: { paramsJson } });
+  return await db.subscriptionCheckoutAttempt.updateMany({ where: { userId, checkoutKey, stripeCheckoutSessionId: null, accountDeletionAt: null }, data: { paramsJson } });
 }
 
-export async function claimDetachedProCheckoutAttempts({ now, leaseToken, leaseExpiresAt, limit = 50, prisma }: { now: Date; leaseToken: string; leaseExpiresAt: Date; limit?: number; prisma?: PrismaTransaction }) {
+// Attempts frozen by account deletion before a Session was bound. Every plan's
+// rows come back; each carries its planId and tier so the caller can replay
+// the create with the right key.
+export async function claimDetachedSubscriptionCheckoutAttempts({ now, leaseToken, leaseExpiresAt, limit = 50, prisma }: { now: Date; leaseToken: string; leaseExpiresAt: Date; limit?: number; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  const rows = await db.proCheckoutAttempt.findMany({ where: { accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, recoveryInterventionAt: null, recoveryCompletedAt: null, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }], AND: [{ OR: [{ recoveryNotBefore: null }, { recoveryNotBefore: { lte: now } }] }] }, take: limit });
+  const rows = await db.subscriptionCheckoutAttempt.findMany({ where: { accountDeletionAt: { not: null }, stripeCheckoutSessionId: null, recoveryInterventionAt: null, recoveryCompletedAt: null, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }], AND: [{ OR: [{ recoveryNotBefore: null }, { recoveryNotBefore: { lte: now } }] }] }, take: limit });
   const claimed = [];
   for (const row of rows) {
-    const updated = await db.proCheckoutAttempt.updateMany({ where: { userId: row.userId, stripeCheckoutSessionId: null, recoveryLeaseToken: row.recoveryLeaseToken, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, data: { recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: { increment: 1 } } });
+    const updated = await db.subscriptionCheckoutAttempt.updateMany({ where: { userId: row.userId, planId: row.planId, stripeCheckoutSessionId: null, recoveryLeaseToken: row.recoveryLeaseToken, OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lte: now } }] }, data: { recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt, recoveryAttempts: { increment: 1 } } });
     if (updated.count === 1) claimed.push({ ...row, recoveryLeaseToken: leaseToken });
   }
   return claimed;
 }
 
-export async function completeDetachedProCheckoutRecovery({ userId, leaseToken, stripeCheckoutSessionId, now = new Date(), prisma }: { userId: string; leaseToken: string; stripeCheckoutSessionId: string; now?: Date; prisma?: PrismaTransaction }) {
+export async function completeDetachedSubscriptionCheckoutRecovery({ userId, planId, leaseToken, stripeCheckoutSessionId, now = new Date(), prisma }: { userId: string; planId: string; leaseToken: string; stripeCheckoutSessionId: string; now?: Date; prisma?: PrismaTransaction }) {
   const run = async (tx: PrismaTransaction) => {
-    const row = await tx.proCheckoutAttempt.findUnique({ where: { userId } });
+    const row = await tx.subscriptionCheckoutAttempt.findUnique({ where: { userId_planId: { userId, planId } } });
     if (!row || row.recoveryLeaseToken !== leaseToken || row.stripeCheckoutSessionId !== null || !row.customerId) return false;
-    const updated = await tx.proCheckoutAttempt.updateMany({ where: { userId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { stripeCheckoutSessionId, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
+    const updated = await tx.subscriptionCheckoutAttempt.updateMany({ where: { userId, planId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { stripeCheckoutSessionId, recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
     if (updated.count !== 1) return false;
-    await scheduleStripeCheckoutCleanup({ sessionId: stripeCheckoutSessionId, userId, kind: "pro", customerId: row.customerId, billingOfferId: row.billingOfferId, now, prisma: tx });
+    await scheduleStripeCheckoutCleanup({ sessionId: stripeCheckoutSessionId, userId, kind: planId, customerId: row.customerId, billingOfferId: row.billingOfferId, now, prisma: tx });
     return true;
   };
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
-export async function rescheduleDetachedProCheckoutRecovery({ userId, leaseToken, notBefore, lastError, prisma }: { userId: string; leaseToken: string; notBefore: Date; lastError: string; prisma?: PrismaTransaction }) {
+export async function rescheduleDetachedSubscriptionCheckoutRecovery({ userId, planId, leaseToken, notBefore, lastError, prisma }: { userId: string; planId: string; leaseToken: string; notBefore: Date; lastError: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.proCheckoutAttempt.updateMany({ where: { userId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: notBefore, recoveryLastError: lastError } });
+  return await db.subscriptionCheckoutAttempt.updateMany({ where: { userId, planId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: notBefore, recoveryLastError: lastError } });
 }
 
-export async function markDetachedProCheckoutRecoveryIntervention({ userId, leaseToken, lastError, prisma }: { userId: string; leaseToken: string; lastError: string; prisma?: PrismaTransaction }) {
+export async function markDetachedSubscriptionCheckoutRecoveryIntervention({ userId, planId, leaseToken, lastError, prisma }: { userId: string; planId: string; leaseToken: string; lastError: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.proCheckoutAttempt.updateMany({ where: { userId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryInterventionAt: new Date(), recoveryLastError: lastError } });
+  return await db.subscriptionCheckoutAttempt.updateMany({ where: { userId, planId, recoveryLeaseToken: leaseToken }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryInterventionAt: new Date(), recoveryLastError: lastError } });
 }
 
-export async function markDetachedProCheckoutRecoveryTerminal({ userId, leaseToken, prisma }: { userId: string; leaseToken: string; prisma?: PrismaTransaction }) {
+export async function markDetachedSubscriptionCheckoutRecoveryTerminal({ userId, planId, leaseToken, prisma }: { userId: string; planId: string; leaseToken: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.proCheckoutAttempt.updateMany({ where: { userId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: null, recoveryCompletedAt: new Date() } });
+  return await db.subscriptionCheckoutAttempt.updateMany({ where: { userId, planId, recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null, recoveryNotBefore: null, recoveryCompletedAt: new Date() } });
 }
 
-export async function deleteBoundProCheckoutAttempt({
+export async function deleteBoundSubscriptionCheckoutAttempt({
   userId,
   checkoutKey,
   stripeCheckoutSessionId,
@@ -246,13 +262,13 @@ export async function deleteBoundProCheckoutAttempt({
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? await getDb();
-  const deleted = await db.proCheckoutAttempt.deleteMany({
+  const deleted = await db.subscriptionCheckoutAttempt.deleteMany({
     where: { userId, checkoutKey, stripeCheckoutSessionId },
   });
   return deleted.count === 1;
 }
 
-export async function expireProCheckoutAttempt({
+export async function expireSubscriptionCheckoutAttempt({
   userId,
   checkoutKey,
   now,
@@ -264,7 +280,7 @@ export async function expireProCheckoutAttempt({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  await db.proCheckoutAttempt.updateMany({
+  await db.subscriptionCheckoutAttempt.updateMany({
     where: {
       userId,
       checkoutKey,
@@ -275,7 +291,7 @@ export async function expireProCheckoutAttempt({
   });
 }
 
-export async function deleteProCheckoutAttempt({
+export async function deleteSubscriptionCheckoutAttempt({
   userId,
   stripeCheckoutSessionId,
   prisma,
@@ -285,13 +301,13 @@ export async function deleteProCheckoutAttempt({
   prisma?: PrismaTransaction;
 }): Promise<boolean> {
   const db = prisma ?? await getDb();
-  const deleted = await db.proCheckoutAttempt.deleteMany({
+  const deleted = await db.subscriptionCheckoutAttempt.deleteMany({
     where: { userId, stripeCheckoutSessionId },
   });
   return deleted.count === 1;
 }
 
-export async function deleteProCheckoutAttemptBySessionId({ stripeCheckoutSessionId, prisma }: { stripeCheckoutSessionId: string; prisma?: PrismaTransaction }) {
+export async function deleteSubscriptionCheckoutAttemptBySessionId({ stripeCheckoutSessionId, prisma }: { stripeCheckoutSessionId: string; prisma?: PrismaTransaction }) {
   const db = prisma ?? await getDb();
-  return await db.proCheckoutAttempt.deleteMany({ where: { stripeCheckoutSessionId } });
+  return await db.subscriptionCheckoutAttempt.deleteMany({ where: { stripeCheckoutSessionId } });
 }

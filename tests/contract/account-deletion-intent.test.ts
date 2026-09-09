@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   ACCOUNT_DELETION_INTENT_LIFETIME_MS,
   authorizeAccountDeletionIntent,
-  bindProCheckoutSession,
+  bindSubscriptionCheckoutSession,
   setDbProvider,
 } from "@beutl/db";
 
@@ -108,10 +108,14 @@ describe("account deletion intent authorization", () => {
         },
         count: async () => 0,
       },
-      proCheckoutAttempt: {
-        findUnique: async ({ where }: any) =>
+      subscriptionCheckoutAttempt: {
+        findMany: async ({ where }: any) =>
           proCheckoutAttempt?.userId === where.userId
-            ? { ...proCheckoutAttempt }
+            ? [{ planId: "pro", ...proCheckoutAttempt }]
+            : [],
+        findUnique: async ({ where }: any) =>
+          proCheckoutAttempt?.userId === (where.userId_planId?.userId ?? where.userId)
+            ? { planId: "pro", ...proCheckoutAttempt }
             : null,
         updateMany: async ({ where, data }: any) => {
           if (
@@ -239,8 +243,9 @@ describe("account deletion intent authorization", () => {
     const authorizationPromise = authorizeAccountDeletionIntent(
       authorizationOptions,
     );
-    const bindingPromise = bindProCheckoutSession({
+    const bindingPromise = bindSubscriptionCheckoutSession({
       userId: "user-1",
+      planId: "pro",
       checkoutKey: "checkout-race",
       stripeCheckoutSessionId: "cs_raced",
       expiresAt: new Date("2026-08-10T00:00:00.000Z"),
@@ -269,8 +274,9 @@ describe("account deletion intent authorization", () => {
       expiresAt: new Date("2026-08-10T00:00:00.000Z"),
     };
 
-    const bindingPromise = bindProCheckoutSession({
+    const bindingPromise = bindSubscriptionCheckoutSession({
       userId: "user-1",
+      planId: "pro",
       checkoutKey: "checkout-race",
       stripeCheckoutSessionId: "cs_raced",
       expiresAt: new Date("2026-08-10T00:00:00.000Z"),

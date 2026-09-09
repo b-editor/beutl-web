@@ -4,6 +4,7 @@ import {
   claimStorageUploadCreation,
   claimStorageUploadForAbandon,
   createStorageUploadIntent,
+  touchStorageUploadActivity,
   deleteClaimedStorageUpload,
   deleteStorageUpload,
   findStorageUploadByIdAndUserId,
@@ -89,6 +90,45 @@ describe("durable storage-upload start saga", () => {
       expected: abandonExpectation(current!),
     })).toBe(true);
     expect(await attachStorageUploadRemote({ id, userId, uploadId: "remote-A", leaseToken: "A" })).toBe(false);
+  });
+
+  it("does not claim a row a part has touched since it was listed", async () => {
+    const id = await intent();
+    const now = new Date();
+    const [listed] = await listStorageUploadsStartedBefore({
+      before: new Date(now.getTime() + 1),
+      now,
+      limit: 1,
+    });
+    expect(listed?.id).toBe(id);
+    expect(listed?.lastActivityAt ?? null).toBeNull();
+
+    // A part request fences the row while the sweep still holds the listing.
+    const partAt = new Date(now.getTime() + 1);
+    expect(await touchStorageUploadActivity({ id, userId, now: partAt })).toBe(true);
+
+    expect(await claimStorageUploadForAbandon({
+      id,
+      userId,
+      now: new Date(now.getTime() + 2),
+      cleanupLeaseToken: "cleanup-stale",
+      cleanupLeaseUntil: new Date(now.getTime() + 60_000),
+      expected: { ...abandonExpectation(listed!), lastActivityAt: listed!.lastActivityAt ?? null },
+    })).toBe(false);
+    expect((await findStorageUploadByIdAndUserId({ id, userId }))?.abandonedAt).toBeNull();
+
+    // The other order: once the sweep has claimed the row, the touch fails
+    // and the part is not sent.
+    const current = await findStorageUploadByIdAndUserId({ id, userId });
+    expect(await claimStorageUploadForAbandon({
+      id,
+      userId,
+      now: new Date(now.getTime() + 3),
+      cleanupLeaseToken: "cleanup-current",
+      cleanupLeaseUntil: new Date(now.getTime() + 60_000),
+      expected: { ...abandonExpectation(current!), lastActivityAt: current!.lastActivityAt ?? null },
+    })).toBe(true);
+    expect(await touchStorageUploadActivity({ id, userId })).toBe(false);
   });
 
   it("does not let an old sweeper release a newer creator lease", async () => {

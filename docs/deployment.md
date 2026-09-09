@@ -239,6 +239,61 @@ The Stripe webhook endpoint must receive these Paid AI lifecycle events:
   `charge.dispute.closed`, `charge.dispute.funds_withdrawn`, and
   `charge.dispute.funds_reinstated`
 
+### Storage plan
+
+The storage plan is a second Stripe subscription on the same customer,
+independent of AI Pro. A user can hold both. Every plan lives in the same
+tables: `Subscription` and `SubscriptionCheckoutAttempt` are keyed by
+`(userId, planId)`, and a plan that sells several sizes records the size in
+the `tier` column (`BillingOffer.tier` for the Price, `Subscription.tier` for
+the contract). The webhook, checkout, portal sync, refund holds, cleanup
+reconciler, and account deletion take the plan from `metadata.planId`
+(missing means AI Pro) and run the same code for every plan; the plan
+registry is `SUBSCRIPTION_PLANS` in `packages/core/src/subscription-plans.ts`
+and the Stripe-side Price mapping is `apps/web/src/lib/stripe/subscription-plans.ts`.
+Adding a tier to AI Pro later means adding tier ids to the registry and a
+Price per tier to that mapping, not new tables. Adding a whole plan also
+needs its id in the `StripeCheckoutCleanup_kind_check` constraint (see
+`docs/stripe-ai-billing-migration.md`).
+
+The Web Worker requires one monthly recurring Price per storage tier:
+
+- `STRIPE_STORAGE_PRICE_ID_100GB`
+- `STRIPE_STORAGE_PRICE_ID_200GB`
+- `STRIPE_STORAGE_PRICE_ID_1TB`
+- `STRIPE_STORAGE_HISTORICAL_OFFERS`, containing immutable
+  `priceId:productId:tier` triples for rotated storage Prices
+
+Only these Prices can grant storage entitlement. The tier of record is always
+resolved from the Price (`BillingOffer.tier`); the `tier` metadata on a
+subscription is informational. All Prices must share one currency. The API
+Worker needs nothing new.
+
+Tier quotas are code constants in `packages/core/src/storage-plan.ts`
+(100 GiB, 200 GiB, 1 TiB; 100,000 files) and are not configurable from the
+admin console. The free quota stays 1 GiB / 10,000 files. A single upload is
+capped at 10,000 multipart parts of 16 MiB (160,000 MiB, about 156 GiB)
+regardless of tier.
+
+Tier changes are made by the `changeStorageTier` action, not through the
+customer portal: the subscription item is switched with
+`proration_behavior: always_invoice` and `payment_behavior:
+error_if_incomplete`, so the difference is charged immediately and a declined
+or 3DS-gated card leaves the subscription unchanged. Keep the portal
+configuration as documented for Paid AI (cancel at period end, no price
+switching); the storage row cancels through the portal's
+`subscription_cancel` deep link for its own subscription id.
+
+When a storage subscription lapses while the account is over the free quota,
+existing files remain readable, downloadable, and deletable. Only new uploads
+are refused until the account is back under quota or subscribes again.
+Nothing is deleted automatically.
+
+The webhook endpoint needs no additional event types; the Paid AI set covers
+storage subscriptions, invoices, refunds, and disputes. A refunded or disputed
+storage invoice places a `SubscriptionEntitlementHold` on the storage
+subscription only.
+
 ### Result retention
 
 Successful transcription and translation payloads are stored as private AI

@@ -6,13 +6,14 @@ import {
   findAccountDeletionIntentByUserId,
   getAiJobById,
   getAiJobByIdempotency,
-  getSubscriptionByUserId,
+  getSubscription,
   refundUsage,
   startRetryableTransaction,
   updateActiveAiJobToFailed,
   failAiJobOwnedByFinalizer,
   failAiJobOwnedByProviderPoll,
 } from "@beutl/db";
+import { PRO_PLAN } from "./pricing";
 import { isActiveProSubscription } from "./entitlements";
 import { loadAiSettings } from "./settings";
 import { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "./storage";
@@ -200,7 +201,7 @@ export async function createReservedAiJob({
       if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
         return { outcome: "accountDeletionAuthorized" as const };
       }
-      const subscription = await getSubscriptionByUserId({ userId, prisma });
+      const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
       if (!subscription || !isActiveProSubscription(subscription)) {
         return { outcome: "planRequired" as const };
       }
@@ -371,7 +372,7 @@ export async function failAiJobAndRefundUsage({
   expectedProviderJobId?: string | null;
 }) {
   await startRetryableTransaction(async (prisma) => {
-    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };
@@ -443,7 +444,7 @@ export async function failFinalizingAiJobAndRefundUsage({
   error: string;
 }) {
   await startRetryableTransaction(async (prisma) => {
-    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };
@@ -473,7 +474,7 @@ export async function failPolledAiJobAndRefundUsage({
   error: string;
 }) {
   await startRetryableTransaction(async (prisma) => {
-    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };

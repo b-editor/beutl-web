@@ -91,7 +91,13 @@
     "paymentMethodDescription": "カード情報の変更や追加が行えます。",
     "noPaymentMethodYet": "お支払い方法はまだ登録されていません。",
     "changePaymentMethod": "支払い方法を変更",
-    "stripeUnavailableNotice": "Stripe に接続できなかったため、最新の状態を反映できていない可能性があります。時間をおいて再読み込みしてください。"
+    "stripeUnavailableNotice": "Stripe に接続できなかったため、最新の状態を反映できていない可能性があります。時間をおいて再読み込みしてください。",
+    "storageProductName": "Beutl Storage",
+    "storageTier": {
+      "100gb": "100 GB",
+      "200gb": "200 GB",
+      "1tb": "1 TB"
+    }
   },
   "aiPlan": {
     "plan": "サブスクリプション",
@@ -114,5 +120,26 @@
     "manageSubscription": "サブスクリプションを管理",
     "checkoutFailed": "チェックアウトの開始に失敗しました",
     "checkoutSuccess": "チェックアウトが完了しました。反映まで数分かかることがあります。"
+  },
+  "storagePlan": {
+    "title": "ストレージプラン",
+    "description": "契約中はアップロードできる容量が増えます。既存のファイルはそのままです。",
+    "tierQuota": "容量 {{quota}}",
+    "currentTier": "現在のプラン",
+    "changeTier": "プランを変更",
+    "changeTierHint": "今の期間の残りぶんの差額をすぐに請求します。追加認証が必要なカードではこの方法で決済できないため、先に支払い方法を変更してください。",
+    "cancelScheduledNotice": "解約を受け付けました。期限まではプランの容量を利用できます。期限後、無料枠を超えている間は新しいアップロードができなくなりますが、既存のファイルは削除されません。",
+    "tierChanged": "ストレージプランを変更しました。",
+    "tierChangeFailed": "プランを変更できませんでした。決済が拒否されたか追加の認証が必要です。支払い方法を変更してからもう一度お試しください。",
+    "downgradeBlocked": "そのプランの容量を超えて使用しています。先にファイルを削除してからプランを変更してください。",
+    "choosePlan": "プランを選択",
+    "selectTierTitle": "ストレージプランを選ぶ",
+    "changeTierTitle": "ストレージプランを変更",
+    "tierOptions": "選べるプラン",
+    "confirmSubscribe": "このプランに加入",
+    "confirmChange": "このプランに変更",
+    "perMonth": "/ 月",
+    "priceUnavailable": "価格を取得できませんでした",
+    "tierUnavailable": "そのプランは現在申し込めません。時間をおいてもう一度お試しください。"
   }
 }

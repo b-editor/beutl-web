@@ -1,7 +1,13 @@
 // このファイルはサーバーコンポーネントの集まり。account 配下の他ページの
 // components.tsx は "use client" だが、請求ページは表示だけでクライアント状態を
 // 持たないのでサーバーのまま組む。
-import { formatAmount, formatCount, formatDate } from "@beutl/core";
+import {
+  formatAmount,
+  formatBytes,
+  formatCount,
+  formatDate,
+  type StorageTierId,
+} from "@beutl/core";
 import type { Translator } from "@beutl/i18n";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -27,9 +33,12 @@ import {
   createPaymentMethodPortalLink,
   createProCheckout,
 } from "./actions";
+import { createStorageCancelPortalLink } from "./storage-actions";
+import { StorageTierDialog } from "./storage-tier-dialog";
 import type {
   BillingOfferEntry,
   BillingSubscriptionEntry,
+  StorageTierPrices,
 } from "./queries";
 
 const STATUS_LABEL_KEY: Record<AiPlanStatusPresentation, string> = {
@@ -50,11 +59,23 @@ function statusVariant(status: AiPlanStatusPresentation) {
 // カードの左右パディングを合わせる。
 const EDGE_CELL = "first:pl-6 last:pr-6";
 
-// 顧客単位でポータルを開く。1ユーザーが複数の商品を契約できるようになったら、
-// 行ごとに subscription_cancel の flow_data で対象を指定する必要がある。
-function ManageSubscriptionButton({ t }: { t: Translator }) {
+// AI Pro は顧客単位でポータルを開く。ストレージは同じ顧客に 2 つ目の契約なので、
+// 解約フローの deep link で対象の契約を指定する (対象 ID はサーバー側で決める)。
+function ManageSubscriptionButton({
+  t,
+  product,
+}: {
+  t: Translator;
+  product: BillingSubscriptionEntry["product"];
+}) {
   return (
-    <form action={createBillingPortalLink}>
+    <form
+      action={
+        product === "storage"
+          ? createStorageCancelPortalLink
+          : createBillingPortalLink
+      }
+    >
       <SubmitButton variant="outline">
         {t("account:aiPlan.manageSubscription")}
       </SubmitButton>
@@ -67,11 +88,15 @@ export function PlanSection({
   t,
   subscriptions,
   offers,
+  storageQuota,
+  storageTierPrices,
 }: {
   lang: string;
   t: Translator;
   subscriptions: BillingSubscriptionEntry[];
   offers: BillingOfferEntry[];
+  storageQuota: { tier: StorageTierId | null; quotaBytes: number };
+  storageTierPrices: StorageTierPrices;
 }) {
   const needsAttention = subscriptions.some(
     (subscription) => subscription.status === "needsAttention",
@@ -105,12 +130,21 @@ export function PlanSection({
               <div className="min-w-0 flex-1 basis-64">
                 <div className="flex items-center gap-3">
                   <p className="text-lg font-bold">
-                    {formatBillingProductLabel(t, subscription.product)}
+                    {formatBillingProductLabel(t, subscription.product, {
+                      tier: subscription.tier,
+                    })}
                   </p>
                   <Badge variant={statusVariant(subscription.status)}>
                     {t(STATUS_LABEL_KEY[subscription.status])}
                   </Badge>
                 </div>
+                {subscription.product === "storage" && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("account:storagePlan.tierQuota", {
+                      quota: formatBytes(storageQuota.quotaBytes),
+                    })}
+                  </p>
+                )}
                 {subscription.currentPeriodEnd && (
                   <p className="text-sm text-muted-foreground">
                     {subscription.status === "cancelScheduled"
@@ -121,11 +155,26 @@ export function PlanSection({
                 )}
                 {subscription.showCancellationNotice && (
                   <p className="mt-1 text-sm text-amber-600 dark:text-amber-500">
-                    {t("account:aiPlan.cancelScheduledNotice")}
+                    {t(
+                      subscription.product === "storage"
+                        ? "account:storagePlan.cancelScheduledNotice"
+                        : "account:aiPlan.cancelScheduledNotice",
+                    )}
                   </p>
                 )}
               </div>
-              <ManageSubscriptionButton t={t} />
+              <div className="flex flex-wrap gap-2">
+                {subscription.product === "storage" &&
+                  subscription.status === "active" &&
+                  subscription.tier !== null && (
+                    <StorageTierDialog
+                      lang={lang}
+                      currentTier={subscription.tier}
+                      prices={storageTierPrices}
+                    />
+                  )}
+                <ManageSubscriptionButton t={t} product={subscription.product} />
+              </div>
             </div>
           ))
         )}
@@ -134,19 +183,50 @@ export function PlanSection({
           <>
             {/* 契約一覧 (空状態を含む) と加入できる商品の区切り。 */}
             <Separator />
-            {offers.map((offer) => (
-              <div
-                key={offer.product}
-                className="flex flex-wrap items-center justify-between gap-4"
-              >
-                <p className="font-bold">
-                  {formatBillingProductLabel(t, offer.product)}
-                </p>
-                <form action={createProCheckout}>
-                  <SubmitButton>{t("account:aiPlan.subscribe")}</SubmitButton>
-                </form>
-              </div>
-            ))}
+            {offers.map((offer) =>
+              offer.product === "aiPro" ? (
+                <div
+                  key={offer.product}
+                  className="flex flex-wrap items-center justify-between gap-4"
+                >
+                  <p className="font-bold">
+                    {formatBillingProductLabel(t, offer.product)}
+                  </p>
+                  <form action={createProCheckout}>
+                    <SubmitButton>{t("account:aiPlan.subscribe")}</SubmitButton>
+                  </form>
+                </div>
+              ) : (
+                <div
+                  key={offer.product}
+                  className="flex flex-wrap items-center justify-between gap-4"
+                >
+                  <div>
+                    <p className="font-bold">
+                      {formatBillingProductLabel(t, offer.product)}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {t("account:storagePlan.description")}
+                    </p>
+                    {/* i18next escapes interpolated values for HTML, which
+                        would turn the separator into an entity; React already
+                        escapes text, so the list is rendered as JSX instead. */}
+                    <p className="text-sm text-muted-foreground">
+                      {t("account:storagePlan.tierOptions")}:{" "}
+                      {offer.tiers
+                        .map((tier) => t(`account:billing.storageTier.${tier}`))
+                        .join(" / ")}
+                    </p>
+                  </div>
+                  <StorageTierDialog
+                    lang={lang}
+                    currentTier={null}
+                    tiers={offer.tiers}
+                    prices={storageTierPrices}
+                  />
+                </div>
+              ),
+            )}
           </>
         )}
       </div>

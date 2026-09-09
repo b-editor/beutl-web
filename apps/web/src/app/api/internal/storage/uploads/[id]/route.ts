@@ -5,11 +5,19 @@ import {
   unauthorizedResponse,
 } from "@/lib/internal-request";
 import { cancelUpload, finishUpload } from "@/lib/storage-upload-server";
-import { STORAGE_QUOTA_BYTES, STORAGE_UPLOAD_PART_BYTES } from "@beutl/core";
+import {
+  MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES,
+  STORAGE_MULTIPART_MAX_PARTS,
+  STORAGE_UPLOAD_ETAG_MAX_LENGTH,
+} from "@beutl/core";
 
-const MAX_PART_COUNT = Math.ceil(STORAGE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES);
-const MAX_ETAG_LENGTH = 256;
-const MAX_CONTROL_BODY_BYTES = 64 * 1024;
+// The bucket's own ceiling on parts is the most any upload can have.
+const MAX_PART_COUNT = STORAGE_MULTIPART_MAX_PARTS;
+const MAX_ETAG_LENGTH = STORAGE_UPLOAD_ETAG_MAX_LENGTH;
+// A completion names every part, so the body limit is sized from the part
+// count. It is the same constant the Worker's outer body guard applies, so
+// what the route can read is what the Worker lets through.
+const MAX_CONTROL_BODY_BYTES = MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES;
 
 // Finishing an upload, or giving it up.
 //
@@ -36,8 +44,8 @@ export async function POST(
   if (
     !Array.isArray(parts) ||
     parts.length === 0 ||
-    // The whole quota cut into parts is what an upload can ever have; a longer
-    // list describes an upload that could not exist.
+    // The largest file cut into parts is what an upload can ever have; a
+    // longer list describes an upload that could not exist.
     parts.length > MAX_PART_COUNT ||
     !parts.every(
       (part) =>

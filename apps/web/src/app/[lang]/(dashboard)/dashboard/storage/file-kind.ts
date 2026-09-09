@@ -7,24 +7,17 @@ import {
   FileVideo,
   type LucideIcon,
 } from "lucide-react";
+import {
+  FILE_KINDS,
+  fileKind,
+  normalizeMimeType,
+  type FileKind,
+} from "@beutl/core";
 import type { StorageFile } from "./types";
 
-export type FileKind =
-  | "image"
-  | "video"
-  | "audio"
-  | "document"
-  | "archive"
-  | "other";
-
-export const FILE_KINDS: readonly FileKind[] = [
-  "image",
-  "video",
-  "audio",
-  "document",
-  "archive",
-  "other",
-];
+// The kinds themselves live in @beutl/core so the listing query can filter by
+// them; this module adds what only the screen needs.
+export { FILE_KINDS, fileKind, normalizeMimeType, type FileKind };
 
 // React escapes file names when it renders them; i18next must not escape them
 // a second time, or "a&b.png" would read "a&amp;b.png".
@@ -39,34 +32,6 @@ export function contentUrl(file: Pick<StorageFile, "id">): string {
 export function isDedicated(file: Pick<StorageFile, "visibility">): boolean {
   return file.visibility === "DEDICATED";
 }
-
-export function normalizeMimeType(mimeType: string): string {
-  return mimeType.split(";", 1)[0].trim().toLowerCase();
-}
-
-const ARCHIVE_TYPES = new Set([
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/gzip",
-  "application/x-tar",
-  "application/x-7z-compressed",
-  "application/x-rar-compressed",
-  "application/vnd.rar",
-]);
-
-const DOCUMENT_TYPES = new Set([
-  "application/pdf",
-  "application/json",
-  "application/xml",
-  "application/javascript",
-  "application/rtf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-]);
 
 // Only what the content route serves inline as an image. Anything else comes
 // back as a download and would not render in an <img>.
@@ -83,16 +48,6 @@ const THUMBNAIL_TYPES = new Set([
 // There is no thumbnail service; the grid shows the original. Past this size
 // a page of cards would pull more than a video's worth of bytes.
 export const THUMBNAIL_MAX_BYTES = 8 * 1024 * 1024;
-
-export function fileKind(mimeType: string): FileKind {
-  const type = normalizeMimeType(mimeType);
-  if (type.startsWith("image/")) return "image";
-  if (type.startsWith("video/")) return "video";
-  if (type.startsWith("audio/")) return "audio";
-  if (ARCHIVE_TYPES.has(type)) return "archive";
-  if (type.startsWith("text/") || DOCUMENT_TYPES.has(type)) return "document";
-  return "other";
-}
 
 const KIND_ICONS: Record<FileKind, LucideIcon> = {
   image: FileImage,

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  bindProCheckoutSession,
-  deleteProCheckoutAttempt,
-  getOrCreateProCheckoutAttempt,
-} from "../../packages/db/src/pro-checkout-attempt";
+  bindSubscriptionCheckoutSession,
+  deleteSubscriptionCheckoutAttempt,
+  getOrCreateSubscriptionCheckoutAttempt,
+} from "../../packages/db/src/subscription-checkout-attempt";
 
 describe("Pro checkout attempts", () => {
   it("keeps an expired local lease when a Checkout Session is already bound", async () => {
@@ -19,15 +19,16 @@ describe("Pro checkout attempts", () => {
       accountDeletionIntent: {
         findFirst: vi.fn().mockResolvedValue(null),
       },
-      proCheckoutAttempt: {
+      subscriptionCheckoutAttempt: {
         findUnique: vi.fn().mockResolvedValue(existing),
         upsert: vi.fn(),
       },
     };
 
     await expect(
-      getOrCreateProCheckoutAttempt({
+      getOrCreateSubscriptionCheckoutAttempt({
         userId: "user-1",
+        planId: "pro",
         billingOfferId: "offer-current",
         now,
         customerId: "cus_1",
@@ -36,7 +37,7 @@ describe("Pro checkout attempts", () => {
       }),
     ).resolves.toBe(existing);
 
-    expect(transaction.proCheckoutAttempt.upsert).not.toHaveBeenCalled();
+    expect(transaction.subscriptionCheckoutAttempt.upsert).not.toHaveBeenCalled();
   });
 
   it("restarts checkout after a settled deletion tombstone expires", async () => {
@@ -44,7 +45,7 @@ describe("Pro checkout attempts", () => {
     const upsert = vi.fn().mockResolvedValue({ checkoutKey: "attempt-new" });
     const transaction = {
       accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
-      proCheckoutAttempt: {
+      subscriptionCheckoutAttempt: {
         findUnique: vi.fn().mockResolvedValue({
           userId: "user-1",
           checkoutKey: "attempt-old",
@@ -58,8 +59,9 @@ describe("Pro checkout attempts", () => {
       },
     };
 
-    await expect(getOrCreateProCheckoutAttempt({
+    await expect(getOrCreateSubscriptionCheckoutAttempt({
       userId: "user-1",
+      planId: "pro",
       billingOfferId: "offer-current",
       now,
       customerId: "cus_1",
@@ -80,7 +82,7 @@ describe("Pro checkout attempts", () => {
     const upsert = vi.fn();
     const transaction = {
       accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
-      proCheckoutAttempt: {
+      subscriptionCheckoutAttempt: {
         findUnique: vi.fn().mockResolvedValue({
           userId: "user-1",
           checkoutKey: "attempt-old",
@@ -94,8 +96,9 @@ describe("Pro checkout attempts", () => {
       },
     };
 
-    await expect(getOrCreateProCheckoutAttempt({
+    await expect(getOrCreateSubscriptionCheckoutAttempt({
       userId: "user-1",
+      planId: "pro",
       billingOfferId: "offer-current",
       now: new Date("2026-08-12T00:00:00.000Z"),
       customerId: "cus_1",
@@ -107,20 +110,20 @@ describe("Pro checkout attempts", () => {
 
   it("deletes only the Checkout Session named by the cleanup caller", async () => {
     const transaction = {
-      proCheckoutAttempt: {
+      subscriptionCheckoutAttempt: {
         deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     };
 
     await expect(
-      deleteProCheckoutAttempt({
+      deleteSubscriptionCheckoutAttempt({
         userId: "user-1",
         stripeCheckoutSessionId: "cs_old",
         prisma: transaction as never,
       }),
     ).resolves.toBe(true);
 
-    expect(transaction.proCheckoutAttempt.deleteMany).toHaveBeenCalledWith({
+    expect(transaction.subscriptionCheckoutAttempt.deleteMany).toHaveBeenCalledWith({
       where: {
         userId: "user-1",
         stripeCheckoutSessionId: "cs_old",
@@ -131,7 +134,7 @@ describe("Pro checkout attempts", () => {
   it("preserves a post-cascade bound Session and writes cleanup outbox from stored customerId", async () => {
     const upsert = vi.fn().mockResolvedValue(undefined);
     const transaction = {
-      proCheckoutAttempt: {
+      subscriptionCheckoutAttempt: {
         findUnique: vi.fn().mockResolvedValue({
           userId: "user-1", checkoutKey: "key-1", billingOfferId: "offer-1",
           stripeCheckoutSessionId: null, customerId: "cus_1", accountDeletionAt: new Date(),
@@ -141,8 +144,9 @@ describe("Pro checkout attempts", () => {
       accountDeletionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
       stripeCheckoutCleanup: { upsert, findUnique: vi.fn().mockResolvedValue(null), create: upsert, update: vi.fn() },
     };
-    await expect(bindProCheckoutSession({
+    await expect(bindSubscriptionCheckoutSession({
       userId: "user-1",
+      planId: "pro",
       checkoutKey: "key-1",
       stripeCheckoutSessionId: "cs_late",
       expiresAt: new Date(),

@@ -1,3 +1,10 @@
+import {
+  ARCHIVE_MIME_TYPES,
+  DOCUMENT_MIME_TYPES,
+  type FileKind,
+  type StorageListingParams,
+} from "@beutl/core";
+import type { Prisma } from "@prisma/client";
 import { getDb } from "./provider";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
@@ -162,20 +169,74 @@ export async function findFileForApi({
   return file;
 }
 
-export async function retrieveFilesByUserId({
+// How many colliding names are worth reading to pick the next "(n)". Past
+// this the account has that many copies of one basename, and any free name
+// will do.
+export const STORAGE_FILE_NAME_SCAN_LIMIT = 500;
+const STORAGE_FILE_NAME_PROBES = 8;
+
+// The name a new file gets: the one asked for, or "name (n).ext" once that is
+// taken, the way the screen has always done. The exact name is checked with
+// one lookup; the suffixed copies are read as a bounded page, and with more
+// copies than that the next number is taken from a count kept in the
+// database and probed a few times, with a random suffix ending the search
+// when even those are taken. An account holding many files, or many copies
+// of one name, never pays for a listing of them on every upload.
+export async function availableStorageFileName({
   userId,
+  name,
   prisma,
 }: {
   userId: string;
+  name: string;
   prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return await db.file.findMany({
-    where: {
-      userId: userId,
-      aiJobResult: null,
-    },
+}): Promise<string> {
+  const db = prisma ?? await getDb();
+  // The exact name is asked about on its own: a bounded, unordered page of
+  // suffixed copies is not guaranteed to contain it.
+  const exact = await db.file.findFirst({
+    where: { userId, aiJobResult: null, name },
+    select: { id: true },
   });
+  if (!exact) return name;
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  const stem = extension ? name.slice(0, -extension.length) : name;
+  const suffixed = {
+    userId,
+    aiJobResult: null,
+    name: { startsWith: `${stem} (`, endsWith: extension },
+  } satisfies Prisma.FileWhereInput;
+  const rows = await db.file.findMany({
+    where: suffixed,
+    select: { name: true },
+    take: STORAGE_FILE_NAME_SCAN_LIMIT + 1,
+  });
+  const taken = new Set(rows.map((row) => row.name));
+  if (rows.length <= STORAGE_FILE_NAME_SCAN_LIMIT) {
+    for (let index = 1; ; index++) {
+      const candidate = `${stem} (${index})${extension}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+  }
+  const count = await db.file.count({ where: suffixed });
+  for (let index = count + 1; index <= count + STORAGE_FILE_NAME_PROBES; index++) {
+    const candidate = `${stem} (${index})${extension}`;
+    const exists = await db.file.findFirst({
+      where: { userId, name: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
+  }
+  return `${stem} (${crypto.randomUUID().slice(0, 8)})${extension}`;
+}
+
+// A MIME type as stored: served as given, but without stray whitespace at the
+// ends or around the ";" that starts a parameter. RFC 2045 allows that
+// whitespace, and the screen's classification drops it; storing it would put
+// "application/pdf ; charset=binary" under "other" in the listing's kind
+// filter while the screen calls it a document.
+export function storedMimeType(mimeType: string): string {
+  return mimeType.trim().replace(/\s*;\s*/gu, ";");
 }
 
 export async function createFile({
@@ -203,7 +264,7 @@ export async function createFile({
       objectKey,
       name,
       size,
-      mimeType,
+      mimeType: storedMimeType(mimeType),
       userId,
       visibility,
       sha256,
@@ -358,6 +419,7 @@ export async function deleteUserFilesWithStorageCleanup({
       where: { id: { in: uniqueIds }, userId, aiJobResult: null },
       select: {
         id: true,
+        objectKey: true,
         visibility: true,
         ...fileReferenceSelect,
       },
@@ -373,13 +435,31 @@ export async function deleteUserFilesWithStorageCleanup({
       return { kind: "inUse" as const };
     }
 
-    const records = [];
-    for (const fileId of uniqueIds) {
-      records.push(
-        await deleteFileWithStorageCleanup({ fileId, userId, prisma: tx }),
-      );
+    // One outbox write and one delete for the whole set, so the statement
+    // count does not grow with the selection: the same shape as the
+    // unreferenced bulk delete, with the exact-set check above kept.
+    const now = new Date();
+    const objectKeys = files.map((file) => file.objectKey);
+    await tx.aiStorageCleanup.createMany({
+      data: objectKeys.map((objectKey) => ({
+        objectKey,
+        aiJobId: null,
+        leaseToken: null,
+        state: "writing",
+        notBefore: now,
+      })),
+    });
+    const deleted = await tx.file.deleteMany({
+      where: { id: { in: uniqueIds }, userId, aiJobResult: null },
+    });
+    if (deleted.count !== uniqueIds.length) {
+      throw new Error("Storage files changed before deletion");
     }
-    return { kind: "deleted" as const, records };
+    await tx.aiStorageCleanup.updateMany({
+      where: { objectKey: { in: objectKeys }, state: "writing", leaseToken: null },
+      data: { state: "cleanup", notBefore: now },
+    });
+    return { kind: "deleted" as const, records: files };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
@@ -462,26 +542,6 @@ export async function updateFileName({
   return result.count === 1;
 }
 
-export async function retrieveFileNamesAndSizesByUserId({
-  userId,
-  prisma,
-}: {
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.file.findMany({
-    where: {
-      userId,
-      aiJobResult: null,
-    },
-    select: {
-      size: true,
-      name: true,
-    },
-  });
-}
-
 export async function retrieveStorageFilesByUserId({
   userId,
   prisma,
@@ -507,6 +567,110 @@ export async function retrieveStorageFilesByUserId({
       folderId: true,
     },
     orderBy: { createdAt: "desc" },
+  });
+}
+
+const STORAGE_FILE_SELECT = {
+  id: true,
+  name: true,
+  size: true,
+  mimeType: true,
+  visibility: true,
+  createdAt: true,
+  folderId: true,
+} satisfies Prisma.FileSelect;
+
+// 画面の「種類」フィルタを DB の条件に。判定は core の fileKind と同じ順序で、
+// 「その他」は他のどれにも当たらないもの。fileKind は "; charset=..." の
+// パラメータを落として比べるので、完全一致の種類はパラメータ付きも受ける。
+function storageFileKindWhere(kind: FileKind): Prisma.FileWhereInput {
+  const insensitive = "insensitive" as const;
+  const exactly = (types: readonly string[]): Prisma.FileWhereInput[] =>
+    types.flatMap((type) => [
+      { mimeType: { equals: type, mode: insensitive } },
+      { mimeType: { startsWith: `${type};`, mode: insensitive } },
+    ]);
+  const named: Record<Exclude<FileKind, "other">, Prisma.FileWhereInput> = {
+    image: { mimeType: { startsWith: "image/", mode: insensitive } },
+    video: { mimeType: { startsWith: "video/", mode: insensitive } },
+    audio: { mimeType: { startsWith: "audio/", mode: insensitive } },
+    archive: { OR: exactly(ARCHIVE_MIME_TYPES) },
+    document: {
+      OR: [
+        { mimeType: { startsWith: "text/", mode: insensitive } },
+        ...exactly(DOCUMENT_MIME_TYPES),
+      ],
+    },
+  };
+  if (kind === "other") return { NOT: Object.values(named) };
+  return named[kind];
+}
+
+export type StorageFileListingPage = {
+  files: Prisma.FileGetPayload<{ select: typeof STORAGE_FILE_SELECT }>[];
+  total: number;
+  // 要求より後ろのページが無ければ最後のページに寄せる。
+  page: number;
+  pageCount: number;
+};
+
+// 一覧の 1 ページ。検索中はフォルダーを問わず全体から、そうでなければそのフォルダー
+// 直下だけ。並び順には id を添えて、同じ値が並んでもページの境目で行が二重に
+// 出たり抜けたりしないようにする。
+export async function retrieveStorageFilesPage({
+  userId,
+  listing,
+  pageSize,
+  prisma,
+}: {
+  userId: string;
+  listing: StorageListingParams;
+  pageSize: number;
+  prisma?: PrismaTransaction;
+}): Promise<StorageFileListingPage> {
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+    throw new RangeError("Storage listing page size must be a positive integer");
+  }
+  const db = prisma ?? await getDb();
+  const query = listing.query.trim();
+  const where: Prisma.FileWhereInput = {
+    userId,
+    aiJobResult: null,
+    ...(query.length > 0
+      ? { name: { contains: query, mode: "insensitive" } }
+      : { folderId: listing.folderId }),
+    ...(listing.kind ? storageFileKindWhere(listing.kind) : {}),
+    ...(listing.visibility ? { visibility: listing.visibility } : {}),
+  };
+  const total = await db.file.count({ where });
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, listing.page), pageCount);
+  const direction = listing.descending ? "desc" : "asc";
+  const files = await db.file.findMany({
+    where,
+    select: STORAGE_FILE_SELECT,
+    orderBy: [{ [listing.sort]: direction }, { id: "asc" }],
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  });
+  return { files, total, page, pageCount };
+}
+
+// フォルダー削除の確認に出す本数。画面は一覧を 1 ページしか持っていないので、
+// 木の下にあるファイルは数えてもらう。
+export async function countStorageFilesInFolders({
+  userId,
+  folderIds,
+  prisma,
+}: {
+  userId: string;
+  folderIds: readonly string[];
+  prisma?: PrismaTransaction;
+}): Promise<number> {
+  if (folderIds.length === 0) return 0;
+  const db = prisma ?? await getDb();
+  return await db.file.count({
+    where: { userId, aiJobResult: null, folderId: { in: [...folderIds] } },
   });
 }
 

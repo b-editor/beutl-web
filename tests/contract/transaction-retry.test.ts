@@ -303,8 +303,8 @@ describe("database transactions", () => {
       customer: {
         findUnique: vi.fn().mockResolvedValue(null),
       },
-      proCheckoutAttempt: {
-        findUnique: vi.fn().mockResolvedValue(null),
+      subscriptionCheckoutAttempt: {
+        findMany: vi.fn().mockResolvedValue([]),
         count: vi.fn().mockResolvedValue(0),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -365,7 +365,7 @@ describe("database transactions", () => {
     ).resolves.toMatchObject({ status: "authorized", resumed: false });
     expect(transaction).toHaveBeenCalledTimes(2);
     expect(tx.confirmationToken.deleteMany).toHaveBeenCalledTimes(2);
-    expect(tx.proCheckoutAttempt.updateMany).toHaveBeenCalledTimes(2);
+    expect(tx.subscriptionCheckoutAttempt.updateMany).toHaveBeenCalledTimes(2);
     expect(tx.topUpCheckoutAttempt.updateMany).toHaveBeenCalledTimes(4);
     expect(tx.aiJob.findMany).toHaveBeenCalledTimes(2);
   });

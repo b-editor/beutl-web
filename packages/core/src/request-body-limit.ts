@@ -3,7 +3,10 @@ import {
   aiScreenUploadLimit,
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
 } from "./ai-capabilities";
-import { STORAGE_UPLOAD_PART_BYTES } from "./storage-quota";
+import {
+  STORAGE_UPLOAD_FINISH_BODY_BYTES,
+  STORAGE_UPLOAD_PART_BYTES,
+} from "./storage-quota";
 
 /**
  * 1 リクエストの本文に許す大きさ。
@@ -17,7 +20,10 @@ export const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 export const MAX_API_JSON_REQUEST_BYTES = 32 * 1024;
 export const MAX_AUTH_REQUEST_BODY_BYTES = 64 * 1024;
 export const MAX_INTERNAL_STORAGE_START_BODY_BYTES = 4 * 1024;
-export const MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES = 64 * 1024;
+// A completion names every part, so the cap follows the part count rather
+// than a round figure; the finish route reads its body with the same number.
+export const MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES =
+  STORAGE_UPLOAD_FINISH_BODY_BYTES;
 export const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1024 * 1024;
 export const MAX_OPENROUTER_CALLBACK_BODY_BYTES = 64 * 1024;
 

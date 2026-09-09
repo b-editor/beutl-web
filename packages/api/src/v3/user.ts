@@ -3,8 +3,9 @@ import { apiErrorResponse } from "../api/error";
 import type { Prisma } from "@prisma/client";
 import { getUserId } from "../api/auth";
 import { getContentUrl } from "../content-url";
-import { findProfileForApi } from "@beutl/db";
+import { findProfileForApi, getDb } from "@beutl/db";
 import { canStartAiOperation, getEntitlements } from "../ai/entitlements";
+import { getStorageEntitlement } from "../storage-entitlements";
 import {
   isUploadLimitExceeded,
   parseJsonWithBodyLimit,
@@ -91,7 +92,16 @@ const app = new Hono().get("/", async (c) => {
       });
     }
 
-    return c.json(await getEntitlements(currentUserId));
+    // The AI fields keep their names, order, and types; `storage` is added
+    // beside them so existing desktop clients keep parsing the response.
+    // One client serves both reads: in the Worker every getDb() call opens
+    // its own connection, and this handler has no reason to hold two.
+    const prisma = await getDb();
+    const [entitlements, storage] = await Promise.all([
+      getEntitlements(currentUserId, { prisma }),
+      getStorageEntitlement(currentUserId, { prisma }),
+    ]);
+    return c.json({ ...entitlements, storage });
   })
   .post("/ai-availability", async (c) => {
     const currentUserId = await getUserId(c);

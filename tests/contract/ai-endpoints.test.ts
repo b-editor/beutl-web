@@ -520,6 +520,15 @@ describe("v3 AI endpoints contract", () => {
         },
         availability: expect.any(Object),
         modelAvailability: expect.any(Object),
+        // The storage plan is reported beside the AI fields; the AI fields
+        // themselves keep their names and shape for existing desktop clients.
+        storage: expect.objectContaining({
+          plan: null,
+          quotaBytes: expect.any(Number),
+          usedBytes: 0,
+          fileCount: 0,
+          canUpload: true,
+        }),
       });
     });
 
@@ -595,6 +604,15 @@ describe("v3 AI endpoints contract", () => {
         },
         availability: expect.any(Object),
         modelAvailability: expect.any(Object),
+        // The storage plan is reported beside the AI fields; the AI fields
+        // themselves keep their names and shape for existing desktop clients.
+        storage: expect.objectContaining({
+          plan: null,
+          quotaBytes: expect.any(Number),
+          usedBytes: 0,
+          fileCount: 0,
+          canUpload: true,
+        }),
       });
     });
 

@@ -1,6 +1,7 @@
 import { getDb } from "./provider";
-import type { PrismaTransaction } from "./transaction";
+import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { StorageCleanupBusyError } from "./ai-job";
+import { FILE_IN_USE_WHERE } from "./storage-folder";
 import { enqueueStorageMultipartCleanups } from "./storage-multipart-cleanup";
 import {
   DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
@@ -282,6 +283,133 @@ export async function countUsers({
 // 期限のあいだで選んだ数。
 const CLEANUP_BATCH_SIZE = 500;
 
+// One outbox write for a set of object keys, the way the account cascade
+// writes them: a row per key, an existing row moved up to cleanup, and a row
+// a cleaner has leased refused.
+async function enqueueObjectCleanupBatch(
+  db: PrismaTransaction,
+  batch: string[],
+  dedicatedKeys: ReadonlySet<string>,
+  now: Date,
+): Promise<void> {
+  const existing = await db.aiStorageCleanup.findMany({
+    where: { objectKey: { in: batch } },
+    select: {
+      objectKey: true,
+      leaseToken: true,
+      state: true,
+      notBefore: true,
+    },
+  });
+  // A lease token means a cleaner owns the remote side effect until it
+  // explicitly settles. Expiry only makes the row claimable through the
+  // cleanup CAS; normal account-deletion writers must never overwrite it.
+  const busy = existing.filter((row) => row.leaseToken !== null);
+  if (busy.length > 0) {
+    throw new StorageCleanupBusyError(busy.map((row) => row.objectKey));
+  }
+  await db.aiStorageCleanup.createMany({
+    data: batch.map((objectKey) => ({
+      objectKey,
+      aiJobId: null,
+      leaseToken: null,
+      state: "cleanup",
+      notBefore: dedicatedKeys.has(objectKey)
+        ? new Date(
+            now.getTime() + DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
+          )
+        : now,
+    })),
+    skipDuplicates: true,
+  });
+  // Existing rows are updated once per batch. Active leases were rejected
+  // above, so this cannot move a claimed row backwards.
+  if (existing.length === 0) return;
+  const immediate = existing.filter((row) => !dedicatedKeys.has(row.objectKey));
+  // Dedicated writes already carry a delayed outbox established by the
+  // freeze CAS. Do not shorten it during the User cascade: an R2 put owned
+  // by the expired lease may still publish before that grace elapses.
+  if (immediate.length === 0) return;
+  await db.aiStorageCleanup.updateMany({
+    where: {
+      objectKey: { in: immediate.map((row) => row.objectKey) },
+      OR: [{ leaseToken: null }, { notBefore: { lte: now } }],
+    },
+    data: { aiJobId: null, state: "cleanup", notBefore: now },
+  });
+}
+
+// How many files one transaction of the account drain retires. The account
+// may hold as many files as its plan allows, and one transaction over all of
+// them would outgrow the statement and time limits, as it would for a folder.
+export const ACCOUNT_STORAGE_DRAIN_BATCH = 500;
+
+export type AccountStorageDrainResult =
+  | { kind: "drained"; fileCount: number }
+  | { kind: "notAuthorized" };
+
+/** Retire the account's plain storage files before the User cascade, a page
+ * at a time, each page in its own transaction with its own outbox rows.
+ *
+ * The cascade runs in one serializable transaction, and the outbox for every
+ * object the account owns has to be written in it; read whole, that is a
+ * hundred thousand rows on the largest plan. Draining first leaves the
+ * cascade only what the file limit does not govern: dedicated files and files
+ * a package, screenshot, profile, or release still points at (bounded by the
+ * packages), AI results (bounded by credits), and unfinished uploads.
+ *
+ * Runs only under a live deletion intent, checked in every page, and only
+ * after the Stripe customer has been closed: from there the account is on its
+ * way out, and the files are the next thing to go. */
+export async function drainUserStorageFiles({
+  userId,
+  now = new Date(),
+  prisma,
+}: {
+  userId: string;
+  now?: Date;
+  prisma?: PrismaTransaction;
+}): Promise<AccountStorageDrainResult> {
+  const transact = <T>(run: (tx: PrismaTransaction) => Promise<T>) =>
+    prisma ? run(prisma) : startRetryableTransaction(run);
+  let fileCount = 0;
+  for (;;) {
+    const outcome = await transact(async (tx) => {
+      const intent = await tx.accountDeletionIntent.findFirst({
+        where: { userId, expiresAt: { gt: now } },
+        select: { userId: true },
+      });
+      if (!intent) return { kind: "notAuthorized" as const };
+      const batch: { id: string; objectKey: string }[] = await tx.file.findMany({
+        where: { userId, aiJobResult: null, NOT: FILE_IN_USE_WHERE },
+        select: { id: true, objectKey: true },
+        orderBy: { id: "asc" },
+        take: ACCOUNT_STORAGE_DRAIN_BATCH,
+      });
+      if (batch.length === 0) return { kind: "drained" as const, count: 0 };
+      // Every file here came through a multipart upload, whose object is
+      // published before the File row exists; nothing can still land on
+      // these keys, so the outbox is due at once.
+      await enqueueObjectCleanupBatch(
+        tx,
+        [...new Set(batch.map((file) => file.objectKey))],
+        new Set(),
+        now,
+      );
+      const deleted = await tx.file.deleteMany({
+        where: { id: { in: batch.map((file) => file.id) }, userId },
+      });
+      if (deleted.count !== batch.length) {
+        throw new Error("Storage files changed before deletion");
+      }
+      return { kind: "drained" as const, count: batch.length };
+    });
+    if (outcome.kind !== "drained") return outcome;
+    if (outcome.count === 0) return { kind: "drained", fileCount };
+    fileCount += outcome.count;
+  }
+}
+
 export async function enqueueUserStorageCleanups({
   userId,
   now = new Date(),
@@ -397,54 +525,15 @@ export async function enqueueUserStorageCleanups({
   // まとめて書く。1 件ずつだと、上限いっぱいまでファイルを持つ利用者の削除は
   // 1 万回の往復になり、その全部がカスケードと同じトランザクションの中に入る
   // ——期限に間に合わなければ、削除そのものが最後まで通らない。
+  // 普通のファイルは drainUserStorageFiles が先にページ単位で片付けている
+  // ので、ここに残るのはファイル数の上限とは別の理由で数が抑えられるもの。
   for (let at = 0; at < keys.length; at += CLEANUP_BATCH_SIZE) {
-    const batch = keys.slice(at, at + CLEANUP_BATCH_SIZE);
-    const existing = await db.aiStorageCleanup.findMany({
-      where: { objectKey: { in: batch } },
-      select: {
-        objectKey: true,
-        leaseToken: true,
-        state: true,
-        notBefore: true,
-      },
-    });
-    // A lease token means a cleaner owns the remote side effect until it
-    // explicitly settles. Expiry only makes the row claimable through the
-    // cleanup CAS; normal account-deletion writers must never overwrite it.
-    const busy = existing.filter((row) => row.leaseToken !== null);
-    if (busy.length > 0) {
-      throw new StorageCleanupBusyError(busy.map((row) => row.objectKey));
-    }
-    await db.aiStorageCleanup.createMany({
-      data: batch.map((objectKey) => ({
-        objectKey,
-        aiJobId: null,
-        leaseToken: null,
-        state: "cleanup",
-        notBefore: dedicatedKeys.has(objectKey)
-          ? new Date(
-              now.getTime() + DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS,
-            )
-          : now,
-      })),
-      skipDuplicates: true,
-    });
-    // Existing rows are updated once per batch. Active leases were rejected
-    // above, so this cannot move a claimed row backwards.
-    if (existing.length > 0) {
-      const immediate = existing.filter((row) => !dedicatedKeys.has(row.objectKey));
-      // Dedicated writes already carry a delayed outbox established by the
-      // freeze CAS. Do not shorten it during the User cascade: an R2 put owned
-      // by the expired lease may still publish before that grace elapses.
-      if (immediate.length === 0) continue;
-      await db.aiStorageCleanup.updateMany({
-        where: {
-          objectKey: { in: immediate.map((row) => row.objectKey) },
-          OR: [{ leaseToken: null }, { notBefore: { lte: now } }],
-        },
-        data: { aiJobId: null, state: "cleanup", notBefore: now },
-      });
-    }
+    await enqueueObjectCleanupBatch(
+      db,
+      keys.slice(at, at + CLEANUP_BATCH_SIZE),
+      dedicatedKeys,
+      now,
+    );
   }
   return keys.length;
 }

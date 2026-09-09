@@ -2,7 +2,7 @@ import {
   findAccountDeletionIntentByUserId,
   findCreditAccount,
   getDb,
-  getSubscriptionByUserId,
+  getSubscription,
   startRetryableTransaction,
   type PrismaTransaction,
   usagePeriodsEqual,
@@ -223,7 +223,7 @@ async function loadEntitlementSnapshot(
   balance: AiBalanceSnapshot;
 }> {
   const [subscription, deletionIntent, settings] = await Promise.all([
-    getSubscriptionByUserId({ userId, prisma }),
+    getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
     findAccountDeletionIntentByUserId({ userId, prisma }),
     loadAiSettings({ prisma }),
   ]);
@@ -350,7 +350,7 @@ export async function canStartAiOperation(
     if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
       return false;
     }
-    const subscription = await getSubscriptionByUserId({ userId, prisma });
+    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     if (!subscription || !isActiveProSubscription(subscription)) {
       return false;
     }

@@ -34,7 +34,7 @@ model User {
   CreditAccount                CreditAccount?
   CreditTransaction            CreditTransaction[]
   AiJob                        AiJob[]
-  Subscription                 Subscription?
+  subscriptions                Subscription[]
   accountDeletionIntents       AccountDeletionIntent[]
   stripeCustomerOwnerships     StripeCustomerOwnership[]
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
@@ -248,6 +248,8 @@ model StorageUpload {
   // 掃除が「この行のパートは自分が捨てる」と宣言した時刻。設定された行にはもう
   // 控えを書けない——書けてしまうと、掃除が消したオブジェクトを File が指す。
   abandonedAt     DateTime?
+  // 最後にパートが届いた (専用書き込みならリースを更新した) 時刻。放置判定の起点。
+  lastActivityAt  DateTime?
   // Keep the database default active until every old writer is retired. New
   // intent rows set this field explicitly; a later contract migration can
   // switch the default once the rolling-deploy window has closed.
@@ -281,6 +283,7 @@ model StorageUpload {
   @@index([completionState, completionRetryNotBefore])
   @@index([completionState, unknownProbeNotBefore])
   @@index([abandonedAt, cleanupLeaseUntil])
+  @@index([completedFileId, lastActivityAt])
 }
 
 model Package {
@@ -602,11 +605,16 @@ model StorageMultipartCleanup {
   @@index([objectKey, status], map: "StorageMultipartCleanup_objectKey_status_idx")
 }
 
+// 1 ユーザーはプランごとに 1 契約を持つ (AI Pro とストレージは別の Stripe
+// subscription)。tier はプラン内の段階で、ティアを持たないプランでは null。
+// 列の意味は Stripe の観測をそのまま写したもので、planId / tier は Price から
+// 解決した BillingOffer の値の写し。
 model Subscription {
-  userId                    String        @id
+  userId                    String
   stripeSubscriptionId      String        @unique
   status                    String
   planId                    String
+  tier                      String?
   currentPeriodStart        DateTime?
   currentPeriodEnd          DateTime?
   cancelAtPeriodEnd         Boolean       @default(false)
@@ -621,14 +629,21 @@ model Subscription {
   user                      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   billingOffer              BillingOffer? @relation(fields: [billingOfferId], references: [id])
 
+  @@id([userId, planId])
   @@index([billingOfferId])
   // 管理画面の利用状況レポートは有効な契約数を status と期間で数える。
   @@index([status, currentPeriodEnd])
 }
 
-model ProCheckoutAttempt {
-  userId                  String       @id
-  checkoutKey             String       @unique
+// サブスクリプションのチェックアウト試行。ユーザーとプランごとに 1 行で、Stripe の
+// Checkout Session を束縛して、応答が失われても同じ Session を引き当てられるように
+// する。User への外部キーは意図的に無い (アカウント削除のカスケードを生き延びて、
+// 束縛済みの Session を後始末するため)。
+model SubscriptionCheckoutAttempt {
+  userId                  String
+  planId                  String       @default("pro")
+  tier                    String?
+  checkoutKey             String       @unique(map: "ProCheckoutAttempt_checkoutKey_key")
   stripeCheckoutSessionId String?
   customerId             String?
   accountDeletionAt       DateTime?
@@ -644,9 +659,10 @@ model ProCheckoutAttempt {
   expiresAt               DateTime
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
-  billingOffer            BillingOffer @relation(fields: [billingOfferId], references: [id])
+  billingOffer            BillingOffer @relation(fields: [billingOfferId], references: [id], map: "ProCheckoutAttempt_billingOfferId_fkey")
 
-  @@index([billingOfferId])
+  @@id([userId, planId])
+  @@index([billingOfferId], map: "ProCheckoutAttempt_billingOfferId_idx")
   @@index([accountDeletionAt, stripeCheckoutSessionId, recoveryNotBefore, recoveryLeaseExpiresAt, recoveryInterventionAt], map: "ProCheckoutAttempt_recovery_idx")
 }
 
@@ -660,15 +676,20 @@ model BillingOffer {
   creditAmount           Int?
   recurringInterval      String?
   recurringIntervalCount Int?
+  // ティアを持つプランの Price だけに入る。どのティアの Price かを、Stripe を
+  // 読まずに判定側へ渡すための写し。ティアの無いプランでは null。
+  tier                   String?
   checkoutEnabled        Boolean                @default(false)
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   subscriptions          Subscription[]
-  proCheckoutAttempts    ProCheckoutAttempt[]
+  checkoutAttempts       SubscriptionCheckoutAttempt[]
   topUpCheckoutAttempts  TopUpCheckoutAttempt[]
   creditTransactions     CreditTransaction[]
 
   @@index([kind, checkoutEnabled])
+  // 「販売中の offer は kind とティアごとに 1 つ」なので、ティアを含めて引く。
+  @@index([kind, tier, checkoutEnabled])
 }
 
 model TopUpCheckoutAttempt {

@@ -3,8 +3,8 @@ import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api";
 import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
+  STORAGE_FREE_FILE_COUNT_LIMIT,
+  STORAGE_FREE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
@@ -329,8 +329,8 @@ describe("uploading a file too large for one request", () => {
     expect(STORAGE_UPLOAD_PART_BYTES).toBeLessThan(100 * 1024 * 1024);
     expect(partCountOf(BigInt(STORAGE_UPLOAD_PART_BYTES))).toBe(1);
     expect(partCountOf(BigInt(STORAGE_UPLOAD_PART_BYTES + 1))).toBe(2);
-    expect(partCountOf(BigInt(STORAGE_QUOTA_BYTES))).toBe(
-      Math.ceil(STORAGE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES),
+    expect(partCountOf(BigInt(STORAGE_FREE_QUOTA_BYTES))).toBe(
+      Math.ceil(STORAGE_FREE_QUOTA_BYTES / STORAGE_UPLOAD_PART_BYTES),
     );
   });
 
@@ -537,7 +537,7 @@ describe("uploading a file too large for one request", () => {
   });
 
   it("counts what is already on its way against the quota", async () => {
-    const half = BigInt(STORAGE_QUOTA_BYTES) / BigInt(2);
+    const half = BigInt(STORAGE_FREE_QUOTA_BYTES) / BigInt(2);
     const first = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -658,6 +658,101 @@ describe("uploading a file too large for one request", () => {
     expect(swept).toEqual({ abandoned: 1, failed: 0 });
     expect(state.storageUploads.size).toBe(0);
     expect([...bucket.uploads.values()].every((upload) => upload.aborted)).toBe(true);
+  });
+
+  it("records activity before a part is sent, and refuses the part once the sweep owns the row", async () => {
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "fenced.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const row = state.storageUploads.get(started.upload.id)!;
+    expect(row.lastActivityAt ?? null).toBeNull();
+
+    // By the time the bucket sees the part, the row already says the upload
+    // is alive; the fence is not an afterthought of a successful put.
+    const resume = bucket.resumeMultipartUpload;
+    let activityWhenSent: Date | null | undefined;
+    vi.spyOn(bucket, "resumeMultipartUpload").mockImplementationOnce((key, uploadId) => {
+      const real = resume(key, uploadId);
+      return {
+        ...real,
+        uploadPart: async (partNumber: number, body: ReadableStream<Uint8Array>) => {
+          activityWhenSent = state.storageUploads.get(row.id)?.lastActivityAt;
+          return await real.uploadPart(partNumber, body);
+        },
+      };
+    });
+    await expect(uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
+    })).resolves.toMatchObject({ ok: true });
+    expect(activityWhenSent).toBeInstanceOf(Date);
+
+    // The sweep claimed the row: the touch fails and nothing is sent.
+    state.storageUploads.set(row.id, {
+      ...state.storageUploads.get(row.id)!,
+      abandonedAt: null,
+      lastActivityAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    });
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toMatchObject({ abandoned: 1 });
+    const sends = bucket.resumeMultipartUpload.mock.calls.length;
+    await expect(uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
+    })).resolves.toEqual({ ok: false, reason: "uploadNotFound" });
+    expect(bucket.resumeMultipartUpload.mock.calls.length).toBe(sends);
+  });
+
+  it("keeps an upload that is still receiving parts, however old it is", async () => {
+    // Started thirty hours ago, but a part landed an hour ago: alive. Once a
+    // day passes without a part, it is abandoned like any other.
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "slow.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(4_000),
+    });
+    if (!started.ok) throw new Error(started.reason);
+    const hour = 60 * 60 * 1000;
+    const row = state.storageUploads.get(started.upload.id)!;
+    state.storageUploads.set(row.id, { ...row, createdAt: new Date(Date.now() - 30 * hour) });
+    await uploadPart({
+      userId: USER_ID,
+      uploadId: row.id,
+      partNumber: 1,
+      body: streamOf(4_000),
+      contentLength: 4_000,
+    });
+    expect(state.storageUploads.get(row.id)?.lastActivityAt?.getTime()).toBeGreaterThan(
+      Date.now() - hour,
+    );
+
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 0,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(row.id)).toBe(true);
+
+    state.storageUploads.set(row.id, {
+      ...state.storageUploads.get(row.id)!,
+      lastActivityAt: new Date(Date.now() - 25 * hour),
+    });
+    await expect(abandonStaleStorageUploads(new Date())).resolves.toEqual({
+      abandoned: 1,
+      failed: 0,
+    });
+    expect(state.storageUploads.has(row.id)).toBe(false);
   });
 
   it("keeps active completion fenced, then escalates an expired lease", async () => {
@@ -1628,7 +1723,7 @@ describe("uploading a file too large for one request", () => {
       id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
-      size: BigInt(STORAGE_QUOTA_BYTES),
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES),
     });
     if (!started.ok) throw new Error(started.reason);
     const [tracked] = [...state.storageUploads.values()];
@@ -1656,7 +1751,7 @@ describe("uploading a file too large for one request", () => {
       id: crypto.randomUUID(),
       name: "clip.mp4",
       mimeType: "video/mp4",
-      size: BigInt(STORAGE_QUOTA_BYTES),
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES),
     });
     if (!first.ok) throw new Error(first.reason);
     const refused = await startUpload({
@@ -1675,7 +1770,7 @@ describe("uploading a file too large for one request", () => {
   it("refuses to start once the account holds as many files as it may", async () => {
     // 容量だけでは本数を縛れない。1 バイトのファイルを順に完成させれば、枠の
     // 内側で R2 のオブジェクトと行をいくらでも増やせる。
-    for (let index = 0; index < STORAGE_FILE_COUNT_LIMIT; index++) {
+    for (let index = 0; index < STORAGE_FREE_FILE_COUNT_LIMIT; index++) {
       state.files.set(`file-${index}`, {
         id: `file-${index}`,
         objectKey: `key-${index}`,

@@ -1,4 +1,5 @@
 import {
+  abandonBlockedUnknownStorageUploadCompletion,
   claimStorageMultipartCleanup,
   claimStorageUploadForAbandon,
   countFilesByUserId,
@@ -15,14 +16,11 @@ import {
   listStorageUploadsStartedBefore,
   escalateDueStorageUploadCompletions,
   settleTerminalClaimedStorageUpload,
+  resolveStorageQuota,
   startRetryableTransaction,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
 } from "@beutl/db";
-import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
-} from "@beutl/core";
 import { getR2Bucket } from "./ai/storage";
 import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
@@ -42,9 +40,12 @@ export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 // can no longer take a receipt — so whatever is left in the bucket is this
 // sweep's to throw away.
 //
-// Long enough that a slow upload of the largest file this service takes is
-// never mistaken for an abandoned one.
-const ABANDON_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
+// How long an upload may go without a part before it is given up. Idleness,
+// not age: a part arriving refreshes the deadline, so a slow transfer that
+// is still making progress is never mistaken for an abandoned one, however
+// large it is. The bucket's own seven-day lifecycle rule (see
+// apps/web/r2-lifecycle.json) remains the last line of defence.
+const ABANDON_AFTER_IDLE_MILLISECONDS = 24 * 60 * 60 * 1000;
 // 取り消しの墓標を置いたまま待つ時間。遅れて現れる開始を止めるために置くもの
 // なので、開始の要求が生きていられるより長く。
 const TOMBSTONE_GRACE_MILLISECONDS = 15 * 60 * 1000;
@@ -129,9 +130,10 @@ export async function reconcileStorageMultipartCleanups(
 
 export async function reconcileUnknownStorageUploadCompletions(
   limit: number = MAX_PER_RUN,
-): Promise<{ inspected: number; finalized: number; errors: number }> {
+): Promise<{ inspected: number; finalized: number; abandoned: number; errors: number }> {
   const uploads = await listUnknownStorageUploadCompletions({ limit, now: new Date() });
   let finalized = 0;
+  let abandoned = 0;
   let errors = 0;
 
   for (const listed of uploads) {
@@ -188,15 +190,41 @@ export async function reconcileUnknownStorageUploadCompletions(
         }
 
         const actual = BigInt(object.size!);
-        const [stored, files] = await Promise.all([
+        const [quota, stored, files] = await Promise.all([
+          resolveStorageQuota({ userId: current.userId, prisma }),
           sumFileSizeByUserId({ userId: current.userId, prisma }),
           countFilesByUserId({ userId: current.userId, prisma }),
         ]);
         if (
-          stored + actual > BigInt(STORAGE_QUOTA_BYTES) ||
-          files >= STORAGE_FILE_COUNT_LIMIT
+          stored + actual > BigInt(quota.quotaBytes) ||
+          files >= quota.fileCountLimit
         ) {
-          return "blocked" as const;
+          // The object exists but the account can no longer hold it: the plan
+          // lapsed between the completion and this probe. Leaving the row
+          // unknown would keep the object, and its reservation, forever and
+          // probe it every run; the sweep never touches unknown rows and the
+          // bucket lifecycle only collects unfinished multiparts. Treat it as
+          // finalizeUpload treats an over-quota completion: the object goes
+          // to cleanup and the row goes away.
+          const cleanupAt = new Date();
+          if (
+            !await abandonBlockedUnknownStorageUploadCompletion({
+              id: current.id,
+              userId: current.userId,
+              objectKey: current.objectKey,
+              uploadId: current.uploadId,
+              expectedRevision: current.completionRevision,
+              unknownProbeLeaseToken: current.unknownProbeLeaseToken!,
+              now: cleanupAt,
+              objectCleanupNotBefore: new Date(
+                cleanupAt.getTime() + STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
+              ),
+              prisma,
+            })
+          ) {
+            return "blocked" as const;
+          }
+          return "abandoned" as const;
         }
 
         const created = await createFile({
@@ -220,13 +248,14 @@ export async function reconcileUnknownStorageUploadCompletions(
         return "finalized" as const;
       });
       if (outcome === "finalized") finalized++;
+      if (outcome === "abandoned") abandoned++;
     } catch (error) {
       errors++;
       console.error("Failed to persist an unknown storage completion receipt", candidate.id, error);
     }
   }
 
-  return { inspected: uploads.length, finalized, errors };
+  return { inspected: uploads.length, finalized, abandoned, errors };
 }
 
 export async function abandonStaleStorageUploads(
@@ -244,7 +273,7 @@ export async function abandonStaleStorageUploads(
       return { inspected: 0, finalized: 0, errors: 1 };
     });
   const stale = await listStorageUploadsStartedBefore({
-    before: new Date(now.getTime() - ABANDON_AFTER_MILLISECONDS),
+    before: new Date(now.getTime() - ABANDON_AFTER_IDLE_MILLISECONDS),
     now,
     limit: MAX_PER_RUN,
   });
@@ -325,6 +354,9 @@ export async function abandonStaleStorageUploads(
           reservationKind: listed.reservationKind,
           cleanupLeaseUntil: listed.cleanupLeaseUntil,
           cleanupLeaseToken: listed.cleanupLeaseToken,
+          // A part that touched the row since it was listed makes this
+          // claim fail rather than abort an upload that just came alive.
+          lastActivityAt: listed.lastActivityAt,
         },
       });
     } catch (error) {

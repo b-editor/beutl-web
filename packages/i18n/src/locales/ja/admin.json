@@ -387,67 +387,26 @@
     }
   },
   "storage": {
-    "title": "ストレージ",
-    "description": "各ファイルの実体がどのストアにあるかを確認し、設定済みのストア間で移動します。新しいアップロードは主ストアに保存され、主ストアに無いファイルはもう一方のストアから配信されます。",
-    "stores": {
-      "heading": "設定済みのストア",
-      "primary": "主ストア (新規アップロード先)",
-      "fallback": "読み取りの代替",
-      "none": "未設定",
-      "configError": "ストレージの設定に問題があります: {{error}}"
+    "plan": "ストレージ契約",
+    "activeSubscriptions": "有効なストレージ契約",
+    "activeSubscriptionsHint": "ティア別の契約数。期間フィルタには依存しません。",
+    "byTier": "ティア別",
+    "tier": "ティア",
+    "count": "契約数",
+    "quota": "容量",
+    "tiers": {
+      "100gb": "100 GB",
+      "200gb": "200 GB",
+      "1tb": "1 TB"
     },
-    "providers": {
-      "r2": "R2",
-      "s3": "S3"
-    },
-    "search": {
-      "placeholder": "ファイル名または所有者のメールアドレスで検索",
-      "submit": "検索",
-      "order": "並び順",
-      "oldestFirst": "古い順",
-      "newestFirst": "新しい順"
-    },
-    "columns": {
-      "name": "ファイル",
-      "owner": "所有者",
-      "size": "サイズ",
-      "createdAt": "作成日",
-      "location": "所在",
-      "actions": "操作"
-    },
-    "location": {
-      "missing": "見つかりません",
-      "unknown": "確認できません: {{error}}"
-    },
-    "noResults": "ファイルが見つかりません",
-    "moveTo": "{{provider}} へ移動",
-    "moving": "移動中",
-    "batch": {
-      "heading": "まとめて移動",
-      "description": "古いファイルから順に走査し、移動先にまだ無いオブジェクトを移します。1 回の実行には上限があり、続けて実行すると前回の続きから進みます。",
-      "destination": "移動先",
-      "run": "次の一連を移動",
-      "keepRunning": "すべてのファイルを走査し終えるまで続ける",
-      "stop": "この一連で止める",
-      "reset": "最も古いファイルからやり直す",
-      "running": "実行中",
-      "progress": "走査 {{scanned}} 件、移動 {{moved}} 件、移動済み {{alreadyThere}} 件、見つからず {{missing}} 件、失敗 {{failed}} 件",
-      "done": "すべてのファイルを走査しました。",
-      "paused": "停止しました。再実行すると最後のファイルの続きから進みます。",
-      "failures": "失敗",
-      "noProgress": "前回の実行は進みませんでした。ストアが遅いか利用できない可能性があります。再実行すると同じファイルからやり直します。"
-    },
-    "messages": {
-      "moved": "{{name}} を {{from}} から {{to}} へ移動しました。",
-      "movedSourceLeft": "{{name}} を {{to}} へコピーしましたが、{{from}} 側の削除に失敗しました。もう一度移動を実行すると削除されます。",
-      "alreadyThere": "{{name}} は既に {{to}} にあります。",
-      "missing": "{{name}} のオブジェクトはどのストアにも見つかりません。",
-      "invalidInput": "不正な要求です。",
-      "notConfigured": "そのストアは設定されていません。",
-      "unauthenticated": "サインアウトしています。もう一度サインインしてください。",
-      "forbidden": "このアカウントには管理者権限がありません。",
-      "failed": "移動に失敗しました。"
-    }
+    "free": "無料枠",
+    "planActive": "有効",
+    "planNone": "契約なし",
+    "status": "状態",
+    "usage": "使用量",
+    "usageValue": "{{used}} / {{quota}} ({{files}} / {{limit}} 件)",
+    "subscriptionPeriod": "契約期間の終了",
+    "planHeld": "契約中 (現在は容量が無効)"
   },
   "category": {
     "BUG_REPORT": "バグ報告",

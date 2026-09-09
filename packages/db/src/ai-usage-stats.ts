@@ -273,7 +273,15 @@ export async function getTopAiUsers({
 
 // The plan id is a parameter because the catalog that names it lives in
 // @beutl/api, which depends on this package.
-export async function countActiveProSubscriptions({
+export type ActiveSubscriptionCounts = {
+  total: number;
+  // ティアごとの内訳。ティアの無いプランでは空。
+  byTier: Record<string, number>;
+};
+
+// 今この瞬間に権利を与えている契約の数。isActiveSubscription と同じ規則で、
+// 返金・異議の hold が効いている契約と、削除が認可された口座は除く。
+export async function countActiveSubscriptions({
   now,
   planId,
   prisma,
@@ -281,13 +289,13 @@ export async function countActiveProSubscriptions({
   now: Date;
   planId: string;
   prisma?: PrismaTransaction;
-}): Promise<number> {
+}): Promise<ActiveSubscriptionCounts> {
   const db = prisma ?? await getDb();
   const activeWhere = {
     status: "active",
     planId,
     // A row with no offer was never matched to a Price and is granted
-    // nothing, the same way isActiveProSubscription reads it.
+    // nothing, the same way isActiveSubscription reads it.
     billingOfferId: {
       not: null,
     },
@@ -300,16 +308,19 @@ export async function countActiveProSubscriptions({
     // for weeks after it stopped being able to.
     OR: [{ cancelAt: null }, { cancelAt: { gt: now } }],
   };
-  const [activeCount, activeHolds, deletionIntents] = await Promise.all([
-    db.subscription.count({ where: activeWhere }),
+  // The counts stay in the database; only the exclusions (holds and deletion
+  // intents, both rare) are loaded, each with the plan's row of its user so
+  // the identity and overlap checks below can run without a second query.
+  const [grouped, activeHolds, deletionIntents] = await Promise.all([
+    db.subscription.groupBy({
+      by: ["tier"],
+      where: activeWhere,
+      _count: { _all: true },
+    }),
     db.subscriptionEntitlementHold.findMany({
       where: {
         active: true,
-        user: {
-          Subscription: {
-            is: activeWhere,
-          },
-        },
+        user: { subscriptions: { some: activeWhere } },
       },
       select: {
         userId: true,
@@ -318,9 +329,11 @@ export async function countActiveProSubscriptions({
         billingPeriodEnd: true,
         user: {
           select: {
-            Subscription: {
+            subscriptions: {
+              where: { planId },
               select: {
                 stripeSubscriptionId: true,
+                tier: true,
                 currentPeriodStart: true,
                 currentPeriodEnd: true,
               },
@@ -332,22 +345,35 @@ export async function countActiveProSubscriptions({
     db.accountDeletionIntent.findMany({
       where: {
         expiresAt: { gt: now },
+        user: { subscriptions: { some: activeWhere } },
+      },
+      select: {
+        userId: true,
         user: {
-          Subscription: {
-            is: activeWhere,
+          select: {
+            subscriptions: { where: { planId }, select: { tier: true } },
           },
         },
       },
-      select: { userId: true },
     }),
   ]);
 
+  const byTier: Record<string, number> = {};
+  let total = 0;
+  for (const group of grouped) {
+    const count = group._count._all;
+    total += count;
+    if (group.tier !== null) {
+      byTier[group.tier] = (byTier[group.tier] ?? 0) + count;
+    }
+  }
+
   // Holds remain as audit records after a period or subscription replacement.
-  // Mirror getSubscriptionByUserId's identity and overlap checks so only a hold
-  // that currently denies the allowance is removed from the report.
-  const ineligibleUsers = new Set<string>();
+  // Mirror getSubscription's identity and overlap checks so only a hold that
+  // currently denies the entitlement is removed from the count.
+  const ineligible = new Map<string, string | null>();
   for (const hold of activeHolds) {
-    const subscription = hold.user.Subscription;
+    const subscription = hold.user.subscriptions[0];
     if (
       !subscription ||
       hold.stripeSubscriptionId !== subscription.stripeSubscriptionId
@@ -364,12 +390,19 @@ export async function countActiveProSubscriptions({
     ) {
       continue;
     }
-    ineligibleUsers.add(hold.userId);
+    ineligible.set(hold.userId, subscription.tier);
   }
   for (const intent of deletionIntents) {
-    ineligibleUsers.add(intent.userId);
+    ineligible.set(intent.userId, intent.user.subscriptions[0]?.tier ?? null);
   }
-  return Math.max(0, activeCount - ineligibleUsers.size);
+  for (const tier of ineligible.values()) {
+    total -= 1;
+    if (tier !== null && byTier[tier] !== undefined) {
+      byTier[tier] -= 1;
+      if (byTier[tier] === 0) delete byTier[tier];
+    }
+  }
+  return { total, byTier };
 }
 
 // The account row as stored. Unlike getCreditAccount this never creates one,

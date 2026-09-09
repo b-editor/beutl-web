@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   countUnboundAccountDeletionCheckoutAttempts: vi.fn(),
   countActiveStripeCustomerProvisioning: vi.fn(),
   findBillingOfferById: vi.fn(),
-  findBoundProCheckoutAttemptForAccountDeletion: vi.fn(),
+  findBoundSubscriptionCheckoutAttemptsForAccountDeletion: vi.fn(),
   findCustomerByUserId: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
   invoicePaymentList: vi.fn(),
@@ -47,8 +47,8 @@ vi.mock("@beutl/db", () => ({
   countUnboundAccountDeletionCheckoutAttempts: mocks.countUnboundAccountDeletionCheckoutAttempts,
   countActiveStripeCustomerProvisioning: mocks.countActiveStripeCustomerProvisioning,
   findBillingOfferById: mocks.findBillingOfferById,
-  findBoundProCheckoutAttemptForAccountDeletion:
-    mocks.findBoundProCheckoutAttemptForAccountDeletion,
+  findBoundSubscriptionCheckoutAttemptsForAccountDeletion:
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion,
   findCustomerByUserId: mocks.findCustomerByUserId,
   findStripeCustomerOwnershipByStripeId:
     mocks.findStripeCustomerOwnershipByStripeId,
@@ -186,7 +186,7 @@ function proSubscription() {
           product: "prod_pro",
           unit_amount: 2_000,
           currency: "usd",
-          recurring: { interval: "month", interval_count: 1 },
+          recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
         },
       }],
     },
@@ -207,7 +207,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     });
     mocks.countUnboundAccountDeletionCheckoutAttempts.mockResolvedValue(0);
     mocks.countActiveStripeCustomerProvisioning.mockResolvedValue(0);
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue(null);
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([]);
     mocks.findBillingOfferById.mockResolvedValue(proOffer);
     mocks.cancelSubscription.mockResolvedValue({
       id: "sub_canceled",
@@ -650,10 +650,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("queues compensation before deleting a customer when a bound Checkout completes during expiry", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue({
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([{
+      planId: "pro",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_bound",
-    });
+    }]);
     mocks.checkoutRetrieve
       .mockResolvedValueOnce(proCheckoutSession("open"))
       .mockResolvedValueOnce(proCheckoutSession("complete"));
@@ -684,7 +685,7 @@ describe("application-owned Stripe customer lifecycle", () => {
     await closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
 
     expect(
-      mocks.findBoundProCheckoutAttemptForAccountDeletion,
+      mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion,
     ).toHaveBeenCalledWith({ userId: "user-1" });
     expect(mocks.checkoutRetrieve).toHaveBeenNthCalledWith(1, "cs_bound", {
       expand: ["line_items.data.price"],
@@ -729,10 +730,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("keeps the customer and bound Checkout handle when compensation cannot persist", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue({
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([{
+      planId: "pro",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_bound",
-    });
+    }]);
     mocks.checkoutRetrieve.mockResolvedValue(proCheckoutSession("complete"));
     mocks.invoicePaymentList.mockResolvedValue({
       data: [{
@@ -756,10 +758,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("does not delete a customer until bound Checkout cancellation is durably recorded", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue({
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([{
+      planId: "pro",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_bound",
-    });
+    }]);
     mocks.checkoutRetrieve.mockResolvedValue(proCheckoutSession("complete"));
     mocks.invoicePaymentList.mockResolvedValue({
       data: [{
@@ -788,10 +791,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("does not delete a customer when bound Checkout cancellation remains non-terminal", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue({
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([{
+      planId: "pro",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_bound",
-    });
+    }]);
     mocks.checkoutRetrieve.mockResolvedValue(proCheckoutSession("complete"));
     mocks.invoicePaymentList.mockResolvedValue({
       data: [{
@@ -816,10 +820,11 @@ describe("application-owned Stripe customer lifecycle", () => {
 
   it("does not delete a customer when the bound Checkout fails ownership validation", async () => {
     mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
-    mocks.findBoundProCheckoutAttemptForAccountDeletion.mockResolvedValue({
+    mocks.findBoundSubscriptionCheckoutAttemptsForAccountDeletion.mockResolvedValue([{
+      planId: "pro",
       billingOfferId: "offer_pro_v1",
       stripeCheckoutSessionId: "cs_bound",
-    });
+    }]);
     mocks.checkoutRetrieve.mockResolvedValue({
       ...proCheckoutSession("complete"),
       metadata: {

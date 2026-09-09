@@ -5,7 +5,7 @@ import {
   unauthorizedResponse,
 } from "@/lib/internal-request";
 import { startUpload } from "@/lib/storage-upload-server";
-import { STORAGE_QUOTA_BYTES, STORAGE_FILE_NAME_MAX_LENGTH } from "@beutl/core";
+import { STORAGE_MAX_FILE_BYTES, STORAGE_FILE_NAME_MAX_LENGTH } from "@beutl/core";
 
 // Starting an upload that will arrive in parts. What comes back is the id every
 // later request names, and how the file is to be cut up.
@@ -45,8 +45,9 @@ export async function POST(request: Request): Promise<Response> {
     // ゼロは枠を 1 バイトも使わないまま R2 のマルチパートと追跡行を作れてしまう。
     // 中身のないファイルを送る用はないので、始めさせない。
     size <= 0 ||
-    // Nothing may be started that could not be stored even in an empty account.
-    size > STORAGE_QUOTA_BYTES
+    // Nothing may be started that the bucket could not assemble at all. Whether
+    // the account has room for it is the transaction's decision, not this one.
+    size > STORAGE_MAX_FILE_BYTES
   ) {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }

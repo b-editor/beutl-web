@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import {
-  countActiveProSubscriptions,
+  countActiveSubscriptions,
   findCheckoutBillingOffer,
   getAdminCreditAdjustmentTotals,
   getAiBalanceTotals,
@@ -46,7 +46,7 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
         getAdminCreditAdjustmentTotals({ since }),
         getAiBalanceTotals({ now: new Date() }),
         getTopAiUsers({ since, limit: 10 }),
-        countActiveProSubscriptions({ now, planId: "pro" }),
+        countActiveSubscriptions({ now, planId: "pro" }),
       ]);
 
     expect(Array.isArray(statusCounts)).toBe(true);

@@ -1,7 +1,5 @@
 import "server-only";
 import {
-  STORAGE_FILE_COUNT_LIMIT,
-  STORAGE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
 import {
@@ -12,6 +10,7 @@ import {
   renewStorageUploadCompletion,
   claimStorageUploadCreation,
   attachStorageUploadRemote,
+  touchStorageUploadActivity,
   countFilesByUserId,
   countStorageUploadTombstonesByUserId,
   createFile,
@@ -25,13 +24,13 @@ import {
   enqueueStorageMultipartCleanup,
   markStorageUploadCompleted,
   recordStorageUploadRemoteAfterAttachFailure,
-  type PrismaTransaction,
-  retrieveFileNamesAndSizesByUserId,
+  availableStorageFileName,
   startRetryableTransaction,
   settleTerminalClaimedStorageUpload,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
+  resolveStorageQuota,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 
@@ -99,29 +98,7 @@ function bucket() {
 // user input is a path the user chooses inside the bucket.
 // A second file of the same name becomes "clip (1).mp4" rather than replacing
 // the first, which is what the screen did before an upload came in parts.
-async function availableName({
-  userId,
-  name,
-  prisma,
-}: {
-  userId: string;
-  name: string;
-  prisma?: PrismaTransaction;
-}): Promise<string> {
-  const taken = new Set(
-    (await retrieveFileNamesAndSizesByUserId({ userId, prisma })).map(
-      (file) => file.name,
-    ),
-  );
-  if (!taken.has(name)) return name;
-
-  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
-  const stem = extension ? name.slice(0, -extension.length) : name;
-  for (let index = 1; ; index++) {
-    const candidate = `${stem} (${index})${extension}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
+const availableName = availableStorageFileName;
 
 // What the part at this position may carry: a whole part, except the last one,
 // which carries only what is left of the declared size.
@@ -285,17 +262,21 @@ export async function startUpload({
       const active = await countStorageUploadsByUserId({ userId, prisma });
       if (active >= MAX_ACTIVE_UPLOADS) return "tooMany";
 
+      // 枠は契約で変わる。同じ取引の中で読むので、プランの失効とアップロードの
+      // 開始が入れ違うことはない。
+      const quota = await resolveStorageQuota({ userId, prisma });
+
       // 本数の上限。容量の枠内でも、小さなファイルを積み上げれば R2 の
       // オブジェクトと行はいくらでも増える。完成した本数と、いま進行中の本数を
       // 合わせて数える。
       const files = await countFilesByUserId({ userId, prisma });
-      if (files + active >= STORAGE_FILE_COUNT_LIMIT) return "tooManyFiles";
+      if (files + active >= quota.fileCountLimit) return "tooManyFiles";
 
       const [stored, underway] = await Promise.all([
         sumFileSizeByUserId({ userId, prisma }),
         sumStorageUploadSizeByUserId({ userId, prisma }),
       ]);
-      if (stored + underway + size > BigInt(STORAGE_QUOTA_BYTES)) {
+      if (stored + underway + size > BigInt(quota.quotaBytes)) {
         return null;
       }
 
@@ -468,6 +449,16 @@ export async function uploadPart({
     return { ok: false, reason: "insufficientStorageSpace" };
   }
   if (!upload.uploadId) return { ok: false, reason: "uploadFailed" };
+
+  // Fence the stale sweep before the part goes anywhere. The touch is a
+  // compare-and-set against a row the sweep has not claimed: if the sweep
+  // got there first the touch fails and the part is refused, and if the
+  // touch lands first the sweep's claim, which compares the activity it
+  // listed, fails instead. Either way an ETag never comes back for parts
+  // the sweep is about to throw away.
+  if (!await touchStorageUploadActivity({ id: upload.id, userId })) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
 
   const multipart = bucket().resumeMultipartUpload(
     upload.objectKey,
@@ -782,14 +773,17 @@ async function finalizeUpload(
       // 掃除が取っていった行。控えは書けないし、書いてはいけない。
       if (current.abandonedAt) return { kind: "abandoned" as const };
 
-      const [stored, files] = await Promise.all([
+      // 開始から完了までの間にプランが失効していれば、ここで拒否されて
+      // オブジェクトは掃除される (新規のアップロードは受けない、の一部)。
+      const [quota, stored, files] = await Promise.all([
+        resolveStorageQuota({ userId, prisma }),
         sumFileSizeByUserId({ userId, prisma }),
         countFilesByUserId({ userId, prisma }),
       ]);
-      if (stored + actual > BigInt(STORAGE_QUOTA_BYTES)) {
+      if (stored + actual > BigInt(quota.quotaBytes)) {
         return { kind: "overQuota" as const };
       }
-      if (files >= STORAGE_FILE_COUNT_LIMIT) {
+      if (files >= quota.fileCountLimit) {
         return { kind: "tooManyFiles" as const };
       }
 

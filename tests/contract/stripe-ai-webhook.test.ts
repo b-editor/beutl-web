@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   constructEvent: vi.fn(),
   createUserPackage: vi.fn(),
   createUserPaymentHistory: vi.fn(),
-  deleteProCheckoutAttempt: vi.fn(),
+  deleteSubscriptionCheckoutAttempt: vi.fn(),
   existsCreditTransactionByStripePaymentId: vi.fn(),
   existsUserPaymentHistoryByPaymentId: vi.fn(),
   findCreditPurchaseByStripePaymentId: vi.fn(),
@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   findPackagePaymentReference: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
   findPackageIdById: vi.fn(),
-  getSubscriptionByUserId: vi.fn(),
+  getSubscription: vi.fn(),
   reconcilePurchasedCreditReversal: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
   reconcileSubscriptionEntitlementHold: vi.fn(),
@@ -103,7 +103,7 @@ vi.mock("@beutl/db", () => ({
   addPurchasedCredits: mocks.addPurchasedCredits,
   createUserPackage: mocks.createUserPackage,
   createUserPaymentHistory: mocks.createUserPaymentHistory,
-  deleteProCheckoutAttempt: mocks.deleteProCheckoutAttempt,
+  deleteSubscriptionCheckoutAttempt: mocks.deleteSubscriptionCheckoutAttempt,
   existsCreditTransactionByStripePaymentId:
     mocks.existsCreditTransactionByStripePaymentId,
   existsUserPaymentHistoryByPaymentId:
@@ -117,7 +117,11 @@ vi.mock("@beutl/db", () => ({
   findStripeCustomerOwnershipByStripeId:
     mocks.findStripeCustomerOwnershipByStripeId,
   findPackageIdById: mocks.findPackageIdById,
-  getSubscriptionByUserId: mocks.getSubscriptionByUserId,
+  getSubscription: mocks.getSubscription,
+  listSubscriptionsByUserId: async ({ userId }: { userId: string }) => {
+    const stored = await mocks.getSubscription({ userId, planId: "pro" });
+    return stored ? [stored] : [];
+  },
   PACKAGE_PAYMENT_EVENT_RANK: {
     paymentSucceeded: 10,
     refundSucceeded: 20,
@@ -199,7 +203,7 @@ function mockProInvoicePaymentContext() {
     period_start: 1_786_060_800,
     period_end: 1_788_739_200,
   });
-  mocks.getSubscriptionByUserId.mockResolvedValue({
+  mocks.getSubscription.mockResolvedValue({
     userId: "user-1",
     stripeSubscriptionId: "sub_pro_1",
     billingOfferId: "offer_pro_v1",
@@ -224,7 +228,7 @@ function mockProInvoicePaymentContext() {
             product: "prod_pro",
             unit_amount: 2_000,
             currency: "usd",
-            recurring: { interval: "month", interval_count: 1 },
+            recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
           },
           current_period_start: 1_786_060_800,
           current_period_end: 1_788_739_200,
@@ -421,7 +425,7 @@ describe("Stripe AI billing webhook", () => {
     mocks.revokePackagePayment.mockResolvedValue(null);
     mocks.restorePackagePayment.mockResolvedValue(null);
     mocks.existsCreditTransactionByStripePaymentId.mockResolvedValue(false);
-    mocks.getSubscriptionByUserId.mockResolvedValue(null);
+    mocks.getSubscription.mockResolvedValue(null);
     mocks.retrievePrice.mockResolvedValue({
       id: "price_credits",
       unit_amount: 1000,
@@ -475,7 +479,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
             current_period_start: 1_786_060_800,
             current_period_end: 1_788_739_200,
@@ -492,6 +496,7 @@ describe("Stripe AI billing webhook", () => {
       stripeSubscriptionId: "sub_1",
       status: "active",
       planId: "pro",
+      tier: null,
       billingOfferId: "offer_pro_v1",
       currentPeriodStart: new Date(1_786_060_800_000),
       currentPeriodEnd: new Date(1_788_739_200_000),
@@ -773,7 +778,7 @@ describe("Stripe AI billing webhook", () => {
       currency: "usd",
       metadata: {},
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_refunded",
       status: "active",
@@ -812,7 +817,7 @@ describe("Stripe AI billing webhook", () => {
         replaceExistingSubscription: false,
       }),
     );
-    expect(mocks.deleteProCheckoutAttempt).toHaveBeenCalledWith({
+    expect(mocks.deleteSubscriptionCheckoutAttempt).toHaveBeenCalledWith({
       userId: "user-1",
       stripeCheckoutSessionId: "cs_refunded",
     });
@@ -838,7 +843,7 @@ describe("Stripe AI billing webhook", () => {
       currency: "usd",
       metadata: {},
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_active",
       status: "active",
@@ -892,7 +897,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro_v1",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
             current_period_start: 1_786_060_800,
             current_period_end: 1_788_739_200,
@@ -907,7 +912,7 @@ describe("Stripe AI billing webhook", () => {
       unit_amount: 2_000,
       currency: "usd",
       type: "recurring",
-      recurring: { interval: "month", interval_count: 1 },
+      recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
     });
 
     const response = await POST(webhookRequest() as never);
@@ -924,6 +929,7 @@ describe("Stripe AI billing webhook", () => {
         creditAmount: null,
         recurringInterval: "month",
         recurringIntervalCount: 1,
+        tier: null,
       },
     });
     expect(mocks.reconcileSubscriptionObservation).toHaveBeenCalledWith(
@@ -975,7 +981,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_other",
               unit_amount: 100,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
           },
         ],
@@ -1026,7 +1032,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
             current_period_start: 1_786_060_800,
             current_period_end: 1_788_739_200,
@@ -1136,7 +1142,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_historical_unowned",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
             current_period_start: 1_786_060_800,
             current_period_end: 1_788_739_200,
@@ -1159,7 +1165,7 @@ describe("Stripe AI billing webhook", () => {
         id: "sub_old",
       }),
     );
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_current",
     });
@@ -1184,7 +1190,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
                 },
                 current_period_start: 1_786_060_800,
                 current_period_end: 1_788_739_200,
@@ -1212,7 +1218,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
               },
               current_period_start: 1_780_876_800,
               current_period_end: 1_783_382_400,
@@ -1268,7 +1274,7 @@ describe("Stripe AI billing webhook", () => {
       period_start: 1_786_060_800,
       period_end: 1_788_739_200,
     });
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_pro_1",
       billingOfferId: "offer_pro_v1",
@@ -1293,7 +1299,7 @@ describe("Stripe AI billing webhook", () => {
               product: "prod_pro",
               unit_amount: 2_000,
               currency: "usd",
-              recurring: { interval: "month", interval_count: 1 },
+              recurring: { interval: "month", interval_count: 1, usage_type: "licensed" },
             },
             current_period_start: 1_786_060_800,
             current_period_end: 1_788_739_200,
@@ -1375,7 +1381,7 @@ describe("Stripe AI billing webhook", () => {
 
   it("records a Pro reversal that arrives before its subscription event", async () => {
     mockProInvoicePaymentContext();
-    mocks.getSubscriptionByUserId.mockResolvedValue({
+    mocks.getSubscription.mockResolvedValue({
       userId: "user-1",
       stripeSubscriptionId: "sub_previous",
       billingOfferId: "offer_pro_v1",

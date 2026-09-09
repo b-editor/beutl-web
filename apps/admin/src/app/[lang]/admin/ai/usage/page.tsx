@@ -1,3 +1,4 @@
+import { formatBytes, STORAGE_PLAN_TIERS } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import {
@@ -54,6 +55,17 @@ export default async function Page(props: {
       label: t("admin:ai.usage.purchasedCredits"),
       value: formatNumber(report.totals.purchasedCredits, lang),
       hint: t("admin:ai.usage.purchasedCreditsHint"),
+    },
+    {
+      label: t("admin:storage.activeSubscriptions"),
+      value: formatNumber(
+        STORAGE_PLAN_TIERS.reduce(
+          (total, tier) => total + (report.storageSubscriptions[tier.id] ?? 0),
+          0,
+        ),
+        lang,
+      ),
+      hint: t("admin:storage.activeSubscriptionsHint"),
     },
   ];
 
@@ -136,6 +148,41 @@ export default async function Page(props: {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">
+          {t("admin:storage.activeSubscriptions")}
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          {t("admin:storage.activeSubscriptionsHint")}
+        </p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t("admin:storage.tier")}</TableHead>
+              <TableHead className="text-right">
+                {t("admin:storage.quota")}
+              </TableHead>
+              <TableHead className="text-right">
+                {t("admin:storage.count")}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {STORAGE_PLAN_TIERS.map((tier) => (
+              <TableRow key={tier.id}>
+                <TableCell>{t(`admin:storage.tiers.${tier.id}`)}</TableCell>
+                <TableCell className="text-right">
+                  {formatBytes(tier.quotaBytes)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {formatNumber(report.storageSubscriptions[tier.id] ?? 0, lang)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </section>
 
       <AiUsageDistributionSection

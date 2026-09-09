@@ -3,12 +3,12 @@ import { setDbProvider } from "@beutl/db";
 import {
   addPurchasedCredits,
   AiUsageLimitExceededError,
-  bindProCheckoutSession,
+  bindSubscriptionCheckoutSession,
   consumeUsage,
-  expireProCheckoutAttempt,
+  expireSubscriptionCheckoutAttempt,
   getCreditAccount,
   getCreditPurchasesByUserId,
-  getOrCreateProCheckoutAttempt,
+  getOrCreateSubscriptionCheckoutAttempt,
   getMonthlyUsageAccount,
   reconcilePurchasedCreditReversal,
   refundUsage,
@@ -662,26 +662,26 @@ describe("AI usage ledger", () => {
   it("reuses an active Pro checkout attempt and rotates it after expiry", async () => {
     const now = new Date("2026-08-08T00:00:00.000Z");
     const expiresAt = new Date("2026-08-09T00:00:00.000Z");
-    const first = await getOrCreateProCheckoutAttempt({
+    const first = await getOrCreateSubscriptionCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
       customerId: "cus_1",
       now,
       expiresAt,
     });
-    const second = await getOrCreateProCheckoutAttempt({
+    const second = await getOrCreateSubscriptionCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
       customerId: "cus_1",
       now,
       expiresAt,
     });
-    await expireProCheckoutAttempt({
+    await expireSubscriptionCheckoutAttempt({
       userId: USER_ID,
       checkoutKey: first.checkoutKey,
       now,
     });
-    const replacement = await getOrCreateProCheckoutAttempt({
+    const replacement = await getOrCreateSubscriptionCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
       customerId: "cus_1",
@@ -696,7 +696,7 @@ describe("AI usage ledger", () => {
   it("keeps a live Stripe session bound across a billing-offer rotation", async () => {
     const now = new Date("2026-08-08T00:00:00.000Z");
     const expiresAt = new Date("2026-08-09T00:00:00.000Z");
-    const first = await getOrCreateProCheckoutAttempt({
+    const first = await getOrCreateSubscriptionCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v1",
       customerId: "cus_1",
@@ -704,7 +704,7 @@ describe("AI usage ledger", () => {
       expiresAt,
     });
     await expect(
-      bindProCheckoutSession({
+      bindSubscriptionCheckoutSession({
         userId: USER_ID,
         checkoutKey: first.checkoutKey,
         stripeCheckoutSessionId: "cs_live",
@@ -712,7 +712,7 @@ describe("AI usage ledger", () => {
       }),
     ).resolves.toBe("bound");
 
-    const afterRotation = await getOrCreateProCheckoutAttempt({
+    const afterRotation = await getOrCreateSubscriptionCheckoutAttempt({
       userId: USER_ID,
       billingOfferId: "offer-pro-v2",
       customerId: "cus_1",
@@ -739,7 +739,7 @@ describe("AI usage ledger", () => {
     });
 
     await expect(
-      getOrCreateProCheckoutAttempt({
+      getOrCreateSubscriptionCheckoutAttempt({
         userId: USER_ID,
         billingOfferId: "offer-pro-v1",
         customerId: "cus_1",
@@ -747,6 +747,6 @@ describe("AI usage ledger", () => {
         expiresAt: new Date(now.getTime() + 86_400_000),
       }),
     ).rejects.toThrow("Account deletion is already authorized");
-    expect(state.proCheckoutAttempts.size).toBe(0);
+    expect(state.subscriptionCheckoutAttempts.size).toBe(0);
   });
 });

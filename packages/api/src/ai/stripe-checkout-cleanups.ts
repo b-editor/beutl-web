@@ -4,6 +4,7 @@ import {
   isValidStripeCheckoutAmount,
   isValidStripeCheckoutSessionAmount,
   isZeroCostStripeCheckoutSessionAmount,
+  subscriptionPlanOf,
 } from "@beutl/core";
 import { discoverPackageCheckoutAttempt, discoverTopUpCheckoutAttempt, discoverLegacyPackageCheckoutAttempt } from "../package-checkout-discovery";
 import {
@@ -33,14 +34,14 @@ import {
   finalizeTopUpCheckoutResolutionAtomically,
   getTopUpCheckoutResolution,
   scheduleTopUpCheckoutResolution,
-  claimDetachedProCheckoutAttempts,
-  completeDetachedProCheckoutRecovery,
-  markDetachedProCheckoutRecoveryTerminal,
-  rescheduleDetachedProCheckoutRecovery,
-  markDetachedProCheckoutRecoveryIntervention,
+  claimDetachedSubscriptionCheckoutAttempts,
+  completeDetachedSubscriptionCheckoutRecovery,
+  markDetachedSubscriptionCheckoutRecoveryTerminal,
+  rescheduleDetachedSubscriptionCheckoutRecovery,
+  markDetachedSubscriptionCheckoutRecoveryIntervention,
   completeDetachedTopUpCheckoutRecovery,
   findBillingOfferById,
-  deleteProCheckoutAttemptBySessionId,
+  deleteSubscriptionCheckoutAttemptBySessionId,
   deletePackageCheckoutAttemptBySessionId,
   resolvePackageCheckoutAttemptIntervention,
   markPackageCheckoutAttemptIntervention,
@@ -771,28 +772,33 @@ export async function reconcileStripeCheckoutCleanups(
       else await clearDetachedTopUpCheckoutRecovery({ attemptId: attempt.id, leaseToken: recoveryLeaseToken, lastError: error instanceof Error ? error.message : String(error), notBefore: new Date(now.getTime() + 5 * 60_000) });
     }
   }
-  const detachedPro = await claimDetachedProCheckoutAttempts({ now, leaseToken: recoveryLeaseToken, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) });
-  for (const attempt of detachedPro) {
+  // Subscription attempts frozen by account deletion before their Session was
+  // bound. Replay the create under the plan's own key; the response tells us
+  // which Session Stripe already made, if any.
+  const detachedSubscriptions = await claimDetachedSubscriptionCheckoutAttempts({ now, leaseToken: recoveryLeaseToken, leaseExpiresAt: new Date(now.getTime() + LEASE_MS) });
+  for (const attempt of detachedSubscriptions) {
+    const plan = subscriptionPlanOf(attempt.planId);
     try {
+      if (!plan) throw new Error(`Detached checkout attempt names an unknown plan ${attempt.planId}`);
       if (!attempt.paramsJson || !attempt.customerId) {
-        await markDetachedProCheckoutRecoveryIntervention({ userId: attempt.userId, leaseToken: recoveryLeaseToken, lastError: "Detached Pro attempt lacks params or Customer identity; metadata-only operator recovery required" });
+        await markDetachedSubscriptionCheckoutRecoveryIntervention({ userId: attempt.userId, planId: attempt.planId, leaseToken: recoveryLeaseToken, lastError: `Detached ${plan.id} attempt lacks params or Customer identity; metadata-only operator recovery required` });
         continue;
       }
       const params = JSON.parse(attempt.paramsJson) as Stripe.Checkout.SessionCreateParams;
-      let session = await stripe.checkout.sessions.create(params, { idempotencyKey: `ai-pro-checkout:${attempt.checkoutKey}` });
+      let session = await stripe.checkout.sessions.create(params, { idempotencyKey: `${plan.checkoutIdempotencyPrefix}:${attempt.checkoutKey}` });
       if (!session.line_items) session = await stripe.checkout.sessions.retrieve(session.id, { expand: ["line_items.data.price"] });
       const sessionCustomer = typeof session.customer === "string" ? session.customer : session.customer?.id;
       const line = session.line_items?.data?.[0];
       const offer = await findBillingOfferById({ id: attempt.billingOfferId });
-      if (session.mode !== "subscription" || sessionCustomer !== attempt.customerId || session.metadata?.beutlUserId !== attempt.userId || session.metadata?.billingOfferId !== attempt.billingOfferId || session.metadata?.planId !== "pro" || !offer || (typeof line?.price === "string" ? line.price : line?.price?.id) !== offer.stripePriceId) throw new Error("Detached Pro replay failed canonical validation");
+      if (session.mode !== "subscription" || sessionCustomer !== attempt.customerId || session.metadata?.beutlUserId !== attempt.userId || session.metadata?.billingOfferId !== attempt.billingOfferId || session.metadata?.planId !== plan.id || (session.metadata?.tier ?? null) !== (attempt.tier ?? null) || !offer || offer.kind !== plan.offerKind || (offer.tier ?? null) !== (attempt.tier ?? null) || (typeof line?.price === "string" ? line.price : line?.price?.id) !== offer.stripePriceId) throw new Error(`Detached ${plan.id} replay failed canonical validation`);
       if (session.status === "expired") {
-        await markDetachedProCheckoutRecoveryTerminal({ userId: attempt.userId, leaseToken: recoveryLeaseToken });
+        await markDetachedSubscriptionCheckoutRecoveryTerminal({ userId: attempt.userId, planId: attempt.planId, leaseToken: recoveryLeaseToken });
         continue;
       }
-      if (!(await completeDetachedProCheckoutRecovery({ userId: attempt.userId, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: session.id, now }))) throw new Error("Detached Pro recovery lease lost");
+      if (!(await completeDetachedSubscriptionCheckoutRecovery({ userId: attempt.userId, planId: attempt.planId, leaseToken: recoveryLeaseToken, stripeCheckoutSessionId: session.id, now }))) throw new Error(`Detached ${plan.id} recovery lease lost`);
     } catch (error) {
-      if (attempt.recoveryAttempts >= 12) await markDetachedProCheckoutRecoveryIntervention({ userId: attempt.userId, leaseToken: recoveryLeaseToken, lastError: error instanceof Error ? error.message : String(error) });
-      else await rescheduleDetachedProCheckoutRecovery({ userId: attempt.userId, leaseToken: recoveryLeaseToken, notBefore: new Date(now.getTime() + retryDelay(attempt.recoveryAttempts)), lastError: error instanceof Error ? error.message : String(error) });
+      if (attempt.recoveryAttempts >= 12) await markDetachedSubscriptionCheckoutRecoveryIntervention({ userId: attempt.userId, planId: attempt.planId, leaseToken: recoveryLeaseToken, lastError: error instanceof Error ? error.message : String(error) });
+      else await rescheduleDetachedSubscriptionCheckoutRecovery({ userId: attempt.userId, planId: attempt.planId, leaseToken: recoveryLeaseToken, notBefore: new Date(now.getTime() + retryDelay(attempt.recoveryAttempts)), lastError: error instanceof Error ? error.message : String(error) });
     }
   }
   for (const attempt of detached) {
@@ -905,21 +911,26 @@ export async function reconcileStripeCheckoutCleanups(
             customerId: claimed.customerId,
           });
         } else {
+          // The cleanup kind names the plan. The Session and the offer must
+          // both belong to that plan; mixing them is an operator problem.
+          const plan = subscriptionPlanOf(claimed.kind);
+          if (!plan) throw new Error(`Cleanup names an unknown plan ${claimed.kind}`);
           if (session.metadata?.beutlPurchaseKind !== undefined && session.metadata.beutlPurchaseKind !== "package") {
-            if (session.metadata.beutlPurchaseKind !== "pro") throw new Error("Pro cleanup purchase kind mismatch");
+            if (session.metadata.beutlPurchaseKind !== "pro") throw new Error(`${plan.id} cleanup purchase kind mismatch`);
           }
-          if (session.metadata?.billingOfferId !== claimed.billingOfferId) throw new Error("Pro cleanup offer mismatch");
+          if (session.metadata?.planId !== undefined && session.metadata.planId !== plan.id) throw new Error(`${plan.id} cleanup plan mismatch`);
+          if (session.metadata?.billingOfferId !== claimed.billingOfferId) throw new Error(`${plan.id} cleanup offer mismatch`);
           const lineItems = session.line_items?.data;
-          if (!lineItems || lineItems.length !== 1 || lineItems[0].quantity !== 1) throw new Error("Pro cleanup line item mismatch");
+          if (!lineItems || lineItems.length !== 1 || lineItems[0].quantity !== 1) throw new Error(`${plan.id} cleanup line item mismatch`);
           const offer = claimed.billingOfferId ? await findBillingOfferById({ id: claimed.billingOfferId }) : null;
-          if (!offer || offer.kind !== "pro" || (typeof lineItems[0].price === "string" ? lineItems[0].price : lineItems[0].price?.id) !== offer.stripePriceId) throw new Error("Pro cleanup price mismatch");
+          if (!offer || offer.kind !== plan.offerKind || (typeof lineItems[0].price === "string" ? lineItems[0].price : lineItems[0].price?.id) !== offer.stripePriceId) throw new Error(`${plan.id} cleanup price mismatch`);
           const subscriptionId = typeof session.subscription === "string"
             ? session.subscription
             : session.subscription?.id;
-          if (!subscriptionId) throw new Error("Pro cleanup Session has no subscription");
+          if (!subscriptionId) throw new Error(`${plan.id} cleanup Session has no subscription`);
           const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-          if ((typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id) !== claimed.customerId) throw new Error("Pro cleanup customer mismatch");
-          if (subscription.metadata?.billingOfferId !== claimed.billingOfferId) throw new Error("Pro cleanup offer mismatch");
+          if ((typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id) !== claimed.customerId) throw new Error(`${plan.id} cleanup customer mismatch`);
+          if (subscription.metadata?.billingOfferId !== claimed.billingOfferId) throw new Error(`${plan.id} cleanup offer mismatch`);
           if (subscription.status !== "canceled" && subscription.status !== "incomplete_expired") {
             await stripe.subscriptions.cancel(subscription.id, { invoice_now: false, prorate: false }, { idempotencyKey: `beutl:checkout-cleanup:cancel:${subscription.id}` });
           }
@@ -956,7 +967,7 @@ export async function reconcileStripeCheckoutCleanups(
       if (claimed.kind === "package") {
         await deletePackageCheckoutAttemptBySessionId({ stripeCheckoutSessionId: claimed.sessionId });
       } else {
-        await deleteProCheckoutAttemptBySessionId({ stripeCheckoutSessionId: claimed.sessionId });
+        await deleteSubscriptionCheckoutAttemptBySessionId({ stripeCheckoutSessionId: claimed.sessionId });
       }
       completed++;
     } catch (error) {

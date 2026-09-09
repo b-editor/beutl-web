@@ -2,33 +2,69 @@ import "server-only";
 
 import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import {
+  STORAGE_TIER_IDS,
+  effectiveSubscriptionEnd,
+  isStorageTierId,
+  type StorageTierId,
+} from "@beutl/core";
+import {
   findCustomerByUserId,
   findPackagesForBillingHistory,
   getCreditPurchasesByUserId,
   getDb,
   getUserPaymentHistory,
+  resolveStorageQuota,
 } from "@beutl/db";
 import {
   getAiPlanPresentation,
   type AiPlanStatusPresentation,
 } from "@/lib/ai-plan-presentation";
 import type { BillingProduct } from "@/lib/billing-product";
+import { getSubscriptionPresentation } from "@/lib/subscription-presentation";
 import {
   retrieveBillingDocuments,
   type BillingDocuments,
 } from "@/lib/stripe/billing-documents";
 import { createStripe } from "@/lib/stripe/config";
+import {
+  describeConfiguredSubscriptionPrices,
+  type SubscriptionPriceDescription,
+} from "@/lib/stripe/subscription-billing";
+import { subscriptionPlanConfig } from "@/lib/stripe/subscription-plans";
 
 export type BillingSubscriptionEntry = {
   product: BillingProduct;
+  // ストレージ契約だけ持つ。
+  tier: StorageTierId | null;
   status: AiPlanStatusPresentation;
   // 表示すべきでないときは null。
   currentPeriodEnd: string | null;
   showCancellationNotice: boolean;
 };
 
-// まだ契約していない商品。契約中のものは含まない。
-export type BillingOfferEntry = { product: BillingProduct };
+// まだ契約していない商品。契約中のものは含まない。ストレージは加入できる
+// ティアを並べる。
+export type BillingOfferEntry =
+  | { product: "aiPro" }
+  | { product: "storage"; tiers: readonly StorageTierId[] };
+
+// 月額。null は価格を取得できなかったティア (env 未設定や Stripe 不達)。
+export type StorageTierPrices = Record<
+  StorageTierId,
+  SubscriptionPriceDescription | null
+>;
+
+// A tier change is charged right away without a Checkout page, so the page
+// must be able to show what each tier costs before offering the change.
+async function retrieveStorageTierPrices(): Promise<StorageTierPrices> {
+  const described = await describeConfiguredSubscriptionPrices(
+    subscriptionPlanConfig("storage"),
+    createStripe(),
+  );
+  return Object.fromEntries(
+    STORAGE_TIER_IDS.map((tier) => [tier, described.get(tier) ?? null]),
+  ) as StorageTierPrices;
+}
 
 const NO_BILLING_DOCUMENTS: BillingDocuments = {
   subscriptionPayments: [],
@@ -63,15 +99,15 @@ async function retrieveBillingDocumentsIfReachable({
 export async function retrieveBillingPage(userId: string) {
   // Explicitly share the render-scoped PrismaClient across all billing reads.
   const prisma = await getDb();
-  const [entitlements, customer, payments, creditPurchases] = await Promise.all(
-    [
+  const [entitlements, customer, payments, creditPurchases, storageQuota] =
+    await Promise.all([
       getEntitlementSummary(userId, { prisma }),
       findCustomerByUserId({ userId, prisma }),
       getUserPaymentHistory({ userId, prisma }),
       getCreditPurchasesByUserId({ userId, prisma }),
-    ],
-  );
-  const [packagesById, billingDocuments] = await Promise.all([
+      resolveStorageQuota({ userId, prisma }),
+    ]);
+  const [packagesById, billingDocuments, storageTierPrices] = await Promise.all([
     findPackagesForBillingHistory({
       packageIds: payments.map((payment) => payment.packageId),
       prisma,
@@ -80,27 +116,53 @@ export async function retrieveBillingPage(userId: string) {
       stripeCustomerId: customer?.stripeId ?? null,
       userId,
     }),
+    retrieveStorageTierPrices(),
   ]);
 
   const presentation = getAiPlanPresentation(entitlements);
-  // 契約中の商品と加入できる商品を配列で返す。今日の商品は AI Pro だけなので
-  // どちらも 0〜1 件だが、商品が増えたらここに写像を足して連結する。
-  const subscriptions: BillingSubscriptionEntry[] =
-    presentation.canManageSubscription
-      ? [
-          {
-            product: "aiPro",
-            status: presentation.status,
-            currentPeriodEnd: presentation.showCurrentPeriodEnd
-              ? entitlements.currentPeriodEnd
-              : null,
-            showCancellationNotice: presentation.showCancellationNotice,
-          },
-        ]
-      : [];
-  const offers: BillingOfferEntry[] = presentation.canManageSubscription
-    ? []
-    : [{ product: "aiPro" }];
+  const storageSubscription = storageQuota.subscription;
+  const storageEnd = storageSubscription
+    ? effectiveSubscriptionEnd(storageSubscription)
+    : null;
+  const storagePresentation = getSubscriptionPresentation({
+    entitled: storageQuota.tier !== null,
+    subscriptionStatus: storageSubscription?.status ?? null,
+    cancelAtPeriodEnd: storageSubscription?.cancelAtPeriodEnd === true,
+    currentPeriodEnd: storageEnd ? storageEnd.toISOString() : null,
+  });
+  // 契約中の商品と加入できる商品を配列で返す。商品ごとに片方にだけ入る。
+  const subscriptions: BillingSubscriptionEntry[] = [];
+  const offers: BillingOfferEntry[] = [];
+  if (presentation.canManageSubscription) {
+    subscriptions.push({
+      product: "aiPro",
+      tier: null,
+      status: presentation.status,
+      currentPeriodEnd: presentation.showCurrentPeriodEnd
+        ? entitlements.currentPeriodEnd
+        : null,
+      showCancellationNotice: presentation.showCancellationNotice,
+    });
+  } else {
+    offers.push({ product: "aiPro" });
+  }
+  if (storagePresentation.canManageSubscription && storageSubscription) {
+    subscriptions.push({
+      product: "storage",
+      // The tier the customer subscribed to, whether or not it is granting
+      // anything right now (past_due, a refund hold). The effective quota is
+      // reported separately in storageQuota.
+      tier: isStorageTierId(storageSubscription.tier) ? storageSubscription.tier : null,
+      status: storagePresentation.status,
+      currentPeriodEnd:
+        storagePresentation.showCurrentPeriodEnd && storageEnd
+          ? storageEnd.toISOString()
+          : null,
+      showCancellationNotice: storagePresentation.showCancellationNotice,
+    });
+  } else {
+    offers.push({ product: "storage", tiers: STORAGE_TIER_IDS });
+  }
 
   return {
     subscriptions,
@@ -109,6 +171,11 @@ export async function retrieveBillingPage(userId: string) {
       canUseAi: entitlements.canUseAi,
       ...entitlements.balance,
     },
+    storageQuota: {
+      tier: storageQuota.tier,
+      quotaBytes: storageQuota.quotaBytes,
+    },
+    storageTierPrices,
     // 支払い方法がまだ 1 つも無いことの目安。顧客が無ければ確実に無い。
     hasStripeCustomer: customer !== null,
     payments,

@@ -351,6 +351,39 @@ Use the following order for every environment:
    runtimes report the new schema and the verification queries above have been
    recorded in the deployment log.
 
+## Stale uploads are measured by idleness
+
+`20260908020000_add_storage_upload_activity` adds `StorageUpload.lastActivityAt`
+(additive, replayable, no maintenance window). Every part that lands, and
+every renewal of a dedicated write lease, stamps it; the stale sweep abandons
+an upload only after 24 hours without one, falling back to `createdAt` for a
+row that never received a part (existing rows keep `NULL`). A slow transfer
+that is still receiving parts is therefore never abandoned, whatever its
+size; the bucket's seven-day lifecycle rule remains the last line of defence.
+
+## Stored MIME types are normalized
+
+The storage screen's kind filter runs in the database and matches a MIME
+type either exactly or followed by `;` and parameters, which is what the
+screen's classifier reduces a value to. Files are written through
+`storedMimeType` (ends trimmed, whitespace around `;` removed), and
+`20260909020000_normalize_file_mime_types` applies the same rule to rows
+stored before it existed. Data only, replayable, no maintenance window; a
+served `Content-Type` keeps its meaning.
+
+## Account deletion drains files before the cascade
+
+The User cascade runs in one serializable transaction, and the cleanup outbox
+for every object the account owns is written in it. On the largest storage
+plan that is a hundred thousand rows read and written at once, more than a
+Worker or the transaction deadline holds. Both deletion flows therefore call
+`drainUserStorageFiles` after the Stripe customer is closed and before the
+cascade: it retires the plain files a page at a time, each page in its own
+transaction with its own outbox rows, and checks the deletion intent in every
+page. What the cascade still handles is bounded by something other than the
+file limit: dedicated and referenced files by the packages, AI results by
+credits, unfinished uploads by what was in flight.
+
 ## Durable top-up Checkout recovery
 
 `20260826050000_harden_topup_checkout_recovery` gives each user one nullable,
@@ -438,3 +471,62 @@ The script inspects every non-terminal subscription, retrieves the canonical
 object from Stripe, and writes back the terminal status and billing period. A
 subscription Stripe no longer recognizes is reconciled as canceled, matching
 the account-page and webhook recovery paths.
+
+## One subscription table for every plan
+
+`20260908000000_generalize_subscription_plans` re-keys `Subscription` and the
+former `ProCheckoutAttempt` by `(userId, planId)`, adds a nullable `tier`
+column to both and to `BillingOffer`, renames `ProCheckoutAttempt` to
+`SubscriptionCheckoutAttempt`, and re-creates the two `BillingOffer` CHECK
+constraints so `kind = 'storage'` is accepted. Existing rows keep their key:
+every Pro row already carried `planId = 'pro'`, and the checkout attempt
+column is added with that default. Index and constraint names keep the
+`ProCheckoutAttempt_` prefix (mapped in `schema.prisma`) so the rename does
+not rebuild anything.
+
+The primary-key change is why this release needs a short rolling window: the
+previous runtime upserts `Subscription` and `ProCheckoutAttempt` by `userId`
+alone, which stops being a unique key once the migration runs. Apply the
+migration immediately before deploying the Web and API Workers, and do not
+run a Worker built from an older commit against the migrated database.
+Nothing needs to be backfilled.
+
+The plan registry (`SUBSCRIPTION_PLANS` in `packages/core`) holds the static
+facts of a plan: its offer kind, the tier ids it sells, the idempotency-key
+prefix of its Checkouts, and the disposition recorded when a superseded
+Checkout is compensated. `apps/web/src/lib/stripe/subscription-plans.ts` adds
+the environment-dependent Price mapping. Everything else is written once
+against that registry: the checkout loop, the success reconciliation, the
+webhook, the portal sync, refund holds, the cleanup reconciler, the account
+deletion closure, and the admin counts (`countActiveSubscriptions` returns a
+total and a per-tier breakdown). A future AI tier is a new tier id plus a
+Price; it does not touch the tables.
+
+`SubscriptionCheckoutAttempt` has no foreign key to `User`, for the same
+reason `20260825140000_detach_checkout_attempts` removed it from
+`ProCheckoutAttempt`: a bound Checkout Session must survive the account
+cascade so the cleanup reconciler can expire or compensate it. The cleanup
+row's `kind` is the plan id (`pro`, `storage`), and the reconciler validates
+the Session against that plan's offer kind and tier.
+`20260908010000_allow_storage_checkout_cleanup` widens
+`StripeCheckoutCleanup_kind_check` to accept `'storage'`; a plan id added to
+`SUBSCRIPTION_PLANS` later must be added to that CHECK in its own migration,
+or account deletion fails when it queues the plan's bound Session.
+
+Tier changes use `always_invoice` with `error_if_incomplete`. With
+`create_prorations` the difference would only be billed at the next renewal,
+so a user could move to the largest tier, fill it, and cancel at period end
+without paying for it. A Price edited in the Stripe Dashboard without updating
+`metadata.billingOfferId` marks the row `invalid_price`, exactly as for Pro.
+
+Verify after deployment:
+
+```sql
+SHOW CREATE TABLE "Subscription";
+SHOW CREATE TABLE "SubscriptionCheckoutAttempt";
+SHOW CREATE TABLE "BillingOffer";
+```
+
+The first two must report `PRIMARY KEY ("userId" ASC, "planId" ASC)`, all
+three `schema_locked = true`, and the `BillingOffer_kind_check` constraint
+must list `'storage'`.

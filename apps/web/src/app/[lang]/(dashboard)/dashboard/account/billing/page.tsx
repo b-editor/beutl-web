@@ -4,7 +4,9 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { buildBillingHistory } from "@/lib/billing-history";
 import { syncSubscriptionFromStripe } from "@/lib/stripe/subscription-sync";
+import { SUBSCRIPTION_PLAN_IDS } from "@beutl/core";
 import { reconcileAiCheckoutSuccess } from "./actions";
+import { reconcileStorageCheckoutSuccess } from "./storage-actions";
 import {
   AiUsageSection,
   PaymentHistorySection,
@@ -19,6 +21,7 @@ export default async function Page(props: {
     checkout?: string;
     portal?: string;
     session_id?: string;
+    tier?: string;
   }>;
 }) {
   const { lang } = await props.params;
@@ -32,34 +35,55 @@ export default async function Page(props: {
   // ポータルでの解約は subscription webhook が届くまで見えない。戻ってきた時点で
   // Stripe を直接読み、ユーザーが今変更した状態をそのまま見せる。
   if (searchParams.portal === "returned") {
-    try {
-      await syncSubscriptionFromStripe(session.user.id);
-    } catch (error) {
-      console.error("Could not sync the subscription on portal return", error);
-      stripeUnavailable = true;
+    // 同じ顧客にプランごとの契約があり得るので、全プランを読む。
+    const results = await Promise.allSettled(
+      SUBSCRIPTION_PLAN_IDS.map((planId) =>
+        syncSubscriptionFromStripe(session.user.id, planId),
+      ),
+    );
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.error("Could not sync a subscription on portal return", result.reason);
+        stripeUnavailable = true;
+      }
     }
   }
 
   let checkoutSuccess = false;
   if (
-    searchParams.checkout === "success" &&
+    (searchParams.checkout === "success" ||
+      searchParams.checkout === "storage-success") &&
     typeof searchParams.session_id === "string"
   ) {
     try {
-      checkoutSuccess = await reconcileAiCheckoutSuccess(
-        searchParams.session_id,
-      );
+      checkoutSuccess =
+        searchParams.checkout === "storage-success"
+          ? await reconcileStorageCheckoutSuccess(searchParams.session_id)
+          : await reconcileAiCheckoutSuccess(searchParams.session_id);
     } catch (error) {
-      console.error("Could not reconcile the AI checkout", error);
+      console.error("Could not reconcile the checkout", error);
       stripeUnavailable = true;
     }
   }
+  const tierNotice =
+    searchParams.tier === "changed"
+      ? ("changed" as const)
+      : searchParams.tier === "failed"
+        ? ("failed" as const)
+        : searchParams.tier === "over-quota"
+          ? ("over-quota" as const)
+          : searchParams.tier === "unavailable" ||
+              searchParams.checkout === "unavailable"
+            ? ("unavailable" as const)
+            : null;
 
   const { t } = await getTranslation(lang);
   const {
     subscriptions,
     offers,
     aiUsage,
+    storageQuota,
+    storageTierPrices,
     hasStripeCustomer,
     payments,
     creditPurchases,
@@ -95,6 +119,30 @@ export default async function Page(props: {
           </AlertDescription>
         </Alert>
       )}
+      {tierNotice === "changed" && (
+        <Alert>
+          <CheckCircle2 className="h-4 w-4" />
+          <AlertDescription>
+            {t("account:storagePlan.tierChanged")}
+          </AlertDescription>
+        </Alert>
+      )}
+      {(tierNotice === "failed" ||
+        tierNotice === "over-quota" ||
+        tierNotice === "unavailable") && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            {t(
+              tierNotice === "failed"
+                ? "account:storagePlan.tierChangeFailed"
+                : tierNotice === "over-quota"
+                  ? "account:storagePlan.downgradeBlocked"
+                  : "account:storagePlan.tierUnavailable",
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
       {(stripeUnavailable || billingDocumentsUnavailable) && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -109,6 +157,8 @@ export default async function Page(props: {
         t={t}
         subscriptions={subscriptions}
         offers={offers}
+        storageQuota={storageQuota}
+        storageTierPrices={storageTierPrices}
       />
       <AiUsageSection lang={lang} t={t} usage={aiUsage} />
       <PaymentMethodSection t={t} hasStripeCustomer={hasStripeCustomer} />

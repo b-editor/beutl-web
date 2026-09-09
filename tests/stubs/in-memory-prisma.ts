@@ -155,6 +155,7 @@ type Subscription = {
   stripeSubscriptionId: string;
   status: string;
   planId: string;
+  tier: string | null;
   billingOfferId: string | null;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
@@ -168,11 +169,23 @@ type Subscription = {
   updatedAt: Date;
 };
 
-type ProCheckoutAttempt = {
+type SubscriptionCheckoutAttempt = {
   userId: string;
+  planId: string;
+  tier: string | null;
   checkoutKey: string;
   billingOfferId: string;
   stripeCheckoutSessionId: string | null;
+  customerId: string | null;
+  paramsJson: string | null;
+  accountDeletionAt: Date | null;
+  recoveryLeaseToken: string | null;
+  recoveryLeaseExpiresAt: Date | null;
+  recoveryAttempts: number;
+  recoveryLastError: string | null;
+  recoveryInterventionAt: Date | null;
+  recoveryNotBefore: Date | null;
+  recoveryCompletedAt: Date | null;
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -302,6 +315,20 @@ type FileRecord = {
   visibility: string;
   createdAt: Date;
   updatedAt: Date;
+  folderId?: string | null;
+};
+
+// The listing query's where clause, as the stub understands it.
+type FileWhere = {
+  id?: string | { in: string[] };
+  userId?: string;
+  aiJobResult?: null;
+  folderId?: string | null | { in: string[] };
+  name?: string | { contains?: string; startsWith?: string; endsWith?: string; mode?: "insensitive" };
+  mimeType?: { equals?: string; startsWith?: string; in?: string[]; mode?: "insensitive" };
+  visibility?: string;
+  OR?: FileWhere[];
+  NOT?: FileWhere | FileWhere[];
 };
 
 type BillingOffer = {
@@ -314,6 +341,7 @@ type BillingOffer = {
   creditAmount: number | null;
   recurringInterval: string | null;
   recurringIntervalCount: number | null;
+  tier?: string | null;
   checkoutEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -331,8 +359,9 @@ export type InMemoryPrismaState = {
   aiSettings: Map<string, AiSetting>;
   accountDeletionIntents: Map<string, AccountDeletionIntent>;
   aiRemoteJobCleanups: Map<string, AiRemoteJobCleanup>;
+  // Keyed by `${userId}:${planId}`.
   subscriptions: Map<string, Subscription>;
-  proCheckoutAttempts: Map<string, ProCheckoutAttempt>;
+  subscriptionCheckoutAttempts: Map<string, SubscriptionCheckoutAttempt>;
   topUpCheckoutAttempts: Map<string, TopUpCheckoutAttempt>;
   topUpDuplicateRefundAttempts: Map<string, TopUpDuplicateRefundAttempt>;
   topUpCheckoutResolutions: Map<string, TopUpCheckoutResolution>;
@@ -355,6 +384,7 @@ type StorageUploadRecord = {
   createdAt: Date;
   completedFileId: string | null;
   abandonedAt: Date | null;
+  lastActivityAt?: Date | null;
   startState: string;
   creationLeaseUntil: Date | null;
   creationLeaseToken: string | null;
@@ -372,6 +402,52 @@ type StorageUploadRecord = {
   cleanupLeaseToken: string | null;
 };
 
+type SubscriptionWhere = {
+  userId?: string;
+  status?: string | { notIn?: string[] };
+  planId?: string;
+  billingOfferId?: { not: null };
+  currentPeriodEnd?: { gt?: Date };
+  OR?: Array<{ cancelAt?: null | { gt?: Date } }>;
+};
+
+function matchesSubscriptionWhere(
+  subscription: Subscription,
+  where: SubscriptionWhere | undefined,
+): boolean {
+  return (
+    (!where?.userId || subscription.userId === where.userId) &&
+    (where?.status === undefined ||
+      (typeof where.status === "string"
+        ? subscription.status === where.status
+        : !where.status.notIn?.includes(subscription.status))) &&
+    (!where?.planId || subscription.planId === where.planId) &&
+    (!where?.billingOfferId || subscription.billingOfferId !== null) &&
+    (!where?.currentPeriodEnd?.gt ||
+      (subscription.currentPeriodEnd !== null &&
+        subscription.currentPeriodEnd.getTime() >
+          where.currentPeriodEnd.gt.getTime())) &&
+    (!where?.OR ||
+      where.OR.some((clause) =>
+        clause.cancelAt === null
+          ? subscription.cancelAt === null
+          : clause.cancelAt?.gt !== undefined
+            ? subscription.cancelAt instanceof Date &&
+              subscription.cancelAt.getTime() > clause.cancelAt.gt.getTime()
+            : true,
+      ))
+  );
+}
+
+// Relation filter and nested select on a user's subscriptions, as the admin
+// counts use them from a hold or deletion-intent row.
+type UserSubscriptionsRelation = {
+  user?: { subscriptions?: { some?: SubscriptionWhere } };
+};
+type UserSubscriptionsSelect = {
+  user?: { select?: { subscriptions?: { where?: SubscriptionWhere } } };
+};
+
 type StorageUploadWhere = {
   id?: string;
   userId?: string;
@@ -380,12 +456,13 @@ type StorageUploadWhere = {
   uploadId?: string | null;
   name?: string;
   mimeType?: string;
-  size?: bigint;
+  size?: bigint | { lte?: bigint; gt?: bigint };
   partSize?: number;
   completedFileId?: string | null | { not: null };
   abandonedAt?: Date | null | { not: null };
+  lastActivityAt?: Date | null | { lt: Date };
   startState?: string;
-  createdAt?: Date | { lt?: Date };
+  createdAt?: Date | { lt?: Date; gte?: Date };
   creationLeaseUntil?: Date | null | { lte: Date };
   creationLeaseToken?: string | null;
   completionState?: string | { in?: string[]; not?: string };
@@ -420,15 +497,22 @@ function matchesStorageUploadWhere(
   if (where.uploadId !== undefined && item.uploadId !== where.uploadId) return false;
   if (where.name !== undefined && item.name !== where.name) return false;
   if (where.mimeType !== undefined && item.mimeType !== where.mimeType) return false;
-  if (where.size !== undefined && item.size !== where.size) return false;
+  if (where.size !== undefined) {
+    if (typeof where.size === "bigint") {
+      if (item.size !== where.size) return false;
+    } else {
+      if (where.size.lte !== undefined && item.size > where.size.lte) return false;
+      if (where.size.gt !== undefined && item.size <= where.size.gt) return false;
+    }
+  }
   if (where.partSize !== undefined && item.partSize !== where.partSize) return false;
   if (where.startState !== undefined && item.startState !== where.startState) return false;
   if (where.createdAt instanceof Date) {
     if (item.createdAt.getTime() !== where.createdAt.getTime()) return false;
-  } else if (
-    where.createdAt?.lt &&
-    item.createdAt.getTime() >= where.createdAt.lt.getTime()
-  ) return false;
+  } else if (where.createdAt) {
+    if (where.createdAt.lt && item.createdAt.getTime() >= where.createdAt.lt.getTime()) return false;
+    if (where.createdAt.gte && item.createdAt.getTime() < where.createdAt.gte.getTime()) return false;
+  }
   if (where.creationLeaseToken !== undefined && item.creationLeaseToken !== where.creationLeaseToken) return false;
   if (where.creationLeaseUntil !== undefined) {
     if (
@@ -514,6 +598,16 @@ function matchesStorageUploadWhere(
     item.abandonedAt === null
   ) {
     return false;
+  }
+  if (where.lastActivityAt !== undefined) {
+    const activity = item.lastActivityAt ?? null;
+    if (where.lastActivityAt === null) {
+      if (activity !== null) return false;
+    } else if (where.lastActivityAt instanceof Date) {
+      if (activity === null || activity.getTime() !== where.lastActivityAt.getTime()) return false;
+    } else if (activity === null || activity.getTime() >= where.lastActivityAt.lt.getTime()) {
+      return false;
+    }
   }
   if (where.OR && !where.OR.some((candidate) => matchesStorageUploadWhere(item, candidate))) {
     return false;
@@ -627,13 +721,37 @@ export function createInMemoryPrisma() {
     accountDeletionIntents: new Map(),
     aiRemoteJobCleanups: new Map(),
     subscriptions: new Map(),
-    proCheckoutAttempts: new Map(),
+    subscriptionCheckoutAttempts: new Map(),
     topUpCheckoutAttempts: new Map(),
     topUpDuplicateRefundAttempts: new Map(),
     topUpCheckoutResolutions: new Map(),
     billingRefundAttempts: new Map(),
     files: new Map(),
     storageUploads: new Map(),
+  };
+  const subscriptionsOf = (userId: string) =>
+    [...state.subscriptions.values()].filter((row) => row.userId === userId);
+  const userHasSubscription = (
+    userId: string,
+    where: UserSubscriptionsRelation | undefined,
+  ) => {
+    const some = where?.user?.subscriptions?.some;
+    if (!some) return true;
+    return subscriptionsOf(userId).some((row) => matchesSubscriptionWhere(row, some));
+  };
+  const selectUserSubscriptions = (
+    userId: string,
+    select: UserSubscriptionsSelect | undefined,
+  ) => {
+    if (!select?.user) return {};
+    const where = select.user.select?.subscriptions?.where;
+    return {
+      user: {
+        subscriptions: subscriptionsOf(userId)
+          .filter((row) => matchesSubscriptionWhere(row, where))
+          .map((row) => ({ ...row })),
+      },
+    };
   };
 
   const now = () => new Date();
@@ -896,8 +1014,50 @@ export function createInMemoryPrisma() {
         matchesBillingRefundAttemptWhere(attempt, item)))
     );
   };
+  const subscriptionKey = (userId: string, planId: string) => `${userId}:${planId}`;
   const aiJobResultForFile = (fileId: string) =>
     [...state.aiJobs.values()].find((job) => job.resultFileId === fileId);
+  const matchesFileWhere = (file: FileRecord, where: FileWhere | undefined): boolean => {
+    if (!where) return true;
+    if (where.id !== undefined) {
+      if (typeof where.id === "string" ? file.id !== where.id : !where.id.in.includes(file.id)) return false;
+    }
+    if (where.userId !== undefined && file.userId !== where.userId) return false;
+    if (where.aiJobResult === null && aiJobResultForFile(file.id)) return false;
+    if (where.folderId !== undefined) {
+      const folderId = file.folderId ?? null;
+      if (where.folderId === null) {
+        if (folderId !== null) return false;
+      } else if (typeof where.folderId === "string") {
+        if (folderId !== where.folderId) return false;
+      } else if (folderId === null || !where.folderId.in.includes(folderId)) return false;
+    }
+    if (where.name !== undefined) {
+      if (typeof where.name === "string") {
+        if (file.name !== where.name) return false;
+      } else {
+        const fold = (value: string) => (where.name && typeof where.name === "object" && where.name.mode === "insensitive" ? value.toLowerCase() : value);
+        const haystack = fold(file.name);
+        if (where.name.contains !== undefined && !haystack.includes(fold(where.name.contains))) return false;
+        if (where.name.startsWith !== undefined && !haystack.startsWith(fold(where.name.startsWith))) return false;
+        if (where.name.endsWith !== undefined && !haystack.endsWith(fold(where.name.endsWith))) return false;
+      }
+    }
+    if (where.mimeType !== undefined) {
+      const fold = (value: string) => (where.mimeType?.mode === "insensitive" ? value.toLowerCase() : value);
+      const type = fold(file.mimeType);
+      if (where.mimeType.equals !== undefined && type !== fold(where.mimeType.equals)) return false;
+      if (where.mimeType.startsWith !== undefined && !type.startsWith(fold(where.mimeType.startsWith))) return false;
+      if (where.mimeType.in !== undefined && !where.mimeType.in.map(fold).includes(type)) return false;
+    }
+    if (where.visibility !== undefined && file.visibility !== where.visibility) return false;
+    if (where.OR && !where.OR.some((clause) => matchesFileWhere(file, clause))) return false;
+    if (where.NOT !== undefined) {
+      const clauses = Array.isArray(where.NOT) ? where.NOT : [where.NOT];
+      if (clauses.some((clause) => matchesFileWhere(file, clause))) return false;
+    }
+    return true;
+  };
   const projectSelectedFields = (
     record: Record<string, unknown>,
     selection: unknown,
@@ -980,8 +1140,8 @@ export function createInMemoryPrisma() {
     subscriptions: new Map(
       [...state.subscriptions].map(([k, v]) => [k, { ...v }]),
     ),
-    proCheckoutAttempts: new Map(
-      [...state.proCheckoutAttempts].map(([k, v]) => [k, { ...v }]),
+    subscriptionCheckoutAttempts: new Map(
+      [...state.subscriptionCheckoutAttempts].map(([k, v]) => [k, { ...v }]),
     ),
     topUpCheckoutAttempts: new Map(
       [...state.topUpCheckoutAttempts].map(([k, v]) => [k, { ...v }]),
@@ -1020,6 +1180,25 @@ export function createInMemoryPrisma() {
         );
         return intent ? { ...intent } : null;
       },
+      findMany: async ({
+        where,
+        select,
+      }: {
+        where?: {
+          userId?: { in: string[] };
+          expiresAt?: { gt: Date };
+        } & UserSubscriptionsRelation;
+        select?: { userId?: boolean } & UserSubscriptionsSelect;
+      } = {}) =>
+        [...state.accountDeletionIntents.values()]
+          .filter(
+            (item) =>
+              (!where?.userId || where.userId.in.includes(item.userId)) &&
+              (!where?.expiresAt ||
+                item.expiresAt.getTime() > where.expiresAt.gt.getTime()) &&
+              userHasSubscription(item.userId, where),
+          )
+          .map((item) => ({ ...item, ...selectUserSubscriptions(item.userId, select) })),
     },
     creditAccount: {
       upsert: async ({
@@ -1862,27 +2041,62 @@ export function createInMemoryPrisma() {
       count: async ({
         where,
       }: {
-        where?: { status?: string; currentPeriodEnd?: { gt?: Date } };
+        where?: { status?: string; planId?: string; currentPeriodEnd?: { gt?: Date } };
       } = {}) =>
         [...state.subscriptions.values()].filter(
           (subscription) =>
             (!where?.status || subscription.status === where.status) &&
+            (!where?.planId || subscription.planId === where.planId) &&
             (!where?.currentPeriodEnd?.gt ||
               (subscription.currentPeriodEnd !== null &&
                 subscription.currentPeriodEnd.getTime() >
                   where.currentPeriodEnd.gt.getTime())),
         ).length,
+      findMany: async ({
+        where,
+      }: {
+        where?: SubscriptionWhere;
+        select?: Record<string, boolean>;
+        orderBy?: unknown;
+      } = {}) =>
+        [...state.subscriptions.values()]
+          .filter((subscription) => matchesSubscriptionWhere(subscription, where))
+          .map((subscription) => ({ ...subscription })),
+      groupBy: async ({
+        where,
+        ...args
+      }: GroupByArgs & { where?: SubscriptionWhere }) =>
+        groupRows(
+          [...state.subscriptions.values()].filter((subscription) =>
+            matchesSubscriptionWhere(subscription, where),
+          ) as unknown as Record<string, unknown>[],
+          args,
+        ),
+      findFirst: async ({
+        where,
+      }: {
+        where?: { userId?: string; status?: { notIn?: string[] } };
+        select?: Record<string, boolean>;
+      } = {}) => {
+        const record = [...state.subscriptions.values()].find(
+          (subscription) =>
+            (!where?.userId || subscription.userId === where.userId) &&
+            (!where?.status?.notIn || !where.status.notIn.includes(subscription.status)),
+        );
+        return record ? { ...record } : null;
+      },
       upsert: async ({
         where,
         create,
         update,
       }: {
-        where: { userId: string };
+        where: { userId_planId: { userId: string; planId: string } };
         create: {
           userId: string;
           stripeSubscriptionId: string;
           status: string;
           planId: string;
+          tier?: string | null;
           billingOfferId?: string | null;
           currentPeriodStart?: Date | null;
           currentPeriodEnd?: Date | null;
@@ -1893,27 +2107,16 @@ export function createInMemoryPrisma() {
           stripeCanonicalObservedAt?: Date | null;
           stripeObservationRank?: string | null;
         };
-        update: Partial<{
-          stripeSubscriptionId: string;
-          status: string;
-          planId: string;
-          billingOfferId?: string | null;
-          currentPeriodStart?: Date | null;
-          currentPeriodEnd?: Date | null;
-          cancelAtPeriodEnd?: boolean;
-          cancelAt?: Date | null;
-          stripeEventId?: string | null;
-          stripeEventCreatedAt?: Date | null;
-          stripeCanonicalObservedAt?: Date | null;
-          stripeObservationRank?: string | null;
-        }>;
+        update: Partial<Subscription>;
       }) => {
-        const existing = state.subscriptions.get(where.userId);
+        const key = subscriptionKey(where.userId_planId.userId, where.userId_planId.planId);
+        const existing = state.subscriptions.get(key);
         const base: Subscription = existing ?? {
           userId: create.userId,
           stripeSubscriptionId: create.stripeSubscriptionId,
           status: create.status,
           planId: create.planId,
+          tier: create.tier ?? null,
           billingOfferId: create.billingOfferId ?? null,
           currentPeriodStart: create.currentPeriodStart ?? null,
           currentPeriodEnd: create.currentPeriodEnd ?? null,
@@ -1927,30 +2130,43 @@ export function createInMemoryPrisma() {
           createdAt: now(),
           updatedAt: now(),
         };
+        // Prisma leaves a column alone when the update names it as undefined.
         const record: Subscription = {
           ...base,
-          ...update,
+          ...Object.fromEntries(
+            Object.entries(update).filter(([, value]) => value !== undefined),
+          ),
           updatedAt: now(),
         };
-        state.subscriptions.set(where.userId, record);
+        state.subscriptions.set(key, record);
         return { ...record };
       },
-      findUnique: async ({ where }: { where: { userId: string } }) => {
-        const record = state.subscriptions.get(where.userId);
+      findUnique: async ({
+        where,
+      }: {
+        where: {
+          userId_planId?: { userId: string; planId: string };
+          stripeSubscriptionId?: string;
+        };
+      }) => {
+        const record = where.userId_planId
+          ? state.subscriptions.get(
+              subscriptionKey(where.userId_planId.userId, where.userId_planId.planId),
+            )
+          : [...state.subscriptions.values()].find(
+              (item) => item.stripeSubscriptionId === where.stripeSubscriptionId,
+            );
         return record ? { ...record } : null;
       },
       update: async ({
         where,
         data,
       }: {
-        where: { userId: string };
-        data: {
-          status: string;
-          currentPeriodStart?: Date | null;
-          currentPeriodEnd?: Date | null;
-        };
+        where: { userId_planId: { userId: string; planId: string } };
+        data: Partial<Subscription>;
       }) => {
-        const existing = state.subscriptions.get(where.userId);
+        const key = subscriptionKey(where.userId_planId.userId, where.userId_planId.planId);
+        const existing = state.subscriptions.get(key);
         if (!existing) {
           throw new Error("Subscription not found");
         }
@@ -1959,7 +2175,7 @@ export function createInMemoryPrisma() {
           ...data,
           updatedAt: now(),
         };
-        state.subscriptions.set(where.userId, updated);
+        state.subscriptions.set(key, updated);
         return { ...updated };
       },
       updateMany: async ({
@@ -1968,6 +2184,7 @@ export function createInMemoryPrisma() {
       }: {
         where: {
           userId: string;
+          planId: string;
           stripeSubscriptionId: string;
           stripeEventCreatedAt: Date | null;
           stripeCanonicalObservedAt: Date | null;
@@ -1976,7 +2193,8 @@ export function createInMemoryPrisma() {
         };
         data: Partial<Subscription>;
       }) => {
-        const existing = state.subscriptions.get(where.userId);
+        const key = subscriptionKey(where.userId, where.planId);
+        const existing = state.subscriptions.get(key);
         if (!existing) return { count: 0 };
         const eventCreatedMatches =
           existing.stripeEventCreatedAt?.getTime() ===
@@ -1993,7 +2211,7 @@ export function createInMemoryPrisma() {
         ) {
           return { count: 0 };
         }
-        state.subscriptions.set(where.userId, {
+        state.subscriptions.set(key, {
           ...existing,
           ...data,
           updatedAt: now(),
@@ -2003,41 +2221,94 @@ export function createInMemoryPrisma() {
     },
     subscriptionEntitlementHold: {
       findFirst: async () => null,
+      findMany: async () => [],
     },
-    proCheckoutAttempt: {
-      findUnique: async ({ where }: { where: { userId: string } }) => {
-        const attempt = state.proCheckoutAttempts.get(where.userId);
+    subscriptionCheckoutAttempt: {
+      findUnique: async ({
+        where,
+      }: {
+        where: { userId_planId: { userId: string; planId: string } };
+      }) => {
+        const attempt = state.subscriptionCheckoutAttempts.get(
+          subscriptionKey(where.userId_planId.userId, where.userId_planId.planId),
+        );
         return attempt ? { ...attempt } : null;
       },
+      findFirst: async ({
+        where,
+      }: {
+        where: { userId?: string; planId?: string; stripeCheckoutSessionId?: string | null };
+      }) => {
+        const attempt = [...state.subscriptionCheckoutAttempts.values()].find(
+          (item) =>
+            (where.userId === undefined || item.userId === where.userId) &&
+            (where.planId === undefined || item.planId === where.planId) &&
+            (where.stripeCheckoutSessionId === undefined ||
+              item.stripeCheckoutSessionId === where.stripeCheckoutSessionId),
+        );
+        return attempt ? { ...attempt } : null;
+      },
+      findMany: async ({
+        where,
+      }: {
+        where?: { userId?: string; stripeCheckoutSessionId?: { not: null } };
+        select?: Record<string, boolean>;
+      } = {}) =>
+        [...state.subscriptionCheckoutAttempts.values()]
+          .filter(
+            (item) =>
+              (where?.userId === undefined || item.userId === where.userId) &&
+              (!where?.stripeCheckoutSessionId || item.stripeCheckoutSessionId !== null),
+          )
+          .map((item) => ({ ...item })),
+      count: async ({ where }: { where?: { userId?: string } } = {}) =>
+        [...state.subscriptionCheckoutAttempts.values()].filter(
+          (item) => where?.userId === undefined || item.userId === where.userId,
+        ).length,
       upsert: async ({
         where,
         create,
         update,
       }: {
-        where: { userId: string };
+        where: { userId_planId: { userId: string; planId: string } };
         create: {
           userId: string;
+          planId: string;
+          tier?: string | null;
           billingOfferId: string;
           checkoutKey: string;
+          customerId?: string | null;
+          paramsJson?: string | null;
           expiresAt: Date;
         };
-        update: {
-          checkoutKey: string;
-          billingOfferId: string;
-          stripeCheckoutSessionId: null;
-          expiresAt: Date;
-        };
+        update: Partial<SubscriptionCheckoutAttempt>;
       }) => {
-        const existing = state.proCheckoutAttempts.get(where.userId);
-        const attempt: ProCheckoutAttempt = existing
+        const key = subscriptionKey(where.userId_planId.userId, where.userId_planId.planId);
+        const existing = state.subscriptionCheckoutAttempts.get(key);
+        const attempt: SubscriptionCheckoutAttempt = existing
           ? { ...existing, ...update, updatedAt: now() }
           : {
-              ...create,
+              userId: create.userId,
+              planId: create.planId,
+              tier: create.tier ?? null,
+              billingOfferId: create.billingOfferId,
+              checkoutKey: create.checkoutKey,
+              customerId: create.customerId ?? null,
+              paramsJson: create.paramsJson ?? null,
+              expiresAt: create.expiresAt,
               stripeCheckoutSessionId: null,
+              accountDeletionAt: null,
+              recoveryLeaseToken: null,
+              recoveryLeaseExpiresAt: null,
+              recoveryAttempts: 0,
+              recoveryLastError: null,
+              recoveryInterventionAt: null,
+              recoveryNotBefore: null,
+              recoveryCompletedAt: null,
               createdAt: now(),
               updatedAt: now(),
             };
-        state.proCheckoutAttempts.set(where.userId, attempt);
+        state.subscriptionCheckoutAttempts.set(key, attempt);
         return { ...attempt };
       },
       updateMany: async ({
@@ -2045,55 +2316,64 @@ export function createInMemoryPrisma() {
         data,
       }: {
         where: {
-          userId: string;
+          userId?: string;
+          planId?: string;
           checkoutKey?: string;
           stripeCheckoutSessionId?: string | null;
+          accountDeletionAt?: null;
         };
-        data: Partial<
-          Pick<
-            ProCheckoutAttempt,
-            "stripeCheckoutSessionId" | "expiresAt"
-          >
-        >;
+        data: Partial<SubscriptionCheckoutAttempt>;
       }) => {
-        const existing = state.proCheckoutAttempts.get(where.userId);
-        if (
-          !existing ||
-          (where.checkoutKey && existing.checkoutKey !== where.checkoutKey) ||
-          (where.stripeCheckoutSessionId !== undefined &&
-            existing.stripeCheckoutSessionId !==
-              where.stripeCheckoutSessionId)
-        ) {
-          return { count: 0 };
+        let count = 0;
+        for (const [key, existing] of state.subscriptionCheckoutAttempts) {
+          if (
+            (where.userId !== undefined && existing.userId !== where.userId) ||
+            (where.planId !== undefined && existing.planId !== where.planId) ||
+            (where.checkoutKey !== undefined &&
+              existing.checkoutKey !== where.checkoutKey) ||
+            (where.stripeCheckoutSessionId !== undefined &&
+              existing.stripeCheckoutSessionId !==
+                where.stripeCheckoutSessionId) ||
+            (where.accountDeletionAt === null &&
+              existing.accountDeletionAt !== null)
+          ) {
+            continue;
+          }
+          state.subscriptionCheckoutAttempts.set(key, {
+            ...existing,
+            ...data,
+            updatedAt: now(),
+          });
+          count++;
         }
-        state.proCheckoutAttempts.set(where.userId, {
-          ...existing,
-          ...data,
-          updatedAt: now(),
-        });
-        return { count: 1 };
+        return { count };
       },
       deleteMany: async ({
         where,
       }: {
         where: {
-          userId: string;
+          userId?: string;
+          planId?: string;
           checkoutKey?: string;
           stripeCheckoutSessionId?: string;
         };
       }) => {
-        const existing = state.proCheckoutAttempts.get(where.userId);
-        if (
-          !existing ||
-          (where.checkoutKey !== undefined &&
-            existing.checkoutKey !== where.checkoutKey) ||
-          (where.stripeCheckoutSessionId !== undefined &&
-            existing.stripeCheckoutSessionId !== where.stripeCheckoutSessionId)
-        ) {
-          return { count: 0 };
+        let count = 0;
+        for (const [key, existing] of state.subscriptionCheckoutAttempts) {
+          if (
+            (where.userId !== undefined && existing.userId !== where.userId) ||
+            (where.planId !== undefined && existing.planId !== where.planId) ||
+            (where.checkoutKey !== undefined &&
+              existing.checkoutKey !== where.checkoutKey) ||
+            (where.stripeCheckoutSessionId !== undefined &&
+              existing.stripeCheckoutSessionId !== where.stripeCheckoutSessionId)
+          ) {
+            continue;
+          }
+          state.subscriptionCheckoutAttempts.delete(key);
+          count++;
         }
-        state.proCheckoutAttempts.delete(where.userId);
-        return { count: 1 };
+        return { count };
       },
     },
     topUpCheckoutAttempt: {
@@ -2488,13 +2768,14 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-        where?: { kind?: string; checkoutEnabled?: boolean };
+        where?: { kind?: string; tier?: string | null; checkoutEnabled?: boolean };
         orderBy?: unknown;
       } = {}) => {
         const rows = [...state.billingOffers.values()]
           .filter(
             (offer) =>
               (where?.kind === undefined || offer.kind === where.kind) &&
+              (where?.tier === undefined || (offer.tier ?? null) === where.tier) &&
               (where?.checkoutEnabled === undefined ||
                 offer.checkoutEnabled === where.checkoutEnabled),
           )
@@ -3181,15 +3462,18 @@ export function createInMemoryPrisma() {
         orderBy,
       }: {
         where?: StorageUploadWhere;
-        orderBy?: Array<Record<string, "asc" | "desc">>;
+        orderBy?:
+          | Record<string, "asc" | "desc">
+          | Array<Record<string, "asc" | "desc">>;
         take?: number;
       } = {}) => {
         const rows = [...state.storageUploads.values()]
           .filter((item) => matchesStorageUploadWhere(item, where))
           .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
         if (orderBy) {
+          const orders = Array.isArray(orderBy) ? orderBy : [orderBy];
           rows.sort((left, right) => {
-            for (const order of orderBy) {
+            for (const order of orders) {
               const [field, direction] = Object.entries(order)[0];
               const lv = (left as unknown as Record<string, unknown>)[field];
               const rv = (right as unknown as Record<string, unknown>)[field];
@@ -3252,12 +3536,13 @@ export function createInMemoryPrisma() {
       aggregate: async ({
         where,
       }: {
-        where?: { userId?: string };
+        where?: { userId?: string; aiJobResult?: null };
         _sum?: { size?: boolean };
       } = {}) => {
         let total = BigInt(0);
         for (const file of state.files.values()) {
           if (where?.userId && file.userId !== where.userId) continue;
+          if (where?.aiJobResult === null && aiJobResultForFile(file.id)) continue;
           total += BigInt(file.size);
         }
         return { _sum: { size: total } };
@@ -3291,13 +3576,10 @@ export function createInMemoryPrisma() {
         state.files.set(record.id, record);
         return { ...record };
       },
-      count: async (
-        { where }: { where?: { userId?: string } } = {},
-      ) => {
+      count: async ({ where }: { where?: FileWhere } = {}) => {
         let total = 0;
         for (const item of state.files.values()) {
-          if (where?.userId && item.userId !== where.userId) continue;
-          total++;
+          if (matchesFileWhere(item, where)) total++;
         }
         return total;
       },
@@ -3320,22 +3602,13 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-        where: {
-          id?: string;
-          userId?: string;
-          objectKey?: string;
-          visibility?: string;
-          aiJobResult?: null;
-        };
+        where: FileWhere & { objectKey?: string };
         select?: { id?: boolean; objectKey?: boolean };
       }) => {
         const file = [...state.files.values()].find(
           (item) =>
-            (!where.id || item.id === where.id) &&
-            (!where.userId || item.userId === where.userId) &&
-            (!where.objectKey || item.objectKey === where.objectKey) &&
-            (!where.visibility || item.visibility === where.visibility) &&
-            (where.aiJobResult !== null || !aiJobResultForFile(item.id)),
+            matchesFileWhere(item, where) &&
+            (!where.objectKey || item.objectKey === where.objectKey),
         );
         const aiJobResult = file ? aiJobResultForFile(file.id) : null;
         return file
@@ -3351,22 +3624,42 @@ export function createInMemoryPrisma() {
       },
       findMany: async ({
         where,
+        orderBy,
+        skip,
+        take,
       }: {
-        where?: {
-          id?: { in: string[] };
-          userId?: string;
-          aiJobResult?: null;
-        };
+        where?: FileWhere;
         select?: Record<string, boolean>;
+        orderBy?:
+          | Record<string, "asc" | "desc">
+          | Array<Record<string, "asc" | "desc">>;
+        skip?: number;
+        take?: number;
       }) => {
-        return [...state.files.values()]
-          .filter(
-            (file) =>
-              (!where?.id || where.id.in.includes(file.id)) &&
-              (!where?.userId || file.userId === where.userId) &&
-              (where?.aiJobResult !== null || !aiJobResultForFile(file.id)),
-          )
-          .map((file) => ({ ...file }));
+        const rows = [...state.files.values()].filter((file) =>
+          matchesFileWhere(file, where),
+        );
+        if (orderBy) {
+          const orders = Array.isArray(orderBy) ? orderBy : [orderBy];
+          rows.sort((left, right) => {
+            for (const order of orders) {
+              const [field, direction] = Object.entries(order)[0];
+              const lv = (left as unknown as Record<string, unknown>)[field];
+              const rv = (right as unknown as Record<string, unknown>)[field];
+              const compared =
+                lv instanceof Date && rv instanceof Date
+                  ? lv.getTime() - rv.getTime()
+                  : typeof lv === "string" && typeof rv === "string"
+                    ? lv.localeCompare(rv)
+                    : Number(lv ?? 0) - Number(rv ?? 0);
+              if (compared !== 0) return direction === "desc" ? -compared : compared;
+            }
+            return 0;
+          });
+        }
+        const from = skip ?? 0;
+        const to = take === undefined ? rows.length : from + take;
+        return rows.slice(from, to).map((file) => ({ ...file }));
       },
       delete: async ({ where }: { where: { id: string } }) => {
         const file = state.files.get(where.id);
@@ -3420,15 +3713,12 @@ export function createInMemoryPrisma() {
         where,
         data,
       }: {
-        where: { id?: string; aiJobResult?: null };
-        data: Partial<Pick<FileRecord, "visibility">>;
+        where: FileWhere;
+        data: Partial<Pick<FileRecord, "visibility" | "folderId">>;
       }) => {
         let count = 0;
         for (const [id, file] of state.files) {
-          if (
-            (!where.id || id === where.id) &&
-            (where.aiJobResult !== null || !aiJobResultForFile(id))
-          ) {
+          if (matchesFileWhere(file, where)) {
             state.files.set(id, { ...file, ...data, updatedAt: now() });
             count++;
           }

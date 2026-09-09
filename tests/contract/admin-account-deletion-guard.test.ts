@@ -22,10 +22,14 @@ function transaction(overrides: {
       count: vi.fn().mockResolvedValue(overrides.provisioningCount ?? 0),
     },
     subscription: {
-      findUnique: vi.fn().mockResolvedValue(overrides.subscription ?? null),
+      findFirst: vi.fn().mockResolvedValue(overrides.subscription ?? null),
     },
-    proCheckoutAttempt: {
-      findUnique: vi.fn().mockResolvedValue(overrides.checkout ?? null),
+    subscriptionCheckoutAttempt: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue(
+          overrides.checkout ? [{ planId: "pro", ...overrides.checkout }] : [],
+        ),
       updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       count: vi.fn().mockResolvedValue(overrides.blockerCount ?? 0),
     },
@@ -80,12 +84,12 @@ describe("administrator account deletion guard", () => {
   });
 
   it.each([
-    ["subscription", { subscription: { status: "past_due" } }],
+    ["subscription", { subscription: { status: "past_due", planId: "pro" } }],
   ] as const)("blocks an active subscription", async (reason, state) => {
     const tx = transaction(state);
     await expect(
       reserveAdminAccountDeletion({ userId: "user-1", prisma: tx as never }),
-    ).resolves.toEqual({ status: "blocked", reason });
+    ).resolves.toEqual({ status: "blocked", reason, planId: "pro" });
     expect(tx.accountDeletionIntent.delete).not.toHaveBeenCalled();
   });
 

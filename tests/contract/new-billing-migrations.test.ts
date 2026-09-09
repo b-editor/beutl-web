@@ -25,6 +25,9 @@ const migrations = [
   "20260828000000_harden_unknown_storage_completion/migration.sql",
   "20260829010000_add_unknown_probe_lease/migration.sql",
   "20260829020000_add_dedicated_storage_reservation/migration.sql",
+  "20260908000000_generalize_subscription_plans/migration.sql",
+  "20260908010000_allow_storage_checkout_cleanup/migration.sql",
+  "20260908020000_add_storage_upload_activity/migration.sql",
 ];
 
 describe("new billing migrations", () => {
@@ -181,6 +184,16 @@ describe("new billing migrations", () => {
     expect(sql).toContain("unknownProbeLeaseToken\" IS NULL AND \"unknownProbeNotBefore\" IS NULL");
     expect(sql).toContain("unknownProbeLeaseToken\" IS NOT NULL AND \"unknownProbeNotBefore\" IS NOT NULL");
     expect(sql).toContain("completionState\" <> 'unknown'");
+  });
+
+  it("normalizes the MIME types stored before the kind filter existed", async () => {
+    const sql = await readFile(new URL("../../apps/web/prisma/migrations/20260909020000_normalize_file_mime_types/migration.sql", import.meta.url), "utf8");
+    // The same rule storedMimeType applies on the way in: trim, and drop the
+    // whitespace around ";". Only rows that differ are written, so a replay
+    // is a no-op.
+    expect(sql).toContain(`regexp_replace(btrim("mimeType"), '\\s*;\\s*', ';', 'g')`);
+    expect(sql).toMatch(/UPDATE "File"[\s\S]*WHERE "mimeType" <> regexp_replace/);
+    expect(sql).not.toContain("schema_locked");
   });
 
   it("documents the dedicated storage reservation cutover", async () => {
