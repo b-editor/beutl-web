@@ -371,6 +371,19 @@ screen's classifier reduces a value to. Files are written through
 stored before it existed. Data only, replayable, no maintenance window; a
 served `Content-Type` keeps its meaning.
 
+## Account deletion drains files before the cascade
+
+The User cascade runs in one serializable transaction, and the cleanup outbox
+for every object the account owns is written in it. On the largest storage
+plan that is a hundred thousand rows read and written at once, more than a
+Worker or the transaction deadline holds. Both deletion flows therefore call
+`drainUserStorageFiles` after the Stripe customer is closed and before the
+cascade: it retires the plain files a page at a time, each page in its own
+transaction with its own outbox rows, and checks the deletion intent in every
+page. What the cascade still handles is bounded by something other than the
+file limit: dedicated and referenced files by the packages, AI results by
+credits, unfinished uploads by what was in flight.
+
 ## Durable top-up Checkout recovery
 
 `20260826050000_harden_topup_checkout_recovery` gives each user one nullable,

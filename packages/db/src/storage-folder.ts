@@ -182,8 +182,9 @@ async function folderSubtree(
 export const STORAGE_FOLDER_DELETE_BATCH = 200;
 
 // A file the bulk delete would refuse: dedicated, or still pointed at from a
-// package, screenshot, profile, or release.
-const FILE_IN_USE_WHERE = {
+// package, screenshot, profile, or release. The account drain skips the same
+// files, leaving them to the User cascade.
+export const FILE_IN_USE_WHERE = {
   OR: [
     { visibility: "DEDICATED" as const },
     { Package: { some: {} } },

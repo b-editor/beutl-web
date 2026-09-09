@@ -1,6 +1,7 @@
 import "server-only";
 import {
   deleteUserById,
+  drainUserStorageFiles,
   enqueueUserStorageCleanups,
   findAccountDeletionIntent,
   prepareAccountDeletionOutboxes,
@@ -30,6 +31,11 @@ export async function deleteUser(token: string, identifier: string) {
   if (stripeClosure.status === "owner-mismatch") {
     throw new Error("Stripe customer ownership could not be verified");
   }
+  // The plain files go first, a page per transaction, so the cascade below
+  // stays small however many files the plan allowed. A resumed intent that
+  // was already completed drains nothing and falls through to the same
+  // "already done" answer as before.
+  await drainUserStorageFiles({ userId: intent.userId });
   const deleted = await startRetryableTransaction(async (prisma) => {
     const currentIntent = await findAccountDeletionIntent({
       identifier: intent.identifier,

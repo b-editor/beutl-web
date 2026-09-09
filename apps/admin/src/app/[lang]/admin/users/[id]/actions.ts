@@ -8,6 +8,7 @@ import {
   adjustPurchasedCreditsByAdmin,
   CreditAdjustmentRejectedError,
   deleteUserById,
+  drainUserStorageFiles,
   enqueueUserStorageCleanups,
   existsUserById,
   findAdminCreditAdjustment,
@@ -175,6 +176,10 @@ export async function deleteUser({
       return { success: false, message: "Cancel this user's active Stripe subscriptions before deleting the account" };
     }
 
+    // 普通のファイルは先にページ単位で片付ける。Stripe 側はもう閉じているので、
+    // ここから先はアカウントが消える一方で、次に消えるのがファイル。下の
+    // カスケードには上限に依らない数のものだけが残る。
+    await drainUserStorageFiles({ userId });
     const result = await startRetryableTransaction(async (tx) => {
       const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
       if (!currentIntent) return { status: "already-completed" as const };
