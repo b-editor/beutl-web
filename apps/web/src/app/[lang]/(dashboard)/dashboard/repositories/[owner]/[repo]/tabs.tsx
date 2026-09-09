@@ -51,7 +51,7 @@ export function RepositoryTabs({
   return (
     <nav className="flex gap-1 border-b">
       {tabs.map((tab) => (
-        <Link
+        <Link prefetch={false}
           key={tab.key}
           href={tab.href}
           className={cn(

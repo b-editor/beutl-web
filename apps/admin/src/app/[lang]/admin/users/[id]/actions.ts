@@ -185,7 +185,7 @@ export async function deleteUser({
     // 普通のファイルは先にページ単位で片付ける。Stripe 側はもう閉じているので、
     // ここから先はアカウントが消える一方で、次に消えるのがファイル。下の
     // カスケードには上限に依らない数のものだけが残る。
-    // Forgejo 側を先に消す。git トークンは Forgejo が直接認証し、Caddy は git の
+    // Forgejo のトークンを先に失効させる。Forgejo が直接認証し、Caddy は git の
     // 経路を素通しするので、こちらのレコードだけ消しても push は通り続ける。
     // 外部への呼び出しなのでトランザクションの外で行う (再試行で二重に走らせない)。
     let forgejoUsername: string | null = null;
@@ -203,90 +203,82 @@ export async function deleteUser({
     }
 
     try {
-    await drainUserStorageFiles({ userId });
-    const result = await startRetryableTransaction(async (tx) => {
-      const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
-      if (!currentIntent) return { status: "already-completed" as const };
-      // The remote closure ran outside this transaction. Revalidate the exact
-      // intent snapshot and Customer identity before cascading rows; otherwise
-      // a provisioning/mapping race could make a successful closure apply to
-      // a newly assigned Customer.
-      if (
-        currentIntent.stripeCustomerId !== intent.stripeCustomerId ||
-        closure.customerId !== currentIntent.stripeCustomerId
-      ) {
-        return { status: "blocked" as const, reason: "customer" as const };
-      }
-      // Any plan still granting something blocks deletion, and the plan is
-      // named so the administrator knows which subscription to cancel.
-      const live = (await listSubscriptionsByUserId({ userId, prisma: tx })).find(
-        (row) => isSubscriptionPlanId(row.planId) && isActiveSubscription(row, row.planId),
-      );
-      if (live) {
-        return { status: "blocked" as const, reason: "subscription" as const, planId: live.planId };
-      }
-      const provisioning = await tx.stripeCustomerProvisioning.findFirst({
-        where: {
-          userId,
-          status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
-        },
-        select: { id: true },
-      });
-      if (provisioning) {
-        return { status: "blocked" as const, reason: "provisioning" as const };
-      }
-      const mapping = await findCustomerByUserId({ userId, prisma: tx });
-      if (mapping && mapping.stripeId !== currentIntent.stripeCustomerId) {
-        return { status: "blocked" as const, reason: "customer" as const };
-      }
-      if (mapping && closure.status !== "closed" && closure.status !== "already-closed") {
-        return { status: "blocked" as const, reason: "customer" as const };
-      }
-      // 本人が消すときと同じ後始末を、同じトランザクションで。行が消えたあとに
-      // 外の持ちものを指す手掛かりは残らないので、消す前に控えを取る——R2 の
-      // オブジェクトと、走っている provider の job がそれ。
-      const prepared = await prepareAccountDeletionOutboxes({ userId, prisma: tx });
-      if (prepared.unboundCheckoutRecoveries > 0) {
-        return { status: "blocked" as const, reason: "checkout" as const };
-      }
-      if (prepared.customerProvisioningRecoveries > 0) {
-        return { status: "blocked" as const, reason: "provisioning" as const };
-      }
-      await enqueueUserStorageCleanups({ userId, prisma: tx });
-      await deleteUserById({ userId, prisma: tx });
-      // 「purge してよい」印は削除と同時に確定させる。別々にすると、削除が失敗
-      // したのに purge 待ちの行だけが残り、生きている利用者のデータを消す。
-      await markGitAccountDeletionReady({ userId, intentId, prisma: tx });
-      await addAuditLog({
-        userId: session.user.id,
-        action: auditLogActions.admin.userDeleted,
-        details: `userId: ${userId}`,
-        prisma: tx,
-      });
-      if (forgejoUsername) {
+      await drainUserStorageFiles({ userId });
+      const result = await startRetryableTransaction(async (tx) => {
+        const currentIntent = await findAccountDeletionIntentByUserId({ userId, prisma: tx });
+        if (!currentIntent) return { status: "already-completed" as const };
+        // The remote closure ran outside this transaction. Revalidate the exact
+        // intent snapshot and Customer identity before cascading rows; otherwise
+        // a provisioning/mapping race could make a successful closure apply to
+        // a newly assigned Customer.
+        if (
+          currentIntent.stripeCustomerId !== intent.stripeCustomerId ||
+          closure.customerId !== currentIntent.stripeCustomerId
+        ) {
+          return { status: "blocked" as const, reason: "customer" as const };
+        }
+        // Any plan still granting something blocks deletion, and the plan is
+        // named so the administrator knows which subscription to cancel.
+        const live = (await listSubscriptionsByUserId({ userId, prisma: tx })).find(
+          (row) => isSubscriptionPlanId(row.planId) && isActiveSubscription(row, row.planId),
+        );
+        if (live) {
+          return { status: "blocked" as const, reason: "subscription" as const, planId: live.planId };
+        }
+        const provisioning = await tx.stripeCustomerProvisioning.findFirst({
+          where: {
+            userId,
+            status: { in: ["pending", "mapping", "cleanup_required", "intervention"] },
+          },
+          select: { id: true },
+        });
+        if (provisioning) {
+          return { status: "blocked" as const, reason: "provisioning" as const };
+        }
+        const mapping = await findCustomerByUserId({ userId, prisma: tx });
+        if (mapping && mapping.stripeId !== currentIntent.stripeCustomerId) {
+          return { status: "blocked" as const, reason: "customer" as const };
+        }
+        if (mapping && closure.status !== "closed" && closure.status !== "already-closed") {
+          return { status: "blocked" as const, reason: "customer" as const };
+        }
+        // 本人が消すときと同じ後始末を、同じトランザクションで。行が消えたあとに
+        // 外の持ちものを指す手掛かりは残らないので、消す前に控えを取る——R2 の
+        // オブジェクトと、走っている provider の job がそれ。
+        const prepared = await prepareAccountDeletionOutboxes({ userId, prisma: tx });
+        if (prepared.unboundCheckoutRecoveries > 0) {
+          return { status: "blocked" as const, reason: "checkout" as const };
+        }
+        if (prepared.customerProvisioningRecoveries > 0) {
+          return { status: "blocked" as const, reason: "provisioning" as const };
+        }
+        await enqueueUserStorageCleanups({ userId, prisma: tx });
+        await deleteUserById({ userId, prisma: tx });
+        // 「purge してよい」印は削除と同時に確定させる。別々にすると、削除が失敗
+        // したのに purge 待ちの行だけが残り、生きている利用者のデータを消す。
+        await markGitAccountDeletionReady({ userId, intentId, prisma: tx });
         await addAuditLog({
           userId: session.user.id,
           action: auditLogActions.admin.userDeleted,
           details: `userId: ${userId}`,
           prisma: tx,
         });
+        return { status: "deleted" as const };
+      });
+      if (result.status === "blocked") {
+        await abortGitAccountDeletion(userId, intentId);
+        const message =
+          result.reason === "subscription"
+            ? `Cancel this user's ${subscriptionPlanLabel(result.planId)} subscription before deleting the account`
+            : {
+                checkout:
+                  "Resolve this user's pending subscription checkout before deleting the account",
+                customer: "Close this user's Stripe customer before deleting the account",
+                provisioning: "Wait for this user's Stripe customer provisioning to settle",
+              }[result.reason];
+        return { success: false, message };
       }
-      return { status: "deleted" as const };
-    });
-    if (result.status === "blocked") {
-      await abortGitAccountDeletion(userId, intentId);
-      const message =
-        result.reason === "subscription"
-          ? `Cancel this user's ${subscriptionPlanLabel(result.planId)} subscription before deleting the account`
-          : {
-              checkout:
-                "Resolve this user's pending subscription checkout before deleting the account",
-              customer: "Close this user's Stripe customer before deleting the account",
-              provisioning: "Wait for this user's Stripe customer provisioning to settle",
-            }[result.reason];
-      return { success: false, message };
-    }
-    if (result.status === "already-completed") return { success: true };
+      if (result.status === "already-completed") return { success: true };
     } catch (error) {
       await abortGitAccountDeletion(userId, intentId);
       throw error;

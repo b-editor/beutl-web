@@ -52,7 +52,8 @@ vi.mock("@/lib/stripe/ai-billing", () => ({
     currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
   }),
 }));
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
     "pre-owner-metadata-2026-08-09",
   deleteBoundSubscriptionCheckoutAttempt: mocks.deleteBoundSubscriptionCheckoutAttempt,

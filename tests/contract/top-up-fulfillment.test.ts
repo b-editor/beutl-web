@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   requireTopUpRefund: vi.fn(),
 }));
 
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   findTopUpCheckoutAttempt: mocks.findTopUpCheckoutAttempt,
   fulfillTopUpCheckoutAttempt: mocks.fulfillTopUpCheckoutAttempt,
   recordTopUpRefund: mocks.recordTopUpRefund,

@@ -63,7 +63,8 @@ vi.mock("@/lib/stripe/config", () => ({
     prices: { retrieve: mocks.pricesRetrieve },
   }),
 }));
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   activateBillingOffer: mocks.activateBillingOffer,
   bindTopUpCheckoutCreation: mocks.bindTopUpCheckoutCreation,
   bindSubscriptionCheckoutSession: mocks.bindSubscriptionCheckoutSession,

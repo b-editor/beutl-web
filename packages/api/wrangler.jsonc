@@ -9,11 +9,6 @@
     "enable_request_signal"
   ],
   "keep_vars": true,
-  // 退会の後始末をやり残したときの消化。利用者のリクエストの中でやると応答が
-  // 遅くなるうえ、次の退会が起きるまで残り続ける。
-  "triggers": {
-    "crons": ["*/15 * * * *"]
-  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

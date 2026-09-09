@@ -56,7 +56,8 @@ vi.mock("@/lib/stripe/package-payment", () => ({
   resolvePackagePayment: mocks.resolvePackagePayment,
   resolvePackagePaymentOwner: mocks.resolvePackagePaymentOwner,
 }));
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   PACKAGE_PAYMENT_EVENT_RANK: {
     paymentSucceeded: 10,
     disputeRevoked: 20,

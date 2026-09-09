@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  missingForgejoConfig: vi.fn(),
+  gitCleanup: vi.fn(),
   events: [] as string[],
   callOrder: [] as string[],
   tick: 0,
@@ -15,6 +17,16 @@ const mocks = vi.hoisted(() => ({
   customer: vi.fn(),
   billing: vi.fn(),
   setR2: vi.fn(),
+}));
+
+vi.mock("@beutl/forgejo", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/forgejo")>(),
+  missingForgejoConfig: mocks.missingForgejoConfig,
+  releaseExpiredGitAccountDeletionBlocks: mocks.gitCleanup,
+  retryPendingGitDeletions: mocks.gitCleanup,
+  reconcileGitAccountDeletionTombstones: mocks.gitCleanup,
+  reconcileGitResurrectionTombstones: mocks.gitCleanup,
+  retryGitRepositoryRepairs: mocks.gitCleanup,
 }));
 
 vi.mock("@beutl/api", async (importOriginal) => {
@@ -46,18 +58,20 @@ const env = {
 
 async function runScheduled(tick: number) {
   mocks.tick = tick;
-  let pending!: Promise<unknown>;
+  const pending: Promise<unknown>[] = [];
   await worker.scheduled(
-    { scheduledTime: Date.parse(`2026-08-25T00:0${tick}:00.000Z`) },
+    { scheduledTime: Date.parse("2026-08-25T00:00:00.000Z") + tick * 15 * 60_000 },
     env,
-    { waitUntil: (promise) => { pending = promise; } },
+    { waitUntil: (promise) => { pending.push(promise); } },
   );
-  await pending;
+  await Promise.all(pending);
 }
 
 describe("worker scheduled refund/cleanup dependency", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.missingForgejoConfig.mockReturnValue([]);
+    mocks.gitCleanup.mockResolvedValue({});
     mocks.events.length = 0;
     mocks.callOrder.length = 0;
     mocks.tick = 0;
@@ -100,6 +114,7 @@ describe("worker scheduled refund/cleanup dependency", () => {
     });
 
     await runScheduled(1);
+    expect(mocks.gitCleanup).toHaveBeenCalledTimes(5);
     expect(resolutionState).toBe("pending");
     expect(mocks.events).toEqual(expect.arrayContaining(["duplicate:schedule", "cleanup:pending"]));
 
@@ -116,5 +131,16 @@ describe("worker scheduled refund/cleanup dependency", () => {
     const log = logSpy.mock.calls.at(-1);
     expect(log?.[1]).toMatchObject({ topUpDuplicateRefunds: expect.any(Object), stripeCheckoutCleanups: expect.any(Object) });
     vi.restoreAllMocks();
+  });
+
+  it("reports missing Git configuration while still running billing cleanup", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.missingForgejoConfig.mockReturnValue(["FORGEJO_BASE_URL"]);
+    mocks.duplicate.mockResolvedValue({ interventionRequired: 0 });
+    mocks.cleanup.mockResolvedValue({ interventionRequired: 0, detachedIntervention: 0 });
+    await expect(runScheduled(1)).rejects.toThrow(/FORGEJO_BASE_URL/);
+    expect(mocks.duplicate).toHaveBeenCalled();
+    expect(mocks.gitCleanup).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

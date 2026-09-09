@@ -420,28 +420,3 @@ describe("worker request body route limits", () => {
     await expectFileTooLarge(response);
   });
 });
-
-describe("定期実行は設定不足を黙って見逃さない", () => {
-  afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) delete process.env[key];
-    }
-    for (const [key, value] of Object.entries(originalEnv)) {
-      process.env[key] = value;
-    }
-  });
-
-  it("Forgejo の設定が欠けていたら、名前を挙げて失敗する", async () => {
-    // 黙って抜けると、退会のやり直しも、復活したアカウントの消し直しも、
-    // リポジトリの直しも止まったまま、誰も気付けない。
-    delete process.env.FORGEJO_BASE_URL;
-    delete process.env.FORGEJO_ADMIN_TOKEN;
-    delete process.env.FORGEJO_PROXY_SECRET;
-
-    await expect(
-      worker.scheduled(null, {
-        BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://test" },
-      } as never),
-    ).rejects.toThrow(/FORGEJO_BASE_URL/);
-  });
-});

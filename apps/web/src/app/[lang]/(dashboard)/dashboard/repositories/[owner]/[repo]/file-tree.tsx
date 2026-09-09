@@ -96,7 +96,7 @@ export async function FileTree({
           const size = sizes.get(entry.path);
           return (
             <li key={entry.path}>
-              <Link
+              <Link prefetch={false}
                 href={href}
                 className="flex items-center justify-between gap-3 px-4 py-2 hover:bg-muted/50"
               >

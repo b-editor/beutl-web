@@ -29,7 +29,8 @@ vi.mock("@/lib/stripe/config", () => ({
     webhooks: { constructEvent: mocks.constructEvent },
   }),
 }));
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT: "pre-owner-metadata-2026-08-09",
   activateBillingOffer: mocks.activateBillingOffer,
   registerHistoricalBillingOffer: mocks.registerHistoricalBillingOffer,

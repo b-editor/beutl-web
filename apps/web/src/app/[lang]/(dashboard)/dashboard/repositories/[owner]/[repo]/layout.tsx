@@ -17,7 +17,7 @@ export default async function Layout(props: {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
-        <Link
+        <Link prefetch={false}
           href={`/${lang}/dashboard/repositories`}
           className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >

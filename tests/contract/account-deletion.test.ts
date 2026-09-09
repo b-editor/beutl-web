@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   addAuditLog: vi.fn(),
+  beginGitAccountDeletion: vi.fn(),
+  finishGitAccountDeletion: vi.fn(),
+  abortGitAccountDeletion: vi.fn(),
+  markGitAccountDeletionReady: vi.fn(),
   authorizeAccountDeletion: vi.fn(),
   closeStripeCustomerForAccountDeletion: vi.fn(),
   deleteUserById: vi.fn(),
@@ -12,7 +16,13 @@ const mocks = vi.hoisted(() => ({
   startRetryableTransaction: vi.fn(),
 }));
 
+vi.mock("@beutl/forgejo", () => ({
+  beginGitAccountDeletion: mocks.beginGitAccountDeletion,
+  finishGitAccountDeletion: mocks.finishGitAccountDeletion,
+  abortGitAccountDeletion: mocks.abortGitAccountDeletion,
+}));
 vi.mock("@beutl/db", () => ({
+  markGitAccountDeletionReady: mocks.markGitAccountDeletionReady,
   deleteUserById: mocks.deleteUserById,
   drainUserStorageFiles: mocks.drainUserStorageFiles,
   enqueueUserStorageCleanups: mocks.enqueueUserStorageCleanups,
@@ -23,6 +33,7 @@ vi.mock("@beutl/db", () => ({
 vi.mock("@beutl/next/audit-log", () => ({
   addAuditLog: mocks.addAuditLog,
   auditLogActions: {
+    git: { accountDeleted: "git.accountDeleted", accountPurgeFailed: "git.accountPurgeFailed" },
     account: { accountDeleted: "account.accountDeleted" },
   },
 }));
@@ -48,6 +59,9 @@ const intent = {
 describe("resumable account deletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.addAuditLog.mockResolvedValue(undefined);
+    mocks.beginGitAccountDeletion.mockResolvedValue({ forgejoUsername: "git-user", intentId: "git-intent" });
+    mocks.finishGitAccountDeletion.mockResolvedValue(true);
     mocks.authorizeAccountDeletion.mockResolvedValue({
       status: "authorized",
       resumed: false,
@@ -72,6 +86,9 @@ describe("resumable account deletion", () => {
   it("durably authorizes before Stripe and deletes locally only after closure", async () => {
     await deleteUser("confirmation-token", "owner@example.com");
 
+    expect(mocks.markGitAccountDeletionReady).toHaveBeenCalledWith({ userId: "user-1", intentId: "git-intent", prisma: { transaction: true } });
+    expect(mocks.beginGitAccountDeletion.mock.invocationCallOrder[0]).toBeLessThan(mocks.deleteUserById.mock.invocationCallOrder[0]);
+    expect(mocks.deleteUserById.mock.invocationCallOrder[0]).toBeLessThan(mocks.finishGitAccountDeletion.mock.invocationCallOrder[0]);
     expect(mocks.authorizeAccountDeletion).toHaveBeenCalledWith({
       token: "confirmation-token",
       identifier: "owner@example.com",
@@ -162,6 +179,8 @@ describe("resumable account deletion", () => {
     expect(mocks.findAccountDeletionIntent).toHaveBeenCalledTimes(2);
     expect(mocks.prepareAccountDeletionOutboxes).toHaveBeenCalledTimes(2);
     expect(mocks.deleteUserById).toHaveBeenCalledTimes(2);
+    expect(mocks.beginGitAccountDeletion).toHaveBeenCalledTimes(1);
+    expect(mocks.finishGitAccountDeletion).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the local user when Stripe customer ownership conflicts", async () => {
@@ -214,6 +233,8 @@ describe("resumable account deletion", () => {
     await expect(
       deleteUser("confirmation-token", "owner@example.com"),
     ).rejects.toThrow("audit unavailable");
+    expect(mocks.abortGitAccountDeletion).toHaveBeenCalledWith("user-1", "git-intent");
+    expect(mocks.finishGitAccountDeletion).not.toHaveBeenCalled();
 
     expect(mocks.enqueueUserStorageCleanups).toHaveBeenCalled();
     expect(mocks.prepareAccountDeletionOutboxes).toHaveBeenCalled();

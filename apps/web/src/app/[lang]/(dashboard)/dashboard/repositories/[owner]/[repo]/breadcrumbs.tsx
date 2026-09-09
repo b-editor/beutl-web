@@ -19,7 +19,7 @@ export function Breadcrumbs({
 
   return (
     <nav className="flex flex-wrap items-center gap-1 text-sm">
-      <Link href={base} className="font-medium hover:underline">
+      <Link prefetch={false} href={base} className="font-medium hover:underline">
         {repo}
       </Link>
       {segments.map((segment, index) => {
@@ -33,7 +33,7 @@ export function Breadcrumbs({
             {isLast ? (
               <span className="text-muted-foreground">{segment}</span>
             ) : (
-              <Link href={href} className="hover:underline">
+              <Link prefetch={false} href={href} className="hover:underline">
                 {segment}
               </Link>
             )}

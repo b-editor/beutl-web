@@ -97,7 +97,8 @@ vi.mock("@/lib/stripe/package-payment", () => ({
   resolvePackagePayment: mocks.resolvePackagePayment,
   resolvePackagePaymentOwner: mocks.resolvePackagePaymentOwner,
 }));
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async () => ({
+  GitRepositoryOperation: (await import("@prisma/client")).GitRepositoryOperation,
   LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
     "pre-owner-metadata-2026-08-09",
   addPurchasedCredits: mocks.addPurchasedCredits,

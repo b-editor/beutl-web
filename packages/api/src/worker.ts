@@ -143,8 +143,7 @@ function withBoundedBody(
   } as RequestInit & { duplex: "half" });
 }
 
-export default {
-  /**
+/**
    * 退会の後始末をやり残していたら片付ける。
    *
    * Forgejo が落ちている間に退会があると purge が失敗し、GitAccountDeletion に
@@ -154,7 +153,7 @@ export default {
    * 併せて、退会を始めたまま消えた処理の印も外す。これを外さないと、その利用者は
    * 資格情報の発行も、やり直しの退会もできないまま固まる。
    */
-  async reconcileGitDeletions(): Promise<void> {
+async function reconcileGitDeletions(): Promise<void> {
 
     // **黙って抜けない。** ここで止まると、退会のやり直しも、復活したアカウントの
     // 消し直しも、リポジトリの直しも全部止まる。どれも利用者からは見えないので、
@@ -317,8 +316,9 @@ export default {
     } catch (error) {
       console.error("failed to repair Git repositories", error);
     }
-  },
+}
 
+export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     // Bound the body before routing. Some v1 handlers parse JSON before auth,
     // so declared and streamed sizes must be rejected at the Worker boundary.
@@ -354,7 +354,10 @@ export default {
     context: ExecutionContextLike,
   ): Promise<void> {
     configureRuntime(env);
-    context.waitUntil(this.reconcileGitDeletions());
+    // Billing runs every five minutes; preserve the Git cleanup cadence.
+    if (new Date(controller.scheduledTime).getUTCMinutes() % 15 === 0) {
+      context.waitUntil(reconcileGitDeletions());
+    }
     const scheduledAt = new Date(controller.scheduledTime);
     // Duplicate top-up and package-payment refunds may be created by checkout
     // recovery. Let both refund workers finish before cleanup consumes their

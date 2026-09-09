@@ -78,7 +78,7 @@ export default async function Page(props: {
           <ul className="divide-y rounded-lg border">
             {repositories.map((repository) => (
               <li key={repository.id}>
-                <Link
+                <Link prefetch={false}
                   className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 hover:bg-muted/50"
                   href={`/${lang}/dashboard/repositories/${repository.owner.login}/${repository.name}`}
                 >

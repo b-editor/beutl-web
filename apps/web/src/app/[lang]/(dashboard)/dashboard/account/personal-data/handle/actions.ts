@@ -39,55 +39,55 @@ export async function deleteUser(token: string, identifier: string) {
   // "already done" answer as before.
   const { forgejoUsername, intentId } = await beginGitAccountDeletion(intent.userId);
   try {
-  await drainUserStorageFiles({ userId: intent.userId });
-  const deleted = await startRetryableTransaction(async (prisma) => {
-    const currentIntent = await findAccountDeletionIntent({
-      identifier: intent.identifier,
-      tokenHash: intent.tokenHash,
-      prisma,
+    await drainUserStorageFiles({ userId: intent.userId });
+    const deleted = await startRetryableTransaction(async (prisma) => {
+      const currentIntent = await findAccountDeletionIntent({
+        identifier: intent.identifier,
+        tokenHash: intent.tokenHash,
+        prisma,
+      });
+      if (!currentIntent) {
+        // A concurrent invocation already completed the same durable intent.
+        return false;
+      }
+      if (
+        currentIntent.userId !== intent.userId ||
+        currentIntent.stripeCustomerId !== intent.stripeCustomerId
+      ) {
+        throw new Error("Account deletion intent changed unexpectedly");
+      }
+      // Re-snapshot billing attempts and provider jobs in the same serializable
+      // transaction that performs the User cascade. This closes the interval
+      // between durable authorization and final local deletion.
+      const prepared = await prepareAccountDeletionOutboxes({
+        userId: intent.userId,
+        prisma,
+      });
+      if (prepared.unboundCheckoutRecoveries > 0) {
+        throw new Error("Checkout recovery is pending before account deletion");
+      }
+      if (prepared.customerProvisioningRecoveries > 0) {
+        throw new Error(
+          "Stripe Customer provisioning recovery is pending before account deletion",
+        );
+      }
+      await enqueueUserStorageCleanups({
+        userId: intent.userId,
+        prisma,
+      });
+      await addAuditLog({
+        userId: null,
+        action: auditLogActions.account.accountDeleted,
+        details: `User ${intent.userId} deleted their account`,
+        prisma,
+      });
+      await deleteUserById({ userId: intent.userId, prisma });
+      await markGitAccountDeletionReady({ userId: intent.userId, intentId, prisma });
+      return true;
     });
-    if (!currentIntent) {
-      // A concurrent invocation already completed the same durable intent.
-      return false;
+    if (!deleted) {
+      return;
     }
-    if (
-      currentIntent.userId !== intent.userId ||
-      currentIntent.stripeCustomerId !== intent.stripeCustomerId
-    ) {
-      throw new Error("Account deletion intent changed unexpectedly");
-    }
-    // Re-snapshot billing attempts and provider jobs in the same serializable
-    // transaction that performs the User cascade. This closes the interval
-    // between durable authorization and final local deletion.
-    const prepared = await prepareAccountDeletionOutboxes({
-      userId: intent.userId,
-      prisma,
-    });
-    if (prepared.unboundCheckoutRecoveries > 0) {
-      throw new Error("Checkout recovery is pending before account deletion");
-    }
-    if (prepared.customerProvisioningRecoveries > 0) {
-      throw new Error(
-        "Stripe Customer provisioning recovery is pending before account deletion",
-      );
-    }
-    await enqueueUserStorageCleanups({
-      userId: intent.userId,
-      prisma,
-    });
-    await addAuditLog({
-      userId: null,
-      action: auditLogActions.account.accountDeleted,
-      details: `User ${intent.userId} deleted their account`,
-      prisma,
-    });
-    await deleteUserById({ userId: intent.userId, prisma });
-    await markGitAccountDeletionReady({ userId: intent.userId, intentId, prisma });
-    return true;
-  });
-  if (!deleted) {
-    return;
-  }
   } catch (error) {
     await abortGitAccountDeletion(intent.userId, intentId);
     throw error;
@@ -110,5 +110,4 @@ export async function deleteUser(token: string, identifier: string) {
       console.error("failed to record the Git account deletion", auditError);
     });
   }
-
 }
