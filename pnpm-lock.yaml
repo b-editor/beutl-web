@@ -364,6 +364,9 @@ importers:
 
   packages/email:
     dependencies:
+      '@beutl/i18n':
+        specifier: workspace:*
+        version: link:../i18n
       server-only:
         specifier: ^0.0.1
         version: 0.0.1

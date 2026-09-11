@@ -3,10 +3,10 @@
 import { authenticated } from "@/lib/auth-guard";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { sendEmail as sendEmailUsingResend } from "@beutl/email";
+import { emailButton, sendEmail as sendEmailUsingResend } from "@beutl/email";
 import { ConfirmationTokenPurpose } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { getTranslation } from "@beutl/i18n";
+import { getTranslation, type AvailableLanguage } from "@beutl/i18n";
 import { getLanguage } from "@beutl/next/language";
 import { findEmailByUserId } from "@beutl/db";
 import { deleteManyConfirmationTokens } from "@beutl/db";
@@ -23,7 +23,11 @@ const emailSchema = z.object({
   cancel: z.literal("true").optional().or(emptyStringToUndefined),
 });
 
-async function sendEmail(email: string, token: string, lang: string) {
+async function sendEmail(
+  email: string,
+  token: string,
+  lang: AvailableLanguage,
+) {
   const { t } = await getTranslation(lang);
   const urlstr = (await headers()).get("x-url");
   if (!urlstr) {
@@ -37,9 +41,11 @@ async function sendEmail(email: string, token: string, lang: string) {
   await sendEmailUsingResend({
     to: email,
     subject: t("account:data.confirmationAccountDeletion.title"),
-    body: t("account:data.confirmationAccountDeletion.body", {
-      url: url.toString(),
-    }),
+    body: `
+      <p>${t("account:data.confirmationAccountDeletion.body")}</p>
+      ${emailButton(url.toString(), t("account:data.deleteAccount"))}
+    `,
+    lang,
   });
 }
 

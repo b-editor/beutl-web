@@ -2,7 +2,7 @@
 
 import { authenticated } from "@/lib/auth-guard";
 import { headers } from "next/headers";
-import { sendEmail as sendEmailUsingResend } from "@beutl/email";
+import { emailButton, sendEmail as sendEmailUsingResend } from "@beutl/email";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ConfirmationTokenPurpose } from "@prisma/client";
@@ -49,8 +49,9 @@ async function sendEmail(email: string, token: string) {
     subject: t("account:email.changeEmail"),
     body: `
       <p>${t("account:email.clickOnTheLink")}</p>
-      <a href="${url.toString()}">${t("change")}</a>
+      ${emailButton(url.toString(), t("change"))}
     `,
+    lang,
   });
 }
 

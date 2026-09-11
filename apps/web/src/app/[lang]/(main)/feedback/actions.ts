@@ -83,6 +83,7 @@ export async function submitFeedback(
         <p><strong>Message:</strong></p>
         <p>${escapeHtml(message).replace(/\n/g, "<br/>")}</p>
       `,
+      lang,
     });
 
     await Promise.all([dbSave, emailNotification]);

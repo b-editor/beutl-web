@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@beutl/i18n": "workspace:*",
     "server-only": "^0.0.1"
   }
 }
