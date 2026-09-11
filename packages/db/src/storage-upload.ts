@@ -389,6 +389,8 @@ export async function commitDedicatedStorageReservation({
   sha256,
   leaseToken,
   publish,
+  visibility = "DEDICATED",
+  folderId = null,
   prisma,
 }: {
   id: string;
@@ -398,6 +400,14 @@ export async function commitDedicatedStorageReservation({
   sha256?: string;
   leaseToken?: string;
   publish?: (tx: PrismaTransaction, file: { id: string; objectKey: string; size: bigint }) => Promise<void>;
+  // Where in the user's storage the file lands. A folder deleted since the
+  // caller chose it puts the file in the root, as deleting a folder does to
+  // the files already in it.
+  folderId?: string | null;
+  // Developer artifacts are DEDICATED: owned by a package or release rather
+  // than listed in the user's storage. A copy the user asked to keep in their
+  // storage is an ordinary PRIVATE file, reserved and committed the same way.
+  visibility?: "DEDICATED" | "PRIVATE";
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
@@ -436,6 +446,9 @@ export async function commitDedicatedStorageReservation({
     if (files >= quota.fileCountLimit) {
       return { kind: "tooManyFiles" as const };
     }
+    const folderStillOwned =
+      folderId !== null &&
+      (await tx.storageFolder.count({ where: { id: folderId, userId } })) === 1;
     const created = await tx.file.create({
       data: {
         id: fileId,
@@ -444,7 +457,8 @@ export async function commitDedicatedStorageReservation({
         size: reservation.size,
         mimeType: storedMimeType(reservation.mimeType),
         userId: reservation.userId,
-        visibility: "DEDICATED",
+        visibility,
+        folderId: folderStillOwned ? folderId : null,
         ...(sha256 ? { sha256 } : {}),
       },
     } as never);

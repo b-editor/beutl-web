@@ -6,6 +6,14 @@ import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import { Button } from "@beutl/ui/ui/button";
 import { Card } from "@beutl/ui/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@beutl/ui/ui/dialog";
+import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -25,12 +33,19 @@ import {
   ChevronRight,
   Copy,
   Download,
+  FolderInput,
+  Loader2,
   Lock,
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { listStorageFoldersAction, saveResultToStorageAction } from "./actions";
+import {
+  FolderTreePicker,
+  type PickableFolder,
+} from "../storage/folder-picker";
 
 export {
   canSubmitAiRequest,
@@ -1275,6 +1290,190 @@ export function DownloadButton({
       <Download className="mr-2 h-4 w-4" />
       {label}
     </Button>
+  );
+}
+
+// Keeps a finished image or video in the user's storage. The result itself
+// stays with the job; what the button makes is a copy that counts against the
+// storage quota, so it can be refused where the generation could not. One
+// press is one copy — after it lands the button stays on "saved" so a second
+// press does not quietly make a "(1)" twin — and a new result gets a fresh
+// button, because the key is the job.
+export function SaveToStorageButton({
+  lang,
+  jobId,
+}: {
+  lang: string;
+  jobId: string;
+}) {
+  const { t } = useTranslation(lang);
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={saved}
+        onClick={() => setOpen(true)}
+      >
+        <FolderInput className="mr-2 h-4 w-4" />
+        {saved
+          ? t("dashboard:ai.savedToStorage")
+          : t("dashboard:ai.saveToStorage")}
+      </Button>
+      {open && (
+        <SaveToStorageDialog
+          lang={lang}
+          jobId={jobId}
+          onClose={() => setOpen(false)}
+          onSaved={(fileName, folderName) => {
+            setSaved(true);
+            setOpen(false);
+            toast({
+              title: t("dashboard:ai.savedToStorageTitle"),
+              description: (
+                <span className="flex flex-col gap-1">
+                  <span>
+                    {t("dashboard:ai.savedToStorageDescription", {
+                      name: fileName,
+                      folder: folderName,
+                    })}
+                  </span>
+                  <Link
+                    href={`/${lang}/dashboard/storage`}
+                    prefetch={false}
+                    className="font-medium underline underline-offset-4"
+                  >
+                    {t("dashboard:ai.openStorage")}
+                  </Link>
+                </span>
+              ),
+            });
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Where to keep the result: the storage's folder tree, read when the dialog
+// opens so a folder made in another tab is on offer. Mounted fresh on every
+// open, so the choice starts at the root each time.
+function SaveToStorageDialog({
+  lang,
+  jobId,
+  onClose,
+  onSaved,
+}: {
+  lang: string;
+  jobId: string;
+  onClose: () => void;
+  onSaved: (fileName: string, folderName: string) => void;
+}) {
+  const { t } = useTranslation(lang);
+  const { toast } = useToast();
+  const [folders, setFolders] = useState<PickableFolder[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [target, setTarget] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    listStorageFoldersAction().then(
+      (loaded) => {
+        if (!cancelled) setFolders(loaded);
+      },
+      () => {
+        if (!cancelled) setLoadFailed(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async () => {
+    setPending(true);
+    let result: Awaited<ReturnType<typeof saveResultToStorageAction>>;
+    try {
+      result = await saveResultToStorageAction(jobId, target);
+    } catch {
+      result = { success: false };
+    }
+    setPending(false);
+    if (!result.success) {
+      toast({
+        title: result.message ?? t("dashboard:ai.saveToStorageFailed"),
+        variant: "destructive",
+      });
+      return;
+    }
+    const folderName =
+      (target !== null && folders?.find((folder) => folder.id === target)?.name) ||
+      t("storage:myStorage");
+    onSaved(result.storageFile?.name ?? "", folderName);
+  };
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !pending) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("dashboard:ai.saveToStorageTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("dashboard:ai.saveToStorageDescription")}
+          </DialogDescription>
+        </DialogHeader>
+        {folders ? (
+          <FolderTreePicker
+            lang={lang}
+            folders={folders}
+            value={target}
+            onChange={setTarget}
+            label={t("dashboard:ai.saveToStorageTitle")}
+          />
+        ) : loadFailed ? (
+          <Alert variant="destructive">
+            <TriangleAlert className="h-4 w-4" />
+            <AlertDescription>
+              {t("dashboard:ai.foldersLoadFailed")}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <div className="flex flex-col gap-2 rounded-md border p-2">
+            <Shimmer className="h-8 w-full" />
+            <Shimmer className="h-8 w-3/4" />
+            <Shimmer className="h-8 w-2/3" />
+          </div>
+        )}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={pending}
+          >
+            {t("cancel")}
+          </Button>
+          <Button
+            type="button"
+            disabled={pending || folders === null}
+            onClick={() => void save()}
+          >
+            {pending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+            {t("dashboard:ai.saveHere")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

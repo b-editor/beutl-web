@@ -51,6 +51,7 @@ import {
   useFileFingerprints,
   useAiRequestNames,
   ResultPanel,
+  SaveToStorageButton,
   ResultShimmer,
   ShimmerImage,
   ResultPlaceholder,
@@ -530,12 +531,17 @@ export function ImageEditForm({
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
-          <DownloadButton
-            label={t("dashboard:ai.download")}
-            onDownload={() =>
-              downloadFromUrl(state.url ?? "", state.fileName ?? "ai-image.png")
-            }
-          />
+          <>
+            {state.jobId && (
+              <SaveToStorageButton lang={lang} jobId={state.jobId} />
+            )}
+            <DownloadButton
+              label={t("dashboard:ai.download")}
+              onDownload={() =>
+                downloadFromUrl(state.url ?? "", state.fileName ?? "ai-image.png")
+              }
+            />
+          </>
         }
       >
         {sourcePreview && (

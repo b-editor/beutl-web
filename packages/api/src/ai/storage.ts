@@ -35,13 +35,16 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
   await bucket.delete(objectKey);
 }
 
-export async function readAiJsonResult({
+// The whole object, refused rather than truncated when it is larger than the
+// caller is prepared to hold: an AI result is read back into memory, so the
+// bound is the caller's memory budget, not the store's.
+export async function readAiOutputBytes({
   objectKey,
-  maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
+  maximumBytes,
 }: {
   objectKey: string;
-  maximumBytes?: number;
-}): Promise<unknown> {
+  maximumBytes: number;
+}): Promise<ArrayBuffer> {
   const bucket = getR2Bucket();
   if (!bucket.get) {
     throw new Error("The configured R2 bucket does not support reads.");
@@ -88,6 +91,17 @@ export async function readAiJsonResult({
   if (bytes.byteLength > maximumBytes) {
     throw new Error(`AI result ${objectKey} exceeds the size limit`);
   }
+  return bytes;
+}
+
+export async function readAiJsonResult({
+  objectKey,
+  maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
+}: {
+  objectKey: string;
+  maximumBytes?: number;
+}): Promise<unknown> {
+  const bytes = await readAiOutputBytes({ objectKey, maximumBytes });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 

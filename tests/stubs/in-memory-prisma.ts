@@ -368,6 +368,15 @@ export type InMemoryPrismaState = {
   billingRefundAttempts: Map<string, BillingRefundAttempt>;
   files: Map<string, FileRecord>;
   storageUploads: Map<string, StorageUploadRecord>;
+  storageFolders: Map<string, StorageFolderRecord>;
+};
+
+type StorageFolderRecord = {
+  id: string;
+  name: string;
+  userId: string;
+  parentId: string | null;
+  createdAt: Date;
 };
 
 // An upload that is still arriving, held while its parts are put in the bucket.
@@ -728,6 +737,7 @@ export function createInMemoryPrisma() {
     billingRefundAttempts: new Map(),
     files: new Map(),
     storageUploads: new Map(),
+    storageFolders: new Map(),
   };
   const subscriptionsOf = (userId: string) =>
     [...state.subscriptions.values()].filter((row) => row.userId === userId);
@@ -1158,6 +1168,9 @@ export function createInMemoryPrisma() {
     files: new Map([...state.files].map(([k, v]) => [k, { ...v }])),
     storageUploads: new Map(
       [...state.storageUploads].map(([k, v]) => [k, { ...v }]),
+    ),
+    storageFolders: new Map(
+      [...state.storageFolders].map(([k, v]) => [k, { ...v }]),
     ),
   });
 
@@ -3407,6 +3420,27 @@ export function createInMemoryPrisma() {
         return { count };
       },
     },
+    storageFolder: {
+      count: async ({ where }: { where: { id?: string; userId?: string } }) =>
+        [...state.storageFolders.values()].filter(
+          (folder) =>
+            (where.id === undefined || folder.id === where.id) &&
+            (where.userId === undefined || folder.userId === where.userId),
+        ).length,
+      findFirst: async ({ where }: { where: { id?: string; userId?: string } }) => {
+        const folder = [...state.storageFolders.values()].find(
+          (item) =>
+            (where.id === undefined || item.id === where.id) &&
+            (where.userId === undefined || item.userId === where.userId),
+        );
+        return folder ? { ...folder } : null;
+      },
+      findMany: async ({ where }: { where?: { userId?: string } } = {}) =>
+        [...state.storageFolders.values()]
+          .filter((folder) => !where?.userId || folder.userId === where.userId)
+          .sort((left, right) => left.name.localeCompare(right.name))
+          .map((folder) => ({ ...folder })),
+    },
     storageUpload: {
       create: async ({
         data,
@@ -3559,6 +3593,7 @@ export function createInMemoryPrisma() {
           userId: string;
           visibility: string;
           sha256?: string;
+          folderId?: string | null;
         };
       }) => {
         const record: FileRecord = {
@@ -3570,6 +3605,7 @@ export function createInMemoryPrisma() {
           userId: data.userId,
           visibility: data.visibility,
           sha256: data.sha256 ?? null,
+          folderId: data.folderId ?? null,
           createdAt: now(),
           updatedAt: now(),
         };

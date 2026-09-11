@@ -49,6 +49,7 @@ import {
   DownloadButton,
   ModelSelect,
   ResultPanel,
+  SaveToStorageButton,
   ResultShimmer,
   ShimmerImage,
   ResultPlaceholder,
@@ -147,7 +148,7 @@ export function ImageGenerateForm({
   const [isPending, setIsPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [generated, setGenerated] = useState<
-    { url: string; fileName: string } | null
+    { jobId: string; url: string; fileName: string } | null
   >(null);
   // The rough version the model is working through, shown while it works. Only
   // some providers send any; the rest simply have none to show.
@@ -347,7 +348,11 @@ export function ImageGenerateForm({
     setMessage(null);
     setPreview(null);
     try {
-      const outcome = await runAiStream<{ url: string; fileName?: string }>(
+      const outcome = await runAiStream<{
+        jobId: string;
+        url: string;
+        fileName?: string;
+      }>(
         "images",
         {
           body,
@@ -362,6 +367,7 @@ export function ImageGenerateForm({
 
       if (outcome.ok) {
         setGenerated({
+          jobId: outcome.result.jobId,
           url: outcome.result.url,
           fileName: outcome.result.fileName ?? "ai-image.png",
         });
@@ -667,10 +673,13 @@ export function ImageGenerateForm({
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
-          <DownloadButton
-            label={t("dashboard:ai.download")}
-            onDownload={() => downloadFromUrl(generated.url, generated.fileName)}
-          />
+          <>
+            <SaveToStorageButton lang={lang} jobId={generated.jobId} />
+            <DownloadButton
+              label={t("dashboard:ai.download")}
+              onDownload={() => downloadFromUrl(generated.url, generated.fileName)}
+            />
+          </>
         }
       >
         <ShimmerImage

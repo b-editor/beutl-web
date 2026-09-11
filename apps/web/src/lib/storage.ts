@@ -7,7 +7,9 @@ import {
   createFileAndSettleStorageWrite,
   deleteAiStorageCleanup,
   deleteFileWithStorageCleanup,
+  getAiJobResultFile,
   registerAiStorageCleanup,
+  storageFolderBelongsToUser,
   recordDedicatedStorageWriteUnknown,
   recordDedicatedStorageWriteUnknownByLeaseToken,
   recordLateDedicatedStorageWriteResult,
@@ -19,6 +21,7 @@ import {
   sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
+import { readAiOutputBytes } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const DEDICATED_STORAGE_WRITE_DEADLINE_MILLISECONDS = 30 * 1000;
@@ -161,6 +164,24 @@ export async function createStorageFile({
   }
 }
 
+/** What a reserved storage write stores: the bytes are asked for only after
+ * the quota has been reserved, so a refused write never reads them. */
+export type StorageWriteSource = {
+  name: string;
+  mimeType: string;
+  size: number;
+  bytes: () => Promise<ArrayBuffer>;
+};
+
+function sourceOfFile(file: File): StorageWriteSource {
+  return {
+    name: file.name,
+    mimeType: file.type,
+    size: file.size,
+    bytes: () => file.arrayBuffer(),
+  };
+}
+
 /** Dedicated developer artifacts use the same transactional quota invariant as
  * multipart uploads. A durable reservation is committed before the provider
  * put, and the File commit consumes that reservation atomically.
@@ -178,16 +199,101 @@ export async function createDedicatedStorageFile({
   quota?: { quotaBytes: bigint; fileCountLimit: number };
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
+  return await createReservedStorageFile({
+    source: sourceOfFile(file),
+    userId,
+    visibility: "DEDICATED",
+    quota,
+    publish,
+  });
+}
+
+export type AiResultStorageCopyOutcome =
+  | { kind: "created"; record: { id: string; name: string } }
+  | { kind: "overQuota" }
+  | { kind: "tooManyFiles" }
+  // The chosen folder is not one of the user's, or no longer exists.
+  | { kind: "folderNotFound" }
+  // No finished media result under this job for this user: the job is gone,
+  // still running, failed, or its result is a transcript rather than a file.
+  | { kind: "unavailable" };
+
+/** Keep a finished AI image or video in the user's storage.
+ *
+ * The result already sits in the bucket as the job's File, but that File is
+ * outside the storage listing and its quota (a paid result cannot be refused
+ * for lack of space). Keeping it means a second object under a fresh key and
+ * an ordinary PRIVATE File in the chosen folder of the storage, reserved
+ * against the quota like any upload. The job keeps its own result, so deleting
+ * the job later does not take the copy with it, and vice versa. */
+export async function copyAiResultToStorage({
+  jobId,
+  userId,
+  folderId = null,
+}: {
+  jobId: string;
+  userId: string;
+  folderId?: string | null;
+}): Promise<AiResultStorageCopyOutcome> {
+  const result = await getAiJobResultFile({ jobId, userId });
+  // Transcripts and translations are stored as JSON documents the screens turn
+  // into subtitle files; there is no file to keep as it is.
+  if (!result || result.mimeType === "application/json") {
+    return { kind: "unavailable" };
+  }
+  // Asked before anything is reserved or written: a folder that is not the
+  // user's is a refusal, not a file that quietly lands in the root.
+  if (
+    folderId !== null &&
+    !(await storageFolderBelongsToUser({ folderId, userId }))
+  ) {
+    return { kind: "folderNotFound" };
+  }
+  const size = Number(result.size);
+  const outcome = await createReservedStorageFile({
+    source: {
+      name: result.name,
+      mimeType: result.mimeType,
+      size,
+      bytes: () =>
+        readAiOutputBytes({ objectKey: result.objectKey, maximumBytes: size }),
+    },
+    userId,
+    visibility: "PRIVATE",
+    folderId,
+  });
+  if (outcome.kind !== "created") return outcome;
+  return {
+    kind: "created",
+    record: { id: outcome.record.id, name: outcome.record.name },
+  };
+}
+
+async function createReservedStorageFile({
+  source,
+  userId,
+  visibility,
+  folderId = null,
+  quota,
+  publish,
+}: {
+  source: StorageWriteSource;
+  userId: string;
+  visibility: "DEDICATED" | "PRIVATE";
+  folderId?: string | null;
+  quota?: { quotaBytes: bigint; fileCountLimit: number };
+  publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
+}) {
   // Only the names that could collide are read; see availableStorageFileName.
-  const filename = await availableStorageFileName({ userId, name: file.name });
+  const filename = await availableStorageFileName({ userId, name: source.name });
   const objectKey = crypto.randomUUID();
   const reservationInput = {
     userId,
     id: crypto.randomUUID(),
     objectKey,
     name: filename,
-    mimeType: file.type || "application/octet-stream",
-    size: BigInt(file.size),
+    mimeType: source.mimeType || "application/octet-stream",
+    size: BigInt(source.size),
   };
   const reservation = quota
     ? await createDedicatedStorageReservation({ ...reservationInput, ...quota })
@@ -208,7 +314,7 @@ export async function createDedicatedStorageFile({
   }
   let array: ArrayBuffer;
   try {
-    array = await file.arrayBuffer();
+    array = await source.bytes();
   } catch (error) {
     await releaseDedicatedStorageReservation({
       id: reservation.reservation.id,
@@ -401,6 +507,8 @@ export async function createDedicatedStorageFile({
       sha256: hashHex,
       leaseToken,
       publish,
+      visibility,
+      folderId,
     });
     if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
       // The plan lapsed between the reservation and this commit. The object
@@ -436,6 +544,8 @@ export async function createDedicatedStorageFile({
         sha256: hashHex,
         leaseToken,
         publish,
+        visibility,
+        folderId,
       }).catch(() => null);
       if (recovered?.kind === "created") return recovered;
     }

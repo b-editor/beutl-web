@@ -33,6 +33,22 @@ async function folderBelongsToUser(
   return (await tx.storageFolder.count({ where: { id: folderId, userId } })) === 1;
 }
 
+// Whether a folder the client named is one of this user's. A write that lands
+// a file in a folder asks before reserving anything, and again inside its own
+// transaction, because the folder may go away in between.
+export async function storageFolderBelongsToUser({
+  folderId,
+  userId,
+  prisma,
+}: {
+  folderId: string;
+  userId: string;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  const db = prisma ?? await getDb();
+  return await folderBelongsToUser(db, folderId, userId);
+}
+
 export async function createStorageFolder({
   userId,
   name,
