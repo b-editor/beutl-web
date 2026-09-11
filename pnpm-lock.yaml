@@ -236,8 +236,8 @@ importers:
         version: 4.5.4
     devDependencies:
       '@next/bundle-analyzer':
-        specifier: 15.5.22
-        version: 15.5.22
+        specifier: 15.5.24
+        version: 15.5.24
       '@tailwindcss/postcss':
         specifier: ^4.2.1
         version: 4.2.1
@@ -1516,8 +1516,8 @@ packages:
   '@levischuck/tiny-cbor@0.2.11':
     resolution: {integrity: sha512-llBRm4dT4Z89aRsm6u2oEZ8tfwL/2l6BwpZ7JcyieouniDECM5AqNgr/y08zalEIvW3RSK4upYyybDcmjXqAow==}
 
-  '@next/bundle-analyzer@15.5.22':
-    resolution: {integrity: sha512-RH3P0yrgKpJ4+zd8l9MptFk/cI48/6JpIwjdIrdqAb4Kkp611BGudysHpOGUDPOYD8qjT+QkUjDI5QyAwEyMBA==}
+  '@next/bundle-analyzer@15.5.24':
+    resolution: {integrity: sha512-nHvTgPWX8i4gx/eFI6kzsq7cy3J7aX9j2hxiQpM/SCmlmGd0bZPIR/fAygH7IiWgRWwAVMfSMe3vBUb7FJMQQw==}
 
   '@next/env@15.5.24':
     resolution: {integrity: sha512-mBDF7T0XKZjs9SpUAl0buizVO+O02ULjOvWX8o/AZo/5AGw/UAS1Zzcylmd4pqbftzmKQi+L/nB4jgBYKEAl5Q==}
@@ -7282,7 +7282,7 @@ snapshots:
 
   '@levischuck/tiny-cbor@0.2.11': {}
 
-  '@next/bundle-analyzer@15.5.22':
+  '@next/bundle-analyzer@15.5.24':
     dependencies:
       webpack-bundle-analyzer: 4.10.1
     transitivePeerDependencies:
