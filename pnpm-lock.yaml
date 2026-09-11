@@ -398,6 +398,9 @@ importers:
       '@beutl/db':
         specifier: workspace:*
         version: link:../db
+      '@beutl/email':
+        specifier: workspace:*
+        version: link:../email
       '@beutl/i18n':
         specifier: workspace:*
         version: link:../i18n

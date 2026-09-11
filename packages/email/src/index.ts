@@ -77,7 +77,7 @@ function assetContentId(key: EmailAssetKey): string {
 }
 
 /**
- * 同梱画像の <img>。macOS の Mail はインライン添付の width 属性を無視して原寸で
+ * 同梱画像の <img>。ロゴはリンクの中で唯一の内容なので、alt がリンクの名前になる。macOS の Mail はインライン添付の width 属性を無視して原寸で
  * 出すことがあるので、CSS の width/height も併記する。
  */
 function assetImg(key: EmailAssetKey, alt: string): string {
@@ -296,7 +296,7 @@ async function renderUnsafeEmailTemplate(
                 <tr>
                   <td valign="middle" style="padding-right: 8px;">
                     <a href="${SITE_URL}/${lang}" target="_blank" style="text-decoration: none;">
-                      ${assetImg("logo", "")}
+                      ${assetImg("logo", "Beutl")}
                     </a>
                   </td>
                   <td valign="middle" style="font-family: ${fontFamily}; font-size: 20px; font-weight: 600; line-height: 28px; color: ${palette.foreground};">

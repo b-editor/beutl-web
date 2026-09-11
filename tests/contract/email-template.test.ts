@@ -40,7 +40,7 @@ describe("email template", () => {
     expect(html).toContain('<meta name="color-scheme" content="dark">');
     // ナビバーと同じロゴ + 見出し。画像はサイトに頼らず cid: のインライン添付
     expect(html).toContain(
-      '<img src="cid:beutl-email-logo" width="28" height="28" alt="" style="display: block; border: 0; width: 28px; height: 28px;">',
+      '<img src="cid:beutl-email-logo" width="28" height="28" alt="Beutl" style="display: block; border: 0; width: 28px; height: 28px;">',
     );
     expect(html).toMatch(/font-weight: 600; line-height: 28px; [^>]*>[\s\S]*Beutl</);
     // フッター: SNS アイコンは白塗り PNG、規約リンクは言語別、著作権は今年まで
@@ -69,7 +69,7 @@ describe("email template", () => {
     expect(html).toContain("<p>こんにちは</p>");
   });
 
-  it("falls back to the default language and translates footer labels", async () => {
+  it("translates footer labels and links for the requested language", async () => {
     const { html } = await capture({
       to: "user@example.com",
       subject: "Hello",
@@ -79,6 +79,18 @@ describe("email template", () => {
     expect(html).toContain("https://beutl.beditor.net/en/docs/privacy");
     expect(html).toContain(">Privacy Policy<");
     expect(html).toContain('<html lang="en"');
+  });
+
+  it("falls back to the default language when lang is omitted", async () => {
+    const { html } = await capture({
+      to: "user@example.com",
+      subject: "Hello",
+      body: "<p>Hi</p>",
+    });
+    // defaultLanguage は ja (packages/i18n/src/settings.ts)
+    expect(html).toContain('<html lang="ja"');
+    expect(html).toContain("https://beutl.beditor.net/ja/docs/privacy");
+    expect(html).toContain(">プライバシーポリシー<");
   });
 
   it("derives a readable text/plain part from the HTML body", async () => {

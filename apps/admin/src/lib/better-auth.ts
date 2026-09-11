@@ -6,7 +6,7 @@ import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
-import { emailButton, sendEmail } from "@beutl/email";
+import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
 import type { Session, User } from "better-auth";
 import { cache } from "react";
 
@@ -55,17 +55,7 @@ async function createAuthWithPrisma() {
       }),
       magicLink({
         disableSignUp: true,
-        sendMagicLink: async ({ email, url }) => {
-          const { host } = new URL(url);
-          await sendEmail({
-            to: email,
-            subject: `Sign in to ${host}`,
-            body: `
-              <p>Click the button below to sign in:</p>
-              ${emailButton(url, "Sign in")}
-            `,
-          });
-        },
+        sendMagicLink: sendMagicLinkEmail,
       }),
       nextCookies(),
     ],
