@@ -18,6 +18,7 @@ import { STORAGE_FREE_FILE_COUNT_LIMIT } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const RESULT_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+const KEY = "5b2c8e2a-1c6b-4f0e-9a5d-3c2b1a0f9e8d";
 
 // A copy in storage is a second object: the job's own result must survive the
 // copy being deleted, and the copy must survive the job being deleted.
@@ -116,7 +117,7 @@ describe("keeping an AI result in storage", () => {
   it("copies the result under a new key as a private storage file", async () => {
     seedResult();
 
-    const outcome = await copyAiResultToStorage({ jobId: "job-1", userId: "u" });
+    const outcome = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
 
     expect(outcome.kind).toBe("created");
     if (outcome.kind !== "created") return;
@@ -160,7 +161,7 @@ describe("keeping an AI result in storage", () => {
     }
 
     await expect(
-      copyAiResultToStorage({ jobId: "job-1", userId: "u" }),
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
     ).resolves.toEqual({ kind: "tooManyFiles" });
     expect(bucket.get).not.toHaveBeenCalled();
     expect(bucket.put).not.toHaveBeenCalled();
@@ -182,7 +183,7 @@ describe("keeping an AI result in storage", () => {
       updatedAt: new Date(),
     });
 
-    const outcome = await copyAiResultToStorage({ jobId: "job-1", userId: "u" });
+    const outcome = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
 
     expect(outcome).toMatchObject({
       kind: "created",
@@ -197,12 +198,13 @@ describe("keeping an AI result in storage", () => {
     });
 
     const outcome = await copyAiResultToStorage({
-      jobId: "job-1", userId: "u", folderId: "folder-1",
+      jobId: "job-1", userId: "u", folderId: "folder-1", saveKey: KEY,
     });
 
     expect(outcome.kind).toBe("created");
     if (outcome.kind !== "created") return;
     expect(memory.state.files.get(outcome.record.id)?.folderId).toBe("folder-1");
+    expect(outcome.record.folderId).toBe("folder-1");
   });
 
   it("refuses another user's folder before reserving or writing anything", async () => {
@@ -213,7 +215,7 @@ describe("keeping an AI result in storage", () => {
 
     for (const folderId of ["theirs", "missing"]) {
       await expect(
-        copyAiResultToStorage({ jobId: "job-1", userId: "u", folderId }),
+        copyAiResultToStorage({ jobId: "job-1", userId: "u", folderId, saveKey: KEY }),
       ).resolves.toEqual({ kind: "folderNotFound" });
     }
     expect(bucket.get).not.toHaveBeenCalled();
@@ -234,12 +236,81 @@ describe("keeping an AI result in storage", () => {
     });
 
     const outcome = await copyAiResultToStorage({
-      jobId: "job-1", userId: "u", folderId: "folder-1",
+      jobId: "job-1", userId: "u", folderId: "folder-1", saveKey: KEY,
     });
 
     expect(outcome.kind).toBe("created");
     if (outcome.kind !== "created") return;
     expect(memory.state.files.get(outcome.record.id)?.folderId).toBeNull();
+  });
+
+  it("answers a retry under the same key with the copy that already landed", async () => {
+    seedResult();
+
+    const first = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
+    const again = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
+
+    expect(first.kind).toBe("created");
+    expect(again).toEqual(first);
+    expect(bucket.put).toHaveBeenCalledTimes(1);
+    expect(memory.state.files.size).toBe(2);
+    // A different key is a different save, and makes its own copy.
+    const other = await copyAiResultToStorage({
+      jobId: "job-1", userId: "u", saveKey: "0e1d2c3b-4a59-4687-9584-73625140f0e1",
+    });
+    expect(other.kind).toBe("created");
+    expect(bucket.put).toHaveBeenCalledTimes(2);
+    expect(memory.state.files.size).toBe(3);
+  });
+
+  it("refuses a retry while the first attempt is still in flight", async () => {
+    seedResult();
+    let releasePut: () => void = () => undefined;
+    bucket.put.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releasePut = resolve; }),
+    );
+
+    const first = copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
+    // Let the first attempt reach its put before asking again.
+    await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1));
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).resolves.toEqual({ kind: "inProgress" });
+    releasePut();
+    await expect(first).resolves.toMatchObject({ kind: "created" });
+  });
+
+  it("makes a new attempt after an earlier one under the same key failed", async () => {
+    seedResult();
+    bucket.put.mockRejectedValueOnce(new Error("store unavailable"));
+
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).rejects.toThrow("store unavailable");
+    const outcome = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
+
+    expect(outcome.kind).toBe("created");
+    expect(bucket.put).toHaveBeenCalledTimes(2);
+    expect(memory.state.files.size).toBe(2);
+  });
+
+  it("refuses a result whose stream stops short of its declared size", async () => {
+    seedResult();
+    // Declared as the full result, but the stream ends after part of it.
+    bucket.get.mockImplementationOnce(async () => ({
+      size: RESULT_BYTES.byteLength,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(RESULT_BYTES.subarray(0, 5));
+          controller.close();
+        },
+      }),
+    }));
+
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).rejects.toThrow("shorter than its declared size");
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 
   it("does not copy another user's result, a deleted job's result, or a transcript", async () => {
@@ -254,7 +325,7 @@ describe("keeping an AI result in storage", () => {
 
     for (const jobId of ["other", "gone", "transcript", "missing"]) {
       await expect(
-        copyAiResultToStorage({ jobId, userId: "u" }),
+        copyAiResultToStorage({ jobId, userId: "u", saveKey: KEY }),
       ).resolves.toEqual({ kind: "unavailable" });
     }
     expect(bucket.put).not.toHaveBeenCalled();

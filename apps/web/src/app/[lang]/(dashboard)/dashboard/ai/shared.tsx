@@ -1310,6 +1310,10 @@ export function SaveToStorageButton({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState(false);
+  // One name for this button's save, however many times the dialog is opened
+  // and the request retried: a save whose response was lost is found again
+  // under it rather than made twice.
+  const [saveKey] = useState(() => randomUuid());
 
   return (
     <>
@@ -1329,6 +1333,7 @@ export function SaveToStorageButton({
         <SaveToStorageDialog
           lang={lang}
           jobId={jobId}
+          saveKey={saveKey}
           onClose={() => setOpen(false)}
           onSaved={(fileName, folderName) => {
             setSaved(true);
@@ -1366,11 +1371,13 @@ export function SaveToStorageButton({
 function SaveToStorageDialog({
   lang,
   jobId,
+  saveKey,
   onClose,
   onSaved,
 }: {
   lang: string;
   jobId: string;
+  saveKey: string;
   onClose: () => void;
   onSaved: (fileName: string, folderName: string) => void;
 }) {
@@ -1400,7 +1407,7 @@ function SaveToStorageDialog({
     setPending(true);
     let result: Awaited<ReturnType<typeof saveResultToStorageAction>>;
     try {
-      result = await saveResultToStorageAction(jobId, target);
+      result = await saveResultToStorageAction(jobId, target, saveKey);
     } catch {
       result = { success: false };
     }
@@ -1412,10 +1419,12 @@ function SaveToStorageDialog({
       });
       return;
     }
-    const folderName =
-      (target !== null && folders?.find((folder) => folder.id === target)?.name) ||
-      t("storage:myStorage");
-    onSaved(result.storageFile?.name ?? "", folderName);
+    // Where the file actually landed, as the server committed it: the folder
+    // picked here may have been renamed or deleted in the meantime.
+    onSaved(
+      result.storageFile?.name ?? "",
+      result.storageFile?.folderName ?? t("storage:myStorage"),
+    );
   };
 
   return (

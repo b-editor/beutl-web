@@ -192,6 +192,7 @@
     "saveToStorageFull": "Your storage is full. Delete files you no longer need, or change your plan.",
     "saveToStorageTooManyFiles": "Your storage has reached its file limit. Delete files you no longer need, or change your plan.",
     "saveToStorageUnavailable": "This result cannot be saved to storage.",
+    "saveToStorageInProgress": "This result is still being saved. Please try again in a moment.",
     "copy": "Copy",
     "copyText": "Copy text",
     "copied": "Copied",

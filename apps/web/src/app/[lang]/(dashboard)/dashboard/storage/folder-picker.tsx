@@ -54,10 +54,10 @@ export function FolderTreePicker({
       else map.set(key, [folder]);
     }
     for (const list of map.values()) {
-      list.sort((left, right) => left.name.localeCompare(right.name));
+      list.sort((left, right) => left.name.localeCompare(right.name, lang));
     }
     return map;
-  }, [folders, byId]);
+  }, [folders, byId, lang]);
 
   // Opens on the starting location with its ancestors unfolded. Computed once:
   // the picker is mounted fresh each time its dialog opens.
