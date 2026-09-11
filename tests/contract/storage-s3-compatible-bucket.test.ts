@@ -199,11 +199,39 @@ describe("S3 compatible bucket adapter", () => {
     expect(recorded[0].headers.get("content-length")).toBe("4");
     expect(recorded[1].headers.get("content-length")).toBe("2");
     expect(recorded[1].headers.get("content-type")).toBe("text/plain");
-    // A buffered body already carries its length; the header is left to fetch.
-    expect(recorded[2].headers.get("content-length")).toBeNull();
+    // A buffered body says its length too: a fetch that rebuilds the request
+    // around the body stream (Next.js's patched fetch does) would otherwise
+    // send it chunked, and S3 refuses that with 411.
+    expect(recorded[2].headers.get("content-length")).toBe("8");
     await expect(
       s3.resumeMultipartUpload!("k", "up").uploadPart(1, stream(new Uint8Array(1)), { contentLength: -1 }),
     ).rejects.toBeInstanceOf(RangeError);
+  });
+
+  it("keeps the length of a buffered put through a fetch that rebuilds the request", async () => {
+    // What Next.js's patched fetch does with a Request input: a new Request
+    // around the body stream, with the headers copied over. The body's own
+    // length is gone by then; only the header survives.
+    const rebuilt: Request[] = [];
+    const rebuildingFetch = async (input: RequestInfo | URL) => {
+      if (!(input instanceof Request)) throw new Error("expected a signed Request");
+      const request = new Request(input.url, {
+        method: input.method,
+        headers: input.headers,
+        body: input.body,
+        duplex: "half",
+      } as RequestInit);
+      rebuilt.push(request);
+      return new Response(null, { status: 200 });
+    };
+    await bucket({ fetch: rebuildingFetch as typeof fetch }).put(
+      "k",
+      new Uint8Array([1, 2, 3, 4, 5]).buffer,
+    );
+    await bucket({ fetch: rebuildingFetch as typeof fetch }).put("k", "héllo");
+    expect(rebuilt[0].headers.get("content-length")).toBe("5");
+    expect(rebuilt[1].headers.get("content-length")).toBe("6");
+    expect(new Uint8Array(await rebuilt[0].arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
   });
 
   it("does not retry a streamed part", async () => {

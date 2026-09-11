@@ -194,11 +194,27 @@ type FixedLengthStreamConstructor = new (
   length: number,
 ) => TransformStream<Uint8Array, Uint8Array>;
 
+// How many bytes a buffered body is. A string goes on the wire as UTF-8.
+function byteLengthOf(value: ArrayBuffer | ArrayBufferView | string): number {
+  if (typeof value === "string") return new TextEncoder().encode(value).byteLength;
+  return value.byteLength;
+}
+
 function withKnownLength(
   value: BucketValue,
   contentLength: number | undefined,
 ): { body: BucketValue; headers: Record<string, string> } {
-  if (!(value instanceof ReadableStream) || contentLength === undefined) {
+  if (!(value instanceof ReadableStream)) {
+    // A buffered body carries its length, but not all the way to the wire:
+    // Next.js's patched fetch rebuilds the Request around `request.body`, a
+    // stream, and S3 then refuses the chunked transfer with 411. Say the
+    // length outright; every fetch honours the header.
+    return {
+      body: value,
+      headers: { "content-length": String(byteLengthOf(value)) },
+    };
+  }
+  if (contentLength === undefined) {
     return { body: value, headers: {} };
   }
   if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
