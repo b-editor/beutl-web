@@ -326,13 +326,16 @@ export function ImageGenerateForm({
       return;
     }
 
+    // Taken before the wait below: once the event has finished dispatching,
+    // currentTarget is null, and FormData refuses it.
+    const form = event.currentTarget;
     const idempotencyKey = await names.acquireAndCommit(
       signature,
       model,
       names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
     );
     if (!idempotencyKey) return;
-    const body = new FormData(event.currentTarget);
+    const body = new FormData(form);
     // What the form carries is what the endpoint reads, save for the model and
     // the shapes this screen settled from the model's own capabilities.
     body.set("prompt", composePrompt({ main: prompt, style, composition, exclusions }));

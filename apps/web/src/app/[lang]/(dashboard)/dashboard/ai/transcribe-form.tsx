@@ -256,9 +256,12 @@ export function TranscribeForm({
       return;
     }
     if (!names.ready) return;
+    // Taken before the wait below: once the event has finished dispatching,
+    // currentTarget is null, and FormData refuses it.
+    const form = event.currentTarget;
     const idempotencyKey = await names.acquireAndCommit(signature, model, null);
     if (!idempotencyKey) return;
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData(form);
     formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
     dispatch(formData);
   }
