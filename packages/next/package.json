@@ -7,6 +7,7 @@
     "./audit-log": "./src/audit-log.ts",
     "./auth-hooks": "./src/auth-hooks.ts",
     "./language": "./src/language.ts",
+    "./magic-link-email": "./src/magic-link-email.ts",
     "./local-redirect": "./src/local-redirect.ts",
     "./middleware": "./src/middleware.ts"
   },
@@ -16,6 +17,7 @@
   "dependencies": {
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
+    "@beutl/email": "workspace:*",
     "@beutl/i18n": "workspace:*",
     "server-only": "^0.0.1"
   },

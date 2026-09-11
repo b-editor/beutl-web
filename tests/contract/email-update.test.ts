@@ -24,7 +24,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("@beutl/email", () => ({ sendEmail: vi.fn() }));
+vi.mock("@beutl/email", () => ({
+  sendEmail: vi.fn(),
+  emailButton: vi.fn(() => ""),
+}));
 vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn() }));
 vi.mock("@beutl/i18n", () => ({ getTranslation: vi.fn() }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: mocks.getLanguage }));
