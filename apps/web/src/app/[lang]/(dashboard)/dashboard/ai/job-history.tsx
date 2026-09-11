@@ -49,6 +49,7 @@ import {
   blockedReason,
   downloadFromUrl,
   downloadTextFile,
+  SaveToStorageButton,
   type AiAccess,
 } from "./shared";
 import {
@@ -615,19 +616,22 @@ export function JobHistory({
                         </>
                       ) : (
                         job.url && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              downloadFromUrl(
-                                job.url as string,
-                                job.fileName ?? `ai-result-${job.id}`,
-                              )
-                            }
-                          >
-                            {t("dashboard:ai.download")}
-                          </Button>
+                          <>
+                            <SaveToStorageButton lang={lang} jobId={job.id} />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                downloadFromUrl(
+                                  job.url as string,
+                                  job.fileName ?? `ai-result-${job.id}`,
+                                )
+                              }
+                            >
+                              {t("dashboard:ai.download")}
+                            </Button>
+                          </>
                         )
                       )}
                       {job.kind === "video" && isActive(job) && (

@@ -49,6 +49,7 @@ import {
   DownloadButton,
   ModelSelect,
   ResultPanel,
+  SaveToStorageButton,
   ResultShimmer,
   ShimmerImage,
   ResultPlaceholder,
@@ -147,7 +148,7 @@ export function ImageGenerateForm({
   const [isPending, setIsPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [generated, setGenerated] = useState<
-    { url: string; fileName: string } | null
+    { jobId: string; url: string; fileName: string } | null
   >(null);
   // The rough version the model is working through, shown while it works. Only
   // some providers send any; the rest simply have none to show.
@@ -325,13 +326,17 @@ export function ImageGenerateForm({
       return;
     }
 
+    // Taken before the wait below, for two reasons: once the event has
+    // finished dispatching currentTarget is null, and FormData refuses it; and
+    // the name is committed for the values as they are now, so what is sent
+    // must be those values, not whatever the fields hold when the wait ends.
+    const body = new FormData(event.currentTarget);
     const idempotencyKey = await names.acquireAndCommit(
       signature,
       model,
       names.heldCapabilityFor(signature) ?? heldCapabilities[model] ?? null,
     );
     if (!idempotencyKey) return;
-    const body = new FormData(event.currentTarget);
     // What the form carries is what the endpoint reads, save for the model and
     // the shapes this screen settled from the model's own capabilities.
     body.set("prompt", composePrompt({ main: prompt, style, composition, exclusions }));
@@ -347,7 +352,11 @@ export function ImageGenerateForm({
     setMessage(null);
     setPreview(null);
     try {
-      const outcome = await runAiStream<{ url: string; fileName?: string }>(
+      const outcome = await runAiStream<{
+        jobId: string;
+        url: string;
+        fileName?: string;
+      }>(
         "images",
         {
           body,
@@ -362,6 +371,7 @@ export function ImageGenerateForm({
 
       if (outcome.ok) {
         setGenerated({
+          jobId: outcome.result.jobId,
           url: outcome.result.url,
           fileName: outcome.result.fileName ?? "ai-image.png",
         });
@@ -667,10 +677,13 @@ export function ImageGenerateForm({
       <ResultPanel
         title={t("dashboard:ai.generated")}
         actions={
-          <DownloadButton
-            label={t("dashboard:ai.download")}
-            onDownload={() => downloadFromUrl(generated.url, generated.fileName)}
-          />
+          <>
+            <SaveToStorageButton lang={lang} jobId={generated.jobId} />
+            <DownloadButton
+              label={t("dashboard:ai.download")}
+              onDownload={() => downloadFromUrl(generated.url, generated.fileName)}
+            />
+          </>
         }
       >
         <ShimmerImage

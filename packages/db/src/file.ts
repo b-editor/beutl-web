@@ -687,7 +687,7 @@ export async function findStorageFileByIdAndUserId({
   const db = prisma ?? await getDb();
   return await db.file.findFirst({
     where: { id, userId },
-    select: { id: true, name: true, size: true },
+    select: { id: true, name: true, size: true, folderId: true },
   });
 }
 

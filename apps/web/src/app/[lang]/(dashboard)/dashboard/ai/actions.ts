@@ -49,6 +49,8 @@ import {
   getAiJobResultFile,
   listAiJobsByUserId,
   prepareAiJobDeletionByUserId,
+  findStorageFolderNameByIdAndUserId,
+  retrieveStorageFoldersByUserId,
 } from "@beutl/db";
 import {
   classifyVideoSubmissionFailure,
@@ -78,6 +80,8 @@ import {
 import { composePrompt } from "@/lib/ai-prompt";
 import { parseGlossary } from "@/lib/subtitle-format";
 import { getContentUrl } from "@/lib/content-url";
+import { copyAiResultToStorage } from "@/lib/storage";
+import { revalidatePath } from "next/cache";
 import { aiFailureResult } from "@/lib/ai-screen";
 import { retryJobFingerprint } from "@/lib/ai-retry-attempt";
 
@@ -102,6 +106,15 @@ export type AiActionResult = {
   language?: string;
   jobs?: unknown[];
   nextCursor?: { createdAt: string; id: string } | null;
+  // The storage file a result was kept as, by saveResultToStorageAction, and
+  // where it landed as committed — the folder chosen may have gone away in
+  // between, in which case the file is in the root and folderName is null.
+  storageFile?: {
+    id: string;
+    name: string;
+    folderId: string | null;
+    folderName: string | null;
+  };
 };
 
 // まだ結果が出ていない、というだけの状態。失敗・取り消しは決着がついている。
@@ -1604,4 +1617,95 @@ export async function deleteJobAction(jobId: string): Promise<AiActionResult> {
     outputObjectKey: prepared.outputFile?.objectKey,
   });
   return { success: true };
+}
+
+// Keep a finished image or video in the user's storage. The job keeps its own
+// result; this is a copy, counted against the storage quota like an upload,
+// so it can be refused for lack of space where the result itself could not.
+const SAVE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+export async function saveResultToStorageAction(
+  jobId: string,
+  folderId: string | null,
+  // Names this save. The screen makes one per button, so a retry after a lost
+  // response gets the copy that already landed rather than a second one.
+  saveKey: string,
+): Promise<AiActionResult> {
+  const session = await throwIfUnauth();
+  const lang = await getLanguage();
+  const { t } = await getTranslation(lang);
+  if (typeof jobId !== "string" || jobId.length === 0) {
+    return { success: false, message: t("api-errors:aiJobNotFound") };
+  }
+  if (typeof saveKey !== "string" || !SAVE_KEY_PATTERN.test(saveKey)) {
+    return { success: false, message: t("dashboard:ai.saveToStorageFailed") };
+  }
+  let outcome: Awaited<ReturnType<typeof copyAiResultToStorage>>;
+  try {
+    outcome = await copyAiResultToStorage({
+      jobId,
+      userId: session.user.id,
+      // Anything but a folder id (empty string, wrong type) means the root.
+      folderId:
+        typeof folderId === "string" && folderId.length > 0 ? folderId : null,
+      saveKey,
+    });
+  } catch (error) {
+    console.error("Failed to copy an AI result into storage", jobId, error);
+    return { success: false, message: t("dashboard:ai.saveToStorageFailed") };
+  }
+  switch (outcome.kind) {
+    case "created": {
+      revalidatePath(`/${lang}/dashboard/storage`);
+      const folderName = outcome.record.folderId
+        ? await findStorageFolderNameByIdAndUserId({
+            folderId: outcome.record.folderId,
+            userId: session.user.id,
+          })
+        : null;
+      return {
+        success: true,
+        storageFile: {
+          ...outcome.record,
+          // A folder that vanished after the commit leaves the file in the
+          // root as far as the listing is concerned; say so.
+          folderId: folderName === null ? null : outcome.record.folderId,
+          folderName,
+        },
+      };
+    }
+    case "inProgress":
+      return {
+        success: false,
+        message: t("dashboard:ai.saveToStorageInProgress"),
+      };
+    case "exhausted":
+      return { success: false, message: t("dashboard:ai.saveToStorageFailed") };
+    case "overQuota":
+      return { success: false, message: t("dashboard:ai.saveToStorageFull") };
+    case "tooManyFiles":
+      return {
+        success: false,
+        message: t("dashboard:ai.saveToStorageTooManyFiles"),
+      };
+    case "folderNotFound":
+      return { success: false, message: t("storage:folderNotFound") };
+    case "unavailable":
+      return {
+        success: false,
+        message: t("dashboard:ai.saveToStorageUnavailable"),
+      };
+  }
+}
+
+// The user's storage folders, for choosing where a result is kept. The whole
+// tree: it is small, and the picker needs the ancestors to unfold a path.
+export async function listStorageFoldersAction(): Promise<
+  { id: string; name: string; parentId: string | null }[]
+> {
+  const session = await throwIfUnauth();
+  const folders = await retrieveStorageFoldersByUserId({
+    userId: session.user.id,
+  });
+  return folders.map(({ id, name, parentId }) => ({ id, name, parentId }));
 }

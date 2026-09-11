@@ -7,7 +7,11 @@ import {
   createFileAndSettleStorageWrite,
   deleteAiStorageCleanup,
   deleteFileWithStorageCleanup,
+  findStorageFileByIdAndUserId,
+  findStorageUploadByIdAndUserId,
+  getAiJobResultFile,
   registerAiStorageCleanup,
+  storageFolderBelongsToUser,
   recordDedicatedStorageWriteUnknown,
   recordDedicatedStorageWriteUnknownByLeaseToken,
   recordLateDedicatedStorageWriteResult,
@@ -19,6 +23,7 @@ import {
   sumFileSizeByUserId,
 } from "@beutl/db";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
+import { readAiOutputBytes, sha256Hex } from "@beutl/api";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const DEDICATED_STORAGE_WRITE_DEADLINE_MILLISECONDS = 30 * 1000;
@@ -161,6 +166,24 @@ export async function createStorageFile({
   }
 }
 
+/** What a reserved storage write stores: the bytes are asked for only after
+ * the quota has been reserved, so a refused write never reads them. */
+export type StorageWriteSource = {
+  name: string;
+  mimeType: string;
+  size: number;
+  bytes: () => Promise<ArrayBuffer>;
+};
+
+function sourceOfFile(file: File): StorageWriteSource {
+  return {
+    name: file.name,
+    mimeType: file.type,
+    size: file.size,
+    bytes: () => file.arrayBuffer(),
+  };
+}
+
 /** Dedicated developer artifacts use the same transactional quota invariant as
  * multipart uploads. A durable reservation is committed before the provider
  * put, and the File commit consumes that reservation atomically.
@@ -178,16 +201,158 @@ export async function createDedicatedStorageFile({
   quota?: { quotaBytes: bigint; fileCountLimit: number };
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
 }) {
+  return await createReservedStorageFile({
+    source: sourceOfFile(file),
+    userId,
+    visibility: "DEDICATED",
+    quota,
+    publish,
+  });
+}
+
+// How many times one save may be attempted before it is given up on. Each
+// failed attempt leaves a released reservation row behind under its own name.
+const AI_RESULT_COPY_ATTEMPTS = 8;
+
+export type AiResultStorageCopyOutcome =
+  | { kind: "created"; record: { id: string; name: string; folderId: string | null } }
+  | { kind: "overQuota" }
+  | { kind: "tooManyFiles" }
+  // An earlier attempt under the same key has not settled yet.
+  | { kind: "inProgress" }
+  // Every attempt this save is allowed has failed.
+  | { kind: "exhausted" }
+  // The chosen folder is not one of the user's, or no longer exists.
+  | { kind: "folderNotFound" }
+  // No finished media result under this job for this user: the job is gone,
+  // still running, failed, or its result is a transcript rather than a file.
+  | { kind: "unavailable" };
+
+/** Keep a finished AI image or video in the user's storage.
+ *
+ * The result already sits in the bucket as the job's File, but that File is
+ * outside the storage listing and its quota (a paid result cannot be refused
+ * for lack of space). Keeping it means a second object under a fresh key and
+ * an ordinary PRIVATE File in the chosen folder of the storage, reserved
+ * against the quota like any upload. The job keeps its own result, so deleting
+ * the job later does not take the copy with it, and vice versa.
+ *
+ * One save is one copy: the client names each save with a key, and the
+ * reservation is made under a name derived from it, so a retry after a lost
+ * response finds the settled reservation and gets the same receipt back
+ * instead of a second file charged against the quota again. */
+export async function copyAiResultToStorage({
+  jobId,
+  userId,
+  folderId = null,
+  saveKey,
+}: {
+  jobId: string;
+  userId: string;
+  folderId?: string | null;
+  saveKey: string;
+}): Promise<AiResultStorageCopyOutcome> {
+  const result = await getAiJobResultFile({ jobId, userId });
+  // Transcripts and translations are stored as JSON documents the screens turn
+  // into subtitle files; there is no file to keep as it is.
+  if (!result || result.mimeType === "application/json") {
+    return { kind: "unavailable" };
+  }
+  // Asked before anything is reserved or written: a folder that is not the
+  // user's is a refusal, not a file that quietly lands in the root.
+  if (
+    folderId !== null &&
+    !(await storageFolderBelongsToUser({ folderId, userId }))
+  ) {
+    return { kind: "folderNotFound" };
+  }
+  // Every attempt of this save has a name derived from the key and its
+  // number, so a retry meets the same names: a settled attempt is the
+  // receipt, an attempt in flight is a refusal, and a failed (released) one
+  // leaves its name taken. A retry of a retry thus finds what the retry did;
+  // a random name for the successor would not be found again. All the names
+  // are looked at, not just up to the first free one: the cleanup collects
+  // released reservations, so an earlier attempt's name can be free again
+  // while a later attempt's receipt still stands. The user is part of the
+  // name, so a key guessed from someone else's save can only ever meet that
+  // person's own reservations.
+  let reservationId: string | null = null;
+  for (let attempt = 0; attempt < AI_RESULT_COPY_ATTEMPTS; attempt++) {
+    const id =
+      `ai-result-copy:${await sha256Hex(`${userId}\n${jobId}\n${saveKey}\n${attempt}`)}`;
+    const previous = await findStorageUploadByIdAndUserId({ id, userId });
+    if (!previous) {
+      reservationId ??= id;
+      continue;
+    }
+    if (previous.completedFileId) {
+      const copy = await findStorageFileByIdAndUserId({
+        id: previous.completedFileId,
+        userId,
+      });
+      // The receipt of the save that already landed. A copy deleted since is
+      // not something to redo behind the user's back.
+      return copy
+        ? { kind: "created", record: { id: copy.id, name: copy.name, folderId: copy.folderId } }
+        : { kind: "unavailable" };
+    }
+    if (!previous.abandonedAt) return { kind: "inProgress" };
+  }
+  if (reservationId === null) return { kind: "exhausted" };
+  const size = Number(result.size);
+  const outcome = await createReservedStorageFile({
+    source: {
+      name: result.name,
+      mimeType: result.mimeType,
+      size,
+      bytes: () =>
+        readAiOutputBytes({ objectKey: result.objectKey, maximumBytes: size }),
+    },
+    userId,
+    visibility: "PRIVATE",
+    folderId,
+    reservationId,
+  });
+  if (outcome.kind !== "created") return outcome;
+  return {
+    kind: "created",
+    record: {
+      id: outcome.record.id,
+      name: outcome.record.name,
+      folderId: outcome.record.folderId ?? null,
+    },
+  };
+}
+
+async function createReservedStorageFile({
+  source,
+  userId,
+  visibility,
+  folderId = null,
+  reservationId = crypto.randomUUID(),
+  quota,
+  publish,
+}: {
+  source: StorageWriteSource;
+  userId: string;
+  visibility: "DEDICATED" | "PRIVATE";
+  folderId?: string | null;
+  // The reservation's name. A caller that derives it from its own idempotency
+  // key can find the reservation again after a lost response.
+  reservationId?: string;
+  quota?: { quotaBytes: bigint; fileCountLimit: number };
+  publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>;
+}) {
   // Only the names that could collide are read; see availableStorageFileName.
-  const filename = await availableStorageFileName({ userId, name: file.name });
+  const filename = await availableStorageFileName({ userId, name: source.name });
   const objectKey = crypto.randomUUID();
   const reservationInput = {
     userId,
-    id: crypto.randomUUID(),
+    id: reservationId,
     objectKey,
     name: filename,
-    mimeType: file.type || "application/octet-stream",
-    size: BigInt(file.size),
+    mimeType: source.mimeType || "application/octet-stream",
+    size: BigInt(source.size),
   };
   const reservation = quota
     ? await createDedicatedStorageReservation({ ...reservationInput, ...quota })
@@ -208,7 +373,7 @@ export async function createDedicatedStorageFile({
   }
   let array: ArrayBuffer;
   try {
-    array = await file.arrayBuffer();
+    array = await source.bytes();
   } catch (error) {
     await releaseDedicatedStorageReservation({
       id: reservation.reservation.id,
@@ -401,6 +566,8 @@ export async function createDedicatedStorageFile({
       sha256: hashHex,
       leaseToken,
       publish,
+      visibility,
+      folderId,
     });
     if (outcome.kind === "overQuota" || outcome.kind === "tooManyFiles") {
       // The plan lapsed between the reservation and this commit. The object
@@ -436,6 +603,8 @@ export async function createDedicatedStorageFile({
         sha256: hashHex,
         leaseToken,
         publish,
+        visibility,
+        folderId,
       }).catch(() => null);
       if (recovered?.kind === "created") return recovered;
     }

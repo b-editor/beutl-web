@@ -35,13 +35,16 @@ export async function deleteAiOutputObject(objectKey: string): Promise<void> {
   await bucket.delete(objectKey);
 }
 
-export async function readAiJsonResult({
+// The whole object, refused rather than truncated when it is larger than the
+// caller is prepared to hold: an AI result is read back into memory, so the
+// bound is the caller's memory budget, not the store's.
+export async function readAiOutputBytes({
   objectKey,
-  maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
+  maximumBytes,
 }: {
   objectKey: string;
-  maximumBytes?: number;
-}): Promise<unknown> {
+  maximumBytes: number;
+}): Promise<ArrayBuffer> {
   const bucket = getR2Bucket();
   if (!bucket.get) {
     throw new Error("The configured R2 bucket does not support reads.");
@@ -54,30 +57,18 @@ export async function readAiJsonResult({
 
   let bytes: ArrayBuffer;
   if (object.body) {
-    const reader = object.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > maximumBytes) {
-          await reader.cancel("AI result size limit exceeded");
-          throw new Error(`AI result ${objectKey} exceeds the size limit`);
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    const combined = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      combined.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    bytes = combined.buffer;
+    bytes = await readStreamBytes(object.body, {
+      objectKey,
+      maximumBytes,
+      // A declared size is trusted for the allocation and then held to: the
+      // result lands in one buffer of that size instead of a pile of chunks
+      // joined into a second copy, which on a Worker can be the difference
+      // between fitting in memory and not.
+      declaredSize:
+        object.size !== undefined && Number.isSafeInteger(object.size) && object.size >= 0
+          ? object.size
+          : undefined,
+    });
   } else if (object.arrayBuffer) {
     // Legacy adapters without a stream cannot be bounded during the read. Keep
     // the post-read check, but prefer body whenever both forms are available.
@@ -88,6 +79,61 @@ export async function readAiJsonResult({
   if (bytes.byteLength > maximumBytes) {
     throw new Error(`AI result ${objectKey} exceeds the size limit`);
   }
+  return bytes;
+}
+
+async function readStreamBytes(
+  body: ReadableStream<Uint8Array>,
+  {
+    objectKey,
+    maximumBytes,
+    declaredSize,
+  }: { objectKey: string; maximumBytes: number; declaredSize: number | undefined },
+): Promise<ArrayBuffer> {
+  const reader = body.getReader();
+  // With a declared size the destination is allocated once, up front. Without
+  // one the chunks are kept and joined at the end.
+  const fixed = declaredSize === undefined ? null : new Uint8Array(declaredSize);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximumBytes || (fixed && total > fixed.byteLength)) {
+        await reader.cancel("AI result size limit exceeded");
+        throw new Error(`AI result ${objectKey} exceeds the size limit`);
+      }
+      if (fixed) fixed.set(value, total - value.byteLength);
+      else chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (fixed) {
+    if (total !== fixed.byteLength) {
+      throw new Error(`AI result ${objectKey} was shorter than its declared size`);
+    }
+    return fixed.buffer;
+  }
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined.buffer;
+}
+
+export async function readAiJsonResult({
+  objectKey,
+  maximumBytes = MAX_AI_TEXT_RESULT_BYTES,
+}: {
+  objectKey: string;
+  maximumBytes?: number;
+}): Promise<unknown> {
+  const bytes = await readAiOutputBytes({ objectKey, maximumBytes });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
