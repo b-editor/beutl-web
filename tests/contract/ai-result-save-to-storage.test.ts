@@ -292,6 +292,29 @@ describe("keeping an AI result in storage", () => {
     expect(outcome.kind).toBe("created");
     expect(bucket.put).toHaveBeenCalledTimes(2);
     expect(memory.state.files.size).toBe(2);
+    // The retry's own name is stable too: asking again after its response was
+    // lost finds what it made rather than making a third copy.
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).resolves.toEqual(outcome);
+    expect(bucket.put).toHaveBeenCalledTimes(2);
+    expect(memory.state.files.size).toBe(2);
+  });
+
+  it("gives up on a save whose every attempt failed", async () => {
+    seedResult();
+    bucket.put.mockRejectedValue(new Error("store unavailable"));
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await expect(
+        copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+      ).rejects.toThrow("store unavailable");
+    }
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).resolves.toEqual({ kind: "exhausted" });
+    expect(bucket.put).toHaveBeenCalledTimes(8);
+    expect(memory.state.files.size).toBe(1);
   });
 
   it("refuses a result whose stream stops short of its declared size", async () => {

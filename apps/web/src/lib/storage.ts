@@ -210,12 +210,18 @@ export async function createDedicatedStorageFile({
   });
 }
 
+// How many times one save may be attempted before it is given up on. Each
+// failed attempt leaves a released reservation row behind under its own name.
+const AI_RESULT_COPY_ATTEMPTS = 8;
+
 export type AiResultStorageCopyOutcome =
   | { kind: "created"; record: { id: string; name: string; folderId: string | null } }
   | { kind: "overQuota" }
   | { kind: "tooManyFiles" }
   // An earlier attempt under the same key has not settled yet.
   | { kind: "inProgress" }
+  // Every attempt this save is allowed has failed.
+  | { kind: "exhausted" }
   // The chosen folder is not one of the user's, or no longer exists.
   | { kind: "folderNotFound" }
   // No finished media result under this job for this user: the job is gone,
@@ -260,13 +266,22 @@ export async function copyAiResultToStorage({
   ) {
     return { kind: "folderNotFound" };
   }
-  // The user is part of the name, so a key guessed from someone else's save
-  // can only ever meet that person's own reservations.
-  const attemptId =
-    `ai-result-copy:${await sha256Hex(`${userId}\n${jobId}\n${saveKey}`)}`;
-  let reservationId = attemptId;
-  const previous = await findStorageUploadByIdAndUserId({ id: attemptId, userId });
-  if (previous) {
+  // Every attempt of this save has a name derived from the key and its
+  // number, so a retry walks the same names in the same order: a settled
+  // attempt is the receipt, an attempt in flight is a refusal, and a failed
+  // (released) one is stepped over to the next name. A retry of a retry thus
+  // finds what the retry did; a random name for the successor would not be
+  // found again. The user is part of the name, so a key guessed from someone
+  // else's save can only ever meet that person's own reservations.
+  let reservationId: string | null = null;
+  for (let attempt = 0; attempt < AI_RESULT_COPY_ATTEMPTS; attempt++) {
+    const id =
+      `ai-result-copy:${await sha256Hex(`${userId}\n${jobId}\n${saveKey}\n${attempt}`)}`;
+    const previous = await findStorageUploadByIdAndUserId({ id, userId });
+    if (!previous) {
+      reservationId = id;
+      break;
+    }
     if (previous.completedFileId) {
       const copy = await findStorageFileByIdAndUserId({
         id: previous.completedFileId,
@@ -279,10 +294,8 @@ export async function copyAiResultToStorage({
         : { kind: "unavailable" };
     }
     if (!previous.abandonedAt) return { kind: "inProgress" };
-    // The earlier attempt failed and was released; this one is a new attempt,
-    // under a name of its own because the released row keeps the derived one.
-    reservationId = crypto.randomUUID();
   }
+  if (reservationId === null) return { kind: "exhausted" };
   const size = Number(result.size);
   const outcome = await createReservedStorageFile({
     source: {

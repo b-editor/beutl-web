@@ -1679,6 +1679,8 @@ export async function saveResultToStorageAction(
         success: false,
         message: t("dashboard:ai.saveToStorageInProgress"),
       };
+    case "exhausted":
+      return { success: false, message: t("dashboard:ai.saveToStorageFailed") };
     case "overQuota":
       return { success: false, message: t("dashboard:ai.saveToStorageFull") };
     case "tooManyFiles":
