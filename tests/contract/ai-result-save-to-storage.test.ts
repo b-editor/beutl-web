@@ -301,6 +301,26 @@ describe("keeping an AI result in storage", () => {
     expect(memory.state.files.size).toBe(2);
   });
 
+  it("still finds a later attempt's receipt after the cleanup collected an earlier one", async () => {
+    seedResult();
+    bucket.put.mockRejectedValueOnce(new Error("store unavailable"));
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).rejects.toThrow("store unavailable");
+    const landed = await copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY });
+    expect(landed.kind).toBe("created");
+    // The cleanup collects the released first attempt, freeing its name.
+    for (const [id, row] of memory.state.storageUploads) {
+      if (row.abandonedAt) memory.state.storageUploads.delete(id);
+    }
+
+    await expect(
+      copyAiResultToStorage({ jobId: "job-1", userId: "u", saveKey: KEY }),
+    ).resolves.toEqual(landed);
+    expect(bucket.put).toHaveBeenCalledTimes(2);
+    expect(memory.state.files.size).toBe(2);
+  });
+
   it("gives up on a save whose every attempt failed", async () => {
     seedResult();
     bucket.put.mockRejectedValue(new Error("store unavailable"));

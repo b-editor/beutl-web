@@ -267,20 +267,23 @@ export async function copyAiResultToStorage({
     return { kind: "folderNotFound" };
   }
   // Every attempt of this save has a name derived from the key and its
-  // number, so a retry walks the same names in the same order: a settled
-  // attempt is the receipt, an attempt in flight is a refusal, and a failed
-  // (released) one is stepped over to the next name. A retry of a retry thus
-  // finds what the retry did; a random name for the successor would not be
-  // found again. The user is part of the name, so a key guessed from someone
-  // else's save can only ever meet that person's own reservations.
+  // number, so a retry meets the same names: a settled attempt is the
+  // receipt, an attempt in flight is a refusal, and a failed (released) one
+  // leaves its name taken. A retry of a retry thus finds what the retry did;
+  // a random name for the successor would not be found again. All the names
+  // are looked at, not just up to the first free one: the cleanup collects
+  // released reservations, so an earlier attempt's name can be free again
+  // while a later attempt's receipt still stands. The user is part of the
+  // name, so a key guessed from someone else's save can only ever meet that
+  // person's own reservations.
   let reservationId: string | null = null;
   for (let attempt = 0; attempt < AI_RESULT_COPY_ATTEMPTS; attempt++) {
     const id =
       `ai-result-copy:${await sha256Hex(`${userId}\n${jobId}\n${saveKey}\n${attempt}`)}`;
     const previous = await findStorageUploadByIdAndUserId({ id, userId });
     if (!previous) {
-      reservationId = id;
-      break;
+      reservationId ??= id;
+      continue;
     }
     if (previous.completedFileId) {
       const copy = await findStorageFileByIdAndUserId({
