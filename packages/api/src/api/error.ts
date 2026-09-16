@@ -54,6 +54,16 @@ export const errorCodes = [
   "virtualAssetCannotBeDownloaded",
   "cannotDeleteReleaseAssets",
 
+  // Storage
+  "invalidStorageQuery",
+  "invalidStorageCursor",
+  "storageFileNotFound",
+  "storageFolderNotFound",
+  "storageFileInUse",
+  "storageFolderInUse",
+  "storageInvalidMove",
+  "storageFolderNotEmpty",
+
   // AI
   "aiPlanRequired",
   "aiUsageLimitExceeded",

@@ -35,13 +35,12 @@ import {
   DropdownMenuTrigger,
 } from "@beutl/ui/ui/dropdown-menu";
 import { Separator } from "@beutl/ui/ui/separator";
-import { cn } from "@beutl/core";
+import { cn, storageFileActions } from "@beutl/core";
 import { useToast } from "@beutl/ui/use-toast";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import {
   contentUrl,
   downloadFile,
-  isDedicated,
   openFile,
   RAW,
 } from "./file-kind";
@@ -89,7 +88,7 @@ export function useFileActions(
   const { t } = useTranslation(lang);
   const { toast } = useToast();
   const single = files.length === 1 ? files[0] : null;
-  const editable = files.filter((file) => !isDedicated(file));
+  const editable = files.filter((file) => storageFileActions(file.visibility).includes("rename"));
   const actions: ItemAction[] = [];
 
   if (single) {
@@ -107,7 +106,7 @@ export function useFileActions(
       group: 0,
       run: () => downloadFile(single),
     });
-    if (single.visibility === "PUBLIC") {
+    if (storageFileActions(single.visibility).includes("copyLink")) {
       actions.push({
         id: "copyLink",
         label: t("storage:copyLink"),
@@ -129,7 +128,7 @@ export function useFileActions(
         },
       });
     }
-    if (!isDedicated(single)) {
+    if (storageFileActions(single.visibility).includes("rename")) {
       actions.push({
         id: "rename",
         label: t("storage:rename"),
@@ -157,8 +156,8 @@ export function useFileActions(
       run: () => handlers.showDetails(single),
     });
   }
-  const toPublic = editable.filter((file) => file.visibility === "PRIVATE");
-  const toPrivate = editable.filter((file) => file.visibility === "PUBLIC");
+  const toPublic = editable.filter((file) => storageFileActions(file.visibility).includes("setPublic"));
+  const toPrivate = editable.filter((file) => storageFileActions(file.visibility).includes("setPrivate"));
   if (toPublic.length > 0) {
     actions.push({
       id: "setPublic",

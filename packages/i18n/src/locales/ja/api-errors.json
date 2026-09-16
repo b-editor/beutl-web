@@ -41,5 +41,13 @@
   "aiModelDoesNotSupportRequest": "選択したモデルはこの組み合わせに対応していません。解像度・長さ・アスペクト比を変えるか、別のモデルを選んでください。",
   "unknown": "不明なエラーが発生しました。",
   "invalidVersionFormat": "バージョンの形式が無効です。",
-  "aiResultUnavailable": "このリクエストの結果を読み出せませんでした。もう一度実行してください。同じリクエストとして問い合わせるため、支払い済みの分が二重に請求されることはありません。"
+  "aiResultUnavailable": "このリクエストの結果を読み出せませんでした。もう一度実行してください。同じリクエストとして問い合わせるため、支払い済みの分が二重に請求されることはありません。",
+  "storageFileNotFound": "ファイルが見つかりません。",
+  "storageFolderNotFound": "フォルダーが見つかりません。",
+  "storageFileInUse": "使用中のファイルは変更できません。",
+  "storageFolderInUse": "このフォルダーには使用中のファイルが含まれています。",
+  "storageInvalidMove": "フォルダーを自身や子フォルダーに移動することはできません。",
+  "storageFolderNotEmpty": "フォルダーは空ではありません。内容を含む削除を明示的に指定してください。",
+  "invalidStorageQuery": "ストレージ一覧の取得条件が正しくありません。",
+  "invalidStorageCursor": "カーソルが正しくないか、別のフォルダー・取得条件のカーソルです。"
 }
