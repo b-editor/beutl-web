@@ -1201,6 +1201,25 @@ export function createInMemoryPrisma() {
   };
 
   const prisma = {
+    $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+      if (!query.join("?").includes('WITH RECURSIVE "storage_folder_path"')) {
+        throw new Error("Unsupported in-memory raw query");
+      }
+      const [folderId, userId, ancestorUserId] = values;
+      if (userId !== ancestorUserId) throw new Error("Ancestor queries must retain the owner");
+      const folders = [];
+      const visited = new Set<string>();
+      let id = folderId as string | null;
+      while (id !== null && !visited.has(id)) {
+        visited.add(id);
+        const folder = state.storageFolders.get(id);
+        if (!folder || folder.userId !== userId) break;
+        const { name, parentId, createdAt, updatedAt } = folder;
+        folders.push({ id, name, parentId, createdAt, updatedAt });
+        id = parentId;
+      }
+      return folders;
+    },
     accountDeletionIntent: {
       findFirst: async ({
         where,

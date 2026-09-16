@@ -33,22 +33,37 @@ export async function storageFolderPath(
   folderId: string | null,
   prisma?: PrismaTransaction,
 ) {
+  if (folderId === null) return [];
   const db = prisma ?? (await getDb());
-  const path: Prisma.StorageFolderGetPayload<{ select: typeof STORAGE_ENTRY_FOLDER_SELECT }>[] = [];
+  type Folder = Prisma.StorageFolderGetPayload<{ select: typeof STORAGE_ENTRY_FOLDER_SELECT }>;
+  // UNION deduplicates complete folder rows so corrupt cycles also terminate in SQL.
+  // Both terms are owner-scoped; the path never traverses another user's folders.
+  const folders = await db.$queryRaw<Folder[]>`
+    WITH RECURSIVE "storage_folder_path" AS (
+      SELECT "id", "name", "parentId", "createdAt", "updatedAt"
+      FROM "StorageFolder"
+      WHERE "id" = ${folderId} AND "userId" = ${userId}
+      UNION
+      SELECT parent."id", parent."name", parent."parentId", parent."createdAt", parent."updatedAt"
+      FROM "StorageFolder" AS parent
+      JOIN "storage_folder_path" AS child ON parent."id" = child."parentId"
+      WHERE parent."userId" = ${userId}
+    )
+    SELECT "id", "name", "parentId", "createdAt", "updatedAt" FROM "storage_folder_path"
+  `;
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const path: Folder[] = [];
   const visited = new Set<string>();
-  let id = folderId;
+  let id: string | null = folderId;
   while (id !== null) {
     if (visited.has(id)) throw new Error("Cyclic storage folder hierarchy");
     visited.add(id);
-    const folder = await db.storageFolder.findFirst({
-      where: { id, userId },
-      select: STORAGE_ENTRY_FOLDER_SELECT,
-    });
+    const folder = byId.get(id);
     if (!folder) return null;
-    path.unshift(folder);
+    path.push(folder);
     id = folder.parentId;
   }
-  return path;
+  return path.reverse();
 }
 
 // Keyset pagination uses the same (name, id) ordering and comparisons in the DB.
