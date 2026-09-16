@@ -9,6 +9,11 @@
 // SERIALIZABLE ordering has to be checked against CockroachDB in
 // tests/integration.
 
+// Sorting and cursor predicates must use the same locale-independent ordering.
+function compareStrings(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
 type CreditAccount = {
   userId: string;
   monthlyUsageUsed: number;
@@ -1034,7 +1039,7 @@ export function createInMemoryPrisma() {
       const actual = (folder as unknown as Record<string, unknown>)[key];
       if (value && typeof value === "object") {
         if ("in" in value) return (value.in as unknown[]).includes(actual);
-        if ("gt" in value) return String(actual) > String(value.gt);
+        if ("gt" in value) return compareStrings(String(actual), String(value.gt)) > 0;
       }
       return actual === value;
     });
@@ -1043,7 +1048,7 @@ export function createInMemoryPrisma() {
     if (!where) return true;
     if (where.id !== undefined) {
       if (typeof where.id === "string") { if (file.id !== where.id) return false; }
-      else if ((where.id.in && !where.id.in.includes(file.id)) || (where.id.gt !== undefined && file.id <= where.id.gt)) return false;
+      else if ((where.id.in && !where.id.in.includes(file.id)) || (where.id.gt !== undefined && compareStrings(file.id, where.id.gt) <= 0)) return false;
     }
     if (where.userId !== undefined && file.userId !== where.userId) return false;
     if (where.aiJobResult === null && aiJobResultForFile(file.id)) return false;
@@ -1061,7 +1066,7 @@ export function createInMemoryPrisma() {
       } else {
         const fold = (value: string) => (where.name && typeof where.name === "object" && where.name.mode === "insensitive" ? value.toLowerCase() : value);
         const haystack = fold(file.name);
-        if (where.name.gt !== undefined && file.name <= where.name.gt) return false;
+        if (where.name.gt !== undefined && compareStrings(file.name, where.name.gt) <= 0) return false;
         if (where.name.contains !== undefined && !haystack.includes(fold(where.name.contains))) return false;
         if (where.name.startsWith !== undefined && !haystack.startsWith(fold(where.name.startsWith))) return false;
         if (where.name.endsWith !== undefined && !haystack.endsWith(fold(where.name.endsWith))) return false;
@@ -3446,7 +3451,7 @@ export function createInMemoryPrisma() {
       },
       findMany: async ({ where, take }: { where?: Record<string, unknown>; take?: number } = {}) =>
         [...state.storageFolders.values()].filter(folder => matchesFolder(folder, where))
-          .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+          .sort((a, b) => compareStrings(a.name, b.name) || compareStrings(a.id, b.id))
           .slice(0, take).map(folder => ({ ...folder })),
       create: async ({ data }: { data: { name: string; parentId: string | null; userId: string } }) => {
         const folder = { ...data, id: crypto.randomUUID(), createdAt: now(), updatedAt: now() };
@@ -3719,7 +3724,7 @@ export function createInMemoryPrisma() {
                 lv instanceof Date && rv instanceof Date
                   ? lv.getTime() - rv.getTime()
                   : typeof lv === "string" && typeof rv === "string"
-                    ? lv.localeCompare(rv)
+                    ? compareStrings(lv, rv)
                     : Number(lv ?? 0) - Number(rv ?? 0);
               if (compared !== 0) return direction === "desc" ? -compared : compared;
             }

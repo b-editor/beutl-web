@@ -164,6 +164,40 @@ describe("storage resource API", () => {
       expect((await request(`/entries?${query}`)).status).toBe(400);
   });
 
+  it.each(["name", "id"])(
+    "pages mixed-case and Unicode %s values without omissions or duplicates",
+    async (field) => {
+      const values = ["ä", "z", "A", "Ä", "2", "a", "Z", "10", "é", "e\u0301", "あ"];
+      const ordered = ["10", "2", "A", "Z", "a", "e\u0301", "z", "Ä", "ä", "é", "あ"];
+      for (const value of values) {
+        const name = field === "name" ? value : "same";
+        folder(`folder-${value}`, USER, null, name);
+        file(`file-${value}`, { name });
+      }
+      const expected = [
+        ...ordered.map((value) => `folder-${value}`),
+        ...ordered.map((value) => `file-${value}`),
+      ];
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      // Bound the loop so a repeated cursor fails instead of hanging the suite.
+      for (let pageNumber = 0; pageNumber < expected.length + 1; pageNumber++) {
+        const response = await request(
+          `/entries?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        expect(response.status).toBe(200);
+        const page = await response.json();
+        seen.push(...page.entries.map((entry: { id: string }) => entry.id));
+        cursor = page.nextCursor;
+        if (cursor === null) break;
+      }
+
+      expect(cursor).toBeNull();
+      expect(seen).toEqual(expected);
+      expect(new Set(seen).size).toBe(expected.length);
+    },
+  );
+
   it("creates folders and atomically patches names and parents, refusing cycles and foreign targets", async () => {
     folder("parent");
     folder("foreign", "other");
