@@ -48,6 +48,11 @@ pnpm dev:admin
 Local environment files and Wrangler `.dev.vars` files are ignored by Git and
 must not be committed.
 
+The workspace root's `postinstall` generates the shared Prisma Client once after
+dependency installation. Keep this hook at the root: per-app hooks run in parallel
+and would write to the same generated client. The generator uses a temporary schema
+and leaves `apps/web/prisma/schema.prisma` unchanged.
+
 ## Common commands
 
 | Command | Purpose |

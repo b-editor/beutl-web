@@ -256,6 +256,9 @@ importers:
       '@types/semver':
         specifier: ^7.7.0
         version: 7.7.0
+      dotenv:
+        specifier: 17.4.2
+        version: 17.4.2
       eslint:
         specifier: ^9.39.5
         version: 9.39.5(jiti@2.6.1)
