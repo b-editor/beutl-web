@@ -2,9 +2,9 @@ import { z } from "zod";
 import { isValidStorageName, STORAGE_BATCH_SIZE_MAX } from "@beutl/core";
 import {
   createStorageFolder,
+  deleteEmptyStorageFolder,
   deleteStorageFolderTree,
   deleteUserFilesWithStorageCleanup,
-  storageFolderSummary,
   updateOwnedStorageFiles,
   updateOwnedStorageFolder,
 } from "@beutl/db";
@@ -105,11 +105,11 @@ export async function deleteManagedFiles(userId: string, ids: string[]) {
 
 export async function deleteManagedFolder(userId: string, id: string, recursive: boolean) {
   parseStorageInput(storageIdSchema, id);
-  const summary = await storageFolderSummary(userId, id);
-  if (!summary) throw new StorageOperationError("storageFolderNotFound");
-  if (!recursive && (summary.fileCount || summary.folderCount))
-    throw new StorageOperationError("storageFolderNotEmpty");
-  const result = await deleteStorageFolderTree({ userId, folderId: id });
+  const result = await (recursive ? deleteStorageFolderTree : deleteEmptyStorageFolder)({
+    userId,
+    folderId: id,
+  });
+  if (result.kind === "notEmpty") throw new StorageOperationError("storageFolderNotEmpty");
   if (result.kind === "inUse") throw new StorageOperationError("storageFolderInUse");
   if (result.kind !== "deleted") throw new StorageOperationError("storageFolderNotFound");
   return { deletedFiles: result.fileCount, deletedFolders: result.folderCount };

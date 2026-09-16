@@ -323,6 +323,110 @@ describe("storage resource API", () => {
     expect(memory.state.storageFolders.has("protected")).toBe(true);
   });
 
+  it("deletes only owned empty folders without recursive intent", async () => {
+    for (const query of ["", "?recursive=false"]) {
+      folder("empty");
+      const deleted = await request(`/folders/empty${query}`, "DELETE");
+      expect(deleted.status).toBe(200);
+      expect(await deleted.json()).toEqual({ deletedFiles: 0, deletedFolders: 1 });
+      expect(memory.state.storageFolders.has("empty")).toBe(false);
+    }
+    folder("foreign", "other");
+    for (const id of ["foreign", "missing"]) {
+      const response = await request(`/folders/${id}`, "DELETE");
+      expect(response.status).toBe(404);
+      expect(await response.json()).toHaveProperty("error_code", "storageFolderNotFound");
+    }
+    expect(memory.state.storageFolders.has("foreign")).toBe(true);
+    expect(memory.state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it.each(["created file", "moved file", "created folder", "moved folder"])(
+    "rejects nonrecursive deletion when a %s arrives before its transaction",
+    async (arrival) => {
+      folder("parent");
+      if (arrival === "moved file") file("incoming-file");
+      if (arrival === "moved folder") folder("incoming-folder");
+      const transaction = memory.prisma.$transaction;
+      vi.spyOn(memory.prisma, "$transaction").mockImplementationOnce(async (run) => {
+        // The old API had already checked an empty summary at this point.
+        // A concurrent request commits its creation or move before deletion starts.
+        if (arrival.endsWith("folder")) {
+          folder("incoming-folder", USER, "parent");
+          file("incoming-file", { folderId: "incoming-folder" });
+        } else {
+          file("incoming-file", { folderId: "parent" });
+        }
+        return transaction(run);
+      });
+
+      const response = await request("/folders/parent?recursive=false", "DELETE");
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toHaveProperty("error_code", "storageFolderNotEmpty");
+      expect(memory.state.storageFolders.has("parent")).toBe(true);
+      expect(memory.state.files.get("incoming-file")?.folderId).toBe(
+        arrival.endsWith("folder") ? "incoming-folder" : "parent",
+      );
+      if (arrival.endsWith("folder")) {
+        expect(memory.state.storageFolders.get("incoming-folder")?.parentId).toBe("parent");
+      }
+      expect(memory.state.aiStorageCleanups.size).toBe(0);
+    },
+  );
+
+  it.each(["file", "folder"])(
+    "rechecks nonrecursive emptiness after a concurrent %s causes a serialization retry",
+    async (kind) => {
+      folder("parent");
+      const transaction = memory.prisma.$transaction;
+      const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
+      const transactions = vi.spyOn(memory.prisma, "$transaction");
+      transactions.mockImplementationOnce(async (run) => {
+        try {
+          return await transaction(async (tx) => {
+            await run(tx);
+            // Roll back the attempted deletion before exposing the concurrent commit.
+            throw conflict;
+          });
+        } catch (error) {
+          if (kind === "file") file("incoming", { folderId: "parent" });
+          else folder("incoming", USER, "parent");
+          throw error;
+        }
+      });
+
+      const response = await request("/folders/parent", "DELETE");
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toHaveProperty("error_code", "storageFolderNotEmpty");
+      expect(transactions).toHaveBeenCalledTimes(2);
+      for (const call of transactions.mock.calls) {
+        expect(call).toEqual([expect.any(Function), { isolationLevel: "Serializable" }]);
+      }
+      expect(memory.state.storageFolders.has("parent")).toBe(true);
+      expect(
+        kind === "file"
+          ? memory.state.files.get("incoming")?.folderId
+          : memory.state.storageFolders.get("incoming")?.parentId,
+      ).toBe("parent");
+      expect(memory.state.aiStorageCleanups.size).toBe(0);
+    },
+  );
+
+  it("keeps files omitted from the listing attached during nonrecursive deletion", async () => {
+    folder("parent");
+    file("ai-result", { folderId: "parent" });
+    memory.state.aiJobs.set("job", { id: "job", resultFileId: "ai-result" } as never);
+
+    const response = await request("/folders/parent", "DELETE");
+
+    expect(response.status).toBe(409);
+    expect(memory.state.storageFolders.has("parent")).toBe(true);
+    expect(memory.state.files.get("ai-result")?.folderId).toBe("parent");
+    expect(memory.state.aiStorageCleanups.size).toBe(0);
+  });
+
   it("requires recursive intent for nonempty folders and uses the durable deletion path", async () => {
     folder("parent");
     folder("child", USER, "parent");
