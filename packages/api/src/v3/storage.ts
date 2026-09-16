@@ -166,7 +166,10 @@ const app = new Hono<{ Variables: { storageUserId: string } }>()
           : null,
     });
   })
-  .get("/usage", async (c) => c.json(await getStorageEntitlement(c.get("storageUserId"))))
+  .get("/usage", async (c) => {
+    const prisma = await getDb();
+    return c.json(await getStorageEntitlement(c.get("storageUserId"), { prisma }));
+  })
   .post("/folders", async (c) => {
     const result = await createManagedFolder(c.get("storageUserId"), await jsonBody(c));
     c.header("Location", `/api/v3/storage/folders/${encodeURIComponent(result.id)}`);

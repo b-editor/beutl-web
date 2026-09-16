@@ -83,6 +83,19 @@ describe("storage resource API", () => {
     expect((await request("/")).status).toBe(404);
   });
 
+  it("shares one database client across the storage usage reads", async () => {
+    file("owned");
+    file("foreign", { userId: "other" });
+    const provider = vi.fn(async () => memory.prisma as never);
+    setDbProvider(provider);
+
+    const response = await request("/usage");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ usedBytes: 1024, fileCount: 1 });
+    expect(provider).toHaveBeenCalledTimes(1);
+  });
+
   it("returns only immediate owned children and their path, without storage internals or usage queries", async () => {
     folder("parent");
     folder("child", USER, "parent");
