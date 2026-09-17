@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
+import uploads from "./storage-uploads";
 import {
   boundedBody,
   MAX_API_JSON_REQUEST_BYTES,
@@ -28,6 +29,7 @@ import {
   deleteManagedFiles,
   deleteManagedFolder,
   runManagedFileBatch,
+  moveManagedEntries,
 } from "../storage/management";
 
 const cursorSchema = z
@@ -114,6 +116,10 @@ const app = new Hono<{ Variables: { storageUserId: string } }>()
     c.set("storageUserId", userId);
     await next();
   })
+  .route("/uploads", uploads)
+  .post("/entries/move", async (c) =>
+    c.json(await moveManagedEntries(c.get("storageUserId"), await jsonBody(c))),
+  )
   .get("/entries", async (c) => {
     const parsed = querySchema.safeParse({
       ...c.req.query(),

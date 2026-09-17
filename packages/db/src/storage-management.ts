@@ -204,3 +204,36 @@ export async function storageFolderSummary(userId: string, id: string) {
     fileCount,
   };
 }
+
+export async function moveOwnedStorageEntries(
+  userId: string,
+  entries: { id: string; kind: "file" | "folder" }[],
+  parentId: string | null,
+) {
+  return startRetryableTransaction(
+    async (tx) => {
+      const path = await storageFolderPath(userId, parentId, tx);
+      if (!path) return { kind: "targetNotFound" as const };
+      const fileIds = entries.filter((x) => x.kind === "file").map((x) => x.id);
+      const folderIds = entries.filter((x) => x.kind === "folder").map((x) => x.id);
+      if (path.some((x) => folderIds.includes(x.id))) return { kind: "intoItself" as const };
+      const files = { id: { in: fileIds }, userId, aiJobResult: null } as const;
+      const folders = { id: { in: folderIds }, userId };
+      if (
+        (await tx.file.count({ where: files })) !== fileIds.length ||
+        (await tx.storageFolder.count({ where: folders })) !== folderIds.length
+      )
+        return { kind: "notFound" as const };
+      const movedFiles = fileIds.length
+        ? await tx.file.updateMany({ where: files, data: { folderId: parentId } })
+        : { count: 0 };
+      const movedFolders = folderIds.length
+        ? await tx.storageFolder.updateMany({ where: folders, data: { parentId } })
+        : { count: 0 };
+      if (movedFiles.count + movedFolders.count !== entries.length)
+        throw new Error("Storage entries changed during move");
+      return { kind: "moved" as const, count: entries.length };
+    },
+    { isolationLevel: "Serializable" },
+  );
+}

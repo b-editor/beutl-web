@@ -234,6 +234,44 @@ describe("storage resource API", () => {
     expect((await request(`/folders/${id}`, "PATCH", {})).status).toBe(400);
   });
 
+  it("moves mixed files and folders atomically and rejects cycles or foreign selections", async () => {
+    folder("source");
+    folder("destination");
+    folder("child", USER, "source");
+    file("file");
+    file("foreign", { userId: "other" });
+    const entries = [
+      { id: "file", kind: "file" },
+      { id: "source", kind: "folder" },
+    ];
+    expect((await request("/entries/move", "POST", { entries, parentId: "child" })).status).toBe(
+      409,
+    );
+    expect(memory.state.files.get("file")?.folderId).toBeNull();
+    expect(
+      (
+        await request("/entries/move", "POST", {
+          entries: [...entries, { id: "foreign", kind: "file" }],
+          parentId: "destination",
+        })
+      ).status,
+    ).toBe(404);
+    expect(memory.state.storageFolders.get("source")?.parentId).toBeNull();
+    const response = await request("/entries/move", "POST", { entries, parentId: "destination" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ affected: 2 });
+    expect(memory.state.files.get("file")?.folderId).toBe("destination");
+    expect(memory.state.storageFolders.get("source")?.parentId).toBe("destination");
+    expect(
+      (
+        await request("/entries/move", "POST", {
+          entries: [entries[0], entries[0]],
+          parentId: null,
+        })
+      ).status,
+    ).toBe(400);
+  });
+
   it("updates an exact file set atomically and enforces dedicated-file actions", async () => {
     file("a");
     file("b");

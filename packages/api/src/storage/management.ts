@@ -7,6 +7,7 @@ import {
   deleteUserFilesWithStorageCleanup,
   updateOwnedStorageFiles,
   updateOwnedStorageFolder,
+  moveOwnedStorageEntries,
 } from "@beutl/db";
 
 export type StorageErrorCode =
@@ -61,6 +62,29 @@ export const fileBatchSchema = z.discriminatedUnion("operation", [
     .strict(),
   z.object({ operation: z.literal("delete"), ids: idsSchema }).strict(),
 ]);
+
+export async function moveManagedEntries(userId: string, input: unknown) {
+  const value = parseStorageInput(
+    z
+      .object({
+        entries: z
+          .array(z.object({ id: storageIdSchema, kind: z.enum(["file", "folder"]) }).strict())
+          .min(1)
+          .max(STORAGE_BATCH_SIZE_MAX)
+          .refine(
+            (entries) => new Set(entries.map((x) => `${x.kind}:${x.id}`)).size === entries.length,
+          ),
+        parentId: parentSchema,
+      })
+      .strict(),
+    input,
+  );
+  const result = await moveOwnedStorageEntries(userId, value.entries, value.parentId);
+  if (result.kind === "intoItself") throw new StorageOperationError("storageInvalidMove");
+  if (result.kind === "targetNotFound" || result.kind === "notFound")
+    throw new StorageOperationError("storageFolderNotFound");
+  return { affected: result.count };
+}
 
 export function parseStorageInput<T>(schema: z.ZodType<T>, input: unknown): T {
   const parsed = schema.safeParse(input);

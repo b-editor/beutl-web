@@ -51,6 +51,9 @@ export function apiRequestBodyLimit(
 ): number {
   const normalizedMethod = method.toUpperCase();
   const path = pathname.length > 1 ? pathname.replace(/\/+$/u, "") : pathname;
+  if (normalizedMethod === "POST" && path === "/api/v3/storage/uploads") return MAX_INTERNAL_STORAGE_START_BODY_BYTES;
+  if (normalizedMethod === "POST" && /^\/api\/v3\/storage\/uploads\/[^/]+\/complete$/u.test(path)) return STORAGE_UPLOAD_FINISH_BODY_BYTES;
+  if (normalizedMethod === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)) return STORAGE_UPLOAD_PART_BYTES;
   if (
     normalizedMethod === "POST" &&
     /^\/api\/v3\/ai\/videos\/[^/]+\/openrouter-callback$/u.test(path)

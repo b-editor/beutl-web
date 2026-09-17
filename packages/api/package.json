@@ -13,7 +13,8 @@
     "./ai/r2-provider": "./src/ai/r2-provider.ts",
     "./storage/bucket-from-env": "./src/storage/bucket-from-env.ts",
     "./storage/s3-compatible-bucket": "./src/storage/s3-compatible-bucket.ts",
-    "./storage/management": "./src/storage/management.ts"
+    "./storage/management": "./src/storage/management.ts",
+    "./storage/uploads": "./src/storage/uploads.ts"
   },
   "dependencies": {
     "@beutl/core": "workspace:*",
