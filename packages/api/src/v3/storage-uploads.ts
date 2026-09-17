@@ -38,7 +38,10 @@ const partsSchema = z
   })
   .strict();
 async function body(request: Request, limit: number) {
-  if (!request.headers.get("content-type")?.startsWith("application/json") || !request.body)
+  if (
+    !request.headers.get("content-type")?.toLowerCase().startsWith("application/json") ||
+    !request.body
+  )
     throw new StorageOperationError("invalidRequestBody");
   try {
     return await new Response(boundedBody(request.body, limit)).json();

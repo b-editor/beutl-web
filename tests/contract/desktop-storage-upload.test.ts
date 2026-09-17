@@ -66,7 +66,13 @@ describe.each([false, true])(
       vi.unstubAllGlobals();
     });
 
-    async function request(path: string, method: string, body?: unknown, user = "owner") {
+    async function request(
+      path: string,
+      method: string,
+      body?: unknown,
+      user = "owner",
+      contentType = "application/json",
+    ) {
       const token = await sign(
         {
           "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": user,
@@ -80,7 +86,7 @@ describe.each([false, true])(
         method,
         headers: {
           authorization: `Bearer ${token}`,
-          "content-type": binary ? "application/octet-stream" : "application/json",
+          "content-type": binary ? "application/octet-stream" : contentType,
           ...(binary ? { "content-length": String(body.byteLength) } : {}),
         },
         body: body === undefined ? undefined : binary ? body : JSON.stringify(body),
@@ -88,24 +94,35 @@ describe.each([false, true])(
       return api.fetch(withBoundedBody(raw, () => {})!);
     }
 
-    it("starts, streams and completes an authenticated upload with idempotent receipts", async () => {
-      const id = crypto.randomUUID();
-      const input = { id, name: "clip.bin", mimeType: "application/octet-stream", size: 3 };
-      expect((await request("", "POST", input)).status).toBe(201);
-      expect((await request(`/${id}/parts/1`, "PUT", new Uint8Array([1, 2, 3]))).status).toBe(200);
-      const completed = await request(`/${id}/complete`, "POST", {
-        parts: [{ partNumber: 1, etag: "etag-1" }],
-      });
-      expect(completed.status).toBe(200);
-      const result = await completed.json();
-      expect(memory.state.files.get(result.id)?.size).toBe(3);
-      expect(memory.state.files.get(result.id)?.visibility).toBe("PRIVATE");
-      const replay = await request(`/${id}/complete`, "POST", {
-        parts: [{ partNumber: 1, etag: "etag-1" }],
-      });
-      expect((await replay.json()).id).toBe(result.id);
-      expect(memory.state.files.size).toBe(1);
-    });
+    it.each(["application/json", "Application/JSON; Charset=UTF-8"])(
+      "starts, streams and completes an authenticated upload with idempotent receipts (%s)",
+      async (contentType) => {
+        const id = crypto.randomUUID();
+        const input = { id, name: "clip.bin", mimeType: "application/octet-stream", size: 3 };
+        expect((await request("", "POST", input, "owner", contentType)).status).toBe(201);
+        expect((await request(`/${id}/parts/1`, "PUT", new Uint8Array([1, 2, 3]))).status).toBe(
+          200,
+        );
+        const completed = await request(
+          `/${id}/complete`,
+          "POST",
+          {
+            parts: [{ partNumber: 1, etag: "etag-1" }],
+          },
+          "owner",
+          contentType,
+        );
+        expect(completed.status).toBe(200);
+        const result = await completed.json();
+        expect(memory.state.files.get(result.id)?.size).toBe(3);
+        expect(memory.state.files.get(result.id)?.visibility).toBe("PRIVATE");
+        const replay = await request(`/${id}/complete`, "POST", {
+          parts: [{ partNumber: 1, etag: "etag-1" }],
+        });
+        expect((await replay.json()).id).toBe(result.id);
+        expect(memory.state.files.size).toBe(1);
+      },
+    );
 
     it("isolates uploads by owner and cancels unfinished parts", async () => {
       const id = crypto.randomUUID();
