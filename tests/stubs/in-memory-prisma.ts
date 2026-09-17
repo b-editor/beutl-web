@@ -1202,6 +1202,25 @@ export function createInMemoryPrisma() {
 
   const prisma = {
     $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+      if (query.join("?").includes('WITH RECURSIVE "storage_folder_descendants"')) {
+        const [folderId, userId, descendantUserId, fileUserId] = values;
+        if (userId !== descendantUserId || userId !== fileUserId)
+          throw new Error("Descendant queries must retain the owner");
+        const ids = new Set<string>();
+        const pending = [folderId as string];
+        while (pending.length) {
+          const id = pending.pop()!;
+          if (ids.has(id) || state.storageFolders.get(id)?.userId !== userId) continue;
+          ids.add(id);
+          for (const child of state.storageFolders.values())
+            if (child.parentId === id && child.userId === userId) pending.push(child.id);
+        }
+        const files = [...state.files.values()].filter(
+          (file) => file.userId === userId && file.folderId != null &&
+            ids.has(file.folderId) && !aiJobResultForFile(file.id),
+        );
+        return [{ folderCount: BigInt(ids.size), fileCount: BigInt(files.length) }];
+      }
       if (!query.join("?").includes('WITH RECURSIVE "storage_folder_path"')) {
         throw new Error("Unsupported in-memory raw query");
       }

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDbProvider, storageFolderPath, updateOwnedStorageFolder } from "@beutl/db";
+import {
+  setDbProvider,
+  storageFolderPath,
+  storageFolderSummary,
+  updateOwnedStorageFolder,
+} from "@beutl/db";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 describe("storage folder ancestor lookup", () => {
@@ -66,5 +71,44 @@ describe("storage folder ancestor lookup", () => {
     ).resolves.toEqual({ kind: "intoItself" });
     expect(memory.state.storageFolders.get("parent")?.parentId).toBeNull();
     expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("summarizes a deep tree with a fixed number of queries and excludes foreign branches and AI files", async () => {
+    for (let i = 0; i < 256; i++) folder(`folder-${i}`, i ? `folder-${i - 1}` : null);
+    folder("foreign", "folder-0", "other");
+    folder("hidden", "foreign");
+    for (const [id, folderId, userId] of [
+      ["root-file", "folder-0", "owner"],
+      ["leaf-file", "folder-255", "owner"],
+      ["foreign-file", "folder-0", "other"],
+      ["hidden-file", "hidden", "owner"],
+      ["ai-result", "folder-255", "owner"],
+    ])
+      memory.state.files.set(id, { id, folderId, userId } as never);
+    memory.state.aiJobs.set("job", { id: "job", resultFileId: "ai-result" } as never);
+    const query = vi.spyOn(memory.prisma, "$queryRaw");
+    const children = vi.spyOn(memory.prisma.storageFolder, "findMany");
+    const files = vi.spyOn(memory.prisma.file, "count");
+
+    expect(await storageFolderSummary("owner", "folder-0")).toMatchObject({
+      folder: { id: "folder-0" },
+      ancestors: [],
+      folderCount: 255,
+      fileCount: 2,
+    });
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(children).not.toHaveBeenCalled();
+    expect(files).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the folder disappears between the path and counts queries", async () => {
+    folder("root");
+    const original = memory.prisma.$queryRaw;
+    vi.spyOn(memory.prisma, "$queryRaw").mockImplementationOnce(async (...args) => {
+      const result = await original(...args);
+      memory.state.storageFolders.delete("root");
+      return result;
+    });
+    await expect(storageFolderSummary("owner", "root")).resolves.toBeNull();
   });
 });

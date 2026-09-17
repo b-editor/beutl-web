@@ -184,24 +184,28 @@ export async function storageFolderSummary(userId: string, id: string) {
   const db = await getDb();
   const path = await storageFolderPath(userId, id, db);
   if (!path?.length) return null;
-  const ids = new Set([id]);
-  let frontier = [id];
-  while (frontier.length) {
-    const children = await db.storageFolder.findMany({
-      where: { userId, parentId: { in: frontier } },
-      select: { id: true },
-    });
-    frontier = children.map((folder) => folder.id).filter((child) => !ids.has(child));
-    for (const child of frontier) ids.add(child);
-  }
-  const fileCount = await db.file.count({
-    where: { userId, aiJobResult: null, folderId: { in: [...ids] } },
-  });
+  const [counts] = await db.$queryRaw<{ folderCount: bigint; fileCount: bigint }[]>`
+    WITH RECURSIVE "storage_folder_descendants" AS (
+      SELECT "id" FROM "StorageFolder" WHERE "id" = ${id} AND "userId" = ${userId}
+      UNION
+      SELECT child."id" FROM "StorageFolder" child
+      JOIN "storage_folder_descendants" parent ON child."parentId" = parent."id"
+      WHERE child."userId" = ${userId}
+    )
+    SELECT
+      (SELECT COUNT(*) FROM "storage_folder_descendants") AS "folderCount",
+      (SELECT COUNT(*) FROM "File" file
+        JOIN "storage_folder_descendants" folder ON file."folderId" = folder."id"
+        WHERE file."userId" = ${userId}
+          AND NOT EXISTS (SELECT 1 FROM "AiJob" job WHERE job."resultFileId" = file."id")
+      ) AS "fileCount"
+  `;
+  if (!counts || counts.folderCount === BigInt(0)) return null;
   return {
     folder: path[path.length - 1],
     ancestors: path.slice(0, -1),
-    folderCount: ids.size - 1,
-    fileCount,
+    folderCount: Number(counts.folderCount) - 1,
+    fileCount: Number(counts.fileCount),
   };
 }
 
