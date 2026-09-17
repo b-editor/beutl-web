@@ -334,6 +334,26 @@ describe("uploading a file too large for one request", () => {
     );
   });
 
+  it.each([STORAGE_UPLOAD_PART_BYTES / 2, STORAGE_UPLOAD_PART_BYTES / 4])(
+    "continues and completes uploads with a persisted %i-byte part size",
+    async (partSize) => {
+      const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "legacy.bin", mimeType: "application/octet-stream", size: BigInt(partSize * 2 + 1) });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      const row = state.storageUploads.get(started.upload.id)!;
+      row.partSize = partSize;
+      for (const [partNumber, length] of [[1, partSize], [2, partSize], [3, 1]]) {
+        await expect(uploadPart({ userId: USER_ID, uploadId: row.id, partNumber, contentLength: length, body: streamOf(length) }))
+          .resolves.toEqual({ ok: true, etag: `etag-${partNumber}` });
+      }
+      await expect(uploadPart({ userId: USER_ID, uploadId: row.id, partNumber: 4, contentLength: 1, body: streamOf(1) }))
+        .resolves.toEqual({ ok: false, reason: "uploadNotFound" });
+      const completed = await finishUpload({ userId: USER_ID, uploadId: row.id, parts: [1, 2, 3].map(partNumber => ({ partNumber, etag: `etag-${partNumber}` })) });
+      expect(completed.ok).toBe(true);
+      if (completed.ok) expect(Number(completed.file.size)).toBe(partSize * 2 + 1);
+    },
+  );
+
   it.each([
     ["a missing part", [{ partNumber: 1, etag: "etag-1" }]],
     ["an extra part", [

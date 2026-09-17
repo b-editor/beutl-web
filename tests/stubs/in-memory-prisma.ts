@@ -9,6 +9,11 @@
 // SERIALIZABLE ordering has to be checked against CockroachDB in
 // tests/integration.
 
+// Sorting and cursor predicates must use the same locale-independent ordering.
+function compareStrings(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
 type CreditAccount = {
   userId: string;
   monthlyUsageUsed: number;
@@ -320,13 +325,13 @@ type FileRecord = {
 
 // The listing query's where clause, as the stub understands it.
 type FileWhere = {
-  id?: string | { in: string[] };
+  id?: string | { in?: string[]; gt?: string };
   userId?: string;
   aiJobResult?: null;
   folderId?: string | null | { in: string[] };
-  name?: string | { contains?: string; startsWith?: string; endsWith?: string; mode?: "insensitive" };
+  name?: string | { contains?: string; startsWith?: string; endsWith?: string; gt?: string; mode?: "insensitive" };
   mimeType?: { equals?: string; startsWith?: string; in?: string[]; mode?: "insensitive" };
-  visibility?: string;
+  visibility?: string | { not: string };
   OR?: FileWhere[];
   NOT?: FileWhere | FileWhere[];
 };
@@ -1027,10 +1032,23 @@ export function createInMemoryPrisma() {
   const subscriptionKey = (userId: string, planId: string) => `${userId}:${planId}`;
   const aiJobResultForFile = (fileId: string) =>
     [...state.aiJobs.values()].find((job) => job.resultFileId === fileId);
+  const matchesFolder = (folder: StorageFolderRecord, where?: Record<string, unknown>): boolean => {
+    if (!where) return true;
+    return Object.entries(where).every(([key, value]) => {
+      if (key === "OR") return (value as Record<string, unknown>[]).some(item => matchesFolder(folder, item));
+      const actual = (folder as unknown as Record<string, unknown>)[key];
+      if (value && typeof value === "object") {
+        if ("in" in value) return (value.in as unknown[]).includes(actual);
+        if ("gt" in value) return compareStrings(String(actual), String(value.gt)) > 0;
+      }
+      return actual === value;
+    });
+  };
   const matchesFileWhere = (file: FileRecord, where: FileWhere | undefined): boolean => {
     if (!where) return true;
     if (where.id !== undefined) {
-      if (typeof where.id === "string" ? file.id !== where.id : !where.id.in.includes(file.id)) return false;
+      if (typeof where.id === "string") { if (file.id !== where.id) return false; }
+      else if ((where.id.in && !where.id.in.includes(file.id)) || (where.id.gt !== undefined && compareStrings(file.id, where.id.gt) <= 0)) return false;
     }
     if (where.userId !== undefined && file.userId !== where.userId) return false;
     if (where.aiJobResult === null && aiJobResultForFile(file.id)) return false;
@@ -1048,6 +1066,7 @@ export function createInMemoryPrisma() {
       } else {
         const fold = (value: string) => (where.name && typeof where.name === "object" && where.name.mode === "insensitive" ? value.toLowerCase() : value);
         const haystack = fold(file.name);
+        if (where.name.gt !== undefined && compareStrings(file.name, where.name.gt) <= 0) return false;
         if (where.name.contains !== undefined && !haystack.includes(fold(where.name.contains))) return false;
         if (where.name.startsWith !== undefined && !haystack.startsWith(fold(where.name.startsWith))) return false;
         if (where.name.endsWith !== undefined && !haystack.endsWith(fold(where.name.endsWith))) return false;
@@ -1060,7 +1079,10 @@ export function createInMemoryPrisma() {
       if (where.mimeType.startsWith !== undefined && !type.startsWith(fold(where.mimeType.startsWith))) return false;
       if (where.mimeType.in !== undefined && !where.mimeType.in.map(fold).includes(type)) return false;
     }
-    if (where.visibility !== undefined && file.visibility !== where.visibility) return false;
+    if (where.visibility !== undefined && (typeof where.visibility === "string" ? file.visibility !== where.visibility : file.visibility === where.visibility.not)) return false;
+    for (const relation of ["Package", "Profile", "PackageScreenshot", "Release"] as const) {
+      if ((where as Record<string, unknown>)[relation] && !((file as unknown as Record<string, unknown[]>)[relation]?.length)) return false;
+    }
     if (where.OR && !where.OR.some((clause) => matchesFileWhere(file, clause))) return false;
     if (where.NOT !== undefined) {
       const clauses = Array.isArray(where.NOT) ? where.NOT : [where.NOT];
@@ -1179,6 +1201,44 @@ export function createInMemoryPrisma() {
   };
 
   const prisma = {
+    $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+      if (query.join("?").includes('WITH RECURSIVE "storage_folder_descendants"')) {
+        const [folderId, userId, descendantUserId, fileUserId] = values;
+        if (userId !== descendantUserId || userId !== fileUserId)
+          throw new Error("Descendant queries must retain the owner");
+        const ids = new Set<string>();
+        const pending = [folderId as string];
+        while (pending.length) {
+          const id = pending.pop()!;
+          if (ids.has(id) || state.storageFolders.get(id)?.userId !== userId) continue;
+          ids.add(id);
+          for (const child of state.storageFolders.values())
+            if (child.parentId === id && child.userId === userId) pending.push(child.id);
+        }
+        const files = [...state.files.values()].filter(
+          (file) => file.userId === userId && file.folderId != null &&
+            ids.has(file.folderId) && !aiJobResultForFile(file.id),
+        );
+        return [{ folderCount: BigInt(ids.size), fileCount: BigInt(files.length) }];
+      }
+      if (!query.join("?").includes('WITH RECURSIVE "storage_folder_path"')) {
+        throw new Error("Unsupported in-memory raw query");
+      }
+      const [folderId, userId, ancestorUserId] = values;
+      if (userId !== ancestorUserId) throw new Error("Ancestor queries must retain the owner");
+      const folders = [];
+      const visited = new Set<string>();
+      let id = folderId as string | null;
+      while (id !== null && !visited.has(id)) {
+        visited.add(id);
+        const folder = state.storageFolders.get(id);
+        if (!folder || folder.userId !== userId) break;
+        const { name, parentId, createdAt, updatedAt } = folder;
+        folders.push({ id, name, parentId, createdAt, updatedAt });
+        id = parentId;
+      }
+      return folders;
+    },
     accountDeletionIntent: {
       findFirst: async ({
         where,
@@ -3421,25 +3481,41 @@ export function createInMemoryPrisma() {
       },
     },
     storageFolder: {
-      count: async ({ where }: { where: { id?: string; userId?: string } }) =>
-        [...state.storageFolders.values()].filter(
-          (folder) =>
-            (where.id === undefined || folder.id === where.id) &&
-            (where.userId === undefined || folder.userId === where.userId),
-        ).length,
-      findFirst: async ({ where }: { where: { id?: string; userId?: string } }) => {
-        const folder = [...state.storageFolders.values()].find(
-          (item) =>
-            (where.id === undefined || item.id === where.id) &&
-            (where.userId === undefined || item.userId === where.userId),
-        );
+      count: async ({ where }: { where?: Record<string, unknown> }) =>
+        [...state.storageFolders.values()].filter(folder => matchesFolder(folder, where)).length,
+      findFirst: async ({ where }: { where?: Record<string, unknown> }) => {
+        const folder = [...state.storageFolders.values()].find(folder => matchesFolder(folder, where));
         return folder ? { ...folder } : null;
       },
-      findMany: async ({ where }: { where?: { userId?: string } } = {}) =>
-        [...state.storageFolders.values()]
-          .filter((folder) => !where?.userId || folder.userId === where.userId)
-          .sort((left, right) => left.name.localeCompare(right.name))
-          .map((folder) => ({ ...folder })),
+      findMany: async ({ where, take }: { where?: Record<string, unknown>; take?: number } = {}) =>
+        [...state.storageFolders.values()].filter(folder => matchesFolder(folder, where))
+          .sort((a, b) => compareStrings(a.name, b.name) || compareStrings(a.id, b.id))
+          .slice(0, take).map(folder => ({ ...folder })),
+      create: async ({ data }: { data: { name: string; parentId: string | null; userId: string } }) => {
+        const folder = { ...data, id: crypto.randomUUID(), createdAt: now(), updatedAt: now() };
+        state.storageFolders.set(folder.id, folder);
+        return { ...folder };
+      },
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Partial<StorageFolderRecord> }) => {
+        let count = 0;
+        for (const [id, folder] of state.storageFolders) {
+          if (!matchesFolder(folder, where)) continue;
+          state.storageFolders.set(id, { ...folder, ...data, updatedAt: now() });
+          count++;
+        }
+        return { count };
+      },
+      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const ids = new Set([...state.storageFolders.values()].filter(folder => matchesFolder(folder, where)).map(f => f.id));
+        for (;;) {
+          const children = [...state.storageFolders.values()].filter(f => f.parentId !== null && ids.has(f.parentId) && !ids.has(f.id));
+          if (!children.length) break;
+          children.forEach(f => ids.add(f.id));
+        }
+        for (const id of ids) state.storageFolders.delete(id);
+        for (const file of state.files.values()) if (file.folderId && ids.has(file.folderId)) file.folderId = null;
+        return { count: ids.size };
+      },
     },
     storageUpload: {
       create: async ({
@@ -3686,7 +3762,7 @@ export function createInMemoryPrisma() {
                 lv instanceof Date && rv instanceof Date
                   ? lv.getTime() - rv.getTime()
                   : typeof lv === "string" && typeof rv === "string"
-                    ? lv.localeCompare(rv)
+                    ? compareStrings(lv, rv)
                     : Number(lv ?? 0) - Number(rv ?? 0);
               if (compared !== 0) return direction === "desc" ? -compared : compared;
             }
@@ -3715,21 +3791,11 @@ export function createInMemoryPrisma() {
       deleteMany: async ({
         where,
       }: {
-        where: {
-          id?: string;
-          userId?: string;
-          visibility?: string;
-          aiJobResult?: null;
-        };
+        where: FileWhere;
       }) => {
         let count = 0;
         for (const [id, file] of state.files) {
-          if (
-            (!where.id || file.id === where.id) &&
-            (!where.userId || file.userId === where.userId) &&
-            (!where.visibility || file.visibility === where.visibility) &&
-            (where.aiJobResult !== null || !aiJobResultForFile(file.id))
-          ) {
+          if (matchesFileWhere(file, where)) {
             state.files.delete(id);
             for (const [jobId, job] of state.aiJobs) {
               if (job.resultFileId === id) {
@@ -3750,7 +3816,7 @@ export function createInMemoryPrisma() {
         data,
       }: {
         where: FileWhere;
-        data: Partial<Pick<FileRecord, "visibility" | "folderId">>;
+        data: Partial<Pick<FileRecord, "name" | "visibility" | "folderId">>;
       }) => {
         let count = 0;
         for (const [id, file] of state.files) {

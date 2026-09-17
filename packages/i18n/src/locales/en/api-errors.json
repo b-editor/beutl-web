@@ -41,5 +41,13 @@
   "aiModelDoesNotSupportRequest": "The selected model does not support this combination. Change the resolution, length or aspect ratio, or pick another model.",
   "unknown": "An unknown error occurred.",
   "invalidVersionFormat": "Invalid version format.",
-  "aiResultUnavailable": "The result of this request could not be read just now. Ask for it again — the same request is asked for, so what has already been paid for is not paid for twice."
+  "aiResultUnavailable": "The result of this request could not be read just now. Ask for it again — the same request is asked for, so what has already been paid for is not paid for twice.",
+  "storageFileNotFound": "The file was not found.",
+  "storageFolderNotFound": "The folder was not found.",
+  "storageFileInUse": "This file is in use and cannot be changed.",
+  "storageFolderInUse": "This folder contains a file in use.",
+  "storageInvalidMove": "A folder cannot be moved into itself or a descendant.",
+  "storageFolderNotEmpty": "The folder is not empty. Recursive deletion must be explicitly requested.",
+  "invalidStorageQuery": "The storage listing parameters are invalid.",
+  "invalidStorageCursor": "The storage continuation cursor is invalid for this folder or filter."
 }

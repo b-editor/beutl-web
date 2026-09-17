@@ -111,7 +111,7 @@ export function requestBodyLimitForWorker(
   return apiRequestBodyLimit(method, pathname, contentType);
 }
 
-function withBoundedBody(
+export function withBoundedBody(
   request: Request,
   onLimitExceeded: () => void,
 ): Request | null {
@@ -132,7 +132,10 @@ function withBoundedBody(
   }
 
   const headers = new Headers(request.headers);
-  headers.delete("content-length");
+  // Multipart storage providers require the declared part length; the route
+  // additionally bounds the stream to that length before handing it to storage.
+  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname)))
+    headers.delete("content-length");
   return new Request(request.url, {
     method: request.method,
     headers,

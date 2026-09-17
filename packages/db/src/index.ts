@@ -42,3 +42,4 @@ export * from "./topup-checkout-resolution";
 export * from "./user-package";
 export * from "./user-payment-history";
 export * from "./user";
+export * from "./storage-management";

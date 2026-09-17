@@ -198,6 +198,7 @@ model File {
 
   @@index([userId])
   @@index([folderId])
+  @@index([userId, folderId, name, id])
   // 管理画面の一括移動が (createdAt, id) のカーソルで全件を歩くための索引。
   @@index([createdAt, id])
 }
@@ -217,6 +218,7 @@ model StorageFolder {
   files     File[]
 
   @@index([userId, parentId])
+  @@index([userId, parentId, name, id])
 }
 
 /// An upload in progress, split into parts because one request cannot carry a

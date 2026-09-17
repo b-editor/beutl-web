@@ -12,6 +12,9 @@ vi.mock("@/lib/auth-guard", () => ({
   throwIfUnauth: vi.fn(async () => ({ user: { id: "user-1" } })),
 }));
 vi.mock("@beutl/db", () => ({
+  updateOwnedStorageFiles: vi.fn(),
+  updateOwnedStorageFolder: vi.fn(),
+  storageFolderSummary: vi.fn(),
   createStorageFolder: vi.fn(),
   deleteStorageFolderTree: vi.fn(),
   deleteUserFilesWithStorageCleanup: vi.fn(),
@@ -34,6 +37,9 @@ import {
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/storage/actions";
 import {
   createStorageFolder,
+  updateOwnedStorageFiles,
+  updateOwnedStorageFolder,
+  storageFolderSummary,
   deleteStorageFolderTree,
   moveStorageFiles,
   moveStorageFolder,
@@ -44,7 +50,9 @@ describe("dashboard storage folders", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(createStorageFolder).mockResolvedValue({ kind: "created", id: "folder-1" });
-    vi.mocked(renameStorageFolder).mockResolvedValue(true);
+    vi.mocked(updateOwnedStorageFolder).mockResolvedValue({ kind: "updated" });
+    vi.mocked(updateOwnedStorageFiles).mockResolvedValue({ kind: "updated", count: 2 });
+    vi.mocked(storageFolderSummary).mockResolvedValue({ folder: { id: "folder-1" }, ancestors: [], folderCount: 0, fileCount: 0 } as never);
     vi.mocked(moveStorageFolder).mockResolvedValue({ kind: "moved" });
     vi.mocked(moveStorageFiles).mockResolvedValue({ kind: "moved" });
     vi.mocked(deleteStorageFolderTree).mockResolvedValue({
@@ -66,11 +74,9 @@ describe("dashboard storage folders", () => {
     });
   });
 
-  it("treats an empty parent id as the root", async () => {
-    await createFolder("Clips", "");
-    expect(createStorageFolder).toHaveBeenCalledWith(
-      expect.objectContaining({ parentId: null }),
-    );
+  it("rejects an empty parent id instead of silently targeting the root", async () => {
+    await expect(createFolder("Clips", "")).resolves.toMatchObject({ success: false });
+    expect(createStorageFolder).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid folder name before touching the database", async () => {
@@ -83,7 +89,7 @@ describe("dashboard storage folders", () => {
       message: "storage:invalidFolderName",
     });
     expect(createStorageFolder).not.toHaveBeenCalled();
-    expect(renameStorageFolder).not.toHaveBeenCalled();
+    expect(updateOwnedStorageFolder).not.toHaveBeenCalled();
   });
 
   it("reports a missing parent", async () => {
@@ -95,7 +101,7 @@ describe("dashboard storage folders", () => {
   });
 
   it("refuses to move a folder into itself or its subtree", async () => {
-    vi.mocked(moveStorageFolder).mockResolvedValue({ kind: "intoItself" });
+    vi.mocked(updateOwnedStorageFolder).mockResolvedValue({ kind: "intoItself" });
     await expect(moveFolder("folder-1", "folder-1-child")).resolves.toMatchObject({
       success: false,
       message: "storage:cannotMoveFolderIntoItself",
@@ -106,20 +112,16 @@ describe("dashboard storage folders", () => {
     await expect(moveFiles(["file-1", "file-2"], null)).resolves.toMatchObject({
       success: true,
     });
-    expect(moveStorageFiles).toHaveBeenCalledWith({
-      fileIds: ["file-1", "file-2"],
-      userId: "user-1",
-      folderId: null,
-    });
+    expect(updateOwnedStorageFiles).toHaveBeenCalledWith("user-1", ["file-1", "file-2"], { parentId: null });
   });
 
   it("reports a missing destination or file when moving", async () => {
-    vi.mocked(moveStorageFiles).mockResolvedValue({ kind: "targetNotFound" });
+    vi.mocked(updateOwnedStorageFiles).mockResolvedValue({ kind: "targetNotFound" });
     await expect(moveFiles(["file-1"], "gone")).resolves.toMatchObject({
       success: false,
       message: "storage:folderNotFound",
     });
-    vi.mocked(moveStorageFiles).mockResolvedValue({ kind: "notFound" });
+    vi.mocked(updateOwnedStorageFiles).mockResolvedValue({ kind: "notFound" });
     await expect(moveFiles(["other"], null)).resolves.toMatchObject({
       success: false,
       message: "storage:fileNotFound",

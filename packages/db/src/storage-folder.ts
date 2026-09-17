@@ -229,6 +229,42 @@ export const FILE_IN_USE_WHERE = {
   ],
 };
 
+// The emptiness check and deletion must share a serializable transaction.
+// Otherwise the folder's cascades could delete or detach concurrent arrivals
+// even though the caller did not request recursive deletion.
+export async function deleteEmptyStorageFolder({
+  folderId,
+  userId,
+}: {
+  folderId: string;
+  userId: string;
+}) {
+  return startRetryableTransaction(
+    async (tx) => {
+      if (!(await folderBelongsToUser(tx, folderId, userId))) {
+        return { kind: "notFound" as const };
+      }
+      // Check every relationship affected by the cascades, including files
+      // excluded from the storage listing (for example, AI results).
+      const child = await tx.storageFolder.findFirst({
+        where: { parentId: folderId },
+        select: { id: true },
+      });
+      if (child) return { kind: "notEmpty" as const };
+      const file = await tx.file.findFirst({
+        where: { folderId },
+        select: { id: true },
+      });
+      if (file) return { kind: "notEmpty" as const };
+      const deleted = await tx.storageFolder.deleteMany({ where: { id: folderId, userId } });
+      return deleted.count === 1
+        ? { kind: "deleted" as const, fileCount: 0, folderCount: 1 }
+        : { kind: "notFound" as const };
+    },
+    { isolationLevel: "Serializable" },
+  );
+}
+
 // Deleting a folder deletes what is inside it, the way a desktop folder does.
 // The files go through the same cleanup path as a bulk delete. An in-use file
 // anywhere in the tree stops the whole operation before anything is lost:
