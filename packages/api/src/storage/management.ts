@@ -81,7 +81,8 @@ export async function moveManagedEntries(userId: string, input: unknown) {
   );
   const result = await moveOwnedStorageEntries(userId, value.entries, value.parentId);
   if (result.kind === "intoItself") throw new StorageOperationError("storageInvalidMove");
-  if (result.kind === "targetNotFound" || result.kind === "notFound")
+  if (result.kind === "fileNotFound") throw new StorageOperationError("storageFileNotFound");
+  if (result.kind === "targetNotFound" || result.kind === "folderNotFound")
     throw new StorageOperationError("storageFolderNotFound");
   return { affected: result.count };
 }

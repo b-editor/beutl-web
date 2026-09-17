@@ -272,6 +272,42 @@ describe("storage resource API", () => {
     ).toBe(400);
   });
 
+  it.each([
+    ["file", "missing", "storageFileNotFound"],
+    ["file", "foreign", "storageFileNotFound"],
+    ["folder", "missing", "storageFolderNotFound"],
+    ["folder", "foreign", "storageFolderNotFound"],
+  ])("reports a %s selection that is %s without moving other entries", async (kind, id, code) => {
+    folder("source");
+    folder("destination");
+    folder("foreign", "other");
+    file("owned");
+    file("foreign", { userId: "other" });
+    const response = await request("/entries/move", "POST", {
+      entries: [
+        { id: "owned", kind: "file" },
+        { id: "source", kind: "folder" },
+        { id, kind },
+      ],
+      parentId: "destination",
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error_code: code });
+    expect(memory.state.files.get("owned")?.folderId).toBeNull();
+    expect(memory.state.storageFolders.get("source")?.parentId).toBeNull();
+  });
+
+  it("reports a missing move destination as a folder error", async () => {
+    file("owned");
+    const response = await request("/entries/move", "POST", {
+      entries: [{ id: "owned", kind: "file" }],
+      parentId: "missing",
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error_code: "storageFolderNotFound" });
+    expect(memory.state.files.get("owned")?.folderId).toBeNull();
+  });
+
   it("updates an exact file set atomically and enforces dedicated-file actions", async () => {
     file("a");
     file("b");

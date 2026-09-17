@@ -219,11 +219,10 @@ export async function moveOwnedStorageEntries(
       if (path.some((x) => folderIds.includes(x.id))) return { kind: "intoItself" as const };
       const files = { id: { in: fileIds }, userId, aiJobResult: null } as const;
       const folders = { id: { in: folderIds }, userId };
-      if (
-        (await tx.file.count({ where: files })) !== fileIds.length ||
-        (await tx.storageFolder.count({ where: folders })) !== folderIds.length
-      )
-        return { kind: "notFound" as const };
+      if ((await tx.file.count({ where: files })) !== fileIds.length)
+        return { kind: "fileNotFound" as const };
+      if ((await tx.storageFolder.count({ where: folders })) !== folderIds.length)
+        return { kind: "folderNotFound" as const };
       const movedFiles = fileIds.length
         ? await tx.file.updateMany({ where: files, data: { folderId: parentId } })
         : { count: 0 };
