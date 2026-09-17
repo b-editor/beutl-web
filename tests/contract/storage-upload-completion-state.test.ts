@@ -122,6 +122,7 @@ describe("storage upload completion state machine", () => {
       id: "local-handle-failure",
       objectKey: "storage/local-handle-failure",
       uploadId: "multipart-local-handle-failure",
+      partSize: 10,
       completionState: "idle",
       completionRevision: 0,
       completionAttempts: 0,
