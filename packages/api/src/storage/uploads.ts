@@ -107,10 +107,9 @@ function allowedPartSize(size: bigint, partSize: number, partNumber: number): bi
   return remaining < BigInt(partSize) ? remaining : BigInt(partSize);
 }
 
-export function partCountOf(size: bigint): number {
+export function partCountOf(size: bigint, partSize = STORAGE_UPLOAD_PART_BYTES): number {
   if (size <= BigInt(0)) return 1;
-  const parts = (size + BigInt(STORAGE_UPLOAD_PART_BYTES) - BigInt(1)) /
-    BigInt(STORAGE_UPLOAD_PART_BYTES);
+  const parts = (size + BigInt(partSize) - BigInt(1)) / BigInt(partSize);
   return Number(parts);
 }
 
@@ -172,9 +171,10 @@ function isUniqueConstraintError(error: unknown): boolean {
 
 function validCompletionParts(
   size: bigint,
+  partSize: number,
   parts: readonly { partNumber: number; etag: string }[],
 ): boolean {
-  const expected = partCountOf(size);
+  const expected = partCountOf(size, partSize);
   if (parts.length !== expected) return false;
   return parts.every((part, index) =>
     part.partNumber === index + 1 &&
@@ -218,7 +218,7 @@ export async function startUpload({
         upload: {
           id: existing.id,
           partSize: existing.partSize,
-          partCount: partCountOf(existing.size),
+          partCount: partCountOf(existing.size, existing.partSize),
         },
       };
     }
@@ -329,7 +329,7 @@ export async function startUpload({
   }
 
   if (upload.uploadId) {
-    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size) } };
+    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size, upload.partSize) } };
   }
 
   const leaseToken = crypto.randomUUID();
@@ -350,7 +350,7 @@ export async function startUpload({
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (current?.uploadId) {
-      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size) } };
+      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size, current.partSize) } };
     }
     return { ok: false, reason: "uploadFailed" };
   }
@@ -412,7 +412,7 @@ export async function startUpload({
     upload: {
       id: upload.id,
       partSize: upload.partSize,
-      partCount: partCountOf(upload.size),
+      partCount: partCountOf(upload.size, upload.partSize),
     },
   };
 }
@@ -434,7 +434,7 @@ export async function uploadPart({
   if (!upload) return { ok: false, reason: "uploadNotFound" };
   // 掃除に取られた行のパートはもう捨てられている。送っても行き先がない。
   if (upload.abandonedAt) return { ok: false, reason: "uploadNotFound" };
-  if (partNumber < 1 || partNumber > partCountOf(upload.size)) {
+  if (partNumber < 1 || partNumber > partCountOf(upload.size, upload.partSize)) {
     return { ok: false, reason: "uploadNotFound" };
   }
   // The quota was reserved against the size the upload declared. Without this,
@@ -529,7 +529,7 @@ export async function finishUpload({
   // R2 joins exactly the submitted list. Require the complete, ordered 1..N
   // set derived from the persisted reservation so a truncated, duplicated or
   // reordered client list can never publish a different object generation.
-  if (!validCompletionParts(upload.size, parts)) {
+  if (!validCompletionParts(upload.size, upload.partSize, parts)) {
     return { ok: false, reason: "uploadFailed" };
   }
 
