@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { listAiJobsByUserId, retrieveStorageFoldersByUserId } from "@beutl/db";
+import { retrieveStorageFoldersByUserId } from "@beutl/db";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { parseJsonWithBodyLimit } from "../../ai/upload-limits";
@@ -11,34 +11,6 @@ const saveSchema = z
   .strict();
 
 export default new Hono()
-  .get("/source-videos", async (c) => {
-    const userId = await getUserId(c);
-    if (!userId) return c.json(await apiErrorResponse("authenticationIsRequired"), 401);
-    const page = await listAiJobsByUserId({ userId, limit: 100 });
-    return c.json({
-      videos: page.jobs.flatMap((job) => {
-        const duration = (job.inputParams as { durationSeconds?: unknown } | null)?.durationSeconds;
-        if (
-          job.kind !== "video" ||
-          job.status !== "succeeded" ||
-          !job.resultFileId ||
-          !job.resultFile?.mimeType?.startsWith("video/") ||
-          typeof duration !== "number" ||
-          !Number.isFinite(duration) ||
-          duration <= 0
-        )
-          return [];
-        return [
-          {
-            jobId: job.id,
-            fileName: job.resultFile.name,
-            durationSeconds: Math.ceil(duration),
-            createdAt: job.createdAt.toISOString(),
-          },
-        ];
-      }),
-    });
-  })
   .get("/storage-folders", async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json(await apiErrorResponse("authenticationIsRequired"), 401);

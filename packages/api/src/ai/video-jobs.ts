@@ -31,7 +31,6 @@ import type {
   VideoInputReference,
 } from "./providers/types";
 import {
-  publishSourceVideoForJob,
   publishVideoInputMedia,
 } from "./video-input-media";
 import type { AiVideoAspectRatio, AiVideoResolution } from "@beutl/core";
@@ -168,8 +167,6 @@ export async function createAndAttachVideoJob({
   frameImages,
   inputReferences,
   mode,
-  sourceJobId,
-  sourceUserId,
   sourceVideo,
   motionOrientation,
   motionQuality,
@@ -191,16 +188,12 @@ export async function createAndAttachVideoJob({
   /** Reference pictures for reference-to-video. Never sent with frames. */
   inputReferences?: VideoInputReference[];
   /**
-   * Absent for an ordinary generation. The rest work from a video this user
-   * already has, which is served to the provider rather than sent inline.
+   * Absent for an ordinary generation. Editing modes use an uploaded video,
+   * which is served to the provider rather than sent inline.
    */
   mode?: "edit" | "extend" | "motion";
-  /** A finished job of this user's, whose result is the source. */
-  sourceJobId?: string;
-  sourceUserId?: string;
   /**
-   * A video the caller sent with the request, as an alternative to naming a
-   * job. Already checked by the caller — the container is validated before
+   * A video the caller uploaded. The container is validated before
    * anything is reserved, which is also where its length comes from — so what
    * arrives here is only served.
    */
@@ -228,7 +221,7 @@ export async function createAndAttachVideoJob({
   const videoProvider = videoProviderFor(provider);
   let sourceVideoUrl: string | undefined;
   if (mode !== undefined) {
-    if (!sourceVideo && (!sourceJobId || !sourceUserId)) {
+    if (!sourceVideo) {
       throw new AiVideoSubmissionError(
         `A ${mode} request needs a source video`,
         { outcome: "definite_failure" },
@@ -240,34 +233,13 @@ export async function createAndAttachVideoJob({
         { outcome: "definite_failure" },
       );
     }
-    if (sourceVideo) {
-      // Sent with the request. It is served from the same short-lived prefix a
-      // job's own result would be, so the provider reads one kind of URL and
-      // neither copy outlives the job.
-      const { url } = await publishVideoInputMedia({
-        jobId,
-        bytes: sourceVideo.bytes,
-        mimeType: sourceVideo.mimeType,
-        origin: mediaOrigin,
-      });
-      sourceVideoUrl = url;
-    } else {
-      const published = await publishSourceVideoForJob({
-        jobId,
-        userId: sourceUserId!,
-        sourceJobId: sourceJobId!,
-        origin: mediaOrigin,
-      });
-      if (!published) {
-        // The named job is not this user's, produced no video, or is gone. The
-        // provider has not been asked for anything, so the reservation refunds.
-        throw new AiVideoSubmissionError(
-          "The source video is unavailable",
-          { outcome: "definite_failure" },
-        );
-      }
-      sourceVideoUrl = published.url;
-    }
+    const { url } = await publishVideoInputMedia({
+      jobId,
+      bytes: sourceVideo.bytes,
+      mimeType: sourceVideo.mimeType,
+      origin: mediaOrigin,
+    });
+    sourceVideoUrl = url;
   }
   const media = videoProvider.requiresHostedMedia
     ? await hostVideoInputMedia({

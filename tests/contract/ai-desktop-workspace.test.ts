@@ -50,7 +50,7 @@ describe("AI desktop workspace endpoints", () => {
   });
 
   it("requires authentication before listing or saving", async () => {
-    expect((await app().request("/api/v3/ai/source-videos")).status).toBe(401);
+    expect((await app().request("/api/v3/ai/source-videos")).status).toBe(404);
     expect((await app().request("/api/v3/ai/storage-folders")).status).toBe(401);
     expect(
       (await app().request(`/api/v3/ai/jobs/${jobId}/storage`, { method: "POST" })).status,
@@ -59,31 +59,9 @@ describe("AI desktop workspace endpoints", () => {
     expect(calls.save).not.toHaveBeenCalled();
   });
 
-  it("offers only finished retained videos with known durations and uses the authenticated owner", async () => {
-    const valid = {
-      id: jobId,
-      kind: "video",
-      status: "succeeded",
-      resultFileId: "file",
-      resultFile: { name: "clip.mp4", mimeType: "video/mp4" },
-      inputParams: { durationSeconds: 7 },
-      createdAt: new Date("2026-09-20"),
-    };
-    calls.jobs.mockResolvedValue({
-      jobs: [
-        valid,
-        { ...valid, status: "running" },
-        { ...valid, resultFileId: null },
-        { ...valid, inputParams: null },
-        { ...valid, kind: "image" },
-      ],
-    });
-    const response = await app().request("/api/v3/ai/source-videos", { headers: await headers() });
-    expect(response.status).toBe(200);
-    expect((await response.json()).videos).toEqual([
-      expect.objectContaining({ jobId, durationSeconds: 7 }),
-    ]);
-    expect(calls.jobs).toHaveBeenCalledWith({ userId: "owner", limit: 100 });
+  it("does not expose generated videos as editing sources", async () => {
+    expect((await app().request("/api/v3/ai/source-videos", { headers: await headers() })).status).toBe(404);
+    expect(calls.jobs).not.toHaveBeenCalled();
   });
 
   it("lists only the authenticated owner's folder tree", async () => {

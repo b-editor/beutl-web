@@ -92,87 +92,39 @@ export function buildAiVideoSubmission({
   };
 }
 
-/**
- * An edit or an extension of a video this account already has.
- *
- * The source is named by the job that produced it rather than uploaded: the
- * bytes are already here, so nothing is sent twice and the API can check who
- * owns it before anything is charged.
- *
- * An edit produces something as long as its source, so it carries no length —
- * sending one would be a number nothing honours, and the API refuses it.
- */
+/** Upload a source clip. Edits follow its length; extensions name the added length. */
 export function buildAiSourceVideoSubmission({
-  mode,
-  prompt,
-  source,
-  durationSeconds,
-  model,
+  mode, prompt, source, durationSeconds, model,
 }: {
   mode: "edit" | "extend";
   prompt: string;
-  // Either a finished job of this account's, or a video chosen from disk. The
-  // API tells the two apart by the content type, so the shape follows.
-  source: { kind: "job"; jobId: string } | { kind: "file"; file: File };
-  // The added segment's length, for an extension only.
+  source: File;
   durationSeconds: number | null;
   model: string;
 }): AiVideoSubmission {
-  const operation = mode === "edit" ? "videos/edit" : "videos/extend";
-  const sendsDuration = mode === "extend" && durationSeconds !== null;
-
-  if (source.kind === "file") {
-    const body = new FormData();
-    body.set("prompt", prompt);
-    body.set("sourceVideo", source.file);
-    if (sendsDuration) body.set("durationSeconds", String(durationSeconds));
-    if (model) body.set("model", model);
-    return { operation, body };
-  }
-
-  return {
-    operation,
-    body: JSON.stringify({
-      prompt,
-      sourceJobId: source.jobId,
-      ...(sendsDuration ? { durationSeconds } : {}),
-      ...(model ? { model } : {}),
-    }),
-  };
+  const body = new FormData();
+  body.set("prompt", prompt);
+  body.set("sourceVideo", source);
+  if (mode === "extend" && durationSeconds !== null) body.set("durationSeconds", String(durationSeconds));
+  if (model) body.set("model", model);
+  return { operation: mode === "edit" ? "videos/edit" : "videos/extend", body };
 }
 
-/**
- * A character picture given the motion of a video this account already has.
- *
- * Multipart because this is the one mode that also carries an upload: the
- * character is a picture, while the motion comes from a finished job named the
- * same way an edit names its source.
- */
+/** Upload the motion source together with the character image. */
 export function buildAiMotionVideoSubmission({
-  prompt,
-  source,
-  characterImage,
-  durationSeconds,
-  orientation,
-  quality,
-  model,
+  prompt, source, characterImage, durationSeconds, orientation, quality, model,
 }: {
   prompt: string;
-  source: { kind: "job"; jobId: string } | { kind: "file"; file: File };
+  source: File;
   characterImage: File;
   durationSeconds: number;
-  // Whether the result follows the character picture's shape or the reference
-  // video's.
   orientation: "image" | "video";
   quality: "standard" | "pro";
   model: string;
 }): AiVideoSubmission {
   const body = new FormData();
   body.set("prompt", prompt);
-  // Exactly one of the two. The API refuses a request naming both, because
-  // which of them was paid for would otherwise depend on which branch ran.
-  if (source.kind === "file") body.set("sourceVideo", source.file);
-  else body.set("sourceJobId", source.jobId);
+  body.set("sourceVideo", source);
   body.set("characterImage", characterImage);
   body.set("durationSeconds", String(durationSeconds));
   body.set("orientation", orientation);

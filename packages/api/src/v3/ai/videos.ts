@@ -10,7 +10,6 @@ import {
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
-  describeSourceVideo,
   isVideoInputMediaId,
   readVideoInputMedia,
 } from "../../ai/video-input-media";
@@ -110,19 +109,6 @@ const createFramesSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   seed: z.coerce.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
-  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
-}).strict();
-
-// Working from a video this service already holds. The source is named by the
-// job that produced it rather than uploaded: the bytes are already here, a
-// video is far larger than anything this service accepts as an upload, and
-// naming a job is what lets ownership be checked before anything is charged.
-const sourceVideoSchema = z.object({
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  sourceJobId: z.string().uuid(),
-  // The extension segment's length, not the total. Absent for an edit, which
-  // produces something as long as its source.
-  durationSeconds: z.number().refine(isAiVideoDurationSeconds).optional(),
   model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
@@ -292,28 +278,16 @@ function largestBytesOf(files: readonly File[]): number {
   return largest;
 }
 
-/**
- * Whether the source arrived with the request rather than being named.
- *
- * Decided by the content type alone: a multipart body is the only way a video
- * can be sent, and a JSON one is the only way a job can be named, so nothing
- * has to guess which of two optional fields the caller meant.
- */
+/** Video editing accepts uploaded media in multipart requests. */
 function isMultipartRequest(request: Request): boolean {
   const contentType = request.headers.get("content-type") ?? "";
   return contentType.split(";", 1)[0]!.trim().toLowerCase() ===
     "multipart/form-data";
 }
 
-// Motion control. The character is a picture the caller uploads; the motion
-// comes from a finished job of theirs, named the same way an edit names its
-// source.
+// Motion control uploads both the character picture and its source video.
 const motionSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  // Absent when the motion comes from a video sent with the request instead of
-  // from a finished job. Exactly one of the two has to be there, which is
-  // checked against the parts rather than in the schema.
-  sourceJobId: z.string().uuid().optional(),
   durationSeconds: z.coerce.number().refine(isAiVideoDurationSeconds),
   // Whether the result follows the character picture's shape or the reference
   // video's. The provider allows a longer result for the latter.
@@ -1322,98 +1296,74 @@ const app = new Hono()
     const requestSignal = c.req.raw.signal;
     requestSignal.throwIfAborted();
 
-    // The source is either a finished job of this user's, named in JSON, or a
-    // video sent with the request. The second is what makes an arbitrary clip
-    // usable; it costs a multipart body, so the two shapes are told apart by
-    // the content type rather than by an optional field in one schema.
-    const uploaded = isMultipartRequest(c.req.raw);
+    if (!isMultipartRequest(c.req.raw)) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
+    }
     let prompt: string;
-    let sourceJobId: string | undefined;
     let requestedDuration: number | undefined;
     let requestedModel: string | undefined;
-    let sourceVideo: { bytes: ArrayBuffer; mimeType: string } | undefined;
-    let uploadedDurationSeconds: number | undefined;
+    let sourceVideo: { bytes: ArrayBuffer; mimeType: string };
+    let sourceDurationSeconds: number;
 
-    if (uploaded) {
-      let body: Awaited<ReturnType<typeof c.req.parseBody>>;
-      try {
-        body = await parseBodyWithUploadLimit(
-          c.req,
-          MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
-          aiApiMultipartBodyLimit(`/api/v3/ai/videos/${mode}`)!,
-        );
-      } catch (error) {
-        if (isUploadLimitExceeded(error)) {
-          return c.json(await apiErrorResponse("fileIsTooLarge"), {
-            status: 413,
-          });
-        }
-        throw error;
-      }
-      requestSignal.throwIfAborted();
-      const file = body["sourceVideo"];
-      if (!(file instanceof File) || file.size === 0) {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: 400,
+    let body: Awaited<ReturnType<typeof c.req.parseBody>>;
+    try {
+      body = await parseBodyWithUploadLimit(
+        c.req,
+        MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        aiApiMultipartBodyLimit(`/api/v3/ai/videos/${mode}`)!,
+      );
+    } catch (error) {
+      if (isUploadLimitExceeded(error)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), {
+          status: 413,
         });
       }
-      if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
-        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
-      }
-      const fields = uploadedSourceVideoSchema.safeParse({
-        prompt: body["prompt"],
-        ...(typeof body["durationSeconds"] === "string" &&
-        body["durationSeconds"].length > 0
-          ? { durationSeconds: body["durationSeconds"] }
-          : {}),
-        ...(typeof body["model"] === "string" && body["model"].length > 0
-          ? { model: body["model"] }
-          : {}),
-      });
-      if (!fields.success) {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: 400,
-        });
-      }
-      const bytes = await file.arrayBuffer();
-      requestSignal.throwIfAborted();
-      // The container is checked before anything is reserved, and the same
-      // pass reads the length. An edit is charged for as many seconds as its
-      // source runs, so that number has to come from the bytes rather than
-      // from whoever sent them.
-      let metadata;
-      try {
-        metadata = inspectGeneratedVideo(bytes, file.type);
-      } catch {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: 400,
-        });
-      }
-      prompt = fields.data.prompt;
-      requestedDuration = fields.data.durationSeconds;
-      requestedModel = fields.data.model;
-      sourceVideo = { bytes, mimeType: metadata.mimeType };
-      uploadedDurationSeconds = Math.ceil(metadata.durationSeconds);
-    } else {
-      let rawBody: unknown;
-      try {
-        rawBody = await parseJsonWithBodyLimit<unknown>(c.req);
-      } catch (error) {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: isUploadLimitExceeded(error) ? 413 : 400,
-        });
-      }
-      const parsedBody = sourceVideoSchema.safeParse(rawBody);
-      if (!parsedBody.success) {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: 400,
-        });
-      }
-      prompt = parsedBody.data.prompt;
-      sourceJobId = parsedBody.data.sourceJobId;
-      requestedDuration = parsedBody.data.durationSeconds;
-      requestedModel = parsedBody.data.model;
+      throw error;
     }
+    requestSignal.throwIfAborted();
+    const file = body["sourceVideo"];
+    if ("sourceJobId" in body || !(file instanceof File) || file.size === 0) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
+      return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+    }
+    const fields = uploadedSourceVideoSchema.safeParse({
+      prompt: body["prompt"],
+      ...(typeof body["durationSeconds"] === "string" &&
+      body["durationSeconds"].length > 0
+        ? { durationSeconds: body["durationSeconds"] }
+        : {}),
+      ...(typeof body["model"] === "string" && body["model"].length > 0
+        ? { model: body["model"] }
+        : {}),
+    });
+    if (!fields.success) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const bytes = await file.arrayBuffer();
+    requestSignal.throwIfAborted();
+    // The container is checked before anything is reserved, and the same
+    // pass reads the length. An edit is charged for as many seconds as its
+    // source runs, so that number has to come from the bytes rather than
+    // from whoever sent them.
+    let metadata;
+    try {
+      metadata = inspectGeneratedVideo(bytes, file.type);
+    } catch {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    prompt = fields.data.prompt;
+    requestedDuration = fields.data.durationSeconds;
+    requestedModel = fields.data.model;
+    sourceVideo = { bytes, mimeType: metadata.mimeType };
+    sourceDurationSeconds = Math.ceil(metadata.durationSeconds);
 
     // An edit produces something as long as what it was given, so naming a
     // length for one would be a number nothing honours.
@@ -1433,12 +1383,7 @@ const app = new Hono()
       input: {
         ...(requestedModel ? { model: requestedModel } : {}),
         prompt,
-        // One of the two names the source. An uploaded clip is named by what
-        // it contains, so re-sending the same file is the same request and
-        // sending a different one is not.
-        ...(sourceJobId === undefined
-          ? { sourceVideoSha256: await sha256Hex(sourceVideo!.bytes) }
-          : { sourceJobId }),
+        sourceVideoSha256: await sha256Hex(sourceVideo.bytes),
         ...(requestedDuration === undefined
           ? {}
           : { durationSeconds: requestedDuration }),
@@ -1463,20 +1408,6 @@ const app = new Hono()
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
     }
 
-    // Before anything is reserved: a named source that is not this user's, is
-    // gone, or never produced a video must cost nothing. An uploaded one needs
-    // no such check — it came from this request — and its length was read out
-    // of the bytes above.
-    let sourceDurationSeconds: number;
-    if (sourceJobId === undefined) {
-      sourceDurationSeconds = uploadedDurationSeconds!;
-    } else {
-      const source = await describeSourceVideo({ userId, sourceJobId });
-      if (!source) {
-        return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
-      }
-      sourceDurationSeconds = source.durationSeconds;
-    }
     const durationSeconds = mode === "edit"
       ? sourceDurationSeconds
       : requestedDuration!;
@@ -1505,9 +1436,7 @@ const app = new Hono()
           (mode === "extend" && selectedCapabilities.durations.length > 0 &&
             !selectedCapabilities.durations.includes(durationSeconds)))) ||
       sourceVideoOutsideModelRange(selectedCapabilities, {
-        ...(sourceVideo === undefined
-          ? {}
-          : { bytes: sourceVideo.bytes.byteLength }),
+        bytes: sourceVideo.bytes.byteLength,
         durationSeconds: sourceDurationSeconds,
       })
     ) {
@@ -1526,7 +1455,6 @@ const app = new Hono()
       status: "queued",
       inputParams: {
         prompt,
-        ...(sourceJobId === undefined ? {} : { sourceJobId }),
         durationSeconds,
         mode,
       },
@@ -1566,9 +1494,7 @@ const app = new Hono()
         aspectRatio: "16:9",
         generateAudio: true,
         mode,
-        ...(sourceJobId === undefined
-          ? { sourceVideo: sourceVideo! }
-          : { sourceJobId, sourceUserId: userId }),
+        sourceVideo,
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         provider: selectedModel.provider,
@@ -1638,6 +1564,10 @@ const app = new Hono()
     }
     requestSignal.throwIfAborted();
 
+    if ("sourceJobId" in body) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
+    }
+
     const characterImage = body["characterImage"];
     if (
       !(characterImage instanceof File) ||
@@ -1660,9 +1590,6 @@ const app = new Hono()
     };
     const fields = motionSchema.safeParse({
       prompt: body["prompt"],
-      ...(optionalField("sourceJobId") === undefined
-        ? {}
-        : { sourceJobId: body["sourceJobId"] }),
       durationSeconds: body["durationSeconds"],
       orientation: optionalField("orientation"),
       quality: optionalField("quality"),
@@ -1674,40 +1601,28 @@ const app = new Hono()
       });
     }
 
-    // The motion comes either from a finished job or from a video sent here.
-    // Exactly one: naming both would leave which of them was paid for up to
-    // whichever branch happened to run first.
     const uploadedSource = body["sourceVideo"];
-    const hasUpload = uploadedSource instanceof File && uploadedSource.size > 0;
-    if (hasUpload === (fields.data.sourceJobId !== undefined)) {
+    if (!(uploadedSource instanceof File) || uploadedSource.size === 0) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
+    }
+    const file = uploadedSource as File;
+    if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
+      return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+    }
+    const bytes = await file.arrayBuffer();
+    requestSignal.throwIfAborted();
+    // Validate the uploaded container before reserving any usage.
+    let metadata;
+    try {
+      metadata = inspectGeneratedVideo(bytes, file.type);
+    } catch {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
-    let sourceVideo: { bytes: ArrayBuffer; mimeType: string } | undefined;
-    let sourceVideoSha256: string | undefined;
-    let uploadedSourceSeconds: number | undefined;
-    if (hasUpload) {
-      const file = uploadedSource as File;
-      if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
-        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
-      }
-      const bytes = await file.arrayBuffer();
-      requestSignal.throwIfAborted();
-      // Checked before anything is reserved, the same way a named job's source
-      // is: a file the provider would refuse must cost nothing.
-      let metadata;
-      try {
-        metadata = inspectGeneratedVideo(bytes, file.type);
-      } catch {
-        return c.json(await apiErrorResponse("invalidRequestBody"), {
-          status: 400,
-        });
-      }
-      sourceVideo = { bytes, mimeType: metadata.mimeType };
-      sourceVideoSha256 = await sha256Hex(bytes);
-      uploadedSourceSeconds = Math.ceil(metadata.durationSeconds);
-    }
+    const sourceVideo = { bytes, mimeType: metadata.mimeType };
+    const sourceVideoSha256 = await sha256Hex(bytes);
+    const sourceDurationSeconds = Math.ceil(metadata.durationSeconds);
 
     const validatedImage = await validateAiInputImage(
       characterImage,
@@ -1721,7 +1636,7 @@ const app = new Hono()
     }
     requestSignal.throwIfAborted();
 
-    const { prompt, sourceJobId, durationSeconds, orientation, quality } =
+    const { prompt, durationSeconds, orientation, quality } =
       fields.data;
     const characterSha256 = await sha256Hex(validatedImage.bytes);
     const requestIdentity = await getAiRequestIdentity({
@@ -1730,11 +1645,7 @@ const app = new Hono()
       input: {
         ...(fields.data.model ? { model: fields.data.model } : {}),
         prompt,
-        // One of the two names the source. An uploaded clip is named by what
-        // it contains, so re-sending the same file is the same request.
-        ...(sourceJobId === undefined
-          ? { sourceVideoSha256: sourceVideoSha256! }
-          : { sourceJobId }),
+        sourceVideoSha256,
         durationSeconds,
         orientation,
         quality,
@@ -1763,20 +1674,6 @@ const app = new Hono()
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
     }
 
-    // A named source that is not this user's, is gone, or never produced a
-    // video must cost nothing. An uploaded one came from this request and was
-    // already checked above.
-    // The source's own length, which the model may bound. An uploaded clip
-    // carries it from the container read above.
-    let motionSourceDurationSeconds: number | null = uploadedSourceSeconds ?? null;
-    if (sourceJobId !== undefined) {
-      const source = await describeSourceVideo({ userId, sourceJobId });
-      if (!source) {
-        return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
-      }
-      motionSourceDurationSeconds = source.durationSeconds;
-    }
-
     const catalog = await loadAiModelCatalog();
     const selectedModel = catalog.resolve("video.motion", fields.data.model);
     if (!selectedModel) {
@@ -1798,12 +1695,10 @@ const app = new Hono()
         (prompt.length > motionCapabilities.maxPromptCharacters ||
           (motionCapabilities.durations.length > 0 &&
             !motionCapabilities.durations.includes(durationSeconds)))) ||
-      (motionSourceDurationSeconds !== null &&
+      (sourceDurationSeconds !== null &&
         sourceVideoOutsideModelRange(motionCapabilities, {
-          ...(sourceVideo === undefined
-            ? {}
-            : { bytes: sourceVideo.bytes.byteLength }),
-          durationSeconds: motionSourceDurationSeconds,
+          bytes: sourceVideo.bytes.byteLength,
+          durationSeconds: sourceDurationSeconds,
         }))
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
@@ -1821,7 +1716,6 @@ const app = new Hono()
       status: "queued",
       inputParams: {
         prompt,
-        ...(sourceJobId === undefined ? {} : { sourceJobId }),
         durationSeconds,
         orientation,
         quality,
@@ -1875,9 +1769,7 @@ const app = new Hono()
           ),
         ],
         mode: "motion",
-        ...(sourceJobId === undefined
-          ? { sourceVideo: sourceVideo! }
-          : { sourceJobId, sourceUserId: userId }),
+        sourceVideo,
         motionOrientation: orientation,
         motionQuality: quality,
         callbackNonceHash: callbackNonce.hash,

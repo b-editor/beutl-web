@@ -39,7 +39,6 @@ import {
   buildAiMotionVideoSubmission,
   buildAiSourceVideoSubmission,
 } from "@/lib/ai-video-submit";
-import { listSourceVideosAction, type AiSourceVideo } from "./actions";
 import type { AiSourceVideoOperation } from "./video-options";
 import type { AiVideoModelOptions } from "./video-form";
 import {
@@ -82,9 +81,6 @@ const MODES: readonly {
 ];
 
 const MODE_OPERATIONS = MODES.map((entry) => entry.operation);
-
-/** Where the video being worked on comes from. */
-type SourceKind = "upload" | "job";
 
 export type AiVideoEditScreenOptions = Record<
   AiSourceVideoOperation,
@@ -157,10 +153,7 @@ export function VideoEditForm({
   const submittingRef = useRef(false);
   const activeRequestRef = useRef<AbortController | null>(null);
 
-  const [sourceKind, setSourceKind] = useState<SourceKind>("upload");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [sources, setSources] = useState<AiSourceVideo[] | null>(null);
-  const [sourceJobId, setSourceJobId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [extendDuration, setExtendDuration] = useState("5");
   const [motionDuration, setMotionDuration] = useState("5");
@@ -185,22 +178,6 @@ export function VideoEditForm({
   // way to the provider while the durable idempotency key stays recoverable.
   useEffect(() => {
     return () => activeRequestRef.current?.abort();
-  }, []);
-
-  // This account's finished videos, offered as an alternative to picking a
-  // file. Read once: all three modes take the same list.
-  useEffect(() => {
-    let current = true;
-    void listSourceVideosAction()
-      .then((listed) => {
-        if (current) setSources(listed);
-      })
-      .catch(() => {
-        if (current) setSources([]);
-      });
-    return () => {
-      current = false;
-    };
   }, []);
 
   const models = useMemo(() => screen?.models ?? [], [screen]);
@@ -234,7 +211,7 @@ export function VideoEditForm({
   // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの
   // ものが同じ依頼に見え、片方が走っている間もう片方を始められない。送れないと
   // 分かっている大きさのものは読まない——名前には要らない。
-  const sentSourceFile = sourceKind === "upload" ? sourceFile : null;
+  const sentSourceFile = sourceFile;
   const oversizedSource =
     sentSourceFile !== null &&
     sentSourceFile.size > MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES;
@@ -263,9 +240,7 @@ export function VideoEditForm({
   // An edit produces something as long as its source, so it names no length.
   // Counting one anyway would split the same request across two names.
   const sentDuration = mode === "edit" ? null : duration;
-  const chosenSource = sources?.find((entry) => entry.jobId === sourceJobId);
-  const hasSource =
-    sourceKind === "upload" ? sentSourceFile !== null : sourceJobId !== "";
+  const hasSource = sentSourceFile !== null;
 
   const signature = oversized
     ? ""
@@ -273,10 +248,9 @@ export function VideoEditForm({
         mode,
         model,
         trimmedPrompt,
-        // 素材そのもの。アップロードは中身で、生成済みはジョブの名前で見分ける
-        // ——どちらも、選び直しただけで別の依頼になってはいけない。
-        sourceKind,
-        sourceKind === "job" ? sourceJobId : (sourceContents[0] ?? ""),
+        // Preserve the signature of existing local uploads across this change.
+        "upload",
+        sourceContents[0] ?? "",
         sentDuration,
         mode === "motion" ? orientation : null,
         mode === "motion" ? quality : null,
@@ -348,10 +322,7 @@ export function VideoEditForm({
       );
       if (!idempotencyKey) return;
 
-      const source =
-        sourceKind === "upload"
-          ? ({ kind: "file", file: sentSourceFile! } as const)
-          : ({ kind: "job", jobId: sourceJobId } as const);
+      const source = sentSourceFile!;
       const submission =
         mode === "motion"
           ? buildAiMotionVideoSubmission({
@@ -417,100 +388,20 @@ export function VideoEditForm({
   const form = (
     <Card className="flex flex-col gap-4 p-6">
       <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-        {/* The video being worked on comes first, the way the picture does on
-            the image edit screen. It is either one chosen from disk or one this
-            account already generated — never both, because the API charges for
-            exactly one source. */}
         <div className="flex flex-col space-y-1.5">
-          <Label>{t("dashboard:ai.sourceVideo")}</Label>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={sourceKind}
-            onValueChange={(value) => {
-              if (value === "upload" || value === "job") setSourceKind(value);
-            }}
-            className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-          >
-            <ToggleGroupItem value="upload" className="justify-start gap-2">
-              <Clapperboard className="h-4 w-4 shrink-0" />
-              <span className="truncate">
-                {t("dashboard:ai.sourceVideoUpload")}
-              </span>
-            </ToggleGroupItem>
-            <ToggleGroupItem value="job" className="justify-start gap-2">
-              <History className="h-4 w-4 shrink-0" />
-              <span className="truncate">
-                {t("dashboard:ai.sourceVideoGenerated")}
-              </span>
-            </ToggleGroupItem>
-          </ToggleGroup>
-
-          {sourceKind === "upload" ? (
-            <>
-              <Input
-                id="sourceVideoFile"
-                type="file"
-                accept="video/mp4,video/webm"
-                onChange={(event) =>
-                  setSourceFile(event.target.files?.[0] ?? null)
-                }
-              />
-              <p
-                className={
-                  oversizedSource
-                    ? "text-xs text-destructive"
-                    : "text-xs text-muted-foreground"
-                }
-              >
-                {oversizedSource
-                  ? t("dashboard:ai.sourceVideoTooLarge", {
-                      maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES),
-                    })
-                  : t("dashboard:ai.sourceVideoUploadHint", {
-                      maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES),
-                    })}
-              </p>
-            </>
-          ) : sources === null ? (
-            <p className="text-xs text-muted-foreground">
-              {t("dashboard:ai.sourceVideoLoading")}
-            </p>
-          ) : sources.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {t("dashboard:ai.sourceVideoNone")}
-            </p>
-          ) : (
-            <Select value={sourceJobId} onValueChange={setSourceJobId}>
-              <SelectTrigger id="sourceVideoJob">
-                <SelectValue
-                  placeholder={t("dashboard:ai.sourceVideoPlaceholder")}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {sources.map((source) => (
-                  <SelectItem
-                    key={source.jobId}
-                    value={source.jobId}
-                    hint={`${source.durationSeconds}s`}
-                  >
-                    {source.fileName ??
-                      new Date(source.createdAt).toLocaleString(lang)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {/* An edit answers with something as long as its source, so the
-              length is worth seeing before the request is paid for. */}
-          {mode === "edit" && sourceKind === "job" && chosenSource && (
-            <p className="text-xs text-muted-foreground">
-              {t("dashboard:ai.sourceVideoEditLength", {
-                seconds: chosenSource.durationSeconds,
-              })}
-            </p>
-          )}
-          {mode === "edit" && sourceKind === "upload" && (
+          <Label htmlFor="sourceVideoFile">{t("dashboard:ai.sourceVideo")}</Label>
+          <Input
+            id="sourceVideoFile"
+            type="file"
+            accept="video/mp4,video/webm"
+            onChange={(event) => setSourceFile(event.target.files?.[0] ?? null)}
+          />
+          <p className={oversizedSource ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+            {oversizedSource
+              ? t("dashboard:ai.sourceVideoTooLarge", { maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES) })
+              : t("dashboard:ai.sourceVideoUploadHint", { maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES) })}
+          </p>
+          {mode === "edit" && (
             <p className="text-xs text-muted-foreground">
               {t("dashboard:ai.sourceVideoEditLengthUnknown")}
             </p>

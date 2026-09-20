@@ -15,6 +15,13 @@ vi.mock("../../packages/api/src/ai/video-jobs", async (importOriginal) => {
   return { ...actual, createAndAttachVideoJob };
 });
 
+// Container parsing is covered by ai-video-validation.test.ts; these cases
+// exercise request admission and ambiguous provider outcomes.
+vi.mock("../../packages/api/src/ai/video-validation", async (original) => ({
+  ...(await original<typeof import("../../packages/api/src/ai/video-validation")>()),
+  inspectGeneratedVideo: vi.fn(() => ({ mimeType: "video/mp4", durationSeconds: 6 })),
+}));
+
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const JWT_SECRET = "test-secret-for-source-video-modes";
 const SOURCE_JOB_ID = "22222222-2222-4222-8222-222222222222";
@@ -98,7 +105,7 @@ function sourceVideoJob() {
   } as never;
 }
 
-describe("working from a video this service already holds", () => {
+describe("uploaded video sources and rejection of removed job references", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
 
   beforeEach(() => {
@@ -160,7 +167,7 @@ describe("working from a video this service already holds", () => {
       durationSeconds: 4,
     });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(400);
     expect(state.aiJobs.size).toBe(0);
     expect(createAndAttachVideoJob).not.toHaveBeenCalled();
   });
@@ -185,7 +192,7 @@ describe("working from a video this service already holds", () => {
       sourceJobId: SOURCE_JOB_ID,
     });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(400);
     expect(createAndAttachVideoJob).not.toHaveBeenCalled();
   });
 
@@ -204,10 +211,11 @@ describe("working from a video this service already holds", () => {
       }),
     );
 
-    const response = await post("edit", {
-      prompt: "make it night",
-      sourceJobId: SOURCE_JOB_ID,
-    });
+    const form = new FormData();
+    form.set("prompt", "make it night");
+    form.set("sourceVideo", new File(["clip"], "clip.mp4", { type: "video/mp4" }));
+    const { "content-type": _contentType, ...headers } = await authHeaders();
+    const response = await makeApp().request("/api/v3/ai/videos/edit", { method: "POST", headers, body: form });
 
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -237,7 +245,7 @@ describe("working from a video this service already holds", () => {
 
     const form = new FormData();
     form.set("prompt", "dance");
-    form.set("sourceJobId", SOURCE_JOB_ID);
+    form.set("sourceVideo", new File(["clip"], "clip.mp4", { type: "video/mp4" }));
     form.set("durationSeconds", "5");
     form.set(
       "characterImage",

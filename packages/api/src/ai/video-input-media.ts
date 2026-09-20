@@ -17,13 +17,9 @@
 // behind.
 
 import {
-  getAiJobById,
-  getAiJobResultFile,
   registerAiStorageCleanup,
 } from "@beutl/db";
 import { getR2Bucket } from "./r2-provider";
-import { readAiOutputBytes } from "./storage";
-import { MAX_AI_GENERATED_VIDEO_BYTES } from "./video-validation";
 
 /** The prefix the serving route is confined to. */
 export const AI_VIDEO_INPUT_PREFIX = "ai/video-input";
@@ -85,100 +81,6 @@ export async function publishVideoInputMedia({
     origin,
   );
   return { url: url.toString(), objectKey };
-}
-
-/**
- * What a finished video job produced, for a mode that works from it.
- *
- * Read before anything is reserved: an edit is charged for the source's own
- * length, and a request naming a job that is not this user's, is gone, or never
- * produced a video has to be refused before it costs anything.
- */
-export async function describeSourceVideo({
-  userId,
-  sourceJobId,
-}: {
-  userId: string;
-  sourceJobId: string;
-}): Promise<{ durationSeconds: number } | null> {
-  const [file, sourceJob] = await Promise.all([
-    getAiJobResultFile({ jobId: sourceJobId, userId }),
-    getAiJobById({ jobId: sourceJobId }),
-  ]);
-  if (
-    !file ||
-    sourceJob?.userId !== userId ||
-    sourceJob.kind !== "video" ||
-    !file.mimeType?.startsWith("video/")
-  ) {
-    return null;
-  }
-  const duration = (sourceJob.inputParams as { durationSeconds?: unknown } | null)
-    ?.durationSeconds;
-  return typeof duration === "number" && Number.isFinite(duration) && duration > 0
-    ? { durationSeconds: Math.ceil(duration) }
-    : null;
-}
-
-/**
- * Serve a finished job's video to the provider, for a mode that works from one.
- *
- * The bytes are copied rather than the stored object being shared. Sharing it
- * would mean a second way to name an object in the bucket, and a mapping from
- * capability URL to arbitrary key is exactly what the serving route refuses to
- * have — it reads one prefix and nothing else. A generated video is capped at
- * MAX_AI_GENERATED_VIDEO_BYTES, which is the same amount this service already
- * holds in memory when it finalizes one, and the copy is scheduled for
- * deletion as it is written.
- */
-export async function publishSourceVideoForJob({
-  jobId,
-  userId,
-  sourceJobId,
-  origin,
-  now = new Date(),
-}: {
-  jobId: string;
-  userId: string;
-  sourceJobId: string;
-  origin: string;
-  now?: Date;
-}): Promise<{ url: string; durationSeconds: number | null } | null> {
-  const [file, sourceJob] = await Promise.all([
-    getAiJobResultFile({ jobId: sourceJobId, userId }),
-    getAiJobById({ jobId: sourceJobId }),
-  ]);
-  // Someone else's job, a deleted one, or one that never produced a video.
-  if (
-    !file ||
-    sourceJob?.userId !== userId ||
-    sourceJob.kind !== "video" ||
-    !file.mimeType?.startsWith("video/")
-  ) {
-    return null;
-  }
-
-  const bytes = await readAiOutputBytes({
-    objectKey: file.objectKey,
-    maximumBytes: MAX_AI_GENERATED_VIDEO_BYTES,
-  });
-  const { url } = await publishVideoInputMedia({
-    jobId,
-    bytes,
-    mimeType: file.mimeType,
-    origin,
-    now,
-  });
-  // What the source is worth charging for, when the mode produces something of
-  // the same length rather than a length the caller chose.
-  const duration = (sourceJob.inputParams as { durationSeconds?: unknown } | null)
-    ?.durationSeconds;
-  return {
-    url,
-    durationSeconds: typeof duration === "number" && Number.isFinite(duration)
-      ? duration
-      : null,
-  };
 }
 
 /** The bytes behind one media URL, or null when nothing is stored there. */
