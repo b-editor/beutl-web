@@ -1029,7 +1029,14 @@ describe("dashboard AI actions", () => {
       ["generateAudio", "false"], ["generateAudio", 0], ["generateAudio", null],
       ["firstFrame", null], ["firstFrame", false], ["firstFrame", {}],
       ["lastFrame", null], ["lastFrame", false], ["lastFrame", {}],
-    ] as const)("rejects present malformed video field %s before reservation", async (field, value) => {
+      ["firstFrame", { filename: "first.png", mimeType: "image/png" }],
+      ["lastFrame", { filename: "last.png", mimeType: "image/png" }],
+      ["inputReferences", [{ filename: "reference.mp4", mimeType: "video/mp4" }]],
+      ["inputReferences", []], ["inputReferences", null],
+      ["mode", "edit"], ["mode", "extend"], ["mode", "motion"],
+      ["characterImage", { filename: "character.png", mimeType: "image/png" }],
+      ["characterImage", null],
+    ] as const)("rejects non-replayable video field %s before reservation", async (field, value) => {
       await registerVideoModel();
       const inputParams: Record<string, unknown> = {
         prompt: "a cat", durationSeconds: 4, resolution: "720p", aspectRatio: "16:9",
@@ -1042,6 +1049,9 @@ describe("dashboard AI actions", () => {
       const result = await retryJobAction(job.id, crypto.randomUUID());
       expect(result).toMatchObject({ success: false, message: "api-errors:invalidRequestBody" });
       expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(createAndAttachVideoJob).not.toHaveBeenCalled();
+      const history = await listJobsAction();
+      expect(history.jobs?.find((entry) => entry.id === job.id)?.canRetry).toBe(false);
     });
 
     it("rejects a retry when the confirmed job payload changed before reservation", async () => {
