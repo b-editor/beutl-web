@@ -133,6 +133,46 @@ describe("uploaded video sources and rejection of removed job references", () =>
       body: JSON.stringify(body),
     });
 
+  it.each(["edit", "extend", "motion"])(
+    "rejects a saved source job for %s before reserving usage",
+    async (mode) => {
+      await activatePro();
+      state.aiJobs.set(SOURCE_JOB_ID, sourceVideoJob());
+      state.files.set("file-1", sourceVideoFile());
+
+      const fields = {
+        prompt: "make it night",
+        sourceJobId: SOURCE_JOB_ID,
+        ...(mode === "edit" ? {} : { durationSeconds: 5 }),
+      };
+      const jsonResponse = await post(mode, fields);
+      expect(jsonResponse.status).toBe(400);
+      expect(await jsonResponse.json()).toMatchObject({ error_code: "invalidRequestBody" });
+
+      // Supplying a valid upload alongside a removed job reference must also
+      // be refused, rather than silently choosing one of the two sources.
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) {
+        form.set(key, String(value));
+      }
+      form.set("sourceVideo", new File(["clip"], "clip.mp4", { type: "video/mp4" }));
+      if (mode === "motion") {
+        form.set("characterImage", new File([PNG_BYTES], "character.png", { type: "image/png" }));
+      }
+      const { "content-type": _contentType, ...headers } = await authHeaders();
+      const multipartResponse = await makeApp().request(`/api/v3/ai/videos/${mode}`, {
+        method: "POST",
+        headers,
+        body: form,
+      });
+      expect(multipartResponse.status).toBe(400);
+      expect(await multipartResponse.json()).toMatchObject({ error_code: "invalidRequestBody" });
+      expect(state.aiJobs.size).toBe(1);
+      expect(state.creditTransactions).toHaveLength(0);
+      expect(createAndAttachVideoJob).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses an edit that names a length, because the source decides it", async () => {
     // The result is as long as what it was given. Accepting a length here
     // would charge for a number nothing honours.
