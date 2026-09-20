@@ -47,6 +47,7 @@ function optionsFor(
                 maxVideoReferenceBytes: supported.maxVideoReferenceBytes,
                 maxAudioReferences: supported.maxAudioReferences,
                 maxAudioReferenceBytes: supported.maxAudioReferenceBytes,
+                maxTotalReferences: supported.maxTotalReferences,
               },
             ],
           ]

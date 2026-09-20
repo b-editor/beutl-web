@@ -271,6 +271,9 @@ export type AiVideoModelOptions = {
   maxVideoReferenceBytes: number;
   maxAudioReferences: number;
   maxAudioReferenceBytes: number;
+  // 種類ごとに収まっていても、合計でこれを超えると送れない。null は「合計の
+  // 制限は無い」。
+  maxTotalReferences: number | null;
 };
 
 type VideoSubmitState = {
@@ -325,6 +328,7 @@ function optionsOf(capabilities: Record<string, AiVideoModelOptions> | undefined
     maxVideoReferenceBytes: supported?.maxVideoReferenceBytes ?? 0,
     maxAudioReferences: supported?.maxAudioReferences ?? 0,
     maxAudioReferenceBytes: supported?.maxAudioReferenceBytes ?? 0,
+    maxTotalReferences: supported?.maxTotalReferences ?? null,
   };
 }
 
@@ -495,7 +499,17 @@ export function VideoForm({
     [options.referenceToVideo, referenceKinds, sentFirstFrame],
   );
   const oversizedReference = referenceKinds.some((entry) => entry.oversized);
-  const tooManyReferences = referenceKinds.some((entry) => entry.tooMany);
+  // 種類ごとの上限とは別に、合計にも上限を置くモデルがある——H3 は画像 9 枚と
+  // 動画 3 本を別々に許しながら、合わせて 5 つまで。ここで見ないと、どの欄も
+  // 上限内なのに送信だけがサーバーに 400 で返される組み方ができる。
+  const tooManyInTotal =
+    options.maxTotalReferences !== null &&
+    referenceKinds.reduce(
+      (carried, entry) => carried + Math.min(entry.files.length, entry.maxCount),
+      0,
+    ) > options.maxTotalReferences;
+  const tooManyReferences =
+    referenceKinds.some((entry) => entry.tooMany) || tooManyInTotal;
   const frames = useMemo(
     () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
     [sentFirstFrame, sentLastFrame],
@@ -974,6 +988,16 @@ export function VideoForm({
                   />
                 );
               })}
+              {/* Each field is within its own limit, so nothing above says
+                  why the button is off. The aggregate has to speak for
+                  itself. */}
+              {tooManyInTotal && (
+                <p className="text-xs text-destructive">
+                  {t("dashboard:ai.referenceTooManyInTotal", {
+                    maximum: options.maxTotalReferences,
+                  })}
+                </p>
+              )}
               {/* Said rather than silently dropped: the selection is still
                   here if the frame is cleared, but it is not what is being
                   bought while a frame is chosen. */}

@@ -343,6 +343,7 @@ describe("choosing a model per request", () => {
       "maxPromptLength",
       "maxSourceVideoBytes",
       "maxSourceVideoSeconds",
+      "maxTotalReferences",
       "maxVideoReferenceBytes",
       "maxVideoReferences",
       "minSourceVideoSeconds",

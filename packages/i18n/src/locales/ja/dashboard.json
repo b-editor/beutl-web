@@ -254,6 +254,7 @@
     "translating": "翻訳中…",
     "translatedSoFar": "{{total}} 件中 {{done}} 件",
     "referenceImageTooMany": "参照画像は最大 {{maximum}} 枚です。選び直してください。",
+    "referenceTooManyInTotal": "このモデルが受け取る参照素材は、画像・動画・音声あわせて最大 {{maximum}} 個です。選び直してください。",
     "referenceImageTooLarge": "参照画像1枚のサイズは {{maximum}} 以下にしてください。小さいファイルを使用してください。",
     "operationUnavailableTitle": "現在利用できません",
     "operationUnavailableDescription": "この操作に使えるモデルが現在提供されていません。プランや残高では解決しないため、しばらくしてからお試しください。",

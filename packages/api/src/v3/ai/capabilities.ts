@@ -108,6 +108,10 @@ type VideoModelDescription = ModelDescription & {
   maxVideoReferenceBytes: number;
   maxAudioReferences: number;
   maxAudioReferenceBytes: number;
+  // 種類ごとに収まっていても、合計でこれを超える組み合わせは受け取らない。
+  // null は「合計の制限を公開していない」。画面がこれを見ないと、どの欄も
+  // 上限内なのに送信だけが 400 で返る組み方ができてしまう。
+  maxTotalReferences: number | null;
 };
 
 // The provider rides along so a caller can look the entry's capabilities up.
@@ -256,6 +260,7 @@ const app = new Hono().get("/", async (c) => {
       maxVideoReferenceBytes: supported ? supported.maxVideoReferenceBytes : 0,
       maxAudioReferences: supported ? supported.maxAudioReferences : 0,
       maxAudioReferenceBytes: supported ? supported.maxAudioReferenceBytes : 0,
+      maxTotalReferences: supported ? supported.maxTotalReferences : null,
     };
   });
   return c.json({

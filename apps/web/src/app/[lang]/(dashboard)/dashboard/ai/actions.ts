@@ -19,6 +19,7 @@ import {
   generateImage,
   inspectGeneratedImage,
   isIso6391LanguageCode,
+  DEFAULT_AI_PROVIDER_ID,
   loadAiModelCatalog,
   parseAudio,
   readAiJsonResult,
@@ -1252,6 +1253,30 @@ export async function listJobsAction(
   };
 }
 
+/**
+ * The catalog entry a rerun must use: the same model on the same provider the
+ * paid original ran on.
+ *
+ * Resolving by model id alone takes whichever provider that id currently
+ * carries. An administrator who moves an id from OpenRouter to the Gateway
+ * would otherwise have a rerun validated against, and dispatched to, a
+ * different service than the one the user already paid — for the same job.
+ * Nothing left to re-run on the original pair is "unavailable", which is what
+ * the caller reports.
+ */
+function retryEntryFor(
+  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
+  operation: string,
+  job: { model: string | null; provider?: string | null },
+) {
+  const entry = catalog.resolve(operation, job.model ?? undefined);
+  if (!entry) return null;
+  // A row written before the column existed carries the one provider there
+  // was, which is the same resolution the catalog itself makes.
+  const ranOn = job.provider ?? DEFAULT_AI_PROVIDER_ID;
+  return entry.provider === ranOn ? entry : null;
+}
+
 export async function retryJobAction(
   jobId: string,
   idempotencyKey: string,
@@ -1350,7 +1375,7 @@ export async function retryJobAction(
       }
       seed = input.seed;
     }
-    const retryModel = catalog.resolve("image.generate", job.model);
+    const retryModel = retryEntryFor(catalog, "image.generate", job);
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
@@ -1486,7 +1511,7 @@ export async function retryJobAction(
     if (typeof retryAspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio as AiVideoAspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const retryModel = catalog.resolve("video.generate", job.model);
+    const retryModel = retryEntryFor(catalog, "video.generate", job);
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
