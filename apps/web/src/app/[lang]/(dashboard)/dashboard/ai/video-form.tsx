@@ -765,10 +765,10 @@ export function VideoForm({
                 there. */}
             <span
               className={`text-xs tabular-nums ${
-                composedLength > MAX_AI_PROMPT_LENGTH ? "text-destructive" : "text-muted-foreground"
+                composedPromptTooLong ? "text-destructive" : "text-muted-foreground"
               }`}
             >
-              {composedLength} / {MAX_AI_PROMPT_LENGTH}
+              {composedLength} / {promptLimit}
             </span>
           </div>
           <Textarea
