@@ -7,7 +7,8 @@ import {
   type PrismaTransaction,
   usagePeriodsEqual,
 } from "@beutl/db";
-import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
+import { aiMinimumChargeOf, type AiModelChargeCapabilities } from "@beutl/core";
+import { AI_PRICING_CATALOG, PRO_PLAN } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
 import { aiCapabilityKey } from "./providers/types";
@@ -123,42 +124,13 @@ export function toAiBalancePresentation(
   };
 }
 
-// The smallest charge a model can actually incur: its unit price times the
-// smallest request the operation's entry point accepts. Using one unit would
-// report a four-second video as startable on a quarter of what it costs, and
-// the reservation would then reject a prompt the user had already written.
-function minimumChargeFor(
-  operation: string,
-  model: { modelId: string; provider: string },
-  priceUnits: number,
-  videoCapabilities: ReadonlyMap<string, { durations: readonly number[] }>,
-): number {
-  // Edits use the source's measured length; these operations let the caller
-  // choose only among the model's published output durations.
-  const videoCapability = (
-    operation === "video.generate" ||
-    operation === "video.extend" ||
-    operation === "video.motion"
-  )
-    ? videoCapabilities.get(aiCapabilityKey(model.provider, model.modelId))
-    : undefined;
-  if (videoCapability && videoCapability.durations.length === 0) return 0;
-  const minimumQuantity = videoCapability
-    ? Math.min(...videoCapability.durations)
-    : aiMinimumQuantityOf(operation);
-  if (minimumQuantity === null) {
-    return 0;
-  }
-  return priceUnits * minimumQuantity;
-}
-
 export function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
   catalog: AiModelCatalog,
   videoCapabilities: ReadonlyMap<
     string,
-    { durations: readonly number[] }
+    AiModelChargeCapabilities
   > = new Map(),
 ): { availability: AiOperationAvailability; modelAvailability: AiModelAvailability } {
   const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
@@ -167,12 +139,11 @@ export function toAiOperationAvailability(
   for (const operation of Object.keys(AI_PRICING_CATALOG)) {
     const models: Record<string, boolean> = {};
     for (const entry of catalog.list(operation)) {
-      const minimumCharge = minimumChargeFor(
+      const minimumCharge = aiMinimumChargeOf(
         operation,
-        entry,
         entry.priceUnits,
-        videoCapabilities,
-      );
+        videoCapabilities.get(aiCapabilityKey(entry.provider, entry.modelId)),
+      ) ?? 0;
       models[entry.modelId] =
         canUseAi && minimumCharge > 0 && available >= minimumCharge;
     }
@@ -309,8 +280,8 @@ export async function getEntitlements(
     catalog?: AiModelCatalog | PromiseLike<AiModelCatalog>;
     prisma?: PrismaTransaction;
     videoCapabilities?:
-      | ReadonlyMap<string, { durations: readonly number[] }>
-      | PromiseLike<ReadonlyMap<string, { durations: readonly number[] }>>;
+      | ReadonlyMap<string, AiModelChargeCapabilities>
+      | PromiseLike<ReadonlyMap<string, AiModelChargeCapabilities>>;
   } = {},
 ): Promise<EntitlementsResponse> {
   // This is an advisory presentation snapshot. Every paid operation repeats

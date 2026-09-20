@@ -147,7 +147,7 @@ export {
 } from "./ai-pricing-catalog";
 export * from "./ai-capabilities";
 export * from "./request-body-limit";
-export type { AiBillingUnit } from "./ai-pricing-catalog";
+export type { AiBillingUnit, AiModelChargeCapabilities } from "./ai-pricing-catalog";
 export {
   derivePlanUnitValue,
   deriveTopUpUnitValue,

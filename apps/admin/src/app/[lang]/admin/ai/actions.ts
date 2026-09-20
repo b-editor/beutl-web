@@ -509,17 +509,12 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
               }]
             : [];
         },
-        minimumChargeOf: (operation, model, priceUnits) => {
-          const durations = operation === "video.generate"
-            ? videoCapabilityOf(videoCapabilities, model)?.durations
-            : undefined;
-          if (durations) {
-            return durations.length === 0
-              ? 0
-              : priceUnits * Math.min(...durations);
-          }
-          return aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
-        },
+        minimumChargeOf: (operation, model, priceUnits) =>
+          aiMinimumChargeOf(
+            operation,
+            priceUnits,
+            videoCapabilityOf(videoCapabilities, model),
+          ) ?? priceUnits,
         // Refuses a row whose provider has no surface for that operation,
         // before it can be saved and charged against.
         supportsOperation: providerSupportsOperation,

@@ -12,6 +12,7 @@ import {
   validateAiConfigurationChanges,
   type AiOperationModelSnapshot,
 } from "../../apps/admin/src/lib/ai-configuration-changes";
+import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
 
 const defaultModels = AI_DEFAULT_OPERATION_MODELS as Record<
   string,
@@ -129,7 +130,7 @@ describe("saving the AI configuration in one go", () => {
     expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
     expect(actionSource).toContain("loadAiVideoModelCapabilities");
     expect(actionSource).toContain(
-      "videoCapabilityOf(videoCapabilities, model)?.durations",
+      "videoCapabilityOf(videoCapabilities, model)",
     );
   });
 
@@ -228,6 +229,39 @@ describe("saving the AI configuration in one go", () => {
 
     expect(result).toMatchObject({ ok: false });
     expect(result.ok === false && result.message).toContain("video.generate");
+  });
+
+  it.each([
+    ["video.edit", 5],
+    ["video.edit", 4.1],
+    ["video.extend", 5],
+    ["video.motion", 5],
+  ] as const)("requires an affordable %s request with source minimum %s", (operation, minSourceVideoSeconds) => {
+    const capabilities = new Map([
+      [aiCapabilityKey("openrouter", "video/source"), { durations: [1], minSourceVideoSeconds: 1 }],
+      [aiCapabilityKey("vercel-gateway", "video/source"), { durations: [8, 5], minSourceVideoSeconds }],
+    ]);
+    const input = (priceUnits: number) => ({
+      settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "500" }],
+      models: [{
+        operation,
+        models: [model({ modelId: "video/source", provider: "vercel-gateway", priceUnits })],
+      }],
+    });
+    const minimumChargeOf = (
+      operation: string,
+      model: { modelId: string; provider: string },
+      priceUnits: number,
+    ) => aiMinimumChargeOf(
+      operation,
+      priceUnits,
+      capabilities.get(aiCapabilityKey(model.provider, model.modelId)),
+    ) ?? priceUnits;
+
+    expect(validate(input(100), { minimumChargeOf })).toMatchObject({ ok: true });
+    const over = validate(input(101), { minimumChargeOf });
+    expect(over).toMatchObject({ ok: false });
+    expect(over.ok === false && over.message).toContain(operation);
   });
 
   it("falls back to the built-in model when every row is removed", () => {

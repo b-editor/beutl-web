@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AiModelChargeCapabilities } from "@beutl/core";
 import {
   consumeUsage,
   setDbProvider,
@@ -39,7 +40,7 @@ describe("AI entitlements", () => {
   ]);
 
   const readEntitlements = (
-    capabilities: ReadonlyMap<string, { durations: readonly number[] }> =
+    capabilities: ReadonlyMap<string, AiModelChargeCapabilities> =
       videoCapabilities,
   ) => getEntitlements(USER_ID, { videoCapabilities: capabilities });
 
@@ -324,6 +325,51 @@ describe("AI entitlements", () => {
       const short = await readEntitlements(capabilities);
       expect(short.availability[operation]).toBe(false);
       expect(short.modelAvailability[operation]["video/shared-id"]).toBe(false);
+    },
+  );
+
+  it.each([5, 4.1, null, undefined])(
+    "uses the edit source minimum %s for whole-second affordability",
+    async (minSourceVideoSeconds) => {
+      await activatePro();
+      await upsertAiOperationModel({
+        operation: "video.edit",
+        modelId: "video/editor",
+        provider: "vercel-gateway",
+        priceUnits: VIDEO_UNIT_PRICE,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+      const capabilities = new Map<string, AiModelChargeCapabilities>([
+        [aiCapabilityKey("openrouter", "video/editor"), { durations: [1], minSourceVideoSeconds: 1 }],
+        [aiCapabilityKey("vercel-gateway", "video/editor"), { durations: [], minSourceVideoSeconds }],
+      ]);
+      const minimumCharge = VIDEO_UNIT_PRICE * Math.ceil(minSourceVideoSeconds ?? 1);
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - minimumCharge,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-edit-exact",
+      });
+
+      const exact = await readEntitlements(capabilities);
+      expect(exact.availability["video.edit"]).toBe(true);
+      expect(exact.modelAvailability["video.edit"]["video/editor"]).toBe(true);
+
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 1,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-edit-short",
+      });
+
+      const short = await readEntitlements(capabilities);
+      expect(short.availability["video.edit"]).toBe(false);
+      expect(short.modelAvailability["video.edit"]["video/editor"]).toBe(false);
     },
   );
 
