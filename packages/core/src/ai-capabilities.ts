@@ -264,6 +264,8 @@ export const MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES = 20 * 1024 * 1024;
 // 128MiB の isolate も超える——枚数と同じで、本数は上げても総量は動かさない。
 export const AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES = 3;
 export const MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES = 32 * 1024 * 1024;
+// Shared across image, video, and audio references in the same request.
+export const MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES = 32 * 1024 * 1024;
 // 音声は枚数を公開しないモデルが多く、公開しているものも 1 つぶん。大きさは
 // H3 が公開する 15MB に合わせる。
 export const AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES = 1;
@@ -339,12 +341,12 @@ export function aiApiMultipartBodyLimit(pathname: string): number | null {
     case "/api/v3/ai/transcriptions":
       return MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
     case "/api/v3/ai/videos/frames":
-      // 絵は合計で頭打ち。枚数ぶん掛けると、増やした枚数がそのまま Worker の
-      // メモリ予算に乗ってしまう。フレーム 2 枚のほうが大きい場合に備えて、
-      // 大きいほうを採る。
+      // Frames and references are alternatives. Keep one aggregate budget
+      // for mixed references, large enough for the largest supported clip.
+      // Adding all per-kind budgets would increase Worker memory pressure.
       return Math.max(
         2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
-        MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES,
+        MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
       ) + AI_SCREEN_FIELDS_BYTES;
     // 素材の動画を添えて出せる 3 つ。どれも動画 1 本ぶんを運び、モーション適用
     // だけは人物の絵も一緒に運ぶ。ここに無いと JSON の上限 (32 KiB) が当たり、

@@ -14,7 +14,8 @@
     "./storage/bucket-from-env": "./src/storage/bucket-from-env.ts",
     "./storage/s3-compatible-bucket": "./src/storage/s3-compatible-bucket.ts",
     "./storage/management": "./src/storage/management.ts",
-    "./storage/uploads": "./src/storage/uploads.ts"
+    "./storage/uploads": "./src/storage/uploads.ts",
+    "./storage/files": "./src/storage/files.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.86",

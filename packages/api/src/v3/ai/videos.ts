@@ -48,6 +48,7 @@ import {
   AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES,
   MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
   MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
+  MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
   MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES,
 } from "@beutl/core";
 import { inspectGeneratedVideo } from "../../ai/video-validation";
@@ -637,6 +638,9 @@ const app = new Hono()
     // declares. They are counted and sized separately because a model
     // publishes a separate allowance for each — MiniMax H3 takes nine
     // pictures, three clips and one sound.
+    if (references.reduce((sum, file) => sum + file.size, 0) > MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES) {
+      return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+    }
     const classified = references.map((file) => ({
       file,
       kind: videoReferenceKindOf(file.type),
@@ -1403,7 +1407,9 @@ const app = new Hono()
     // prompt it accepts is one they refuse.
     if (
       selectedCapabilities !== undefined &&
-      prompt.length > selectedCapabilities.maxPromptCharacters
+      (prompt.length > selectedCapabilities.maxPromptCharacters ||
+        (mode === "extend" && selectedCapabilities.durations.length > 0 &&
+          !selectedCapabilities.durations.includes(durationSeconds)))
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
@@ -1666,7 +1672,8 @@ const app = new Hono()
     }
     if (
       motionCapabilities !== undefined &&
-      prompt.length > motionCapabilities.maxPromptCharacters
+      (prompt.length > motionCapabilities.maxPromptCharacters ||
+        (motionCapabilities.durations.length > 0 && !motionCapabilities.durations.includes(durationSeconds)))
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,

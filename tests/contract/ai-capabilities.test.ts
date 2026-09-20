@@ -23,6 +23,12 @@ vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => 
   >();
   return { ...actual, listVideoModels };
 });
+const listGatewayVideoModels = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/api/src/ai/providers/vercel-gateway/models", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/api/src/ai/providers/vercel-gateway/models")>();
+  return { ...actual, listGatewayVideoModels };
+});
+
 // What an image model takes is one lookup per model; the endpoint's shape is
 // tested without any of them going over the wire.
 const loadAiImageModelCapabilities = vi.hoisted(() =>
@@ -90,6 +96,8 @@ describe("GET /api/v3/ai/capabilities", () => {
     process.env.JWT_SECRET = JWT_SECRET;
     listVideoModels.mockReset();
     listVideoModels.mockResolvedValue([]);
+    listGatewayVideoModels.mockReset();
+    listGatewayVideoModels.mockResolvedValue([]);
     clearAiVideoModelCapabilitiesCache();
   });
 
@@ -186,6 +194,7 @@ describe("GET /api/v3/ai/capabilities", () => {
     ).toEqual([
       {
         id: "google/veo-3.1-lite",
+        promptToVideo: true,
         displayName: "google/veo-3.1-lite",
         costTier: null,
         isDefault: true,
@@ -252,6 +261,7 @@ describe("GET /api/v3/ai/capabilities", () => {
         displayName: "narrow/model",
         costTier: null,
         isDefault: true,
+        promptToVideo: true,
         // The model's own lengths, not a fixed menu it has to fit into.
         durationsSeconds: [4, 5, 6],
         resolutions: ["720p"],
@@ -280,6 +290,49 @@ describe("GET /api/v3/ai/capabilities", () => {
     // The operation-level lists stay the superset the server will take at all,
     // so a client that ignores the per-model values still sees the full range.
     expect(video.resolutions).toEqual(["480p", "720p", "1080p", "2K"]);
+  });
+
+  it("publishes source-video limits for desktop clients as well as the dashboard", async () => {
+    listGatewayVideoModels.mockResolvedValue([{
+      id: "gateway/editor",
+      supportedResolutions: null, supportedDurations: null, supportedAspectRatios: null,
+      supportedFrameImages: null, generateAudio: null, seed: null,
+      supportsVideoEditing: true,
+      inputLimits: {
+        maxImages: null, maxImageBytes: null, maxVideos: 1, maxVideoBytes: 1_000_000,
+        minVideoDurationSeconds: 2, maxVideoDurationSeconds: 10,
+        maxPromptCharacters: 500, maxTotalInputs: null,
+      },
+    }]);
+    await upsertAiOperationModel({
+      operation: "video.edit", modelId: "gateway/editor", provider: "vercel-gateway",
+      priceUnits: 30, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+    });
+    const response = await makeApp().request("/api/v3/ai/capabilities", { headers: await authHeaders() });
+    expect(response.status).toBe(200);
+    expect((await response.json()).operations["video.edit"].models).toEqual([
+      expect.objectContaining({
+        id: "gateway/editor", maxPromptLength: 500, maxSourceVideoBytes: 1_000_000,
+        minSourceVideoSeconds: 2, maxSourceVideoSeconds: 10,
+      }),
+    ]);
+  });
+
+  it("aligns desktop source durations and generation eligibility with the Web screen", async () => {
+    listGatewayVideoModels.mockResolvedValue([{
+      id: "gateway/motion", supportedResolutions: ["720p"], supportedDurations: [5, 10],
+      supportedAspectRatios: ["16:9"], supportedFrameImages: null, generateAudio: false, seed: false,
+      supportsPromptToVideo: false, supportsVideoExtension: true, supportsMotionControl: true,
+    }]);
+    for (const operation of ["video.generate", "video.extend", "video.motion"]) {
+      await upsertAiOperationModel({ operation, modelId: "gateway/motion", provider: "vercel-gateway",
+        priceUnits: 30, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1" });
+    }
+    const response = await makeApp().request("/api/v3/ai/capabilities", { headers: await authHeaders() });
+    const body = await response.json();
+    expect(body.operations["video.generate"].models).toEqual([]);
+    expect(body.operations["video.extend"].models[0].durationsSeconds).toEqual([5, 10]);
+    expect(body.operations["video.motion"].models[0].durationsSeconds).toEqual([5, 10]);
   });
 
   it("lists every registered model, ordered, with the first as the default", async () => {

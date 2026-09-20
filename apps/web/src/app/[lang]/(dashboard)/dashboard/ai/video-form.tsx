@@ -28,7 +28,7 @@ import {
 } from "@beutl/core";
 import { composePrompt } from "@/lib/ai-prompt";
 import { runAiRequest } from "@/lib/ai-request";
-import { buildAiVideoSubmission } from "@/lib/ai-video-submit";
+import { buildAiVideoSubmission, videoReferenceFingerprintLimit } from "@/lib/ai-video-submit";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AdvancedOptions,
@@ -508,7 +508,7 @@ export function VideoForm({
     useFileFingerprints(
       // 送れないと分かっているものは読まない——名前には要らない。
       oversizedReference || tooManyReferences ? [] : sentReferences,
-      MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      videoReferenceFingerprintLimit,
     );
   const oversizedFrame =
     [sentFirstFrame, sentLastFrame].some(

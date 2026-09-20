@@ -345,7 +345,7 @@ export function AiUsageCard({
  */
 export function useFileFingerprints(
   files: readonly File[],
-  limit: number,
+  limit: number | ((file: File) => number),
 ): { contents: string[]; reading: boolean } {
   const [read, setRead] = useState<{ files: readonly File[]; contents: string[] }>(
     { files: [], contents: [] },
@@ -353,7 +353,7 @@ export function useFileFingerprints(
 
   useEffect(() => {
     let current = true;
-    void Promise.all(files.map((file) => fileFingerprint(file, limit)))
+    void Promise.all(files.map((file) => fileFingerprint(file, typeof limit === "number" ? limit : limit(file))))
       .then((contents) => {
         if (current) setRead({ files, contents });
       })

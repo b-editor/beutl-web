@@ -14,6 +14,7 @@ import {
   MIN_AI_VIDEO_DURATION_SECONDS,
   AI_VIDEO_RESOLUTIONS,
   AI_MAX_VIDEO_INPUT_REFERENCES,
+  MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
 } from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
@@ -162,14 +163,27 @@ const app = new Hono().get("/", async (c) => {
   const describeSourceVideoModels = (operation: string): ModelDescription[] =>
     describeModels(catalog, operation).filter((model) =>
       isVideoModelUsable(videoCapabilities.get(model.id), operation),
-    );
+    ).map((model) => {
+      const supported = videoCapabilities.get(model.id);
+      return {
+        ...model,
+        ...(operation === "video.edit" ? {} : {
+          durationsSeconds: supported?.durations.length ? supported.durations : [...AI_VIDEO_DURATIONS_SECONDS],
+        }),
+        maxPromptLength: supported?.maxPromptCharacters ?? MAX_AI_PROMPT_LENGTH,
+        maxSourceVideoBytes: supported?.maxSourceVideoBytes ?? MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        minSourceVideoSeconds: supported?.minSourceVideoSeconds ?? null,
+        maxSourceVideoSeconds: supported?.maxSourceVideoSeconds ?? null,
+      };
+    });
   const videoModels: VideoModelDescription[] = describeModels(
     catalog,
     "video.generate",
-  ).map((model) => {
+  ).filter((model) => isVideoModelUsable(videoCapabilities.get(model.id), "video.generate")).map((model) => {
     const supported = videoCapabilities.get(model.id);
     return {
       ...model,
+      promptToVideo: supported?.promptToVideo ?? true,
       durationsSeconds: supported
         ? supported.durations
         : [...AI_VIDEO_DURATIONS_SECONDS],
@@ -292,6 +306,7 @@ const app = new Hono().get("/", async (c) => {
         // 参照画像の上限。フレームと同じ大きさで、枚数はモデル側の公開値に
         // 関わらずこの数まで。フレームと同時には送れない。
         maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+        maxInputReferencesTotalBytes: MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
         maxInputReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
       },
     },

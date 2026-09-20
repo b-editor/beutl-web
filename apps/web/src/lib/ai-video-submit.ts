@@ -1,3 +1,13 @@
+import { MAX_AI_VIDEO_FRAME_UPLOAD_BYTES, MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES, MAX_AI_VIDEO_INPUT_AUDIO_BYTES } from "@beutl/core";
+
+/** The hash must cover every byte the reference upload can send. */
+export function videoReferenceFingerprintLimit(file: File): number {
+  const type = file.type.split(";", 1)[0]!.trim().toLowerCase();
+  if (type === "video/mp4" || type === "video/webm") return MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES;
+  if (["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"].includes(type)) return MAX_AI_VIDEO_INPUT_AUDIO_BYTES;
+  return MAX_AI_VIDEO_FRAME_UPLOAD_BYTES;
+}
+
 import { seedValue } from "./ai-screen";
 
 export type AiVideoOperationPath =

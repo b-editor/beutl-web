@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
+  MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
   MAX_API_JSON_REQUEST_BYTES,
   MAX_AUTH_REQUEST_BODY_BYTES,
   MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES,
@@ -48,6 +50,19 @@ describe("what one request body may come to", () => {
     // Server Action は URL では選ばれないので、AI の Action はここへも送れる
     // ——そちらは全体の上限で受ける。
     expect(requestBodyLimit("/ja/dashboard")).toBe(MAX_REQUEST_BODY_BYTES);
+  });
+
+  it("accepts a maximum-size reference clip without summing every media budget", async () => {
+    const path = "/api/v3/ai/videos/frames";
+    const cap = aiApiMultipartBodyLimit(path)!;
+    expect(cap).toBeGreaterThan(MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES);
+    expect(cap).toBeLessThan(MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES + 1024 * 1024);
+    expect(requestBodyLimit(path, "POST", "multipart/form-data; boundary=x")).toBe(cap);
+    await expect(drain(boundedBody(streamOf([
+      MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES, 1024,
+    ]), cap))).resolves.toBe(MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES + 1024);
+    await expect(drain(boundedBody(streamOf([cap, 1]), cap)))
+      .rejects.toBeInstanceOf(RequestBodyLimitExceededError);
   });
 
   it("uses an explicit method and path matrix before OpenNext buffering", () => {
