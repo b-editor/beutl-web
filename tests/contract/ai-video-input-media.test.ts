@@ -9,6 +9,15 @@ import {
   publishVideoInputMedia,
   videoInputObjectKey,
 } from "../../packages/api/src/ai/video-input-media";
+import { createCallbackNonce } from "../../packages/api/src/ai/request-integrity";
+import { createAndAttachVideoJob } from "../../packages/api/src/ai/video-jobs";
+import type { AiVideoStartRequest } from "../../packages/api/src/ai/providers/types";
+
+const startGatewayVideoJob = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/api/src/ai/providers/vercel-gateway/video", async (original) => ({
+  ...(await original<typeof import("../../packages/api/src/ai/providers/vercel-gateway/video")>()),
+  startGatewayVideoJob,
+}));
 
 const JOB_ID = "22222222-2222-4222-8222-222222222222";
 const PICTURE = new Uint8Array([1, 2, 3, 4]).buffer;
@@ -21,11 +30,28 @@ describe("serving the pictures a video request works from", () => {
   let objects: Map<string, { bytes: ArrayBuffer; contentType?: string }>;
   let put: ReturnType<typeof vi.fn>;
   let get: ReturnType<typeof vi.fn>;
+  let state: ReturnType<typeof createInMemoryPrisma>["state"];
+  let nonce: Awaited<ReturnType<typeof createCallbackNonce>>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    startGatewayVideoJob.mockResolvedValue({ id: "provider-job", status: "pending" });
     const memory = createInMemoryPrisma();
+    state = memory.state;
     setDbProvider(async () => memory.prisma as never);
+    nonce = await createCallbackNonce();
+    state.aiJobs.set(JOB_ID, {
+      id: JOB_ID,
+      userId: "media-owner",
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: null,
+      status: "queued",
+      callbackNonceHash: nonce.hash,
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
     objects = new Map();
     put = vi.fn(async (key: string, value: ArrayBuffer, options?: {
       httpMetadata?: { contentType?: string };
@@ -49,6 +75,7 @@ describe("serving the pictures a video request works from", () => {
   it("stores under a prefix the route is confined to, and schedules its removal", async () => {
     const { url, objectKey } = await publishVideoInputMedia({
       jobId: JOB_ID,
+      nonce: nonce.nonce,
       bytes: PICTURE,
       mimeType: "image/png",
       origin: "https://beutl.beditor.net",
@@ -69,12 +96,14 @@ describe("serving the pictures a video request works from", () => {
   it("hands the bytes to an unauthenticated caller, because a provider is one", async () => {
     const { url } = await publishVideoInputMedia({
       jobId: JOB_ID,
+      nonce: nonce.nonce,
       bytes: PICTURE,
       mimeType: "image/png",
       origin: "https://beutl.beditor.net",
     });
 
-    const response = await makeApp().request(new URL(url).pathname);
+    const parsed = new URL(url);
+    const response = await makeApp().request(parsed.pathname + parsed.search);
 
     expect(response.status).toBe(200);
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(
@@ -96,6 +125,109 @@ describe("serving the pictures a video request works from", () => {
     const response = await makeApp().request(
       "/api/v3/ai/videos/media/..%2F..%2Fimage/secret",
     );
+
+    expect(response.status).toBe(404);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it.each(["motion", "references"])("carries an authorized media URL through %s submission", async (mode) => {
+    await createAndAttachVideoJob({
+      jobId: JOB_ID,
+      prompt: "move",
+      model: "gateway/model",
+      provider: "vercel-gateway",
+      durationSeconds: 2,
+      resolution: "720p",
+      callbackNonce: nonce.nonce,
+      callbackNonceHash: nonce.hash,
+      mediaOrigin: "https://beutl.beditor.net",
+      ...(mode === "motion"
+        ? {
+            mode: "motion" as const,
+            sourceVideo: { bytes: PICTURE, mimeType: "video/mp4" },
+            frameImages: [{
+              type: "image_url" as const,
+              image_url: { url: "data:image/png;base64,AQIDBA==" },
+              frame_type: "first_frame" as const,
+            }],
+          }
+        : {
+            inputReferences: [{
+              type: "image_url" as const,
+              image_url: { url: "data:video/mp4;base64,AQIDBA==" },
+              media_type: "video/mp4",
+            }],
+          }),
+    });
+
+    const sent = startGatewayVideoJob.mock.calls[0][0] as AiVideoStartRequest;
+    const urls = [
+      ...(sent.sourceVideoUrl ? [sent.sourceVideoUrl] : []),
+      ...(sent.frameImages ?? []).map((frame) => frame.image_url.url),
+      ...(sent.inputReferences ?? []).map((reference) => reference.image_url.url),
+    ];
+    expect(urls).toHaveLength(mode === "motion" ? 2 : 1);
+    for (const url of urls) {
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get("nonce")).toBe(nonce.nonce);
+      const response = await makeApp().request(parsed.pathname + parsed.search);
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(PICTURE);
+    }
+  });
+
+  it("does not read storage for identifiers without the job's nonce", async () => {
+    const { url } = await publishVideoInputMedia({
+      jobId: JOB_ID,
+      nonce: nonce.nonce,
+      bytes: PICTURE,
+      mimeType: "image/png",
+      origin: "https://beutl.beditor.net",
+    });
+    const parsed = new URL(url);
+    const anotherNonce = await createCallbackNonce();
+    for (const suffix of ["", "?nonce=bad", `?nonce=${anotherNonce.nonce}`]) {
+      const response = await makeApp().request(parsed.pathname + suffix);
+      expect(response.status).toBe(404);
+    }
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("binds a valid nonce to the job that published the media", async () => {
+    const { url } = await publishVideoInputMedia({
+      jobId: JOB_ID,
+      nonce: nonce.nonce,
+      bytes: PICTURE,
+      mimeType: "image/png",
+      origin: "https://beutl.beditor.net",
+    });
+    const otherJobId = "33333333-3333-4333-8333-333333333333";
+    const otherNonce = await createCallbackNonce();
+    state.aiJobs.set(otherJobId, {
+      ...state.aiJobs.get(JOB_ID)!,
+      id: otherJobId,
+      callbackNonceHash: otherNonce.hash,
+    });
+    const parsed = new URL(url);
+    const response = await makeApp().request(
+      parsed.pathname.replace(JOB_ID, otherJobId) + `?nonce=${nonce.nonce}`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("revokes media access when the job is deleted", async () => {
+    const { url } = await publishVideoInputMedia({
+      jobId: JOB_ID,
+      nonce: nonce.nonce,
+      bytes: PICTURE,
+      mimeType: "image/png",
+      origin: "https://beutl.beditor.net",
+    });
+    state.aiJobs.set(JOB_ID, { ...state.aiJobs.get(JOB_ID)!, deletedAt: new Date() });
+    const parsed = new URL(url);
+    const response = await makeApp().request(parsed.pathname + `?nonce=${nonce.nonce}`);
 
     expect(response.status).toBe(404);
     expect(get).not.toHaveBeenCalled();

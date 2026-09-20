@@ -159,6 +159,12 @@ image, transcription, and translation operations as well as video, so the key
 requirement is not limited to registered video models. There is no
 workspace-wide Gateway webhook secret to configure.
 
+Provider media URLs require the nonce of the job that published them. The
+serving Worker checks its stored hash and the job's deletion state before
+reading storage. When upgrading an earlier Gateway deployment that issued
+media URLs without a nonce, let those in-flight jobs finish before rollout:
+the old tokenless media URLs will return 404.
+
 The Web Worker requires:
 
 - `STRIPE_SECRET_KEY`

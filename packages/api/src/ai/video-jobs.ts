@@ -91,11 +91,13 @@ function decodeDataUrl(url: string): { bytes: ArrayBuffer; mimeType: string } {
 
 async function hostVideoInputMedia({
   jobId,
+  callbackNonce,
   frameImages,
   inputReferences,
   mediaOrigin,
 }: {
   jobId: string;
+  callbackNonce: string;
   frameImages: VideoFrameImage[] | undefined;
   inputReferences: VideoInputReference[] | undefined;
   mediaOrigin: string | undefined;
@@ -125,6 +127,7 @@ async function hostVideoInputMedia({
         const { bytes, mimeType } = decodeDataUrl(frame.image_url.url);
         const { url } = await publishVideoInputMedia({
           jobId,
+          nonce: callbackNonce,
           bytes,
           mimeType,
           origin: mediaOrigin,
@@ -139,6 +142,7 @@ async function hostVideoInputMedia({
         const { bytes, mimeType } = decodeDataUrl(reference.image_url.url);
         const { url } = await publishVideoInputMedia({
           jobId,
+          nonce: callbackNonce,
           bytes,
           mimeType,
           origin: mediaOrigin,
@@ -171,6 +175,7 @@ export async function createAndAttachVideoJob({
   motionOrientation,
   motionQuality,
   callbackUrl,
+  callbackNonce,
   callbackNonceHash,
   model,
   provider = DEFAULT_AI_PROVIDER_ID,
@@ -204,6 +209,8 @@ export async function createAndAttachVideoJob({
   // back on, which is the case for a local server. The job is then finished by
   // the poll path instead of the callback.
   callbackUrl?: string;
+  /** The job nonce carried by provider-only media URLs; only its hash is stored. */
+  callbackNonce: string;
   callbackNonceHash: string;
   model: string;
   /** Defaults to the provider every catalog row carried before the column existed. */
@@ -235,6 +242,7 @@ export async function createAndAttachVideoJob({
     }
     const { url } = await publishVideoInputMedia({
       jobId,
+      nonce: callbackNonce,
       bytes: sourceVideo.bytes,
       mimeType: sourceVideo.mimeType,
       origin: mediaOrigin,
@@ -244,6 +252,7 @@ export async function createAndAttachVideoJob({
   const media = videoProvider.requiresHostedMedia
     ? await hostVideoInputMedia({
         jobId,
+        callbackNonce,
         frameImages,
         inputReferences,
         mediaOrigin,

@@ -8,18 +8,18 @@
 // URL before: AI results are handed out through an authenticated route keyed to
 // their owner, which a provider cannot use.
 //
-// So: the object lands in the bucket under a path built from two UUIDs, and the
-// route that serves it will read nothing outside that prefix. The URL is the
-// capability, with 122 bits of media id on top of the job id, and it is given
-// only to the provider. Nothing about the user reaches it, the object is opaque
-// bytes with a declared type, and it is scheduled for deletion as it is written
-// rather than when the job ends — a job that never finishes must not leave it
-// behind.
+// The object lands under a path built from two UUIDs. Its URL also carries the
+// job's random nonce, checked against the stored hash before any bucket read.
+// Only the provider receives that URL. Each object is scheduled for deletion
+// as it is written rather than when the job ends — a job that never finishes
+// must not leave it behind.
 
 import {
+  getAiJobById,
   registerAiStorageCleanup,
 } from "@beutl/db";
 import { getR2Bucket } from "./r2-provider";
+import { callbackNonceMatches } from "./request-integrity";
 
 /** The prefix the serving route is confined to. */
 export const AI_VIDEO_INPUT_PREFIX = "ai/video-input";
@@ -49,12 +49,14 @@ export function isVideoInputMediaId(value: string): boolean {
  */
 export async function publishVideoInputMedia({
   jobId,
+  nonce,
   bytes,
   mimeType,
   origin,
   now = new Date(),
 }: {
   jobId: string;
+  nonce: string;
   bytes: ArrayBuffer;
   mimeType: string;
   origin: string;
@@ -80,18 +82,27 @@ export async function publishVideoInputMedia({
     `/api/v3/ai/videos/media/${encodeURIComponent(jobId)}/${mediaId}`,
     origin,
   );
+  url.searchParams.set("nonce", nonce);
   return { url: url.toString(), objectKey };
 }
 
-/** The bytes behind one media URL, or null when nothing is stored there. */
+/** Read a job's media only after its nonce has been verified. */
 export async function readVideoInputMedia({
   jobId,
   mediaId,
+  nonce,
 }: {
   jobId: string;
   mediaId: string;
+  nonce: string | null;
 }): Promise<{ body: ReadableStream<Uint8Array> | null; bytes: ArrayBuffer | null } | null> {
   if (!isVideoInputMediaId(mediaId) || !isVideoInputMediaId(jobId)) return null;
+  if (!nonce || !/^[0-9a-f]{64}$/u.test(nonce)) return null;
+  const job = await getAiJobById({ jobId });
+  if (
+    !job || job.kind !== "video" || job.deletedAt ||
+    !(await callbackNonceMatches(nonce, job.callbackNonceHash))
+  ) return null;
   const bucket = getR2Bucket();
   if (!bucket.get) return null;
   const object = await bucket.get(videoInputObjectKey(jobId, mediaId));

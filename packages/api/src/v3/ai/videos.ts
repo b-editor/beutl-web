@@ -668,6 +668,7 @@ const app = new Hono()
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         provider: selectedModel.provider,
@@ -1168,6 +1169,7 @@ const app = new Hono()
         ...(frameImages.length > 0 ? { frameImages } : {}),
         ...(inputReferences.length > 0 ? { inputReferences } : {}),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         provider: selectedModel.provider,
@@ -1498,6 +1500,7 @@ const app = new Hono()
         generateAudio: selectedCapabilities?.generateAudio ?? true,
         mode,
         sourceVideo,
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         provider: selectedModel.provider,
@@ -1782,6 +1785,7 @@ const app = new Hono()
         sourceVideo,
         motionOrientation: orientation,
         motionQuality: quality,
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
         provider: selectedModel.provider,
@@ -1913,12 +1917,10 @@ const app = new Hono()
   // The pictures a submitted job works from, for the provider to fetch.
   //
   // Unauthenticated on purpose: a provider holds no account here, and there is
-  // no header it could be told to send. The URL is the capability — a job id
-  // and a media id, both UUIDs — and the route reads nothing outside the one
-  // prefix those two build, so no other object in the bucket is reachable
-  // through it. The objects are opaque picture bytes a caller uploaded moments
-  // earlier for this job, carry nothing about the account, and are scheduled
-  // for deletion as they are written.
+  // no header it could be told to send. The URL carries the job's nonce in
+  // addition to the job and media IDs. readVideoInputMedia verifies it against
+  // the stored hash before reading the job's object prefix. Objects are
+  // scheduled for deletion as they are written.
   .get("/media/:jobId/:mediaId", async (c) => {
     const jobId = c.req.param("jobId");
     const mediaId = c.req.param("mediaId");
@@ -1928,7 +1930,7 @@ const app = new Hono()
 
     let media: Awaited<ReturnType<typeof readVideoInputMedia>>;
     try {
-      media = await readVideoInputMedia({ jobId, mediaId });
+      media = await readVideoInputMedia({ jobId, mediaId, nonce: c.req.query("nonce") ?? null });
     } catch (error) {
       console.error(
         `Failed to read AI video input media for job ${jobId}`,

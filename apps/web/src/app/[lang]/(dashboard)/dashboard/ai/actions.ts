@@ -1598,6 +1598,7 @@ export async function retryJobAction(
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: retryModel.modelId,
         provider: retryModel.provider,
