@@ -391,6 +391,15 @@ export interface AiProvider {
   /** Whether this provider can run the operation at all. */
   supports(operation: string): boolean;
   /**
+   * Whether this deployment holds what the provider needs to be called.
+   *
+   * Only credentials, which are read from the environment and never change
+   * within a request. It is deliberately not a reachability check: a provider
+   * that is configured but momentarily down must keep its models on offer, or
+   * an outage would silently unregister them.
+   */
+  isConfigured(): boolean;
+  /**
    * Which side of the refund line a failure falls on. Getting this wrong bills
    * a user twice or drops a job they paid for, so every provider classifies
    * its own transport and status codes rather than sharing one guess.

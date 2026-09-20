@@ -138,6 +138,10 @@ export const vercelGatewayProvider: AiProvider = {
     return SUPPORTED_OPERATIONS.has(operation);
   },
 
+  isConfigured(): boolean {
+    return Boolean(process.env.VERCEL_AI_GATEWAY_API_KEY);
+  },
+
   executionOf(cause: unknown): AiExecutionOutcome {
     return gatewayExecutionOf(cause);
   },

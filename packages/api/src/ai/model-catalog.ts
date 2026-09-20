@@ -14,7 +14,10 @@
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
-import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
+import {
+  DEFAULT_AI_PROVIDER_ID,
+  isAiProviderConfigured,
+} from "./providers/registry";
 
 export type AiModelCostTier = "low" | "medium" | "high";
 
@@ -115,6 +118,42 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
   };
 }
 
+/**
+ * The built-in entry for an operation with no rows, or nothing when that entry
+ * belongs to a provider this deployment cannot call.
+ *
+ * Upgrading adds operations to the code before an administrator has registered
+ * anything for them, and the three source-video modes exist on Vercel AI
+ * Gateway alone. Without this, an "OpenRouter alone" deployment puts edit,
+ * extend and motion on the screens with no key behind them: every submission
+ * reaches the provider call and fails there, after the usage is reserved,
+ * reading to the user as an outage rather than as a mode this installation
+ * does not have.
+ *
+ * Only an entry that names its provider is checked, which is what "this
+ * operation exists on that provider alone" is recorded as. The rest carry the
+ * historical default, whose absence is not a missing mode but a deployment
+ * with no AI at all — a different condition, reported elsewhere, and not one
+ * this PR introduced.
+ *
+ * A row an administrator registered is never filtered. That is a deliberate
+ * choice, and hiding it would conceal a misconfiguration instead of reporting
+ * it; the admin console already flags a row whose provider cannot serve its
+ * operation.
+ */
+function builtInFallbackFor(
+  operation: string,
+): Omit<AiOperationModelEntry, "costTier">[] {
+  const entry = builtInEntry(operation);
+  if (
+    builtInDefaultsOf(operation)?.provider !== undefined &&
+    !isAiProviderConfigured(entry.provider)
+  ) {
+    return [];
+  }
+  return [entry];
+}
+
 export async function loadAiModelCatalog({
   prisma,
 }: {
@@ -146,7 +185,7 @@ export async function loadAiModelCatalog({
     // まだ 1 行も無い操作だけが組み込みの既定で動く。これは行を作る前の初期状態
     // であって、止められた状態ではない。
     const entries = byOperation.get(operation) ??
-      (configured.has(operation) ? [] : [builtInEntry(operation)]);
+      (configured.has(operation) ? [] : builtInFallbackFor(operation));
     resolved.set(operation, assignCostTiers(entries));
   }
 

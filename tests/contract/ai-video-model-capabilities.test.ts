@@ -621,6 +621,63 @@ describe("the aggregate a model puts on its inputs", () => {
     ).toBe("totalReferenceCount");
   });
 
+  it("refuses a reference bigger than the model takes, per kind", () => {
+    // The counts fit and the service-wide ceiling is clear, but the model
+    // publishes a smaller per-reference size. Without this the request passes
+    // here, reserves the usage, and is refused by the provider.
+    const small = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxReferenceBytes: 4 * 1024 * 1024,
+      maxVideoReferences: 3,
+      maxVideoReferenceBytes: 8 * 1024 * 1024,
+      maxAudioReferences: 1,
+      maxAudioReferenceBytes: 1024 * 1024,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        inputReferences: 1,
+        largestInputReferenceBytes: 4 * 1024 * 1024,
+      }),
+    ).toBeNull();
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        inputReferences: 1,
+        largestInputReferenceBytes: 4 * 1024 * 1024 + 1,
+      }),
+    ).toBe("inputReferenceBytes");
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        videoReferences: 1,
+        largestVideoReferenceBytes: 8 * 1024 * 1024 + 1,
+      }),
+    ).toBe("videoReferenceBytes");
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        audioReferences: 1,
+        largestAudioReferenceBytes: 1024 * 1024 + 1,
+      }),
+    ).toBe("audioReferenceBytes");
+  });
+
+  it("says nothing about a size the request does not carry", () => {
+    // A request with no reference of a kind must not be refused for it, and a
+    // caller that does not measure must not be refused either.
+    const small = capabilities({
+      referenceToVideo: true,
+      maxReferenceBytes: 1,
+      maxVideoReferenceBytes: 1,
+      maxAudioReferenceBytes: 1,
+    });
+
+    expect(unsupportedVideoRequestReason(small, request)).toBeNull();
+  });
+
   it("leaves a model that publishes no aggregate alone", () => {
     const open = capabilities({
       referenceToVideo: true,

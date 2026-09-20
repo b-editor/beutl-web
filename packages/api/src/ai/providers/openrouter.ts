@@ -149,6 +149,10 @@ export const openRouterProvider: AiProvider = {
     );
   },
 
+  isConfigured(): boolean {
+    return Boolean(process.env.OPENROUTER_API_KEY);
+  },
+
   executionOf(cause: unknown): AiExecutionOutcome {
     return openRouterExecutionOf(cause);
   },

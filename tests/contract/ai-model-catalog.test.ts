@@ -41,15 +41,61 @@ describe("AI model catalog", () => {
   });
 
   it("falls back to the built-in model for an operation with no rows", async () => {
-    const catalog = await loadAiModelCatalog();
+    // Its own provider's key, so the modes that exist on one provider alone
+    // are answered for a deployment that can actually call it.
+    const previous = process.env.VERCEL_AI_GATEWAY_API_KEY;
+    process.env.VERCEL_AI_GATEWAY_API_KEY = "test-key";
+    try {
+      const catalog = await loadAiModelCatalog();
 
-    // The migration seeds a row per operation, so this is reached only by one
-    // added in code before an administrator has registered anything.
-    for (const operation of AI_OPERATIONS) {
-      const entry = catalog.getDefault(operation);
-      expect(entry.modelId).toBe(AI_DEFAULT_OPERATION_MODELS[operation].model);
-      expect(entry.priceUnits).toBe(AI_DEFAULT_OPERATION_MODELS[operation].price);
-      expect(catalog.list(operation)).toHaveLength(1);
+      // The migration seeds a row per operation, so this is reached only by one
+      // added in code before an administrator has registered anything.
+      for (const operation of AI_OPERATIONS) {
+        const entry = catalog.getDefault(operation);
+        expect(entry.modelId).toBe(AI_DEFAULT_OPERATION_MODELS[operation].model);
+        expect(entry.priceUnits).toBe(
+          AI_DEFAULT_OPERATION_MODELS[operation].price,
+        );
+        expect(catalog.list(operation)).toHaveLength(1);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL_AI_GATEWAY_API_KEY;
+      else process.env.VERCEL_AI_GATEWAY_API_KEY = previous;
+    }
+  });
+
+  it("offers no built-in for a mode whose only provider has no key", async () => {
+    // The documented "OpenRouter alone" deployment. Upgrading adds the three
+    // source-video modes to the code before any row exists for them, and their
+    // built-in names Vercel AI Gateway; offering them here would put edit,
+    // extend and motion on the screens where every submission fails at the
+    // provider call, after the usage is reserved.
+    const previous = process.env.VERCEL_AI_GATEWAY_API_KEY;
+    delete process.env.VERCEL_AI_GATEWAY_API_KEY;
+    try {
+      const catalog = await loadAiModelCatalog();
+
+      const gatewayOnly = AI_OPERATIONS.filter(
+        (operation) =>
+          AI_DEFAULT_OPERATION_MODELS[operation].provider === "vercel-gateway",
+      );
+      // The rule is "the built-in names its provider", not a list of names.
+      // Stated here so a fourth such mode joins this test by existing.
+      expect(gatewayOnly).toEqual(["video.edit", "video.extend", "video.motion"]);
+
+      for (const operation of gatewayOnly) {
+        expect(catalog.list(operation)).toEqual([]);
+        expect(catalog.resolve(operation)).toBeNull();
+      }
+      // Everything else carries the provider that predates the column, and is
+      // unaffected: a missing OpenRouter key is a deployment with no AI at
+      // all, which is a different condition reported elsewhere.
+      expect(catalog.list("video.generate")).toHaveLength(1);
+      expect(catalog.list("image.generate")).toHaveLength(1);
+    } finally {
+      if (previous !== undefined) {
+        process.env.VERCEL_AI_GATEWAY_API_KEY = previous;
+      }
     }
   });
 

@@ -36,6 +36,16 @@ export function findAiProvider(id: string): AiProvider | null {
   return PROVIDERS[id] ?? null;
 }
 
+/**
+ * Whether a deployment holds the credentials this provider needs.
+ *
+ * An unknown id answers false: nothing can call it, which is the same
+ * situation for every caller as a provider whose key is absent.
+ */
+export function isAiProviderConfigured(id: string): boolean {
+  return findAiProvider(id)?.isConfigured() ?? false;
+}
+
 export function providerFor(id: string): AiProvider {
   const provider = findAiProvider(id);
   if (!provider) {

@@ -103,6 +103,12 @@ export type UnsupportedVideoRequestReason =
   | "audioReferenceCount"
   // 種類ごとには収まっていても、合計がモデルの受け入れ数を超えている。
   | "totalReferenceCount"
+  // 数は足りていても、1 つあたりの大きさがモデルの受け入れ量を超えている。
+  // サービス全体の天井より小さいモデルがあるので、ここを見ないと「送れるのに
+  // 必ず断られる」依頼が、利用枠を確保したあとで拒否される。
+  | "inputReferenceBytes"
+  | "videoReferenceBytes"
+  | "audioReferenceBytes"
   // プロンプトが、そのモデルが読む長さを超えている。サービスの上限より短い
   // モデルがあるので、ここを見ないと「書けるのに必ず断られる」依頼が通る。
   | "promptLength";
@@ -337,6 +343,15 @@ export function unsupportedVideoRequestReason(
     /** Reference clips and sounds, counted separately: a model allows each its own number. */
     videoReferences?: number;
     audioReferences?: number;
+    /**
+     * The largest single reference of each kind, in bytes.
+     *
+     * The largest is what decides it: a model states a per-reference limit, not
+     * a total, so a set passes exactly when its biggest member does.
+     */
+    largestInputReferenceBytes?: number;
+    largestVideoReferenceBytes?: number;
+    largestAudioReferenceBytes?: number;
     promptCharacters?: number;
   },
 ): UnsupportedVideoRequestReason | null {
@@ -391,6 +406,23 @@ export function unsupportedVideoRequestReason(
     if (carried > capabilities.maxTotalReferences) {
       return "totalReferenceCount";
     }
+  }
+  if (
+    (request.largestInputReferenceBytes ?? 0) > capabilities.maxReferenceBytes
+  ) {
+    return "inputReferenceBytes";
+  }
+  if (
+    (request.largestVideoReferenceBytes ?? 0) >
+    capabilities.maxVideoReferenceBytes
+  ) {
+    return "videoReferenceBytes";
+  }
+  if (
+    (request.largestAudioReferenceBytes ?? 0) >
+    capabilities.maxAudioReferenceBytes
+  ) {
+    return "audioReferenceBytes";
   }
   if (
     request.promptCharacters !== undefined &&

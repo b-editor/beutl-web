@@ -279,6 +279,20 @@ const uploadedSourceVideoSchema = z.object({
 }).strict();
 
 /**
+ * The size of the largest file in a set, or 0 for an empty one.
+ *
+ * A model publishes a limit per reference rather than for the set, so the
+ * largest member is what decides whether the set is acceptable.
+ */
+function largestBytesOf(files: readonly File[]): number {
+  let largest = 0;
+  for (const file of files) {
+    if (file.size > largest) largest = file.size;
+  }
+  return largest;
+}
+
+/**
  * Whether the source arrived with the request rather than being named.
  *
  * Decided by the content type alone: a multipart body is the only way a video
@@ -671,7 +685,7 @@ const app = new Hono()
       }
       if (handling.action === "keepQueued") {
         console.error(
-          `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
+          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,
         );
         return c.json(await publicAiJobPayload(job, c.req.raw));
@@ -1045,6 +1059,13 @@ const app = new Hono()
           inputReferences: imageReferences.length,
           videoReferences: videoReferences.length,
           audioReferences: audioReferences.length,
+          // The biggest of each kind. A model states a per-reference size, and
+          // the service-wide ceiling checked above can be the larger of the
+          // two, so without this a reference that is legal for the service but
+          // not for the chosen model is refused only after usage is reserved.
+          largestInputReferenceBytes: largestBytesOf(imageReferences),
+          largestVideoReferenceBytes: largestBytesOf(videoReferences),
+          largestAudioReferenceBytes: largestBytesOf(audioReferences),
           promptCharacters: fields.data.prompt.length,
         },
       )
@@ -1199,7 +1220,7 @@ const app = new Hono()
       }
       if (handling.action === "keepQueued") {
         console.error(
-          `OpenRouter video submission outcome is unknown for AI job ${job.id}`,
+          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,
         );
         return c.json(await publicAiJobPayload(job, c.req.raw));
@@ -1568,9 +1589,24 @@ const app = new Hono()
             ? { expectedProviderJobId: null }
             : {}),
         });
+        return c.json(await apiErrorResponse("aiProviderError"), {
+          status: 500,
+        });
       }
-      if (handling.action === "rethrow") throw err;
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      if (handling.action === "keepQueued") {
+        // The provider may have taken the job: its answer was lost, not
+        // refused. Reporting a failure here would have the client drop the
+        // idempotency key and start a second paid generation once the slot
+        // clears, while the first one is still queued and may yet arrive by
+        // callback. The queued job is what the generation routes return, and
+        // what the client can keep polling.
+        console.error(
+          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
+          err,
+        );
+        return c.json(await publicAiJobPayload(job, c.req.raw));
+      }
+      throw err;
     }
   })
 
@@ -1864,9 +1900,24 @@ const app = new Hono()
             ? { expectedProviderJobId: null }
             : {}),
         });
+        return c.json(await apiErrorResponse("aiProviderError"), {
+          status: 500,
+        });
       }
-      if (handling.action === "rethrow") throw err;
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      if (handling.action === "keepQueued") {
+        // The provider may have taken the job: its answer was lost, not
+        // refused. Reporting a failure here would have the client drop the
+        // idempotency key and start a second paid generation once the slot
+        // clears, while the first one is still queued and may yet arrive by
+        // callback. The queued job is what the generation routes return, and
+        // what the client can keep polling.
+        console.error(
+          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
+          err,
+        );
+        return c.json(await publicAiJobPayload(job, c.req.raw));
+      }
+      throw err;
     }
   })
 
