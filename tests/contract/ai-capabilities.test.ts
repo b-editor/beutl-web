@@ -46,6 +46,7 @@ vi.mock(
 
 import { v3 } from "@beutl/api";
 import { clearAiVideoModelCapabilitiesCache } from "../../packages/api/src/ai/video-model-capabilities";
+import { UNSTATED_VIDEO_INPUT_LIMITS } from "../../packages/api/src/ai/providers/types";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const USER_ID = "ai-capabilities-user";
@@ -335,7 +336,36 @@ describe("GET /api/v3/ai/capabilities", () => {
     expect(body.operations["video.generate"].models).toEqual([]);
     expect(body.operations["video.extend"].models[0].durationsSeconds).toEqual([5, 10]);
     expect(body.operations["video.motion"].models[0].durationsSeconds).toEqual([5, 10]);
+    expect(body.operations["video.motion"].models[0].maxCharacterImageBytes).toBe(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
   });
+
+  it.each([1_000_000, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES * 2])(
+    "publishes the effective character-image limit for a motion model with %s bytes",
+    async (maxImageBytes) => {
+      listGatewayVideoModels.mockResolvedValue([{
+        id: "gateway/motion-limited",
+        supportedResolutions: ["720p"], supportedDurations: [5], supportedAspectRatios: ["16:9"],
+        supportedFrameImages: null, generateAudio: false, seed: false,
+        supportsPromptToVideo: false, supportsMotionControl: true,
+        inputLimits: { ...UNSTATED_VIDEO_INPUT_LIMITS, maxImageBytes },
+      }]);
+      await upsertAiOperationModel({
+        operation: "video.motion", modelId: "gateway/motion-limited", provider: "vercel-gateway",
+        priceUnits: 30, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+      });
+
+      const response = await makeApp().request("/api/v3/ai/capabilities", { headers: await authHeaders() });
+      expect(response.status).toBe(200);
+      const motion = (await response.json()).operations["video.motion"];
+      expect(motion.maxCharacterImageBytes).toBe(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+      expect(motion.models).toEqual([
+        expect.objectContaining({
+          id: "gateway/motion-limited",
+          maxCharacterImageBytes: Math.min(maxImageBytes, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES),
+        }),
+      ]);
+    },
+  );
 
   it("lists every registered model, ordered, with the first as the default", async () => {
     for (const [modelId, priceUnits, sortOrder, displayName] of [

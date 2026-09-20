@@ -63,6 +63,15 @@ type ModelDescription = {
   isDefault: boolean;
 };
 
+type SourceVideoModelDescription = ModelDescription & {
+  durationsSeconds?: number[];
+  maxPromptLength: number;
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  maxCharacterImageBytes?: number;
+};
+
 // A video model states its own accepted parameters. The operation-level lists
 // remain the superset the server will take at all; a request has to satisfy the
 // model it names as well, and one that does not is refused before it is
@@ -184,7 +193,7 @@ const app = new Hono().get("/", async (c) => {
     });
   // A mode that works from a video needs nothing but "can this model do it":
   // the shape and, for an edit, the length come from the source.
-  const describeSourceVideoModels = (operation: string): ModelDescription[] =>
+  const describeSourceVideoModels = (operation: string): SourceVideoModelDescription[] =>
     describeCatalogEntries(catalog, operation).filter((model) =>
       isVideoModelUsable(
         videoCapabilityOf(videoCapabilities, {
@@ -207,6 +216,12 @@ const app = new Hono().get("/", async (c) => {
         maxSourceVideoBytes: supported?.maxSourceVideoBytes ?? MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
         minSourceVideoSeconds: supported?.minSourceVideoSeconds ?? null,
         maxSourceVideoSeconds: supported?.maxSourceVideoSeconds ?? null,
+        ...(operation === "video.motion" ? {
+          maxCharacterImageBytes: Math.min(
+            supported?.maxReferenceBytes ?? MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+            MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+          ),
+        } : {}),
       };
     });
   const videoModels: VideoModelDescription[] = describeCatalogEntries(

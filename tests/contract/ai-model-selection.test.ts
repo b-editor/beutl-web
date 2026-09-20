@@ -391,7 +391,11 @@ describe("choosing a model per request", () => {
                 : AI_SOURCE_VIDEO_OPERATIONS.includes(operation)
                   // An extension and a motion job name the length they want;
                   // an edit answers with its source's and names none.
-                  ? [...sourceVideoKeys, "durationsSeconds"].sort()
+                  ? [
+                      ...sourceVideoKeys,
+                      "durationsSeconds",
+                      ...(operation === "video.motion" ? ["maxCharacterImageBytes"] : []),
+                    ].sort()
                   : ["costTier", "displayName", "id", "isDefault"],
         );
         for (const [key, field] of Object.entries(model)) {
