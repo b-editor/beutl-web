@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
-import { setDbProvider, upsertAiOperationModel, upsertSubscription } from "@beutl/db";
+import { consumeUsage, setDbProvider, upsertAiOperationModel, upsertSubscription } from "@beutl/db";
 import { aiCapabilityKey, v3 } from "@beutl/api";
 import type { AiVideoModelCapabilities } from "../../packages/api/src/ai/video-model-capabilities";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
@@ -27,6 +27,8 @@ vi.mock("../../packages/api/src/ai/video-model-capabilities", async (original) =
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const MODEL_ID = "gateway/source-video";
 const JWT_SECRET = "source-video-capabilities-test";
+const PERIOD_START = new Date(Date.now() - 86_400_000);
+const PERIOD_END = new Date(Date.now() + 30 * 86_400_000);
 const MODES = ["edit", "extend", "motion"] as const;
 const PNG_BYTES = Uint8Array.from(Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -84,8 +86,8 @@ describe("source-video model admission", () => {
       status: "active",
       planId: "pro",
       billingOfferId: "offer_pro_test",
-      currentPeriodStart: new Date(Date.now() - 86_400_000),
-      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+      currentPeriodStart: PERIOD_START,
+      currentPeriodEnd: PERIOD_END,
       cancelAt: null,
     });
     for (const mode of [...MODES, "generate"]) {
@@ -104,7 +106,7 @@ describe("source-video model admission", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  async function post(path: string, body: FormData) {
+  async function post(path: string, body: FormData, key: string | null = crypto.randomUUID()) {
     const token = await sign({
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": USER_ID,
       exp: Math.floor(Date.now() / 1000) + 300,
@@ -113,13 +115,13 @@ describe("source-video model admission", () => {
       `/api/v3/ai/videos/${path}`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": crypto.randomUUID() },
+        headers: { Authorization: `Bearer ${token}`, ...(key === null ? {} : { "Idempotency-Key": key }) },
         body,
       },
     );
   }
 
-  async function submit(mode: typeof MODES[number]) {
+  async function submit(mode: typeof MODES[number], key?: string | null) {
     const body = new FormData();
     body.set("prompt", "make it night");
     body.set("model", MODEL_ID);
@@ -128,8 +130,93 @@ describe("source-video model admission", () => {
     if (mode === "motion") {
       body.set("characterImage", new File([PNG_BYTES], "character.png", { type: "image/png" }));
     }
-    return post(mode, body);
+    return post(mode, body, key);
   }
+
+  async function endPlan() {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_source_limits",
+      status: "canceled",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: PERIOD_START,
+      currentPeriodEnd: PERIOD_END,
+      cancelAt: null,
+    });
+  }
+
+  describe.each(MODES)("%s upload preflight", (mode) => {
+    it.each(["no-plan", "no-credit", "missing-key"])("rejects %s before reading uploads", async (reason) => {
+      if (reason === "no-plan") await endPlan();
+      if (reason === "no-credit") {
+        await consumeUsage({
+          userId: USER_ID,
+          amount: 500,
+          monthlyUsageLimit: 500,
+          usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+          aiJobId: "exhaust-before-upload",
+        });
+      }
+      const formRead = vi.spyOn(Request.prototype, "formData");
+      const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+      try {
+        const response = await submit(mode, reason === "missing-key" ? null : undefined);
+
+        expect(response.status).toBe(reason === "missing-key" ? 400 : 409);
+        expect(await response.json()).toMatchObject({
+          error_code: reason === "missing-key" ? "invalidRequestBody" : "aiRequestInProgress",
+        });
+        expect(formRead).not.toHaveBeenCalled();
+        expect(fileRead).not.toHaveBeenCalled();
+        expect(inspectVideo).not.toHaveBeenCalled();
+        expect(submitVideo).not.toHaveBeenCalled();
+        expect(state.aiJobs.size).toBe(0);
+      } finally {
+        formRead.mockRestore();
+        fileRead.mockRestore();
+      }
+    });
+
+    it("recovers a paid job after the plan ends without reserving again", async () => {
+      const key = `recover-${mode}`;
+      const started = await submit(mode, key);
+      expect(started.status).toBe(200);
+      const original = await started.json();
+      const transactionCount = state.creditTransactions.length;
+      await endPlan();
+
+      const replay = await submit(mode, key);
+
+      expect(replay.status).toBe(202);
+      expect(await replay.json()).toMatchObject({ jobId: original.jobId });
+      expect(submitVideo).toHaveBeenCalledOnce();
+      expect(state.aiJobs.size).toBe(1);
+      expect(state.creditTransactions).toHaveLength(transactionCount);
+    });
+
+    it("does not let a settled key bypass upload admission after the plan ends", async () => {
+      const key = `settled-${mode}`;
+      const started = await submit(mode, key);
+      const { jobId } = await started.json();
+      const job = state.aiJobs.get(jobId)!;
+      state.aiJobs.set(jobId, { ...job, status: "failed" });
+      await endPlan();
+      const formRead = vi.spyOn(Request.prototype, "formData");
+      const fileRead = vi.spyOn(File.prototype, "arrayBuffer");
+      try {
+        const response = await submit(mode, key);
+        expect(response.status).toBe(402);
+        expect(await response.json()).toMatchObject({ error_code: "aiPlanRequired" });
+        expect(formRead).not.toHaveBeenCalled();
+        expect(fileRead).not.toHaveBeenCalled();
+        expect(submitVideo).toHaveBeenCalledOnce();
+      } finally {
+        formRead.mockRestore();
+        fileRead.mockRestore();
+      }
+    });
+  });
 
   async function submitReferences(durations: readonly number[]) {
     selected.maxVideoReferences = 3;

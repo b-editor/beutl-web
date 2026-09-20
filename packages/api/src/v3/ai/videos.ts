@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { getUserId } from "../../api/auth";
-import { apiErrorResponse } from "../../api/error";
+import { apiErrorResponse, type ApiErrorCode } from "../../api/error";
 import {
   createReservedAiJob,
   findReplayableAiJob,
@@ -147,6 +147,40 @@ function sourceVideoOutsideModelRange(
     capabilities.maxSourceVideoSeconds !== null &&
     source.durationSeconds > capabilities.maxSourceVideoSeconds
   );
+}
+
+// Decide whether an upload is worth reading before buffering, inspecting, or
+// hashing it. A paid result remains recoverable after the plan ends, while a
+// new key retains the recoverable response used by the other multipart routes.
+async function videoUploadPreflight(
+  request: Request,
+  userId: string,
+  operation: string,
+): Promise<{ errorCode: ApiErrorCode; status: 400 | 402 | 409 } | null> {
+  const idempotencyKeyHash = await getAiIdempotencyKeyHash(request);
+  if (!idempotencyKeyHash) return { errorCode: "invalidRequestBody", status: 400 };
+  const keyState = await aiJobStateForIdempotencyKey({ userId, idempotencyKeyHash });
+  if (keyState === "deleted") return { errorCode: "aiRequestWasDeleted", status: 409 };
+  if (keyState === "collectable") return null;
+
+  const entitlements = await getEntitlements(userId);
+  const recoverableDenial = { errorCode: "aiRequestInProgress", status: 409 } as const;
+  if (!entitlements.canUseAi) {
+    return keyState === "none"
+      ? recoverableDenial
+      : { errorCode: "aiPlanRequired", status: 402 };
+  }
+  if (Object.keys(entitlements.modelAvailability[operation] ?? {}).length === 0) {
+    return keyState === "none"
+      ? recoverableDenial
+      : { errorCode: "aiModelUnavailable", status: 400 };
+  }
+  if (!entitlements.availability[operation]) {
+    return keyState === "none"
+      ? recoverableDenial
+      : { errorCode: "aiUsageLimitExceeded", status: 402 };
+  }
+  return null;
 }
 
 type AiJobRow = NonNullable<Awaited<ReturnType<typeof getAiJobById>>>;
@@ -676,47 +710,9 @@ const app = new Hono()
     const requestSignal = c.req.raw.signal;
     requestSignal.throwIfAborted();
 
-    // 契約が無ければ、大きな本文を読み込む前に断る。ただし、その名前が取りに来る
-    // 価値のある job を指しているなら別——契約中に課金された結果は、契約が終わった
-    // あとでも取りに来られなければならない。名前は自分の job しか指せない。
-    const idempotencyKeyHash = await getAiIdempotencyKeyHash(c.req.raw);
-    if (!idempotencyKeyHash) {
-      return c.json(await apiErrorResponse("invalidRequestBody"), {
-        status: 400,
-      });
-    }
-    const keyState = await aiJobStateForIdempotencyKey({
-      userId,
-      idempotencyKeyHash,
-    });
-    // 指していた job が消えているなら、本文を読む必要はない。
-    if (keyState === "deleted") {
-      return c.json(await apiErrorResponse("aiRequestWasDeleted"), {
-        status: 409,
-      });
-    }
-
-    if (keyState !== "collectable") {
-      const entitlements = await getEntitlements(userId);
-      const recoverableDenial = async () =>
-        c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
-      if (!entitlements.canUseAi) {
-        return keyState === "none"
-          ? await recoverableDenial()
-          : c.json(await apiErrorResponse("aiPlanRequired"), { status: 402 });
-      }
-      const modelAvailability =
-        entitlements.modelAvailability["video.generate"] ?? {};
-      if (Object.keys(modelAvailability).length === 0) {
-        return keyState === "none"
-          ? await recoverableDenial()
-          : c.json(await apiErrorResponse("aiModelUnavailable"), { status: 400 });
-      }
-      if (!entitlements.availability["video.generate"]) {
-        return keyState === "none"
-          ? await recoverableDenial()
-          : c.json(await apiErrorResponse("aiUsageLimitExceeded"), { status: 402 });
-      }
+    const denial = await videoUploadPreflight(c.req.raw, userId, "video.generate");
+    if (denial) {
+      return c.json(await apiErrorResponse(denial.errorCode), { status: denial.status });
     }
     requestSignal.throwIfAborted();
     let body: Awaited<ReturnType<typeof c.req.parseBody>>;
@@ -1301,6 +1297,11 @@ const app = new Hono()
     if (!isMultipartRequest(c.req.raw)) {
       return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
     }
+    const denial = await videoUploadPreflight(c.req.raw, userId, operation);
+    if (denial) {
+      return c.json(await apiErrorResponse(denial.errorCode), { status: denial.status });
+    }
+    requestSignal.throwIfAborted();
     let prompt: string;
     let requestedDuration: number | undefined;
     let requestedModel: string | undefined;
@@ -1547,6 +1548,12 @@ const app = new Hono()
       });
     }
     const requestSignal = c.req.raw.signal;
+    requestSignal.throwIfAborted();
+
+    const denial = await videoUploadPreflight(c.req.raw, userId, "video.motion");
+    if (denial) {
+      return c.json(await apiErrorResponse(denial.errorCode), { status: denial.status });
+    }
     requestSignal.throwIfAborted();
 
     let body: Awaited<ReturnType<typeof c.req.parseBody>>;
