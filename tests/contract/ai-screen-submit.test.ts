@@ -658,7 +658,7 @@ describe("what a screen reads before it names a request", () => {
 
 describe("which model a screen names", () => {
   const offered = [
-    { id: "model-x", displayName: "Model X", costTier: null, available: true },
+    { id: "model-x", displayName: "Model X", costTier: null, available: true, provider: "openrouter" },
   ] as const;
 
   it("keeps a model the catalog dropped while its request is uncollected", () => {
@@ -675,10 +675,10 @@ describe("which model a screen names", () => {
   it("preserves a removed model only while its paid request is outstanding", () => {
     expect(correctedModelId([], "model-gone", true)).toBe("model-gone");
     expect(correctedModelId([
-      { id: "model-b", displayName: "B", costTier: null, available: true },
+      { id: "model-b", displayName: "B", costTier: null, available: true, provider: "openrouter" },
     ], "model-gone", true)).toBe("model-gone");
     expect(correctedModelId([
-      { id: "model-b", displayName: "B", costTier: null, available: true },
+      { id: "model-b", displayName: "B", costTier: null, available: true, provider: "openrouter" },
     ], "model-gone", false)).toBe("model-b");
   });
 
@@ -696,7 +696,7 @@ describe("which model a screen names", () => {
 
   it("keeps a removed held model selected while restoring A after A to B", () => {
     const catalog = [
-      { id: "model-b", displayName: "B", costTier: null, available: true },
+      { id: "model-b", displayName: "B", costTier: null, available: true, provider: "openrouter" },
     ] as const;
     let names = readyAiRequestNames(newAiRequestNames(), () => "key-a");
     names = commitAiRequestName(names, "request-a", () => "key-b", "model-a");
@@ -915,7 +915,7 @@ describe("which request a screen is looking at", () => {
     // 同じ task の依頼が 2 つ未回収で残ることがある。いま選んでいる 1 つだけを
     // 残すと、もう一方のモデルへ戻れず、その名前が指す支払い済みの結果に届かない。
     const offered = [
-      { id: "model-x", displayName: "Model X", costTier: null, available: true },
+      { id: "model-x", displayName: "Model X", costTier: null, available: true, provider: "openrouter" },
     ] as const;
     const kept = ["model-a", "model-b"].reduce(
       keepModelForHeldRequest,

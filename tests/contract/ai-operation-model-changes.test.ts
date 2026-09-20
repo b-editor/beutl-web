@@ -117,7 +117,10 @@ describe("registering a model for an operation", () => {
 });
 
 describe("keeping an operation startable", () => {
-  const minimumChargeOf = (_modelId: string, priceUnits: number) => priceUnits * 4;
+  const minimumChargeOf = (
+    _model: { modelId: string; provider: string },
+    priceUnits: number,
+  ) => priceUnits * 4;
 
   it("allows a model nobody can afford beside one they can", () => {
     // An expensive option is an offer, not a misconfiguration.
@@ -125,8 +128,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "affordable", priceUnits: 10, enabled: true },
-          { modelId: "expensive", priceUnits: 400, enabled: true },
+          { modelId: "affordable", provider: "openrouter", priceUnits: 10, enabled: true },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -138,8 +141,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "expensive", priceUnits: 200, enabled: true },
-          { modelId: "dearer", priceUnits: 400, enabled: true },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 200, enabled: true },
+          { modelId: "dearer", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -151,8 +154,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "disabled", priceUnits: 10, enabled: false },
-          { modelId: "expensive", priceUnits: 400, enabled: true },
+          { modelId: "disabled", provider: "openrouter", priceUnits: 10, enabled: false },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -163,7 +166,7 @@ describe("keeping an operation startable", () => {
     expect(
       aiOperationWouldGoOffline({
         minimumChargeOf: () => 0,
-        models: [{ modelId: "unsupported", priceUnits: 1, enabled: true }],
+        models: [{ modelId: "unsupported", provider: "openrouter", priceUnits: 1, enabled: true }],
         allowance: 500,
       }),
     ).toBe(true);

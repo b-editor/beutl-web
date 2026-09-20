@@ -194,7 +194,12 @@ describe("saving the AI configuration in one go", () => {
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ modelId: "expensive/video", priceUnits: 200, enabled: true }]
+            ? [{
+                modelId: "expensive/video",
+                provider: "openrouter",
+                priceUnits: 200,
+                enabled: true,
+              }]
             : builtInOf(operation),
       },
     );
