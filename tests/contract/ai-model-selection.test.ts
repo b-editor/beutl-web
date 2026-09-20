@@ -113,6 +113,12 @@ async function generateWith(
   });
 }
 
+const AI_SOURCE_VIDEO_OPERATIONS = [
+  "video.edit",
+  "video.extend",
+  "video.motion",
+];
+
 describe("choosing a model per request", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
 
@@ -340,8 +346,23 @@ describe("choosing a model per request", () => {
       "maxVideoReferenceBytes",
       "maxVideoReferences",
       "minSourceVideoSeconds",
+      "promptToVideo",
       "resolutions",
       "seed",
+    ];
+    // The three modes that work from an existing clip. They carry what the
+    // chosen model will take of that clip, which a plain generation has no
+    // use for — and an edit publishes no lengths at all, because its result
+    // is as long as its source.
+    const sourceVideoKeys = [
+      "costTier",
+      "displayName",
+      "id",
+      "isDefault",
+      "maxPromptLength",
+      "maxSourceVideoBytes",
+      "maxSourceVideoSeconds",
+      "minSourceVideoSeconds",
     ];
     const imageKeys = [
       "aspectRatios",
@@ -364,7 +385,13 @@ describe("choosing a model per request", () => {
             ? videoKeys
             : operation.startsWith("image.")
               ? imageKeys
-              : ["costTier", "displayName", "id", "isDefault"],
+              : operation === "video.edit"
+                ? sourceVideoKeys
+                : AI_SOURCE_VIDEO_OPERATIONS.includes(operation)
+                  // An extension and a motion job name the length they want;
+                  // an edit answers with its source's and names none.
+                  ? [...sourceVideoKeys, "durationsSeconds"].sort()
+                  : ["costTier", "displayName", "id", "isDefault"],
         );
         for (const [key, field] of Object.entries(model)) {
           // An allowance is not a figure a price can be read out of. These say
