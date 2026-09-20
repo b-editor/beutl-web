@@ -295,14 +295,30 @@ async function loadOne(
  */
 export type AiImageModelRef = string | { modelId: string; provider: string };
 
-// Vercel AI Gateway publishes nothing per image model: there is no
-// `image_capabilities` block anywhere in /v1/models, and 32 of its 33 image
-// models declare `modalities.input: ["text"]` even where the documentation says
-// they accept a picture. So what a Gateway model takes is what the SDK's image
-// call takes, and the two fields it has no parameter for are stated as
-// unsupported rather than left to be discovered by a request that succeeds and
-// returns the wrong thing.
+// The Gateway catalog's modalities omit image inputs even for documented
+// editors. The SDK accepting prompt.images is also not a model capability.
+// Keep exact, verified model IDs here: an unknown model remains usable for
+// text generation, but must not advertise image inputs. Mask-only models are
+// not included because this adapter performs edits with a prompt and source.
+// Sources and conservative reference allowances: docs/ai-gateway-image-inputs.md.
+const GATEWAY_IMAGE_REFERENCE_LIMITS = new Map<string, number>([
+  ["openai/gpt-image-1", 4],
+  ["openai/gpt-image-1.5", 4],
+  ["openai/gpt-image-2", 4],
+  ["bfl/flux-2-pro", 4],
+  ["bfl/flux-2-flex", 4],
+  ["bfl/flux-kontext-pro", 1],
+  ["bfl/flux-kontext-max", 1],
+  ["bytedance/seedream-4.0", 4],
+  ["bytedance/seedream-4.5", 4],
+  ["spacexai/grok-imagine-image", 3],
+]);
+
 function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
+  const maxReferenceImages = Math.min(
+    GATEWAY_IMAGE_REFERENCE_LIMITS.get(modelId) ?? 0,
+    AI_MAX_IMAGE_REFERENCES,
+  );
   return {
     modelId,
     aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
@@ -310,8 +326,8 @@ function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
     // ignored, and the user billed for an opaque picture.
     backgrounds: ["auto"],
     seed: true,
-    inputReferences: true,
-    maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
+    inputReferences: maxReferenceImages > 0,
+    maxReferenceImages,
     // No upscale surface, which is what `resolution` stands for here.
     resolution: false,
   };

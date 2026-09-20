@@ -332,6 +332,41 @@ describe("an image model Vercel AI Gateway runs", () => {
     clearAiImageModelCapabilitiesCache();
   });
 
+  it.each([
+    "prodia/flux-fast-schnell",
+    "bfl/flux-pro-1.1",
+    "bfl/flux-pro-1.0-fill",
+    "openai/gpt-image-2-unverified",
+    "future/image-model",
+  ])("does not offer unverified image-input support for %s", async (modelId) => {
+    const model = { modelId, provider: "vercel-gateway" };
+    const entry = imageCapabilityOf(await loadAiImageModelCapabilities([model]), model);
+
+    expect(entry).toMatchObject({ inputReferences: false, maxReferenceImages: 0 });
+    expect(isImageModelUsable(entry, { referenceImages: true })).toBe(false);
+    expect(unsupportedImageRequestReason(entry, { referenceImages: 1 })).toBe("referenceImages");
+    // A missing image-input allowance does not disable plain text generation.
+    expect(isImageModelUsable(entry)).toBe(true);
+    expect(unsupportedImageRequestReason(entry, { referenceImages: 0 })).toBeNull();
+    expect(listModelEndpoints).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["openai/gpt-image-2", 4],
+    ["bfl/flux-2-flex", 4],
+    ["bfl/flux-kontext-pro", 1],
+    ["bytedance/seedream-4.5", 4],
+    ["spacexai/grok-imagine-image", 3],
+  ] as const)("offers the verified reference allowance for %s", async (modelId, maximum) => {
+    const model = { modelId, provider: "vercel-gateway" };
+    const entry = imageCapabilityOf(await loadAiImageModelCapabilities([model]), model);
+
+    expect(entry).toMatchObject({ inputReferences: true, maxReferenceImages: maximum });
+    expect(isImageModelUsable(entry, { referenceImages: true })).toBe(true);
+    expect(unsupportedImageRequestReason(entry, { referenceImages: maximum })).toBeNull();
+    expect(unsupportedImageRequestReason(entry, { referenceImages: maximum + 1 })).toBe("referenceImages");
+  });
+
   it("is described without asking OpenRouter about it", async () => {
     // The Gateway publishes no per-model image capabilities at all — there is
     // no `image_capabilities` block in its model list — so looking the id up on

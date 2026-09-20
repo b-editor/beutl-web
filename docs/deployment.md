@@ -221,6 +221,10 @@ names and relative expense (`costTier`: `low`, `medium`, or `high`) without
 prices. `GET /api/v3/user/entitlements` exposes affordability through
 `modelAvailability`. Prices and secret values never leave the server.
 
+Gateway image editing and reference-image inputs are enabled only for the
+exact models in the [verified image-input compatibility list](ai-gateway-image-inputs.md).
+Unlisted models remain available for plain text-to-image requests.
+
 Price and allowance changes affect only operations started afterwards. Each
 job records the price reserved at its start and uses that same price for a
 refund. Changing the allowance does not alter usage already consumed in the
