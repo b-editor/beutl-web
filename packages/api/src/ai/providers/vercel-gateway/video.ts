@@ -287,7 +287,23 @@ async function readBoundedBytes(response: Response): Promise<ArrayBuffer> {
 }
 
 function base64ToArrayBuffer(value: string): ArrayBuffer {
-  const binary = atob(value);
+  // Bound both the encoded input and its decoded size before atob retains a
+  // second large string. The final quartet can encode one, two, or three
+  // bytes, so its padding matters even when the encoded length is at the cap.
+  const maximumEncodedLength = Math.ceil(MAX_AI_GENERATED_VIDEO_BYTES / 3) * 4;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  if (
+    value.length > maximumEncodedLength ||
+    Math.floor(value.length * 3 / 4) - padding > MAX_AI_GENERATED_VIDEO_BYTES
+  ) {
+    throw new InvalidAiProviderOutputError("Vercel AI Gateway video exceeds the size limit");
+  }
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch (cause) {
+    throw new InvalidAiProviderOutputError("Vercel AI Gateway returned invalid base64 video", { cause });
+  }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) {
     bytes[index] = binary.charCodeAt(index);
@@ -343,6 +359,9 @@ export async function downloadGatewayVideoContent(
   } else if (video.type === "binary" && video.data instanceof Uint8Array) {
     // The provider spec allows it; the Gateway's own wire schema does not emit
     // it today. Handled rather than assumed away.
+    if (video.data.byteLength > MAX_AI_GENERATED_VIDEO_BYTES) {
+      throw new InvalidAiProviderOutputError("Vercel AI Gateway video exceeds the size limit");
+    }
     bytes = video.data.slice().buffer;
   } else {
     throw new InvalidAiProviderOutputError(
