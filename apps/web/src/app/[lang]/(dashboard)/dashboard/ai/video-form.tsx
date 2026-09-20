@@ -45,6 +45,8 @@ import {
   requestSignature,
   seedValue,
   useFileFingerprints,
+  useVideoInputDurations,
+  VideoInputDurationNotice,
   useAiRequestNames,
   useHeldModelCapabilities,
   defaultModelId,
@@ -510,6 +512,19 @@ export function VideoForm({
     ) > options.maxTotalReferences;
   const tooManyReferences =
     referenceKinds.some((entry) => entry.tooMany) || tooManyInTotal;
+  const videoReferencesToInspect = useMemo(
+    () => oversizedReference || tooManyReferences
+      ? []
+      : sentReferences.filter((file) => referenceKindOf(file.type) === "video"),
+    [oversizedReference, tooManyReferences, sentReferences],
+  );
+  const referenceDurations = useVideoInputDurations(
+    videoReferencesToInspect,
+    options.minSourceVideoSeconds,
+    options.maxSourceVideoSeconds,
+  );
+  const invalidReferenceDuration = referenceDurations.error !== null;
+  const waitForReferenceDurations = referenceDurations.reading || invalidReferenceDuration;
   const frames = useMemo(
     () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
     [sentFirstFrame, sentLastFrame],
@@ -524,11 +539,12 @@ export function VideoForm({
   // effect の依存に持ち、その effect が state を書くので、描画が止まらなく
   // なる。フレーム側が useMemo を通しているのと同じ理由。
   const fingerprintedReferences = useMemo(
-    () => (oversizedReference || tooManyReferences ? [] : sentReferences),
-    [oversizedReference, tooManyReferences, sentReferences],
+    () => (oversizedReference || tooManyReferences || waitForReferenceDurations ? [] : sentReferences),
+    [oversizedReference, tooManyReferences, waitForReferenceDurations, sentReferences],
   );
-  const { contents: referenceContents, reading: readingReferences } =
+  const { contents: referenceContents, reading: readingReferenceFiles } =
     useFileFingerprints(fingerprintedReferences, videoReferenceFingerprintLimit);
+  const readingReferences = readingReferenceFiles || referenceDurations.reading;
   const oversizedFrame =
     [sentFirstFrame, sentLastFrame].some(
       (frame) => frame !== null && frame.size > frameByteLimit,
@@ -543,7 +559,7 @@ export function VideoForm({
   // の中にあって描画のたびには読めない——そのぶんこの署名は粗く、粗いほうへ
   // 外れるのは安全側だ。同じ名前で別の依頼が届けば断られるだけで、同じ依頼が
   // 二つの名前に割れて二度課金されることはない。
-  const signature = oversizedFrame ? "" : requestSignature([
+  const signature = oversizedFrame || invalidReferenceDuration ? "" : requestSignature([
     model,
     // 送るのは組み立てたあとの一本の文章。材料をそのまま数えると、前後の空白の
     // ちがいだけで別の名前になり、サーバーには同じ依頼が二度届いて二度課金
@@ -579,13 +595,13 @@ export function VideoForm({
     referenceContents.join("\u001f"),
   ]);
   useEffect(() => {
-    if (names.ready && !readingFrames && !readingReferences && !oversizedFrame)
+    if (names.ready && !readingFrames && !readingReferences && !oversizedFrame && !invalidReferenceDuration)
       void names.ensure(signature);
-  }, [names.ready, names, readingFrames, readingReferences, signature, oversizedFrame]);
+  }, [names.ready, names, readingFrames, readingReferences, signature, oversizedFrame, invalidReferenceDuration]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
   // 支払い済みの結果を取りに行く道が閉じる。
-  const holdsName = !oversizedFrame && names.holds(signature);
+  const holdsName = !oversizedFrame && !invalidReferenceDuration && names.holds(signature);
   const holdsSelectedModel = names.holdsModel(model) || names.hasRestoredModel(model);
   useEffect(() => {
     if (readingFrames) return;
@@ -597,7 +613,7 @@ export function VideoForm({
     if (corrected !== model) setModel(corrected);
   }, [holdsSelectedModel, model, models, names, readingFrames]);
   const modelCanSubmit = canSubmitModelRequest(models, model, holdsSelectedModel, holdsName);
-  const submitBlocked = blocksSubmit(blocked, holdsName) || oversizedFrame || !modelCanSubmit;
+  const submitBlocked = blocksSubmit(blocked, holdsName) || oversizedFrame || invalidReferenceDuration || !modelCanSubmit;
   const canSubmit = canSubmitAiRequest({
     submitBlocked,
     hasTask: true,
@@ -996,6 +1012,7 @@ export function VideoForm({
                   />
                 );
               })}
+              <VideoInputDurationNotice lang={lang} status={referenceDurations} />
               {/* Each field is within its own limit, so nothing above says
                   why the button is off. The aggregate has to speak for
                   itself. */}

@@ -300,6 +300,10 @@
     "sourceVideoGenerated": "Select a generated video",
     "sourceVideoUploadHint": "Use an MP4 or WebM file up to {{maximum}}. The duration is detected automatically.",
     "sourceVideoTooLarge": "The file exceeds the size limit. Select a file that is {{maximum}} or smaller.",
+    "videoInputDurationChecking": "Checking video duration…",
+    "videoInputDurationTooShort": "{{name}} must be at least {{minimum}} seconds long for this model.",
+    "videoInputDurationTooLong": "{{name}} must be {{maximum}} seconds or shorter for this model.",
+    "videoInputDurationUnreadable": "Could not read the duration of {{name}}. Choose another MP4 or WebM file.",
     "sourceVideoEditLengthUnknown": "The edited video will have the same duration as the source. The duration is detected automatically from the uploaded file.",
     "videoReferences": {
       "image": "Reference images",

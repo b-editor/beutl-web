@@ -89,7 +89,7 @@ describe("dashboard AI form input limits", () => {
     expect(videoFormSource.indexOf("const sentFirstFrame")).toBeLessThan(
       videoFormSource.indexOf("const frames = useMemo"),
     );
-    expect(videoFormSource).toContain("const signature = oversizedFrame ? \"\" :");
+    expect(videoFormSource).toContain("const signature = oversizedFrame || invalidReferenceDuration ? \"\" :");
     expect(videoFormSource).toContain(
       "busy: isPending || readingFrames || readingReferences || oversizedFrame",
     );

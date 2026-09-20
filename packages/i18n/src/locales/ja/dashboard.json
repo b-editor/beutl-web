@@ -300,6 +300,10 @@
     "sourceVideoGenerated": "生成済みの動画から選択",
     "sourceVideoUploadHint": "{{maximum}} 以下の MP4 または WebM ファイルを使用できます。動画の長さは自動で読み取ります。",
     "sourceVideoTooLarge": "ファイルサイズが上限を超えています。{{maximum}} 以下のファイルを選んでください。",
+    "videoInputDurationChecking": "動画の長さを確認しています…",
+    "videoInputDurationTooShort": "このモデルでは {{minimum}} 秒以上の動画が必要です（{{name}}）。",
+    "videoInputDurationTooLong": "このモデルでは {{maximum}} 秒以下の動画を使用してください（{{name}}）。",
+    "videoInputDurationUnreadable": "{{name}} の長さを読み取れませんでした。別の MP4 または WebM ファイルを選んでください。",
     "sourceVideoEditLengthUnknown": "編集後の動画の長さは元の動画と同じです。長さはアップロードしたファイルから自動で読み取ります。",
     "videoReferences": {
       "image": "参照画像",

@@ -59,6 +59,8 @@ import {
   requestSignature,
   useAiRequestNames,
   useFileFingerprints,
+  useVideoInputDurations,
+  VideoInputDurationNotice,
   useHeldModelCapabilities,
   type AiAccess,
   type AiScreenModel,
@@ -223,8 +225,19 @@ export function VideoEditForm({
     () => (sentSourceFile && !oversizedSource ? [sentSourceFile] : []),
     [sentSourceFile, oversizedSource],
   );
+  const sourceDuration = useVideoInputDurations(
+    sourceFiles,
+    heldCapabilities?.[model]?.minSourceVideoSeconds ?? null,
+    heldCapabilities?.[model]?.maxSourceVideoSeconds ?? null,
+  );
+  const invalidSourceDuration = sourceDuration.error !== null;
+  const waitForSourceDuration = sourceDuration.reading || invalidSourceDuration;
+  const fingerprintedSourceFiles = useMemo(
+    () => waitForSourceDuration ? [] : sourceFiles,
+    [sourceFiles, waitForSourceDuration],
+  );
   const { contents: sourceContents, reading: readingSource } =
-    useFileFingerprints(sourceFiles, sourceVideoLimit);
+    useFileFingerprints(fingerprintedSourceFiles, sourceVideoLimit);
 
   const sentCharacterImage = mode === "motion" ? characterImage : null;
   const characterImageLimit = Math.min(
@@ -242,7 +255,7 @@ export function VideoEditForm({
     useFileFingerprints(characterImages, characterImageLimit);
 
   const oversized = oversizedSource || oversizedCharacter;
-  const reading = readingSource || readingCharacter;
+  const reading = readingSource || readingCharacter || sourceDuration.reading;
   const trimmedPrompt = prompt.trim();
   const promptLimit = Math.min(
     heldCapabilities?.[model]?.maxPromptCharacters ?? MAX_AI_PROMPT_LENGTH,
@@ -256,7 +269,7 @@ export function VideoEditForm({
   const sentDuration = mode === "edit" ? null : duration;
   const hasSource = sentSourceFile !== null;
 
-  const signature = oversized
+  const signature = oversized || invalidSourceDuration
     ? ""
     : requestSignature([
         mode,
@@ -273,10 +286,10 @@ export function VideoEditForm({
       ]);
 
   useEffect(() => {
-    if (names.ready && !reading && !oversized) void names.ensure(signature);
-  }, [names.ready, names, reading, oversized, signature]);
+    if (names.ready && !reading && !oversized && !invalidSourceDuration) void names.ensure(signature);
+  }, [names.ready, names, reading, oversized, invalidSourceDuration, signature]);
 
-  const holdsName = !oversized && names.holds(signature);
+  const holdsName = !oversized && !invalidSourceDuration && names.holds(signature);
   const holdsSelectedModel =
     names.holdsModel(model) || names.hasRestoredModel(model);
   useEffect(() => {
@@ -299,6 +312,7 @@ export function VideoEditForm({
   const submitBlocked =
     blocksSubmit(blocked, holdsName) ||
     oversized ||
+    invalidSourceDuration ||
     !modelCanSubmit ||
     !hasSource ||
     trimmedPrompt === "" ||
@@ -420,6 +434,7 @@ export function VideoEditForm({
               {t("dashboard:ai.sourceVideoEditLengthUnknown")}
             </p>
           )}
+          <VideoInputDurationNotice lang={lang} status={sourceDuration} />
         </div>
 
         {/* Which edit to run decides whether a length is asked for and what it
