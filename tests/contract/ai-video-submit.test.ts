@@ -4,7 +4,56 @@ import {
   buildAiMotionVideoSubmission,
   buildAiSourceVideoSubmission,
   buildAiVideoSubmission,
+  selectVideoReferences,
 } from "../../apps/web/src/lib/ai-video-submit";
+
+describe("active video reference validation", () => {
+  const image = new File(["image"], "image.png", { type: "image/png" });
+  const video = new File(["video"], "video.mp4", { type: "video/mp4" });
+
+  it(
+    "does not block on retained references when the request will send none",
+    () => {
+      const kinds = [{ files: [image, video], maxCount: 1, maxBytes: 1 }];
+      expect(selectVideoReferences({ enabled: false, kinds, maxTotalReferences: 0 })).toEqual({
+        files: [], oversized: false, tooMany: false, tooManyInTotal: false,
+      });
+      expect(kinds[0].files).toEqual([image, video]);
+      expect(selectVideoReferences({ enabled: true, kinds, maxTotalReferences: 0 }))
+        .toMatchObject({ oversized: true, tooMany: true, tooManyInTotal: true });
+    },
+  );
+
+  it("ignores a retained unsupported reference kind while sending a supported kind", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [
+        { files: [image], maxCount: 1, maxBytes: image.size },
+        { files: [video], maxCount: 0, maxBytes: 0 },
+      ],
+      maxTotalReferences: 1,
+    })).toEqual({ files: [image], oversized: false, tooMany: false, tooManyInTotal: false });
+  });
+
+  it("still rejects excessive visible counts and sizes", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [{ files: [image, video], maxCount: 1, maxBytes: image.size - 1 }],
+      maxTotalReferences: null,
+    })).toEqual({ files: [image], oversized: true, tooMany: true, tooManyInTotal: false });
+  });
+
+  it("checks aggregate limits across active kinds without changing their order", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [
+        { files: [image], maxCount: 1, maxBytes: image.size },
+        { files: [video], maxCount: 1, maxBytes: video.size },
+      ],
+      maxTotalReferences: 1,
+    })).toEqual({ files: [image, video], oversized: false, tooMany: true, tooManyInTotal: true });
+  });
+});
 
 const base = {
   prompt: "Waves crossing a quiet shore",

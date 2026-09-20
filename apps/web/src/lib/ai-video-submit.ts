@@ -10,6 +10,28 @@ export function videoReferenceFingerprintLimit(file: File): number {
 
 import { seedValue } from "./ai-screen";
 
+/** Select and validate only reference kinds that this request can send. */
+export function selectVideoReferences({
+  enabled,
+  kinds,
+  maxTotalReferences,
+}: {
+  enabled: boolean;
+  kinds: readonly { files: readonly File[]; maxCount: number; maxBytes: number }[];
+  maxTotalReferences: number | null;
+}): { files: File[]; oversized: boolean; tooMany: boolean; tooManyInTotal: boolean } {
+  if (!enabled) return { files: [], oversized: false, tooMany: false, tooManyInTotal: false };
+  const active = kinds.filter((kind) => kind.maxCount > 0);
+  const files = active.flatMap((kind) => kind.files.slice(0, kind.maxCount));
+  const tooManyInTotal = maxTotalReferences !== null && files.length > maxTotalReferences;
+  return {
+    files,
+    oversized: active.some((kind) => kind.files.some((file) => file.size > kind.maxBytes)),
+    tooMany: active.some((kind) => kind.files.length > kind.maxCount) || tooManyInTotal,
+    tooManyInTotal,
+  };
+}
+
 export type AiVideoOperationPath =
   | "videos"
   | "videos/frames"

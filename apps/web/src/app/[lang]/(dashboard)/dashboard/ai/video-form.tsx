@@ -28,7 +28,7 @@ import {
 } from "@beutl/core";
 import { composePrompt } from "@/lib/ai-prompt";
 import { runAiRequest } from "@/lib/ai-request";
-import { buildAiVideoSubmission, videoReferenceFingerprintLimit } from "@/lib/ai-video-submit";
+import { buildAiVideoSubmission, selectVideoReferences, videoReferenceFingerprintLimit } from "@/lib/ai-video-submit";
 import { PromptLibrary, type PromptTemplate } from "./prompt-library";
 import {
   AdvancedOptions,
@@ -493,25 +493,19 @@ export function VideoForm({
   );
   // 送るのは、画像・動画・音声の順。並びは依頼の一部で、文章が「1 枚目」と
   // 言う相手が変わる。
-  const sentReferences = useMemo(
-    () =>
-      options.referenceToVideo && sentFirstFrame === null
-        ? referenceKinds.flatMap((entry) => entry.files.slice(0, entry.maxCount))
-        : [],
-    [options.referenceToVideo, referenceKinds, sentFirstFrame],
+  const sendsReferences = options.referenceToVideo && sentFirstFrame === null;
+  const referenceSelection = useMemo(
+    () => selectVideoReferences({
+      enabled: sendsReferences,
+      kinds: referenceKinds,
+      maxTotalReferences: options.maxTotalReferences,
+    }),
+    [sendsReferences, referenceKinds, options.maxTotalReferences],
   );
-  const oversizedReference = referenceKinds.some((entry) => entry.oversized);
-  // 種類ごとの上限とは別に、合計にも上限を置くモデルがある——H3 は画像 9 枚と
-  // 動画 3 本を別々に許しながら、合わせて 5 つまで。ここで見ないと、どの欄も
-  // 上限内なのに送信だけがサーバーに 400 で返される組み方ができる。
-  const tooManyInTotal =
-    options.maxTotalReferences !== null &&
-    referenceKinds.reduce(
-      (carried, entry) => carried + Math.min(entry.files.length, entry.maxCount),
-      0,
-    ) > options.maxTotalReferences;
-  const tooManyReferences =
-    referenceKinds.some((entry) => entry.tooMany) || tooManyInTotal;
+  const sentReferences = referenceSelection.files;
+  const oversizedReference = referenceSelection.oversized;
+  const tooManyInTotal = referenceSelection.tooManyInTotal;
+  const tooManyReferences = referenceSelection.tooMany;
   const videoReferencesToInspect = useMemo(
     () => oversizedReference || tooManyReferences
       ? []
