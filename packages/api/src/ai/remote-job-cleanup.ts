@@ -6,7 +6,8 @@ import {
   rescheduleAiRemoteJobCleanup,
 } from "@beutl/db";
 import { AiProviderError } from "./openrouter";
-import { getVideoJob } from "./openrouter-video";
+import { videoProviderFor } from "./providers/registry";
+import type { AiVideoJobInfo } from "./providers/types";
 
 const REMOTE_JOB_LEASE_MS = 30_000;
 const REMOTE_JOB_POLL_DELAY_MS = 5 * 60 * 1_000;
@@ -35,9 +36,9 @@ export async function reconcileDeletedAccountRemoteJobs(now = new Date()) {
     });
     if (!cleanup) continue;
     try {
-      if (cleanup.provider !== "openrouter") {
-        throw new Error(`Unsupported AI cleanup provider: ${cleanup.provider}`);
-      }
+      // Throws for a provider with no implementation, which lands in the retry
+      // branch below rather than losing the row.
+      const videoProvider = videoProviderFor(cleanup.provider);
       // A cleanup intent can race with a successful local attachment. Never
       // poll or retire a provider job while a live AiJob owns its identifier.
       const localOwner = await getAiJobByProviderJobId({
@@ -53,9 +54,12 @@ export async function reconcileDeletedAccountRemoteJobs(now = new Date()) {
         result.completed++;
         continue;
       }
-      let remoteJob: Awaited<ReturnType<typeof getVideoJob>> | null;
+      let remoteJob: AiVideoJobInfo | null;
       try {
-        remoteJob = await getVideoJob(cleanup.providerJobId);
+        remoteJob = await videoProvider.status({
+          providerJobId: cleanup.providerJobId,
+          model: cleanup.model,
+        });
       } catch (error) {
         if (!isMissingRemoteJob(error)) throw error;
         remoteJob = null;

@@ -6,6 +6,7 @@ import {
   AudioLines,
   ChevronRight,
   Clapperboard,
+  Film,
   History,
   Image as ImageIcon,
   Languages,
@@ -72,6 +73,15 @@ export function AiFeatureLinks({
       description: t("dashboard:ai.videoGenerationDescription"),
       icon: Clapperboard,
       operations: ["video.generate"],
+    },
+    {
+      // The three modes that start from a video this account already has,
+      // rather than from a description alone.
+      slug: "video-edit",
+      title: t("dashboard:ai.videoEdit"),
+      description: t("dashboard:ai.videoEditDescription"),
+      icon: Film,
+      operations: ["video.edit", "video.extend", "video.motion"],
     },
     {
       // History stays reachable without a balance: it is where a result that

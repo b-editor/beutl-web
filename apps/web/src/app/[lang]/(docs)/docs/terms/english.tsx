@@ -253,7 +253,8 @@ export function EnglishTermsPage({ lang }: { lang: string }) {
       <ol className={orderedListClass}>
         <li>
           Prompts, images, audio, subtitles, and other input submitted to an AI
-          feature are sent to OpenRouter and to the business operating the
+          feature are sent to the routing operator (OpenRouter or Vercel AI
+          Gateway) and to the business operating the
           selected model. Do not submit confidential information,
           authentication information, legally sensitive personal information,
           or another person&apos;s personal information unless you have a

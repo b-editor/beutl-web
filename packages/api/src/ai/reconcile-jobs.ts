@@ -9,10 +9,26 @@ import { failAiJobAndRefundUsage } from "./credits";
 import { reconcileAiStorageCleanups } from "./storage";
 import { synchronizeAiVideoJob } from "./video-jobs";
 import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
+import {
+  DEFAULT_AI_PROVIDER_ID,
+  findAiProvider,
+  providerFor,
+} from "./providers/registry";
 
 const SCAN_DELAY_MILLISECONDS = 60 * 1000;
 const ABANDONED_SYNCHRONOUS_JOB_MILLISECONDS = 30 * 60 * 1000;
-const MAXIMUM_VIDEO_JOB_MILLISECONDS = 6 * 60 * 60 * 1000;
+
+// How long a job of this provider's can still deliver something usable.
+//
+// A provider that is not registered cannot say, and this is reached from a
+// catch block where throwing would lose the row: fall back to the default
+// provider's window, which is the flat one every job used before providers
+// were told apart. Never fall back to "forever" — that pins the user's slot.
+function maximumVideoJobAgeOf(provider: string): number {
+  return (
+    findAiProvider(provider) ?? providerFor(DEFAULT_AI_PROVIDER_ID)
+  ).maximumVideoJobMilliseconds();
+}
 
 export type AiJobReconciliationResult = {
   inspected: number;
@@ -74,12 +90,13 @@ export async function reconcileAiJobs(
       }
 
       if (!job.providerJobId) {
-        // Submission transport failures are ambiguous: OpenRouter may have
+        // Submission transport failures are ambiguous: the provider may have
         // accepted and charged for a job whose ID only arrives by callback.
         // Keep the reservation active for the provider's maximum job window.
         // Once that window has elapsed, no usable result can still be delivered,
         // so refund the user instead of pinning their one-video slot forever.
-        if (age < MAXIMUM_VIDEO_JOB_MILLISECONDS) {
+        // How long that window is belongs to the provider that took the job.
+        if (age < maximumVideoJobAgeOf(job.provider)) {
           await touchActiveAiJob({
             jobId: job.id,
             status: job.status,
@@ -123,7 +140,7 @@ export async function reconcileAiJobs(
         hasFreshAiJobFinalizationLease(current, now)
       ) {
         result.pending++;
-      } else if (age >= MAXIMUM_VIDEO_JOB_MILLISECONDS) {
+      } else if (age >= maximumVideoJobAgeOf(job.provider)) {
         await failAiJobAndRefundUsage({
           userId: job.userId,
           aiJobId: job.id,
@@ -136,7 +153,7 @@ export async function reconcileAiJobs(
       }
     } catch (error) {
       const age = now.getTime() - job.createdAt.getTime();
-      if (job.kind === "video" && age >= MAXIMUM_VIDEO_JOB_MILLISECONDS) {
+      if (job.kind === "video" && age >= maximumVideoJobAgeOf(job.provider)) {
         try {
           const current = await getAiJobById({ jobId: job.id });
           if (

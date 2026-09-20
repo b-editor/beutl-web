@@ -85,12 +85,21 @@ describe("dashboard AI form input limits", () => {
     expect(videoFormSource).toContain("const sentFirstFrame = options.firstFrame ? firstFrame : null;");
     expect(videoFormSource).toContain("const sentLastFrame =");
     expect(videoFormSource).toContain("() => [sentFirstFrame, sentLastFrame].filter");
-    expect(videoFormSource).toContain("const oversizedFrame = [sentFirstFrame, sentLastFrame].some(");
+    expect(videoFormSource).toContain("[sentFirstFrame, sentLastFrame].some(");
     expect(videoFormSource.indexOf("const sentFirstFrame")).toBeLessThan(
       videoFormSource.indexOf("const frames = useMemo"),
     );
     expect(videoFormSource).toContain("const signature = oversizedFrame ? \"\" :");
-    expect(videoFormSource).toContain("busy: isPending || readingFrames || oversizedFrame");
+    expect(videoFormSource).toContain(
+      "busy: isPending || readingFrames || readingReferences || oversizedFrame",
+    );
+    // Reference pictures are the frames' alternative, so they are held to the
+    // same rule: only what is actually sent is fingerprinted, and a model that
+    // does not condition on them sends none.
+    expect(videoFormSource).toContain(
+      "options.referenceToVideo && sentFirstFrame === null",
+    );
+    expect(videoFormSource).toContain("references: sentReferences,");
     expect(videoFormSource).toContain("composedPromptTooLong || oversizedFrame");
     expect(videoFormSource).toContain("oversizedFrame ||");
   });

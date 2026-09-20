@@ -6,6 +6,12 @@ import {
   AI_IMAGE_ASPECT_RATIOS,
   AI_IMAGE_BACKGROUNDS,
   AI_MAX_IMAGE_REFERENCES,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+  MAX_AI_PROMPT_LENGTH,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
 } from "@beutl/core";
 
 // What a video model accepts comes from the provider. Mocked so the endpoint's
@@ -118,7 +124,11 @@ describe("GET /api/v3/ai/capabilities", () => {
       "image.edit.upscale",
       "image.generate",
       "subtitle.translate",
+      // Working from a video this service already holds.
+      "video.edit",
+      "video.extend",
       "video.generate",
+      "video.motion",
     ]);
     expect(body.operations["image.generate"]).toMatchObject({
       models: [
@@ -188,6 +198,21 @@ describe("GET /api/v3/ai/capabilities", () => {
         seed: true,
         firstFrame: true,
         lastFrame: true,
+        // Reference pictures are the exception to "says nothing means offers
+        // everything": a model that cannot take them drops them with a warning,
+        // so the client is not shown the option unless the provider states it.
+        inputReferences: false,
+        // Nothing published, so the service's own ceilings are reported.
+        maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+        maxInputReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+        maxSourceVideoBytes: MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        minSourceVideoSeconds: null,
+        maxSourceVideoSeconds: null,
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        maxVideoReferences: 0,
+        maxVideoReferenceBytes: 0,
+        maxAudioReferences: 0,
+        maxAudioReferenceBytes: 0,
       },
     ]);
   });
@@ -237,6 +262,19 @@ describe("GET /api/v3/ai/capabilities", () => {
         // 受け付けるように見えてしまっていた。
         firstFrame: true,
         lastFrame: false,
+        inputReferences: false,
+        // This model publishes no allowances, so the service's own ceilings
+        // are what a client is told.
+        maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+        maxInputReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+        maxSourceVideoBytes: MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        minSourceVideoSeconds: null,
+        maxSourceVideoSeconds: null,
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        maxVideoReferences: 0,
+        maxVideoReferenceBytes: 0,
+        maxAudioReferences: 0,
+        maxAudioReferenceBytes: 0,
       },
     ]);
     // The operation-level lists stay the superset the server will take at all,

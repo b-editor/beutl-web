@@ -30,6 +30,8 @@ export type AiOperationModelsDraft = {
 
 export type AiOperationModelSnapshot = {
   modelId: string;
+  /** Absent on a page rendered before the column existed. */
+  provider?: string;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -45,6 +47,7 @@ export function matchesAiOperationModelSnapshot(
     const snapshot = expected[index];
     return snapshot !== undefined &&
       row.modelId === snapshot.modelId &&
+      (row.provider ?? "openrouter") === (snapshot.provider ?? "openrouter") &&
       row.priceUnits === snapshot.priceUnits &&
       row.displayName === snapshot.displayName &&
       row.enabled === snapshot.enabled &&
@@ -73,6 +76,7 @@ export function validateAiConfigurationChanges(
     storedModelsOf,
     builtInModelsOf,
     minimumChargeOf,
+    supportsOperation,
   }: {
     // The stored value of any setting this save does not touch.
     currentSettingValueOf: (key: string) => string;
@@ -91,6 +95,9 @@ export function validateAiConfigurationChanges(
       modelId: string,
       priceUnits: number,
     ) => number;
+    // Whether a provider can run an operation at all. Passed through to each
+    // row's validation; see validateAiOperationModelInput.
+    supportsOperation?: (provider: string, operation: string) => boolean;
   },
 ): AiConfigurationValidation {
   if (typeof input !== "object" || input === null) {
@@ -142,7 +149,10 @@ export function validateAiConfigurationChanges(
     const validatedRows: AiOperationModelInput[] = [];
     const seenModelIds = new Set<string>();
     for (const row of rows) {
-      const validated = validateAiOperationModelInput({ ...(row as object), operation });
+      const validated = validateAiOperationModelInput(
+        { ...(row as object), operation },
+        supportsOperation ? { supportsOperation } : {},
+      );
       if (!validated.ok) {
         return { ok: false, message: validated.message };
       }
@@ -163,6 +173,7 @@ export function validateAiConfigurationChanges(
       const value = snapshot as Record<string, unknown>;
       if (
         typeof value.modelId !== "string" ||
+        (value.provider !== undefined && typeof value.provider !== "string") ||
         typeof value.priceUnits !== "number" ||
         !Number.isSafeInteger(value.priceUnits) ||
         value.priceUnits < 0 ||
@@ -178,6 +189,9 @@ export function validateAiConfigurationChanges(
       }
       validatedExpected.push({
         modelId: value.modelId,
+        ...(value.provider === undefined
+          ? {}
+          : { provider: value.provider as string }),
         priceUnits: value.priceUnits,
         displayName: value.displayName as string | null,
         enabled: value.enabled,

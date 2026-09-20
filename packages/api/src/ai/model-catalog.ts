@@ -14,12 +14,19 @@
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
+import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
 
 export type AiModelCostTier = "low" | "medium" | "high";
 
 export type AiOperationModelEntry = {
   operation: string;
   modelId: string;
+  /**
+   * Who runs this model. A request names only the model, so the catalog is
+   * where a model id becomes a provider — which is why one id may be
+   * registered for an operation exactly once.
+   */
+  provider: string;
   priceUnits: number;
   displayName: string;
   sortOrder: number;
@@ -77,11 +84,11 @@ function assignCostTiers(
 
 function builtInDefaultsOf(
   operation: string,
-): { model: string; price: number } | undefined {
+): { model: string; price: number; provider?: string } | undefined {
   return (
     AI_DEFAULT_OPERATION_MODELS as Record<
       string,
-      { model: string; price: number }
+      { model: string; price: number; provider?: string }
     >
   )[operation];
 }
@@ -99,6 +106,9 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
   return {
     operation,
     modelId: defaults.model,
+    // An operation whose built-in model exists on one provider only names it;
+    // everything older falls back to the one every registered row carries.
+    provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
     priceUnits: defaults.price,
     displayName: defaults.model,
     sortOrder: 0,
@@ -123,6 +133,7 @@ export async function loadAiModelCatalog({
     entries.push({
       operation: row.operation,
       modelId: row.modelId,
+      provider: row.provider,
       priceUnits: row.priceUnits,
       displayName: row.displayName?.trim() || row.modelId,
       sortOrder: row.sortOrder,

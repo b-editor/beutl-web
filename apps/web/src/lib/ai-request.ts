@@ -1,4 +1,5 @@
 import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
+import type { AiVideoOperationPath } from "./ai-video-submit";
 
 export type AiRequestOutcome<TResult> =
   | { ok: true; result: TResult }
@@ -14,7 +15,7 @@ const MAX_AI_REQUEST_RESPONSE_BYTES = 64 * 1024;
  * may have reached the API even when its response did not reach the browser.
  */
 export async function runAiRequest<TResult>(
-  operation: "videos" | "videos/frames",
+  operation: AiVideoOperationPath,
   {
     body,
     idempotencyKey,

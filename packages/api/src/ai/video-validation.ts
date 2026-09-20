@@ -9,6 +9,17 @@ export type GeneratedVideoExtension = "mp4" | "webm";
 export type VideoMetadata = {
   mimeType: GeneratedVideoMimeType;
   extension: GeneratedVideoExtension;
+  /**
+   * How long the video runs, in seconds, as its own container declares it.
+   *
+   * Already computed while the container is checked — both parsers reject a
+   * file whose declared length is missing, zero or beyond
+   * MAX_AI_GENERATED_VIDEO_DURATION_SECONDS, and MP4 additionally refuses one
+   * whose movie, track and media headers disagree. Returning it means a
+   * caller pricing a request against a source video reads the length from the
+   * bytes rather than from whoever sent them.
+   */
+  durationSeconds: number;
 };
 
 export class InvalidGeneratedVideoError extends Error {
@@ -1108,7 +1119,7 @@ function inspectVideoSampleTable(
   }
 }
 
-function inspectMp4(bytes: Uint8Array): void {
+function inspectMp4(bytes: Uint8Array): number {
   const budget = new ParseBudget();
   const boxes = parseIsoBoxes(bytes, 0, bytes.length, budget);
   const fileType = boxes[0];
@@ -1227,6 +1238,8 @@ function inspectMp4(bytes: Uint8Array): void {
       "Generated MP4 has no structurally valid video track",
     );
   }
+  // The movie header's, which every track was just checked against.
+  return movieDurationSeconds;
 }
 
 type EbmlElement = {
@@ -1723,7 +1736,7 @@ function inspectWebmCluster(
   return { timestamp, maximumRelativeTimestamp, videoKeyframe };
 }
 
-function inspectWebm(bytes: Uint8Array): void {
+function inspectWebm(bytes: Uint8Array): number {
   const budget = new ParseBudget();
   const headerId = readEbmlId(bytes, 0, bytes.length);
   if (headerId.value !== 0x1a45dfa3) {
@@ -1856,6 +1869,8 @@ function inspectWebm(bytes: Uint8Array): void {
       "Generated WebM has no meaningful decodable video keyframe",
     );
   }
+  // The segment's, which every block was just checked against.
+  return durationSeconds;
 }
 
 function sniffVideoMimeType(bytes: Uint8Array): GeneratedVideoMimeType {
@@ -1898,9 +1913,15 @@ export function inspectGeneratedVideo(
     );
   }
   if (actual === "video/mp4") {
-    inspectMp4(bytes);
-    return { mimeType: actual, extension: "mp4" };
+    return {
+      mimeType: actual,
+      extension: "mp4",
+      durationSeconds: inspectMp4(bytes),
+    };
   }
-  inspectWebm(bytes);
-  return { mimeType: actual, extension: "webm" };
+  return {
+    mimeType: actual,
+    extension: "webm",
+    durationSeconds: inspectWebm(bytes),
+  };
 }

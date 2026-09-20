@@ -15,13 +15,25 @@ import {
 } from "./credits";
 import {
   AiProviderError,
+  AiVideoSubmissionError,
   InvalidAiProviderOutputError,
-  downloadVideoContent,
-  getOpenRouterRequestTimeoutMilliseconds,
   isDefiniteVideoSubmissionFailure,
   type VideoFrameImage,
 } from "./openrouter";
-import { createVideoJob, getVideoJob } from "./openrouter-video";
+import {
+  DEFAULT_AI_PROVIDER_ID,
+  videoProviderFor,
+} from "./providers/registry";
+import type {
+  AiVideoContent,
+  AiVideoJobInfo,
+  VideoFrameImage as ProviderVideoFrameImage,
+  VideoInputReference,
+} from "./providers/types";
+import {
+  publishSourceVideoForJob,
+  publishVideoInputMedia,
+} from "./video-input-media";
 import type { AiVideoAspectRatio, AiVideoResolution } from "@beutl/core";
 import {
   AiOutputCommitConflictError,
@@ -30,16 +42,14 @@ import {
 import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
 
 const FINALIZATION_LEASE_MILLISECONDS = 10 * 60 * 1000;
-export const PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS = 30 * 1000;
 
+// Re-exported from the OpenRouter adapter, which is where the lease arithmetic
+// moved when it stopped being the only provider's.
+export { PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS } from "./providers/openrouter";
+
+/** The default provider's poll lease. A job's own provider decides its lease. */
 export function getProviderPollLeaseMilliseconds(): number {
-  const timeout = getOpenRouterRequestTimeoutMilliseconds();
-  if (timeout > Number.MAX_SAFE_INTEGER - PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS) {
-    throw new AiProviderError(
-      "OPENROUTER_REQUEST_TIMEOUT_MS is too large for a safe provider poll lease",
-    );
-  }
-  return timeout + PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS;
+  return videoProviderFor(DEFAULT_AI_PROVIDER_ID).pollLeaseMilliseconds();
 }
 
 // The local job lost its link to a submission the provider accepted.
@@ -55,12 +65,98 @@ function attachmentVerificationError(...causes: unknown[]): AiProviderError {
   });
 }
 
+// Move the pictures a request carries out of the submission and behind a URL.
+//
+// Only for a provider that cannot read them out of the submission. The data
+// URLs the entry points build are decoded back to bytes here rather than at
+// each entry point, because this is the one place every submission passes
+// through and a copy that forgot would send a request the provider refuses
+// after the usage is reserved.
+function decodeDataUrl(url: string): { bytes: ArrayBuffer; mimeType: string } {
+  // [\s\S] rather than the s flag: the admin app compiles this file against an
+  // older target where that flag is unavailable.
+  const match = /^data:([^;,]+);base64,([\s\S]*)$/u.exec(url);
+  if (!match) {
+    throw new AiVideoSubmissionError(
+      "An AI video picture could not be read",
+      { outcome: "definite_failure" },
+    );
+  }
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return { bytes: bytes.buffer, mimeType: match[1] };
+}
+
+async function hostVideoInputMedia({
+  jobId,
+  frameImages,
+  inputReferences,
+  mediaOrigin,
+}: {
+  jobId: string;
+  frameImages: VideoFrameImage[] | undefined;
+  inputReferences: VideoInputReference[] | undefined;
+  mediaOrigin: string | undefined;
+}): Promise<{
+  frameImages?: ProviderVideoFrameImage[];
+  inputReferences?: VideoInputReference[];
+}> {
+  const hasMedia =
+    (frameImages?.length ?? 0) > 0 || (inputReferences?.length ?? 0) > 0;
+  if (!hasMedia) return {};
+  if (!mediaOrigin) {
+    // Sending the request without the pictures would produce a video of
+    // something else and charge for it.
+    throw new AiVideoSubmissionError(
+      "This deployment cannot serve AI video pictures to the provider",
+      { outcome: "definite_failure" },
+    );
+  }
+
+  const hosted: {
+    frameImages?: ProviderVideoFrameImage[];
+    inputReferences?: VideoInputReference[];
+  } = {};
+  if (frameImages && frameImages.length > 0) {
+    hosted.frameImages = await Promise.all(
+      frameImages.map(async (frame) => {
+        const { bytes, mimeType } = decodeDataUrl(frame.image_url.url);
+        const { url } = await publishVideoInputMedia({
+          jobId,
+          bytes,
+          mimeType,
+          origin: mediaOrigin,
+        });
+        return { ...frame, image_url: { url } };
+      }),
+    );
+  }
+  if (inputReferences && inputReferences.length > 0) {
+    hosted.inputReferences = await Promise.all(
+      inputReferences.map(async (reference) => {
+        const { bytes, mimeType } = decodeDataUrl(reference.image_url.url);
+        const { url } = await publishVideoInputMedia({
+          jobId,
+          bytes,
+          mimeType,
+          origin: mediaOrigin,
+        });
+        return { ...reference, image_url: { url }, media_type: mimeType };
+      }),
+    );
+  }
+  return hosted;
+}
+
 // Submit a video to the provider and bind the returned job ID to the local job.
 //
 // Every entry point that starts a video goes through here. The sequence has one
-// hard requirement — once OpenRouter returns an ID, that ID is either stored on
-// the local job or handed to the cleanup outbox, never dropped — and a copy of
-// it that omits a branch silently leaks a submission the user has paid for.
+// hard requirement — once the provider returns an ID, that ID is either stored
+// on the local job or handed to the cleanup outbox, never dropped — and a copy
+// of it that omits a branch silently leaks a submission the user has paid for.
 export async function createAndAttachVideoJob({
   jobId,
   prompt,
@@ -70,9 +166,18 @@ export async function createAndAttachVideoJob({
   generateAudio,
   seed,
   frameImages,
+  inputReferences,
+  mode,
+  sourceJobId,
+  sourceUserId,
+  sourceVideo,
+  motionOrientation,
+  motionQuality,
   callbackUrl,
   callbackNonceHash,
   model,
+  provider = DEFAULT_AI_PROVIDER_ID,
+  mediaOrigin,
   signal,
 }: {
   jobId: string;
@@ -83,18 +188,99 @@ export async function createAndAttachVideoJob({
   generateAudio?: boolean;
   seed?: number;
   frameImages?: VideoFrameImage[];
-  // Absent when the deployment has no HTTPS origin for OpenRouter to call back
-  // on, which is the case for a local server. The job is then finished by the
-  // poll path instead of the callback.
+  /** Reference pictures for reference-to-video. Never sent with frames. */
+  inputReferences?: VideoInputReference[];
+  /**
+   * Absent for an ordinary generation. The rest work from a video this user
+   * already has, which is served to the provider rather than sent inline.
+   */
+  mode?: "edit" | "extend" | "motion";
+  /** A finished job of this user's, whose result is the source. */
+  sourceJobId?: string;
+  sourceUserId?: string;
+  /**
+   * A video the caller sent with the request, as an alternative to naming a
+   * job. Already checked by the caller — the container is validated before
+   * anything is reserved, which is also where its length comes from — so what
+   * arrives here is only served.
+   */
+  sourceVideo?: { bytes: ArrayBuffer; mimeType: string };
+  motionOrientation?: "image" | "video";
+  motionQuality?: "standard" | "pro";
+  // Absent when the deployment has no HTTPS origin for the provider to call
+  // back on, which is the case for a local server. The job is then finished by
+  // the poll path instead of the callback.
   callbackUrl?: string;
   callbackNonceHash: string;
   model: string;
+  /** Defaults to the provider every catalog row carried before the column existed. */
+  provider?: string;
+  /**
+   * The public HTTPS origin pictures can be served from, for a provider that
+   * cannot read them out of the submission. Absent on a deployment that has
+   * none — the same condition that withholds a callback URL — and a request
+   * carrying pictures for such a provider is then refused rather than sent
+   * without them.
+   */
+  mediaOrigin?: string;
   signal?: AbortSignal;
 }) {
+  const videoProvider = videoProviderFor(provider);
+  let sourceVideoUrl: string | undefined;
+  if (mode !== undefined) {
+    if (!sourceVideo && (!sourceJobId || !sourceUserId)) {
+      throw new AiVideoSubmissionError(
+        `A ${mode} request needs a source video`,
+        { outcome: "definite_failure" },
+      );
+    }
+    if (!mediaOrigin) {
+      throw new AiVideoSubmissionError(
+        "This deployment cannot serve AI video pictures to the provider",
+        { outcome: "definite_failure" },
+      );
+    }
+    if (sourceVideo) {
+      // Sent with the request. It is served from the same short-lived prefix a
+      // job's own result would be, so the provider reads one kind of URL and
+      // neither copy outlives the job.
+      const { url } = await publishVideoInputMedia({
+        jobId,
+        bytes: sourceVideo.bytes,
+        mimeType: sourceVideo.mimeType,
+        origin: mediaOrigin,
+      });
+      sourceVideoUrl = url;
+    } else {
+      const published = await publishSourceVideoForJob({
+        jobId,
+        userId: sourceUserId!,
+        sourceJobId: sourceJobId!,
+        origin: mediaOrigin,
+      });
+      if (!published) {
+        // The named job is not this user's, produced no video, or is gone. The
+        // provider has not been asked for anything, so the reservation refunds.
+        throw new AiVideoSubmissionError(
+          "The source video is unavailable",
+          { outcome: "definite_failure" },
+        );
+      }
+      sourceVideoUrl = published.url;
+    }
+  }
+  const media = videoProvider.requiresHostedMedia
+    ? await hostVideoInputMedia({
+        jobId,
+        frameImages,
+        inputReferences,
+        mediaOrigin,
+      })
+    : { frameImages, inputReferences };
   // A transport timeout can hide a provider-side acceptance before any job ID
-  // reaches us. Once OpenRouter returns an ID, however, it is always persisted
+  // reaches us. Once the provider returns an ID, however, it is always persisted
   // either on the local job or in the User-independent cleanup outbox.
-  const providerJob = await createVideoJob({
+  const providerJob = await videoProvider.start({
     prompt,
     durationSeconds,
     resolution,
@@ -102,8 +288,18 @@ export async function createAndAttachVideoJob({
     ...(generateAudio === undefined ? {} : { generateAudio }),
     ...(seed === undefined ? {} : { seed }),
     ...(callbackUrl === undefined ? {} : { callbackUrl }),
-    ...(frameImages ? { frameImages } : {}),
+    ...(media.frameImages ? { frameImages: media.frameImages } : {}),
+    ...(media.inputReferences
+      ? { inputReferences: media.inputReferences }
+      : {}),
+    ...(mode === undefined ? {} : { mode }),
+    ...(sourceVideoUrl === undefined ? {} : { sourceVideoUrl }),
+    ...(motionOrientation === undefined ? {} : { motionOrientation }),
+    ...(motionQuality === undefined ? {} : { motionQuality }),
     model,
+    // The local job id: a provider that deduplicates on it charges once even if
+    // this job is submitted again.
+    idempotencyKey: jobId,
     signal,
   });
   let attachment: Awaited<ReturnType<typeof attachProviderJobIdToQueuedAiJob>>;
@@ -111,7 +307,7 @@ export async function createAndAttachVideoJob({
     attachment = await attachProviderJobIdToQueuedAiJob({
       jobId,
       kind: "video",
-      provider: "openrouter",
+      provider,
       providerJobId: providerJob.id,
       expectedCallbackNonceHash: callbackNonceHash,
     });
@@ -122,7 +318,7 @@ export async function createAndAttachVideoJob({
       [localJob, providerOwner] = await Promise.all([
         getAiJobById({ jobId }),
         getAiJobByProviderJobId({
-          provider: "openrouter",
+          provider,
           providerJobId: providerJob.id,
         }),
       ]);
@@ -137,13 +333,14 @@ export async function createAndAttachVideoJob({
     }
     if (providerOwner && providerOwner.id !== jobId) {
       throw new ProviderVideoJobOwnershipConflictError(
-        "OpenRouter returned a provider job ID already owned by another job",
+        "The provider returned a job ID already owned by another job",
         { cause, execution: "unknown" },
       );
     }
     await enqueueAiRemoteJobCleanup({
-      provider: "openrouter",
+      provider,
       providerJobId: providerJob.id,
+      model,
     });
     throw new DetachedRemoteVideoJobError(
       "AI video job attachment could not be confirmed",
@@ -154,7 +351,7 @@ export async function createAndAttachVideoJob({
     let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
     try {
       providerOwner = await getAiJobByProviderJobId({
-        provider: "openrouter",
+        provider,
         providerJobId: providerJob.id,
       });
     } catch (cause) {
@@ -162,14 +359,15 @@ export async function createAndAttachVideoJob({
     }
     if (providerOwner && providerOwner.id !== jobId) {
       throw new ProviderVideoJobOwnershipConflictError(
-        "OpenRouter returned a provider job ID already owned by another job",
+        "The provider returned a job ID already owned by another job",
         { execution: "unknown" },
       );
     }
     if (!providerOwner) {
       await enqueueAiRemoteJobCleanup({
-        provider: "openrouter",
+        provider,
         providerJobId: providerJob.id,
+        model,
       });
     }
     throw new DetachedRemoteVideoJobError(
@@ -216,6 +414,13 @@ export function classifyVideoSubmissionFailure(
 type AiVideoJobRecord = {
   id: string;
   userId: string;
+  /**
+   * Who accepted the job, and on which model. Optional because a caller may
+   * hand over a record assembled before these columns were read; both fall
+   * back to what every row written before them carries.
+   */
+  provider?: string;
+  model?: string | null;
   providerJobId: string | null;
   status: string;
   resultFileId: string | null;
@@ -247,8 +452,9 @@ export async function synchronizeAiVideoJob({
     throw new AiProviderError("AI video job has no provider job ID");
   }
 
+  const provider = videoProviderFor(job.provider ?? DEFAULT_AI_PROVIDER_ID);
   const pollLeaseExpiresAt = new Date(
-    pollNow.getTime() + getProviderPollLeaseMilliseconds(),
+    pollNow.getTime() + provider.pollLeaseMilliseconds(),
   );
   const pollClaim = await claimAiJobForProviderPoll({
     jobId: job.id,
@@ -262,9 +468,15 @@ export async function synchronizeAiVideoJob({
     throw new AiProviderError("AI video job has no provider job ID");
   }
 
-  let providerJob: Awaited<ReturnType<typeof getVideoJob>>;
+  // The Gateway addresses a job by model as well as by id; OpenRouter ignores
+  // the model. Both read it from the same place.
+  const providerJobRef = {
+    providerJobId: pollClaim.job.providerJobId,
+    model: job.model ?? null,
+  };
+  let providerJob: AiVideoJobInfo;
   try {
-    providerJob = await getVideoJob(pollClaim.job.providerJobId);
+    providerJob = await provider.status(providerJobRef);
   } catch (error) {
     await releaseAiJobProviderPoll({
       jobId: job.id,
@@ -307,9 +519,9 @@ export async function synchronizeAiVideoJob({
     return claim.job;
   }
 
-  let content: Awaited<ReturnType<typeof downloadVideoContent>>;
+  let content: AiVideoContent;
   try {
-    content = await downloadVideoContent(pollClaim.job.providerJobId);
+    content = await provider.download(providerJob, providerJobRef);
   } catch (error) {
     if (error instanceof InvalidAiProviderOutputError) {
       await failFinalizingAiJobAndRefundUsage({

@@ -1,5 +1,5 @@
-// Fetching OpenRouter's published price list for the models currently
-// configured, and turning it into per-operation cost estimates.
+// Fetching the published price list for the models currently configured, and
+// turning it into per-operation cost estimates.
 //
 // ADMIN CONSOLE ONLY, and never on a billing path: an operation is charged the
 // unit price recorded when it starts, not anything derived here.
@@ -9,7 +9,19 @@
 // costs. The SDK client used here is built without one, and with a short
 // timeout: a lookup that only renders a figure on a page must not hang the
 // console when the provider is slow.
+//
+// A model is looked up at the provider that serves it. Asking the wrong one is
+// not a missing figure but a wrong statement: the console reports a model the
+// other provider has never heard of as "not found", which reads as a broken
+// registration rather than as a rate card this module never fetched.
 import { createPublicOpenRouterClient } from "./openrouter";
+import { AiProviderError } from "./providers/errors";
+import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
+import {
+  gatewayDearestVideoRate,
+  loadGatewayRateCard,
+  type GatewayRateCard,
+} from "./providers/vercel-gateway/pricing";
 import type {
   ImageModelEndpointsResponse,
   ModelResponse,
@@ -25,6 +37,7 @@ import {
   estimateTranslationCost,
   estimateVideoCost,
   type AiCostEstimate,
+  type AiCostUnknownReason,
   type ImagePricingEntry,
 } from "./cost-estimate";
 import {
@@ -160,9 +173,15 @@ async function performFetch(
     // other error status is the provider failing, whatever its body looked
     // like. Only a reply that arrived intact and still could not be read is
     // the provider answering something other than its published shape.
+    const status =
+      error instanceof OpenRouterError
+        ? error.statusCode
+        : error instanceof AiProviderError
+          ? error.httpStatus
+          : null;
     const failure =
-      error instanceof OpenRouterError && error.statusCode >= 400
-        ? error.statusCode === 404
+      status !== null && status !== undefined && status >= 400
+        ? status === 404
           ? "model_not_found"
           : "provider_unavailable"
         : error instanceof ResponseValidationError
@@ -413,6 +432,12 @@ async function estimateVideoOperation(
   });
 }
 
+/** A model to price, and who serves it. */
+export type AiPricingModelRef = {
+  modelId: string;
+  provider: string;
+};
+
 export type AiCostEstimateEntry = {
   operation: string;
   model: string;
@@ -432,13 +457,16 @@ export async function loadAiCostEstimates({
   now = new Date(),
   force = false,
 }: {
-  modelsOf: (operation: string) => string[];
+  // Who serves a model comes with it. There is no default: a model id alone
+  // does not say which provider has it, and guessing produced a "model not
+  // found" for models that exist.
+  modelsOf: (operation: string) => AiPricingModelRef[];
   now?: Date;
   force?: boolean;
 }): Promise<AiCostEstimates> {
   const options = { force, now: now.getTime() };
   const pairs = Object.keys(AI_PRICING_CATALOG).flatMap((operation) => {
-    let models: string[] = [];
+    let models: AiPricingModelRef[] = [];
     try {
       models = modelsOf(operation);
     } catch (error) {
@@ -447,14 +475,21 @@ export async function loadAiCostEstimates({
         message: error instanceof Error ? error.message : String(error),
       });
     }
-    return models.map((model) => ({ operation, model }));
+    return models.map((ref) => ({
+      operation,
+      model: ref.modelId,
+      provider: ref.provider,
+    }));
   });
   const generationModels = [
-    ...new Set(
+    ...new Map(
       pairs
         .filter(({ operation }) => operation === "image.generate")
-        .map(({ model }) => model),
-    ),
+        .map((pair) => [
+          `${pair.provider} ${pair.model}`,
+          { modelId: pair.model, provider: pair.provider },
+        ]),
+    ).values(),
   ];
   if (force && generationModels.length > 0) {
     clearAiImageModelCapabilitiesCache();
@@ -468,11 +503,12 @@ export async function loadAiCostEstimates({
     : new Map<string, AiImageModelCapabilities>();
 
   const entries = await Promise.all(
-    pairs.map(async ({ operation, model }): Promise<AiCostEstimateEntry> => {
+    pairs.map(async ({ operation, model, provider }): Promise<AiCostEstimateEntry> => {
       try {
         const estimate = await estimateOperation(
           operation,
           model,
+          provider,
           imageCapabilities,
           options,
         );
@@ -500,13 +536,91 @@ export function aiCostEstimateKey(operation: string, model: string): string {
   return `${operation}\u0000${model}`;
 }
 
+// The Gateway's rate card for one model, cached like OpenRouter's: every
+// operation that shares the model shares the fetch.
+async function loadGatewayPricing(
+  model: string,
+  options: { force: boolean; now: number },
+): Promise<
+  | { ok: true; card: GatewayRateCard }
+  | { ok: false; reason: AiCostUnknownReason }
+> {
+  const outcome = await fetchPricing(
+    `gateway-rate-card:${model}`,
+    async () => await loadGatewayRateCard(model),
+    options,
+  );
+  return outcome.ok
+    ? { ok: true, card: outcome.value as GatewayRateCard }
+    : { ok: false, reason: outcome.failure };
+}
+
+// What a model served by the Gateway costs.
+//
+// Kept apart from the OpenRouter path rather than folded into it because the
+// two publish genuinely different things, not the same thing in two spellings:
+// OpenRouter names video SKUs and the Gateway lists per-second rates, and the
+// Gateway publishes no image rate at all — every image model in its catalog
+// reports zero, which is a price this module must not repeat as if it were
+// one.
+async function estimateGatewayOperation(
+  operation: string,
+  model: string,
+  options: { force: boolean; now: number },
+): Promise<AiCostEstimate> {
+  const pricing = await loadGatewayPricing(model, options);
+  if (!pricing.ok) {
+    return { status: "unknown", reason: pricing.reason };
+  }
+
+  if (operation.startsWith("video.")) {
+    const rate = gatewayDearestVideoRate(pricing.card);
+    if (!rate) {
+      return { status: "unknown", reason: "unsupported_pricing_shape" };
+    }
+    return {
+      status: "estimated",
+      usdMin: rate.usdPerSecond,
+      usdMax: rate.usdPerSecond,
+      // Only when the provider tagged the rate. An untagged rate is the one
+      // any request pays, and naming the model as the "SKU" would read as a
+      // shape that was chosen rather than one that was never offered.
+      assumptions: rate.label ? [{ kind: "videoSku", value: rate.label }] : [],
+    };
+  }
+  if (operation === "audio.transcribe") {
+    return estimateTranscriptionCost({
+      model,
+      promptPriceUsd: pricing.card.promptUsd ?? 0,
+    });
+  }
+  if (operation === "subtitle.translate") {
+    return estimateTranslationCost({
+      promptPriceUsd: pricing.card.promptUsd ?? 0,
+      completionPriceUsd: pricing.card.completionUsd ?? 0,
+    });
+  }
+  // Image models publish `image` and `image_output` as "0" across the whole
+  // catalog, so there is nothing to derive a per-request cost from. Reported
+  // as a price that could not be read rather than as a free operation.
+  return { status: "unknown", reason: "zero_price_reported" };
+}
+
 async function estimateOperation(
   operation: string,
   model: string,
+  provider: string,
   imageCapabilities: ReadonlyMap<string, AiImageModelCapabilities>,
   options: { force: boolean; now: number },
 ): Promise<AiCostEstimate> {
-  if (operation === "video.generate") {
+  if (provider !== DEFAULT_AI_PROVIDER_ID) {
+    return await estimateGatewayOperation(operation, model, options);
+  }
+  // Every video operation is metered per second of output and priced off the
+  // same rate card, so they resolve together. Matching only video.generate
+  // here would send an edit, an extension or a motion job down the text path,
+  // where its model is not a model at all and the lookup answers 404.
+  if (operation.startsWith("video.")) {
     return await estimateVideoOperation(model, options);
   }
   if (operation.startsWith("image.")) {

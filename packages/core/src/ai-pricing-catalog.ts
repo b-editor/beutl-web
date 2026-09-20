@@ -28,6 +28,21 @@ export const AI_PRICING_CATALOG = {
     unit: "second",
     minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
   },
+  // Charged per second of what comes out, like a generation. For an edit that
+  // is the source's own length, which the caller does not choose; for an
+  // extension and for motion control it is the length asked for.
+  "video.edit": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
+  "video.extend": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
+  "video.motion": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
 } as const;
 
 export type AiBillingUnit =

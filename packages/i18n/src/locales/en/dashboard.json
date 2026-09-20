@@ -257,6 +257,59 @@
     "referenceImageTooLarge": "Each reference image must be {{maximum}} or smaller. Use a smaller file.",
     "operationUnavailableTitle": "Not available right now",
     "operationUnavailableDescription": "No model is offered for this operation at the moment. Neither a plan nor credits change that; please try again later.",
-    "referenceImagesTooLarge": "Those pictures come to more than {{maximum}} together. Remove one or use smaller files."
+    "referenceImagesTooLarge": "Those pictures come to more than {{maximum}} together. Remove one or use smaller files.",
+    "videoReferenceExcludesFrames": "Reference images, videos, and audio are not used when a first frame is selected. Clear the frame selection to use reference media.",
+    "sourceVideo": "Source video",
+    "sourceVideoLoading": "Loading generated videos…",
+    "sourceVideoNone": "No generated videos are available. Generate a video first, or upload a file.",
+    "sourceVideoPlaceholder": "Select a source video",
+    "sourceVideoEditLength": "The edited video will have the same duration as the source: {{seconds}}s.",
+    "characterImage": "Character image",
+    "characterImageHint": "Select one image of the character to apply the motion to.",
+    "motionOrientation": "Character orientation",
+    "motionOrientations": {
+      "video": "Match the source video",
+      "image": "Match the character image"
+    },
+    "motionQuality": "Quality",
+    "motionQualities": {
+      "standard": "Standard",
+      "pro": "High quality"
+    },
+    "extendDuration": "Extension duration",
+    "videoEditModeLabel": "Edit mode",
+    "videoEditModes": {
+      "edit": "Edit",
+      "extend": "Extend",
+      "motion": "Motion control"
+    },
+    "videoEditModeHints": {
+      "edit": "Edit the source video based on your prompt. The duration stays the same and cannot be changed.",
+      "extend": "Generate a continuation of the source video. Set the duration of the added segment.",
+      "motion": "Apply motion from the source video to the character image you provide."
+    },
+    "videoEditPrompts": {
+      "edit": "Describe how you want to change the video",
+      "extend": "Describe the next scene and its motion",
+      "motion": "Describe the motion and effects you want for the character"
+    },
+    "videoEdit": "Video editing",
+    "videoEditDescription": "Edit or extend an existing video, or apply its motion to a character image.",
+    "sourceVideoUpload": "Upload a file",
+    "sourceVideoGenerated": "Select a generated video",
+    "sourceVideoUploadHint": "Use an MP4 or WebM file up to {{maximum}}. The duration is detected automatically.",
+    "sourceVideoTooLarge": "The file exceeds the size limit. Select a file that is {{maximum}} or smaller.",
+    "sourceVideoEditLengthUnknown": "The edited video will have the same duration as the source. The duration is detected automatically from the uploaded file.",
+    "videoReferences": {
+      "image": "Reference images",
+      "video": "Reference videos",
+      "audio": "Reference audio"
+    },
+    "videoReferenceHints": {
+      "image": "Images to guide the subject and appearance of the video. Up to {{maximum}} images, {{size}} or smaller per image.",
+      "video": "Videos to guide motion and style. Up to {{maximum}} videos, {{size}} or smaller per video.",
+      "audio": "Audio to guide video generation. Up to {{maximum}} files, {{size}} or smaller per file."
+    },
+    "resultPlaceholderVideoEdit": "Video generation takes some time. You can view the completed video in the job history."
   }
 }

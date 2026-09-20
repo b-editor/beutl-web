@@ -852,6 +852,10 @@ model BillingRefundAttempt {
 model AiRemoteJobCleanup {
   provider       String
   providerJobId  String
+  // 後始末のためにリモートのジョブを照会するとき、プロバイダによってはモデルが要る
+  // （Vercel AI Gateway はジョブ ID だけでは状態を答えない）。この列が無かった
+  // 時代の行は null。
+  model          String?
   notBefore      DateTime
   leaseExpiresAt DateTime?
   attempts       Int       @default(0)
@@ -1031,6 +1035,10 @@ model AiSetting {
 model AiOperationModel {
   operation     String
   modelId       String
+  // どのプロバイダがこのモデルを提供するか。主キーには入れない——クライアントが
+  // 送るのはモデル ID だけで、プロバイダを名乗らない。1 操作につき同じモデル ID は
+  // 1 行、という制約を残すことで、ID からプロバイダが一意に決まる。
+  provider      String   @default("openrouter")
   priceUnits    Int
   displayName   String?
   // 有効な行のうち sortOrder が最小のものが既定。「既定はちょうど 1 つ」を

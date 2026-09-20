@@ -4,6 +4,8 @@ import type { PrismaTransaction } from "./transaction";
 export type AiOperationModelRecord = {
   operation: string;
   modelId: string;
+  /** Which provider runs this model. Rows predating the column say "openrouter". */
+  provider: string;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -25,6 +27,7 @@ export async function listAiOperationModels({
     select: {
       operation: true,
       modelId: true,
+      provider: true,
       priceUnits: true,
       displayName: true,
       sortOrder: true,
@@ -43,6 +46,7 @@ export async function listAiOperationModels({
 export async function upsertAiOperationModel({
   operation,
   modelId,
+  provider = "openrouter",
   priceUnits,
   displayName,
   sortOrder,
@@ -52,6 +56,8 @@ export async function upsertAiOperationModel({
 }: {
   operation: string;
   modelId: string;
+  /** Defaults to the one provider that existed before the column did. */
+  provider?: string;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -65,13 +71,21 @@ export async function upsertAiOperationModel({
     create: {
       operation,
       modelId,
+      provider,
       priceUnits,
       displayName,
       sortOrder,
       enabled,
       updatedBy,
     },
-    update: { priceUnits, displayName, sortOrder, enabled, updatedBy },
+    update: {
+      provider,
+      priceUnits,
+      displayName,
+      sortOrder,
+      enabled,
+      updatedBy,
+    },
   });
 }
 

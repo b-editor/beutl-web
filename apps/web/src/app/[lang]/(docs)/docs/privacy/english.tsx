@@ -226,14 +226,15 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>4. Information handled by AI features</h2>
       <ol className={orderedListClass}>
         <li>
-          AI input is sent to OpenRouter, Inc. for processing and is then sent
-          to the business that operates the selected model. The model publisher
-          and the provider that actually runs the model may differ.
+          AI input is sent for processing to OpenRouter, Inc. or to Vercel Inc.
+          (AI Gateway), whichever routes the model you selected, and is then
+          sent to the business that operates that model. The model publisher and
+          the provider that actually runs the model may differ.
         </li>
         <li>
-          Retention, training use, and safety review of input and output by
-          OpenRouter and each AI provider vary according to the selected model,
-          processing route, and provider policies. The Service does not
+          Retention, training use, and safety review of input and output by the
+          routing operator and each AI provider vary according to the selected
+          model, processing route, and provider policies. The Service does not
           guarantee zero data retention or exclusion from training for every AI
           operation.
         </li>
@@ -252,7 +253,8 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         </li>
       </ol>
       <p className="leading-7 not-first:mt-6">
-        For current information about OpenRouter&apos;s practices, review the
+        For current information about the routing operators&apos; practices,
+        review the
         {" "}
         <a
           className={linkClass}
@@ -272,6 +274,15 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
           rel="noreferrer"
         >
           Provider Logging
+        </a>
+        {", and the "}
+        <a
+          className={linkClass}
+          href="https://vercel.com/legal/privacy-policy"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Vercel Privacy Policy
         </a>
         .
       </p>
@@ -458,6 +469,27 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
               <td className="border px-3 py-2">
                 <a
                   className={linkClass}
+                  href="https://vercel.com/legal/privacy-policy"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Vercel Inc.
+                </a>
+                {" (AI Gateway) and the provider of the selected AI model"}
+              </td>
+              <td className="border px-3 py-2">
+                AI processing, model routing, returning results, and usage
+                management
+              </td>
+              <td className="border px-3 py-2">
+                AI input and output, model, processing identifiers, and
+                technical usage information
+              </td>
+            </tr>
+            <tr>
+              <td className="border px-3 py-2">
+                <a
+                  className={linkClass}
                   href="https://ipinfo.io/privacy-policy"
                   target="_blank"
                   rel="noreferrer"
@@ -519,10 +551,10 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
         States, and their servers or subprocessors may be located in Japan,
         Singapore, the United States, Europe, or other countries or regions.
         The country in which an AI operation is processed varies according to
-        the selected model, OpenRouter routing, availability, and the model
-        provider&apos;s subprocessors, so it cannot be identified as a single
-        country in advance. Potential providers and their locations are listed
-        in the
+        the selected model, the routing operator&apos;s routing, availability,
+        and the model provider&apos;s subprocessors, so it cannot be identified
+        as a single country in advance. Potential providers and their locations
+        are listed in the
         {" "}
         <a
           className={linkClass}
@@ -531,6 +563,15 @@ export function EnglishPrivacyPage({ lang }: { lang: string }) {
           rel="noreferrer"
         >
           OpenRouter provider directory
+        </a>
+        {" and the "}
+        <a
+          className={linkClass}
+          href="https://vercel.com/ai-gateway/models"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Vercel AI Gateway model directory
         </a>
         .
       </p>

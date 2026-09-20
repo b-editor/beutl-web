@@ -11,17 +11,20 @@ import { Label } from "@beutl/ui/ui/label";
 import { Textarea } from "@beutl/ui/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { Slider } from "@beutl/ui/ui/slider";
-import { Clapperboard, Clock, Coins, History } from "lucide-react";
+import { Clapperboard, Clock, Coins, History, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AI_MAX_SEED,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
   AI_MIN_SEED,
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
+  formatBytes,
 } from "@beutl/core";
 import { composePrompt } from "@/lib/ai-prompt";
 import { runAiRequest } from "@/lib/ai-request";
@@ -147,6 +150,101 @@ function Note({ icon: Icon, children }: { icon: typeof Clock; children: React.Re
 
 // What each registered model will accept, read from the provider. A model
 // missing from this map states no restriction and keeps every option.
+/**
+ * One kind of reference, in a field of its own.
+ *
+ * Separate fields rather than one that takes everything: a model allows each
+ * kind its own number, so "3 / 9" means nothing until it says which three, and
+ * a picker that takes anything invites a file the chosen model has no
+ * allowance for at all.
+ */
+function ReferencePicker({
+  id,
+  label,
+  hint,
+  accept,
+  multiple,
+  files,
+  removeLabel,
+  problem,
+  onPick,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  accept: string;
+  multiple: boolean;
+  files: File[];
+  removeLabel: (name: string) => string;
+  // Why this selection cannot be sent, or null. Said rather than silently
+  // trimmed: what is on screen has to be what is bought.
+  problem: string | null;
+  onPick: (files: File[]) => void;
+}) {
+  // 欄はブラウザのもので、こちらからは空にできない。選び直しの結果を書き戻す
+  // のが、持っているものと見えているものを揃える唯一の方法。
+  const input = useRef<HTMLInputElement>(null);
+  function apply(next: File[]) {
+    onPick(next);
+    const selection = new DataTransfer();
+    for (const file of next) selection.items.add(file);
+    if (input.current) input.current.files = selection.files;
+  }
+
+  return (
+    <div className="flex flex-col space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        ref={input}
+        id={id}
+        type="file"
+        multiple={multiple}
+        accept={accept}
+        onChange={(event) => {
+          const picked = [...(event.target.files ?? [])];
+          const added = picked.filter(
+            (file) =>
+              !files.some(
+                (existing) =>
+                  existing.name === file.name && existing.size === file.size,
+              ),
+          );
+          apply([...files, ...added]);
+        }}
+      />
+      {files.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {files.map((file) => (
+            <li
+              key={`${file.name}:${file.size}`}
+              className="flex items-center gap-2 rounded-md border px-2 py-1"
+            >
+              <span className="truncate text-xs">{file.name}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-6 w-6 p-0"
+                aria-label={removeLabel(file.name)}
+                onClick={() => apply(files.filter((entry) => entry !== file))}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p
+        className={
+          problem ? "text-xs text-destructive" : "text-xs text-muted-foreground"
+        }
+      >
+        {problem ?? hint}
+      </p>
+    </div>
+  );
+}
+
 export type AiVideoModelOptions = {
   resolutions: string[];
   durations: number[];
@@ -155,6 +253,24 @@ export type AiVideoModelOptions = {
   seed: boolean;
   firstFrame: boolean;
   lastFrame: boolean;
+  // Pictures the video keeps faithful to rather than passes through. Unlike
+  // the rest, an unstated value means "no": a model handed references it
+  // cannot use ignores them and warns, and a control that quietly does nothing
+  // is worse than one that is not there.
+  referenceToVideo: boolean;
+  // このモデルが実際に受け取る量。一律の数字で切ると、9 枚取れるモデルに
+  // 3 枚しか渡せない。
+  maxInputReferences: number;
+  maxReferenceBytes: number;
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  maxPromptCharacters: number;
+  // 参照として運べる動画と音声。画像とは別枠で、0 ならその種類は出さない。
+  maxVideoReferences: number;
+  maxVideoReferenceBytes: number;
+  maxAudioReferences: number;
+  maxAudioReferenceBytes: number;
 };
 
 type VideoSubmitState = {
@@ -195,7 +311,40 @@ function optionsOf(capabilities: Record<string, AiVideoModelOptions> | undefined
     seed: supported?.seed ?? true,
     firstFrame: supported?.firstFrame ?? true,
     lastFrame: supported?.lastFrame ?? true,
+    referenceToVideo: supported?.referenceToVideo ?? false,
+    maxInputReferences: supported?.maxInputReferences
+      ?? AI_MAX_VIDEO_INPUT_REFERENCES,
+    maxReferenceBytes: supported?.maxReferenceBytes
+      ?? MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    maxSourceVideoBytes: supported?.maxSourceVideoBytes
+      ?? MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+    minSourceVideoSeconds: supported?.minSourceVideoSeconds ?? null,
+    maxSourceVideoSeconds: supported?.maxSourceVideoSeconds ?? null,
+    maxPromptCharacters: supported?.maxPromptCharacters ?? MAX_AI_PROMPT_LENGTH,
+    maxVideoReferences: supported?.maxVideoReferences ?? 0,
+    maxVideoReferenceBytes: supported?.maxVideoReferenceBytes ?? 0,
+    maxAudioReferences: supported?.maxAudioReferences ?? 0,
+    maxAudioReferenceBytes: supported?.maxAudioReferenceBytes ?? 0,
   };
+}
+
+// 欄ごとに受け取る型。サーバーが読める種類だけを並べる——読めないものを
+// 選ばせると、アップロードが終わってから断られる。
+const REFERENCE_ACCEPT = {
+  image: "image/png,image/jpeg,image/webp",
+  video: "video/mp4,video/webm",
+  audio: "audio/wav,audio/mpeg",
+} as const;
+
+/** 参照 1 つの種類。サーバーと同じ見分け方をする。 */
+function referenceKindOf(mediaType: string): "image" | "video" | "audio" | null {
+  const type = mediaType.split(";", 1)[0]!.trim().toLowerCase();
+  if (type.startsWith("image/")) return "image";
+  if (type === "video/mp4" || type === "video/webm") return "video";
+  if (["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"].includes(type)) {
+    return "audio";
+  }
+  return null;
 }
 
 // The length nearest the one asked for that the model actually takes. Lengths
@@ -250,6 +399,11 @@ export function VideoForm({
   const [videoSeed, setVideoSeed] = useState("");
   const [firstFrame, setFirstFrame] = useState<File | null>(null);
   const [lastFrame, setLastFrame] = useState<File | null>(null);
+  // 種類ごとに別々に持つ。モデルは画像・動画・音声に別々の数を公開するので、
+  // 1 本の配列に混ぜると、どれがどの枠を使っているのか画面から分からない。
+  const [imageReferences, setImageReferences] = useState<File[]>([]);
+  const [videoReferences, setVideoReferences] = useState<File[]>([]);
+  const [audioReferences, setAudioReferences] = useState<File[]>([]);
 
   // A Server Action keeps running after its browser has reloaded because it has
   // no Request signal. This screen submits through the internal route instead;
@@ -287,6 +441,61 @@ export function VideoForm({
   // 隠れた選択中のファイルを依頼の一部として扱わない。
   const sentFirstFrame = options.firstFrame ? firstFrame : null;
   const sentLastFrame = sentFirstFrame && options.lastFrame ? lastFrame : null;
+  // 参照はフレームの代わりであって、足し算ではない。両方を受け取ったプロバイダ
+  // は参照を黙って捨てて警告するだけなので、API は組み合わせそのものを断る。
+  // ここでも同じ扱いにする——送らないものを数えれば、画面に見えている条件と、
+  // その名前で買うものが食い違う。
+  // 種類ごとの枠。モデルは画像・動画・音声に別々の数を公開するので、1 つの
+  // 数で切ると必ずどれかを取りこぼす——H3 は画像 9 枚に動画 3 本。
+  const referenceKinds = useMemo(
+    () =>
+      [
+        {
+          kind: "image" as const,
+          files: imageReferences,
+          maxCount: options.maxInputReferences,
+          maxBytes: options.maxReferenceBytes,
+        },
+        {
+          kind: "video" as const,
+          files: videoReferences,
+          maxCount: options.maxVideoReferences,
+          maxBytes: options.maxVideoReferenceBytes,
+        },
+        {
+          kind: "audio" as const,
+          files: audioReferences,
+          maxCount: options.maxAudioReferences,
+          maxBytes: options.maxAudioReferenceBytes,
+        },
+      ].map((entry) => ({
+        ...entry,
+        tooMany: entry.files.length > entry.maxCount,
+        oversized: entry.files.some((file) => file.size > entry.maxBytes),
+      })),
+    [
+      imageReferences,
+      videoReferences,
+      audioReferences,
+      options.maxInputReferences,
+      options.maxReferenceBytes,
+      options.maxVideoReferences,
+      options.maxVideoReferenceBytes,
+      options.maxAudioReferences,
+      options.maxAudioReferenceBytes,
+    ],
+  );
+  // 送るのは、画像・動画・音声の順。並びは依頼の一部で、文章が「1 枚目」と
+  // 言う相手が変わる。
+  const sentReferences = useMemo(
+    () =>
+      options.referenceToVideo && sentFirstFrame === null
+        ? referenceKinds.flatMap((entry) => entry.files.slice(0, entry.maxCount))
+        : [],
+    [options.referenceToVideo, referenceKinds, sentFirstFrame],
+  );
+  const oversizedReference = referenceKinds.some((entry) => entry.oversized);
+  const tooManyReferences = referenceKinds.some((entry) => entry.tooMany);
   const frames = useMemo(
     () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
     [sentFirstFrame, sentLastFrame],
@@ -295,9 +504,16 @@ export function VideoForm({
     frames,
     MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   );
-  const oversizedFrame = [sentFirstFrame, sentLastFrame].some(
-    (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
-  );
+  const { contents: referenceContents, reading: readingReferences } =
+    useFileFingerprints(
+      // 送れないと分かっているものは読まない——名前には要らない。
+      oversizedReference || tooManyReferences ? [] : sentReferences,
+      MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    );
+  const oversizedFrame =
+    [sentFirstFrame, sentLastFrame].some(
+      (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    ) || oversizedReference || tooManyReferences;
   // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
   // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
   // 作るので、画面に見えている条件と、その名前で買うものが食い違わない。
@@ -339,10 +555,14 @@ export function VideoForm({
     sentFirstFrame ? firstFrameContent : "",
     sentLastFrame !== null,
     sentLastFrame ? lastFrameContent : "",
+    // 参照も同じ扱い。並びは依頼の一部——文章が「1 枚目」と言う相手が変わる。
+    sentReferences.length,
+    referenceContents.join("\u001f"),
   ]);
   useEffect(() => {
-    if (names.ready && !readingFrames && !oversizedFrame) void names.ensure(signature);
-  }, [names.ready, names, readingFrames, signature, oversizedFrame]);
+    if (names.ready && !readingFrames && !readingReferences && !oversizedFrame)
+      void names.ensure(signature);
+  }, [names.ready, names, readingFrames, readingReferences, signature, oversizedFrame]);
   // いま画面にある依頼の名前を持っているか。直前の応答が決着していても、
   // 別の依頼の名前はまだ手元にある——そちらへ戻ったときに残高で塞ぐと、
   // 支払い済みの結果を取りに行く道が閉じる。
@@ -366,7 +586,7 @@ export function VideoForm({
     taskHasNoModel: models.length === 0 && !holdsName,
     // 中身を読んでいる間は送らない。読み終える前に送ると、中身の分からないまま
     // 作った名前で課金され、読み終えた時点で名前が変わってしまう。
-    busy: isPending || readingFrames || oversizedFrame,
+    busy: isPending || readingFrames || readingReferences || oversizedFrame,
   });
   // The same composition the action validates, so the counter measures what the
   // server will.
@@ -377,7 +597,11 @@ export function VideoForm({
     motion: videoMotion,
     exclusions: videoExclusions,
   }).length;
-  const composedPromptTooLong = !isAiPromptWithinLimit(composedLength);
+  // このモデルが読む長さ。サービスの上限より短いモデルがあり、そこを見ないと
+  // 「書けるのに必ず断られる」依頼が作れる。
+  const promptLimit = options.maxPromptCharacters;
+  const composedPromptTooLong =
+    !isAiPromptWithinLimit(composedLength) || composedLength > promptLimit;
 
   // 送るものを、名乗ったものに合わせる。フレームの入力欄はモデルの都合で画面
   // から外れ、外れた時点で選ばれていたファイルは欄ごと消える——画面の状態だけ
@@ -428,6 +652,7 @@ export function VideoForm({
         seedText: videoSeed,
         firstFrame: sentFirstFrame,
         lastFrame: sentLastFrame,
+        references: sentReferences,
       });
 
       const outcome = await runAiRequest<VideoJobResponse>(operation, {
@@ -694,6 +919,65 @@ export function VideoForm({
               clearLabel={t("dashboard:ai.clearFrame")}
               note={lastFrame && !sentLastFrame ? t("dashboard:ai.lastFrameNeedsFirst") : null}
             />
+          )}
+          {/* Only for a model that says it conditions on references. Unstated
+              means no here: a model handed pictures it cannot use drops them
+              with a warning, and paying for a request whose references were
+              ignored is worse than not being offered them.
+
+              One field per kind, because a model allows each its own number —
+              "3 / 9" means nothing until it says which three. A kind the model
+              takes none of is left out entirely. */}
+          {options.referenceToVideo && (
+            <>
+              {referenceKinds.map((entry) => {
+                if (entry.maxCount <= 0) return null;
+                const setter =
+                  entry.kind === "image"
+                    ? setImageReferences
+                    : entry.kind === "video"
+                      ? setVideoReferences
+                      : setAudioReferences;
+                return (
+                  <ReferencePicker
+                    key={entry.kind}
+                    id={`videoReference-${entry.kind}`}
+                    label={t(`dashboard:ai.videoReferences.${entry.kind}`)}
+                    hint={t(`dashboard:ai.videoReferenceHints.${entry.kind}`, {
+                      maximum: entry.maxCount,
+                      size: formatBytes(entry.maxBytes),
+                    })}
+                    accept={REFERENCE_ACCEPT[entry.kind]}
+                    multiple={entry.maxCount > 1}
+                    files={entry.files}
+                    removeLabel={(name) =>
+                      t("dashboard:ai.referenceImageRemove", { name })
+                    }
+                    problem={
+                      entry.tooMany
+                        ? t("dashboard:ai.referenceImageTooMany", {
+                            maximum: entry.maxCount,
+                          })
+                        : entry.oversized
+                          ? t("dashboard:ai.referenceImageTooLarge", {
+                              maximum: formatBytes(entry.maxBytes),
+                            })
+                          : null
+                    }
+                    onPick={setter}
+                  />
+                );
+              })}
+              {/* Said rather than silently dropped: the selection is still
+                  here if the frame is cleared, but it is not what is being
+                  bought while a frame is chosen. */}
+              {referenceKinds.some((entry) => entry.files.length > 0) &&
+                sentFirstFrame !== null && (
+                  <p className="text-xs text-destructive">
+                    {t("dashboard:ai.videoReferenceExcludesFrames")}
+                  </p>
+                )}
+            </>
           )}
         </AdvancedOptions>
 

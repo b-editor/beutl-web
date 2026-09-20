@@ -13,11 +13,15 @@ import {
   MAX_AI_VIDEO_DURATION_SECONDS,
   MIN_AI_VIDEO_DURATION_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
 } from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { loadAiVideoModelCapabilities } from "../../ai/video-model-capabilities";
+import {
+  isVideoModelUsable,
+  loadAiVideoModelCapabilities,
+} from "../../ai/video-model-capabilities";
 import { loadAiImageModelCapabilities } from "../../ai/image-model-capabilities";
 import {
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
@@ -25,6 +29,7 @@ import {
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
 } from "../../ai/upload-limits";
 import { MAX_AI_AUDIO_DURATION_SECONDS } from "../../ai/audio-metadata";
@@ -81,6 +86,23 @@ type VideoModelDescription = ModelDescription & {
   // 開始フレームと終了フレームは別々に扱う。片方しか取らないモデルがある。
   firstFrame: boolean;
   lastFrame: boolean;
+  // 参照画像で人物や物の見た目を揃えられるか。フレームとは排他で、両方渡すと
+  // 参照のほうが黙って捨てられる。
+  inputReferences: boolean;
+  // このモデルが実際に受け取る量。公開していないモデルではサービスの天井が
+  // そのまま入る。画面はこれを見て欄を出す——一律の数字で切ると、9 枚取れる
+  // モデルに 3 枚しか渡せない。
+  maxInputReferences: number;
+  maxInputReferenceBytes: number;
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  maxPromptLength: number;
+  // 参照として運べる動画と音声。画像とは別枠。0 はそのモデルが取らないこと。
+  maxVideoReferences: number;
+  maxVideoReferenceBytes: number;
+  maxAudioReferences: number;
+  maxAudioReferenceBytes: number;
 };
 
 function describeModels(
@@ -113,9 +135,10 @@ const app = new Hono().get("/", async (c) => {
   const [videoCapabilities, imageCapabilities] = await Promise.all([
     loadAiVideoModelCapabilities(),
     loadAiImageModelCapabilities(
-      imageOperations.flatMap((operation) =>
-        catalog.list(operation).map((entry) => entry.modelId),
-      ),
+      // The whole entry, not just the id: what a model accepts depends on who
+      // runs it, and the Gateway publishes nothing per model to discover it
+      // from.
+      imageOperations.flatMap((operation) => catalog.list(operation)),
     ),
   ]);
   const describeImageModels = (operation: string): ImageModelDescription[] =>
@@ -134,6 +157,12 @@ const app = new Hono().get("/", async (c) => {
         resolution: supported ? supported.resolution : true,
       };
     });
+  // A mode that works from a video needs nothing but "can this model do it":
+  // the shape and, for an edit, the length come from the source.
+  const describeSourceVideoModels = (operation: string): ModelDescription[] =>
+    describeModels(catalog, operation).filter((model) =>
+      isVideoModelUsable(videoCapabilities.get(model.id), operation),
+    );
   const videoModels: VideoModelDescription[] = describeModels(
     catalog,
     "video.generate",
@@ -152,6 +181,27 @@ const app = new Hono().get("/", async (c) => {
       seed: supported ? supported.seed : true,
       firstFrame: supported ? supported.firstFrame : true,
       lastFrame: supported ? supported.lastFrame : true,
+      // 既定は false。取れないモデルに送っても黙って無視されるだけなので、
+      // 「分からない＝出す」にはしない。
+      inputReferences: supported ? supported.referenceToVideo : false,
+      maxInputReferences: supported
+        ? supported.maxInputReferences
+        : AI_MAX_VIDEO_INPUT_REFERENCES,
+      maxInputReferenceBytes: supported
+        ? supported.maxReferenceBytes
+        : MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      maxSourceVideoBytes: supported
+        ? supported.maxSourceVideoBytes
+        : MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+      minSourceVideoSeconds: supported ? supported.minSourceVideoSeconds : null,
+      maxSourceVideoSeconds: supported ? supported.maxSourceVideoSeconds : null,
+      maxPromptLength: supported
+        ? supported.maxPromptCharacters
+        : MAX_AI_PROMPT_LENGTH,
+      maxVideoReferences: supported ? supported.maxVideoReferences : 0,
+      maxVideoReferenceBytes: supported ? supported.maxVideoReferenceBytes : 0,
+      maxAudioReferences: supported ? supported.maxAudioReferences : 0,
+      maxAudioReferenceBytes: supported ? supported.maxAudioReferenceBytes : 0,
     };
   });
   return c.json({
@@ -201,6 +251,31 @@ const app = new Hono().get("/", async (c) => {
         maxRequestBytes: MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
         languageFormat: "iso-639-1",
       },
+      // Working from a video this service already holds. Only the models that
+      // publish the mode are listed, because one that does not would drop the
+      // source and bill for something else.
+      "video.edit": {
+        models: describeSourceVideoModels("video.edit"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        // The result is as long as its source, so nothing is chosen here.
+        durationFollowsSource: true,
+      },
+      "video.extend": {
+        models: describeSourceVideoModels("video.extend"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        // The length of the added segment, not of the whole result.
+        minDurationSeconds: MIN_AI_VIDEO_DURATION_SECONDS,
+        maxDurationSeconds: MAX_AI_VIDEO_DURATION_SECONDS,
+      },
+      "video.motion": {
+        models: describeSourceVideoModels("video.motion"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        minDurationSeconds: MIN_AI_VIDEO_DURATION_SECONDS,
+        maxDurationSeconds: MAX_AI_VIDEO_DURATION_SECONDS,
+        orientations: ["image", "video"],
+        qualities: ["standard", "pro"],
+        maxCharacterImageBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      },
       "video.generate": {
         models: videoModels,
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
@@ -214,6 +289,10 @@ const app = new Hono().get("/", async (c) => {
         seed,
         maxFrameImageBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
         frameTypes: ["first_frame", "last_frame"],
+        // 参照画像の上限。フレームと同じ大きさで、枚数はモデル側の公開値に
+        // 関わらずこの数まで。フレームと同時には送れない。
+        maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+        maxInputReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
       },
     },
   });

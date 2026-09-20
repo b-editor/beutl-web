@@ -17,6 +17,7 @@
     "./storage/uploads": "./src/storage/uploads.ts"
   },
   "dependencies": {
+    "@ai-sdk/gateway": "^4.0.86",
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/i18n": "workspace:*",
@@ -24,6 +25,7 @@
     "@openrouter/sdk": "^1.2.42",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "ai": "^7.0.106",
     "aws4fetch": "^1.0.20",
     "country-to-currency": "^2.0.2",
     "hono": "^4.13.5",

@@ -6,6 +6,7 @@ import {
   MAX_AI_RESULT_BYTES,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_VIDEO_PICTURES,
 } from "@beutl/core";
 import {
   aiRequestNameOf,
@@ -848,9 +849,14 @@ describe("what an AI screen may put in one body", () => {
     expect(edit).toBeGreaterThan(MAX_AI_IMAGE_UPLOAD_BYTES);
     expect(edit).toBeLessThan(2 * MAX_AI_IMAGE_UPLOAD_BYTES);
     expect(transcribe).toBeGreaterThan(MAX_AI_TRANSCRIPTION_UPLOAD_BYTES);
-    // 始まりと終わりで 2 枚ぶん。1 枚しか見ないと、2 枚の依頼が届かない。
-    expect(video).toBeGreaterThan(2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
-    expect(video).toBeLessThan(3 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+    // 1 回の依頼が運べる絵の枚数ぶん——フレームなら始まりと終わりで 2 枚、参照
+    // 画像ならその上限。少なく見ると、送れるはずの依頼が届く前に断られる。
+    expect(video).toBeGreaterThan(
+      MAX_AI_VIDEO_PICTURES * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    );
+    expect(video).toBeLessThan(
+      (MAX_AI_VIDEO_PICTURES + 1) * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    );
   });
 
   it("leaves screens it does not name alone", () => {

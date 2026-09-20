@@ -27,11 +27,48 @@ describe("registering a model for an operation", () => {
       value: {
         operation: "image.generate",
         modelId: "openai/gpt-image-1",
+        // A row that names no provider belongs to the one that predates the
+        // column, so every registration made before it keeps running where it ran.
+        provider: "openrouter",
         priceUnits: 20,
         displayName: "Fast",
         enabled: true,
       },
     });
+  });
+
+  it("keeps a provider the row names", () => {
+    const result = validateAiOperationModelInput(
+      input({ provider: "vercel-gateway", operation: "video.generate" }),
+    );
+
+    expect(result.ok && result.value.provider).toBe("vercel-gateway");
+  });
+
+  it("refuses a row whose provider cannot run the operation", () => {
+    // Vercel AI Gateway has no named operation for background removal. Without
+    // this the row saves, and the request is refused only after the user has
+    // been charged.
+    const supportsOperation = (provider: string, operation: string) =>
+      provider === "openrouter" || operation === "video.generate";
+
+    const refused = validateAiOperationModelInput(
+      input({
+        provider: "vercel-gateway",
+        operation: "image.edit.remove_background",
+      }),
+      { supportsOperation },
+    );
+    expect(refused).toEqual({
+      ok: false,
+      message: "vercel-gateway cannot run image.edit.remove_background",
+    });
+
+    const accepted = validateAiOperationModelInput(
+      input({ provider: "vercel-gateway", operation: "video.generate" }),
+      { supportsOperation },
+    );
+    expect(accepted.ok).toBe(true);
   });
 
   it("treats a blank display name as absent", () => {

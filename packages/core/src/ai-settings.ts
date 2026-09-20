@@ -80,7 +80,29 @@ export const AI_DEFAULT_OPERATION_MODELS = {
   },
   "subtitle.translate": { model: "openai/gpt-4.1-mini", price: 5 },
   "video.generate": { model: "google/veo-3.1", price: 40 },
-} as const satisfies Record<string, { model: string; price: number }>;
+  // The three modes that work from a video this service already holds. They
+  // exist only on Vercel AI Gateway — OpenRouter's video API has no field for a
+  // source video — so their built-in entry names that provider rather than the
+  // one every older row carries.
+  "video.edit": {
+    model: "spacexai/grok-imagine-video",
+    price: 40,
+    provider: "vercel-gateway",
+  },
+  "video.extend": {
+    model: "spacexai/grok-imagine-video",
+    price: 40,
+    provider: "vercel-gateway",
+  },
+  "video.motion": {
+    model: "klingai/kling-v3.0-motion-control",
+    price: 40,
+    provider: "vercel-gateway",
+  },
+} as const satisfies Record<
+  string,
+  { model: string; price: number; provider?: string }
+>;
 
 export type AiOperation = keyof typeof AI_DEFAULT_OPERATION_MODELS;
 

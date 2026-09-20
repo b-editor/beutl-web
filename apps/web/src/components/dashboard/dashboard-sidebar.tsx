@@ -23,12 +23,14 @@ import {
   useSidebar,
 } from "@beutl/ui/ui/sidebar";
 import {
+  AudioLines,
   BookOpen,
   ChevronRight,
   CircleUser,
   Clapperboard,
   Code2,
   CreditCard,
+  Film,
   HardDrive,
   History,
   Image as ImageIcon,
@@ -42,7 +44,6 @@ import {
   Store,
   Trash,
   WandSparkles,
-  AudioLines,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -156,6 +157,11 @@ export function DashboardSidebar({
       slug: "video",
       label: t("dashboard:ai.videoGeneration"),
       icon: Clapperboard,
+    },
+    {
+      slug: "video-edit",
+      label: t("dashboard:ai.videoEdit"),
+      icon: Film,
     },
     {
       slug: "jobs",

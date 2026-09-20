@@ -257,6 +257,59 @@
     "referenceImageTooLarge": "参照画像1枚のサイズは {{maximum}} 以下にしてください。小さいファイルを使用してください。",
     "operationUnavailableTitle": "現在利用できません",
     "operationUnavailableDescription": "この操作に使えるモデルが現在提供されていません。プランや残高では解決しないため、しばらくしてからお試しください。",
-    "referenceImagesTooLarge": "選んだ画像の合計が {{maximum}} を超えています。枚数を減らすか、小さいファイルを使ってください。"
+    "referenceImagesTooLarge": "選んだ画像の合計が {{maximum}} を超えています。枚数を減らすか、小さいファイルを使ってください。",
+    "videoReferenceExcludesFrames": "最初のフレームを指定している場合、参照素材（画像・動画・音声）は使用されません。参照素材を使うには、フレームの選択を解除してください。",
+    "sourceVideo": "元の動画",
+    "sourceVideoLoading": "生成済みの動画を読み込んでいます…",
+    "sourceVideoNone": "利用できる生成済みの動画がありません。先に動画を生成するか、ファイルをアップロードしてください。",
+    "sourceVideoPlaceholder": "元にする動画を選択",
+    "sourceVideoEditLength": "編集後の動画の長さは、元の動画と同じ {{seconds}} 秒です。",
+    "characterImage": "キャラクター画像",
+    "characterImageHint": "動きを適用するキャラクターの画像を 1 枚選んでください。",
+    "motionOrientation": "キャラクターの向き",
+    "motionOrientations": {
+      "video": "元の動画に合わせる",
+      "image": "キャラクター画像に合わせる"
+    },
+    "motionQuality": "品質",
+    "motionQualities": {
+      "standard": "標準",
+      "pro": "高品質"
+    },
+    "extendDuration": "延長する長さ",
+    "videoEditModeLabel": "編集モード",
+    "videoEditModes": {
+      "edit": "編集",
+      "extend": "延長",
+      "motion": "モーション適用"
+    },
+    "videoEditModeHints": {
+      "edit": "プロンプトに沿って元の動画を編集します。動画の長さは元のままで、変更できません。",
+      "extend": "元の動画の続きを生成します。追加する部分の長さを指定してください。",
+      "motion": "元の動画の動きを、指定したキャラクター画像に適用します。"
+    },
+    "videoEditPrompts": {
+      "edit": "動画をどのように変更するか入力してください",
+      "extend": "続きの場面や動きを入力してください",
+      "motion": "キャラクターに適用したい動きや演出を入力してください"
+    },
+    "videoEdit": "動画編集",
+    "videoEditDescription": "既存の動画をもとに、編集・延長やキャラクターへのモーション適用ができます。",
+    "sourceVideoUpload": "ファイルをアップロード",
+    "sourceVideoGenerated": "生成済みの動画から選択",
+    "sourceVideoUploadHint": "{{maximum}} 以下の MP4 または WebM ファイルを使用できます。動画の長さは自動で読み取ります。",
+    "sourceVideoTooLarge": "ファイルサイズが上限を超えています。{{maximum}} 以下のファイルを選んでください。",
+    "sourceVideoEditLengthUnknown": "編集後の動画の長さは元の動画と同じです。長さはアップロードしたファイルから自動で読み取ります。",
+    "videoReferences": {
+      "image": "参照画像",
+      "video": "参照動画",
+      "audio": "参照音声"
+    },
+    "videoReferenceHints": {
+      "image": "被写体や見た目の参考にする画像です。最大 {{maximum}} 枚、1 枚あたり {{size}} 以下。",
+      "video": "動きや雰囲気の参考にする動画です。最大 {{maximum}} 本、1 本あたり {{size}} 以下。",
+      "audio": "動画生成の参考にする音声です。最大 {{maximum}} ファイル、1 ファイルあたり {{size}} 以下。"
+    },
+    "resultPlaceholderVideoEdit": "動画の生成には時間がかかります。完成した動画はジョブ履歴で確認できます。"
   }
 }

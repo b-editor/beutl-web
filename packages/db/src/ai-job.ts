@@ -1497,13 +1497,14 @@ export async function enqueueUserRemoteAiJobCleanups({
       status: { in: ACTIVE_AI_JOB_STATUSES },
       providerJobId: { not: null },
     },
-    select: { provider: true, providerJobId: true },
+    select: { provider: true, providerJobId: true, model: true },
   });
   for (const job of jobs) {
     if (!job.providerJobId) continue;
     await enqueueAiRemoteJobCleanup({
       provider: job.provider,
       providerJobId: job.providerJobId,
+      model: job.model,
       now,
       prisma,
     });
@@ -1514,11 +1515,14 @@ export async function enqueueUserRemoteAiJobCleanups({
 export async function enqueueAiRemoteJobCleanup({
   provider,
   providerJobId,
+  model = null,
   now = new Date(),
   prisma,
 }: {
   provider: string;
   providerJobId: string;
+  /** Needed by a provider whose status endpoint is addressed by model too. */
+  model?: string | null;
   now?: Date;
   prisma?: PrismaTransaction;
 }) {
@@ -1527,8 +1531,10 @@ export async function enqueueAiRemoteJobCleanup({
       where: {
         provider_providerJobId: { provider, providerJobId },
       },
-      create: { provider, providerJobId, notBefore: now },
-      update: { notBefore: now },
+      create: { provider, providerJobId, model, notBefore: now },
+      // A re-enqueue may know the model where the first one did not; never
+      // overwrite a known model with nothing.
+      update: { notBefore: now, ...(model === null ? {} : { model }) },
     });
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }

@@ -10,6 +10,12 @@ import {
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
+  describeSourceVideo,
+  isVideoInputMediaId,
+  readVideoInputMedia,
+} from "../../ai/video-input-media";
+import {
+  isVideoModelUsable,
   loadAiVideoModelCapabilities,
   unsupportedVideoRequestReason,
 } from "../../ai/video-model-capabilities";
@@ -18,6 +24,7 @@ import {
   fileExceedsUploadLimit,
   isUploadLimitExceeded,
   MAX_AI_PROMPT_LENGTH,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   parseBodyWithUploadLimit,
   parseJsonWithBodyLimit,
@@ -28,12 +35,22 @@ import {
   verifyOpenRouterWebhookSignature,
   type VideoFrameImage,
 } from "../../ai/openrouter";
+import type { VideoInputReference } from "../../ai/providers/types";
 import {
   classifyVideoSubmissionFailure,
   createAndAttachVideoJob,
   synchronizeAiVideoJob,
 } from "../../ai/video-jobs";
-import { aiApiMultipartBodyLimit } from "@beutl/core";
+import {
+  aiApiMultipartBodyLimit,
+  AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+  AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES,
+  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
+  MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES,
+} from "@beutl/core";
+import { inspectGeneratedVideo } from "../../ai/video-validation";
 import {
   validateAiInputImage,
   type AiInputImageMimeType,
@@ -94,6 +111,78 @@ const createFramesSchema = z.object({
   model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
+// Working from a video this service already holds. The source is named by the
+// job that produced it rather than uploaded: the bytes are already here, a
+// video is far larger than anything this service accepts as an upload, and
+// naming a job is what lets ownership be checked before anything is charged.
+const sourceVideoSchema = z.object({
+  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
+  sourceJobId: z.string().uuid(),
+  // The extension segment's length, not the total. Absent for an edit, which
+  // produces something as long as its source.
+  durationSeconds: z.number().refine(isAiVideoDurationSeconds).optional(),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
+}).strict();
+
+/** What one reference is, decided by what its part declares. */
+type VideoReferenceKind = "image" | "video" | "audio";
+
+// Only the types this service can check. A picture is decoded, a clip is
+// parsed, and a sound is taken on its declared type — there is no sound parser
+// here, so the allowlist is the check, and it is deliberately narrow.
+const VIDEO_REFERENCE_AUDIO_TYPES: ReadonlySet<string> = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/mpeg",
+  "audio/mp3",
+]);
+
+function videoReferenceKindOf(declared: string): VideoReferenceKind | null {
+  const mediaType = declared.split(";", 1)[0]!.trim().toLowerCase();
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType === "video/mp4" || mediaType === "video/webm") return "video";
+  if (VIDEO_REFERENCE_AUDIO_TYPES.has(mediaType)) return "audio";
+  return null;
+}
+
+// The same request with the source sent inline instead of named. Multipart, so
+// every scalar arrives as a string and the length has to be coerced.
+const uploadedSourceVideoSchema = z.object({
+  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
+  durationSeconds: z.coerce.number().refine(isAiVideoDurationSeconds).optional(),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
+}).strict();
+
+/**
+ * Whether the source arrived with the request rather than being named.
+ *
+ * Decided by the content type alone: a multipart body is the only way a video
+ * can be sent, and a JSON one is the only way a job can be named, so nothing
+ * has to guess which of two optional fields the caller meant.
+ */
+function isMultipartRequest(request: Request): boolean {
+  const contentType = request.headers.get("content-type") ?? "";
+  return contentType.split(";", 1)[0]!.trim().toLowerCase() ===
+    "multipart/form-data";
+}
+
+// Motion control. The character is a picture the caller uploads; the motion
+// comes from a finished job of theirs, named the same way an edit names its
+// source.
+const motionSchema = z.object({
+  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
+  // Absent when the motion comes from a video sent with the request instead of
+  // from a finished job. Exactly one of the two has to be there, which is
+  // checked against the parts rather than in the schema.
+  sourceJobId: z.string().uuid().optional(),
+  durationSeconds: z.coerce.number().refine(isAiVideoDurationSeconds),
+  // Whether the result follows the character picture's shape or the reference
+  // video's. The provider allows a longer result for the latter.
+  orientation: z.enum(["image", "video"]).default("video"),
+  quality: z.enum(["standard", "pro"]).default("standard"),
+  model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
+}).strict();
+
 const supportedFrameImageTypes = new Set<AiInputImageMimeType>([
   "image/png",
   "image/jpeg",
@@ -115,6 +204,28 @@ const openRouterVideoWebhookSchema = z.object({
   }),
 });
 
+// Vercel AI Gateway's delivery. It carries terminal facts only — never a URL
+// and never bytes — which is why the handler below treats it as a signal to
+// re-read the job rather than as the answer.
+const gatewayVideoWebhookSchema = z.object({
+  type: z.enum([
+    "video.generation.completed",
+    "video.generation.failed",
+    "video.generation.cancelled",
+  ]),
+  data: z.object({
+    jobId: z.string().min(1),
+    modelId: z.string().min(1).optional(),
+    status: z.enum(["completed", "failed", "cancelled"]),
+  }),
+});
+
+const gatewayWebhookStatusByType = {
+  "video.generation.completed": "completed",
+  "video.generation.failed": "failed",
+  "video.generation.cancelled": "cancelled",
+} as const;
+
 const webhookStatusByType = {
   "video.generation.completed": "completed",
   "video.generation.failed": "failed",
@@ -124,24 +235,49 @@ const webhookStatusByType = {
 
 class OpenRouterWebhookBodyTooLargeError extends Error {}
 
-// OpenRouter only calls back over HTTPS. A server reachable only over plain
+// Each provider has its own callback route, because each verifies its own
+// deliveries and refuses a job that is not its. A provider with no route gets
+// no URL and its jobs are finished by polling.
+const VIDEO_CALLBACK_PATHS: Record<string, string> = {
+  openrouter: "openrouter-callback",
+  "vercel-gateway": "gateway-callback",
+};
+
+// The HTTPS origin a provider can reach this deployment on, or undefined for a
+// server that has none. The same condition decides whether a callback URL is
+// offered and whether pictures can be served to a provider that needs them by
+// URL: a provider cannot reach a local server either way.
+function publicHttpsOrigin(request: Request): string | undefined {
+  let origin: URL;
+  try {
+    origin = new URL(process.env.PUBLIC_ORIGIN || new URL(request.url).origin);
+  } catch {
+    return undefined;
+  }
+  return origin.protocol === "https:" ? origin.origin : undefined;
+}
+
+// Providers only call back over HTTPS. A server reachable only over plain
 // HTTP — a local one — gets no callback URL, and its jobs are finished by the
 // poll path instead of being refused at submission.
-function openRouterVideoCallbackUrl(
+function videoCallbackUrl(
   request: Request,
   jobId: string,
   callbackNonce: string,
+  provider: string,
 ): string | undefined {
+  const path = VIDEO_CALLBACK_PATHS[provider];
+  if (path === undefined) return undefined;
   let callbackUrl: URL;
   try {
     const origin = process.env.PUBLIC_ORIGIN || new URL(request.url).origin;
     callbackUrl = new URL(
-      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
+      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/${path}`,
       origin,
     );
   } catch (cause) {
     throw new AiVideoSubmissionError(
-      "OpenRouter video callback URL could not be constructed",
+      "AI video callback URL could not be constructed",
       { outcome: "definite_failure", cause },
     );
   }
@@ -207,6 +343,23 @@ function toVideoFrameImage(
       url: `data:${mimeType};base64,${arrayBufferToBase64(bytes)}`,
     },
     frame_type: frameType,
+  };
+}
+
+// A reference is not a frame: the video does not pass through it, it should
+// contain what it shows. The type travels beside the data because a hosted URL
+// does not announce it, and a provider handed an untyped reference treats it as
+// an image and warns.
+function toVideoInputReference(
+  bytes: ArrayBuffer,
+  mimeType: string,
+): VideoInputReference {
+  return {
+    type: "image_url",
+    image_url: {
+      url: `data:${mimeType};base64,${arrayBufferToBase64(bytes)}`,
+    },
+    media_type: mimeType,
   };
 }
 
@@ -299,6 +452,7 @@ const app = new Hono()
           aspectRatio,
           generateAudio,
           ...(seed === undefined ? {} : { seed }),
+          promptCharacters: prompt.length,
         },
       )
     ) {
@@ -314,7 +468,7 @@ const app = new Hono()
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
-      provider: "openrouter",
+      provider: selectedModel.provider,
       status: "queued",
       inputParams: {
         prompt,
@@ -352,10 +506,12 @@ const app = new Hono()
     }
 
     try {
-      const callbackUrl = openRouterVideoCallbackUrl(
+      const mediaOrigin = publicHttpsOrigin(c.req.raw);
+      const callbackUrl = videoCallbackUrl(
         c.req.raw,
         job.id,
         callbackNonce.nonce,
+        selectedModel.provider,
       );
       await createAndAttachVideoJob({
         jobId: job.id,
@@ -368,6 +524,8 @@ const app = new Hono()
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
+        provider: selectedModel.provider,
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
         signal: requestSignal,
       });
 
@@ -467,15 +625,81 @@ const app = new Hono()
     requestSignal.throwIfAborted();
     const firstFrame = body["firstFrame"];
     const lastFrame = body["lastFrame"];
-    for (const frame of [firstFrame, lastFrame]) {
+    // Reference pictures arrive as repeated `reference[]` parts, the same shape
+    // the image endpoint already takes, with a single `reference` accepted too.
+    // Their order is the order the prompt refers to them in.
+    const listedReferences = body["reference[]"];
+    const references = [
+      body["reference"],
+      ...(Array.isArray(listedReferences) ? listedReferences : [listedReferences]),
+    ].filter((value): value is File => value instanceof File && value.size > 0);
+    // A reference is a picture, a clip or a sound, told apart by what the part
+    // declares. They are counted and sized separately because a model
+    // publishes a separate allowance for each — MiniMax H3 takes nine
+    // pictures, three clips and one sound.
+    const classified = references.map((file) => ({
+      file,
+      kind: videoReferenceKindOf(file.type),
+    }));
+    const unreadable = classified.find((entry) => entry.kind === null);
+    if (unreadable) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const referencesOf = (kind: VideoReferenceKind) =>
+      classified.filter((entry) => entry.kind === kind).map((entry) => entry.file);
+    const imageReferences = referencesOf("image");
+    const videoReferences = referencesOf("video");
+    const audioReferences = referencesOf("audio");
+    if (
+      imageReferences.length > AI_MAX_VIDEO_INPUT_REFERENCES ||
+      videoReferences.length > AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES ||
+      audioReferences.length > AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES
+    ) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    for (const picture of [firstFrame, lastFrame, ...imageReferences]) {
       if (
-        frame instanceof File &&
-        fileExceedsUploadLimit(frame, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES)
+        picture instanceof File &&
+        fileExceedsUploadLimit(picture, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES)
       ) {
         return c.json(await apiErrorResponse("fileIsTooLarge"), {
           status: 413,
         });
       }
+    }
+    // Clips and sounds are held to their own sizes, and to a total: three
+    // fifty-megabyte clips would be more than this Worker can carry at once,
+    // however willing the model is to read them.
+    for (const clip of videoReferences) {
+      if (fileExceedsUploadLimit(clip, MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+      }
+    }
+    if (
+      videoReferences.reduce((total, clip) => total + clip.size, 0) >
+        MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES ||
+      imageReferences.reduce((total, picture) => total + picture.size, 0) >
+        MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES
+    ) {
+      return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+    }
+    for (const sound of audioReferences) {
+      if (fileExceedsUploadLimit(sound, MAX_AI_VIDEO_INPUT_AUDIO_BYTES)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+      }
+    }
+    // Frames and references are alternatives, not a combination: a provider
+    // given both ignores the references and warns, so a request asking for
+    // both is refused rather than half-served after it is charged.
+    const wantsReferences = references.length > 0;
+    if (wantsReferences && (firstFrame !== undefined || lastFrame !== undefined)) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
     }
 
     // An omitted multipart field and an empty one both mean "use the default";
@@ -495,8 +719,8 @@ const app = new Hono()
     });
     if (
       !fields.success ||
-      !(firstFrame instanceof File) ||
-      firstFrame.size === 0 ||
+      (!wantsReferences &&
+        (!(firstFrame instanceof File) || firstFrame.size === 0)) ||
       (lastFrame !== undefined &&
         (!(lastFrame instanceof File) || lastFrame.size === 0))
     ) {
@@ -508,17 +732,57 @@ const app = new Hono()
     // A PNG can expand to the full decode limit while it is inspected. Keep
     // the two validations sequential so two maximum-size frames never retain
     // their decompressed scanlines at the same time in a Worker isolate.
-    const firstFrameImage = await validateAiInputImage(
-      firstFrame,
-      supportedFrameImageTypes,
-      requestSignal,
-    );
-    if (!firstFrameImage) {
+    const firstFrameImage = firstFrame instanceof File
+      ? await validateAiInputImage(
+          firstFrame,
+          supportedFrameImageTypes,
+          requestSignal,
+        )
+      : null;
+    if (firstFrame instanceof File && !firstFrameImage) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
     }
     requestSignal.throwIfAborted();
+    // Kept in the order they were sent: the prompt refers to them by position.
+    const referenceImages: { bytes: ArrayBuffer; mimeType: string }[] = [];
+    for (const entry of classified) {
+      if (entry.kind === "image") {
+        const validated = await validateAiInputImage(
+          entry.file,
+          supportedFrameImageTypes,
+          requestSignal,
+        );
+        if (!validated) {
+          return c.json(await apiErrorResponse("invalidRequestBody"), {
+            status: 400,
+          });
+        }
+        referenceImages.push(validated);
+      } else if (entry.kind === "video") {
+        // Parsed like any other clip this service handles, which also refuses
+        // one whose container does not match what the part declared.
+        const bytes = await entry.file.arrayBuffer();
+        let metadata;
+        try {
+          metadata = inspectGeneratedVideo(bytes, entry.file.type);
+        } catch {
+          return c.json(await apiErrorResponse("invalidRequestBody"), {
+            status: 400,
+          });
+        }
+        referenceImages.push({ bytes, mimeType: metadata.mimeType });
+      } else {
+        // Sound. Nothing here decodes it, so the declared type — already
+        // checked against a narrow allowlist — is what travels with it.
+        referenceImages.push({
+          bytes: await entry.file.arrayBuffer(),
+          mimeType: entry.file.type.split(";", 1)[0]!.trim().toLowerCase(),
+        });
+      }
+      requestSignal.throwIfAborted();
+    }
     const lastFrameImage = lastFrame instanceof File
       ? await validateAiInputImage(
           lastFrame,
@@ -535,10 +799,14 @@ const app = new Hono()
 
     const { prompt, durationSeconds, resolution, aspectRatio, generateAudio, seed } =
       fields.data;
-    const [firstFrameSha256, lastFrameSha256] = await Promise.all([
-      sha256Hex(firstFrameImage.bytes),
-      lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
-    ]);
+    const [firstFrameSha256, lastFrameSha256, referenceSha256s] =
+      await Promise.all([
+        firstFrameImage ? sha256Hex(firstFrameImage.bytes) : null,
+        lastFrameImage ? sha256Hex(lastFrameImage.bytes) : null,
+        Promise.all(
+          referenceImages.map((reference) => sha256Hex(reference.bytes)),
+        ),
+      ]);
     requestSignal.throwIfAborted();
     const commonFingerprintInput = {
       ...(fields.data.model ? { model: fields.data.model } : {}),
@@ -549,10 +817,17 @@ const app = new Hono()
       generateAudio,
       ...(seed === undefined ? {} : { seed }),
     };
-    const firstFrameFingerprint = {
-      contentType: firstFrameImage.mimeType,
-      sha256: firstFrameSha256,
-    };
+    const firstFrameFingerprint = firstFrameImage
+      ? { contentType: firstFrameImage.mimeType, sha256: firstFrameSha256 }
+      : null;
+    // The pictures are part of what was asked for, so a retry that swaps one is
+    // a different request rather than a replay of this one.
+    const referenceFingerprint = referenceImages.length > 0
+      ? referenceImages.map((reference, index) => ({
+          contentType: reference.mimeType,
+          sha256: referenceSha256s[index],
+        }))
+      : null;
     const lastFrameFingerprint = lastFrameImage
       ? {
           contentType: lastFrameImage.mimeType,
@@ -569,6 +844,9 @@ const app = new Hono()
           ? {
               lastFrame: lastFrameFingerprint,
             }
+          : {}),
+        ...(referenceFingerprint
+          ? { inputReferences: referenceFingerprint }
           : {}),
       },
     });
@@ -634,8 +912,12 @@ const app = new Hono()
           aspectRatio,
           generateAudio,
           ...(seed === undefined ? {} : { seed }),
-          firstFrame: true,
+          firstFrame: firstFrame instanceof File,
           lastFrame: lastFrame instanceof File,
+          inputReferences: imageReferences.length,
+          videoReferences: videoReferences.length,
+          audioReferences: audioReferences.length,
+          promptCharacters: fields.data.prompt.length,
         },
       )
     ) {
@@ -649,14 +931,20 @@ const app = new Hono()
     // cannot run a catch/finally refund, so no paid row may exist yet while the
     // request performs its largest synchronous allocation.
     let frameImages: VideoFrameImage[];
+    let inputReferences: VideoInputReference[];
     try {
-      frameImages = [
-        toVideoFrameImage(
-          firstFrameImage.bytes,
-          firstFrameImage.mimeType,
-          "first_frame",
-        ),
-      ];
+      frameImages = firstFrameImage
+        ? [
+            toVideoFrameImage(
+              firstFrameImage.bytes,
+              firstFrameImage.mimeType,
+              "first_frame",
+            ),
+          ]
+        : [];
+      inputReferences = referenceImages.map((reference) =>
+        toVideoInputReference(reference.bytes, reference.mimeType),
+      );
       if (lastFrame instanceof File && lastFrameImage) {
         frameImages.push(
           toVideoFrameImage(
@@ -677,7 +965,7 @@ const app = new Hono()
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
-      provider: "openrouter",
+      provider: selectedModel.provider,
       status: "queued",
       inputParams: {
         prompt,
@@ -686,16 +974,28 @@ const app = new Hono()
         aspectRatio,
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
-        firstFrame: {
-          filename: firstFrame.name,
-          mimeType: firstFrameImage.mimeType,
-        },
+        ...(firstFrame instanceof File && firstFrameImage
+          ? {
+              firstFrame: {
+                filename: firstFrame.name,
+                mimeType: firstFrameImage.mimeType,
+              },
+            }
+          : {}),
         ...(lastFrame instanceof File && lastFrameImage
           ? {
               lastFrame: {
                 filename: lastFrame.name,
                 mimeType: lastFrameImage.mimeType,
               },
+            }
+          : {}),
+        ...(referenceImages.length > 0
+          ? {
+              inputReferences: references.map((reference, index) => ({
+                filename: reference.name,
+                mimeType: referenceImages[index].mimeType,
+              })),
             }
           : {}),
       },
@@ -728,10 +1028,12 @@ const app = new Hono()
     }
 
     try {
-      const callbackUrl = openRouterVideoCallbackUrl(
+      const mediaOrigin = publicHttpsOrigin(c.req.raw);
+      const callbackUrl = videoCallbackUrl(
         c.req.raw,
         job.id,
         callbackNonce.nonce,
+        selectedModel.provider,
       );
 
       await createAndAttachVideoJob({
@@ -742,10 +1044,13 @@ const app = new Hono()
         aspectRatio,
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
-        frameImages,
+        ...(frameImages.length > 0 ? { frameImages } : {}),
+        ...(inputReferences.length > 0 ? { inputReferences } : {}),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: selectedModel.modelId,
+        provider: selectedModel.provider,
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
         signal: requestSignal,
       });
 
@@ -903,6 +1208,684 @@ const app = new Hono()
       }
     }
     return new Response(null, { status: 204 });
+  })
+  // Rewrite a finished video, or continue one from where it left off.
+  //
+  // Both take the same shape, and differ only in which of them the provider is
+  // asked for and where the length comes from: an edit is as long as its
+  // source, an extension is as long as the segment that was asked for.
+  .post("/:mode{edit|extend}", async (c) => {
+    const mode = c.req.param("mode") === "edit" ? "edit" : "extend";
+    const operation = mode === "edit" ? "video.edit" : "video.extend";
+    const userId = await getUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+    const requestSignal = c.req.raw.signal;
+    requestSignal.throwIfAborted();
+
+    // The source is either a finished job of this user's, named in JSON, or a
+    // video sent with the request. The second is what makes an arbitrary clip
+    // usable; it costs a multipart body, so the two shapes are told apart by
+    // the content type rather than by an optional field in one schema.
+    const uploaded = isMultipartRequest(c.req.raw);
+    let prompt: string;
+    let sourceJobId: string | undefined;
+    let requestedDuration: number | undefined;
+    let requestedModel: string | undefined;
+    let sourceVideo: { bytes: ArrayBuffer; mimeType: string } | undefined;
+    let uploadedDurationSeconds: number | undefined;
+
+    if (uploaded) {
+      let body: Awaited<ReturnType<typeof c.req.parseBody>>;
+      try {
+        body = await parseBodyWithUploadLimit(
+          c.req,
+          MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+          aiApiMultipartBodyLimit(`/api/v3/ai/videos/${mode}`)!,
+        );
+      } catch (error) {
+        if (isUploadLimitExceeded(error)) {
+          return c.json(await apiErrorResponse("fileIsTooLarge"), {
+            status: 413,
+          });
+        }
+        throw error;
+      }
+      requestSignal.throwIfAborted();
+      const file = body["sourceVideo"];
+      if (!(file instanceof File) || file.size === 0) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+      }
+      const fields = uploadedSourceVideoSchema.safeParse({
+        prompt: body["prompt"],
+        ...(typeof body["durationSeconds"] === "string" &&
+        body["durationSeconds"].length > 0
+          ? { durationSeconds: body["durationSeconds"] }
+          : {}),
+        ...(typeof body["model"] === "string" && body["model"].length > 0
+          ? { model: body["model"] }
+          : {}),
+      });
+      if (!fields.success) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      const bytes = await file.arrayBuffer();
+      requestSignal.throwIfAborted();
+      // The container is checked before anything is reserved, and the same
+      // pass reads the length. An edit is charged for as many seconds as its
+      // source runs, so that number has to come from the bytes rather than
+      // from whoever sent them.
+      let metadata;
+      try {
+        metadata = inspectGeneratedVideo(bytes, file.type);
+      } catch {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      prompt = fields.data.prompt;
+      requestedDuration = fields.data.durationSeconds;
+      requestedModel = fields.data.model;
+      sourceVideo = { bytes, mimeType: metadata.mimeType };
+      uploadedDurationSeconds = Math.ceil(metadata.durationSeconds);
+    } else {
+      let rawBody: unknown;
+      try {
+        rawBody = await parseJsonWithBodyLimit<unknown>(c.req);
+      } catch (error) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: isUploadLimitExceeded(error) ? 413 : 400,
+        });
+      }
+      const parsedBody = sourceVideoSchema.safeParse(rawBody);
+      if (!parsedBody.success) {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      prompt = parsedBody.data.prompt;
+      sourceJobId = parsedBody.data.sourceJobId;
+      requestedDuration = parsedBody.data.durationSeconds;
+      requestedModel = parsedBody.data.model;
+    }
+
+    // An edit produces something as long as what it was given, so naming a
+    // length for one would be a number nothing honours.
+    if (
+      (mode === "edit" && requestedDuration !== undefined) ||
+      (mode === "extend" && requestedDuration === undefined)
+    ) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    requestSignal.throwIfAborted();
+
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation,
+      input: {
+        ...(requestedModel ? { model: requestedModel } : {}),
+        prompt,
+        // One of the two names the source. An uploaded clip is named by what
+        // it contains, so re-sending the same file is the same request and
+        // sending a different one is not.
+        ...(sourceJobId === undefined
+          ? { sourceVideoSha256: await sha256Hex(sourceVideo!.bytes) }
+          : { sourceJobId }),
+        ...(requestedDuration === undefined
+          ? {}
+          : { durationSeconds: requestedDuration }),
+      },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      return c.json(await publicAiJobPayload(replay.job, c.req.raw), {
+        status: isTerminalAiJobStatus(replay.job.status) ? 200 : 202,
+      });
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("aiRequestChanged"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // Before anything is reserved: a named source that is not this user's, is
+    // gone, or never produced a video must cost nothing. An uploaded one needs
+    // no such check — it came from this request — and its length was read out
+    // of the bytes above.
+    let sourceDurationSeconds: number;
+    if (sourceJobId === undefined) {
+      sourceDurationSeconds = uploadedDurationSeconds!;
+    } else {
+      const source = await describeSourceVideo({ userId, sourceJobId });
+      if (!source) {
+        return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
+      }
+      sourceDurationSeconds = source.durationSeconds;
+    }
+    const durationSeconds = mode === "edit"
+      ? sourceDurationSeconds
+      : requestedDuration!;
+
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve(operation, requestedModel);
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    const selectedCapabilities = (await loadAiVideoModelCapabilities())
+      .get(selectedModel.modelId);
+    if (!isVideoModelUsable(selectedCapabilities, operation)) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+    // Several models read fewer characters than this service's own limit, so a
+    // prompt it accepts is one they refuse.
+    if (
+      selectedCapabilities !== undefined &&
+      prompt.length > selectedCapabilities.maxPromptCharacters
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+    requestSignal.throwIfAborted();
+
+    const callbackNonce = await createCallbackNonce();
+    const cost = selectedModel.priceUnits * durationSeconds;
+    const reservation = await createReservedAiJob({
+      userId,
+      kind: "video",
+      provider: selectedModel.provider,
+      status: "queued",
+      inputParams: {
+        prompt,
+        ...(sourceJobId === undefined ? {} : { sourceJobId }),
+        durationSeconds,
+        mode,
+      },
+      usageUnits: cost,
+      model: selectedModel.modelId,
+      activeJobLimit: 1,
+      callbackNonceHash: callbackNonce.hash,
+      ...requestIdentity,
+    });
+    if (!reservation.ok) {
+      return c.json(await apiErrorResponse(reservation.errorCode), {
+        status: reservation.status,
+      });
+    }
+    const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      return c.json(await publicAiJobPayload(job, c.req.raw), {
+        status: isTerminalAiJobStatus(job.status) ? 200 : 202,
+      });
+    }
+
+    try {
+      const mediaOrigin = publicHttpsOrigin(c.req.raw);
+      const callbackUrl = videoCallbackUrl(
+        c.req.raw,
+        job.id,
+        callbackNonce.nonce,
+        selectedModel.provider,
+      );
+      await createAndAttachVideoJob({
+        jobId: job.id,
+        prompt,
+        durationSeconds,
+        // The shape is the source's; naming one here would be a number the
+        // provider discards. Something has to be sent, so it is the default.
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+        mode,
+        ...(sourceJobId === undefined
+          ? { sourceVideo: sourceVideo! }
+          : { sourceJobId, sourceUserId: userId }),
+        callbackNonceHash: callbackNonce.hash,
+        model: selectedModel.modelId,
+        provider: selectedModel.provider,
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
+        signal: requestSignal,
+      });
+      const current = await getAiJobById({ jobId: job.id });
+      return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
+    } catch (err) {
+      const handling = classifyVideoSubmissionFailure(err);
+      if (handling.action === "refund") {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          ...(handling.detachProviderJob
+            ? { expectedProviderJobId: null }
+            : {}),
+        });
+      }
+      if (handling.action === "rethrow") throw err;
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    }
+  })
+
+  // Put a finished video's motion onto a character picture.
+  .post("/motion", async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+    const requestSignal = c.req.raw.signal;
+    requestSignal.throwIfAborted();
+
+    let body: Awaited<ReturnType<typeof c.req.parseBody>>;
+    try {
+      body = await parseBodyWithUploadLimit(
+        c.req,
+        // The largest single part this route takes. The character picture is
+        // held to its own, smaller limit below.
+        MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        aiApiMultipartBodyLimit("/api/v3/ai/videos/motion")!,
+      );
+    } catch (error) {
+      if (isUploadLimitExceeded(error)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+      }
+      throw error;
+    }
+    requestSignal.throwIfAborted();
+
+    const characterImage = body["characterImage"];
+    if (
+      !(characterImage instanceof File) ||
+      characterImage.size === 0 ||
+      fileExceedsUploadLimit(characterImage, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES)
+    ) {
+      return c.json(
+        await apiErrorResponse(
+          characterImage instanceof File
+            ? "fileIsTooLarge"
+            : "invalidRequestBody",
+        ),
+        { status: characterImage instanceof File ? 413 : 400 },
+      );
+    }
+
+    const optionalField = (name: string) => {
+      const value = body[name];
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    };
+    const fields = motionSchema.safeParse({
+      prompt: body["prompt"],
+      ...(optionalField("sourceJobId") === undefined
+        ? {}
+        : { sourceJobId: body["sourceJobId"] }),
+      durationSeconds: body["durationSeconds"],
+      orientation: optionalField("orientation"),
+      quality: optionalField("quality"),
+      model: optionalField("model"),
+    });
+    if (!fields.success) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
+    // The motion comes either from a finished job or from a video sent here.
+    // Exactly one: naming both would leave which of them was paid for up to
+    // whichever branch happened to run first.
+    const uploadedSource = body["sourceVideo"];
+    const hasUpload = uploadedSource instanceof File && uploadedSource.size > 0;
+    if (hasUpload === (fields.data.sourceJobId !== undefined)) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    let sourceVideo: { bytes: ArrayBuffer; mimeType: string } | undefined;
+    let sourceVideoSha256: string | undefined;
+    if (hasUpload) {
+      const file = uploadedSource as File;
+      if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
+        return c.json(await apiErrorResponse("fileIsTooLarge"), { status: 413 });
+      }
+      const bytes = await file.arrayBuffer();
+      requestSignal.throwIfAborted();
+      // Checked before anything is reserved, the same way a named job's source
+      // is: a file the provider would refuse must cost nothing.
+      let metadata;
+      try {
+        metadata = inspectGeneratedVideo(bytes, file.type);
+      } catch {
+        return c.json(await apiErrorResponse("invalidRequestBody"), {
+          status: 400,
+        });
+      }
+      sourceVideo = { bytes, mimeType: metadata.mimeType };
+      sourceVideoSha256 = await sha256Hex(bytes);
+    }
+
+    const validatedImage = await validateAiInputImage(
+      characterImage,
+      supportedFrameImageTypes,
+      requestSignal,
+    );
+    if (!validatedImage) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    requestSignal.throwIfAborted();
+
+    const { prompt, sourceJobId, durationSeconds, orientation, quality } =
+      fields.data;
+    const characterSha256 = await sha256Hex(validatedImage.bytes);
+    const requestIdentity = await getAiRequestIdentity({
+      request: c.req.raw,
+      operation: "video.motion",
+      input: {
+        ...(fields.data.model ? { model: fields.data.model } : {}),
+        prompt,
+        // One of the two names the source. An uploaded clip is named by what
+        // it contains, so re-sending the same file is the same request.
+        ...(sourceJobId === undefined
+          ? { sourceVideoSha256: sourceVideoSha256! }
+          : { sourceJobId }),
+        durationSeconds,
+        orientation,
+        quality,
+        characterImage: {
+          contentType: validatedImage.mimeType,
+          sha256: characterSha256,
+        },
+      },
+    });
+    if (!requestIdentity) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+
+    const replay = await findReplayableAiJob({ userId, ...requestIdentity });
+    if (replay?.outcome === "existing") {
+      return c.json(await publicAiJobPayload(replay.job, c.req.raw), {
+        status: isTerminalAiJobStatus(replay.job.status) ? 200 : 202,
+      });
+    }
+    if (replay?.outcome === "idempotencyConflict") {
+      return c.json(await apiErrorResponse("aiRequestChanged"), { status: 409 });
+    }
+    if (replay?.outcome === "deleted") {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
+    }
+
+    // A named source that is not this user's, is gone, or never produced a
+    // video must cost nothing. An uploaded one came from this request and was
+    // already checked above.
+    if (
+      sourceJobId !== undefined &&
+      !(await describeSourceVideo({ userId, sourceJobId }))
+    ) {
+      return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
+    }
+
+    const catalog = await loadAiModelCatalog();
+    const selectedModel = catalog.resolve("video.motion", fields.data.model);
+    if (!selectedModel) {
+      return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    const motionCapabilities = (await loadAiVideoModelCapabilities())
+      .get(selectedModel.modelId);
+    if (!isVideoModelUsable(motionCapabilities, "video.motion")) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+    if (
+      motionCapabilities !== undefined &&
+      prompt.length > motionCapabilities.maxPromptCharacters
+    ) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
+        status: 400,
+      });
+    }
+    requestSignal.throwIfAborted();
+
+    const callbackNonce = await createCallbackNonce();
+    const cost = selectedModel.priceUnits * durationSeconds;
+    const reservation = await createReservedAiJob({
+      userId,
+      kind: "video",
+      provider: selectedModel.provider,
+      status: "queued",
+      inputParams: {
+        prompt,
+        ...(sourceJobId === undefined ? {} : { sourceJobId }),
+        durationSeconds,
+        orientation,
+        quality,
+        mode: "motion",
+        characterImage: {
+          filename: characterImage.name,
+          mimeType: validatedImage.mimeType,
+        },
+      },
+      usageUnits: cost,
+      model: selectedModel.modelId,
+      activeJobLimit: 1,
+      callbackNonceHash: callbackNonce.hash,
+      ...requestIdentity,
+    });
+    if (!reservation.ok) {
+      return c.json(await apiErrorResponse(reservation.errorCode), {
+        status: reservation.status,
+      });
+    }
+    const { job } = reservation;
+    if (reservation.outcome === "existing") {
+      return c.json(await publicAiJobPayload(job, c.req.raw), {
+        status: isTerminalAiJobStatus(job.status) ? 200 : 202,
+      });
+    }
+
+    try {
+      const mediaOrigin = publicHttpsOrigin(c.req.raw);
+      const callbackUrl = videoCallbackUrl(
+        c.req.raw,
+        job.id,
+        callbackNonce.nonce,
+        selectedModel.provider,
+      );
+      await createAndAttachVideoJob({
+        jobId: job.id,
+        prompt,
+        durationSeconds,
+        // The result follows the character picture or the reference video, so
+        // neither is chosen here; something has to be sent, so it is the default.
+        resolution: "720p",
+        aspectRatio: "16:9",
+        generateAudio: true,
+        // The character travels as the one picture a motion request carries.
+        frameImages: [
+          toVideoFrameImage(
+            validatedImage.bytes,
+            validatedImage.mimeType,
+            "first_frame",
+          ),
+        ],
+        mode: "motion",
+        ...(sourceJobId === undefined
+          ? { sourceVideo: sourceVideo! }
+          : { sourceJobId, sourceUserId: userId }),
+        motionOrientation: orientation,
+        motionQuality: quality,
+        callbackNonceHash: callbackNonce.hash,
+        model: selectedModel.modelId,
+        provider: selectedModel.provider,
+        ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
+        signal: requestSignal,
+      });
+      const current = await getAiJobById({ jobId: job.id });
+      return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
+    } catch (err) {
+      const handling = classifyVideoSubmissionFailure(err);
+      if (handling.action === "refund") {
+        await failAiJobAndRefundUsage({
+          userId,
+          aiJobId: job.id,
+          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          ...(handling.detachProviderJob
+            ? { expectedProviderJobId: null }
+            : {}),
+        });
+      }
+      if (handling.action === "rethrow") throw err;
+      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+    }
+  })
+
+  // Vercel AI Gateway's terminal delivery.
+  //
+  // What makes this safe is not the payload: it is the per-job nonce in the
+  // query string, which only this service and the Gateway ever saw, plus the
+  // fact that nothing here is believed. The delivery says a job of ours
+  // finished; `synchronizeAiVideoJob` then asks the provider what actually
+  // happened and decides the outcome from that answer. A forged call can
+  // therefore cost at most one poll, which the job's own poll lease already
+  // bounds.
+  //
+  // The Gateway also signs each delivery, with a secret it returns once on the
+  // start response — per job, not per workspace. Verifying that signature
+  // would mean keeping those secrets in the database in the clear, which this
+  // service deliberately does not do for provider credentials; the nonce gives
+  // the same guarantee for a payload that is only a trigger. If the signature
+  // is wanted later, capture `providerMetadata.gateway.asyncJob.webhookSigningSecret`
+  // in the Gateway adapter's `start` and store it beside the job.
+  .post("/:id/gateway-callback", async (c) => {
+    let rawBody: Uint8Array;
+    try {
+      rawBody = await readOpenRouterWebhookBody(c.req.raw);
+    } catch (error) {
+      return new Response(null, {
+        status: error instanceof OpenRouterWebhookBodyTooLargeError ? 413 : 400,
+      });
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(rawBody),
+      ) as unknown;
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    const event = gatewayVideoWebhookSchema.safeParse(payload);
+    if (
+      !event.success ||
+      gatewayWebhookStatusByType[event.data.type] !== event.data.data.status
+    ) {
+      return new Response(null, { status: 400 });
+    }
+
+    const jobId = c.req.param("id");
+    const job = await getAiJobById({ jobId });
+    const callbackNonce = c.req.query("nonce");
+    if (
+      !job ||
+      job.kind !== "video" ||
+      job.provider !== "vercel-gateway" ||
+      !job.callbackNonceHash ||
+      typeof callbackNonce !== "string" ||
+      !(await callbackNonceMatches(callbackNonce, job.callbackNonceHash))
+    ) {
+      return new Response(null, { status: 401 });
+    }
+
+    // Unlike OpenRouter's route, this one never attaches an id: the Gateway
+    // returns the job id on the start response, so a job reaching a terminal
+    // state without one already stored is not this delivery's to claim.
+    if (job.providerJobId !== event.data.data.jobId) {
+      return new Response(null, { status: 409 });
+    }
+
+    if (job.status !== "succeeded" && job.status !== "failed") {
+      try {
+        await synchronizeAiVideoJob({ job });
+      } catch (error) {
+        console.error(
+          `Failed to synchronize Vercel AI Gateway callback for AI job ${job.id}`,
+          error,
+        );
+        return new Response(null, { status: 500 });
+      }
+    }
+    // The Gateway expects a 2xx inside ten seconds and retries otherwise, with
+    // the same x-ai-gateway-idempotency-key; a repeat lands on the terminal
+    // status check above and does nothing.
+    return new Response(null, { status: 204 });
+  })
+  // The pictures a submitted job works from, for the provider to fetch.
+  //
+  // Unauthenticated on purpose: a provider holds no account here, and there is
+  // no header it could be told to send. The URL is the capability — a job id
+  // and a media id, both UUIDs — and the route reads nothing outside the one
+  // prefix those two build, so no other object in the bucket is reachable
+  // through it. The objects are opaque picture bytes a caller uploaded moments
+  // earlier for this job, carry nothing about the account, and are scheduled
+  // for deletion as they are written.
+  .get("/media/:jobId/:mediaId", async (c) => {
+    const jobId = c.req.param("jobId");
+    const mediaId = c.req.param("mediaId");
+    if (!isVideoInputMediaId(jobId) || !isVideoInputMediaId(mediaId)) {
+      return new Response(null, { status: 404 });
+    }
+
+    let media: Awaited<ReturnType<typeof readVideoInputMedia>>;
+    try {
+      media = await readVideoInputMedia({ jobId, mediaId });
+    } catch (error) {
+      console.error(
+        `Failed to read AI video input media for job ${jobId}`,
+        error,
+      );
+      return new Response(null, { status: 500 });
+    }
+    if (!media) return new Response(null, { status: 404 });
+
+    // The type is not read back from the object: a provider only needs bytes,
+    // and echoing a stored type would hand back something a caller chose.
+    const headers = {
+      "content-type": "application/octet-stream",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    };
+    return media.body
+      ? new Response(media.body, { headers })
+      : new Response(media.bytes, { headers });
   })
   .get("/:id", async (c) => {
     const userId = await getUserId(c);

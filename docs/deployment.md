@@ -155,6 +155,12 @@ The desktop API Worker requires:
 - `STRIPE_SECRET_KEY`, used by scheduled top-up and Pro refund reconciliation
 - `OPENROUTER_REQUEST_TIMEOUT_MS` when overriding the default 120-second
   provider deadline
+- `VERCEL_AI_GATEWAY_API_KEY`, only when a video model is registered against
+  the `vercel-gateway` provider. Its deliveries are signed per job with a
+  secret returned on the start response, so there is no workspace-wide webhook
+  secret to configure
+- `VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS` when overriding the same 120-second
+  deadline for that provider
 
 Without `STRIPE_SECRET_KEY`, the API Worker's scheduled billing reconcilers
 fail and compensating refunds stop being issued. Use the same Stripe secret as

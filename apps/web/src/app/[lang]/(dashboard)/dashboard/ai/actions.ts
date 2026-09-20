@@ -57,7 +57,10 @@ import {
   createAndAttachVideoJob,
   deleteAiOutputObject,
   loadAiImageModelCapabilities,
+  imageProviderFor,
   loadAiVideoModelCapabilities,
+  transcriptionProviderFor,
+  translationProviderFor,
   unsupportedImageRequestReason,
   unsupportedVideoRequestReason,
 } from "@beutl/api";
@@ -537,15 +540,40 @@ async function resolveOrigin(): Promise<string> {
 // HTTP — a local one, typically — gets no callback URL at all and its jobs are
 // finished by the poll path instead. Sending the URL anyway fails the whole
 // submission, which made video generation impossible to run locally.
+// Each provider has its own callback route, because each refuses a job that is
+// not its. A provider with no route gets no URL and its jobs are finished by
+// polling — the same branch a deployment without an HTTPS origin takes.
+const VIDEO_CALLBACK_PATHS: Record<string, string> = {
+  openrouter: "openrouter-callback",
+  "vercel-gateway": "gateway-callback",
+};
+
+// The HTTPS origin a provider can reach this deployment on, or undefined for a
+// server that has none. A provider that reads pictures by URL cannot be used
+// from such a deployment, and the submission says so rather than sending a
+// request without them.
+async function resolveMediaOrigin(): Promise<string | undefined> {
+  let origin: URL;
+  try {
+    origin = new URL(await resolveOrigin());
+  } catch {
+    return undefined;
+  }
+  return origin.protocol === "https:" ? origin.origin : undefined;
+}
+
 async function resolveVideoCallbackUrl(
   jobId: string,
   nonce: string,
+  provider: string,
 ): Promise<string | undefined> {
+  const path = VIDEO_CALLBACK_PATHS[provider];
+  if (path === undefined) return undefined;
   const origin = await resolveOrigin();
   let callbackUrl: URL;
   try {
     callbackUrl = new URL(
-      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
+      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/${path}`,
       origin,
     );
   } catch {
@@ -664,7 +692,7 @@ export async function generateImageAction(
   // usage is reserved reads as a provider outage.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+      (await loadAiImageModelCapabilities([selectedModel])).get(
         selectedModel.modelId,
       ),
       {
@@ -685,7 +713,7 @@ export async function generateImageAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "image",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       prompt,
@@ -712,7 +740,7 @@ export async function generateImageAction(
   }
 
   try {
-    const result = await generateImage({
+    const result = await imageProviderFor(selectedModel.provider).generate({
       prompt,
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
@@ -821,7 +849,7 @@ export async function editImageAction(
   // size; a model that takes none of those is refused before it is paid for.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
+      (await loadAiImageModelCapabilities([selectedModel])).get(
         selectedModel.modelId,
       ),
       {
@@ -847,7 +875,7 @@ export async function editImageAction(
     // makes it indistinguishable from a generation, and the retry path then
     // reruns it as text-to-image: no source picture, and the generation price.
     kind: "image_edit",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       task,
@@ -869,7 +897,7 @@ export async function editImageAction(
   }
 
   try {
-    const result = await editImage({
+    const result = await imageProviderFor(selectedModel.provider).edit({
       task,
       image: validated.bytes,
       mimeType: validated.mimeType,
@@ -962,7 +990,7 @@ export async function transcribeAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "stt",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       filename: file.name,
@@ -986,7 +1014,9 @@ export async function transcribeAction(
   }
 
   try {
-    const result = await transcribeAudio({
+    const result = await transcriptionProviderFor(
+      selectedModel.provider,
+    ).transcribe({
       audio: parsedAudio.bytes,
       durationSeconds: parsedAudio.durationSeconds,
       filename: file.name,
@@ -1120,7 +1150,7 @@ export async function translateAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "translation",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
@@ -1145,7 +1175,9 @@ export async function translateAction(
   }
 
   try {
-    const translated = await translateSegments({
+    const translated = await translationProviderFor(
+      selectedModel.provider,
+    ).translate({
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments,
@@ -1323,7 +1355,7 @@ export async function retryJobAction(
     // background, or seed never reaches the paid provider/refund path.
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([retryModel.modelId])).get(
+        (await loadAiImageModelCapabilities([retryModel])).get(
           retryModel.modelId,
         ),
         {
@@ -1357,7 +1389,7 @@ export async function retryJobAction(
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "image",
-      provider: "openrouter",
+      provider: retryModel.provider,
       status: "running",
       inputParams: {
         prompt: input.prompt,
@@ -1380,7 +1412,7 @@ export async function retryJobAction(
       return await answerFromExistingFileJob(retried, t);
     }
     try {
-      const result = await generateImage({
+      const result = await imageProviderFor(retryModel.provider).generate({
         prompt: input.prompt,
         aspectRatio,
         ...(background ? { background } : {}),
@@ -1497,7 +1529,7 @@ export async function retryJobAction(
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "video",
-      provider: "openrouter",
+      provider: retryModel.provider,
       status: "queued",
       inputParams: {
         prompt: input.prompt,
@@ -1520,9 +1552,11 @@ export async function retryJobAction(
     if (reservation.outcome === "existing") {
       return await answerFromExistingVideoJob(retried, t);
     }
+    const mediaOrigin = await resolveMediaOrigin();
     const callbackUrl = await resolveVideoCallbackUrl(
       retried.id,
       callbackNonce.nonce,
+      retryModel.provider,
     );
     try {
       await createAndAttachVideoJob({
@@ -1536,6 +1570,8 @@ export async function retryJobAction(
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
         callbackNonceHash: callbackNonce.hash,
         model: retryModel.modelId,
+        provider: retryModel.provider,
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
       });
       return { success: true, jobId: retried.id };
     } catch (error) {
@@ -1696,6 +1732,62 @@ export async function saveResultToStorageAction(
         message: t("dashboard:ai.saveToStorageUnavailable"),
       };
   }
+}
+
+/** A finished video of this account's, offered as the source for another job. */
+export type AiSourceVideo = {
+  jobId: string;
+  createdAt: string;
+  durationSeconds: number;
+  fileName: string | null;
+  url: string | null;
+};
+
+// How far back the picker looks. A source is named by its job, so only jobs
+// still in history can be chosen; going further would page the whole account's
+// past to fill one select.
+const SOURCE_VIDEO_SEARCH_LIMIT = 100;
+
+/**
+ * The videos an edit, an extension or a motion job can be built from.
+ *
+ * Filtered on exactly what the API will accept later — a finished video job of
+ * this user's, whose result is still here and whose length is recorded. A
+ * picker offering anything else would let a request be built that is refused
+ * after the user has chosen it.
+ */
+export async function listSourceVideosAction(): Promise<AiSourceVideo[]> {
+  const session = await throwIfUnauth();
+  const page = await listAiJobsByUserId({
+    userId: session.user.id,
+    limit: SOURCE_VIDEO_SEARCH_LIMIT,
+  });
+  const sources = await Promise.all(
+    page.jobs.map(async (job): Promise<AiSourceVideo | null> => {
+      if (job.kind !== "video" || job.status !== "succeeded") return null;
+      if (!job.resultFileId) return null;
+      if (!job.resultFile?.mimeType?.startsWith("video/")) return null;
+      // The length is the extension's starting point and an edit's whole
+      // answer, and describeSourceVideo refuses a job without one.
+      const recorded = (job.inputParams as { durationSeconds?: unknown } | null)
+        ?.durationSeconds;
+      if (
+        typeof recorded !== "number" ||
+        !Number.isFinite(recorded) ||
+        recorded <= 0
+      ) {
+        return null;
+      }
+      return {
+        jobId: job.id,
+        createdAt: job.createdAt.toISOString(),
+        durationSeconds: Math.ceil(recorded),
+        fileName: job.resultFile?.name ?? null,
+        url: await getContentUrl(job.resultFileId),
+      };
+    }),
+  );
+  return sources.filter((source): source is AiSourceVideo => source !== null);
 }
 
 // The user's storage folders, for choosing where a result is kept. The whole

@@ -327,8 +327,19 @@ describe("choosing a model per request", () => {
       "durationsSeconds",
       "firstFrame",
       "id",
+      "inputReferences",
       "isDefault",
       "lastFrame",
+      "maxAudioReferenceBytes",
+      "maxAudioReferences",
+      "maxInputReferenceBytes",
+      "maxInputReferences",
+      "maxPromptLength",
+      "maxSourceVideoBytes",
+      "maxSourceVideoSeconds",
+      "maxVideoReferenceBytes",
+      "maxVideoReferences",
+      "minSourceVideoSeconds",
       "resolutions",
       "seed",
     ];
@@ -356,8 +367,16 @@ describe("choosing a model per request", () => {
               : ["costTier", "displayName", "id", "isDefault"],
         );
         for (const [key, field] of Object.entries(model)) {
-          // A count of pictures is not a figure a price can be read out of.
-          if (key === "maxReferenceImages") continue;
+          // An allowance is not a figure a price can be read out of. These say
+          // how much a model will take, which a screen needs in order to offer
+          // it; what any of it costs is never published here.
+          if (
+            key === "maxReferenceImages" ||
+            key.startsWith("max") ||
+            key.startsWith("min")
+          ) {
+            continue;
+          }
           expect(typeof field).not.toBe("number");
         }
       }

@@ -9,6 +9,7 @@ import {
   createPublicOpenRouterClient,
   toAiProviderError,
 } from "./openrouter";
+import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
 
 // What each image model will accept, read from the provider.
 //
@@ -285,15 +286,55 @@ async function loadOne(
   }
 }
 
-// One lookup per model, in parallel and cached, because the provider publishes
+/**
+ * A model to look up, and who runs it.
+ *
+ * A bare id is read as the provider every registered row carried before the
+ * column existed, so a caller with no catalog in hand keeps working.
+ */
+export type AiImageModelRef = string | { modelId: string; provider: string };
+
+// Vercel AI Gateway publishes nothing per image model: there is no
+// `image_capabilities` block anywhere in /v1/models, and 32 of its 33 image
+// models declare `modalities.input: ["text"]` even where the documentation says
+// they accept a picture. So what a Gateway model takes is what the SDK's image
+// call takes, and the two fields it has no parameter for are stated as
+// unsupported rather than left to be discovered by a request that succeeds and
+// returns the wrong thing.
+function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
+  return {
+    modelId,
+    aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
+    // No background parameter exists. Asking for a transparent one would be
+    // ignored, and the user billed for an opaque picture.
+    backgrounds: ["auto"],
+    seed: true,
+    inputReferences: true,
+    maxReferenceImages: AI_MAX_IMAGE_REFERENCES,
+    // No upscale surface, which is what `resolution` stands for here.
+    resolution: false,
+  };
+}
+
+// One lookup per model, in parallel and cached, because a provider publishes
 // image capabilities per model rather than as one list.
 export async function loadAiImageModelCapabilities(
-  modelIds: readonly string[],
+  models: readonly AiImageModelRef[],
   now = Date.now(),
 ): Promise<Map<string, AiImageModelCapabilities>> {
-  const unique = [...new Set(modelIds)];
+  const providerOf = new Map<string, string>();
+  for (const model of models) {
+    const modelId = typeof model === "string" ? model : model.modelId;
+    const provider =
+      typeof model === "string" ? DEFAULT_AI_PROVIDER_ID : model.provider;
+    if (!providerOf.has(modelId)) providerOf.set(modelId, provider);
+  }
   const loaded = await Promise.all(
-    unique.map(async (modelId) => [modelId, await loadOne(modelId, now)] as const),
+    [...providerOf].map(async ([modelId, provider]) =>
+      provider === "vercel-gateway"
+        ? ([modelId, gatewayImageCapabilities(modelId)] as const)
+        : ([modelId, await loadOne(modelId, now)] as const),
+    ),
   );
   return new Map(
     loaded.filter((entry): entry is [string, AiImageModelCapabilities] =>

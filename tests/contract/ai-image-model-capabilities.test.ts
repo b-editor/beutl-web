@@ -310,3 +310,59 @@ describe("whether a registered image model can serve its operation", () => {
     expect(isImageModelUsable(undefined, { referenceImages: true })).toBe(true);
   });
 });
+
+describe("an image model Vercel AI Gateway runs", () => {
+  beforeEach(() => {
+    listModelEndpoints.mockReset();
+    clearAiImageModelCapabilitiesCache();
+  });
+
+  it("is described without asking OpenRouter about it", async () => {
+    // The Gateway publishes no per-model image capabilities at all — there is
+    // no `image_capabilities` block in its model list — so looking the id up on
+    // another provider's endpoint would answer about a different model, or
+    // about nothing.
+    const entry = (
+      await loadAiImageModelCapabilities([
+        { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
+      ])
+    ).get("openai/gpt-image-2");
+
+    expect(listModelEndpoints).not.toHaveBeenCalled();
+    expect(entry).toMatchObject({
+      modelId: "openai/gpt-image-2",
+      seed: true,
+      inputReferences: true,
+    });
+  });
+
+  it("offers no background control and no upscale", async () => {
+    // The SDK's image call has neither parameter. Publishing them as available
+    // would let a request ask for a transparent background, be charged, and get
+    // an opaque picture back with nothing reporting a problem.
+    const entry = (
+      await loadAiImageModelCapabilities([
+        { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
+      ])
+    ).get("openai/gpt-image-2");
+
+    expect(entry?.backgrounds).toEqual(["auto"]);
+    expect(entry?.resolution).toBe(false);
+    expect(unsupportedImageRequestReason(entry, { background: "transparent" }))
+      .toBe("background");
+    expect(unsupportedImageRequestReason(entry, { resolution: true }))
+      .toBe("resolution");
+    expect(unsupportedImageRequestReason(entry, { background: "auto" }))
+      .toBeNull();
+  });
+
+  it("still reads a bare id as OpenRouter's", async () => {
+    // Callers without a catalog in hand pass ids, and those rows are the ones
+    // that predate the provider column.
+    listModelEndpoints.mockResolvedValue({ endpoints: [] });
+
+    await loadAiImageModelCapabilities(["openai/gpt-image-1"]);
+
+    expect(listModelEndpoints).toHaveBeenCalledOnce();
+  });
+});

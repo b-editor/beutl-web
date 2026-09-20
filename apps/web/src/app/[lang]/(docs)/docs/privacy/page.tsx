@@ -139,10 +139,10 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
       <h2 className={sectionClass}>4. AI機能における情報の取扱い</h2>
       <ol className={orderedListClass}>
         <li>
-          AI機能への入力は、処理のためOpenRouter, Inc.へ送信され、さらに選択されたモデルを実行するAI事業者へ送信されます。モデルの提供者と実際の処理基盤が異なる場合があります。
+          AI機能への入力は、処理のため、選択されたモデルの経路を担うOpenRouter, Inc.又はVercel Inc.（AI Gateway）へ送信され、さらにそのモデルを実行するAI事業者へ送信されます。モデルの提供者と実際の処理基盤が異なる場合があります。
         </li>
         <li>
-          OpenRouter及び各AI事業者における入力・出力の保存、学習利用及び安全確認の条件は、選択されたモデル、処理経路及び各社の方針により異なります。本サービスは、すべてのAI処理についてゼロデータ保持又は学習不使用を保証するものではありません。
+          経路を担う事業者及び各AI事業者における入力・出力の保存、学習利用及び安全確認の条件は、選択されたモデル、処理経路及び各社の方針により異なります。本サービスは、すべてのAI処理についてゼロデータ保持又は学習不使用を保証するものではありません。
         </li>
         <li>
           運営者は、処理結果、ジョブ履歴及び課金・復旧に必要な情報を保存します。元の画像又は音声は、利用者が別途ストレージへ保存しない限り、通常はAI処理のため一時的に取り扱い、Beutlのジョブ履歴用ファイルとしては保存しません。ただし、外部AI事業者における保持は各社の条件に従います。
@@ -152,7 +152,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         </li>
       </ol>
       <p className="leading-7 not-first:mt-6">
-        OpenRouterの最新の取扱いは、
+        経路を担う各事業者の最新の取扱いは、
         <a
           className={linkClass}
           href="https://openrouter.ai/privacy"
@@ -169,6 +169,15 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
           rel="noreferrer"
         >
           Provider Logging
+        </a>
+        並びに
+        <a
+          className={linkClass}
+          href="https://vercel.com/legal/privacy-policy"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Vercel Privacy Policy
         </a>
         で確認できます。
       </p>
@@ -303,6 +312,21 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
               <td className="border px-3 py-2">
                 <a
                   className={linkClass}
+                  href="https://vercel.com/legal/privacy-policy"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Vercel Inc.
+                </a>
+                （AI Gateway）及び選択モデルのAI事業者
+              </td>
+              <td className="border px-3 py-2">AI処理、モデルへの経路選択、結果返却及び利用量管理</td>
+              <td className="border px-3 py-2">AIへの入力・出力、モデル、処理識別子及び技術的な利用情報</td>
+            </tr>
+            <tr>
+              <td className="border px-3 py-2">
+                <a
+                  className={linkClass}
                   href="https://ipinfo.io/privacy-policy"
                   target="_blank"
                   rel="noreferrer"
@@ -342,7 +366,7 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
         本サービスのデータベースに記録される情報は、CockroachDBのシンガポールリージョンに保存します。Cockroach Labs, Inc.は米国に所在し、サービスの運用又はサポート等のため、同社又は再委託先がシンガポール国外から情報を取り扱う場合があります。
       </p>
       <p className="leading-7 not-first:mt-6">
-        その他の委託先の多くも米国に所在し、そのサーバー又は再委託先は日本、シンガポール、米国、欧州その他の国・地域に所在する場合があります。AI処理の国は、利用者が選択したモデル、OpenRouterの処理経路、稼働状況及びモデル提供者の再委託先により変わるため、あらかじめ一つの国へ特定できません。候補となる事業者及び所在国は、
+        その他の委託先の多くも米国に所在し、そのサーバー又は再委託先は日本、シンガポール、米国、欧州その他の国・地域に所在する場合があります。AI処理の国は、利用者が選択したモデル、経路を担う事業者の処理経路、稼働状況及びモデル提供者の再委託先により変わるため、あらかじめ一つの国へ特定できません。候補となる事業者及び所在国は、
         <a
           className={linkClass}
           href="https://openrouter.ai/providers"
@@ -350,6 +374,15 @@ function JapanesePrivacyPage({ lang }: { lang: string }) {
           rel="noreferrer"
         >
           OpenRouterのProvider一覧
+        </a>
+        及び
+        <a
+          className={linkClass}
+          href="https://vercel.com/ai-gateway/models"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Vercel AI Gatewayのモデル一覧
         </a>
         で確認できます。
       </p>

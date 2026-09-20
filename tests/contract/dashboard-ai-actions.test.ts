@@ -38,10 +38,8 @@ import {
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
   createReservedAiJob,
-  generateImage,
   readAiJsonResult,
   saveAiImage,
-  translateSegments,
   toAiRequestIdentity,
 } from "@beutl/api";
 import {
@@ -62,15 +60,29 @@ const createAndAttachVideoJob = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
 
+// The actions resolve a provider from the catalog rather than importing one,
+// so the registry accessors are pointed at the same mocks the assertions below
+// read. Keeping the identity means every `expect(generateImage)` still sees the
+// call the action made.
+const generateImage = vi.hoisted(() => vi.fn());
+const editImage = vi.hoisted(() => vi.fn());
+const translateSegments = vi.hoisted(() => vi.fn());
+const transcribeAudio = vi.hoisted(() => vi.fn());
+
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
   return {
     ...actual,
-    generateImage: vi.fn(),
+    generateImage,
+    editImage,
+    translateSegments,
+    transcribeAudio,
+    imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+    translationProviderFor: () => ({ translate: translateSegments }),
+    transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
     saveAiImage: vi.fn(),
     createReservedAiJob: vi.fn(),
     listAiJobsByUserId: vi.fn(),
-    translateSegments: vi.fn(),
     readAiJsonResult: vi.fn(),
     loadAiImageModelCapabilities,
     loadAiVideoModelCapabilities,
