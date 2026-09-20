@@ -120,7 +120,10 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
 
 /**
  * The built-in entry for an operation with no rows, or nothing when that entry
- * belongs to a provider this deployment cannot call.
+ * belongs to a provider this Worker cannot call. Web executes dashboard AI
+ * requests locally, and Web/API/admin each load this catalog. Configure the
+ * enabled Gateway provider on all three Workers as documented in
+ * docs/deployment.md#worker-settings.
  *
  * Upgrading adds operations to the code before an administrator has registered
  * anything for them, and the three source-video modes exist on Vercel AI

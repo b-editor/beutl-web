@@ -134,6 +134,31 @@ host-only session cookies when enabling session sharing.
 
 ### Worker settings
 
+Provider credentials are local to each Worker. The Web Worker executes
+dashboard AI requests through `/api/internal/ai/*` in its own process; it does
+not forward them to the desktop API Worker. Web, desktop API, and admin all
+load the AI model catalog, so keep their enabled Gateway configuration aligned:
+
+| Setting | Web | Desktop API | Admin |
+| --- | --- | --- | --- |
+| `OPENROUTER_API_KEY` | Required for OpenRouter operations | Required for OpenRouter operations and reconciliation | Not needed for public catalog and price reads |
+| `VERCEL_AI_GATEWAY_API_KEY` | Required when Gateway is enabled | Required when Gateway is enabled | Required when Gateway is enabled, including built-in model visibility |
+
+Configure `VERCEL_AI_GATEWAY_API_KEY` as a secret on **all three Workers** when
+enabling Gateway, including an upgrade that relies on the built-in
+`video.edit`, `video.extend`, and `video.motion` models before any rows have
+been registered. Setting it only on the desktop API Worker leaves those modes
+hidden in the Web and admin catalogs. Keep Web and desktop API credentials on
+the same provider account so scheduled reconciliation can retrieve jobs
+started by either Worker. Configure secrets separately for each deployed
+Worker/environment; they are not inherited from another Worker.
+
+An OpenRouter-only installation may omit the Gateway key on all three Workers;
+the Gateway-only built-in modes then remain unavailable. Gateway supports
+image, transcription, and translation operations as well as video, so the key
+requirement is not limited to registered video models. There is no
+workspace-wide Gateway webhook secret to configure.
+
 The Web Worker requires:
 
 - `STRIPE_SECRET_KEY`
@@ -147,20 +172,15 @@ The Web Worker requires:
 Historical offers are explicit rather than learned from a customer-edited
 subscription.
 
-The desktop API Worker requires:
+In addition to the provider settings above, the desktop API Worker requires:
 
-- `OPENROUTER_API_KEY`
 - `OPENROUTER_WEBHOOK_SECRET`, used to verify callbacks that reconcile
   ambiguous video submissions
 - `STRIPE_SECRET_KEY`, used by scheduled top-up and Pro refund reconciliation
-- `OPENROUTER_REQUEST_TIMEOUT_MS` when overriding the default 120-second
-  provider deadline
-- `VERCEL_AI_GATEWAY_API_KEY`, only when a video model is registered against
-  the `vercel-gateway` provider. Its deliveries are signed per job with a
-  secret returned on the start response, so there is no workspace-wide webhook
-  secret to configure
-- `VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS` when overriding the same 120-second
-  deadline for that provider
+
+Both providers default to a 120-second request deadline. Override it on Web
+and desktop API with `OPENROUTER_REQUEST_TIMEOUT_MS` or
+`VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS` as needed.
 
 Without `STRIPE_SECRET_KEY`, the API Worker's scheduled billing reconcilers
 fail and compensating refunds stop being issued. Use the same Stripe secret as
@@ -183,9 +203,10 @@ or disabled models are rejected instead of silently replaced, preventing a
 caller from being charged for a model it did not request.
 
 Administrators register models per operation at `/admin/ai`. They are stored
-in `AiOperationModel`. An operation with no registered models uses the single
-model and price in `AiSetting`; the monthly Pro allowance is configured there
-as well. Values resolve from the database or their built-in defaults, including
+in `AiOperationModel`. An operation with no registered models uses its built-in
+model and price, subject to the provider configuration above. The monthly Pro
+allowance is configured in `AiSetting`. Values resolve from the database or
+their built-in defaults, including
 the default allowance of 500 units per period. Each settings change and account
 adjustment is written to the audit log in the same transaction as the change.
 
@@ -207,8 +228,9 @@ The AI settings page shows:
 - the monetary value of one unit for allowances and purchased credits; and
 - estimated provider cost and the resulting cost ratio.
 
-Provider costs come from OpenRouter's public price endpoints and require no
-provider credential on the admin Worker. They are rate-card estimates, not
+OpenRouter costs come from public price endpoints and require no OpenRouter
+credential on the admin Worker. The Gateway credential requirement for the
+admin catalog is listed above. Provider costs are rate-card estimates, not
 recorded spend. When a token rate must be converted to another unit, the UI
 states the assumption. An indeterminate unit is reported as unknown rather
 than free.
