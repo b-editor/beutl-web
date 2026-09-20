@@ -236,7 +236,13 @@ export function VideoEditForm({
   const oversized = oversizedSource || oversizedCharacter;
   const reading = readingSource || readingCharacter;
   const trimmedPrompt = prompt.trim();
-  const promptTooLong = !isAiPromptWithinLimit(trimmedPrompt.length);
+  const promptLimit = Math.min(
+    heldCapabilities?.[model]?.maxPromptCharacters ?? MAX_AI_PROMPT_LENGTH,
+    MAX_AI_PROMPT_LENGTH,
+  );
+  const promptTooLong =
+    !isAiPromptWithinLimit(trimmedPrompt.length) ||
+    trimmedPrompt.length > promptLimit;
   // An edit produces something as long as its source, so it names no length.
   // Counting one anyway would split the same request across two names.
   const sentDuration = mode === "edit" ? null : duration;
@@ -460,7 +466,7 @@ export function VideoEditForm({
             id="videoEditPrompt"
             value={prompt}
             rows={4}
-            maxLength={MAX_AI_PROMPT_LENGTH}
+            maxLength={promptLimit}
             placeholder={t(`dashboard:ai.videoEditPrompts.${mode}`)}
             onChange={(event) => setPrompt(event.target.value)}
           />
@@ -471,7 +477,7 @@ export function VideoEditForm({
                 : "text-xs text-muted-foreground"
             }
           >
-            {trimmedPrompt.length} / {MAX_AI_PROMPT_LENGTH}
+            {trimmedPrompt.length} / {promptLimit}
           </p>
         </div>
 
