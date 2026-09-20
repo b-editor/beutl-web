@@ -108,6 +108,7 @@ export type UnsupportedVideoRequestReason =
   // 必ず断られる」依頼が、利用枠を確保したあとで拒否される。
   | "inputReferenceBytes"
   | "videoReferenceBytes"
+  | "videoReferenceDuration"
   | "audioReferenceBytes"
   // プロンプトが、そのモデルが読む長さを超えている。サービスの上限より短い
   // モデルがあるので、ここを見ないと「書けるのに必ず断られる」依頼が通る。
@@ -342,6 +343,8 @@ export function unsupportedVideoRequestReason(
     inputReferences?: number;
     /** Reference clips and sounds, counted separately: a model allows each its own number. */
     videoReferences?: number;
+    /** Measured container durations, before any billing rounding. */
+    videoReferenceDurationsSeconds?: readonly number[];
     audioReferences?: number;
     /**
      * The largest single reference of each kind, in bytes.
@@ -417,6 +420,14 @@ export function unsupportedVideoRequestReason(
     capabilities.maxVideoReferenceBytes
   ) {
     return "videoReferenceBytes";
+  }
+  if (request.videoReferenceDurationsSeconds?.some((duration) =>
+    (capabilities.minSourceVideoSeconds !== null &&
+      duration < capabilities.minSourceVideoSeconds) ||
+    (capabilities.maxSourceVideoSeconds !== null &&
+      duration > capabilities.maxSourceVideoSeconds)
+  )) {
+    return "videoReferenceDuration";
   }
   if (
     (request.largestAudioReferenceBytes ?? 0) >

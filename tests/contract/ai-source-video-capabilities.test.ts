@@ -88,7 +88,7 @@ describe("source-video model admission", () => {
       currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
       cancelAt: null,
     });
-    for (const mode of MODES) {
+    for (const mode of [...MODES, "generate"]) {
       await upsertAiOperationModel({
         operation: `video.${mode}`,
         modelId: MODEL_ID,
@@ -104,11 +104,22 @@ describe("source-video model admission", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  async function submit(mode: typeof MODES[number]) {
+  async function post(path: string, body: FormData) {
     const token = await sign({
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": USER_ID,
       exp: Math.floor(Date.now() / 1000) + 300,
     }, JWT_SECRET, "HS256");
+    return new Hono().basePath("/api/v3").route("/", v3).request(
+      `/api/v3/ai/videos/${path}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": crypto.randomUUID() },
+        body,
+      },
+    );
+  }
+
+  async function submit(mode: typeof MODES[number]) {
     const body = new FormData();
     body.set("prompt", "make it night");
     body.set("model", MODEL_ID);
@@ -117,15 +128,61 @@ describe("source-video model admission", () => {
     if (mode === "motion") {
       body.set("characterImage", new File([PNG_BYTES], "character.png", { type: "image/png" }));
     }
-    return new Hono().basePath("/api/v3").route("/", v3).request(
-      `/api/v3/ai/videos/${mode}`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": crypto.randomUUID() },
-        body,
-      },
-    );
+    return post(mode, body);
   }
+
+  async function submitReferences(durations: readonly number[]) {
+    selected.maxVideoReferences = 3;
+    selected.maxVideoReferenceBytes = 1024;
+    const body = new FormData();
+    body.set("prompt", "use these clips");
+    body.set("model", MODEL_ID);
+    body.set("durationSeconds", "5");
+    for (const [index, durationSeconds] of durations.entries()) {
+      inspectVideo.mockReturnValueOnce({ mimeType: "video/mp4", durationSeconds });
+      body.append("reference[]", new File([`clip ${index}`], `${index}.mp4`, { type: "video/mp4" }));
+    }
+    return post("frames", body);
+  }
+
+  describe("generation reference-video durations", () => {
+    it.each([
+      [1.5, 2.1],
+      [2.1, 1.5],
+      [2.3, 2.1],
+      [2.1, 2.3],
+    ])("rejects references of %s and %s seconds before reservation", async (first, second) => {
+      const response = await submitReferences([first, second]);
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error_code: "aiModelDoesNotSupportRequest" });
+      expect(state.aiJobs.size).toBe(0);
+      expect(state.creditTransactions).toHaveLength(0);
+      expect(submitVideo).not.toHaveBeenCalled();
+    });
+
+    it("accepts exact boundaries and fractional durations without rounding", async () => {
+      const response = await submitReferences([2, 2.1, 2.2]);
+
+      expect(response.status).toBe(200);
+      expect(submitVideo).toHaveBeenCalledWith(expect.objectContaining({
+        durationSeconds: 5,
+        inputReferences: expect.any(Array),
+      }));
+      expect([...state.aiJobs.values()]).toEqual([
+        expect.objectContaining({ usageUnits: 200 }),
+      ]);
+    });
+
+    it("allows reference durations when the model publishes no bounds", async () => {
+      selected.minSourceVideoSeconds = null;
+      selected.maxSourceVideoSeconds = null;
+      const response = await submitReferences([1.5, 2.3]);
+
+      expect(response.status).toBe(200);
+      expect(submitVideo).toHaveBeenCalledOnce();
+    });
+  });
 
   it("rejects a motion character image above the model's byte limit before reservation", async () => {
     selected.maxReferenceBytes = PNG_BYTES.byteLength - 1;

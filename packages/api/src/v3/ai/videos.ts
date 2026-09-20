@@ -862,6 +862,7 @@ const app = new Hono()
     requestSignal.throwIfAborted();
     // Kept in the order they were sent: the prompt refers to them by position.
     const referenceImages: { bytes: ArrayBuffer; mimeType: string }[] = [];
+    const videoReferenceDurationsSeconds: number[] = [];
     for (const entry of classified) {
       if (entry.kind === "image") {
         const validated = await validateAiInputImage(
@@ -887,6 +888,7 @@ const app = new Hono()
             status: 400,
           });
         }
+        videoReferenceDurationsSeconds.push(metadata.durationSeconds);
         referenceImages.push({ bytes, mimeType: metadata.mimeType });
       } else {
         // Sound. Nothing here decodes it, so the declared type — already
@@ -1031,6 +1033,7 @@ const app = new Hono()
           lastFrame: lastFrame instanceof File,
           inputReferences: imageReferences.length,
           videoReferences: videoReferences.length,
+          videoReferenceDurationsSeconds,
           audioReferences: audioReferences.length,
           // The biggest of each kind. A model states a per-reference size, and
           // the service-wide ceiling checked above can be the larger of the
