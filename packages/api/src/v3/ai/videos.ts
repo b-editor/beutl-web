@@ -1692,6 +1692,7 @@ const app = new Hono()
     if (
       (motionCapabilities !== undefined &&
         (prompt.length > motionCapabilities.maxPromptCharacters ||
+          validatedImage.bytes.byteLength > motionCapabilities.maxReferenceBytes ||
           (motionCapabilities.durations.length > 0 &&
             !motionCapabilities.durations.includes(durationSeconds)))) ||
       (sourceDurationSeconds !== null &&

@@ -127,6 +127,26 @@ describe("source-video model admission", () => {
     );
   }
 
+  it("rejects a motion character image above the model's byte limit before reservation", async () => {
+    selected.maxReferenceBytes = PNG_BYTES.byteLength - 1;
+    const response = await submit("motion");
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error_code: "aiModelDoesNotSupportRequest" });
+    expect(state.aiJobs.size).toBe(0);
+    expect(state.creditTransactions).toHaveLength(0);
+    expect(submitVideo).not.toHaveBeenCalled();
+  });
+
+  it("accepts a motion character image exactly at the model's byte limit", async () => {
+    selected.maxReferenceBytes = PNG_BYTES.byteLength;
+    const response = await submit("motion");
+
+    expect(response.status).toBe(200);
+    expect(submitVideo).toHaveBeenCalledOnce();
+    expect(state.aiJobs.size).toBe(1);
+  });
+
   describe.each(MODES)("%s source duration", (mode) => {
     it.each([1.5, 2.3])("rejects an out-of-range %s-second source before reservation", async (durationSeconds) => {
       inspectVideo.mockReturnValue({ mimeType: "video/mp4", durationSeconds });
