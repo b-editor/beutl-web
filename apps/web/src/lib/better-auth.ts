@@ -15,7 +15,7 @@ export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
 
 // Create the auth instance with Prisma adapter
-async function createAuthWithPrisma() {
+async function createAuthWithPrisma(writeCookies = true) {
   const prisma = await getDb();
   return betterAuth({
     database: prismaAdapter(prisma, {
@@ -48,7 +48,7 @@ async function createAuthWithPrisma() {
       magicLink({
         sendMagicLink: sendMagicLinkEmail,
       }),
-      nextCookies(),
+      ...(writeCookies ? [nextCookies()] : []),
     ],
     session: {
       expiresIn: 60 * 60 * 24 * 30,
@@ -143,6 +143,12 @@ async function createAuthWithPrisma() {
 // one Server Component render without retaining it in the Worker module scope.
 export const getAuth = cache(createAuthWithPrisma);
 
+// Server Component session reads already receive captured request headers.
+// Do not run nextCookies here: its after hook reads cookies() again after
+// awaited authentication, which can outlive the render when navigation closes
+// the request and Next.js has entered its after phase.
+const getSessionAuth = cache(() => createAuthWithPrisma(false));
+
 // Export an async auth handler for route.ts
 export const auth = {
   handler: async (request: Request) => {
@@ -151,8 +157,11 @@ export const auth = {
   },
   api: {
     getSession: async (options: { headers: Headers }) => {
-      const instance = await getAuth();
-      return instance.api.getSession(options);
+      const instance = await getSessionAuth();
+      return instance.api.getSession({
+        ...options,
+        query: { disableRefresh: true },
+      });
     },
   },
 };
