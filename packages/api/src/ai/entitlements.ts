@@ -133,7 +133,13 @@ function minimumChargeFor(
   priceUnits: number,
   videoCapabilities: ReadonlyMap<string, { durations: readonly number[] }>,
 ): number {
-  const videoCapability = operation === "video.generate"
+  // Edits use the source's measured length; these operations let the caller
+  // choose only among the model's published output durations.
+  const videoCapability = (
+    operation === "video.generate" ||
+    operation === "video.extend" ||
+    operation === "video.motion"
+  )
     ? videoCapabilities.get(aiCapabilityKey(model.provider, model.modelId))
     : undefined;
   if (videoCapability && videoCapability.durations.length === 0) return 0;

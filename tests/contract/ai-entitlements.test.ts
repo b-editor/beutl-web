@@ -247,38 +247,85 @@ describe("AI entitlements", () => {
     expect(entitlements.availability["image.generate"]).toBe(false);
   });
 
-  it("uses each video model's shortest supported duration", async () => {
-    await activatePro();
-    for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
+  it.each(["video.generate", "video.extend", "video.motion"])(
+    "uses each %s model's shortest supported duration",
+    async (operation) => {
+      await activatePro();
+      for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
+        await upsertAiOperationModel({
+          operation,
+          modelId,
+          priceUnits: VIDEO_UNIT_PRICE,
+          displayName: null,
+          sortOrder,
+          enabled: true,
+          updatedBy: "admin-1",
+        });
+      }
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 3,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-video-model-minimum",
+      });
+
+      const entitlements = await readEntitlements(new Map([
+        [aiCapabilityKey("openrouter", "video/short"), { durations: [2, 4] }],
+        [aiCapabilityKey("openrouter", "video/long"), { durations: [5, 8] }],
+      ]));
+
+      expect(entitlements.modelAvailability[operation]).toEqual({
+        "video/short": true,
+        "video/long": false,
+      });
+      expect(entitlements.availability[operation]).toBe(true);
+    },
+  );
+
+  it.each(["video.extend", "video.motion"])(
+    "requires the exact minimum charge for %s on the selected provider",
+    async (operation) => {
+      await activatePro();
       await upsertAiOperationModel({
-        operation: "video.generate",
-        modelId,
+        operation,
+        modelId: "video/shared-id",
+        provider: "vercel-gateway",
         priceUnits: VIDEO_UNIT_PRICE,
         displayName: null,
-        sortOrder,
+        sortOrder: 0,
         enabled: true,
         updatedBy: "admin-1",
       });
-    }
-    await consumeUsage({
-      userId: USER_ID,
-      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 3,
-      monthlyUsageLimit: MONTHLY_LIMIT,
-      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
-      aiJobId: "entitlements-video-model-minimum",
-    });
+      const capabilities = new Map([
+        [aiCapabilityKey("openrouter", "video/shared-id"), { durations: [1] }],
+        [aiCapabilityKey("vercel-gateway", "video/shared-id"), { durations: [8, 5] }],
+      ]);
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 5,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-source-video-exact",
+      });
 
-    const entitlements = await readEntitlements(new Map([
-      [aiCapabilityKey("openrouter", "video/short"), { durations: [2, 4] }],
-      [aiCapabilityKey("openrouter", "video/long"), { durations: [5, 8] }],
-    ]));
+      const exact = await readEntitlements(capabilities);
+      expect(exact.availability[operation]).toBe(true);
+      expect(exact.modelAvailability[operation]["video/shared-id"]).toBe(true);
 
-    expect(entitlements.modelAvailability["video.generate"]).toEqual({
-      "video/short": true,
-      "video/long": false,
-    });
-    expect(entitlements.availability["video.generate"]).toBe(true);
-  });
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 1,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-source-video-short",
+      });
+
+      const short = await readEntitlements(capabilities);
+      expect(short.availability[operation]).toBe(false);
+      expect(short.modelAvailability[operation]["video/shared-id"]).toBe(false);
+    },
+  );
 
   it("says which models are affordable, and calls the operation available if any is", async () => {
     await activatePro();
