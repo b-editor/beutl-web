@@ -1491,7 +1491,7 @@ const app = new Hono()
         // provider discards. Something has to be sent, so it is the default.
         resolution: "720p",
         aspectRatio: "16:9",
-        generateAudio: true,
+        generateAudio: selectedCapabilities?.generateAudio ?? true,
         mode,
         sourceVideo,
         callbackNonceHash: callbackNonce.hash,
@@ -1759,7 +1759,7 @@ const app = new Hono()
         // neither is chosen here; something has to be sent, so it is the default.
         resolution: "720p",
         aspectRatio: "16:9",
-        generateAudio: true,
+        generateAudio: motionCapabilities?.generateAudio ?? true,
         // The character travels as the one picture a motion request carries.
         frameImages: [
           toVideoFrameImage(

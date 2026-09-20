@@ -147,6 +147,24 @@ describe("source-video model admission", () => {
     expect(state.aiJobs.size).toBe(1);
   });
 
+  describe.each(MODES)("%s audio generation", (mode) => {
+    it.each([false, true])("uses the model's generateAudio=%s capability", async (generateAudio) => {
+      selected.generateAudio = generateAudio;
+      const response = await submit(mode);
+
+      expect(response.status).toBe(200);
+      expect(submitVideo).toHaveBeenCalledWith(expect.objectContaining({ generateAudio }));
+    });
+
+    it("preserves the default when the model publishes no capabilities", async () => {
+      loadCapabilities.mockResolvedValue(new Map());
+      const response = await submit(mode);
+
+      expect(response.status).toBe(200);
+      expect(submitVideo).toHaveBeenCalledWith(expect.objectContaining({ generateAudio: true }));
+    });
+  });
+
   describe.each(MODES)("%s source duration", (mode) => {
     it.each([1.5, 2.3])("rejects an out-of-range %s-second source before reservation", async (durationSeconds) => {
       inspectVideo.mockReturnValue({ mimeType: "video/mp4", durationSeconds });
