@@ -227,37 +227,47 @@ export async function createAndAttachVideoJob({
 }) {
   const videoProvider = videoProviderFor(provider);
   let sourceVideoUrl: string | undefined;
-  if (mode !== undefined) {
-    if (!sourceVideo) {
-      throw new AiVideoSubmissionError(
-        `A ${mode} request needs a source video`,
-        { outcome: "definite_failure" },
-      );
-    }
-    if (!mediaOrigin) {
-      throw new AiVideoSubmissionError(
-        "This deployment cannot serve AI video pictures to the provider",
-        { outcome: "definite_failure" },
-      );
-    }
-    const { url } = await publishVideoInputMedia({
-      jobId,
-      nonce: callbackNonce,
-      bytes: sourceVideo.bytes,
-      mimeType: sourceVideo.mimeType,
-      origin: mediaOrigin,
-    });
-    sourceVideoUrl = url;
-  }
-  const media = videoProvider.requiresHostedMedia
-    ? await hostVideoInputMedia({
+  let media: Awaited<ReturnType<typeof hostVideoInputMedia>>;
+  try {
+    if (mode !== undefined) {
+      if (!sourceVideo) {
+        throw new AiVideoSubmissionError(
+          `A ${mode} request needs a source video`,
+          { outcome: "definite_failure" },
+        );
+      }
+      if (!mediaOrigin) {
+        throw new AiVideoSubmissionError(
+          "This deployment cannot serve AI video pictures to the provider",
+          { outcome: "definite_failure" },
+        );
+      }
+      const { url } = await publishVideoInputMedia({
         jobId,
-        callbackNonce,
-        frameImages,
-        inputReferences,
-        mediaOrigin,
-      })
-    : { frameImages, inputReferences };
+        nonce: callbackNonce,
+        bytes: sourceVideo.bytes,
+        mimeType: sourceVideo.mimeType,
+        origin: mediaOrigin,
+      });
+      sourceVideoUrl = url;
+    }
+    media = videoProvider.requiresHostedMedia
+      ? await hostVideoInputMedia({
+          jobId,
+          callbackNonce,
+          frameImages,
+          inputReferences,
+          mediaOrigin,
+        })
+      : { frameImages, inputReferences };
+  } catch (cause) {
+    // No provider request has started, so even an ambiguous storage write
+    // cannot have charged for a generation. Its cleanup row remains queued.
+    throw new AiVideoSubmissionError("Failed to stage AI video input media", {
+      outcome: "definite_failure",
+      cause,
+    });
+  }
   // A transport timeout can hide a provider-side acceptance before any job ID
   // reaches us. Once the provider returns an ID, however, it is always persisted
   // either on the local job or in the User-independent cleanup outbox.
