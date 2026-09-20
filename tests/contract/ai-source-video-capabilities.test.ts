@@ -34,6 +34,10 @@ const PNG_BYTES = Uint8Array.from(Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
 ));
+const JPEG_BYTES = Uint8Array.from(Buffer.from(
+  "/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAADAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgj/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABykX//Z",
+  "base64",
+));
 
 function capabilities(): AiVideoModelCapabilities {
   return {
@@ -231,6 +235,41 @@ describe("source-video model admission", () => {
     }
     return post("frames", body);
   }
+
+  it.each(["first", "last"])("rejects an oversized %s frame before reservation", async (largerFrame) => {
+    selected.lastFrame = true;
+    selected.maxReferenceBytes = PNG_BYTES.byteLength;
+    const body = new FormData();
+    body.set("prompt", "move");
+    body.set("model", MODEL_ID);
+    body.set("durationSeconds", "5");
+    for (const frame of ["first", "last"]) {
+      const jpeg = frame === largerFrame;
+      body.set(`${frame}Frame`, new File([jpeg ? JPEG_BYTES : PNG_BYTES], `${frame}.${jpeg ? "jpg" : "png"}`, {
+        type: jpeg ? "image/jpeg" : "image/png",
+      }));
+    }
+    const response = await post("frames", body);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error_code: "aiModelDoesNotSupportRequest" });
+    expect(state.aiJobs.size).toBe(0);
+    expect(state.creditTransactions).toHaveLength(0);
+    expect(submitVideo).not.toHaveBeenCalled();
+  });
+
+  it("accepts first and last frames at the model's exact byte limit", async () => {
+    selected.lastFrame = true;
+    selected.maxReferenceBytes = PNG_BYTES.byteLength;
+    const body = new FormData();
+    body.set("prompt", "move");
+    body.set("model", MODEL_ID);
+    body.set("durationSeconds", "5");
+    for (const frame of ["first", "last"]) {
+      body.set(`${frame}Frame`, new File([PNG_BYTES], `${frame}.png`, { type: "image/png" }));
+    }
+    expect((await post("frames", body)).status).toBe(200);
+    expect(submitVideo).toHaveBeenCalledOnce();
+  });
 
   describe("generation reference-video durations", () => {
     it.each([

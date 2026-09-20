@@ -514,9 +514,10 @@ export function VideoForm({
     () => [sentFirstFrame, sentLastFrame].filter((frame): frame is File => frame !== null),
     [sentFirstFrame, sentLastFrame],
   );
+  const frameByteLimit = Math.min(options.maxReferenceBytes, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
   const { contents: frameContents, reading: readingFrames } = useFileFingerprints(
     frames,
-    MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    frameByteLimit,
   );
   // 送れないと分かっているものは読まない——名前には要らない。ここで毎回
   // 新しい配列を作ってはいけない：useFileFingerprints は配列の同一性を
@@ -530,7 +531,7 @@ export function VideoForm({
     useFileFingerprints(fingerprintedReferences, videoReferenceFingerprintLimit);
   const oversizedFrame =
     [sentFirstFrame, sentLastFrame].some(
-      (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      (frame) => frame !== null && frame.size > frameByteLimit,
     ) || oversizedReference || tooManyReferences;
   // 実際に送るフレーム。モデルが取らないものは送らず、終わりのフレームは始まり
   // があるときだけ送る——この API に始まりの無い依頼は無い。名前もここから
@@ -926,6 +927,9 @@ export function VideoForm({
               file={firstFrame}
               onPick={setFirstFrame}
               clearLabel={t("dashboard:ai.clearFrame")}
+              note={firstFrame && firstFrame.size > frameByteLimit
+                ? t("dashboard:ai.referenceImageTooLarge", { maximum: formatBytes(frameByteLimit) })
+                : null}
             />
           )}
           {options.firstFrame && options.lastFrame && (
@@ -937,7 +941,11 @@ export function VideoForm({
               file={lastFrame}
               onPick={setLastFrame}
               clearLabel={t("dashboard:ai.clearFrame")}
-              note={lastFrame && !sentLastFrame ? t("dashboard:ai.lastFrameNeedsFirst") : null}
+              note={lastFrame && !sentLastFrame
+                ? t("dashboard:ai.lastFrameNeedsFirst")
+                : lastFrame && lastFrame.size > frameByteLimit
+                  ? t("dashboard:ai.referenceImageTooLarge", { maximum: formatBytes(frameByteLimit) })
+                  : null}
             />
           )}
           {/* Only for a model that says it conditions on references. Unstated

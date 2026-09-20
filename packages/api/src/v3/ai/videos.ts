@@ -1036,7 +1036,11 @@ const app = new Hono()
           // the service-wide ceiling checked above can be the larger of the
           // two, so without this a reference that is legal for the service but
           // not for the chosen model is refused only after usage is reserved.
-          largestInputReferenceBytes: largestBytesOf(imageReferences),
+          largestInputReferenceBytes: Math.max(
+            largestBytesOf(imageReferences),
+            firstFrameImage?.bytes.byteLength ?? 0,
+            lastFrameImage?.bytes.byteLength ?? 0,
+          ),
           largestVideoReferenceBytes: largestBytesOf(videoReferences),
           largestAudioReferenceBytes: largestBytesOf(audioReferences),
           promptCharacters: fields.data.prompt.length,
