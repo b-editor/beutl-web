@@ -212,26 +212,34 @@ export function VideoEditForm({
   // ものが同じ依頼に見え、片方が走っている間もう片方を始められない。送れないと
   // 分かっている大きさのものは読まない——名前には要らない。
   const sentSourceFile = sourceFile;
+  const sourceVideoLimit = Math.min(
+    heldCapabilities?.[model]?.maxSourceVideoBytes ?? MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+    MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  );
   const oversizedSource =
     sentSourceFile !== null &&
-    sentSourceFile.size > MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES;
+    sentSourceFile.size > sourceVideoLimit;
   const sourceFiles = useMemo(
     () => (sentSourceFile && !oversizedSource ? [sentSourceFile] : []),
     [sentSourceFile, oversizedSource],
   );
   const { contents: sourceContents, reading: readingSource } =
-    useFileFingerprints(sourceFiles, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES);
+    useFileFingerprints(sourceFiles, sourceVideoLimit);
 
   const sentCharacterImage = mode === "motion" ? characterImage : null;
+  const characterImageLimit = Math.min(
+    heldCapabilities?.[model]?.maxReferenceBytes ?? MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  );
   const oversizedCharacter =
     sentCharacterImage !== null &&
-    sentCharacterImage.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES;
+    sentCharacterImage.size > characterImageLimit;
   const characterImages = useMemo(
     () => (sentCharacterImage && !oversizedCharacter ? [sentCharacterImage] : []),
     [sentCharacterImage, oversizedCharacter],
   );
   const { contents: characterContents, reading: readingCharacter } =
-    useFileFingerprints(characterImages, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+    useFileFingerprints(characterImages, characterImageLimit);
 
   const oversized = oversizedSource || oversizedCharacter;
   const reading = readingSource || readingCharacter;
@@ -404,8 +412,8 @@ export function VideoEditForm({
           />
           <p className={oversizedSource ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
             {oversizedSource
-              ? t("dashboard:ai.sourceVideoTooLarge", { maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES) })
-              : t("dashboard:ai.sourceVideoUploadHint", { maximum: formatBytes(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES) })}
+              ? t("dashboard:ai.sourceVideoTooLarge", { maximum: formatBytes(sourceVideoLimit) })
+              : t("dashboard:ai.sourceVideoUploadHint", { maximum: formatBytes(sourceVideoLimit) })}
           </p>
           {mode === "edit" && (
             <p className="text-xs text-muted-foreground">
@@ -504,7 +512,7 @@ export function VideoEditForm({
               >
                 {oversizedCharacter
                   ? t("dashboard:ai.referenceImageTooLarge", {
-                      maximum: formatBytes(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES),
+                      maximum: formatBytes(characterImageLimit),
                     })
                   : t("dashboard:ai.characterImageHint")}
               </p>
