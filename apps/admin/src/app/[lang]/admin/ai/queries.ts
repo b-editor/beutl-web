@@ -3,6 +3,7 @@ import { cache } from "react";
 import { getDb, listAiOperationModels, listPackagePaymentRefundInterventions, listStorageMultipartInterventions, listStorageUploadInterventions, listTopUpCheckoutInterventions } from "@beutl/db";
 import {
   aiCostEstimateKey,
+  imageCapabilityOf,
   isImageModelUsable,
   unusableVideoModelsFor,
   loadAiImageModelCapabilities,
@@ -46,11 +47,12 @@ export const getPackagePaymentRefundInterventions = cache(
 export const getUnusableVideoModels = cache(
   async (
     operation: string,
-    models: readonly { modelId: string }[],
+    // Who runs a model decides what it takes, so the rows come through whole.
+    models: readonly { modelId: string; provider: string }[],
   ) => {
     return unusableVideoModelsFor(
       operation,
-      models.map((model) => model.modelId),
+      models,
       await loadAiVideoModelCapabilities(),
     );
   },
@@ -70,19 +72,22 @@ export const getUnusableImageModels = cache(
   ) => {
     const capabilities = await loadAiImageModelCapabilities(models);
     const isEdit = operation.startsWith("image.edit.");
+    // Model ids are returned bare, which stays unambiguous: the catalog keys a
+    // row by (operation, modelId), so one operation never holds the same id
+    // twice.
     return new Set(
       models
-        .map((model) => model.modelId)
         .filter(
-        (modelId) =>
-          !isImageModelUsable(capabilities.get(modelId), {
-            referenceImages: isEdit,
-            resolution: operation === "image.edit.upscale",
-            background: operation === "image.edit.remove_background"
-              ? "transparent"
-              : undefined,
-          }),
-      ),
+          (model) =>
+            !isImageModelUsable(imageCapabilityOf(capabilities, model), {
+              referenceImages: isEdit,
+              resolution: operation === "image.edit.upscale",
+              background: operation === "image.edit.remove_background"
+                ? "transparent"
+                : undefined,
+            }),
+        )
+        .map((model) => model.modelId),
     );
   },
 );

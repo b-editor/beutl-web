@@ -19,7 +19,12 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
 });
 
 import { AI_OPERATIONS } from "@beutl/core";
-import { AiProviderError } from "../../packages/api/src/ai/providers/errors";
+import {
+  AiProviderError,
+  AiVideoSubmissionError,
+  isDefiniteVideoSubmissionFailure,
+  isProviderExecutionOutcomeUnknown,
+} from "../../packages/api/src/ai/providers/errors";
 import {
   DEFAULT_AI_PROVIDER_ID,
   findAiProvider,
@@ -149,5 +154,32 @@ describe("the video half of a provider", () => {
 
   it("reports a provider that generates no video", () => {
     expect(() => videoProviderFor("nonesuch")).toThrow(AiProviderError);
+  });
+});
+
+describe("the axis a refund is decided on", () => {
+  it("carries an unknown submission as unknown on both names", () => {
+    // `outcome` and `execution` are the same axis under two names, and the
+    // base class reads only the second. A reader of `execution` — the field
+    // the money is documented to depend on — used to see "definite_failure"
+    // for a submission that may well have been accepted.
+    const unknown = new AiVideoSubmissionError("lost the response", {
+      outcome: "unknown",
+    });
+
+    expect(unknown.outcome).toBe("unknown");
+    expect(unknown.execution).toBe("unknown");
+    expect(isProviderExecutionOutcomeUnknown(unknown)).toBe(true);
+    expect(isDefiniteVideoSubmissionFailure(unknown)).toBe(false);
+  });
+
+  it("still calls a definite failure definite", () => {
+    const definite = new AiVideoSubmissionError("refused", {
+      outcome: "definite_failure",
+    });
+
+    expect(definite.execution).toBe("definite_failure");
+    expect(isProviderExecutionOutcomeUnknown(definite)).toBe(false);
+    expect(isDefiniteVideoSubmissionFailure(definite)).toBe(true);
   });
 });

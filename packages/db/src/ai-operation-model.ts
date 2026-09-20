@@ -46,7 +46,7 @@ export async function listAiOperationModels({
 export async function upsertAiOperationModel({
   operation,
   modelId,
-  provider = "openrouter",
+  provider,
   priceUnits,
   displayName,
   sortOrder,
@@ -56,7 +56,12 @@ export async function upsertAiOperationModel({
 }: {
   operation: string;
   modelId: string;
-  /** Defaults to the one provider that existed before the column did. */
+  /**
+   * Who runs the model. A new row without one belongs to the provider that
+   * existed before the column did; an existing row without one keeps the
+   * provider it has, because omitting a field is not a request to re-route a
+   * model that is already registered.
+   */
   provider?: string;
   priceUnits: number;
   displayName: string | null;
@@ -71,7 +76,7 @@ export async function upsertAiOperationModel({
     create: {
       operation,
       modelId,
-      provider,
+      provider: provider ?? "openrouter",
       priceUnits,
       displayName,
       sortOrder,
@@ -79,7 +84,7 @@ export async function upsertAiOperationModel({
       updatedBy,
     },
     update: {
-      provider,
+      ...(provider === undefined ? {} : { provider }),
       priceUnits,
       displayName,
       sortOrder,

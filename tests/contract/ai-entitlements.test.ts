@@ -9,6 +9,7 @@ import {
   getEntitlements,
   getEntitlementSummary,
   loadAiModelCatalog,
+  aiCapabilityKey,
 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -31,8 +32,10 @@ describe("AI entitlements", () => {
     setDbProvider(async () => prisma as never);
   });
 
+  // Keyed the way the loader keys it: by provider and id together, because a
+  // model id alone does not identify an endpoint.
   const videoCapabilities = new Map([
-    ["google/veo-3.1", { durations: [4, 6, 8] }],
+    [aiCapabilityKey("openrouter", "google/veo-3.1"), { durations: [4, 6, 8] }],
   ]);
 
   const readEntitlements = (
@@ -266,8 +269,8 @@ describe("AI entitlements", () => {
     });
 
     const entitlements = await readEntitlements(new Map([
-      ["video/short", { durations: [2, 4] }],
-      ["video/long", { durations: [5, 8] }],
+      [aiCapabilityKey("openrouter", "video/short"), { durations: [2, 4] }],
+      [aiCapabilityKey("openrouter", "video/long"), { durations: [5, 8] }],
     ]));
 
     expect(entitlements.modelAvailability["video.generate"]).toEqual({

@@ -22,8 +22,12 @@ import { loadAiModelCatalog } from "../../ai/model-catalog";
 import {
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
+  videoCapabilityOf,
 } from "../../ai/video-model-capabilities";
-import { loadAiImageModelCapabilities } from "../../ai/image-model-capabilities";
+import {
+  imageCapabilityOf,
+  loadAiImageModelCapabilities,
+} from "../../ai/image-model-capabilities";
 import {
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
@@ -106,10 +110,13 @@ type VideoModelDescription = ModelDescription & {
   maxAudioReferenceBytes: number;
 };
 
-function describeModels(
+// The provider rides along so a caller can look the entry's capabilities up.
+// It is not part of the response: a client picks a model, never a provider, and
+// describeModels drops it for the operations that publish nothing else.
+function describeCatalogEntries(
   catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
   operation: string,
-): ModelDescription[] {
+): (ModelDescription & { provider: string })[] {
   const entries = catalog.list(operation);
   return entries.map((entry, index) => ({
     id: entry.modelId,
@@ -117,7 +124,17 @@ function describeModels(
     costTier: entry.costTier,
     // The one a request that names no model runs on.
     isDefault: index === 0,
+    provider: entry.provider,
   }));
+}
+
+function describeModels(
+  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
+  operation: string,
+): ModelDescription[] {
+  return describeCatalogEntries(catalog, operation).map(
+    ({ provider: _provider, ...model }) => model,
+  );
 }
 
 const app = new Hono().get("/", async (c) => {
@@ -143,8 +160,11 @@ const app = new Hono().get("/", async (c) => {
     ),
   ]);
   const describeImageModels = (operation: string): ImageModelDescription[] =>
-    describeModels(catalog, operation).map((model) => {
-      const supported = imageCapabilities.get(model.id);
+    describeCatalogEntries(catalog, operation).map(({ provider, ...model }) => {
+      const supported = imageCapabilityOf(imageCapabilities, {
+        modelId: model.id,
+        provider,
+      });
       return {
         ...model,
         aspectRatios: supported
@@ -161,10 +181,19 @@ const app = new Hono().get("/", async (c) => {
   // A mode that works from a video needs nothing but "can this model do it":
   // the shape and, for an edit, the length come from the source.
   const describeSourceVideoModels = (operation: string): ModelDescription[] =>
-    describeModels(catalog, operation).filter((model) =>
-      isVideoModelUsable(videoCapabilities.get(model.id), operation),
-    ).map((model) => {
-      const supported = videoCapabilities.get(model.id);
+    describeCatalogEntries(catalog, operation).filter((model) =>
+      isVideoModelUsable(
+        videoCapabilityOf(videoCapabilities, {
+          modelId: model.id,
+          provider: model.provider,
+        }),
+        operation,
+      ),
+    ).map(({ provider, ...model }) => {
+      const supported = videoCapabilityOf(videoCapabilities, {
+        modelId: model.id,
+        provider,
+      });
       return {
         ...model,
         ...(operation === "video.edit" ? {} : {
@@ -176,11 +205,22 @@ const app = new Hono().get("/", async (c) => {
         maxSourceVideoSeconds: supported?.maxSourceVideoSeconds ?? null,
       };
     });
-  const videoModels: VideoModelDescription[] = describeModels(
+  const videoModels: VideoModelDescription[] = describeCatalogEntries(
     catalog,
     "video.generate",
-  ).filter((model) => isVideoModelUsable(videoCapabilities.get(model.id), "video.generate")).map((model) => {
-    const supported = videoCapabilities.get(model.id);
+  ).filter((model) =>
+    isVideoModelUsable(
+      videoCapabilityOf(videoCapabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      }),
+      "video.generate",
+    ),
+  ).map(({ provider, ...model }) => {
+    const supported = videoCapabilityOf(videoCapabilities, {
+      modelId: model.id,
+      provider,
+    });
     return {
       ...model,
       promptToVideo: supported?.promptToVideo ?? true,

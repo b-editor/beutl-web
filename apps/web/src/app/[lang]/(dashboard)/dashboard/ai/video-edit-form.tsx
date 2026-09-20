@@ -62,6 +62,7 @@ import {
   useFileFingerprints,
   useHeldModelCapabilities,
   type AiAccess,
+  type AiScreenModel,
 } from "./shared";
 
 /** Which of the three things to do with a video. */
@@ -88,12 +89,7 @@ type SourceKind = "upload" | "job";
 export type AiVideoEditScreenOptions = Record<
   AiSourceVideoOperation,
   {
-    models: {
-      id: string;
-      displayName: string;
-      costTier: "low" | "medium" | "high" | null;
-      available: boolean;
-    }[];
+    models: AiScreenModel[];
     modelOptions: Record<string, AiVideoModelOptions>;
   }
 >;

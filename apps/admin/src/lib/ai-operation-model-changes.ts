@@ -140,8 +140,19 @@ export function aiOperationWouldGoOffline({
   models,
   allowance,
 }: {
-  minimumChargeOf: (modelId: string, priceUnits: number) => number;
-  models: { modelId: string; priceUnits: number; enabled: boolean }[];
+  // Takes the whole row, not just an id: what a model's smallest request costs
+  // comes from its capabilities, and those belong to a provider-and-id pair
+  // rather than to an id alone.
+  minimumChargeOf: (
+    model: { modelId: string; provider: string },
+    priceUnits: number,
+  ) => number;
+  models: {
+    modelId: string;
+    provider: string;
+    priceUnits: number;
+    enabled: boolean;
+  }[];
   allowance: number;
 }): boolean {
   const enabled = models.filter((model) => model.enabled);
@@ -152,7 +163,7 @@ export function aiOperationWouldGoOffline({
   }
   return enabled.every(
     (model) => {
-      const minimumCharge = minimumChargeOf(model.modelId, model.priceUnits);
+      const minimumCharge = minimumChargeOf(model, model.priceUnits);
       return minimumCharge <= 0 || minimumCharge > allowance;
     },
   );
@@ -168,20 +179,25 @@ export function aiOperationsGoingOffline({
 }: {
   minimumChargeOf: (
     operation: string,
-    modelId: string,
+    model: { modelId: string; provider: string },
     priceUnits: number,
   ) => number;
   modelsByOperation: Record<
     string,
-    { modelId: string; priceUnits: number; enabled: boolean }[]
+    {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[]
   >;
   allowance: number;
 }): string[] {
   return Object.entries(modelsByOperation)
     .filter(([operation, models]) =>
       aiOperationWouldGoOffline({
-        minimumChargeOf: (modelId, priceUnits) =>
-          minimumChargeOf(operation, modelId, priceUnits),
+        minimumChargeOf: (model, priceUnits) =>
+          minimumChargeOf(operation, model, priceUnits),
         models,
         allowance,
       }),

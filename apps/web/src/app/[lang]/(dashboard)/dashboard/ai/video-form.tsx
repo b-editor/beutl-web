@@ -504,12 +504,16 @@ export function VideoForm({
     frames,
     MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
   );
+  // 送れないと分かっているものは読まない——名前には要らない。ここで毎回
+  // 新しい配列を作ってはいけない：useFileFingerprints は配列の同一性を
+  // effect の依存に持ち、その effect が state を書くので、描画が止まらなく
+  // なる。フレーム側が useMemo を通しているのと同じ理由。
+  const fingerprintedReferences = useMemo(
+    () => (oversizedReference || tooManyReferences ? [] : sentReferences),
+    [oversizedReference, tooManyReferences, sentReferences],
+  );
   const { contents: referenceContents, reading: readingReferences } =
-    useFileFingerprints(
-      // 送れないと分かっているものは読まない——名前には要らない。
-      oversizedReference || tooManyReferences ? [] : sentReferences,
-      videoReferenceFingerprintLimit,
-    );
+    useFileFingerprints(fingerprintedReferences, videoReferenceFingerprintLimit);
   const oversizedFrame =
     [sentFirstFrame, sentLastFrame].some(
       (frame) => frame !== null && frame.size > MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
@@ -615,6 +619,8 @@ export function VideoForm({
       !canSubmit ||
       composedPromptTooLong ||
       oversizedFrame ||
+      readingFrames ||
+      readingReferences ||
       !names.ready ||
       submittingRef.current
     ) {
@@ -998,7 +1004,8 @@ export function VideoForm({
             submitBlocked ||
             composedPromptTooLong || oversizedFrame ||
             isPending ||
-            readingFrames
+            readingFrames ||
+            readingReferences
           }
         >
           {t("dashboard:ai.generate")}

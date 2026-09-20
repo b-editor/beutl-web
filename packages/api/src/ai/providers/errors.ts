@@ -58,7 +58,11 @@ export class AiVideoSubmissionError extends AiProviderError {
       httpStatus?: number;
     },
   ) {
-    super(message, options);
+    // `outcome` and `execution` are the same axis under two names, and the
+    // base class reads only the second. Passing `options` straight through
+    // left every unknown submission carrying execution: "definite_failure" —
+    // harmless only for as long as the refund path keeps reading `outcome`.
+    super(message, { ...options, execution: options.outcome });
     this.name = "AiVideoSubmissionError";
     this.outcome = options.outcome;
   }

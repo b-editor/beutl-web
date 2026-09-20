@@ -144,3 +144,66 @@ describe("AI model catalog", () => {
     expect(catalog.operations()).toEqual([...AI_OPERATIONS]);
   });
 });
+
+describe("re-saving a registered model", () => {
+  beforeEach(() => {
+    const memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+  });
+
+  it("keeps the provider a row already has when the save omits one", async () => {
+    // The provider decides which service the request is sent to. A caller that
+    // only means to change a price would otherwise re-route the model to
+    // OpenRouter, where its id may not exist at all — and nothing on the
+    // screen would say the routing had moved.
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/gateway-only",
+      provider: "vercel-gateway",
+      priceUnits: 10,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/gateway-only",
+      priceUnits: 12,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const catalog = await loadAiModelCatalog();
+    expect(catalog.list(OPERATION)).toEqual([
+      expect.objectContaining({
+        modelId: "vendor/gateway-only",
+        provider: "vercel-gateway",
+        priceUnits: 12,
+      }),
+    ]);
+  });
+
+  it("registers a new row without one on the provider that predates the column", async () => {
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/unstated",
+      priceUnits: 10,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const catalog = await loadAiModelCatalog();
+    expect(catalog.list(OPERATION)).toEqual([
+      expect.objectContaining({
+        modelId: "vendor/unstated",
+        provider: "openrouter",
+      }),
+    ]);
+  });
+});

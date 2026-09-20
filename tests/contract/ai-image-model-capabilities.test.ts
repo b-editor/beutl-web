@@ -14,6 +14,7 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
 import {
   clearAiImageModelCapabilitiesCache,
   isImageModelUsable,
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
   unsupportedImageRequestReason,
   type AiImageModelCapabilities,
@@ -59,9 +60,10 @@ describe("what an image model accepts", () => {
   it("keeps only the ratios both the model and this service offer", async () => {
     listModelEndpoints.mockResolvedValue({ endpoints: GPT_IMAGE_1 });
 
-    const entry = (
-      await loadAiImageModelCapabilities(["openai/gpt-image-1"])
-    ).get("openai/gpt-image-1");
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["openai/gpt-image-1"]),
+      { modelId: "openai/gpt-image-1", provider: "openrouter" },
+    );
 
     // "auto" is the provider's word for "you decide" rather than a shape this
     // service asks for, and 16:9 is one it asks for that the model refuses.
@@ -82,8 +84,10 @@ describe("what an image model accepts", () => {
       ],
     });
 
-    const entry = (await loadAiImageModelCapabilities(["openai/gpt-image-2"]))
-      .get("openai/gpt-image-2");
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["openai/gpt-image-2"]),
+      { modelId: "openai/gpt-image-2", provider: "openrouter" },
+    );
     expect(entry?.backgrounds).toEqual(["auto", "opaque"]);
     // Upscaling asks for 4K, which this model's sizes stop short of.
     expect(entry?.resolution).toBe(false);
@@ -101,7 +105,10 @@ describe("what an image model accepts", () => {
       ],
     });
 
-    const entry = (await loadAiImageModelCapabilities(["x-ai/grok"])).get("x-ai/grok");
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["x-ai/grok"]),
+      { modelId: "x-ai/grok", provider: "openrouter" },
+    );
     expect(entry?.maxReferenceImages).toBe(3);
     expect(
       unsupportedImageRequestReason(entry, { referenceImages: 4 }),
@@ -114,7 +121,10 @@ describe("what an image model accepts", () => {
       endpoints: [endpoint({ aspect_ratio: { type: "enum", values: ["1:1"] } })],
     });
 
-    const entry = (await loadAiImageModelCapabilities(["a/model"])).get("a/model");
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["a/model"]),
+      { modelId: "a/model", provider: "openrouter" },
+    );
     // Not sending the field is always possible, so the screen can always offer
     // it; anything else would leave the picker with nothing in it.
     expect(entry?.backgrounds).toEqual(["auto"]);
@@ -133,7 +143,10 @@ describe("what an image model accepts", () => {
       ],
     });
 
-    const entry = (await loadAiImageModelCapabilities(["a/model"])).get("a/model");
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["a/model"]),
+      { modelId: "a/model", provider: "openrouter" },
+    );
     expect(entry?.aspectRatios).toEqual(["1:1", "16:9"]);
     expect(entry?.seed).toBe(true);
   });
@@ -155,8 +168,10 @@ describe("what an image model accepts", () => {
       ],
     });
 
-    const entry = (await loadAiImageModelCapabilities(["a/model"]))
-      .get("a/model")!;
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities(["a/model"]),
+      { modelId: "a/model", provider: "openrouter" },
+    )!;
 
     // Preserve the additive wire contract for existing clients. Server-side
     // validation retains which endpoint supplied each option.
@@ -322,11 +337,12 @@ describe("an image model Vercel AI Gateway runs", () => {
     // no `image_capabilities` block in its model list — so looking the id up on
     // another provider's endpoint would answer about a different model, or
     // about nothing.
-    const entry = (
+    const entry = imageCapabilityOf(
       await loadAiImageModelCapabilities([
         { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
-      ])
-    ).get("openai/gpt-image-2");
+      ]),
+      { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
+    );
 
     expect(listModelEndpoints).not.toHaveBeenCalled();
     expect(entry).toMatchObject({
@@ -340,11 +356,12 @@ describe("an image model Vercel AI Gateway runs", () => {
     // The SDK's image call has neither parameter. Publishing them as available
     // would let a request ask for a transparent background, be charged, and get
     // an opaque picture back with nothing reporting a problem.
-    const entry = (
+    const entry = imageCapabilityOf(
       await loadAiImageModelCapabilities([
         { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
-      ])
-    ).get("openai/gpt-image-2");
+      ]),
+      { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
+    );
 
     expect(entry?.backgrounds).toEqual(["auto"]);
     expect(entry?.resolution).toBe(false);

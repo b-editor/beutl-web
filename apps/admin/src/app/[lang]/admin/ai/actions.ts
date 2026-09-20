@@ -28,7 +28,9 @@ import {
   loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
+  DEFAULT_AI_PROVIDER_ID,
   loadAiVideoModelCapabilities,
+  videoCapabilityOf,
   providerSupportsOperation,
   discoverTopUpCheckoutAttempt,
   reconcilePackagePaymentRefundAttempt,
@@ -485,6 +487,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
             .list(operation)
             .map((entry) => ({
               modelId: entry.modelId,
+              provider: entry.provider,
               priceUnits: entry.priceUnits,
               enabled: true,
             })),
@@ -492,20 +495,23 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           const defaults = (
             AI_DEFAULT_OPERATION_MODELS as Record<
               string,
-              { model: string; price: number }
+              { model: string; price: number; provider?: string }
             >
           )[operation];
           return defaults
             ? [{
                 modelId: defaults.model,
+                // A built-in that names no provider runs on the default one,
+                // the same resolution the catalog makes.
+                provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
                 priceUnits: defaults.price,
                 enabled: true,
               }]
             : [];
         },
-        minimumChargeOf: (operation, modelId, priceUnits) => {
+        minimumChargeOf: (operation, model, priceUnits) => {
           const durations = operation === "video.generate"
-            ? videoCapabilities.get(modelId)?.durations
+            ? videoCapabilityOf(videoCapabilities, model)?.durations
             : undefined;
           if (durations) {
             return durations.length === 0

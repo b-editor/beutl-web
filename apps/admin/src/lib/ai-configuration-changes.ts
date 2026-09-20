@@ -84,15 +84,25 @@ export function validateAiConfigurationChanges(
     // no rows is already its built-in model.
     storedModelsOf: (
       operation: string,
-    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
+    ) => {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[];
     // What one runs on once this save leaves it with no rows, which the stored
     // state cannot answer because those rows are the ones going away.
     builtInModelsOf: (
       operation: string,
-    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
+    ) => {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[];
     minimumChargeOf: (
       operation: string,
-      modelId: string,
+      model: { modelId: string; provider: string },
       priceUnits: number,
     ) => number;
     // Whether a provider can run an operation at all. Passed through to each
@@ -226,6 +236,7 @@ export function validateAiConfigurationChanges(
           operation,
           draft.models.map((model) => ({
             modelId: model.modelId,
+            provider: model.provider,
             priceUnits: model.priceUnits,
             enabled: model.enabled,
           })),

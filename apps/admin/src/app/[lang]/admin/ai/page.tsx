@@ -115,7 +115,10 @@ export default async function Page(props: {
           operation,
           await getUnusableVideoModels(
             operation,
-            modelsOf(operation).map((model) => ({ modelId: model.modelId })),
+            modelsOf(operation).map((model) => ({
+              modelId: model.modelId,
+              provider: model.provider,
+            })),
           ),
         ] as const),
     ),

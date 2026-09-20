@@ -44,6 +44,20 @@ export function getGatewayRequestTimeoutMilliseconds(
  * worker's Env, and makes a missing key fail with a message that says which
  * one.
  */
+/**
+ * The caller's signal, with this adapter's own deadline on top.
+ *
+ * A caller that supplies no signal would otherwise wait on a stalled provider
+ * for as long as the platform allows. Every Gateway call goes through here so
+ * none of them is the one without a deadline.
+ */
+export function gatewayRequestSignal(
+  signal: AbortSignal | undefined,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(getGatewayRequestTimeoutMilliseconds());
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export function createGatewayClient(): GatewayProvider {
   return createGateway({ apiKey: getGatewayApiKey() });
 }

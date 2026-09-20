@@ -27,7 +27,10 @@ import {
   translationSystemPrompt,
   translationUserMessage,
 } from "../../translation-contract";
-import { createGatewayClient } from "./config";
+import {
+  createGatewayClient,
+  gatewayRequestSignal,
+} from "./config";
 import { toGatewayProviderError } from "./errors";
 
 const PROVIDER_LABEL = "Vercel AI Gateway";
@@ -92,7 +95,7 @@ export async function translateGatewaySegments(
       system,
       prompt: user,
       providerOptions,
-      abortSignal: request.signal,
+      abortSignal: gatewayRequestSignal(request.signal),
     }));
   } catch (cause) {
     throw toGatewayProviderError(
@@ -129,7 +132,7 @@ async function translateStreaming({
       system,
       prompt: user,
       providerOptions,
-      abortSignal: request.signal,
+      abortSignal: gatewayRequestSignal(request.signal),
     });
     for await (const delta of result.textStream) {
       content += delta;

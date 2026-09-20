@@ -16,6 +16,7 @@ import {
 } from "@beutl/core";
 import { listAiProviders } from "./providers/registry";
 import {
+  aiCapabilityKey,
   UNSTATED_VIDEO_INPUT_LIMITS,
   type AiProviderId,
   type AiVideoModelInputLimits,
@@ -79,6 +80,10 @@ export type AiVideoModelCapabilities = {
   maxVideoReferenceBytes: number;
   maxAudioReferences: number;
   maxAudioReferenceBytes: number;
+  // 種類ごとの上限とは別に、合計にも上限を置くモデルがある。画像 9 枚と動画
+  // 3 本を別々に許しても、合わせて 5 つまでのモデルには送れない。
+  // null は「合計の制限を公開していない」。
+  maxTotalReferences: number | null;
 };
 
 export type UnsupportedVideoRequestReason =
@@ -96,6 +101,8 @@ export type UnsupportedVideoRequestReason =
   // 送っても警告付きで捨てられるだけなので、枚数と同じく手前で断る。
   | "videoReferenceCount"
   | "audioReferenceCount"
+  // 種類ごとには収まっていても、合計がモデルの受け入れ数を超えている。
+  | "totalReferenceCount"
   // プロンプトが、そのモデルが読む長さを超えている。サービスの上限より短い
   // モデルがあるので、ここを見ないと「書けるのに必ず断られる」依頼が通る。
   | "promptLength";
@@ -222,6 +229,7 @@ function toCapabilities(model: {
     // なったら、この 2 行を boundedBy 版に戻すだけで開く。
     maxAudioReferences: 0,
     maxAudioReferenceBytes: 0,
+    maxTotalReferences: limits.maxTotalInputs,
   };
 }
 
@@ -261,23 +269,52 @@ async function loadForProvider(
   return capabilities;
 }
 
+/**
+ * Every registered provider's video capabilities, keyed by
+ * {@link aiCapabilityKey}.
+ *
+ * Read an entry with {@link videoCapabilityOf} rather than indexing the map
+ * directly: the catalog only makes a model id unique within one operation, so
+ * the same id can name an OpenRouter endpoint for one operation and a Gateway
+ * endpoint for another, and those two publish different limits.
+ */
 export async function loadAiVideoModelCapabilities(
   now = Date.now(),
 ): Promise<Map<string, AiVideoModelCapabilities>> {
   const perProvider = await Promise.all(
     listAiProviders().flatMap((provider) =>
-      provider.video ? [loadForProvider(provider.id, provider.video, now)] : [],
+      provider.video
+        ? [
+            loadForProvider(provider.id, provider.video, now).then(
+              (capabilities) => [provider.id, capabilities] as const,
+            ),
+          ]
+        : [],
     ),
   );
-  // One provider is the common case; hand its map back rather than copying it.
-  // Model ids stay unambiguous across providers because the catalog registers
-  // any one id for an operation exactly once.
-  if (perProvider.length === 1) return perProvider[0];
   const merged = new Map<string, AiVideoModelCapabilities>();
-  for (const capabilities of perProvider) {
-    for (const [modelId, entry] of capabilities) merged.set(modelId, entry);
+  for (const [providerId, capabilities] of perProvider) {
+    for (const [modelId, entry] of capabilities) {
+      merged.set(aiCapabilityKey(providerId, modelId), entry);
+    }
   }
   return merged;
+}
+
+/**
+ * The capabilities of one catalog entry, or undefined when the provider does
+ * not list it.
+ *
+ * The provider is part of the lookup because it is part of the identity: two
+ * catalog entries carrying the same model id under different providers are
+ * different endpoints, and answering either with the other's allowances builds
+ * a request the provider then refuses.
+ */
+export function videoCapabilityOf(
+  capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
+  model: { modelId: string; provider: string },
+): AiVideoModelCapabilities | undefined {
+  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.
@@ -347,6 +384,14 @@ export function unsupportedVideoRequestReason(
   if ((request.audioReferences ?? 0) > capabilities.maxAudioReferences) {
     return "audioReferenceCount";
   }
+  if (capabilities.maxTotalReferences !== null) {
+    const carried = (request.inputReferences ?? 0) +
+      (request.videoReferences ?? 0) +
+      (request.audioReferences ?? 0);
+    if (carried > capabilities.maxTotalReferences) {
+      return "totalReferenceCount";
+    }
+  }
   if (
     request.promptCharacters !== undefined &&
     request.promptCharacters > capabilities.maxPromptCharacters
@@ -375,13 +420,21 @@ export function unsupportedVideoRequestReason(
  */
 export function unusableVideoModelsFor(
   operation: string,
-  modelIds: readonly string[],
+  // Whole rows, because who runs a model decides what it takes: the same id
+  // can name a different endpoint under a different provider.
+  models: readonly { modelId: string; provider: string }[],
   capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
 ): Set<string> {
+  // Model ids are returned bare, which stays unambiguous: the catalog keys a
+  // row by (operation, modelId), so one operation never holds the same id
+  // twice.
   return new Set(
-    modelIds.filter(
-      (modelId) => !isVideoModelUsable(capabilities.get(modelId), operation),
-    ),
+    models
+      .filter(
+        (model) =>
+          !isVideoModelUsable(videoCapabilityOf(capabilities, model), operation),
+      )
+      .map((model) => model.modelId),
   );
 }
 

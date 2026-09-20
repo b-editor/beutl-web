@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { setDbProvider } from "@beutl/db";
-import { setR2BucketProvider } from "@beutl/api";
+import { aiCapabilityKey, setR2BucketProvider } from "@beutl/api";
 
 // The dashboard AI server actions call @beutl/api shared logic directly.
 // Mock the provider layer so the actions can be exercised without a real
@@ -750,7 +750,7 @@ describe("dashboard AI actions", () => {
         model: "dear/model",
       });
       loadAiImageModelCapabilities.mockResolvedValue(new Map([
-        ["dear/model", {
+        [aiCapabilityKey("openrouter", "dear/model"), {
           modelId: "dear/model",
           aspectRatios: ["2:3"],
           backgrounds: ["auto", "opaque"],
@@ -813,7 +813,7 @@ describe("dashboard AI actions", () => {
           model: "dear/model",
         });
         loadAiImageModelCapabilities.mockResolvedValue(new Map([
-          ["dear/model", {
+          [aiCapabilityKey("openrouter", "dear/model"), {
             modelId: "dear/model",
             ...capabilities,
             inputReferences: false,

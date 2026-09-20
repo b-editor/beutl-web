@@ -18,6 +18,7 @@ import {
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
   unsupportedVideoRequestReason,
+  videoCapabilityOf,
 } from "../../ai/video-model-capabilities";
 import { getEntitlements } from "../../ai/entitlements";
 import {
@@ -124,6 +125,129 @@ const sourceVideoSchema = z.object({
   durationSeconds: z.number().refine(isAiVideoDurationSeconds).optional(),
   model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
+
+/**
+ * Whether the source clip is one the chosen model will take.
+ *
+ * The allowances are published per model and are already reported to clients;
+ * checking them here as well is what keeps a clip outside the range from being
+ * reserved, charged and only then refused by the provider. Bytes are known
+ * only for an upload — a named job's are not read until the job is submitted —
+ * so that half is checked when it is available.
+ */
+function sourceVideoOutsideModelRange(
+  capabilities:
+    | {
+        maxSourceVideoBytes: number;
+        minSourceVideoSeconds: number | null;
+        maxSourceVideoSeconds: number | null;
+      }
+    | undefined,
+  source: { bytes?: number; durationSeconds: number },
+): boolean {
+  if (!capabilities) return false;
+  if (
+    source.bytes !== undefined &&
+    source.bytes > capabilities.maxSourceVideoBytes
+  ) {
+    return true;
+  }
+  if (
+    capabilities.minSourceVideoSeconds !== null &&
+    source.durationSeconds < capabilities.minSourceVideoSeconds
+  ) {
+    return true;
+  }
+  return (
+    capabilities.maxSourceVideoSeconds !== null &&
+    source.durationSeconds > capabilities.maxSourceVideoSeconds
+  );
+}
+
+type AiJobRow = NonNullable<Awaited<ReturnType<typeof getAiJobById>>>;
+
+/**
+ * Bind a terminal callback's provider job id to the local job, or refuse it.
+ *
+ * A job whose start response never arrived is left queued with no provider id
+ * on purpose — the submission may have been accepted, so it is not refunded.
+ * The callback is then the only thing that carries the id the provider went on
+ * to use, and turning it away would strand a result the account has paid for
+ * until reconciliation gives up hours later.
+ *
+ * Attaching is a compare-and-set against the queued state and the callback
+ * nonce, and the provider-id uniqueness constraint stops a delivery taking
+ * ownership from another job. Both callbacks go through here so neither drifts
+ * from the other on a path this subtle.
+ */
+async function claimCallbackProviderJob({
+  jobId,
+  job,
+  provider,
+  providerJobId,
+}: {
+  jobId: string;
+  job: AiJobRow;
+  provider: string;
+  providerJobId: string;
+}): Promise<{ ok: true; job: AiJobRow } | { ok: false; status: 409 | 500 }> {
+  if (job.providerJobId !== null) {
+    return job.providerJobId === providerJobId
+      ? { ok: true, job }
+      : { ok: false, status: 409 };
+  }
+
+  try {
+    const attachment = await attachProviderJobIdToQueuedAiJob({
+      jobId,
+      kind: "video",
+      provider,
+      providerJobId,
+      expectedCallbackNonceHash: job.callbackNonceHash!,
+    });
+    if (attachment.outcome === "notFound" || attachment.outcome === "conflict") {
+      return { ok: false, status: 409 };
+    }
+    const attachedJob = await getAiJobById({ jobId });
+    if (!attachedJob || attachedJob.providerJobId !== providerJobId) {
+      return { ok: false, status: 409 };
+    }
+    return { ok: true, job: attachedJob };
+  } catch (attachmentError) {
+    // The write may still have landed. Read both sides before deciding, so a
+    // lost response does not refuse a job this delivery does own.
+    let latestJob: Awaited<ReturnType<typeof getAiJobById>>;
+    let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
+    try {
+      [latestJob, providerOwner] = await Promise.all([
+        getAiJobById({ jobId }),
+        getAiJobByProviderJobId({ provider, providerJobId }),
+      ]);
+    } catch (verificationError) {
+      console.error(
+        `Failed to verify ${provider} callback attachment for AI job ${jobId}`,
+        new AggregateError([attachmentError, verificationError]),
+      );
+      return { ok: false, status: 500 };
+    }
+    if (
+      (providerOwner && providerOwner.id !== jobId) ||
+      (latestJob?.providerJobId !== null &&
+        latestJob?.providerJobId !== providerJobId)
+    ) {
+      return { ok: false, status: 409 };
+    }
+    if (!latestJob || latestJob.providerJobId !== providerJobId ||
+        providerOwner?.id !== jobId) {
+      console.error(
+        `Failed to attach ${provider} callback provider job to AI job ${jobId}`,
+        attachmentError,
+      );
+      return { ok: false, status: 500 };
+    }
+    return { ok: true, job: latestJob };
+  }
+}
 
 /** What one reference is, decided by what its part declares. */
 type VideoReferenceKind = "image" | "video" | "audio";
@@ -446,7 +570,7 @@ const app = new Hono()
     }
     if (
       unsupportedVideoRequestReason(
-        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+        videoCapabilityOf(await loadAiVideoModelCapabilities(), selectedModel),
         {
           resolution,
           durationSeconds,
@@ -909,7 +1033,7 @@ const app = new Hono()
     }
     if (
       unsupportedVideoRequestReason(
-        (await loadAiVideoModelCapabilities()).get(selectedModel.modelId),
+        videoCapabilityOf(await loadAiVideoModelCapabilities(), selectedModel),
         {
           resolution,
           durationSeconds,
@@ -1132,67 +1256,14 @@ const app = new Hono()
     }
 
     const providerJobId = event.data.data.id;
-    let currentJob = job;
-    if (job.providerJobId === null) {
-      try {
-        const attachment = await attachProviderJobIdToQueuedAiJob({
-          jobId,
-          kind: "video",
-          provider: "openrouter",
-          providerJobId,
-          expectedCallbackNonceHash: job.callbackNonceHash,
-        });
-        if (
-          attachment.outcome === "notFound" ||
-          attachment.outcome === "conflict"
-        ) {
-          return new Response(null, { status: 409 });
-        }
-        const attachedJob = await getAiJobById({ jobId });
-        if (attachedJob?.providerJobId !== providerJobId) {
-          return new Response(null, { status: 409 });
-        }
-        currentJob = attachedJob;
-      } catch (attachmentError) {
-        let latestJob: Awaited<ReturnType<typeof getAiJobById>>;
-        let providerOwner: Awaited<ReturnType<typeof getAiJobByProviderJobId>>;
-        try {
-          [latestJob, providerOwner] = await Promise.all([
-            getAiJobById({ jobId }),
-            getAiJobByProviderJobId({
-              provider: "openrouter",
-              providerJobId,
-            }),
-          ]);
-        } catch (verificationError) {
-          console.error(
-            `Failed to verify OpenRouter callback attachment for AI job ${jobId}`,
-            new AggregateError([attachmentError, verificationError]),
-          );
-          return new Response(null, { status: 500 });
-        }
-        if (
-          (providerOwner && providerOwner.id !== jobId) ||
-          (latestJob?.providerJobId !== null &&
-            latestJob?.providerJobId !== providerJobId)
-        ) {
-          return new Response(null, { status: 409 });
-        }
-        if (
-          latestJob?.providerJobId !== providerJobId ||
-          providerOwner?.id !== jobId
-        ) {
-          console.error(
-            `Failed to attach OpenRouter callback provider job to AI job ${jobId}`,
-            attachmentError,
-          );
-          return new Response(null, { status: 500 });
-        }
-        currentJob = latestJob;
-      }
-    } else if (job.providerJobId !== providerJobId) {
-      return new Response(null, { status: 409 });
-    }
+    const claimed = await claimCallbackProviderJob({
+      jobId,
+      job,
+      provider: "openrouter",
+      providerJobId,
+    });
+    if (!claimed.ok) return new Response(null, { status: claimed.status });
+    const currentJob = claimed.job;
 
     // The nonce binds the signed terminal callback to this local job. The
     // provider-ID uniqueness constraint and queued-state compare-and-set above
@@ -1396,8 +1467,10 @@ const app = new Hono()
         status: 400,
       });
     }
-    const selectedCapabilities = (await loadAiVideoModelCapabilities())
-      .get(selectedModel.modelId);
+    const selectedCapabilities = videoCapabilityOf(
+      await loadAiVideoModelCapabilities(),
+      selectedModel,
+    );
     if (!isVideoModelUsable(selectedCapabilities, operation)) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
@@ -1406,10 +1479,16 @@ const app = new Hono()
     // Several models read fewer characters than this service's own limit, so a
     // prompt it accepts is one they refuse.
     if (
-      selectedCapabilities !== undefined &&
-      (prompt.length > selectedCapabilities.maxPromptCharacters ||
-        (mode === "extend" && selectedCapabilities.durations.length > 0 &&
-          !selectedCapabilities.durations.includes(durationSeconds)))
+      (selectedCapabilities !== undefined &&
+        (prompt.length > selectedCapabilities.maxPromptCharacters ||
+          (mode === "extend" && selectedCapabilities.durations.length > 0 &&
+            !selectedCapabilities.durations.includes(durationSeconds)))) ||
+      sourceVideoOutsideModelRange(selectedCapabilities, {
+        ...(sourceVideo === undefined
+          ? {}
+          : { bytes: sourceVideo.bytes.byteLength }),
+        durationSeconds: sourceDurationSeconds,
+      })
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
@@ -1571,6 +1650,7 @@ const app = new Hono()
     }
     let sourceVideo: { bytes: ArrayBuffer; mimeType: string } | undefined;
     let sourceVideoSha256: string | undefined;
+    let uploadedSourceSeconds: number | undefined;
     if (hasUpload) {
       const file = uploadedSource as File;
       if (fileExceedsUploadLimit(file, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES)) {
@@ -1590,6 +1670,7 @@ const app = new Hono()
       }
       sourceVideo = { bytes, mimeType: metadata.mimeType };
       sourceVideoSha256 = await sha256Hex(bytes);
+      uploadedSourceSeconds = Math.ceil(metadata.durationSeconds);
     }
 
     const validatedImage = await validateAiInputImage(
@@ -1649,11 +1730,15 @@ const app = new Hono()
     // A named source that is not this user's, is gone, or never produced a
     // video must cost nothing. An uploaded one came from this request and was
     // already checked above.
-    if (
-      sourceJobId !== undefined &&
-      !(await describeSourceVideo({ userId, sourceJobId }))
-    ) {
-      return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
+    // The source's own length, which the model may bound. An uploaded clip
+    // carries it from the container read above.
+    let motionSourceDurationSeconds: number | null = uploadedSourceSeconds ?? null;
+    if (sourceJobId !== undefined) {
+      const source = await describeSourceVideo({ userId, sourceJobId });
+      if (!source) {
+        return c.json(await apiErrorResponse("aiJobNotFound"), { status: 404 });
+      }
+      motionSourceDurationSeconds = source.durationSeconds;
     }
 
     const catalog = await loadAiModelCatalog();
@@ -1663,17 +1748,27 @@ const app = new Hono()
         status: 400,
       });
     }
-    const motionCapabilities = (await loadAiVideoModelCapabilities())
-      .get(selectedModel.modelId);
+    const motionCapabilities = videoCapabilityOf(
+      await loadAiVideoModelCapabilities(),
+      selectedModel,
+    );
     if (!isVideoModelUsable(motionCapabilities, "video.motion")) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
       });
     }
     if (
-      motionCapabilities !== undefined &&
-      (prompt.length > motionCapabilities.maxPromptCharacters ||
-        (motionCapabilities.durations.length > 0 && !motionCapabilities.durations.includes(durationSeconds)))
+      (motionCapabilities !== undefined &&
+        (prompt.length > motionCapabilities.maxPromptCharacters ||
+          (motionCapabilities.durations.length > 0 &&
+            !motionCapabilities.durations.includes(durationSeconds)))) ||
+      (motionSourceDurationSeconds !== null &&
+        sourceVideoOutsideModelRange(motionCapabilities, {
+          ...(sourceVideo === undefined
+            ? {}
+            : { bytes: sourceVideo.bytes.byteLength }),
+          durationSeconds: motionSourceDurationSeconds,
+        }))
     ) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
@@ -1832,19 +1927,26 @@ const app = new Hono()
       return new Response(null, { status: 401 });
     }
 
-    // Unlike OpenRouter's route, this one never attaches an id: the Gateway
-    // returns the job id on the start response, so a job reaching a terminal
-    // state without one already stored is not this delivery's to claim.
-    if (job.providerJobId !== event.data.data.jobId) {
-      return new Response(null, { status: 409 });
-    }
+    // The Gateway names the job on the start response, but that response is
+    // not always seen: a transport timeout leaves the submission classified
+    // as unknown and the job queued with no id. This delivery is then the only
+    // thing carrying it, so it attaches under the same guards OpenRouter's
+    // does rather than being refused.
+    const claimed = await claimCallbackProviderJob({
+      jobId,
+      job,
+      provider: "vercel-gateway",
+      providerJobId: event.data.data.jobId,
+    });
+    if (!claimed.ok) return new Response(null, { status: claimed.status });
+    const currentJob = claimed.job;
 
-    if (job.status !== "succeeded" && job.status !== "failed") {
+    if (currentJob.status !== "succeeded" && currentJob.status !== "failed") {
       try {
-        await synchronizeAiVideoJob({ job });
+        await synchronizeAiVideoJob({ job: currentJob });
       } catch (error) {
         console.error(
-          `Failed to synchronize Vercel AI Gateway callback for AI job ${job.id}`,
+          `Failed to synchronize Vercel AI Gateway callback for AI job ${currentJob.id}`,
           error,
         );
         return new Response(null, { status: 500 });

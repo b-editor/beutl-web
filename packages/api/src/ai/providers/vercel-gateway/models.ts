@@ -14,6 +14,7 @@
 
 import { z } from "zod";
 import { AiProviderError } from "../errors";
+import { readBoundedJson } from "./bounded";
 import {
   UNSTATED_VIDEO_INPUT_LIMITS,
   type AiVideoModelDescriptor,
@@ -191,29 +192,6 @@ export function toVideoModelDescriptor(
   };
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    throw new AiProviderError(
-      "Vercel AI Gateway model list exceeds the size limit",
-    );
-  }
-  const text = await response.text();
-  // Checked after the fact as well: a chunked reply declares no length, and a
-  // worker must not be asked to parse an unbounded body.
-  if (text.length > MAX_RESPONSE_BYTES) {
-    throw new AiProviderError(
-      "Vercel AI Gateway model list exceeds the size limit",
-    );
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (cause) {
-    throw new AiProviderError("Vercel AI Gateway returned invalid JSON", {
-      cause,
-    });
-  }
-}
 
 /**
  * Every video model the Gateway offers.
@@ -241,7 +219,7 @@ export async function listGatewayVideoModels(
     );
   }
 
-  const parsed = modelsResponseSchema.safeParse(await readBoundedJson(response));
+  const parsed = modelsResponseSchema.safeParse(await readBoundedJson(response, MAX_RESPONSE_BYTES, "model list"));
   if (!parsed.success) {
     throw new AiProviderError(
       "Vercel AI Gateway returned an unreadable model list",

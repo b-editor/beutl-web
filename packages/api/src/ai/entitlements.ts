@@ -10,6 +10,7 @@ import {
 import { AI_PRICING_CATALOG, PRO_PLAN, aiMinimumQuantityOf } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
+import { aiCapabilityKey } from "./providers/types";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -128,12 +129,12 @@ export function toAiBalancePresentation(
 // the reservation would then reject a prompt the user had already written.
 function minimumChargeFor(
   operation: string,
-  modelId: string,
+  model: { modelId: string; provider: string },
   priceUnits: number,
   videoCapabilities: ReadonlyMap<string, { durations: readonly number[] }>,
 ): number {
   const videoCapability = operation === "video.generate"
-    ? videoCapabilities.get(modelId)
+    ? videoCapabilities.get(aiCapabilityKey(model.provider, model.modelId))
     : undefined;
   if (videoCapability && videoCapability.durations.length === 0) return 0;
   const minimumQuantity = videoCapability
@@ -162,7 +163,7 @@ export function toAiOperationAvailability(
     for (const entry of catalog.list(operation)) {
       const minimumCharge = minimumChargeFor(
         operation,
-        entry.modelId,
+        entry,
         entry.priceUnits,
         videoCapabilities,
       );

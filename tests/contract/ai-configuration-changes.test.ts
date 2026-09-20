@@ -21,6 +21,7 @@ const defaultModels = AI_DEFAULT_OPERATION_MODELS as Record<
 const builtInOf = (operation: string) => [
   {
     modelId: defaultModels[operation]!.model,
+    provider: "openrouter",
     priceUnits: defaultModels[operation]!.price,
     enabled: true,
   },
@@ -31,11 +32,16 @@ function validate(
   overrides: {
     storedModelsOf?: (
       operation: string,
-    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
+    ) => {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[];
     currentSettingValueOf?: (key: string) => string;
     minimumChargeOf?: (
       operation: string,
-      modelId: string,
+      model: { modelId: string; provider: string },
       priceUnits: number,
     ) => number;
   } = {},
@@ -61,7 +67,7 @@ function validate(
     builtInModelsOf: builtInOf,
     minimumChargeOf:
       overrides.minimumChargeOf ??
-      ((operation, _modelId, priceUnits) =>
+      ((operation, _model, priceUnits) =>
         aiMinimumChargeOf(operation, priceUnits) ?? priceUnits),
   });
 }
@@ -122,7 +128,9 @@ describe("saving the AI configuration in one go", () => {
     expect(actionSource).toContain("matchesAiOperationModelSnapshot(actual, draft.expected)");
     expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
     expect(actionSource).toContain("loadAiVideoModelCapabilities");
-    expect(actionSource).toContain("videoCapabilities.get(modelId)?.durations");
+    expect(actionSource).toContain(
+      "videoCapabilityOf(videoCapabilities, model)?.durations",
+    );
   });
 
   it("accepts an allowance and a model list together", () => {
@@ -206,8 +214,8 @@ describe("saving the AI configuration in one go", () => {
         ],
       },
       {
-        minimumChargeOf: (operation, modelId, priceUnits) =>
-          operation === "video.generate" && modelId === "google/veo-3.1"
+        minimumChargeOf: (operation, model, priceUnits) =>
+          operation === "video.generate" && model.modelId === "google/veo-3.1"
             ? priceUnits * 4
             : priceUnits,
       },
@@ -228,10 +236,15 @@ describe("saving the AI configuration in one go", () => {
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ modelId: "stored/video", priceUnits: 1, enabled: true }]
+            ? [{
+                modelId: "stored/video",
+                provider: "openrouter",
+                priceUnits: 1,
+                enabled: true,
+              }]
             : builtInOf(operation),
-        minimumChargeOf: (operation, modelId, priceUnits) =>
-          operation === "video.generate" && modelId === "google/veo-3.1"
+        minimumChargeOf: (operation, model, priceUnits) =>
+          operation === "video.generate" && model.modelId === "google/veo-3.1"
             ? priceUnits * 4
             : priceUnits,
       },

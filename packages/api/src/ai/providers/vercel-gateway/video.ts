@@ -27,6 +27,7 @@ import {
   InvalidAiProviderOutputError,
 } from "../errors";
 import { gatewayExecutionOf, toGatewayProviderError } from "./errors";
+import { readBoundedBytes as readBoundedGatewayBytes } from "./bounded";
 import type {
   AiVideoContent,
   AiVideoJobInfo,
@@ -40,7 +41,7 @@ import {
 } from "../../video-validation";
 import {
   createGatewayClient,
-  getGatewayRequestTimeoutMilliseconds,
+  gatewayRequestSignal,
 } from "./config";
 import { gatewayVideoResolution } from "./resolution";
 
@@ -114,11 +115,6 @@ type GatewayVideoResult = {
     mediaType?: string;
   }[];
 };
-
-function requestTimeoutSignal(signal: AbortSignal | undefined): AbortSignal {
-  const timeout = AbortSignal.timeout(getGatewayRequestTimeoutMilliseconds());
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
 
 export async function startGatewayVideoJob(
   request: AiVideoStartRequest,
@@ -208,7 +204,7 @@ export async function startGatewayVideoJob(
       ...(request.idempotencyKey === undefined
         ? {}
         : { headers: { "idempotency-key": request.idempotencyKey } }),
-      abortSignal: requestTimeoutSignal(request.signal),
+      abortSignal: gatewayRequestSignal(request.signal),
     });
   } catch (cause) {
     const error = toGatewayProviderError(
@@ -250,7 +246,7 @@ export async function getGatewayVideoJob(
   try {
     status = await getVideoStatus(createGatewayClient().videoModel(ref.model), {
       operation: { gatewayJobId: ref.providerJobId },
-      abortSignal: requestTimeoutSignal(undefined),
+      abortSignal: gatewayRequestSignal(undefined),
     });
   } catch (cause) {
     throw toGatewayProviderError(cause, "Vercel AI Gateway video poll failed");
@@ -273,19 +269,21 @@ export async function getGatewayVideoJob(
 }
 
 async function readBoundedBytes(response: Response): Promise<ArrayBuffer> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_AI_GENERATED_VIDEO_BYTES) {
+  // Counted through the stream rather than after arrayBuffer(): a chunked
+  // reply declares no length, so measuring the buffer means the whole video
+  // is already in the isolate before it is refused.
+  try {
+    return await readBoundedGatewayBytes(
+      response,
+      MAX_AI_GENERATED_VIDEO_BYTES,
+      "video",
+    );
+  } catch (cause) {
     throw new InvalidAiProviderOutputError(
       "Vercel AI Gateway video exceeds the size limit",
+      { cause },
     );
   }
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > MAX_AI_GENERATED_VIDEO_BYTES) {
-    throw new InvalidAiProviderOutputError(
-      "Vercel AI Gateway video exceeds the size limit",
-    );
-  }
-  return bytes;
 }
 
 function base64ToArrayBuffer(value: string): ArrayBuffer {
@@ -322,7 +320,7 @@ export async function downloadGatewayVideoContent(
     let response: Response;
     try {
       response = await fetchImpl(video.url, {
-        signal: requestTimeoutSignal(undefined),
+        signal: gatewayRequestSignal(undefined),
       });
     } catch (cause) {
       throw new AiProviderError(

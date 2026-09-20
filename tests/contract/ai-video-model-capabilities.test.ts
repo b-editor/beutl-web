@@ -32,14 +32,26 @@ import {
   MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
   MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
 } from "@beutl/core";
+import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
 import {
   clearAiVideoModelCapabilitiesCache,
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
   unsupportedVideoRequestReason,
   unusableVideoModelsFor,
+  videoCapabilityOf,
   type AiVideoModelCapabilities,
 } from "../../packages/api/src/ai/video-model-capabilities";
+
+// The loader keys by provider and id together. `listVideoModels` stands in for
+// OpenRouter's list and `listGatewayVideoModels` for the Gateway's, so a test
+// names the one it stubbed.
+async function capabilityOf(modelId: string, provider = "openrouter") {
+  return videoCapabilityOf(await loadAiVideoModelCapabilities(), {
+    modelId,
+    provider,
+  });
+}
 
 function providerModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,6 +100,8 @@ function capabilities(
     maxVideoReferenceBytes: 0,
     maxAudioReferences: 0,
     maxAudioReferenceBytes: 0,
+    // Nothing published, so no aggregate cap applies either.
+    maxTotalReferences: null,
     ...overrides,
   };
 }
@@ -103,7 +117,7 @@ describe("what a video model accepts", () => {
   it("keeps only what both the model and this service offer", async () => {
     listVideoModels.mockResolvedValue([providerModel()]);
 
-    const entry = (await loadAiVideoModelCapabilities()).get("google/veo-3.1");
+    const entry = await capabilityOf("google/veo-3.1");
 
     // 4K is the provider's; this service never asks for it.
     expect(entry).toEqual(capabilities());
@@ -131,9 +145,7 @@ describe("what a video model accepts", () => {
       }),
     ]);
 
-    const entry = (await loadAiVideoModelCapabilities()).get(
-      "minimax/minimax-h3",
-    );
+    const entry = await capabilityOf("minimax/minimax-h3", "vercel-gateway");
 
     expect(entry?.maxInputReferences).toBe(9);
     // The model's thirty megabytes is more than this service serves, so the
@@ -169,9 +181,7 @@ describe("what a video model accepts", () => {
       }),
     ]);
 
-    const entry = (await loadAiVideoModelCapabilities()).get(
-      "bytedance/seedance-2.5",
-    );
+    const entry = await capabilityOf("bytedance/seedance-2.5", "vercel-gateway");
 
     expect(entry?.maxInputReferences).toBe(AI_MAX_VIDEO_INPUT_REFERENCES);
     expect(entry?.maxReferenceBytes).toBe(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
@@ -195,13 +205,32 @@ describe("what a video model accepts", () => {
 
     // Everything on offer, which for the lengths is every whole second the
     // server considers rather than the three a model happens to publish.
-    expect((await loadAiVideoModelCapabilities()).get("google/veo-3.1")).toEqual(
+    expect(await capabilityOf("google/veo-3.1")).toEqual(
       capabilities({
         resolutions: [...AI_VIDEO_RESOLUTIONS],
         durations: [...AI_VIDEO_DURATIONS_SECONDS],
         aspectRatios: [...AI_VIDEO_ASPECT_RATIOS],
       }),
     );
+  });
+
+  it("keeps each provider's answer for a model id both publish", async () => {
+    // The catalog keys a row by (operation, modelId), so one id may be
+    // registered against OpenRouter for one operation and against the Gateway
+    // for another. Merging by id alone silently gave whichever provider loaded
+    // last the other's allowances, and the request was then built against
+    // limits its endpoint does not have.
+    listVideoModels.mockResolvedValue([
+      providerModel({ id: "vendor/shared", supportedDurations: [4] }),
+    ]);
+    listGatewayVideoModels.mockResolvedValue([
+      providerModel({ id: "vendor/shared", supportedDurations: [8] }),
+    ]);
+
+    expect((await capabilityOf("vendor/shared"))?.durations).toEqual([4]);
+    expect(
+      (await capabilityOf("vendor/shared", "vercel-gateway"))?.durations,
+    ).toEqual([8]);
   });
 
   it("asks the provider once and reuses the answer", async () => {
@@ -379,7 +408,7 @@ describe("what a model is actually offered", () => {
       }),
     ]);
 
-    const entry = (await loadAiVideoModelCapabilities()).get("alibaba/wan-v2.6-t2v");
+    const entry = await capabilityOf("alibaba/wan-v2.6-t2v", "vercel-gateway");
 
     expect(entry?.maxAudioReferences).toBe(0);
     expect(entry?.maxAudioReferenceBytes).toBe(0);
@@ -504,20 +533,23 @@ describe("which registered models an operation cannot use", () => {
     aspectRatios: ["16:9", "9:16", "1:1"],
     durations: [5, 10],
   });
-  const known = new Map([[motionOnly.modelId, motionOnly]]);
+  const motionRef = { modelId: motionOnly.modelId, provider: "openrouter" };
+  const known = new Map([
+    [aiCapabilityKey(motionRef.provider, motionRef.modelId), motionOnly],
+  ]);
 
   it("keeps the motion model for the operation that needs it", () => {
     // The regression this exists for: the console asked the generation
     // question about every registered row, so the one model video.motion can
     // run on was reported as certain to fail and told to be replaced.
     expect(
-      unusableVideoModelsFor("video.motion", [motionOnly.modelId], known),
+      unusableVideoModelsFor("video.motion", [motionRef], known),
     ).toEqual(new Set());
   });
 
   it("still refuses it for a plain generation", () => {
     expect(
-      unusableVideoModelsFor("video.generate", [motionOnly.modelId], known),
+      unusableVideoModelsFor("video.generate", [motionRef], known),
     ).toEqual(new Set([motionOnly.modelId]));
   });
 
@@ -528,22 +560,81 @@ describe("which registered models an operation cannot use", () => {
       videoExtension: true,
       motionControl: false,
     });
-    const listed = new Map([[grok.modelId, grok]]);
+    const grokRef = { modelId: grok.modelId, provider: "openrouter" };
+    const listed = new Map([
+      [aiCapabilityKey(grokRef.provider, grokRef.modelId), grok],
+    ]);
 
-    expect(unusableVideoModelsFor("video.edit", [grok.modelId], listed)).toEqual(
+    expect(unusableVideoModelsFor("video.edit", [grokRef], listed)).toEqual(
       new Set(),
     );
     expect(
-      unusableVideoModelsFor("video.extend", [grok.modelId], listed),
+      unusableVideoModelsFor("video.extend", [grokRef], listed),
     ).toEqual(new Set());
     expect(
-      unusableVideoModelsFor("video.motion", [grok.modelId], listed),
+      unusableVideoModelsFor("video.motion", [grokRef], listed),
     ).toEqual(new Set([grok.modelId]));
   });
 
   it("leaves alone a model the provider does not list", () => {
     expect(
-      unusableVideoModelsFor("video.generate", ["vendor/unlisted"], new Map()),
+      unusableVideoModelsFor(
+        "video.generate",
+        [{ modelId: "vendor/unlisted", provider: "openrouter" }],
+        new Map(),
+      ),
     ).toEqual(new Set());
+  });
+});
+
+describe("the aggregate a model puts on its inputs", () => {
+  const request = {
+    resolution: "720p",
+    durationSeconds: 4,
+    aspectRatio: "16:9",
+  };
+
+  it("refuses a combination that fits each kind but not the total", () => {
+    // MiniMax H3 takes nine pictures and three clips but only five inputs in
+    // all. Checking the kinds separately let a request through that the
+    // provider refuses after it is charged.
+    const capped = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxVideoReferences: 3,
+      maxTotalReferences: 5,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(capped, {
+        ...request,
+        inputReferences: 4,
+        videoReferences: 1,
+      }),
+    ).toBeNull();
+    expect(
+      unsupportedVideoRequestReason(capped, {
+        ...request,
+        inputReferences: 5,
+        videoReferences: 1,
+      }),
+    ).toBe("totalReferenceCount");
+  });
+
+  it("leaves a model that publishes no aggregate alone", () => {
+    const open = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxVideoReferences: 3,
+      maxTotalReferences: null,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(open, {
+        ...request,
+        inputReferences: 9,
+        videoReferences: 3,
+      }),
+    ).toBeNull();
   });
 });

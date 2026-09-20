@@ -23,7 +23,10 @@ import {
   validateTranscriptionResult,
   type TranscriptionResult,
 } from "../../audio-validation";
-import { createGatewayClient } from "./config";
+import {
+  createGatewayClient,
+  gatewayRequestSignal,
+} from "./config";
 import { toGatewayProviderError } from "./errors";
 
 export async function transcribeGatewayAudio(
@@ -34,7 +37,7 @@ export async function transcribeGatewayAudio(
     result = await transcribe({
       model: createGatewayClient().transcriptionModel(request.model),
       audio: new Uint8Array(request.audio),
-      abortSignal: request.signal,
+      abortSignal: gatewayRequestSignal(request.signal),
     });
   } catch (cause) {
     throw toGatewayProviderError(cause, "Vercel AI Gateway transcription failed");

@@ -11,6 +11,7 @@ import {
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { imageProviderFor } from "../../ai/providers/registry";
 import {
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
   unsupportedImageRequestReason,
 } from "../../ai/image-model-capabilities";
@@ -417,8 +418,9 @@ const app = new Hono()
     }
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([selectedModel])).get(
-          selectedModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([selectedModel]),
+          selectedModel,
         ),
         {
           aspectRatio,
@@ -745,8 +747,9 @@ const app = new Hono()
     }
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([selectedModel])).get(
-          selectedModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([selectedModel]),
+          selectedModel,
         ),
         {
           // The picture being edited.

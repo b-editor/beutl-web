@@ -10,6 +10,7 @@ import {
   toAiProviderError,
 } from "./openrouter";
 import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
+import { aiCapabilityKey } from "./providers/types";
 
 // What each image model will accept, read from the provider.
 //
@@ -322,18 +323,23 @@ export async function loadAiImageModelCapabilities(
   models: readonly AiImageModelRef[],
   now = Date.now(),
 ): Promise<Map<string, AiImageModelCapabilities>> {
-  const providerOf = new Map<string, string>();
+  // Keyed by provider and id together: the catalog only makes an id unique
+  // within one operation, so the same id can be registered against OpenRouter
+  // for one and against the Gateway for another. Those name different
+  // endpoints, and keeping only the first one seen answers the other with
+  // limits it does not have.
+  const wanted = new Map<string, { modelId: string; provider: string }>();
   for (const model of models) {
     const modelId = typeof model === "string" ? model : model.modelId;
     const provider =
       typeof model === "string" ? DEFAULT_AI_PROVIDER_ID : model.provider;
-    if (!providerOf.has(modelId)) providerOf.set(modelId, provider);
+    wanted.set(aiCapabilityKey(provider, modelId), { modelId, provider });
   }
   const loaded = await Promise.all(
-    [...providerOf].map(async ([modelId, provider]) =>
+    [...wanted].map(async ([key, { modelId, provider }]) =>
       provider === "vercel-gateway"
-        ? ([modelId, gatewayImageCapabilities(modelId)] as const)
-        : ([modelId, await loadOne(modelId, now)] as const),
+        ? ([key, gatewayImageCapabilities(modelId)] as const)
+        : ([key, await loadOne(modelId, now)] as const),
     ),
   );
   return new Map(
@@ -341,6 +347,21 @@ export async function loadAiImageModelCapabilities(
       entry[1] !== null,
     ),
   );
+}
+
+/**
+ * The capabilities of one catalog entry, or undefined when the provider lists
+ * none.
+ *
+ * The counterpart of {@link videoCapabilityOf}: the provider is part of the
+ * lookup because two entries sharing a model id under different providers are
+ * different endpoints.
+ */
+export function imageCapabilityOf(
+  capabilities: ReadonlyMap<string, AiImageModelCapabilities>,
+  model: { modelId: string; provider: string },
+): AiImageModelCapabilities | undefined {
+  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.

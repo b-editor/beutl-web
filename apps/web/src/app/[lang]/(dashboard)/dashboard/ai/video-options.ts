@@ -1,5 +1,6 @@
 import {
   isVideoModelUsable,
+  videoCapabilityOf,
   type AiVideoModelCapabilities,
 } from "@beutl/api/ai/video-model-capabilities";
 import type { AiAccess, AiScreenModel } from "./shared";
@@ -19,7 +20,10 @@ function optionsFor(
   // refused.
   return Object.fromEntries(
     models.flatMap((model) => {
-      const supported = capabilities.get(model.id);
+      const supported = videoCapabilityOf(capabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      });
       return supported
         ? [
             [
@@ -64,7 +68,12 @@ export function buildAiVideoScreenOptions(
   // service is dropped: every request it could be given would be rejected.
   const registered = access.models["video.generate"] ?? [];
   const models = registered.filter((model) =>
-    isVideoModelUsable(capabilities.get(model.id))
+    isVideoModelUsable(
+      videoCapabilityOf(capabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      }),
+    )
   );
   return { models, modelOptions: optionsFor(models, capabilities) };
 }
@@ -98,7 +107,13 @@ export function buildAiSourceVideoScreenOptions(
 > {
   const byOperation = AI_SOURCE_VIDEO_OPERATIONS.map((operation) => {
     const models = (access.models[operation] ?? []).filter((model) =>
-      isVideoModelUsable(capabilities.get(model.id), operation),
+      isVideoModelUsable(
+        videoCapabilityOf(capabilities, {
+          modelId: model.id,
+          provider: model.provider,
+        }),
+        operation,
+      ),
     );
     return [
       operation,

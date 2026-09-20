@@ -402,3 +402,27 @@ export interface AiProvider {
    */
   maximumVideoJobMilliseconds(): number;
 }
+
+/**
+ * The key a capability map is stored under.
+ *
+ * A model id alone is not unique across the catalog: `AiOperationModel` is keyed
+ * by `(operation, modelId)`, so the same underlying id can be registered
+ * against OpenRouter for one operation and against the Gateway for another.
+ * Those two entries describe different endpoints with different limits, and
+ * merging them by id alone silently hands one provider's allowances to the
+ * other — a request validated against the wrong ceiling, then refused after the
+ * usage was reserved.
+ *
+ * Provider ids are a closed set and none is a prefix of another, so joining on
+ * a colon stays unambiguous even though a model id may itself contain one
+ * (`openai/gpt-4o:extended`). Nothing splits this key back apart.
+ */
+export function aiCapabilityKey(
+  // A plain string, not `AiProviderId`: catalog rows carry whatever an
+  // administrator stored, and a key is a join, not a validation.
+  provider: string,
+  modelId: string,
+): string {
+  return `${provider}:${modelId}`;
+}

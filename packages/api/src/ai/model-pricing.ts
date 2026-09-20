@@ -48,6 +48,7 @@ import {
 } from "@beutl/core";
 import {
   clearAiImageModelCapabilitiesCache,
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
   type AiImageModelCapabilities,
 } from "./image-model-capabilities";
@@ -631,10 +632,12 @@ async function estimateOperation(
       model,
       operation,
       operation === "image.generate"
-        ? imageCapabilities.get(model)?.maxReferenceImages ??
-          AI_MAX_IMAGE_REFERENCES
+        ? imageCapabilityOf(imageCapabilities, { modelId: model, provider })
+            ?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES
         : 1,
-      operation !== "image.generate" || imageCapabilities.has(model),
+      operation !== "image.generate" ||
+        imageCapabilityOf(imageCapabilities, { modelId: model, provider }) !==
+          undefined,
       options,
     );
   }

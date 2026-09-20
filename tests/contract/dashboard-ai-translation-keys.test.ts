@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Every `dashboard:ai.*` key the AI screens ask for has to exist, in both
@@ -48,17 +48,29 @@ function resolves(ai: Record<string, unknown>, key: string): boolean {
 }
 
 describe("dashboard AI translation keys", () => {
-  const sources = readdirSync(SCREEN_DIR, { withFileTypes: true })
+  // Recursively: every screen is a `page.tsx` in its own folder, so a scan of
+  // the direct children reads the forms and none of the pages that mount them.
+  // The page is where a screen's heading and description are read, which is
+  // exactly the kind of key this test exists to catch.
+  const sources = readdirSync(SCREEN_DIR, {
+    withFileTypes: true,
+    recursive: true,
+  })
     .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
-    .map((entry) => ({
-      name: entry.name,
-      keys: aiKeysUsedIn(readFileSync(join(SCREEN_DIR, entry.name), "utf8")),
-    }))
+    .map((entry) => {
+      const full = join(entry.parentPath ?? SCREEN_DIR, entry.name);
+      return { name: relative(SCREEN_DIR, full), keys: aiKeysUsedIn(readFileSync(full, "utf8")) };
+    })
     .filter((entry) => entry.keys.length > 0);
 
   it("reads at least the screens this test exists for", () => {
     // A directory move must not turn this into a test that checks nothing.
-    expect(sources.map((entry) => entry.name)).toContain("video-edit-form.tsx");
+    const names = sources.map((entry) => entry.name);
+    expect(names).toContain("video-edit-form.tsx");
+    // A page in a subfolder, which a non-recursive scan would miss. Named
+    // rather than counted: the count was already above its floor while every
+    // page was being skipped.
+    expect(names).toContain(join("video-edit", "page.tsx"));
     expect(sources.length).toBeGreaterThan(3);
   });
 

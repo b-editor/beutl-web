@@ -24,7 +24,10 @@ import type {
   AiImageGenerateRequest,
   GeneratedImage,
 } from "../types";
-import { createGatewayClient } from "./config";
+import {
+  createGatewayClient,
+  gatewayRequestSignal,
+} from "./config";
 import { toGatewayProviderError } from "./errors";
 
 function toGeneratedImage(image: {
@@ -65,7 +68,7 @@ export async function generateGatewayImage(
       aspectRatio: request.aspectRatio,
       n: 1,
       ...(request.seed === undefined ? {} : { seed: request.seed }),
-      abortSignal: request.signal,
+      abortSignal: gatewayRequestSignal(request.signal),
     });
     return toGeneratedImage(result.image);
   } catch (cause) {
@@ -95,7 +98,7 @@ export async function editGatewayImage(
         text: prompt,
       },
       n: 1,
-      abortSignal: request.signal,
+      abortSignal: gatewayRequestSignal(request.signal),
     });
     return toGeneratedImage(result.image);
   } catch (cause) {

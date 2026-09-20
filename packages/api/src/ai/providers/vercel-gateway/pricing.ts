@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { AiProviderError } from "../errors";
+import { readBoundedJson } from "./bounded";
 import { aiVideoResolutionOfGatewayLabel } from "./resolution";
 
 const ENDPOINTS_URL_BASE = "https://ai-gateway.vercel.sh/v1/models";
@@ -69,29 +70,6 @@ export type GatewayRateCard = {
   completionUsd: number | null;
 };
 
-async function readBoundedJson(response: Response): Promise<unknown> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    throw new AiProviderError(
-      "Vercel AI Gateway rate card exceeds the size limit",
-    );
-  }
-  const text = await response.text();
-  // Checked after the fact as well: a chunked reply declares no length, and a
-  // worker must not be asked to parse an unbounded body.
-  if (text.length > MAX_RESPONSE_BYTES) {
-    throw new AiProviderError(
-      "Vercel AI Gateway rate card exceeds the size limit",
-    );
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (cause) {
-    throw new AiProviderError("Vercel AI Gateway returned invalid JSON", {
-      cause,
-    });
-  }
-}
 
 /**
  * The published rates for one model.
@@ -128,7 +106,7 @@ export async function loadGatewayRateCard(
   }
 
   const parsed = endpointsResponseSchema.safeParse(
-    await readBoundedJson(response),
+    await readBoundedJson(response, MAX_RESPONSE_BYTES, "rate card"),
   );
   if (!parsed.success) {
     throw new AiProviderError(

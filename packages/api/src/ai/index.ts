@@ -17,6 +17,7 @@ export * from "./entitlements";
 export * from "./image-model-capabilities";
 export * from "./openrouter";
 export * from "./providers/registry";
+export * from "./providers/types";
 export * from "./openrouter-video";
 export * from "./pricing";
 export * from "./reconcile-jobs";

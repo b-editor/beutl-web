@@ -56,9 +56,11 @@ import {
   classifyVideoSubmissionFailure,
   createAndAttachVideoJob,
   deleteAiOutputObject,
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
   imageProviderFor,
   loadAiVideoModelCapabilities,
+  videoCapabilityOf,
   transcriptionProviderFor,
   translationProviderFor,
   unsupportedImageRequestReason,
@@ -692,8 +694,9 @@ export async function generateImageAction(
   // usage is reserved reads as a provider outage.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel])).get(
-        selectedModel.modelId,
+      imageCapabilityOf(
+        await loadAiImageModelCapabilities([selectedModel]),
+        selectedModel,
       ),
       {
         aspectRatio,
@@ -849,8 +852,9 @@ export async function editImageAction(
   // size; a model that takes none of those is refused before it is paid for.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel])).get(
-        selectedModel.modelId,
+      imageCapabilityOf(
+        await loadAiImageModelCapabilities([selectedModel]),
+        selectedModel,
       ),
       {
         // The picture being edited.
@@ -1355,8 +1359,9 @@ export async function retryJobAction(
     // background, or seed never reaches the paid provider/refund path.
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([retryModel])).get(
-          retryModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([retryModel]),
+          retryModel,
         ),
         {
           aspectRatio,
@@ -1493,7 +1498,7 @@ export async function retryJobAction(
     const validatedResolution = resolution as AiVideoResolution;
     const validatedAspectRatio = retryAspectRatio as AiVideoAspectRatio;
     const retryUnsupported = unsupportedVideoRequestReason(
-      (await loadAiVideoModelCapabilities()).get(retryModel.modelId),
+      videoCapabilityOf(await loadAiVideoModelCapabilities(), retryModel),
       {
         resolution: validatedResolution,
         durationSeconds,
