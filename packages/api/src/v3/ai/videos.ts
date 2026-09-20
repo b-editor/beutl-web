@@ -117,9 +117,8 @@ const createFramesSchema = z.object({
  *
  * The allowances are published per model and are already reported to clients;
  * checking them here as well is what keeps a clip outside the range from being
- * reserved, charged and only then refused by the provider. Bytes are known
- * only for an upload — a named job's are not read until the job is submitted —
- * so that half is checked when it is available.
+ * reserved, charged and only then refused by the provider. Duration limits
+ * apply to the original clip, before whole-second rounding for billing.
  */
 function sourceVideoOutsideModelRange(
   capabilities:
@@ -1363,7 +1362,7 @@ const app = new Hono()
     requestedDuration = fields.data.durationSeconds;
     requestedModel = fields.data.model;
     sourceVideo = { bytes, mimeType: metadata.mimeType };
-    sourceDurationSeconds = Math.ceil(metadata.durationSeconds);
+    sourceDurationSeconds = metadata.durationSeconds;
 
     // An edit produces something as long as what it was given, so naming a
     // length for one would be a number nothing honours.
@@ -1409,7 +1408,7 @@ const app = new Hono()
     }
 
     const durationSeconds = mode === "edit"
-      ? sourceDurationSeconds
+      ? Math.ceil(sourceDurationSeconds)
       : requestedDuration!;
 
     const catalog = await loadAiModelCatalog();
@@ -1622,7 +1621,7 @@ const app = new Hono()
     }
     const sourceVideo = { bytes, mimeType: metadata.mimeType };
     const sourceVideoSha256 = await sha256Hex(bytes);
-    const sourceDurationSeconds = Math.ceil(metadata.durationSeconds);
+    const sourceDurationSeconds = metadata.durationSeconds;
 
     const validatedImage = await validateAiInputImage(
       characterImage,
