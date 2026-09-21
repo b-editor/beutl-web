@@ -37,6 +37,11 @@ overrides:
   mysql2: 3.22.0
   '@simplewebauthn/server': 13.3.2
 
+patchedDependencies:
+  '@ai-sdk/gateway@4.0.86':
+    hash: 7mzjd75xp2htvzjugj7q7qs7ky
+    path: patches/@ai-sdk__gateway@4.0.86.patch
+
 importers:
 
   .:
@@ -285,7 +290,7 @@ importers:
     dependencies:
       '@ai-sdk/gateway':
         specifier: ^4.0.86
-        version: 4.0.86(zod@4.5.4)
+        version: 4.0.86(patch_hash=7mzjd75xp2htvzjugj7q7qs7ky)(zod@4.5.4)
       '@beutl/core':
         specifier: workspace:*
         version: link:../core
@@ -6106,7 +6111,7 @@ packages:
 
 snapshots:
 
-  '@ai-sdk/gateway@4.0.86(zod@4.5.4)':
+  '@ai-sdk/gateway@4.0.86(patch_hash=7mzjd75xp2htvzjugj7q7qs7ky)(zod@4.5.4)':
     dependencies:
       '@ai-sdk/provider': 4.0.17
       '@ai-sdk/provider-utils': 5.0.44(zod@4.5.4)
@@ -9439,7 +9444,7 @@ snapshots:
 
   ai@7.0.106(zod@4.5.4):
     dependencies:
-      '@ai-sdk/gateway': 4.0.86(zod@4.5.4)
+      '@ai-sdk/gateway': 4.0.86(patch_hash=7mzjd75xp2htvzjugj7q7qs7ky)(zod@4.5.4)
       '@ai-sdk/provider': 4.0.17
       '@ai-sdk/provider-utils': 5.0.44(zod@4.5.4)
       zod: 4.5.4
