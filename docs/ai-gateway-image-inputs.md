@@ -38,3 +38,14 @@ so the adapter requests a transparent PNG and supplies a background-removal
 instruction alongside the source image. Other Gateway image models continue
 to advertise only `auto` until their transparent-output behavior is verified
 independently.
+
+## Outpainting input boundary
+
+Gateway outpainting is supported only by the Web workflow, which expands the
+source into a transparent canvas before submitting the edit. The v3 image-edit
+API accepts raw source images and does not perform that expansion, so Gateway
+outpainting models are omitted from API capabilities and availability and new
+requests are rejected before reserving usage or calling the provider. Native
+OpenRouter outpainting, other Gateway edits, and retrieval of previously paid
+results remain available. Do not re-enable this raw-image API path without
+server-side canvas preparation or a validated expanded-input contract.

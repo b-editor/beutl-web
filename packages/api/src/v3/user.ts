@@ -110,7 +110,7 @@ const app = new Hono().get("/", async (c) => {
     // its own connection, and this handler has no reason to hold two.
     const prisma = await getDb();
     const [entitlements, storage] = await Promise.all([
-      getEntitlements(currentUserId, { prisma }),
+      getEntitlements(currentUserId, { prisma, rawImageInputs: true }),
       getStorageEntitlement(currentUserId, { prisma }),
     ]);
     return c.json({ ...entitlements, storage });
@@ -142,6 +142,7 @@ const app = new Hono().get("/", async (c) => {
       available: await canStartAiOperation(
         currentUserId,
         parsed.data,
+        { rawImageInputs: true },
       ),
     });
   });

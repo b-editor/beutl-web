@@ -16,6 +16,7 @@ import { AI_PRICING_CATALOG, PRO_PLAN } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
 import { quoteAiOperationReservation } from "./usage-cost";
+import { providerRequiresPreparedOutpaintCanvas } from "./providers/registry";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -136,6 +137,7 @@ export function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
   catalog: AiModelCatalog,
+  rawImageInputs = false,
 ): { availability: AiOperationAvailability; modelAvailability: AiModelAvailability } {
   const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
   const availability: AiOperationAvailability = {};
@@ -143,6 +145,7 @@ export function toAiOperationAvailability(
   for (const operation of Object.keys(AI_PRICING_CATALOG)) {
     const models: Record<string, boolean> = {};
     for (const entry of catalog.list(operation)) {
+      if (rawImageInputs && providerRequiresPreparedOutpaintCanvas(entry.provider, operation)) continue;
       models[entry.modelId] =
         canUseAi && available > 0;
     }
@@ -280,6 +283,8 @@ export async function getEntitlements(
     prisma?: PrismaTransaction;
     /** Retained for callers compiled against fixed-price affordability. */
     videoCapabilities?: unknown;
+    /** The v3 API accepts raw images, unlike the Web's prepared canvas. */
+    rawImageInputs?: boolean;
   } = {},
 ): Promise<EntitlementsResponse> {
   // This is an advisory presentation snapshot. Every paid operation repeats
@@ -300,6 +305,7 @@ export async function getEntitlements(
       balance,
       summary.canUseAi,
       catalog,
+      options.rawImageInputs,
     ),
   };
 }
@@ -317,6 +323,7 @@ export async function canStartAiOperation(
     aspectRatio?: string;
     background?: string;
   },
+  options: { rawImageInputs?: boolean } = {},
 ): Promise<boolean> {
   const { operation } = request;
   if (!(operation in AI_PRICING_CATALOG)) {
@@ -328,6 +335,7 @@ export async function canStartAiOperation(
   ]);
   const selectedModel = catalog.resolve(operation, request.model);
   if (!selectedModel) return false;
+  if (options.rawImageInputs && providerRequiresPreparedOutpaintCanvas(selectedModel.provider, operation)) return false;
   const quantity = operation === "video.generate"
     ? request.durationSeconds
     : operation === "audio.transcribe"

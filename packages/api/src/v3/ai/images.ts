@@ -9,7 +9,7 @@ import {
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { imageProviderFor } from "../../ai/providers/registry";
+import { imageProviderFor, providerRequiresPreparedOutpaintCanvas } from "../../ai/providers/registry";
 import {
   imageCapabilityOf,
   loadAiImageModelCapabilities,
@@ -186,6 +186,7 @@ const app = new Hono()
         // canonical catalog and ledger.
         const entitlements = await getEntitlements(userId, {
           videoCapabilities: new Map(),
+          rawImageInputs: true,
         });
         if (!entitlements.canUseAi) {
           // The key lookup and this advisory snapshot are not one transaction.
@@ -583,6 +584,7 @@ const app = new Hono()
 
     const entitlements = await getEntitlements(userId, {
       videoCapabilities: new Map(),
+      rawImageInputs: true,
     });
     if (keyState !== "collectable") {
       const recoverableDenial = async () =>
@@ -740,6 +742,13 @@ const app = new Hono()
     // none of those is refused before it is paid for.
     if (!selectedModel) {
       return c.json(await apiErrorResponse("aiModelUnavailable"), {
+        status: 400,
+      });
+    }
+    // Do not send unchanged raw bytes to a prompt-only outpainting adapter.
+    // Keep this after replay so previously paid outputs remain retrievable.
+    if (providerRequiresPreparedOutpaintCanvas(selectedModel.provider, `image.edit.${editTask}`)) {
+      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
       });
     }

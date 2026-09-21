@@ -53,7 +53,8 @@ const MAXIMUM_VIDEO_JOB_MILLISECONDS = 6 * 60 * 60 * 1000;
 //
 // The four supported image edits are all "a picture plus an instruction".
 // Outpainting receives an already-expanded transparent canvas from the web
-// client. Background removal adds OpenAI's transparent-output provider option,
+// client; v3 raw-image uploads exclude it via the input-context check in the
+// provider registry. Background removal adds OpenAI's transparent-output option,
 // and the model capability check admits only models verified to accept it.
 // Upscaling is different: it requires a requested output resolution, which the
 // Gateway adapter still has no operation-level surface for.

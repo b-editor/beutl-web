@@ -108,3 +108,13 @@ export function providerSupportsOperation(
 ): boolean {
   return findAiProvider(id)?.supports(operation) ?? false;
 }
+
+// Gateway has no native canvas-expansion task. Its Web path is usable only
+// because the client supplies a pre-expanded transparent canvas; raw-image API
+// uploads must not advertise or execute that operation as ordinary outpainting.
+export function providerRequiresPreparedOutpaintCanvas(
+  id: string,
+  operation: string,
+): boolean {
+  return id === "vercel-gateway" && operation === "image.edit.outpaint";
+}
