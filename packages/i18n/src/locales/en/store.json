@@ -22,7 +22,7 @@
   "removeWarning": "Removing from the library will make it unavailable until you add it back.",
   "reacquireCost": "It will cost {{amount}} to reacquire.",
   "openDesktopAppToInstall": "Please open the desktop app to install.",
-  "installInBeutl": "Install in Beutl",
+  "installInBeutl": "Install",
   "desktopAppDidNotOpen": "If the app did not open, install the latest version of Beutl, then try the button again.",
   "downloadBeutl": "Download Beutl",
   "removeFromLibrary": "Remove from library",
