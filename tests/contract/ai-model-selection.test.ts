@@ -41,6 +41,7 @@ vi.mock(
 );
 
 import { generateImage } from "../../packages/api/src/ai/openrouter";
+import { gatewayProviderCostUsd } from "../../packages/api/src/ai/provider-cost";
 
 const USER_ID = "user-model-selection";
 const JWT_SECRET = "test-secret-for-model-selection";
@@ -195,6 +196,21 @@ describe("choosing a model per request", () => {
     expect([...state.aiJobs.values()][0].usageUnits).toBe(expectedUnits);
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
       .toBe(expectedUnits);
+  });
+
+  it.each([
+    ["0.0034567800000000000001", 0.518518],
+    ["3.4567800000000000001E-3", 0.518518],
+    ["1e-400", 0.000001],
+  ] as const)("settles every digit of the provider's $%s string", async (cost, expectedUnits) => {
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json: PNG_BASE64,
+      mediaType: "image/png",
+      providerCostUsd: gatewayProviderCostUsd({ gateway: { cost } }),
+    });
+    expect((await generateWith({ model: "dear/model" })).status).toBe(200);
+    expect([...state.aiJobs.values()][0].usageUnits).toBe(expectedUnits);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(expectedUnits);
   });
 
   it("refuses an unknown model without reserving or charging", async () => {

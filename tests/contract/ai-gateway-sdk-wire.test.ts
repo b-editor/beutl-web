@@ -57,17 +57,17 @@ describe("Gateway requests through the installed SDK", () => {
     });
   });
 
-  it("returns the actual image charge reported by AI Gateway", async () => {
+  it.each(["0.05678", "0.0034567800000000000001"])("preserves the actual image charge %s reported by AI Gateway", async (cost) => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({
       images: [PNG],
-      providerMetadata: { gateway: { cost: "0.05678" } },
+      providerMetadata: { gateway: { cost } },
     })));
 
     await expect(generateGatewayImage({
       model: "openai/gpt-image-2",
       prompt: "A marble",
       aspectRatio: "1:1",
-    })).resolves.toMatchObject({ providerCostUsd: 0.05678 });
+    })).resolves.toMatchObject({ providerCostUsd: cost });
   });
 
   it("carries an image edit source through the SDK", async () => {

@@ -44,7 +44,7 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { gatewayVideoResolution } from "./resolution";
-import { gatewayProviderCostUsd } from "../../provider-cost";
+import { gatewayProviderCostUsd, type ProviderCostUsd } from "../../provider-cost";
 
 /**
  * The job id the Gateway assigned, read off the start response.
@@ -65,7 +65,7 @@ function gatewayJobIdOf(providerMetadata: unknown): string | null {
   return typeof jobId === "string" && jobId.length > 0 ? jobId : null;
 }
 
-function costOf(providerMetadata: unknown): { providerCostUsd?: number } {
+function costOf(providerMetadata: unknown): { providerCostUsd?: ProviderCostUsd } {
   const cost = gatewayProviderCostUsd(providerMetadata);
   return cost === undefined ? {} : { providerCostUsd: cost };
 }

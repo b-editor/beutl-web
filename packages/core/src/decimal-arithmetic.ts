@@ -1,11 +1,13 @@
 // Exact decimal intermediates for non-negative prices. Number conversion only
 // happens when returning a result, so e.g. 0.00004 * 1056 does not acquire a
 // floating-point tail that would round a later usage charge up unnecessarily.
-export function decimalFraction(value: number): {
+type DecimalFraction = {
   numerator: bigint;
   denominator: bigint;
-} {
-  const [significand, exponent = "0"] = value.toString().split("e");
+};
+
+export function decimalFraction(value: number | string): DecimalFraction {
+  const [significand, exponent = "0"] = value.toString().toLowerCase().split("e");
   const [integer, fraction = ""] = significand.split(".");
   const scale = fraction.length - Number(exponent);
   const coefficient = BigInt(integer + fraction);
@@ -15,6 +17,22 @@ export function decimalFraction(value: number): {
         numerator: coefficient * BigInt(10) ** BigInt(-scale),
         denominator: BigInt(1),
       };
+}
+
+/** Parse untrusted non-negative decimal amounts without a Number round-trip. */
+export function parseNonNegativeDecimalFraction(value: unknown): DecimalFraction | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? decimalFraction(value) : null;
+  }
+  // Bound both the coefficient and exponent before constructing BigInts. This
+  // still exceeds the precision/range of every finite JavaScript number.
+  if (typeof value !== "string" || value.length > 1024) return null;
+  const decimal = value.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(decimal)) return null;
+  const exponent = Number(decimal.split(/[eE]/)[1] ?? 0);
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 1024) return null;
+  const fraction = decimalFraction(decimal);
+  return fraction.numerator >= BigInt(0) ? fraction : null;
 }
 
 function fractionToNumber(numerator: bigint, denominator: bigint): number {

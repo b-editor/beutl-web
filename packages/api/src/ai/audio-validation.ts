@@ -3,6 +3,7 @@ import {
   MAX_AI_RESULT_TEXT_LENGTH,
 } from "@beutl/core";
 import { z } from "zod";
+import type { ProviderCostUsd } from "./provider-cost";
 
 export type TranscriptionSegment = {
   start: number;
@@ -20,7 +21,7 @@ export type TranscriptionResult = {
   segments: TranscriptionSegment[];
   language?: string;
   words?: TranscriptionWord[];
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 };
 
 export class InvalidTranscriptionResultError extends Error {

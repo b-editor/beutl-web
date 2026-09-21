@@ -33,6 +33,7 @@ import { toGatewayProviderError } from "./errors";
 import {
   gatewayProviderCostUsd,
   withProviderCost,
+  type ProviderCostUsd,
 } from "../../provider-cost";
 
 const PROVIDER_LABEL = "Vercel AI Gateway";
@@ -89,7 +90,7 @@ export async function translateGatewaySegments(
   }
 
   let text: string;
-  let cost: number | undefined;
+  let cost: ProviderCostUsd | undefined;
   try {
     const result = await generateText({
       model,
@@ -133,7 +134,7 @@ async function translateStreaming({
   const seen = new Set<string>();
   let content = "";
   let finished = false;
-  let cost: number | undefined;
+  let cost: ProviderCostUsd | undefined;
 
   try {
     const result = streamText({

@@ -19,6 +19,7 @@ import type {
   AiVideoResolution,
 } from "@beutl/core";
 import type { TranscriptionResult } from "../audio-validation";
+import type { ProviderCostUsd } from "../provider-cost";
 import type {
   GeneratedVideoExtension,
   GeneratedVideoMimeType,
@@ -91,7 +92,7 @@ export type AiVideoJobInfo = {
   status: AiVideoJobStatus;
   error?: string | null;
   /** Actual provider charge in USD, available on a terminal response. */
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
   /**
    * Whatever the provider needs to hand the finished bytes over, opaque to
    * everything but the provider that produced it. OpenRouter downloads by job
@@ -297,7 +298,7 @@ export type ImageReference = {
 export type GeneratedImage = {
   b64Json: string;
   mediaType: string;
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 };
 
 /** A rough version of the picture, sent while the final one is still coming. */
@@ -368,7 +369,7 @@ export type TranslationSegmentContext = {
 };
 
 export type AiTranslationResult = TranslationSegment[] & {
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 };
 
 export type AiTranslateRequest = {

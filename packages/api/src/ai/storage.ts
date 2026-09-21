@@ -22,6 +22,7 @@ import { getR2Bucket } from "./r2-provider";
 import { loadAiSettings } from "./settings";
 import { PRO_PLAN } from "./pricing";
 import { providerCostUsdToMicros } from "./usage-cost";
+import type { ProviderCostUsd } from "./provider-cost";
 
 export { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "@beutl/core";
 export {
@@ -221,7 +222,7 @@ async function saveAiOutput({
   objectKey: string;
   finalizationToken?: string;
   retentionMilliseconds?: number;
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 }) {
   if (
     retentionMilliseconds !== undefined &&
@@ -353,7 +354,7 @@ export async function saveAiImage({
   bytes: ArrayBuffer;
   mimeType: string;
   filename: string;
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 }) {
   return await saveAiOutput({
     jobId,
@@ -382,7 +383,7 @@ export async function saveAiVideo({
   bytes: ArrayBuffer;
   mimeType: string;
   filename: string;
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 }) {
   return await saveAiOutput({
     jobId,
@@ -409,7 +410,7 @@ export async function saveAiJsonResult({
   userId: string;
   filename: string;
   result: unknown;
-  providerCostUsd?: number;
+  providerCostUsd?: ProviderCostUsd;
 }) {
   const serialized = JSON.stringify(result);
   if (serialized === undefined) {

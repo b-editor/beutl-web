@@ -1,5 +1,10 @@
-import { multiplyDecimalAmounts, USD_MICROS_PER_DOLLAR } from "@beutl/core";
+import {
+  multiplyDecimalAmounts,
+  parseNonNegativeDecimalFraction,
+  USD_MICROS_PER_DOLLAR,
+} from "@beutl/core";
 import { loadAiCostEstimates } from "./model-pricing";
+import type { ProviderCostUsd } from "./provider-cost";
 
 // Public prices can move between reservation and completion, and token-priced
 // requests include small fixed prompt costs the catalog estimate omits. The
@@ -7,14 +12,14 @@ import { loadAiCostEstimates } from "./model-pricing";
 // known.
 export const AI_COST_RESERVATION_BUFFER_PERCENT = 120;
 
-export function providerCostUsdToMicros(costUsd: number): number | null {
-  if (!Number.isFinite(costUsd) || costUsd < 0) return null;
-  const scaled = costUsd * USD_MICROS_PER_DOLLAR;
-  const micros = Math.ceil(
-    scaled - Number.EPSILON * Math.max(1, Math.abs(scaled)) * 8,
-  );
-  return Number.isSafeInteger(micros) && micros <= 2_147_483_647
-    ? micros
+export function providerCostUsdToMicros(costUsd: ProviderCostUsd): number | null {
+  const cost = parseNonNegativeDecimalFraction(costUsd);
+  if (cost === null) return null;
+  const micros = (
+    cost.numerator * BigInt(USD_MICROS_PER_DOLLAR) + cost.denominator - BigInt(1)
+  ) / cost.denominator;
+  return micros <= BigInt(2_147_483_647)
+    ? Number(micros)
     : null;
 }
 

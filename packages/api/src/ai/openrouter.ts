@@ -7,7 +7,11 @@ import type {
 } from "@openrouter/sdk/models/operations";
 import type { ChatRequest } from "@openrouter/sdk/models";
 import { createTranslationSegmentReader } from "./translation-stream";
-import { providerCostUsd, withProviderCost } from "./provider-cost";
+import {
+  providerCostUsd,
+  withProviderCost,
+  type ProviderCostUsd,
+} from "./provider-cost";
 import {
   parseTranslationContent as parseSharedTranslationContent,
   toTranslationPromptSegments,
@@ -815,7 +819,7 @@ function parseTranslationContent(
 function parseTranslationResponse(
   response: SendChatCompletionRequestResponse,
   inputSegments: TranslationSegment[],
-): TranslationSegment[] & { providerCostUsd?: number } {
+): TranslationSegment[] & { providerCostUsd?: ProviderCostUsd } {
   // A request for one completion that comes back with none or several is not an
   // answer to it.
   const choice =
@@ -870,7 +874,7 @@ export async function translateSegments({
   // progress. Asking for it is what makes the reply stream; what comes back at
   // the end is the same either way, checked the same way.
   onSegment?: (segment: TranslationSegment) => void;
-}): Promise<TranslationSegment[] & { providerCostUsd?: number }> {
+}): Promise<TranslationSegment[] & { providerCostUsd?: ProviderCostUsd }> {
   const promptSegments = toTranslationPromptSegments(segments, contexts);
   const client = createOpenRouterClient();
   const chatRequest: Omit<ChatRequest, "stream"> = {
@@ -948,13 +952,13 @@ async function translateStreaming({
   segments: TranslationSegment[];
   signal?: AbortSignal;
   onSegment: (segment: TranslationSegment) => void;
-}): Promise<TranslationSegment[] & { providerCostUsd?: number }> {
+}): Promise<TranslationSegment[] & { providerCostUsd?: ProviderCostUsd }> {
   const wanted = new Set(segments.map((segment) => segment.id));
   const seen = new Set<string>();
   const reader = createTranslationSegmentReader();
   let content = "";
   let finished = false;
-  let cost: number | undefined;
+  let cost: ProviderCostUsd | undefined;
   try {
     const stream = await client.chat.send(
       { chatRequest: { ...chatRequest, stream: true } },

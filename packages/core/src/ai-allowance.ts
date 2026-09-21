@@ -7,7 +7,10 @@
 // Pure functions with no I/O, so the admin console can compute them during
 // server rendering and, later, preview an unsaved value in the browser.
 import { AI_PRICING_CATALOG, type AiBillingUnit } from "./ai-pricing-catalog";
-import { decimalFraction } from "./decimal-arithmetic";
+import {
+  decimalFraction,
+  parseNonNegativeDecimalFraction,
+} from "./decimal-arithmetic";
 
 // The quantity an administrator thinks in, which is not always the billing
 // unit: a thousand characters is billed as one unit but read as 1,000.
@@ -79,21 +82,20 @@ export function ceilUsageUnits(value: number): number | null {
 
 /** Provider-reported USD cost rounded up to the ledger's micro-unit. */
 export function usageUnitsForProviderCost(
-  costUsd: number,
+  costUsd: number | string,
   usdPerUsageUnit: number,
   usagePercent = 100,
 ): number | null {
+  const cost = parseNonNegativeDecimalFraction(costUsd);
   if (
-    !Number.isFinite(costUsd) ||
-    costUsd < 0 ||
+    cost === null ||
     !isUsableAmount(usdPerUsageUnit) ||
     !Number.isSafeInteger(usagePercent) ||
     usagePercent <= 0
   ) {
     return null;
   }
-  if (costUsd === 0) return 0;
-  const cost = decimalFraction(costUsd);
+  if (cost.numerator === BigInt(0)) return 0;
   const rate = decimalFraction(usdPerUsageUnit);
   // Round once, after conversion and the model percentage. All intermediate
   // arithmetic stays exact, including scientific notation and repeating ratios.

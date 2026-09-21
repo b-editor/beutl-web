@@ -154,7 +154,11 @@ export {
 export * from "./ai-capabilities";
 export * from "./request-body-limit";
 export type { AiBillingUnit, AiModelChargeCapabilities } from "./ai-pricing-catalog";
-export { addDecimalAmounts, multiplyDecimalAmounts } from "./decimal-arithmetic";
+export {
+  addDecimalAmounts,
+  multiplyDecimalAmounts,
+  parseNonNegativeDecimalFraction,
+} from "./decimal-arithmetic";
 export {
   derivePlanUnitValue,
   deriveTopUpUnitValue,

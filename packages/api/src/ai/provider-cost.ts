@@ -1,20 +1,21 @@
 // Provider-reported request cost, normalized without trusting an untyped
 // metadata object. Costs are USD and may be numbers or decimal strings.
+import { parseNonNegativeDecimalFraction } from "@beutl/core";
 
-export function providerCostUsd(value: unknown): number | undefined {
+export type ProviderCostUsd = number | string;
+
+export function providerCostUsd(value: unknown): ProviderCostUsd | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
     return undefined;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
-    return undefined;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  if (parseNonNegativeDecimalFraction(value) === null) return undefined;
+  // Preserve provider-supplied digits until the final micro-unit rounding.
+  return typeof value === "string" ? value.trim() : value;
 }
 
 export function gatewayProviderCostUsd(
   providerMetadata: unknown,
-): number | undefined {
+): ProviderCostUsd | undefined {
   if (typeof providerMetadata !== "object" || providerMetadata === null) {
     return undefined;
   }
@@ -25,8 +26,8 @@ export function gatewayProviderCostUsd(
 
 export function withProviderCost<T extends object>(
   value: T,
-  costUsd: number | undefined,
-): T & { providerCostUsd?: number } {
+  costUsd: ProviderCostUsd | undefined,
+): T & { providerCostUsd?: ProviderCostUsd } {
   if (costUsd !== undefined) {
     Object.defineProperty(value, "providerCostUsd", {
       value: costUsd,
