@@ -27,16 +27,27 @@ function chatChunk(content: string): unknown {
   };
 }
 
+function chatFinish(): unknown {
+  return {
+    id: "gen-1",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "openai/gpt-4.1-mini",
+    choices: [{ index: 0, finish_reason: "stop", delta: {} }],
+  };
+}
+
 // The reply the model builds up, cut where a provider would cut it.
 function translationChunks(
   segments: Array<{ id: string; text: string }>,
+  { finish = true } = {},
 ): unknown[] {
   const reply = JSON.stringify({ segments });
   const pieces: string[] = [];
   for (let index = 0; index < reply.length; index += 17) {
     pieces.push(reply.slice(index, index + 17));
   }
-  return pieces.map(chatChunk);
+  return [...pieces.map(chatChunk), ...(finish ? [chatFinish()] : [])];
 }
 
 async function sentBody(fetchMock: ReturnType<typeof vi.fn>): Promise<
@@ -132,6 +143,36 @@ describe("streaming a translation", () => {
     expect((await sentBody(fetchMock)).stream).toBe(false);
   });
 
+  it.each([false, true])("rejects complete JSON without an explicit stop (DONE=%s)", async (done) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(eventStream(
+      translationChunks([
+        { id: "line-1", text: "こんにちは" },
+        { id: "line-2", text: "世界" },
+      ], { finish: false }),
+      { done },
+    )));
+    const onSegment = vi.fn();
+
+    await expect(translateSegments({
+      model: "openai/gpt-4.1-mini", targetLanguage: "ja", segments, onSegment,
+    })).rejects.toBeInstanceOf(AiProviderError);
+    expect(onSegment).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the stop signal when an empty usage chunk follows it", async () => {
+    const translated = [
+      { id: "line-1", text: "こんにちは" },
+      { id: "line-2", text: "世界" },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(eventStream([
+      ...translationChunks(translated),
+      { id: "gen-1", object: "chat.completion.chunk", created: 1, model: "openai/gpt-4.1-mini", choices: [] },
+    ])));
+    await expect(translateSegments({
+      model: "openai/gpt-4.1-mini", targetLanguage: "ja", segments, onSegment: vi.fn(),
+    })).resolves.toEqual(translated);
+  });
+
   it("refuses a stream that stops before every subtitle has arrived", async () => {
     // Shown early, judged whole: a reply missing a subtitle is refused exactly
     // as it would be without streaming, whatever was shown on the way.
@@ -207,7 +248,7 @@ describe("streaming a translation", () => {
       ...translationChunks([
         { id: "line-1", text: "こんにちは" },
         { id: "line-2", text: "世界" },
-      ]),
+      ], { finish: false }),
       {
         id: "gen-1", object: "chat.completion.chunk", created: 1,
         model: "openai/gpt-4.1-mini",
