@@ -16,7 +16,8 @@ import type { PrismaTransaction } from "./transaction";
 // Ledger kinds that represent actual consumption. A usage row stores the
 // monthly share in usageAmount and the purchased share as a negative
 // creditAmount; a refund row stores the mirror image. Net units consumed is
-// therefore sum(usageAmount) - sum(creditAmount) across both kinds.
+// therefore sum(usageAmount) - sum(creditAmount) across these kinds. All rows
+// for one job belong to its creation window, even if it settles/refunds later.
 const CONSUMPTION_KINDS = ["usage", "refund", "usage_settlement"] as const;
 
 // A purchase row carries the credits bought; a reversal row carries the credits
@@ -139,9 +140,21 @@ export async function getAiUsageTotals({
   const rows = await db.creditTransaction.groupBy({
     by: ["kind"],
     where: {
-      createdAt: {
-        gte: since,
-      },
+      OR: [
+        {
+          kind: { in: [...CONSUMPTION_KINDS] },
+          aiJob: { is: { createdAt: { gte: since } } },
+        },
+        {
+          createdAt: { gte: since },
+          // Purchases/adjustments retain transaction-time semantics. Legacy
+          // consumption without a job has no shared timestamp to use instead.
+          OR: [
+            { kind: { notIn: [...CONSUMPTION_KINDS] } },
+            { aiJobId: null },
+          ],
+        },
+      ],
     },
     _sum: {
       usageAmount: true,

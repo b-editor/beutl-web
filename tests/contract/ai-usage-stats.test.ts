@@ -234,6 +234,73 @@ describe("AI usage aggregates", () => {
     expect(totals.purchasedCredits).toBe(300);
   });
 
+  it.each([0, 0.625, 4.25])("keeps an old reservation's settlement to %s units out of a newer window", async (actual) => {
+    const old = await settledReservation("user-old", "image", 3.125, actual);
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    memory.state.creditTransactions.find((row) => row.aiJobId === old.id && row.kind === "usage")!.createdAt = beforeWindow;
+    // A current job must contribute its whole charge, not that charge plus an
+    // unrelated delta from the old job. Soft deletion does not erase spend.
+    const current = await settledReservation("user-new", "image", 2.5, 2.25);
+    memory.state.aiJobs.get(current.id)!.createdAt = SINCE;
+    memory.state.aiJobs.get(current.id)!.deletedAt = new Date();
+
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(2.25);
+    expect((await getAiUsageTotals({ since: beforeWindow })).consumedUnits).toBe(actual + 2.25);
+    expect((await getAiUsageTotals({ since: new Date(SINCE.getTime() + 1) })).consumedUnits).toBe(0);
+  });
+
+  it("keeps a delayed refund with its reservation across both balance sources", async () => {
+    await addPurchasedCredits({ userId: "user-a", amount: 300, stripePaymentId: "pi_delayed_refund" });
+    const old = await reserve({ userId: "user-a", jobId: "old", kind: "video", status: "failed", units: 600 });
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    memory.state.creditTransactions.find((row) => row.aiJobId === old.id && row.kind === "usage")!.createdAt = beforeWindow;
+    await refundUsage({ userId: "user-a", aiJobId: old.id, usagePeriod: PERIOD });
+    await reserve({ userId: "user-b", jobId: "new", kind: "image", status: "running", units: 1.25 });
+
+    expect(await getAiUsageTotals({ since: SINCE })).toEqual({
+      consumedUnits: 1.25, purchasedCredits: 300, adminUsageAdjustment: 0,
+    });
+    expect((await getAiUsageTotals({ since: beforeWindow })).consumedUnits).toBe(1.25);
+  });
+
+  it("retains transaction-time filtering for unlinked legacy consumption", async () => {
+    for (const [kind, usageAmount, createdAt] of [
+      ["usage", 5, new Date(SINCE.getTime() - 1)],
+      ["usage", 1.125, SINCE],
+      ["refund", -0.125, SINCE],
+    ] as const) {
+      await memory.prisma.creditTransaction.create({
+        data: { userId: "legacy", kind, usageAmount, creditAmount: 0 },
+      });
+      memory.state.creditTransactions.at(-1)!.createdAt = createdAt;
+    }
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(1);
+  });
+
+  it("keeps purchases and admin adjustments on transaction time even when linked to a job", async () => {
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    const old = await createAiJob({ userId: "user-a", kind: "image", provider: "test", status: "succeeded", usageUnits: 1 });
+    const current = await createAiJob({ userId: "user-a", kind: "image", provider: "test", status: "succeeded", usageUnits: 1 });
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    for (const [aiJobId, kind, creditAmount, usageAmount, createdAt] of [
+      [old.id, "purchase", 7, 0, SINCE],
+      [old.id, "purchase_reversal", -2, 0, SINCE],
+      [old.id, "admin_usage_adjustment", 0, 1.25, SINCE],
+      [current.id, "purchase", 11, 0, beforeWindow],
+      [current.id, "admin_usage_adjustment", 0, 3, beforeWindow],
+    ] as const) {
+      await memory.prisma.creditTransaction.create({
+        data: { userId: "user-a", aiJobId, kind, creditAmount, usageAmount },
+      });
+      memory.state.creditTransactions.at(-1)!.createdAt = createdAt;
+    }
+    expect(await getAiUsageTotals({ since: SINCE })).toEqual({
+      consumedUnits: 0, purchasedCredits: 5, adminUsageAdjustment: 1.25,
+    });
+  });
+
   it("nets a reversed purchase out of the credits purchased", async () => {
     await addPurchasedCredits({
       userId: "user-a",

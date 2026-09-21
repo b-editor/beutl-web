@@ -259,6 +259,10 @@ than free.
 
 `/admin/ai/usage` reports jobs and units for a selected window, current account
 balances, heavy consumers, and allowance consumption statistics. The
+consumed-units total groups each job's reservation, settlement, and refund by
+the job's creation time, so a later adjustment cannot appear without its
+original reservation. Purchases, administrator adjustments, and legacy ledger
+entries without a linked job still use their own transaction time. The
 distribution uses only current billing periods because an expired period's
 counter is not cleared until the account next runs a job.
 

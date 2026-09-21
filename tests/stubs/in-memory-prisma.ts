@@ -712,6 +712,34 @@ function matchesCreatedAt(
   return true;
 }
 
+type CreditTransactionWhere = {
+  kind?: string | { in?: readonly string[]; notIn?: readonly string[] };
+  createdAt?: { gte?: Date; lt?: Date };
+  aiJobId?: string | null;
+  aiJob?: { is: { createdAt?: { gte?: Date; lt?: Date } } };
+  OR?: CreditTransactionWhere[];
+};
+
+function matchesCreditTransactionWhere(
+  transaction: CreditTransaction,
+  where: CreditTransactionWhere | undefined,
+  jobs: ReadonlyMap<string, AiJob>,
+): boolean {
+  if (!where) return true;
+  if (where.OR && !where.OR.some((clause) => matchesCreditTransactionWhere(transaction, clause, jobs))) return false;
+  if (typeof where.kind === "string" && transaction.kind !== where.kind) return false;
+  if (typeof where.kind === "object") {
+    if (where.kind.in && !where.kind.in.includes(transaction.kind)) return false;
+    if (where.kind.notIn?.includes(transaction.kind)) return false;
+  }
+  if (where.aiJobId !== undefined && transaction.aiJobId !== where.aiJobId) return false;
+  if (where.aiJob) {
+    const job = transaction.aiJobId === null ? undefined : jobs.get(transaction.aiJobId);
+    if (!job || !matchesCreatedAt(job.createdAt, where.aiJob.is.createdAt)) return false;
+  }
+  return matchesCreatedAt(transaction.createdAt, where.createdAt);
+}
+
 type DateFilter = { gt?: Date; gte?: Date; lt?: Date; lte?: Date };
 
 // NULL is outside every range, the way a SQL comparison against it is.
@@ -1535,12 +1563,10 @@ export function createInMemoryPrisma() {
         where,
         ...args
       }: GroupByArgs & {
-        where?: { kind?: string; createdAt?: { gte?: Date; lt?: Date } };
+        where?: CreditTransactionWhere;
       }) => {
         const rows = state.creditTransactions.filter(
-          (transaction) =>
-            (!where?.kind || transaction.kind === where.kind) &&
-            matchesCreatedAt(transaction.createdAt, where?.createdAt),
+          (transaction) => matchesCreditTransactionWhere(transaction, where, state.aiJobs),
         );
         return groupRows(rows as unknown as Record<string, unknown>[], args);
       },
