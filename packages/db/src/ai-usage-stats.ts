@@ -54,6 +54,11 @@ export type AiTopUser = {
   reservedUnits: number;
 };
 
+type ReservationAggregate = {
+  jobCount: bigint;
+  reservedUnits: Prisma.Decimal;
+};
+
 function sumOf(
   value: number | Prisma.Decimal | null | undefined,
 ): number {
@@ -106,27 +111,21 @@ export async function getAiJobUsageByKind({
   prisma?: PrismaTransaction;
 }): Promise<AiJobKindUsage[]> {
   const db = prisma ?? await getDb();
-  const rows = await db.aiJob.groupBy({
-    by: ["kind"],
-    where: {
-      createdAt: {
-        gte: since,
-      },
-    },
-    _count: {
-      _all: true,
-    },
-    _sum: {
-      usageUnits: true,
-    },
-  });
-  return rows
-    .map((row) => ({
-      kind: row.kind,
-      jobCount: row._count._all,
-      reservedUnits: sumOf(row._sum.usageUnits),
-    }))
-    .sort((left, right) => right.reservedUnits - left.reservedUnits);
+  // Fall back per job, before aggregating: legacy and actual-cost jobs can
+  // share a group, and successful actual-cost jobs overwrite usageUnits.
+  const rows = await db.$queryRaw<(ReservationAggregate & { kind: string })[]>`
+    SELECT "kind", COUNT(*) AS "jobCount",
+      SUM(COALESCE("reservedUsageUnits", "usageUnits")) AS "reservedUnits"
+    FROM "AiJob"
+    WHERE "createdAt" >= ${since}
+    GROUP BY "kind"
+    ORDER BY "reservedUnits" DESC, "kind" ASC
+  `;
+  return rows.map((row) => ({
+    kind: row.kind,
+    jobCount: Number(row.jobCount),
+    reservedUnits: sumOf(row.reservedUnits),
+  }));
 }
 
 export async function getAiUsageTotals({
@@ -269,30 +268,21 @@ export async function getTopAiUsers({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  const rows = await db.aiJob.groupBy({
-    by: ["userId"],
-    where: {
-      createdAt: {
-        gte: since,
-      },
-    },
-    _count: {
-      _all: true,
-    },
-    _sum: {
-      usageUnits: true,
-    },
-    orderBy: {
-      _sum: {
-        usageUnits: "desc",
-      },
-    },
-    take: limit,
-  });
+  // Rank the combined legacy/new reservation totals in SQL before LIMIT;
+  // limiting separate cohorts or sorting actual charges loses top users.
+  const rows = await db.$queryRaw<(ReservationAggregate & { userId: string })[]>`
+    SELECT "userId", COUNT(*) AS "jobCount",
+      SUM(COALESCE("reservedUsageUnits", "usageUnits")) AS "reservedUnits"
+    FROM "AiJob"
+    WHERE "createdAt" >= ${since}
+    GROUP BY "userId"
+    ORDER BY "reservedUnits" DESC, "userId" ASC
+    LIMIT ${limit}
+  `;
   return rows.map((row) => ({
     userId: row.userId,
-    jobCount: row._count._all,
-    reservedUnits: sumOf(row._sum.usageUnits),
+    jobCount: Number(row.jobCount),
+    reservedUnits: sumOf(row.reservedUnits),
   }));
 }
 
@@ -514,13 +504,17 @@ export async function listRecentAiJobsByUserId({
       kind: true,
       status: true,
       usageUnits: true,
+      reservedUsageUnits: true,
       deletedAt: true,
       createdAt: true,
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
-  return decimalNumberRows(rows);
+  return decimalNumberRows(rows).map((row) => ({
+    ...row,
+    reservedUnits: row.reservedUsageUnits ?? row.usageUnits,
+  }));
 }
 
 export async function listRecentCreditTransactionsByUserId({

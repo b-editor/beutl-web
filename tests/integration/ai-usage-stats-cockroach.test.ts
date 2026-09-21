@@ -11,13 +11,13 @@ import {
   getAiUsageTotals,
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
+  listRecentAiJobsByUserId,
   setDbProvider,
 } from "@beutl/db";
 
-// The admin usage report leans on groupBy with _count/_sum and an aggregate
-// orderBy, which the in-memory stub can only approximate. This exercises the
-// real SQL against CockroachDB. It reads only, so it makes no assumption about
-// what the target database contains.
+// The in-memory stub can only approximate the admin report's aggregates and
+// ranking. Exercise the real SQL without retaining any fixture data: queries
+// are read-only except for the reservation fixtures, which are rolled back.
 const connectionString = process.env.TEST_DATABASE_URL;
 const describeWithCockroach = connectionString ? describe : describe.skip;
 
@@ -33,6 +33,49 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
+
+  it("keeps reservations distinct from settled usage in SQL", async () => {
+    const userIds = Array.from({ length: 3 }, () => crypto.randomUUID());
+    const [userA, userB, userC] = userIds;
+    const rollback = new Error("Roll back reservation report fixtures");
+
+    await expect(prisma.$transaction(async (tx) => {
+      const newestJob = await tx.aiJob.findFirst({
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      // Keep report totals independent of existing development data.
+      const since = new Date(Math.max(Date.now(), newestJob?.createdAt.getTime() ?? 0) + 60_000);
+      await tx.user.createMany({
+        data: userIds.map((id) => ({ id, email: `${id}@reservation-test.invalid` })),
+      });
+      const job = { provider: "test", status: "succeeded", createdAt: since };
+      await tx.aiJob.createMany({
+        data: [
+          { ...job, userId: userA, kind: "image", usageUnits: 0.125, reservedUsageUnits: 3.125, usageSettledAt: since },
+          { ...job, userId: userA, kind: "image", usageUnits: 2.25 },
+          { ...job, userId: userB, kind: "video", usageUnits: 20, reservedUsageUnits: 5.25, usageSettledAt: since },
+          { ...job, userId: userC, kind: "image", usageUnits: 5.125 },
+        ],
+      });
+
+      expect(await getAiJobUsageByKind({ since, prisma: tx })).toEqual([
+        { kind: "image", jobCount: 3, reservedUnits: 10.5 },
+        { kind: "video", jobCount: 1, reservedUnits: 5.25 },
+      ]);
+      expect(await getTopAiUsers({ since, limit: 1, prisma: tx })).toEqual([
+        { userId: userA, jobCount: 2, reservedUnits: 5.375 },
+      ]);
+      const recent = await listRecentAiJobsByUserId({ userId: userA, limit: 10, prisma: tx });
+      expect(recent).toEqual(expect.arrayContaining([
+        expect.objectContaining({ usageUnits: 0.125, reservedUnits: 3.125 }),
+        expect.objectContaining({ usageUnits: 2.25, reservedUnits: 2.25 }),
+      ]));
+      throw rollback;
+    }, { timeout: 30_000 })).rejects.toBe(rollback);
+
+    expect(await prisma.user.count({ where: { id: { in: userIds } } })).toBe(0);
+  }, 45_000);
 
   it("runs every report query the admin console issues", async () => {
     const now = new Date();

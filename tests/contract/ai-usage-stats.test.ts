@@ -12,9 +12,11 @@ import {
   getAiUsageTotals,
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
+  listRecentAiJobsByUserId,
   reconcilePurchasedCreditReversal,
   refundUsage,
   setDbProvider,
+  settleUsage,
   setMonthlyUsageUsedByAdmin,
   upsertSubscription,
 } from "@beutl/db";
@@ -40,12 +42,14 @@ async function reserve({
   kind,
   status,
   units,
+  reservedUnits,
 }: {
   userId: string;
   jobId: string;
   kind: string;
   status: string;
   units: number;
+  reservedUnits?: number;
 }) {
   const job = await createAiJob({
     userId,
@@ -53,6 +57,7 @@ async function reserve({
     provider: "openrouter",
     status,
     usageUnits: units,
+    reservedUsageUnits: reservedUnits,
   });
   await consumeUsage({
     userId,
@@ -60,6 +65,26 @@ async function reserve({
     monthlyUsageLimit: MONTHLY_LIMIT,
     usagePeriod: PERIOD,
     aiJobId: job.id,
+  });
+  return job;
+}
+
+async function settledReservation(userId: string, kind: string, reserved: number, actual: number) {
+  const job = await reserve({
+    userId,
+    jobId: "settlement-fixture",
+    kind,
+    status: "succeeded",
+    units: reserved,
+    reservedUnits: reserved,
+  });
+  await settleUsage({
+    userId,
+    aiJobId: job.id,
+    actualAmount: actual,
+    providerCostUsdMicros: Math.round(actual * 10_000),
+    monthlyUsageLimit: MONTHLY_LIMIT,
+    currentUsagePeriod: PERIOD,
   });
   return job;
 }
@@ -134,6 +159,50 @@ describe("AI usage aggregates", () => {
       { kind: "video", jobCount: 2, reservedUnits: 200 },
       { kind: "image", jobCount: 1, reservedUnits: 20 },
     ]);
+  });
+
+  it("keeps original reservations across settlements, refunds, and legacy jobs", async () => {
+    await settledReservation("user-a", "image", 3.125, 0.625);
+    await settledReservation("user-b", "video", 1.75, 4.25);
+    await settledReservation("user-a", "image", 0.125, 0);
+    await reserve({ userId: "user-a", jobId: "legacy", kind: "image", status: "succeeded", units: 0.5 });
+    await reserve({ userId: "user-c", jobId: "queued", kind: "image", status: "queued", units: 0.25, reservedUnits: 0.25 });
+    const failed = await reserve({ userId: "user-c", jobId: "failed", kind: "image", status: "failed", units: 1.125, reservedUnits: 1.125 });
+    await refundUsage({ userId: "user-c", aiJobId: failed.id, usagePeriod: PERIOD });
+
+    expect(await getAiJobUsageByKind({ since: SINCE })).toEqual([
+      { kind: "image", jobCount: 5, reservedUnits: 5.125 },
+      { kind: "video", jobCount: 1, reservedUnits: 1.75 },
+    ]);
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(5.625);
+    expect(await getAiJobUsageByKind({ since: new Date(Date.now() + 60_000) })).toEqual([]);
+  });
+
+  it("ranks and limits users by combined legacy and new reservations", async () => {
+    await settledReservation("user-a", "image", 3.125, 0.125);
+    await reserve({ userId: "user-a", jobId: "legacy-a", kind: "image", status: "succeeded", units: 2.25 });
+    await settledReservation("user-b", "video", 5.25, 20);
+    await reserve({ userId: "user-c", jobId: "legacy-c", kind: "image", status: "succeeded", units: 5.125 });
+    const old = await settledReservation("user-old", "video", 100, 100);
+    memory.state.aiJobs.get(old.id)!.createdAt = new Date(SINCE.getTime() - 1);
+
+    expect(await getTopAiUsers({ since: SINCE, limit: 3 })).toEqual([
+      { userId: "user-a", jobCount: 2, reservedUnits: 5.375 },
+      { userId: "user-b", jobCount: 1, reservedUnits: 5.25 },
+      { userId: "user-c", jobCount: 1, reservedUnits: 5.125 },
+    ]);
+    expect(await getTopAiUsers({ since: SINCE, limit: 1 })).toEqual([
+      { userId: "user-a", jobCount: 2, reservedUnits: 5.375 },
+    ]);
+  });
+
+  it("exposes reservations separately from actual usage in recent job rows", async () => {
+    const settled = await settledReservation("user-a", "image", 3.125, 0.125);
+    const legacy = await reserve({ userId: "user-a", jobId: "legacy-a", kind: "image", status: "succeeded", units: 2.25 });
+    const rows = await listRecentAiJobsByUserId({ userId: "user-a", limit: 10 });
+
+    expect(rows.find((row) => row.id === settled.id)).toMatchObject({ usageUnits: 0.125, reservedUnits: 3.125 });
+    expect(rows.find((row) => row.id === legacy.id)).toMatchObject({ usageUnits: 2.25, reservedUnits: 2.25 });
   });
 
   it("reports consumption net of refunds across both balance sources", async () => {

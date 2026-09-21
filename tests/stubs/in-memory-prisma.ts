@@ -1210,6 +1210,23 @@ export function createInMemoryPrisma() {
 
   const prisma = {
     $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+      const sql = query.join("?");
+      if (sql.includes('SUM(COALESCE("reservedUsageUnits", "usageUnits"))')) {
+        const [since, limit] = values as [Date, number | undefined];
+        const key = sql.includes('GROUP BY "kind"') ? "kind" : "userId";
+        const groups = new Map<string, { jobCount: bigint; reservedUnits: number }>();
+        for (const job of state.aiJobs.values()) {
+          if (job.createdAt < since) continue;
+          const group = groups.get(job[key]) ?? { jobCount: BigInt(0), reservedUnits: 0 };
+          group.jobCount += BigInt(1);
+          group.reservedUnits += job.reservedUsageUnits ?? job.usageUnits;
+          groups.set(job[key], group);
+        }
+        const ordered = [...groups].sort(([leftKey, left], [rightKey, right]) =>
+          right.reservedUnits - left.reservedUnits || compareStrings(leftKey, rightKey),
+        );
+        return ordered.slice(0, limit).map(([value, totals]) => ({ [key]: value, ...totals }));
+      }
       if (query.join("?").includes('WITH RECURSIVE "storage_folder_descendants"')) {
         const [folderId, userId, descendantUserId, fileUserId] = values;
         if (userId !== descendantUserId || userId !== fileUserId)
