@@ -311,6 +311,11 @@ export async function canStartAiOperation(
     model?: string;
     durationSeconds?: number;
     characterCount?: number;
+    referenceImages?: number;
+    resolution?: string;
+    generateAudio?: boolean;
+    aspectRatio?: string;
+    background?: string;
   },
 ): Promise<boolean> {
   const { operation } = request;
@@ -346,6 +351,7 @@ export async function canStartAiOperation(
     quantity,
     modelId: selectedModel.modelId,
     provider: selectedModel.provider,
+    request,
   });
   const requiredUsage = quote === null
     ? ceilUsageUnits(

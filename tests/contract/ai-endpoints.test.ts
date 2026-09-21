@@ -1451,7 +1451,7 @@ describe("v3 AI endpoints contract", () => {
       await activatePro();
       await consumeUsage({
         userId: USER_ID,
-        amount: 490,
+        amount: 496,
         monthlyUsageLimit: 500,
         usagePeriod: { start: PERIOD_START, end: PERIOD_END },
         aiJobId: "setup-job",
@@ -1511,8 +1511,9 @@ describe("v3 AI endpoints contract", () => {
         // A request that still names a fixed size is recorded as the ratio it
         // always meant, so the history speaks one vocabulary.
         inputParams: { prompt: "test", aspectRatio: "1:1" },
-        reservedUsageUnits: 10.1376,
-        usageUnits: 8.448,
+        // No reference images were submitted: only the output image is priced.
+        reservedUsageUnits: 5.0688,
+        usageUnits: 4.224,
         resultFileId: body.fileId,
       });
       expect(state.files.size).toBe(1);
@@ -1526,7 +1527,7 @@ describe("v3 AI endpoints contract", () => {
         state.creditTransactions.some(
           (t) =>
             t.kind === "usage" &&
-            t.usageAmount === 10.1376 &&
+            t.usageAmount === 5.0688 &&
             t.creditAmount === 0 &&
             t.aiJobId === job.id,
         ),
@@ -1542,7 +1543,7 @@ describe("v3 AI endpoints contract", () => {
       });
       await consumeUsage({
         userId: USER_ID,
-        amount: 495,
+        amount: 498,
         monthlyUsageLimit: 500,
         usagePeriod: { start: PERIOD_START, end: PERIOD_END },
         aiJobId: "setup-job",
@@ -1570,12 +1571,12 @@ describe("v3 AI endpoints contract", () => {
           transaction.kind === "usage" && transaction.aiJobId !== "setup-job",
       );
       expect(usage).toMatchObject({
-        usageAmount: 5,
-        creditAmount: -5.1376,
+        usageAmount: 2,
+        creditAmount: -3.0688,
       });
       expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
         monthlyUsageUsed: 500,
-        purchasedCredits: 96.552,
+        purchasedCredits: 97.776,
       });
     });
 
@@ -1607,12 +1608,12 @@ describe("v3 AI endpoints contract", () => {
       // Both the reservation and refund are recorded.
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "usage" && t.usageAmount === 10.1376,
+          (t) => t.kind === "usage" && t.usageAmount === 5.0688,
         ),
       ).toBe(true);
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "refund" && t.usageAmount === -10.1376,
+          (t) => t.kind === "refund" && t.usageAmount === -5.0688,
         ),
       ).toBe(true);
       // The balance is restored.
@@ -1834,6 +1835,8 @@ describe("v3 AI endpoints contract", () => {
       // The bytes are not stored, only the names — which is why the history
       // offers no retry for this job.
       expect([...state.aiJobs.values()][0]).toMatchObject({
+        reservedUsageUnits: 6.336,
+        usageUnits: 5.28,
         inputParams: {
           prompt: "in this style",
           aspectRatio: "1:1",

@@ -42,13 +42,27 @@ affect the ledger. It is never returned to ordinary clients.
 ## Reservation and settlement
 
 Before calling a provider, the service reserves 120% of the current public
-price estimate. The job separately records the unbuffered estimate. On success,
+price estimate for the submitted request: image reference count, video
+resolution and audio setting, and aspect ratio where token pricing depends on
+pixel count. OpenRouter image prices are restricted to endpoints that support
+the submitted shape. Model-wide maximum-shape estimates remain for the admin
+catalog, not for billing a cheaper request. Source-video operations that inherit
+an unknown output shape retain the applicable source-video estimate rather than
+assuming the generation defaults.
+
+`POST /api/v3/user/ai-availability` accepts optional `referenceImages` (a count),
+`aspectRatio`, and `background` for image generation, and `resolution`,
+`generateAudio`, and `aspectRatio` for video generation. Send the same shape as
+the eventual generation request. Omitted fields use the generation defaults:
+zero references and 1:1 for images, or 720p, audio enabled, and 16:9 for videos.
+
+The job separately records the unbuffered request estimate. On success,
 result persistence, job completion, and the ledger delta commit in one database
 transaction:
 
 - an actual cost releases or adds units until the formula above is met;
-- a response without actual cost settles to the unbuffered estimate, not the
-  temporary 120% reservation; and
+- a response without actual cost settles to the unbuffered request estimate,
+  not the temporary 120% reservation; and
 - an unexpected overrun consumes remaining allowance and purchased credits,
   then records any shortfall as purchased-credit debt for the next top-up.
 

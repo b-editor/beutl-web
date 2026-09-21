@@ -81,6 +81,8 @@ export type GatewayVideoRate = {
   videoInput?: boolean;
   /** Present when a token rate was converted to the per-second figure above. */
   tokenCalculation?: {
+    /** Original rate retained so request geometry can be priced without division/rounding. */
+    costPerMillionTokens: number;
     tokensPerSecond: number;
     resolution: string;
   };
@@ -314,7 +316,7 @@ export async function loadGatewayRateCard(
             tokensPerSecond,
           ),
           videoInput,
-          tokenCalculation: { tokensPerSecond, resolution },
+          tokenCalculation: { costPerMillionTokens, tokensPerSecond, resolution },
         });
       }
     }
@@ -350,13 +352,23 @@ export function gatewayDearestVideoRate(
   rateCard: GatewayRateCard,
   {
     videoInput,
+    resolution,
+    aspectRatio,
   }: {
     /** Whether this operation always sends a source video. Omit to consider both. */
     videoInput?: boolean;
+    /** When known, exclude tiers for resolutions this request does not use. */
+    resolution?: string;
+    aspectRatio?: string;
   } = {},
 ): GatewayVideoRate | null {
+  const requestedResolution = resolution === undefined
+    ? undefined
+    : aiVideoResolutionOfGatewayLabel(resolution);
+  if (requestedResolution === null) return null;
   let best: GatewayVideoRate | null = null;
-  for (const rate of rateCard.videoRates) {
+  for (const original of rateCard.videoRates) {
+    let rate = original;
     if (
       videoInput !== undefined &&
       rate.videoInput !== undefined &&
@@ -366,6 +378,21 @@ export function gatewayDearestVideoRate(
     }
     if (rate.label !== null && aiVideoResolutionOfGatewayLabel(rate.label) === null) {
       continue;
+    }
+    if (
+      requestedResolution !== undefined && rate.label !== null &&
+      aiVideoResolutionOfGatewayLabel(rate.label) !== requestedResolution
+    ) continue;
+    if (aspectRatio !== undefined && rate.tokenCalculation) {
+      const tokensPerSecond = videoTokensPerSecond(rate.tokenCalculation.resolution, aspectRatio);
+      if (tokensPerSecond === null) continue;
+      rate = {
+        ...rate,
+        usdPerSecond: multiplyDecimalAmounts(
+          rate.tokenCalculation.costPerMillionTokens, 0.000001, tokensPerSecond,
+        ),
+        tokenCalculation: { ...rate.tokenCalculation, tokensPerSecond },
+      };
     }
     if (!best || rate.usdPerSecond > best.usdPerSecond) {
       best = rate;

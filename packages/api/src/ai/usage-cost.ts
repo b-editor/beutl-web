@@ -3,7 +3,7 @@ import {
   parseNonNegativeDecimalFraction,
   USD_MICROS_PER_DOLLAR,
 } from "@beutl/core";
-import { loadAiCostEstimates } from "./model-pricing";
+import { loadAiCostEstimates, type AiCostRequestShape } from "./model-pricing";
 import type { ProviderCostUsd } from "./provider-cost";
 
 // Public prices can move between reservation and completion, and token-priced
@@ -94,11 +94,21 @@ export async function quoteAiUsageReservation({
 } | null> {
   const billable = billableRequestOf({ kind, inputParams });
   if (!billable) return null;
+  const input = recordOf(inputParams);
   const quote = await quoteAiOperationReservation({
     operation: billable.operation,
     quantity: billable.quantity,
     modelId,
     provider,
+    request: {
+      referenceImages: kind === "image"
+        ? Array.isArray(input.references) ? input.references.length : 0
+        : kind === "image_edit" ? 1 : undefined,
+      resolution: typeof input.resolution === "string" ? input.resolution : undefined,
+      generateAudio: typeof input.generateAudio === "boolean" ? input.generateAudio : undefined,
+      aspectRatio: typeof input.aspectRatio === "string" ? input.aspectRatio : undefined,
+      background: typeof input.background === "string" ? input.background : undefined,
+    },
   });
   return quote === null
     ? null
@@ -114,11 +124,13 @@ export async function quoteAiOperationReservation({
   quantity,
   modelId,
   provider,
+  request = {},
 }: {
   operation: string;
   quantity: number;
   modelId: string;
   provider: string;
+  request?: AiCostRequestShape;
 }): Promise<{
   estimatedProviderCostUsd: number;
   reservationProviderCostUsd: number;
@@ -127,6 +139,20 @@ export async function quoteAiOperationReservation({
   const { entries } = await loadAiCostEstimates({
     modelsOf: (candidate) =>
       candidate === operation ? [{ modelId, provider }] : [],
+    request: {
+      ...request,
+      referenceImages: operation === "image.generate"
+        ? request.referenceImages ?? 0
+        : operation.startsWith("image.edit.") ? 1 : undefined,
+      ...(operation === "image.generate" ? { aspectRatio: request.aspectRatio ?? "1:1" } : {}),
+      // Match the generation entry points' defaults. Source-video operations
+      // inherit the clip's shape, so an absent resolution must remain unknown.
+      ...(operation === "video.generate" ? {
+        resolution: request.resolution ?? "720p",
+        generateAudio: request.generateAudio ?? true,
+        aspectRatio: request.aspectRatio ?? "16:9",
+      } : {}),
+    },
   });
   const estimate = entries[0]?.estimate;
   if (!estimate || estimate.status !== "estimated") return null;

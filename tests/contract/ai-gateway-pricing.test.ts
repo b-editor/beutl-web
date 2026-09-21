@@ -150,25 +150,25 @@ describe("reading a Gateway rate card", () => {
         label: "720p",
         usdPerSecond: 0.23112,
         videoInput: false,
-        tokenCalculation: { tokensPerSecond: 21600, resolution: "720p" },
+        tokenCalculation: { costPerMillionTokens: 10.7, tokensPerSecond: 21600, resolution: "720p" },
       },
       {
         label: "720p",
         usdPerSecond: 0.13824,
         videoInput: true,
-        tokenCalculation: { tokensPerSecond: 21600, resolution: "720p" },
+        tokenCalculation: { costPerMillionTokens: 6.4, tokensPerSecond: 21600, resolution: "720p" },
       },
       {
         label: "1080p",
         usdPerSecond: 0.56862,
         videoInput: false,
-        tokenCalculation: { tokensPerSecond: 48600, resolution: "1080p" },
+        tokenCalculation: { costPerMillionTokens: 11.7, tokensPerSecond: 48600, resolution: "1080p" },
       },
       {
         label: "1080p",
         usdPerSecond: 0.3402,
         videoInput: true,
-        tokenCalculation: { tokensPerSecond: 48600, resolution: "1080p" },
+        tokenCalculation: { costPerMillionTokens: 7, tokensPerSecond: 48600, resolution: "1080p" },
       },
     ]);
   });
@@ -203,13 +203,13 @@ describe("reading a Gateway rate card", () => {
       label: resolution,
       usdPerSecond: 1.0368,
       videoInput: false,
-      tokenCalculation: { tokensPerSecond: 86400, resolution: "2K" },
+      tokenCalculation: { costPerMillionTokens: 12, tokensPerSecond: 86400, resolution: "2K" },
     });
     expect(gatewayDearestVideoRate(card, { videoInput: true })).toEqual({
       label: resolution,
       usdPerSecond: 0.6912,
       videoInput: true,
-      tokenCalculation: { tokensPerSecond: 86400, resolution: "2K" },
+      tokenCalculation: { costPerMillionTokens: 8, tokensPerSecond: 86400, resolution: "2K" },
     });
   });
 
@@ -462,7 +462,7 @@ describe("costing an operation at the provider that serves it", () => {
     // Five seconds reserve $1.0368 * 5 * 120% / $0.01 = 622.08 units.
     // The cheaper 1080p tier would incorrectly fit inside the 500-unit plan.
     expect(await canStartAiOperation(userId, {
-      operation: "video.generate", model: modelId, durationSeconds: 5,
+      operation: "video.generate", model: modelId, durationSeconds: 5, resolution: "2K",
     })).toBe(credits > 0);
     const result = await createReservedAiJob({
       userId, kind: "video", provider: "vercel-gateway", status: "queued", model: modelId,

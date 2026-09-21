@@ -1,9 +1,9 @@
 // Estimating what one chargeable unit of an AI operation costs at the
 // provider's published rates.
 //
-// ADMIN CONSOLE ONLY. These figures exist so an administrator can tell whether
-// a unit price covers its cost. They are estimates from a price list, not what
-// was actually billed: nothing records the real per-job cost today.
+// Shared by admin summaries and request-shaped reservations. These figures
+// estimate published prices, not actual spend; provider-reported costs take
+// precedence when a successful job settles.
 //
 // Pure functions with no I/O. ./model-pricing fetches and normalizes the price
 // list, then hands it here.
@@ -15,6 +15,10 @@
 //     is returned alongside the number so the UI can state it.
 
 import { addDecimalAmounts, multiplyDecimalAmounts } from "@beutl/core";
+import {
+  aiVideoResolutionOfGatewayLabel,
+  gatewayVideoResolution,
+} from "./providers/vercel-gateway/resolution";
 
 export type AiCostUnknownReason =
   | "provider_unavailable"
@@ -307,9 +311,18 @@ const VIDEO_RESOLUTION_PIXELS: Record<string, number> = {
 
 // Null for a resolution with no known pixel count, which leaves a token-priced
 // model reported as unknown rather than costed against a guess.
-export function videoTokensPerSecond(resolution: string): number | null {
-  const pixels = VIDEO_RESOLUTION_PIXELS[resolution.toLowerCase()];
+export function videoTokensPerSecond(resolution: string, aspectRatio?: string): number | null {
+  let pixels = VIDEO_RESOLUTION_PIXELS[resolution.toLowerCase()];
   if (pixels === undefined) return null;
+  if (aspectRatio !== undefined) {
+    // Use the same even pixel dimensions as generation instead of pricing a
+    // square/portrait request as a default landscape frame.
+    const label = aiVideoResolutionOfGatewayLabel(resolution);
+    const dimensions = label === null ? null : gatewayVideoResolution(label, aspectRatio);
+    if (dimensions === null) return null;
+    const [width, height] = dimensions.split("x").map(Number);
+    pixels = width * height;
+  }
   return (pixels * VIDEO_TOKEN_FPS) / VIDEO_PIXELS_PER_TOKEN;
 }
 
@@ -320,10 +333,12 @@ export function estimateVideoCost({
   pricingSkus,
   resolution,
   withAudio,
+  aspectRatio,
 }: {
   pricingSkus: Record<string, string>;
   resolution: string;
   withAudio: boolean;
+  aspectRatio?: string;
 }): AiCostEstimate {
   const candidates = Object.entries(pricingSkus).filter(
     ([key]) =>
@@ -336,7 +351,7 @@ export function estimateVideoCost({
   const audioSuffix = withAudio ? "_with_audio" : "_without_audio";
   const resolutionSuffix = `_${resolution.toLowerCase()}`;
 
-  const tokensPerSecond = videoTokensPerSecond(resolution);
+  const tokensPerSecond = videoTokensPerSecond(resolution, aspectRatio);
 
   const scoreOf = (key: string): number | null => {
     const prefix = [
