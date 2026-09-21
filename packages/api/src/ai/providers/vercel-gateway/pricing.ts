@@ -16,7 +16,7 @@
 // does not choose.
 
 import { z } from "zod";
-import { AiProviderError } from "../errors";
+import { AiProviderError, InvalidAiProviderOutputError } from "../errors";
 import { readBoundedJson } from "./bounded";
 import { aiVideoResolutionOfGatewayLabel } from "./resolution";
 
@@ -147,7 +147,7 @@ export async function loadGatewayImagePrices(
     await readBoundedJson(response, MAX_CATALOG_RESPONSE_BYTES, "image prices"),
   );
   if (!parsed.success) {
-    throw new AiProviderError("Vercel AI Gateway returned unreadable image prices", {
+    throw new InvalidAiProviderOutputError("Vercel AI Gateway returned unreadable image prices", {
       cause: parsed.error,
     });
   }
@@ -198,7 +198,7 @@ export async function loadGatewayRateCard(
     await readBoundedJson(response, MAX_RESPONSE_BYTES, "rate card"),
   );
   if (!parsed.success) {
-    throw new AiProviderError(
+    throw new InvalidAiProviderOutputError(
       "Vercel AI Gateway returned an unreadable rate card",
       { cause: parsed.error },
     );

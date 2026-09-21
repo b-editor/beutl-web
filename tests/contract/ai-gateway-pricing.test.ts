@@ -292,6 +292,37 @@ describe("costing an operation at the provider that serves it", () => {
     return costs.entries.find((entry) => entry.operation === operation)?.estimate;
   };
 
+  it.each(["image.generate", "video.generate"])("classifies malformed %s pricing replies as invalid responses", async (operation) => {
+    for (const body of ['{"data":42}', 'not JSON']) {
+      clearAiModelPricingCache();
+      const fetchMock = vi.fn(async () => new Response(body, {
+        headers: { "content-type": "application/json" },
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const expected = { status: "unknown", reason: "invalid_response" };
+      expect(await estimateFor(operation, "x/y", "vercel-gateway")).toEqual(expected);
+      expect(await estimateFor(operation, "x/y", "vercel-gateway")).toEqual(expected);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("keeps network, HTTP and interrupted-body failures distinct from malformed prices", async () => {
+    const cases = [
+      async () => { throw new TypeError("connection failed"); },
+      async () => new Response("not JSON", { status: 503 }),
+      async () => new Response(new ReadableStream({
+        start(controller) { controller.error(new Error("connection lost")); },
+      })),
+    ];
+    for (const fetchImpl of cases) {
+      clearAiModelPricingCache();
+      vi.stubGlobal("fetch", fetchImpl);
+      expect(await estimateFor("image.generate", "x/y", "vercel-gateway"))
+        .toEqual({ status: "unknown", reason: "provider_unavailable" });
+    }
+  });
+
   it("prices a Gateway video model instead of calling it missing", async () => {
     // The regression this exists for: the estimate used to be looked up in
     // OpenRouter's catalog whatever the row said, so every Gateway model was

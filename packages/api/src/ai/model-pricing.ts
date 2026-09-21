@@ -15,7 +15,7 @@
 // other provider has never heard of as "not found", which reads as a broken
 // registration rather than as a rate card this module never fetched.
 import { createPublicOpenRouterClient } from "./openrouter";
-import { AiProviderError } from "./providers/errors";
+import { AiProviderError, InvalidAiProviderOutputError } from "./providers/errors";
 import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
 import {
   gatewayDearestVideoRate,
@@ -187,7 +187,7 @@ async function performFetch(
         ? status === 404
           ? "model_not_found"
           : "provider_unavailable"
-        : error instanceof ResponseValidationError
+        : error instanceof ResponseValidationError || error instanceof InvalidAiProviderOutputError
           ? "invalid_response"
           : "provider_unavailable";
     if (failure === "provider_unavailable") {
