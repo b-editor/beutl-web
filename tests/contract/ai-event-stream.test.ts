@@ -15,6 +15,28 @@ describe("reading AI results in the dashboard", () => {
     await expect(run()).resolves.toEqual({ ok: true, result: RESULT });
   });
 
+  it.each(["", "not JSON", '{"jobId":"job-1","segments":'])
+    ("treats an unreadable successful JSON replay as interrupted: %j", async (body) => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(body, {
+        headers: { "content-type": "application/json" },
+      })));
+      await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+    });
+
+  it("treats a connection failure while reading a successful replay as interrupted", async () => {
+    let reads = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode('{"jobId":"job-1",'));
+        else controller.error(new Error("connection lost"));
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, {
+      headers: { "content-type": "application/json" },
+    })));
+    await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+  });
+
   it("keeps JSON refusals as errors", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error_code: "aiRequestInProgress" }, { status: 409 })));
     await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInProgress" });

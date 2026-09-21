@@ -50,7 +50,15 @@ export async function runAiStream<TResult>(
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
     // A completed idempotent request is replayed as ordinary JSON, even when
     // this caller requested a stream.
-    if (response.ok) return { ok: true, result: await response.json() as TResult };
+    if (response.ok) {
+      try {
+        return { ok: true, result: await response.json() as TResult };
+      } catch {
+        // The job succeeded, but its replay did not arrive intact. Keep the
+        // request recoverable under the same idempotency key.
+        return { ok: false, errorCode: "aiRequestInterrupted" };
+      }
+    }
     return { ok: false, errorCode: await errorCodeOf(response) };
   }
   if (!response.body) return { ok: false, errorCode: "aiRequestInterrupted" };
