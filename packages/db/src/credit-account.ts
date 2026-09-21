@@ -1001,7 +1001,10 @@ export async function settleUsage({
       purchasedCreditDebt -= debtPaid;
       purchasedCredits += purchasedRestored - debtPaid;
       monthlyUsageUsed -= monthlyRestored;
-      usageAmount = -monthlyRestored;
+      // The ledger records the full correction to this job's original period.
+      // Counter restoration is separately clamped above: expired allowance
+      // must never credit a new period, nor undo an administrator's reset.
+      usageAmount = -monthlyWanted;
       creditAmount = purchasedRestored;
       debtAmount = debtPaid === 0 ? 0 : -debtPaid;
     } else if (delta > 0) {

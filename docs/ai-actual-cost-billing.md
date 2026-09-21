@@ -72,6 +72,12 @@ Provider failures refund the full reservation. Jobs created by a pre-migration
 Worker have no conversion snapshot and retain their original fixed charge when
 a newer Worker finalizes them.
 
+Settlement rows retain the full correction to the original reservation period,
+including monthly units that can no longer be restored after renewal or an
+administrator's counter reset. The current account counter is restored only
+when the periods match and never below zero; expired allowance does not carry
+into the new period. Consumption reports still reflect the job's actual charge.
+
 The legacy `AiOperationModel.priceUnits` column remains temporarily for legacy
 jobs and as a last-resort quote fallback. It is no longer editable or
 used when a provider price or actual cost is available. New rows write `1` to
