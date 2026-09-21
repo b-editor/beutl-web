@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { clearAiModelPricingCache, loadAiCostEstimates } from "../../packages/api/src/ai/model-pricing";
 import { listGatewayVideoModels } from "../../packages/api/src/ai/providers/vercel-gateway/models";
 import {
   gatewayDearestVideoRate,
@@ -7,7 +8,7 @@ import {
 
 // Hits Vercel AI Gateway's public model list for real, so it is opt-in:
 //
-//   TEST_VERCEL_GATEWAY_MODELS=1 pnpm vitest run tests/integration/ai-gateway-models-live.test.ts
+//   TEST_VERCEL_GATEWAY_MODELS=1 vp exec vitest run tests/integration/ai-gateway-models-live.test.ts
 //
 // It needs no credentials — GET /v1/models is unauthenticated.
 //
@@ -19,6 +20,30 @@ import {
 const describeLive = process.env.TEST_VERCEL_GATEWAY_MODELS
   ? describe
   : describe.skip;
+
+describeLive("Vercel AI Gateway image prices against the live catalog", () => {
+  it("estimates GPT Image 2 and a per-image model using the admin pricing path", async () => {
+    clearAiModelPricingCache();
+    const { entries } = await loadAiCostEstimates({
+      modelsOf: (operation) => ["image.generate", "image.edit.restyle", "image.edit.remove_object"].includes(operation)
+        ? ["openai/gpt-image-2", "bytedance/seedream-4.5"].map((modelId) => ({
+            modelId,
+            provider: "vercel-gateway",
+          }))
+        : [],
+    });
+
+    expect(entries).toHaveLength(6);
+    for (const entry of entries) {
+      expect(entry.estimate, `${entry.operation}: ${entry.model}`).toMatchObject({
+        status: "estimated",
+      });
+      if (entry.estimate.status !== "estimated") continue;
+      expect(entry.estimate.usdMin).toBeGreaterThan(0);
+      expect(entry.estimate.usdMax).toBeLessThan(100);
+    }
+  });
+});
 
 describeLive("Vercel AI Gateway video models against the live list", () => {
   it("still publishes capabilities this service can read", async () => {

@@ -276,6 +276,7 @@
         "invalid_response": "価格の形式が想定外です",
         "unsupported_pricing_shape": "この課金形態には未対応です",
         "unknown_stt_pricing_unit": "単価の単位が不明です",
+        "price_not_published": "プロバイダーの API に参照できる画像単価がありません",
         "zero_price_reported": "価格が取得できませんでした"
       },
       "unaffordable": "1 回も実行できません",

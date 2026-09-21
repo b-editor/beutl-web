@@ -19,7 +19,9 @@ import { AiProviderError } from "./providers/errors";
 import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
 import {
   gatewayDearestVideoRate,
+  loadGatewayImagePrices,
   loadGatewayRateCard,
+  type GatewayImagePrice,
   type GatewayRateCard,
 } from "./providers/vercel-gateway/pricing";
 import type {
@@ -556,14 +558,31 @@ async function loadGatewayPricing(
     : { ok: false, reason: outcome.failure };
 }
 
-// What a model served by the Gateway costs.
-//
-// Kept apart from the OpenRouter path rather than folded into it because the
-// two publish genuinely different things, not the same thing in two spellings:
-// OpenRouter names video SKUs and the Gateway lists per-second rates, and the
-// Gateway publishes no image rate at all — every image model in its catalog
-// reports zero, which is a price this module must not repeat as if it were
-// one.
+async function estimateGatewayImageOperation(
+  model: string,
+  referenceImages: number,
+  options: { force: boolean; now: number },
+): Promise<AiCostEstimate> {
+  // Share one catalog request across all image models and operations.
+  const outcome = await fetchPricing(
+    "gateway-image-prices",
+    async () => await loadGatewayImagePrices(),
+    options,
+  );
+  if (!outcome.ok) return { status: "unknown", reason: outcome.failure };
+
+  const prices = outcome.value as Map<string, GatewayImagePrice | null>;
+  if (!prices.has(model)) return { status: "unknown", reason: "model_not_found" };
+  const price = prices.get(model);
+  if (!price) return { status: "unknown", reason: "price_not_published" };
+  return estimateImageCost({
+    endpoints: [[{ billable: "output_image", ...price }]],
+    referenceImages,
+  });
+}
+
+// Video and text rates are published per endpoint; image rates are read from
+// the model catalog by estimateGatewayImageOperation instead.
 async function estimateGatewayOperation(
   operation: string,
   model: string,
@@ -601,10 +620,7 @@ async function estimateGatewayOperation(
       completionPriceUsd: pricing.card.completionUsd ?? 0,
     });
   }
-  // Image models publish `image` and `image_output` as "0" across the whole
-  // catalog, so there is nothing to derive a per-request cost from. Reported
-  // as a price that could not be read rather than as a free operation.
-  return { status: "unknown", reason: "zero_price_reported" };
+  return { status: "unknown", reason: "unsupported_pricing_shape" };
 }
 
 async function estimateOperation(
@@ -615,6 +631,16 @@ async function estimateOperation(
   options: { force: boolean; now: number },
 ): Promise<AiCostEstimate> {
   if (provider !== DEFAULT_AI_PROVIDER_ID) {
+    if (operation.startsWith("image.")) {
+      return await estimateGatewayImageOperation(
+        model,
+        operation === "image.generate"
+          ? imageCapabilityOf(imageCapabilities, { modelId: model, provider })
+              ?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES
+          : 1,
+        options,
+      );
+    }
     return await estimateGatewayOperation(operation, model, options);
   }
   // Every video operation is metered per second of output and priced off the

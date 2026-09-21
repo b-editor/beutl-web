@@ -276,6 +276,7 @@
         "invalid_response": "Unexpected price format",
         "unsupported_pricing_shape": "Pricing shape not supported",
         "unknown_stt_pricing_unit": "Price unit is unknown",
+        "price_not_published": "The provider API does not publish a usable image price",
         "zero_price_reported": "No price reported"
       },
       "unaffordable": "Not even once",
