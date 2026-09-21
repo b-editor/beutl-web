@@ -216,9 +216,10 @@ defaults, including 500 units per period and $0.01 per unit. Each settings
 change and account adjustment is written to the audit log in the same
 transaction as the change.
 
-Clients discover models through `GET /api/v3/ai/capabilities`. It exposes model
-names and relative expense (`costTier`: `low`, `medium`, or `high`) without
-prices. `GET /api/v3/user/entitlements` exposes affordability through
+Clients discover model names through `GET /api/v3/ai/capabilities`. The
+`costTier` field remains for compatibility with older clients and is always
+`null`: request-dependent provider costs cannot be ranked into fixed relative
+price tiers. `GET /api/v3/user/entitlements` exposes affordability through
 `modelAvailability`. Prices and secret values never leave the server.
 
 Gateway image editing and reference-image inputs are enabled only for the
