@@ -201,6 +201,23 @@ describe("streaming a translation", () => {
       }),
     ).rejects.toBeInstanceOf(AiProviderError);
   });
+
+  it.each(["error", "length", "content_filter"])("rejects a %s finish after complete translation JSON", async (finishReason) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(eventStream([
+      ...translationChunks([
+        { id: "line-1", text: "こんにちは" },
+        { id: "line-2", text: "世界" },
+      ]),
+      {
+        id: "gen-1", object: "chat.completion.chunk", created: 1,
+        model: "openai/gpt-4.1-mini",
+        choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+      },
+    ])));
+    await expect(translateSegments({
+      model: "openai/gpt-4.1-mini", targetLanguage: "ja", segments, onSegment: vi.fn(),
+    })).rejects.toBeInstanceOf(AiProviderError);
+  });
 });
 
 describe("streaming an image", () => {

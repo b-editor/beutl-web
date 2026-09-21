@@ -820,9 +820,8 @@ function parseTranslationResponse(
       "OpenRouter returned an invalid translation completion",
     );
   }
-  // The model's own report that it gave up. A refusal or a stop for any other
-  // reason still has to parse as the requested JSON, which is checked below.
-  if (choice.finishReason === "error") {
+  // A complete-looking JSON object can precede a failure or truncation.
+  if (choice.finishReason && choice.finishReason !== "stop") {
     throw new AiProviderError("OpenRouter failed to translate segments");
   }
   if (typeof choice.message.content !== "string" || !choice.message.content) {
@@ -960,6 +959,9 @@ async function translateStreaming({
         throw new AiProviderError(
           `OpenRouter failed to translate segments: ${chunk.error.message}`,
         );
+      }
+      if (chunk.choices.some((choice) => choice.finishReason && choice.finishReason !== "stop")) {
+        throw new AiProviderError("OpenRouter did not finish translating segments");
       }
       const delta = chunk.choices[0]?.delta.content;
       if (typeof delta !== "string" || delta.length === 0) continue;

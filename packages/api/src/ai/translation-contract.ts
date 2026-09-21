@@ -126,21 +126,21 @@ export function translationUserMessage({
  */
 export function translationJsonSchema(segments: TranslationSegment[]) {
   return {
-    type: "object",
+    type: "object" as const,
     properties: {
       segments: {
-        type: "array",
+        type: "array" as const,
         description: "One translated subtitle for every input segment.",
         items: {
-          type: "object",
+          type: "object" as const,
           properties: {
             id: {
-              type: "string",
+              type: "string" as const,
               enum: segments.map((segment) => segment.id),
               description: "The unchanged input segment ID.",
             },
             text: {
-              type: "string",
+              type: "string" as const,
               description:
                 "Translated subtitle text with line breaks preserved.",
             },
@@ -152,7 +152,7 @@ export function translationJsonSchema(segments: TranslationSegment[]) {
     },
     required: ["segments"],
     additionalProperties: false,
-  } as const;
+  };
 }
 
 /**
