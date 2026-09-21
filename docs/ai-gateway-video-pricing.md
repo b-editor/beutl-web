@@ -20,6 +20,10 @@ The parser converts the published rate with the provider's verified video-token
 formula: `width * height * 24 fps / 1024` tokens per second. Only resolutions
 the service can request are retained. Generation uses the no-video-input tier;
 the source-video operations use the with-video-input tier.
+The `2k`/`2K` tier uses the same 2560×1440 default frame as Gateway requests:
+86,400 video tokens per second. It participates in the highest applicable tier
+used for reservation and affordability checks, rather than falling back to a
+cheaper resolution.
 
 ## FLUX 3
 

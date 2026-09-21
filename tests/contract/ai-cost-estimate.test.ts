@@ -720,6 +720,21 @@ describe("video SKU resolution", () => {
     expect(estimate.usdMin).toBeCloseTo(0.37422, 8);
   });
 
+  it.each(["2K", "2k"])("sizes %s video tokens at 2560 by 1440 pixels", (resolution) => {
+    expect(estimateVideoCost({
+      pricingSkus: { video_tokens: "0.000012" },
+      resolution,
+      withAudio: true,
+    })).toMatchObject({
+      status: "estimated",
+      usdMin: 1.0368,
+      usdMax: 1.0368,
+      assumptions: expect.arrayContaining([
+        { kind: "videoTokens", tokensPerSecond: 86400, resolution },
+      ]),
+    });
+  });
+
   it("says what a second was taken to be", () => {
     const estimate = estimateVideoCost({
       pricingSkus: { video_tokens: "0.0000107" },

@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  addPurchasedCredits,
+  getCreditAccount,
+  setDbProvider,
+  upsertAiOperationModel,
+  upsertSubscription,
+} from "@beutl/db";
+import { createReservedAiJob } from "../../packages/api/src/ai/credits";
+import { canStartAiOperation } from "../../packages/api/src/ai/entitlements";
+import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
+import {
   gatewayDearestVideoRate,
   loadGatewayImagePrices,
   loadGatewayRateCard,
@@ -175,6 +185,32 @@ describe("reading a Gateway rate card", () => {
       { label: "hd", usdPerSecond: 0.41, videoInput: true },
       { label: "fhd", usdPerSecond: 0.53, videoInput: true },
     ]);
+  });
+
+  it.each(["2k", "2K"])("keeps %s token tiers and their source-video rates", async (resolution) => {
+    const card = await loadGatewayRateCard("test/2k-video", respondWith({
+      data: { endpoints: [{ pricing: { video_token_pricing: { tiers: [
+        { resolution: "1080p", no_video_input: { cost_per_million_tokens: "10" } },
+        {
+          resolution,
+          no_video_input: { cost_per_million_tokens: "12" },
+          with_video_input: { cost_per_million_tokens: "8" },
+        },
+      ] } } }] },
+    }));
+
+    expect(gatewayDearestVideoRate(card, { videoInput: false })).toEqual({
+      label: resolution,
+      usdPerSecond: 1.0368,
+      videoInput: false,
+      tokenCalculation: { tokensPerSecond: 86400, resolution: "2K" },
+    });
+    expect(gatewayDearestVideoRate(card, { videoInput: true })).toEqual({
+      label: resolution,
+      usdPerSecond: 0.6912,
+      videoInput: true,
+      tokenCalculation: { tokensPerSecond: 86400, resolution: "2K" },
+    });
   });
 
   it("takes the dearest endpoint when a model has several", async () => {
@@ -398,6 +434,54 @@ describe("costing an operation at the provider that serves it", () => {
     });
     return costs.entries.find((entry) => entry.operation === operation)?.estimate;
   };
+
+  it.each([0, 123])("uses the 2K tier for affordability and reservation with %s purchased units", async (credits) => {
+    const memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+    const userId = "gateway-2k-reservation";
+    const modelId = "test/2k-video";
+    await upsertSubscription({
+      userId, stripeSubscriptionId: "sub_gateway_2k", status: "active", planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date(Date.now() - 86_400_000),
+      currentPeriodEnd: new Date(Date.now() + 86_400_000),
+    });
+    await upsertAiOperationModel({
+      operation: "video.generate", modelId, provider: "vercel-gateway",
+      usagePercent: 100, priceUnits: 1, displayName: null,
+      enabled: true, sortOrder: 0, updatedBy: "admin",
+    });
+    if (credits) await addPurchasedCredits({ userId, amount: credits, stripePaymentId: "pi_gateway_2k" });
+    stubGatewayFetch({
+      data: { endpoints: [{ pricing: { video_token_pricing: { tiers: [
+        { resolution: "1080p", no_video_input: { cost_per_million_tokens: "10" } },
+        { resolution: "2k", no_video_input: { cost_per_million_tokens: "12" } },
+      ] } } }] },
+    });
+
+    // Five seconds reserve $1.0368 * 5 * 120% / $0.01 = 622.08 units.
+    // The cheaper 1080p tier would incorrectly fit inside the 500-unit plan.
+    expect(await canStartAiOperation(userId, {
+      operation: "video.generate", model: modelId, durationSeconds: 5,
+    })).toBe(credits > 0);
+    const result = await createReservedAiJob({
+      userId, kind: "video", provider: "vercel-gateway", status: "queued", model: modelId,
+      inputParams: { mode: "generate", durationSeconds: 5, resolution: "2K" },
+    });
+    if (credits > 0) {
+      expect(result).toMatchObject({
+        ok: true,
+        job: { reservedUsageUnits: 622.08, estimatedUsageUnits: 518.4 },
+      });
+      expect(await getCreditAccount({ userId })).toMatchObject({
+        monthlyUsageUsed: 500, purchasedCredits: 0.92, purchasedCreditDebt: 0,
+      });
+    } else {
+      expect(result).toEqual({ ok: false, errorCode: "aiUsageLimitExceeded", status: 402 });
+      expect(memory.state.aiJobs.size).toBe(0);
+      expect((await getCreditAccount({ userId })).monthlyUsageUsed).toBe(0);
+    }
+  });
 
   it.each(["image.generate", "video.generate"])("classifies malformed %s pricing replies as invalid responses", async (operation) => {
     for (const body of ['{"data":42}', 'not JSON']) {
