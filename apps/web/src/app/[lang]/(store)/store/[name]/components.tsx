@@ -223,7 +223,7 @@ export function ClientPage({
                 lang={lang}
               />
             )}
-            {message && <p>{t("store:openDesktopAppToInstall")}</p>}
+            {message && !owned && <p>{t("store:openDesktopAppToInstall")}</p>}
           </div>
         </div>
         <DropdownMenu>
