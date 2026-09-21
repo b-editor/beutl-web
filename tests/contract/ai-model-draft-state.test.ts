@@ -28,6 +28,25 @@ const snapshot = (
 });
 
 describe("AI model draft state", () => {
+  it("serializes a provider-only edit to an existing model", () => {
+    const baseline = [snapshot({ provider: "openrouter" })];
+    const drafts = reduceModelDrafts(new Map(), {
+      type: "set",
+      operation: "image.generate",
+      rows: [row({ provider: "vercel-gateway" })],
+      saved: [row()],
+      snapshot: baseline,
+    });
+
+    expect(serializeModelDrafts(drafts)).toEqual([
+      {
+        operation: "image.generate",
+        models: [row({ provider: "vercel-gateway" })],
+        expected: baseline,
+      },
+    ]);
+  });
+
   it("keeps the first expected snapshot across a stale refresh and retry", () => {
     const baseline = [snapshot()];
     const concurrent = [

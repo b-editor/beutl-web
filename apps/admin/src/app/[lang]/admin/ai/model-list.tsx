@@ -228,10 +228,11 @@ function ModelEditor({
           <select
             className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
             value={draft.provider}
-            // The provider decides where the job runs, so it is part of the
-            // row's identity in the same way the id is: switching it on a saved
-            // row would point an existing registration at another service.
-            disabled={isPending || !isNew}
+            // The model id remains the row's identity. Changing this field
+            // deliberately re-routes that registration to another provider;
+            // the transactional save validates the new pairing before it is
+            // committed.
+            disabled={isPending}
             onChange={(e) => setDraft({ ...draft, provider: e.target.value })}
           >
             {PROVIDER_OPTIONS.map((option) => (
