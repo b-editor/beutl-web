@@ -235,14 +235,6 @@ export async function createReservedAiJob({
         : null;
     }
   }
-  if (usageUnits === undefined && !quote && legacyReservationUnits === null) {
-    return {
-      ok: false as const,
-      errorCode: "aiProviderCostUnavailable" as const,
-      status: 503 as const,
-    };
-  }
-
   try {
     const result = await startRetryableTransaction(async (prisma) => {
       if (idempotencyKeyHash && requestFingerprint) {
@@ -265,6 +257,13 @@ export async function createReservedAiJob({
             ? { outcome: "deleted" as const }
             : { outcome: "existing" as const, job: existing };
         }
+      }
+
+      // Pricing is required only for a new reservation, never to recover an
+      // already-paid job (including one committed during the quote lookup).
+      // Keep the network lookup outside the retryable transaction itself.
+      if (usageUnits === undefined && !quote && legacyReservationUnits === null) {
+        return { outcome: "providerCostUnavailable" as const };
       }
 
       if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
@@ -350,6 +349,12 @@ export async function createReservedAiJob({
     });
 
     switch (result.outcome) {
+      case "providerCostUnavailable":
+        return {
+          ok: false as const,
+          errorCode: "aiProviderCostUnavailable" as const,
+          status: 503 as const,
+        };
       case "accountDeletionAuthorized":
         return {
           ok: false as const,
