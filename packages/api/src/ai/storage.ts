@@ -299,13 +299,8 @@ async function saveAiOutput({
         !usesActualCostBilling || providerCostUsd === undefined
         ? null
         : providerCostUsdToMicros(providerCostUsd);
-      if (
-        usesActualCostBilling &&
-        providerCostUsd !== undefined &&
-        providerCostMicros === null
-      ) {
-        throw new Error(`AI job ${jobId} provider cost is out of range`);
-      }
+      // This optional legacy INT4 audit field can overflow while the actual
+      // usage charge above is valid. Omit the audit value, not the settlement.
       await settleUsage({
         userId,
         aiJobId: jobId,

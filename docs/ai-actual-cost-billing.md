@@ -22,7 +22,9 @@ Calculations preserve the provider's decimal cost, apply the rate and percentage
 then round up once at one-millionth of a usage unit. For example, `$0.00345678`
 at `$0.01` per unit and 100% consumes exactly `0.345678` units. The legacy
 `providerCostUsdMicros` audit field is rounded to micro-USD and is not an input
-to this calculation. Balances, ledger deltas, reservations, and settled job
+to this calculation. Costs above its legacy INT4 capacity ($2,147.483647) leave
+that optional audit field null; a valid usage charge still settles normally.
+Balances, ledger deltas, reservations, and settled job
 charges are stored as exact `DECIMAL(16,6)` values. Balance checks compare
 integer micro-units so an exactly sufficient fractional balance is accepted.
 

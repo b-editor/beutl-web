@@ -5,6 +5,7 @@ import {
   getCreditAccount,
   setDbProvider,
   upsertAiOperationModel,
+  upsertAiSetting,
   upsertSubscription,
 } from "@beutl/db";
 import { setR2BucketProvider, v3 } from "@beutl/api";
@@ -211,6 +212,52 @@ describe("choosing a model per request", () => {
     expect((await generateWith({ model: "dear/model" })).status).toBe(200);
     expect([...state.aiJobs.values()][0].usageUnits).toBe(expectedUnits);
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(expectedUnits);
+  });
+
+  it.each([
+    ["2147.483647", 2.147484, 2_147_483_647],
+    ["2147.4836470000001", 2.147484, null],
+    [3000, 3, null],
+    ["3000", 3, null],
+  ] as const)("settles a valid $%s charge even when its optional audit field overflows", async (cost, units, auditMicros) => {
+    await upsertAiSetting({ key: "billing.providerUsdPerUsageUnit", value: "1000", updatedBy: "admin" });
+    await upsertAiOperationModel({
+      operation: "image.generate", modelId: "dear/model", usagePercent: 100,
+      priceUnits: 31, displayName: "Dear", sortOrder: 1, enabled: true, updatedBy: "admin",
+    });
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json: PNG_BASE64, mediaType: "image/png", providerCostUsd: cost,
+    });
+
+    const first = await generateWith({ model: "dear/model" }, "audit-range-replay");
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    const job = [...state.aiJobs.values()][0];
+    expect(job).toMatchObject({
+      status: "succeeded", usageUnits: units, usageUnitUsdMicros: 1_000_000_000,
+      providerCostUsdMicros: auditMicros, resultFileId: body.fileId,
+    });
+    expect(state.files.size).toBe(1);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(units);
+    expect(state.creditTransactions.filter((row) => row.kind === "refund")).toHaveLength(0);
+    const replay = await generateWith({ model: "dear/model" }, "audit-range-replay");
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(body);
+    expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+    expect(state.creditTransactions.filter((row) => row.kind === "usage_settlement")).toHaveLength(1);
+  });
+
+  it.each([-1, Number.NaN, "100000000"])("still rejects invalid or unrepresentable actual charges: %s", async (cost) => {
+    vi.mocked(generateImage).mockResolvedValue({ b64Json: PNG_BASE64, mediaType: "image/png", providerCostUsd: cost });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await generateWith({ model: "dear/model" })).status).toBe(500);
+      expect([...state.aiJobs.values()][0].status).toBe("failed");
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+      expect(state.creditTransactions.filter((row) => row.kind === "usage_settlement")).toHaveLength(0);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("refuses an unknown model without reserving or charging", async () => {
