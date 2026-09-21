@@ -14,7 +14,7 @@ const connectionString = process.env.TEST_DATABASE_URL;
 const describeWithCockroach = connectionString ? describe : describe.skip;
 
 describeWithCockroach("AI usage cutover on locked Cockroach tables", () => {
-  it("preserves old balances, supports fractions, and finishes with every table locked", async () => {
+  it.each(["fresh", "recovered failure"])("preserves balances, fractions, and locks on a %s cutover", async (scenario) => {
     const schema = `ai_usage_rehearsal_${randomUUID().replaceAll("-", "")}`;
     const client = new Client({ connectionString });
     let created = false;
@@ -24,7 +24,8 @@ describeWithCockroach("AI usage cutover on locked Cockroach tables", () => {
       created = true;
       await client.query(`SET search_path TO "${schema}"`);
       await client.query(`CREATE TABLE "_prisma_migrations" (
-        migration_name STRING PRIMARY KEY, checksum STRING NOT NULL,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        migration_name STRING NOT NULL, checksum STRING NOT NULL,
         started_at TIMESTAMPTZ DEFAULT now(), finished_at TIMESTAMPTZ, rolled_back_at TIMESTAMPTZ
       )`);
       await client.query(`CREATE TABLE "AiOperationModel" (
@@ -81,27 +82,61 @@ describeWithCockroach("AI usage cutover on locked Cockroach tables", () => {
           };
         }),
       );
-      const result = await runAiUsageMigration({
-        client,
-        migrations,
-        writersStopped: true,
-        deploy: async () => {
-          for (const migration of migrations) {
-            // These four migrations contain no SQL strings with semicolons.
-            for (const statement of migration.sql
-              .replace(/--[^\n]*/g, "")
-              .split(";")
-              .filter((sql: string) => sql.trim())) {
-              await client.query(statement);
+      let injectFailure = scenario === "recovered failure";
+      const completed: string[] = [];
+      const deploy = async () => {
+        const { rows: history } = await client.query(
+          'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
+        );
+        const applied = new Set(history.map((row: { migration_name: string }) => row.migration_name));
+        for (const migration of migrations) {
+          if (applied.has(migration.name)) continue;
+          const { rows: [attempt] } = await client.query(
+            'INSERT INTO "_prisma_migrations" (migration_name, checksum) VALUES ($1, $2) RETURNING id',
+            [migration.name, migration.checksum],
+          );
+          // These four migrations contain no SQL strings with semicolons.
+          for (const statement of migration.sql
+            .replace(/--[^\n]*/g, "")
+            .split(";")
+            .filter((sql: string) => sql.trim())) {
+            await client.query(statement);
+            if (injectFailure && migration.name === AI_USAGE_MIGRATIONS[1]) {
+              injectFailure = false;
+              throw new Error("Injected failure after the first billing DDL");
             }
-            await client.query(
-              `INSERT INTO "_prisma_migrations" (migration_name, checksum, finished_at) VALUES ($1, $2, now())`,
-              [migration.name, migration.checksum],
-            );
           }
-        },
-      });
-      expect(result.applied).toEqual(AI_USAGE_MIGRATIONS);
+          await client.query(
+            'UPDATE "_prisma_migrations" SET finished_at = now() WHERE id = $1',
+            [attempt.id],
+          );
+          completed.push(migration.name);
+        }
+      };
+      const run = { client, migrations, writersStopped: true, deploy };
+      if (scenario === "recovered failure") {
+        await expect(runAiUsageMigration(run)).rejects.toThrow("Injected failure");
+        for (const table of ["AiOperationModel", "AiJob", "CreditAccount", "CreditTransaction"]) {
+          const { rows } = await client.query(`SHOW CREATE TABLE "${table}"`);
+          expect(rows[0].create_statement).toContain("schema_locked = true");
+        }
+        await expect(runAiUsageMigration(run)).rejects.toThrow("Recover failed migration");
+        // Simulate operator recovery: undo the partial column addition, then
+        // record the failed attempt as rolled back as migrate resolve would.
+        await client.query('ALTER TABLE "AiOperationModel" SET (schema_locked = false)');
+        await client.query('ALTER TABLE "AiOperationModel" DROP COLUMN "usagePercent"');
+        await client.query('ALTER TABLE "AiOperationModel" SET (schema_locked = true)');
+        await client.query(
+          'UPDATE "_prisma_migrations" SET rolled_back_at = now() WHERE migration_name = $1 AND finished_at IS NULL',
+          [AI_USAGE_MIGRATIONS[1]],
+        );
+      }
+      const result = await runAiUsageMigration(run);
+      expect(result.applied).toEqual(scenario === "fresh" ? AI_USAGE_MIGRATIONS : AI_USAGE_MIGRATIONS.slice(1));
+      expect(completed).toEqual(AI_USAGE_MIGRATIONS);
+      expect(
+        (await client.query('SELECT COUNT(*)::INT4 AS count FROM "_prisma_migrations" WHERE migration_name = $1', [AI_USAGE_MIGRATIONS[0]])).rows[0].count,
+      ).toBe(1);
       const account = await client.query(
         `SELECT "monthlyUsageUsed", "purchasedCredits", "purchasedCreditDebt" FROM "CreditAccount"`,
       );

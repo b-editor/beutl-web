@@ -7,6 +7,7 @@ export const AI_USAGE_MIGRATIONS = [
   "20260921030000_relock_ai_cost_billing_tables",
 ];
 const BILLING_MIGRATIONS = new Set(AI_USAGE_MIGRATIONS.slice(1, 3));
+const [UNLOCK_MIGRATION, ACTUAL_COST_MIGRATION] = AI_USAGE_MIGRATIONS;
 const BILLING_TABLES = [
   "AiOperationModel",
   "AiJob",
@@ -117,6 +118,14 @@ export async function runAiUsageMigration({
 
   const before = needsMaintenance ? await readLedgerTotals(client) : null;
   try {
+    if (pending.includes(ACTUAL_COST_MIGRATION) && !pending.includes(UNLOCK_MIGRATION)) {
+      // Failure recovery relocks these tables, but Prisma will not replay the
+      // already-applied unlock migration. Reopen only the pending DDL's guards,
+      // after maintenance checks and inside the relock-on-failure boundary.
+      for (const table of ["AiOperationModel", "AiJob"]) {
+        await client.query(`ALTER TABLE "${table}" SET (schema_locked = false)`);
+      }
+    }
     await deploy();
     if (before !== null) {
       const after = await readLedgerTotals(client);

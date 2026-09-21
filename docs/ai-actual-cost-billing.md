@@ -95,6 +95,14 @@ For an existing database with the preceding migration chain applied:
    compares ledger row counts and unit totals, and verifies all four schema
    locks. On failure it attempts to restore schema locks and exits nonzero;
    keep all writers stopped while recovering the failed migration.
+   Revert any partially applied DDL before using Prisma's
+   `migrate resolve --rolled-back` to make a failed migration pending again;
+   resolving its history does not undo its SQL. Then rerun the same
+   `--writers-stopped` command. If the unlock migration is already recorded as
+   applied while `20260921010000_add_actual_ai_cost_billing` is still pending,
+   the runner reopens `AiOperationModel` and `AiJob` before deployment and
+   restores their locks on failure. It does not replay the applied unlock
+   migration, edit its checksum, or resolve failed history automatically.
 5. Deploy the updated Web, API, and Admin builds (including the regenerated
    Prisma client), verify the nine usage columns are `DECIMAL(16,6)`, then resume
    traffic and scheduled work and let the webhook backlog replay. Do not resume

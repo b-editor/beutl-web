@@ -9,7 +9,13 @@ const migrations = AI_USAGE_MIGRATIONS.map((name: string) => ({
   name,
   checksum: name,
 }));
-const applied = (name: string) => ({
+type MigrationHistory = {
+  migration_name: string;
+  checksum: string;
+  finished_at: Date | null;
+  rolled_back_at: Date | null;
+};
+const applied = (name: string): MigrationHistory => ({
   migration_name: name,
   checksum: name,
   finished_at: new Date(),
@@ -140,6 +146,67 @@ describe("AI billing maintenance cutover", () => {
         sql.startsWith("ALTER TABLE"),
       ),
     ).toHaveLength(4);
+  });
+
+  const recoveredHistory = () => [
+    applied(AI_USAGE_MIGRATIONS[0]),
+    {
+      ...applied(AI_USAGE_MIGRATIONS[1]),
+      finished_at: null,
+      rolled_back_at: new Date(),
+    },
+  ];
+
+  it("reopens the first billing migration's tables after its unlock was already applied", async () => {
+    const run = fixture({ history: recoveredHistory() });
+    run.deploy.mockImplementationOnce(async () => {
+      expect(run.client.query.mock.calls.filter(([sql]) => sql.includes("schema_locked = false")))
+        .toEqual([
+          ['ALTER TABLE "AiOperationModel" SET (schema_locked = false)'],
+          ['ALTER TABLE "AiJob" SET (schema_locked = false)'],
+        ]);
+    });
+
+    expect(await runAiUsageMigration({ ...run, writersStopped: true })).toEqual({
+      applied: AI_USAGE_MIGRATIONS.slice(1),
+      needsMaintenance: true,
+    });
+    expect(run.deploy).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { checkOnly: true, writersStopped: false, activeJobs: "0", error: null },
+    { checkOnly: false, writersStopped: false, activeJobs: "0", error: "--writers-stopped" },
+    { checkOnly: false, writersStopped: true, activeJobs: "1", error: "Active AI jobs remain" },
+  ])("keeps retry unlocks behind preflight and maintenance gates %#", async ({ error, ...options }) => {
+    const run = fixture({ history: recoveredHistory(), activeJobs: options.activeJobs });
+    const result = runAiUsageMigration({ ...run, ...options });
+    if (error) await expect(result).rejects.toThrow(error);
+    else await expect(result).resolves.toMatchObject({ pending: AI_USAGE_MIGRATIONS.slice(1) });
+    expect(run.deploy).not.toHaveBeenCalled();
+    expect(run.client.query.mock.calls.some(([sql]) => sql.startsWith("ALTER"))).toBe(false);
+  });
+
+  it("restores all locks when the retry's second unlock fails", async () => {
+    const run = fixture({ history: recoveredHistory() });
+    const query = run.client.query.getMockImplementation()!;
+    run.client.query.mockImplementation(async (sql) => {
+      if (sql === 'ALTER TABLE "AiJob" SET (schema_locked = false)') {
+        throw new Error("Retry unlock failed");
+      }
+      return await query(sql);
+    });
+    await expect(runAiUsageMigration({ ...run, writersStopped: true }))
+      .rejects.toThrow("Retry unlock failed");
+    expect(run.deploy).not.toHaveBeenCalled();
+    expect(run.client.query.mock.calls.filter(([sql]) => sql.includes("schema_locked = true")))
+      .toHaveLength(4);
+  });
+
+  it("does not reopen first-migration tables when only the fractional migration is pending", async () => {
+    const run = fixture({ history: AI_USAGE_MIGRATIONS.slice(0, 2).map(applied) });
+    await runAiUsageMigration({ ...run, writersStopped: true });
+    expect(run.client.query.mock.calls.some(([sql]) => sql.includes("schema_locked = false"))).toBe(false);
   });
 
   it("refuses success if the migration omitted a schema relock", async () => {
