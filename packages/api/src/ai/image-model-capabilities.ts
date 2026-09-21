@@ -9,6 +9,8 @@ import {
   createPublicOpenRouterClient,
   toAiProviderError,
 } from "./openrouter";
+import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
+import { aiCapabilityKey } from "./providers/types";
 
 // What each image model will accept, read from the provider.
 //
@@ -285,21 +287,97 @@ async function loadOne(
   }
 }
 
-// One lookup per model, in parallel and cached, because the provider publishes
+/**
+ * A model to look up, and who runs it.
+ *
+ * A bare id is read as the provider every registered row carried before the
+ * column existed, so a caller with no catalog in hand keeps working.
+ */
+export type AiImageModelRef = string | { modelId: string; provider: string };
+
+// The Gateway catalog's modalities omit image inputs even for documented
+// editors. The SDK accepting prompt.images is also not a model capability.
+// Keep exact, verified model IDs here: an unknown model remains usable for
+// text generation, but must not advertise image inputs. Mask-only models are
+// not included because this adapter performs edits with a prompt and source.
+// Sources and conservative reference allowances: docs/ai-gateway-image-inputs.md.
+const GATEWAY_IMAGE_REFERENCE_LIMITS = new Map<string, number>([
+  ["openai/gpt-image-1", 4],
+  ["openai/gpt-image-1.5", 4],
+  ["openai/gpt-image-2", 4],
+  ["bfl/flux-2-pro", 4],
+  ["bfl/flux-2-flex", 4],
+  ["bfl/flux-kontext-pro", 1],
+  ["bfl/flux-kontext-max", 1],
+  ["bytedance/seedream-4.0", 4],
+  ["bytedance/seedream-4.5", 4],
+  ["spacexai/grok-imagine-image", 3],
+]);
+
+function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
+  const maxReferenceImages = Math.min(
+    GATEWAY_IMAGE_REFERENCE_LIMITS.get(modelId) ?? 0,
+    AI_MAX_IMAGE_REFERENCES,
+  );
+  return {
+    modelId,
+    aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
+    // No background parameter exists. Asking for a transparent one would be
+    // ignored, and the user billed for an opaque picture.
+    backgrounds: ["auto"],
+    seed: true,
+    inputReferences: maxReferenceImages > 0,
+    maxReferenceImages,
+    // No upscale surface, which is what `resolution` stands for here.
+    resolution: false,
+  };
+}
+
+// One lookup per model, in parallel and cached, because a provider publishes
 // image capabilities per model rather than as one list.
 export async function loadAiImageModelCapabilities(
-  modelIds: readonly string[],
+  models: readonly AiImageModelRef[],
   now = Date.now(),
 ): Promise<Map<string, AiImageModelCapabilities>> {
-  const unique = [...new Set(modelIds)];
+  // Keyed by provider and id together: the catalog only makes an id unique
+  // within one operation, so the same id can be registered against OpenRouter
+  // for one and against the Gateway for another. Those name different
+  // endpoints, and keeping only the first one seen answers the other with
+  // limits it does not have.
+  const wanted = new Map<string, { modelId: string; provider: string }>();
+  for (const model of models) {
+    const modelId = typeof model === "string" ? model : model.modelId;
+    const provider =
+      typeof model === "string" ? DEFAULT_AI_PROVIDER_ID : model.provider;
+    wanted.set(aiCapabilityKey(provider, modelId), { modelId, provider });
+  }
   const loaded = await Promise.all(
-    unique.map(async (modelId) => [modelId, await loadOne(modelId, now)] as const),
+    [...wanted].map(async ([key, { modelId, provider }]) =>
+      provider === "vercel-gateway"
+        ? ([key, gatewayImageCapabilities(modelId)] as const)
+        : ([key, await loadOne(modelId, now)] as const),
+    ),
   );
   return new Map(
     loaded.filter((entry): entry is [string, AiImageModelCapabilities] =>
       entry[1] !== null,
     ),
   );
+}
+
+/**
+ * The capabilities of one catalog entry, or undefined when the provider lists
+ * none.
+ *
+ * The counterpart of {@link videoCapabilityOf}: the provider is part of the
+ * lookup because two entries sharing a model id under different providers are
+ * different endpoints.
+ */
+export function imageCapabilityOf(
+  capabilities: ReadonlyMap<string, AiImageModelCapabilities>,
+  model: { modelId: string; provider: string },
+): AiImageModelCapabilities | undefined {
+  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.

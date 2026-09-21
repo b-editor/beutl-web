@@ -30,6 +30,12 @@ export type AiScreenModel = {
   displayName: string;
   costTier: "low" | "medium" | "high" | null;
   available: boolean;
+  // Who runs it. Carried because an id alone does not identify an endpoint:
+  // the catalog keys a row by (operation, modelId), so the same id can name an
+  // OpenRouter model for one operation and a Gateway model for another, and
+  // the two publish different limits. Not shown anywhere — it exists so the
+  // screen looks a model's capabilities up as the server does.
+  provider: string;
 };
 
 export type AiBalance = {
@@ -710,7 +716,16 @@ export function keepModelForHeldRequest(
 
   return [
     ...models,
-    { id: chosen, displayName: chosen, costTier: null, available: true },
+    {
+      id: chosen,
+      displayName: chosen,
+      costTier: null,
+      available: true,
+      // A held model the catalog no longer lists has no provider to name. It
+      // may only replay a finished request, which reads nothing from
+      // capabilities, so the value is never looked up.
+      provider: "",
+    },
   ];
 }
 

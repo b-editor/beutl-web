@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { AI_DEFAULT_OPERATION_MODELS, aiMinimumChargeOf } from "@beutl/core";
 import { aiOperationsGoingOffline } from "../../apps/admin/src/lib/ai-operation-model-changes";
 
-const minimumChargeOf = (operation: string, _modelId: string, priceUnits: number) =>
-  aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
+const minimumChargeOf = (
+  operation: string,
+  _model: { modelId: string; provider: string },
+  priceUnits: number,
+) => aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
 
 describe("an allowance measured against the models on offer", () => {
   it("names the operations it would take offline", () => {
@@ -12,8 +15,8 @@ describe("an allowance measured against the models on offer", () => {
     const offline = aiOperationsGoingOffline({
       minimumChargeOf,
       modelsByOperation: {
-        "video.generate": [{ modelId: "video", priceUnits: 40, enabled: true }],
-        "image.generate": [{ modelId: "image", priceUnits: 20, enabled: true }],
+        "video.generate": [{ modelId: "video", provider: "openrouter", priceUnits: 40, enabled: true }],
+        "image.generate": [{ modelId: "image", provider: "openrouter", priceUnits: 20, enabled: true }],
       },
       allowance: 39,
     });
@@ -27,8 +30,8 @@ describe("an allowance measured against the models on offer", () => {
         minimumChargeOf,
         modelsByOperation: {
           "image.generate": [
-            { modelId: "affordable", priceUnits: 20, enabled: true },
-            { modelId: "expensive", priceUnits: 400, enabled: true },
+            { modelId: "affordable", provider: "openrouter", priceUnits: 20, enabled: true },
+            { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
           ],
         },
         allowance: 100,
@@ -42,8 +45,8 @@ describe("an allowance measured against the models on offer", () => {
         minimumChargeOf,
         modelsByOperation: {
           "image.generate": [
-            { modelId: "disabled", priceUnits: 20, enabled: false },
-            { modelId: "expensive", priceUnits: 400, enabled: true },
+            { modelId: "disabled", provider: "openrouter", priceUnits: 20, enabled: false },
+            { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
           ],
         },
         allowance: 100,
@@ -60,7 +63,12 @@ describe("an allowance measured against the models on offer", () => {
         Object.entries(AI_DEFAULT_OPERATION_MODELS).map(
           ([operation, defaults]) => [
             operation,
-            [{ modelId: defaults.model, priceUnits: defaults.price, enabled: true }],
+            [{
+              modelId: defaults.model,
+              provider: "openrouter",
+              priceUnits: defaults.price,
+              enabled: true,
+            }],
           ],
         ),
       ),

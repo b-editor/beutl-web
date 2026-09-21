@@ -29,6 +29,7 @@ import {
   sha256Hex,
 } from "../../ai/request-integrity";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import { transcriptionProviderFor } from "../../ai/providers/registry";
 import { validateTranscriptionResult } from "../../ai/audio-validation";
 import { isIso6391LanguageCode } from "../../ai/subtitle-validation";
 import { aiApiMultipartBodyLimit } from "@beutl/core";
@@ -254,7 +255,7 @@ const app = new Hono().post("/", async (c) => {
   const reservation = await createReservedAiJob({
     userId,
     kind: "stt",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       filename: file.name,
@@ -280,7 +281,9 @@ const app = new Hono().post("/", async (c) => {
   }
 
   try {
-    const result = await transcribeAudio({
+    const result = await transcriptionProviderFor(
+      selectedModel.provider,
+    ).transcribe({
       audio: parsedAudio.bytes,
       durationSeconds: parsedAudio.durationSeconds,
       filename: file.name,

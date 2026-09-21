@@ -13,18 +13,28 @@ import {
   MAX_AI_VIDEO_DURATION_SECONDS,
   MIN_AI_VIDEO_DURATION_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+  MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
 } from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { loadAiVideoModelCapabilities } from "../../ai/video-model-capabilities";
-import { loadAiImageModelCapabilities } from "../../ai/image-model-capabilities";
+import {
+  isVideoModelUsable,
+  loadAiVideoModelCapabilities,
+  videoCapabilityOf,
+} from "../../ai/video-model-capabilities";
+import {
+  imageCapabilityOf,
+  loadAiImageModelCapabilities,
+} from "../../ai/image-model-capabilities";
 import {
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
 } from "../../ai/upload-limits";
 import { MAX_AI_AUDIO_DURATION_SECONDS } from "../../ai/audio-metadata";
@@ -51,6 +61,15 @@ type ModelDescription = {
   displayName: string;
   costTier: "low" | "medium" | "high" | null;
   isDefault: boolean;
+};
+
+type SourceVideoModelDescription = ModelDescription & {
+  durationsSeconds?: number[];
+  maxPromptLength: number;
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  maxCharacterImageBytes?: number;
 };
 
 // A video model states its own accepted parameters. The operation-level lists
@@ -81,12 +100,36 @@ type VideoModelDescription = ModelDescription & {
   // 開始フレームと終了フレームは別々に扱う。片方しか取らないモデルがある。
   firstFrame: boolean;
   lastFrame: boolean;
+  // 参照画像で人物や物の見た目を揃えられるか。フレームとは排他で、両方渡すと
+  // 参照のほうが黙って捨てられる。
+  inputReferences: boolean;
+  // このモデルが実際に受け取る量。公開していないモデルではサービスの天井が
+  // そのまま入る。画面はこれを見て欄を出す——一律の数字で切ると、9 枚取れる
+  // モデルに 3 枚しか渡せない。
+  maxInputReferences: number;
+  maxInputReferenceBytes: number;
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  maxPromptLength: number;
+  // 参照として運べる動画と音声。画像とは別枠。0 はそのモデルが取らないこと。
+  maxVideoReferences: number;
+  maxVideoReferenceBytes: number;
+  maxAudioReferences: number;
+  maxAudioReferenceBytes: number;
+  // 種類ごとに収まっていても、合計でこれを超える組み合わせは受け取らない。
+  // null は「合計の制限を公開していない」。画面がこれを見ないと、どの欄も
+  // 上限内なのに送信だけが 400 で返る組み方ができてしまう。
+  maxTotalReferences: number | null;
 };
 
-function describeModels(
+// The provider rides along so a caller can look the entry's capabilities up.
+// It is not part of the response: a client picks a model, never a provider, and
+// describeModels drops it for the operations that publish nothing else.
+function describeCatalogEntries(
   catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
   operation: string,
-): ModelDescription[] {
+): (ModelDescription & { provider: string })[] {
   const entries = catalog.list(operation);
   return entries.map((entry, index) => ({
     id: entry.modelId,
@@ -94,7 +137,17 @@ function describeModels(
     costTier: entry.costTier,
     // The one a request that names no model runs on.
     isDefault: index === 0,
+    provider: entry.provider,
   }));
+}
+
+function describeModels(
+  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
+  operation: string,
+): ModelDescription[] {
+  return describeCatalogEntries(catalog, operation).map(
+    ({ provider: _provider, ...model }) => model,
+  );
 }
 
 const app = new Hono().get("/", async (c) => {
@@ -113,14 +166,18 @@ const app = new Hono().get("/", async (c) => {
   const [videoCapabilities, imageCapabilities] = await Promise.all([
     loadAiVideoModelCapabilities(),
     loadAiImageModelCapabilities(
-      imageOperations.flatMap((operation) =>
-        catalog.list(operation).map((entry) => entry.modelId),
-      ),
+      // The whole entry, not just the id: what a model accepts depends on who
+      // runs it, and the Gateway publishes nothing per model to discover it
+      // from.
+      imageOperations.flatMap((operation) => catalog.list(operation)),
     ),
   ]);
   const describeImageModels = (operation: string): ImageModelDescription[] =>
-    describeModels(catalog, operation).map((model) => {
-      const supported = imageCapabilities.get(model.id);
+    describeCatalogEntries(catalog, operation).map(({ provider, ...model }) => {
+      const supported = imageCapabilityOf(imageCapabilities, {
+        modelId: model.id,
+        provider,
+      });
       return {
         ...model,
         aspectRatios: supported
@@ -134,13 +191,58 @@ const app = new Hono().get("/", async (c) => {
         resolution: supported ? supported.resolution : true,
       };
     });
-  const videoModels: VideoModelDescription[] = describeModels(
+  // A mode that works from a video needs nothing but "can this model do it":
+  // the shape and, for an edit, the length come from the source.
+  const describeSourceVideoModels = (operation: string): SourceVideoModelDescription[] =>
+    describeCatalogEntries(catalog, operation).filter((model) =>
+      isVideoModelUsable(
+        videoCapabilityOf(videoCapabilities, {
+          modelId: model.id,
+          provider: model.provider,
+        }),
+        operation,
+      ),
+    ).map(({ provider, ...model }) => {
+      const supported = videoCapabilityOf(videoCapabilities, {
+        modelId: model.id,
+        provider,
+      });
+      return {
+        ...model,
+        ...(operation === "video.edit" ? {} : {
+          durationsSeconds: supported?.durations.length ? supported.durations : [...AI_VIDEO_DURATIONS_SECONDS],
+        }),
+        maxPromptLength: supported?.maxPromptCharacters ?? MAX_AI_PROMPT_LENGTH,
+        maxSourceVideoBytes: supported?.maxSourceVideoBytes ?? MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+        minSourceVideoSeconds: supported?.minSourceVideoSeconds ?? null,
+        maxSourceVideoSeconds: supported?.maxSourceVideoSeconds ?? null,
+        ...(operation === "video.motion" ? {
+          maxCharacterImageBytes: Math.min(
+            supported?.maxReferenceBytes ?? MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+            MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+          ),
+        } : {}),
+      };
+    });
+  const videoModels: VideoModelDescription[] = describeCatalogEntries(
     catalog,
     "video.generate",
-  ).map((model) => {
-    const supported = videoCapabilities.get(model.id);
+  ).filter((model) =>
+    isVideoModelUsable(
+      videoCapabilityOf(videoCapabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      }),
+      "video.generate",
+    ),
+  ).map(({ provider, ...model }) => {
+    const supported = videoCapabilityOf(videoCapabilities, {
+      modelId: model.id,
+      provider,
+    });
     return {
       ...model,
+      promptToVideo: supported?.promptToVideo ?? true,
       durationsSeconds: supported
         ? supported.durations
         : [...AI_VIDEO_DURATIONS_SECONDS],
@@ -152,6 +254,28 @@ const app = new Hono().get("/", async (c) => {
       seed: supported ? supported.seed : true,
       firstFrame: supported ? supported.firstFrame : true,
       lastFrame: supported ? supported.lastFrame : true,
+      // 既定は false。取れないモデルに送っても黙って無視されるだけなので、
+      // 「分からない＝出す」にはしない。
+      inputReferences: supported ? supported.referenceToVideo : false,
+      maxInputReferences: supported
+        ? supported.maxInputReferences
+        : AI_MAX_VIDEO_INPUT_REFERENCES,
+      maxInputReferenceBytes: supported
+        ? supported.maxReferenceBytes
+        : MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      maxSourceVideoBytes: supported
+        ? supported.maxSourceVideoBytes
+        : MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+      minSourceVideoSeconds: supported ? supported.minSourceVideoSeconds : null,
+      maxSourceVideoSeconds: supported ? supported.maxSourceVideoSeconds : null,
+      maxPromptLength: supported
+        ? supported.maxPromptCharacters
+        : MAX_AI_PROMPT_LENGTH,
+      maxVideoReferences: supported ? supported.maxVideoReferences : 0,
+      maxVideoReferenceBytes: supported ? supported.maxVideoReferenceBytes : 0,
+      maxAudioReferences: supported ? supported.maxAudioReferences : 0,
+      maxAudioReferenceBytes: supported ? supported.maxAudioReferenceBytes : 0,
+      maxTotalReferences: supported ? supported.maxTotalReferences : null,
     };
   });
   return c.json({
@@ -201,6 +325,31 @@ const app = new Hono().get("/", async (c) => {
         maxRequestBytes: MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
         languageFormat: "iso-639-1",
       },
+      // Working from a video this service already holds. Only the models that
+      // publish the mode are listed, because one that does not would drop the
+      // source and bill for something else.
+      "video.edit": {
+        models: describeSourceVideoModels("video.edit"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        // The result is as long as its source, so nothing is chosen here.
+        durationFollowsSource: true,
+      },
+      "video.extend": {
+        models: describeSourceVideoModels("video.extend"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        // The length of the added segment, not of the whole result.
+        minDurationSeconds: MIN_AI_VIDEO_DURATION_SECONDS,
+        maxDurationSeconds: MAX_AI_VIDEO_DURATION_SECONDS,
+      },
+      "video.motion": {
+        models: describeSourceVideoModels("video.motion"),
+        maxPromptLength: MAX_AI_PROMPT_LENGTH,
+        minDurationSeconds: MIN_AI_VIDEO_DURATION_SECONDS,
+        maxDurationSeconds: MAX_AI_VIDEO_DURATION_SECONDS,
+        orientations: ["image", "video"],
+        qualities: ["standard", "pro"],
+        maxCharacterImageBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+      },
       "video.generate": {
         models: videoModels,
         maxPromptLength: MAX_AI_PROMPT_LENGTH,
@@ -214,6 +363,11 @@ const app = new Hono().get("/", async (c) => {
         seed,
         maxFrameImageBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
         frameTypes: ["first_frame", "last_frame"],
+        // 参照画像の上限。フレームと同じ大きさで、枚数はモデル側の公開値に
+        // 関わらずこの数まで。フレームと同時には送れない。
+        maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+        maxInputReferencesTotalBytes: MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
+        maxInputReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
       },
     },
   });

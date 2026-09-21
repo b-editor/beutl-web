@@ -3,8 +3,9 @@ import { cache } from "react";
 import { getDb, listAiOperationModels, listPackagePaymentRefundInterventions, listStorageMultipartInterventions, listStorageUploadInterventions, listTopUpCheckoutInterventions } from "@beutl/db";
 import {
   aiCostEstimateKey,
+  imageCapabilityOf,
   isImageModelUsable,
-  isVideoModelUsable,
+  unusableVideoModelsFor,
   loadAiImageModelCapabilities,
   loadAiCostEstimates,
   loadAiModelCatalog,
@@ -30,20 +31,32 @@ export const getPackagePaymentRefundInterventions = cache(
     await listPackagePaymentRefundInterventions({ page, pageSize }),
 );
 
-// The video models that cannot serve a single request this service can build.
+// The video models that cannot serve a single request the operation they are
+// registered for can build.
 //
 // Which resolutions, lengths and aspect ratios a video model takes differs per
 // model, and one that shares none with this service is registered but dead: the
 // provider refuses everything it is sent. Nothing else on this page would show
 // that, and on the user's screen it reads as a provider outage.
-export const getUnusableVideoModels = cache(async () => {
-  const capabilities = await loadAiVideoModelCapabilities();
-  return new Set(
-    [...capabilities.values()]
-      .filter((entry) => !isVideoModelUsable(entry))
-      .map((entry) => entry.modelId),
-  );
-});
+//
+// Per operation, because what makes a model usable differs between them. A
+// motion-control model offers no text-to-video at all, which makes it useless
+// for a generation and is exactly what video.motion needs; asking the
+// generation question about every row condemned the one model that operation
+// has.
+export const getUnusableVideoModels = cache(
+  async (
+    operation: string,
+    // Who runs a model decides what it takes, so the rows come through whole.
+    models: readonly { modelId: string; provider: string }[],
+  ) => {
+    return unusableVideoModelsFor(
+      operation,
+      models,
+      await loadAiVideoModelCapabilities(),
+    );
+  },
+);
 
 // The image models that cannot serve the operation they are registered for.
 //
@@ -52,20 +65,29 @@ export const getUnusableVideoModels = cache(async () => {
 // work from — which every edit depends on. Nothing else on this page would show
 // that, and on the user's screen it reads as a provider outage.
 export const getUnusableImageModels = cache(
-  async (operation: string, modelIds: readonly string[]) => {
-    const capabilities = await loadAiImageModelCapabilities(modelIds);
+  async (
+    operation: string,
+    // Who runs a model decides what it takes, so the rows come through whole.
+    models: readonly { modelId: string; provider: string }[],
+  ) => {
+    const capabilities = await loadAiImageModelCapabilities(models);
     const isEdit = operation.startsWith("image.edit.");
+    // Model ids are returned bare, which stays unambiguous: the catalog keys a
+    // row by (operation, modelId), so one operation never holds the same id
+    // twice.
     return new Set(
-      modelIds.filter(
-        (modelId) =>
-          !isImageModelUsable(capabilities.get(modelId), {
-            referenceImages: isEdit,
-            resolution: operation === "image.edit.upscale",
-            background: operation === "image.edit.remove_background"
-              ? "transparent"
-              : undefined,
-          }),
-      ),
+      models
+        .filter(
+          (model) =>
+            !isImageModelUsable(imageCapabilityOf(capabilities, model), {
+              referenceImages: isEdit,
+              resolution: operation === "image.edit.upscale",
+              background: operation === "image.edit.remove_background"
+                ? "transparent"
+                : undefined,
+            }),
+        )
+        .map((model) => model.modelId),
     );
   },
 );
@@ -93,7 +115,10 @@ export const getAiEconomics = cache(async () => {
     resolveOfferPricing({ kind: "top_up", prisma }),
     loadAiCostEstimates({
       modelsOf: (operation) =>
-        catalog.list(operation).map((entry) => entry.modelId),
+        catalog.list(operation).map((entry) => ({
+          modelId: entry.modelId,
+          provider: entry.provider,
+        })),
     }),
   ]);
 

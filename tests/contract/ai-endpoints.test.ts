@@ -11,6 +11,7 @@ import {
 } from "@beutl/db";
 import {
   AI_TEXT_RESULT_RETENTION_MILLISECONDS,
+  aiCapabilityKey,
   createReservedAiJob,
   reconcileAiJobs,
   setR2BucketProvider,
@@ -1707,7 +1708,7 @@ describe("v3 AI endpoints contract", () => {
       loadAiImageModelCapabilities.mockResolvedValueOnce(
         new Map([
           [
-            "openai/gpt-image-1",
+            aiCapabilityKey("openrouter", "openai/gpt-image-1"),
             {
               modelId: "openai/gpt-image-1",
               aspectRatios: ["1:1", "2:3", "3:2"],

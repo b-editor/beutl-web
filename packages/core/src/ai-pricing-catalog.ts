@@ -28,6 +28,21 @@ export const AI_PRICING_CATALOG = {
     unit: "second",
     minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
   },
+  // Charged per second of what comes out, like a generation. For an edit that
+  // is the source's own length, which the caller does not choose; for an
+  // extension and for motion control it is the length asked for.
+  "video.edit": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
+  "video.extend": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
+  "video.motion": {
+    unit: "second",
+    minimumQuantity: MIN_AI_VIDEO_DURATION_SECONDS,
+  },
 } as const;
 
 export type AiBillingUnit =
@@ -48,6 +63,11 @@ export function aiMinimumQuantityOf(operation: string): number | null {
     .minimumQuantity;
 }
 
+export type AiModelChargeCapabilities = {
+  durations: readonly number[];
+  minSourceVideoSeconds?: number | null;
+};
+
 // The smallest charge an operation can incur. Comparing a unit price against an
 // allowance answers the wrong question for anything whose smallest request is
 // more than one unit: a four-second video priced under the allowance can still
@@ -55,7 +75,26 @@ export function aiMinimumQuantityOf(operation: string): number | null {
 export function aiMinimumChargeOf(
   operation: string,
   price: number,
+  capabilities?: AiModelChargeCapabilities,
 ): number | null {
-  const minimumQuantity = aiMinimumQuantityOf(operation);
-  return minimumQuantity === null ? null : price * minimumQuantity;
+  let minimumQuantity = aiMinimumQuantityOf(operation);
+  if (minimumQuantity === null) return null;
+  if (capabilities) {
+    if (operation === "video.edit") {
+      // Edits are charged for the source's measured length, rounded up to a
+      // whole second. Their output-duration choices do not constrain a source.
+      minimumQuantity = Math.max(
+        minimumQuantity,
+        Math.ceil(capabilities.minSourceVideoSeconds ?? minimumQuantity),
+      );
+    } else if (
+      operation === "video.generate" ||
+      operation === "video.extend" ||
+      operation === "video.motion"
+    ) {
+      if (capabilities.durations.length === 0) return 0;
+      minimumQuantity = Math.min(...capabilities.durations);
+    }
+  }
+  return price * minimumQuantity;
 }

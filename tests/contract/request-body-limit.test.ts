@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  boundedBody,
+  MAX_AI_IMAGE_UPLOAD_BYTES,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
+  MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
   MAX_API_JSON_REQUEST_BYTES,
   MAX_AUTH_REQUEST_BODY_BYTES,
-  MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES,
   MAX_INTERNAL_STORAGE_START_BODY_BYTES,
   MAX_REQUEST_BODY_BYTES,
@@ -11,6 +13,7 @@ import {
   RequestBodyLimitExceededError,
   STORAGE_UPLOAD_PART_BYTES,
   aiApiMultipartBodyLimit,
+  boundedBody,
   requestBodyLimit,
 } from "@beutl/core";
 
@@ -47,6 +50,19 @@ describe("what one request body may come to", () => {
     // Server Action は URL では選ばれないので、AI の Action はここへも送れる
     // ——そちらは全体の上限で受ける。
     expect(requestBodyLimit("/ja/dashboard")).toBe(MAX_REQUEST_BODY_BYTES);
+  });
+
+  it("accepts a maximum-size reference clip without summing every media budget", async () => {
+    const path = "/api/v3/ai/videos/frames";
+    const cap = aiApiMultipartBodyLimit(path)!;
+    expect(cap).toBeGreaterThan(MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES);
+    expect(cap).toBeLessThan(MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES + 1024 * 1024);
+    expect(requestBodyLimit(path, "POST", "multipart/form-data; boundary=x")).toBe(cap);
+    await expect(drain(boundedBody(streamOf([
+      MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES, 1024,
+    ]), cap))).resolves.toBe(MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES + 1024);
+    await expect(drain(boundedBody(streamOf([cap, 1]), cap)))
+      .rejects.toBeInstanceOf(RequestBodyLimitExceededError);
   });
 
   it("uses an explicit method and path matrix before OpenNext buffering", () => {
@@ -88,6 +104,26 @@ describe("what one request body may come to", () => {
       "POST",
       "multipart/form-data; boundary=x",
     )).toBe(transcriptionCap);
+    // The three modes that carry a video. Without an entry of their own they
+    // fall through to the JSON cap, which is 32 KiB — small enough that no
+    // video and no character picture could ever be sent, and the request is
+    // refused before the route sees it.
+    for (const mode of ["edit", "extend", "motion"] as const) {
+      const path = `/api/v3/ai/videos/${mode}`;
+      const cap = aiApiMultipartBodyLimit(path);
+      expect(cap, mode).not.toBeNull();
+      expect(cap!, mode).toBeGreaterThan(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES);
+      expect(requestBodyLimit(
+        path,
+        "POST",
+        "multipart/form-data; boundary=x",
+      ), mode).toBe(cap);
+    }
+    // Motion also carries the character picture, so its body holds both.
+    expect(
+      aiApiMultipartBodyLimit("/api/v3/ai/videos/motion")!,
+    ).toBeGreaterThan(aiApiMultipartBodyLimit("/api/v3/ai/videos/edit")!);
+
     expect(requestBodyLimit(
       "/api/v1/account/createAuthUri",
       "POST",

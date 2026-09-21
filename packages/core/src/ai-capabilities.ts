@@ -96,6 +96,23 @@ export type AiVideoResolution = (typeof AI_VIDEO_RESOLUTIONS)[number];
 export const MIN_AI_VIDEO_DURATION_SECONDS = 1;
 export const MAX_AI_VIDEO_DURATION_SECONDS = 60;
 
+// How many reference pictures a video request may carry.
+//
+// Deliberately below what some models advertise (Wan takes five images and
+// three videos): every reference is uploaded, stored and served to the
+// provider, and a video is charged per second at one rate whatever it was
+// given — so the count has to be one the price was set against. Raising it
+// costs storage and provider cost that the per-second price does not follow.
+// 1 回の依頼が運べる参照画像の上限。モデルが公開する枚数のほうが少なければ
+// そちらが勝つ——ここは「どのモデルでもこれ以上は運ばない」という天井で、
+// MiniMax H3 と Seedance 2.0 系が公開する 9 枚に合わせてある。Wan v3 の 10 枚
+// と Seedance 2.5 の 30 枚はこれを超えるので、そこまでは出さない。
+//
+// 枚数を増やしても総量は増やさない。下の合計上限が、1 枚のときと同じところで
+// 頭打ちにする——増えるのは選べる枚数であって、Worker が抱えるバイト数では
+// ない。
+export const AI_MAX_VIDEO_INPUT_REFERENCES = 9;
+
 // Provider-supported deterministic seed. Bounded to a signed 32-bit value so
 // the same number survives every JSON encoder between the client and the
 // provider.
@@ -232,6 +249,32 @@ export const MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES = MAX_AI_IMAGE_UPLOAD_BYTES;
 // JSON serialization. Keep this substantially below the ordinary image-edit
 // limit so a two-frame request stays within the Worker's memory budget.
 export const MAX_AI_VIDEO_FRAME_UPLOAD_BYTES = 5 * 1024 * 1024;
+// 1 回の依頼が運べる絵の最大枚数。フレームなら 2 枚、参照画像ならその上限で、
+// 両方を同時には送れないので多いほうが本文の上限を決める。
+export const MAX_AI_VIDEO_PICTURES = Math.max(
+  2,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+);
+// 参照画像を全部あわせた大きさ。画像生成の画面と同じ考え方で、1 枚あたりの
+// 上限を枚数分そのまま許すと 9 枚で 45MiB になり、読み込みと公開で二重に
+// 抱えると 128MiB の Worker では持たない。枚数が増えてもここは動かさない。
+export const MAX_AI_VIDEO_REFERENCES_TOTAL_BYTES = 20 * 1024 * 1024;
+// 参照として運べる動画の本数と、その合計。H3 が公開する 3 本に合わせてある。
+// 1 本 50MB を 3 本そのまま許すと本文だけで 150MB になり、100MB の本文上限も
+// 128MiB の isolate も超える——枚数と同じで、本数は上げても総量は動かさない。
+export const AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES = 3;
+export const MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES = 32 * 1024 * 1024;
+// Shared across image, video, and audio references in the same request.
+export const MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES = 32 * 1024 * 1024;
+// 音声は枚数を公開しないモデルが多く、公開しているものも 1 つぶん。大きさは
+// H3 が公開する 15MB に合わせる。
+export const AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES = 1;
+export const MAX_AI_VIDEO_INPUT_AUDIO_BYTES = 15 * 1024 * 1024;
+// 素材として送れる動画そのものの大きさ。生成結果の上限と同じ数にしてある——
+// このサービスが 1 本の動画を仕上げるときにすでにメモリへ載せている量で、
+// 素材として受け取るぶんだけ予算が増えるわけではない。
+export const MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES = 32 * 1024 * 1024;
+
 // A canonical maximum-size translation payload can contain 200 64-character
 // IDs plus 20,000 multi-byte UTF-8 text characters.
 export const MAX_AI_TRANSLATION_JSON_REQUEST_BYTES = 128 * 1024;
@@ -274,8 +317,9 @@ export function aiScreenUploadLimit(pathname: string): number | null {
         + MAX_AI_RESULT_BYTES
       );
     case "video":
-      // 始まりと終わりで 2 枚。
-      return 2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+      // 始まりと終わりで 2 枚、または参照画像。多いほうに合わせる。
+      return MAX_AI_VIDEO_PICTURES * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES
+        + AI_SCREEN_FIELDS_BYTES;
     case "translate":
       return (
         MAX_AI_TRANSLATION_JSON_REQUEST_BYTES
@@ -297,7 +341,23 @@ export function aiApiMultipartBodyLimit(pathname: string): number | null {
     case "/api/v3/ai/transcriptions":
       return MAX_AI_TRANSCRIPTION_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
     case "/api/v3/ai/videos/frames":
-      return 2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+      // Frames and references are alternatives. Keep one aggregate budget
+      // for mixed references, large enough for the largest supported clip.
+      // Adding all per-kind budgets would increase Worker memory pressure.
+      return Math.max(
+        2 * MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+        MAX_AI_VIDEO_INPUT_REFERENCES_TOTAL_BYTES,
+      ) + AI_SCREEN_FIELDS_BYTES;
+    // 素材の動画を添えて出せる 3 つ。どれも動画 1 本ぶんを運び、モーション適用
+    // だけは人物の絵も一緒に運ぶ。ここに無いと JSON の上限 (32 KiB) が当たり、
+    // 絵も動画も添えられないまま断られる。
+    case "/api/v3/ai/videos/edit":
+    case "/api/v3/ai/videos/extend":
+      return MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES + AI_SCREEN_FIELDS_BYTES;
+    case "/api/v3/ai/videos/motion":
+      return MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES
+        + MAX_AI_VIDEO_FRAME_UPLOAD_BYTES
+        + AI_SCREEN_FIELDS_BYTES;
     default:
       return null;
   }

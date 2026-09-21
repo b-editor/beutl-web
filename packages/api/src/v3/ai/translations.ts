@@ -23,6 +23,7 @@ import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
 import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import { translationProviderFor } from "../../ai/providers/registry";
 import {
   isIso6391LanguageCode,
   translationCharacterCount,
@@ -271,7 +272,7 @@ const app = new Hono().post("/", async (c) => {
   const reservation = await createReservedAiJob({
     userId,
     kind: "translation",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
@@ -317,7 +318,9 @@ const app = new Hono().post("/", async (c) => {
         { start: context.start, end: context.end },
       ]),
     );
-    const translatedSegments = await translateSegments({
+    const translatedSegments = await translationProviderFor(
+      selectedModel.provider,
+    ).translate({
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments: segments.map(({ id, text }) => ({ id, text })),

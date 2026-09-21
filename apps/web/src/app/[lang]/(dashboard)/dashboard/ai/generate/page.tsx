@@ -1,6 +1,7 @@
 import { getTranslation } from "@beutl/i18n";
 import {
   isImageModelUsable,
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
 } from "@beutl/api/ai/image-model-capabilities";
 import { authOrSignIn } from "@/lib/auth-guard";
@@ -25,17 +26,28 @@ export default async function Page(props: {
   // accepts rather than a fixed set the provider then rejects.
   const registered = access.models["image.generate"] ?? [];
   const capabilities = await loadAiImageModelCapabilities(
-    registered.map((model) => model.id),
+    registered.map((model) => ({
+      modelId: model.id,
+      provider: model.provider,
+    })),
   );
   const usable = registered.filter((model) =>
-    isImageModelUsable(capabilities.get(model.id)),
+    isImageModelUsable(
+      imageCapabilityOf(capabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      }),
+    ),
   );
   // 使えるモデルがひとつも無いのは、能力が読めなかったからではない（読めなければ
   // 制限なしとして全部残る）。登録済みを戻すと、必ず拒否される送信を許すことになる。
   const models = usable;
   const modelOptions: Record<string, AiImageModelOptions> = Object.fromEntries(
     models.flatMap((model) => {
-      const supported = capabilities.get(model.id);
+      const supported = imageCapabilityOf(capabilities, {
+        modelId: model.id,
+        provider: model.provider,
+      });
       return supported
         ? [
             [

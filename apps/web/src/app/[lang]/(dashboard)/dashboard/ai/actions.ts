@@ -19,6 +19,7 @@ import {
   generateImage,
   inspectGeneratedImage,
   isIso6391LanguageCode,
+  DEFAULT_AI_PROVIDER_ID,
   loadAiModelCatalog,
   parseAudio,
   readAiJsonResult,
@@ -56,8 +57,13 @@ import {
   classifyVideoSubmissionFailure,
   createAndAttachVideoJob,
   deleteAiOutputObject,
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
+  imageProviderFor,
   loadAiVideoModelCapabilities,
+  videoCapabilityOf,
+  transcriptionProviderFor,
+  translationProviderFor,
   unsupportedImageRequestReason,
   unsupportedVideoRequestReason,
 } from "@beutl/api";
@@ -537,15 +543,40 @@ async function resolveOrigin(): Promise<string> {
 // HTTP — a local one, typically — gets no callback URL at all and its jobs are
 // finished by the poll path instead. Sending the URL anyway fails the whole
 // submission, which made video generation impossible to run locally.
+// Each provider has its own callback route, because each refuses a job that is
+// not its. A provider with no route gets no URL and its jobs are finished by
+// polling — the same branch a deployment without an HTTPS origin takes.
+const VIDEO_CALLBACK_PATHS: Record<string, string> = {
+  openrouter: "openrouter-callback",
+  "vercel-gateway": "gateway-callback",
+};
+
+// The HTTPS origin a provider can reach this deployment on, or undefined for a
+// server that has none. A provider that reads pictures by URL cannot be used
+// from such a deployment, and the submission says so rather than sending a
+// request without them.
+async function resolveMediaOrigin(): Promise<string | undefined> {
+  let origin: URL;
+  try {
+    origin = new URL(await resolveOrigin());
+  } catch {
+    return undefined;
+  }
+  return origin.protocol === "https:" ? origin.origin : undefined;
+}
+
 async function resolveVideoCallbackUrl(
   jobId: string,
   nonce: string,
+  provider: string,
 ): Promise<string | undefined> {
+  const path = VIDEO_CALLBACK_PATHS[provider];
+  if (path === undefined) return undefined;
   const origin = await resolveOrigin();
   let callbackUrl: URL;
   try {
     callbackUrl = new URL(
-      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/openrouter-callback`,
+      `/api/v3/ai/videos/${encodeURIComponent(jobId)}/${path}`,
       origin,
     );
   } catch {
@@ -664,8 +695,9 @@ export async function generateImageAction(
   // usage is reserved reads as a provider outage.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
-        selectedModel.modelId,
+      imageCapabilityOf(
+        await loadAiImageModelCapabilities([selectedModel]),
+        selectedModel,
       ),
       {
         aspectRatio,
@@ -685,7 +717,7 @@ export async function generateImageAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "image",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       prompt,
@@ -712,7 +744,7 @@ export async function generateImageAction(
   }
 
   try {
-    const result = await generateImage({
+    const result = await imageProviderFor(selectedModel.provider).generate({
       prompt,
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
@@ -821,8 +853,9 @@ export async function editImageAction(
   // size; a model that takes none of those is refused before it is paid for.
   if (
     unsupportedImageRequestReason(
-      (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
-        selectedModel.modelId,
+      imageCapabilityOf(
+        await loadAiImageModelCapabilities([selectedModel]),
+        selectedModel,
       ),
       {
         // The picture being edited.
@@ -847,7 +880,7 @@ export async function editImageAction(
     // makes it indistinguishable from a generation, and the retry path then
     // reruns it as text-to-image: no source picture, and the generation price.
     kind: "image_edit",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       task,
@@ -869,7 +902,7 @@ export async function editImageAction(
   }
 
   try {
-    const result = await editImage({
+    const result = await imageProviderFor(selectedModel.provider).edit({
       task,
       image: validated.bytes,
       mimeType: validated.mimeType,
@@ -962,7 +995,7 @@ export async function transcribeAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "stt",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       filename: file.name,
@@ -986,7 +1019,9 @@ export async function transcribeAction(
   }
 
   try {
-    const result = await transcribeAudio({
+    const result = await transcriptionProviderFor(
+      selectedModel.provider,
+    ).transcribe({
       audio: parsedAudio.bytes,
       durationSeconds: parsedAudio.durationSeconds,
       filename: file.name,
@@ -1120,7 +1155,7 @@ export async function translateAction(
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "translation",
-    provider: "openrouter",
+    provider: selectedModel.provider,
     status: "running",
     inputParams: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
@@ -1145,7 +1180,9 @@ export async function translateAction(
   }
 
   try {
-    const translated = await translateSegments({
+    const translated = await translationProviderFor(
+      selectedModel.provider,
+    ).translate({
       ...(sourceLanguage ? { sourceLanguage } : {}),
       targetLanguage,
       segments,
@@ -1214,6 +1251,30 @@ export async function listJobsAction(
         }
       : null,
   };
+}
+
+/**
+ * The catalog entry a rerun must use: the same model on the same provider the
+ * paid original ran on.
+ *
+ * Resolving by model id alone takes whichever provider that id currently
+ * carries. An administrator who moves an id from OpenRouter to the Gateway
+ * would otherwise have a rerun validated against, and dispatched to, a
+ * different service than the one the user already paid — for the same job.
+ * Nothing left to re-run on the original pair is "unavailable", which is what
+ * the caller reports.
+ */
+function retryEntryFor(
+  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
+  operation: string,
+  job: { model: string | null; provider?: string | null },
+) {
+  const entry = catalog.resolve(operation, job.model ?? undefined);
+  if (!entry) return null;
+  // A row written before the column existed carries the one provider there
+  // was, which is the same resolution the catalog itself makes.
+  const ranOn = job.provider ?? DEFAULT_AI_PROVIDER_ID;
+  return entry.provider === ranOn ? entry : null;
 }
 
 export async function retryJobAction(
@@ -1314,7 +1375,7 @@ export async function retryJobAction(
       }
       seed = input.seed;
     }
-    const retryModel = catalog.resolve("image.generate", job.model);
+    const retryModel = retryEntryFor(catalog, "image.generate", job);
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
@@ -1323,8 +1384,9 @@ export async function retryJobAction(
     // background, or seed never reaches the paid provider/refund path.
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([retryModel.modelId])).get(
-          retryModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([retryModel]),
+          retryModel,
         ),
         {
           aspectRatio,
@@ -1357,7 +1419,7 @@ export async function retryJobAction(
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "image",
-      provider: "openrouter",
+      provider: retryModel.provider,
       status: "running",
       inputParams: {
         prompt: input.prompt,
@@ -1380,7 +1442,7 @@ export async function retryJobAction(
       return await answerFromExistingFileJob(retried, t);
     }
     try {
-      const result = await generateImage({
+      const result = await imageProviderFor(retryModel.provider).generate({
         prompt: input.prompt,
         aspectRatio,
         ...(background ? { background } : {}),
@@ -1449,7 +1511,7 @@ export async function retryJobAction(
     if (typeof retryAspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio as AiVideoAspectRatio)) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const retryModel = catalog.resolve("video.generate", job.model);
+    const retryModel = retryEntryFor(catalog, "video.generate", job);
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
@@ -1461,7 +1523,7 @@ export async function retryJobAction(
     const validatedResolution = resolution as AiVideoResolution;
     const validatedAspectRatio = retryAspectRatio as AiVideoAspectRatio;
     const retryUnsupported = unsupportedVideoRequestReason(
-      (await loadAiVideoModelCapabilities()).get(retryModel.modelId),
+      videoCapabilityOf(await loadAiVideoModelCapabilities(), retryModel),
       {
         resolution: validatedResolution,
         durationSeconds,
@@ -1497,7 +1559,7 @@ export async function retryJobAction(
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "video",
-      provider: "openrouter",
+      provider: retryModel.provider,
       status: "queued",
       inputParams: {
         prompt: input.prompt,
@@ -1520,9 +1582,11 @@ export async function retryJobAction(
     if (reservation.outcome === "existing") {
       return await answerFromExistingVideoJob(retried, t);
     }
+    const mediaOrigin = await resolveMediaOrigin();
     const callbackUrl = await resolveVideoCallbackUrl(
       retried.id,
       callbackNonce.nonce,
+      retryModel.provider,
     );
     try {
       await createAndAttachVideoJob({
@@ -1534,8 +1598,11 @@ export async function retryJobAction(
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
         ...(callbackUrl === undefined ? {} : { callbackUrl }),
+        callbackNonce: callbackNonce.nonce,
         callbackNonceHash: callbackNonce.hash,
         model: retryModel.modelId,
+        provider: retryModel.provider,
+        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
       });
       return { success: true, jobId: retried.id };
     } catch (error) {

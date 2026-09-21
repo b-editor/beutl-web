@@ -8,18 +8,50 @@ vi.mock("../../packages/api/src/ai/openrouter-video", async (importOriginal) => 
   return { ...actual, listVideoModels };
 });
 
+// Every registered provider is asked, and the Gateway's list is a real HTTP
+// GET. Left alone it would put the network in the middle of these assertions.
+const listGatewayVideoModels = vi.hoisted(() => vi.fn());
+vi.mock(
+  "../../packages/api/src/ai/providers/vercel-gateway/models",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../../packages/api/src/ai/providers/vercel-gateway/models")
+    >();
+    return { ...actual, listGatewayVideoModels };
+  },
+);
+
 import {
+  AI_MAX_VIDEO_INPUT_REFERENCES,
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  MAX_AI_PROMPT_LENGTH,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
 } from "@beutl/core";
+import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
 import {
   clearAiVideoModelCapabilitiesCache,
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
   unsupportedVideoRequestReason,
+  unusableVideoModelsFor,
+  videoCapabilityOf,
   type AiVideoModelCapabilities,
 } from "../../packages/api/src/ai/video-model-capabilities";
+
+// The loader keys by provider and id together. `listVideoModels` stands in for
+// OpenRouter's list and `listGatewayVideoModels` for the Gateway's, so a test
+// names the one it stubbed.
+async function capabilityOf(modelId: string, provider = "openrouter") {
+  return videoCapabilityOf(await loadAiVideoModelCapabilities(), {
+    modelId,
+    provider,
+  });
+}
 
 function providerModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,6 +78,30 @@ function capabilities(
     seed: true,
     firstFrame: true,
     lastFrame: true,
+    promptToVideo: true,
+    // Reference pictures are the exception to "unstated means unrestricted":
+    // a model that cannot take them drops them with a warning, so nothing is
+    // offered unless the provider says so.
+    referenceToVideo: false,
+    // The three modes that work from a video this service already holds are
+    // off for the same reason: nothing is offered on a guess.
+    videoEditing: false,
+    videoExtension: false,
+    motionControl: false,
+    // Nothing published, so the service's own ceilings stand.
+    maxInputReferences: AI_MAX_VIDEO_INPUT_REFERENCES,
+    maxReferenceBytes: MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    maxSourceVideoBytes: MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+    minSourceVideoSeconds: null,
+    maxSourceVideoSeconds: null,
+    maxPromptCharacters: MAX_AI_PROMPT_LENGTH,
+    // Nothing published, so neither kind is offered.
+    maxVideoReferences: 0,
+    maxVideoReferenceBytes: 0,
+    maxAudioReferences: 0,
+    maxAudioReferenceBytes: 0,
+    // Nothing published, so no aggregate cap applies either.
+    maxTotalReferences: null,
     ...overrides,
   };
 }
@@ -53,16 +109,84 @@ function capabilities(
 describe("what a video model accepts", () => {
   beforeEach(() => {
     listVideoModels.mockReset();
+    listGatewayVideoModels.mockReset();
+    listGatewayVideoModels.mockResolvedValue([]);
     clearAiVideoModelCapabilitiesCache();
   });
 
   it("keeps only what both the model and this service offer", async () => {
     listVideoModels.mockResolvedValue([providerModel()]);
 
-    const entry = (await loadAiVideoModelCapabilities()).get("google/veo-3.1");
+    const entry = await capabilityOf("google/veo-3.1");
 
     // 4K is the provider's; this service never asks for it.
     expect(entry).toEqual(capabilities());
+  });
+
+  it("offers as much as the model says it takes", async () => {
+    // MiniMax H3 takes nine pictures and a fifty-megabyte source video.
+    // Holding every model to one service-wide number threw that away.
+    // Only the Gateway publishes allowances; the OpenRouter adapter states
+    // none, which is why this goes through the Gateway's list.
+    listVideoModels.mockResolvedValue([]);
+    listGatewayVideoModels.mockResolvedValue([
+      providerModel({
+        id: "minimax/minimax-h3",
+        inputLimits: {
+          maxImages: 9,
+          maxImageBytes: 30 * 1024 * 1024,
+          maxVideos: 3,
+          maxVideoBytes: 50 * 1024 * 1024,
+          minVideoDurationSeconds: 2,
+          maxVideoDurationSeconds: 15,
+          maxPromptCharacters: 2500,
+          maxTotalInputs: 5,
+        },
+      }),
+    ]);
+
+    const entry = await capabilityOf("minimax/minimax-h3", "vercel-gateway");
+
+    expect(entry?.maxInputReferences).toBe(9);
+    // The model's thirty megabytes is more than this service serves, so the
+    // service's own figure stands.
+    expect(entry?.maxReferenceBytes).toBe(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+    expect(entry?.maxSourceVideoBytes).toBe(
+      Math.min(50 * 1024 * 1024, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES),
+    );
+    expect(entry?.minSourceVideoSeconds).toBe(2);
+    expect(entry?.maxSourceVideoSeconds).toBe(15);
+    // Below this service's own limit, and that is the direction that matters:
+    // a prompt the screen accepts is one the model refuses.
+    expect(entry?.maxPromptCharacters).toBe(2500);
+  });
+
+  it("never offers more than this service can carry", async () => {
+    // Seedance 2.5 publishes thirty pictures and a two-hundred-megabyte clip.
+    // Offering them would put both well past a 128 MiB Worker's budget.
+    listVideoModels.mockResolvedValue([]);
+    listGatewayVideoModels.mockResolvedValue([
+      providerModel({
+        id: "bytedance/seedance-2.5",
+        inputLimits: {
+          maxImages: 30,
+          maxImageBytes: 30 * 1024 * 1024,
+          maxVideos: 10,
+          maxVideoBytes: 200 * 1024 * 1024,
+          minVideoDurationSeconds: 2,
+          maxVideoDurationSeconds: 30,
+          maxPromptCharacters: 20_000,
+          maxTotalInputs: 50,
+        },
+      }),
+    ]);
+
+    const entry = await capabilityOf("bytedance/seedance-2.5", "vercel-gateway");
+
+    expect(entry?.maxInputReferences).toBe(AI_MAX_VIDEO_INPUT_REFERENCES);
+    expect(entry?.maxReferenceBytes).toBe(MAX_AI_VIDEO_FRAME_UPLOAD_BYTES);
+    expect(entry?.maxSourceVideoBytes).toBe(MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES);
+    expect(entry?.maxPromptCharacters).toBe(MAX_AI_PROMPT_LENGTH);
   });
 
   it("treats an unstated restriction as no restriction", async () => {
@@ -81,13 +205,32 @@ describe("what a video model accepts", () => {
 
     // Everything on offer, which for the lengths is every whole second the
     // server considers rather than the three a model happens to publish.
-    expect((await loadAiVideoModelCapabilities()).get("google/veo-3.1")).toEqual(
+    expect(await capabilityOf("google/veo-3.1")).toEqual(
       capabilities({
         resolutions: [...AI_VIDEO_RESOLUTIONS],
         durations: [...AI_VIDEO_DURATIONS_SECONDS],
         aspectRatios: [...AI_VIDEO_ASPECT_RATIOS],
       }),
     );
+  });
+
+  it("keeps each provider's answer for a model id both publish", async () => {
+    // The catalog keys a row by (operation, modelId), so one id may be
+    // registered against OpenRouter for one operation and against the Gateway
+    // for another. Merging by id alone silently gave whichever provider loaded
+    // last the other's allowances, and the request was then built against
+    // limits its endpoint does not have.
+    listVideoModels.mockResolvedValue([
+      providerModel({ id: "vendor/shared", supportedDurations: [4] }),
+    ]);
+    listGatewayVideoModels.mockResolvedValue([
+      providerModel({ id: "vendor/shared", supportedDurations: [8] }),
+    ]);
+
+    expect((await capabilityOf("vendor/shared"))?.durations).toEqual([4]);
+    expect(
+      (await capabilityOf("vendor/shared", "vercel-gateway"))?.durations,
+    ).toEqual([8]);
   });
 
   it("asks the provider once and reuses the answer", async () => {
@@ -101,6 +244,7 @@ describe("what a video model accepts", () => {
 
   it("imposes nothing when the provider cannot be reached", async () => {
     listVideoModels.mockRejectedValue(new Error("provider is down"));
+    listGatewayVideoModels.mockRejectedValue(new Error("gateway is down"));
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const warningLog = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -112,9 +256,16 @@ describe("what a video model accepts", () => {
       durationSeconds: 4,
     })).toBeNull();
     expect(errorLog).not.toHaveBeenCalled();
+    // The warning names which provider went quiet; with several registered,
+    // "the video model list failed" would not say whose.
     expect(warningLog).toHaveBeenCalledWith(
-      "Failed to read OpenRouter video model capabilities",
+      "Failed to read openrouter video model capabilities",
       { message: "provider is down" },
+    );
+    // One provider going quiet must not be reported as another's.
+    expect(warningLog).toHaveBeenCalledWith(
+      "Failed to read vercel-gateway video model capabilities",
+      { message: "gateway is down" },
     );
     errorLog.mockRestore();
     warningLog.mockRestore();
@@ -197,10 +348,135 @@ describe("refusing a request the model would reject", () => {
     ).toBeNull();
   });
 
+  it("refuses reference pictures on a model that does not take them", () => {
+    // Unlike every other field here, an unstated answer is "no". A provider
+    // handed references by a model that cannot use them drops them with a
+    // warning and bills for a video of something else.
+    expect(
+      unsupportedVideoRequestReason(capabilities(), {
+        ...request,
+        inputReferences: true,
+      }),
+    ).toBe("inputReferences");
+    expect(
+      unsupportedVideoRequestReason(
+        capabilities({ referenceToVideo: true }),
+        { ...request, inputReferences: true },
+      ),
+    ).toBeNull();
+  });
+
   it("says nothing about a model the provider does not list", () => {
     // The catalog decides which models exist. A stale list must not take a
     // working model offline.
     expect(unsupportedVideoRequestReason(undefined, request)).toBeNull();
+  });
+});
+
+describe("what a model is actually offered", () => {
+  beforeEach(() => {
+    clearAiVideoModelCapabilitiesCache();
+    listVideoModels.mockReset();
+    listGatewayVideoModels.mockReset();
+    listGatewayVideoModels.mockResolvedValue([]);
+  });
+
+  it("offers no sound, whatever the catalog says it takes", async () => {
+    // Verified against the live Gateway on 2026-09-20 with
+    // alibaba/wan-v2.6-t2v: a silent WAV and a deliberately corrupt one
+    // declared as audio/wav both completed, with no warning either time. Read
+    // audio would have failed the second. Until the provider consumes it,
+    // offering the field would sell a control that does nothing.
+    listVideoModels.mockResolvedValue([]);
+    listGatewayVideoModels.mockResolvedValue([
+      providerModel({
+        id: "alibaba/wan-v2.6-t2v",
+        inputLimits: {
+          maxImages: 5,
+          maxImageBytes: 20 * 1024 * 1024,
+          maxVideos: 3,
+          maxVideoBytes: 100 * 1024 * 1024,
+          minVideoDurationSeconds: 1,
+          maxVideoDurationSeconds: 30,
+          maxAudio: 1,
+          maxAudioBytes: 15 * 1024 * 1024,
+          minAudioDurationSeconds: 3,
+          maxAudioDurationSeconds: 30,
+          maxPromptCharacters: 1500,
+          maxTotalInputs: 5,
+        },
+      }),
+    ]);
+
+    const entry = await capabilityOf("alibaba/wan-v2.6-t2v", "vercel-gateway");
+
+    expect(entry?.maxAudioReferences).toBe(0);
+    expect(entry?.maxAudioReferenceBytes).toBe(0);
+    // Clips are offered, and were confirmed to work: three references of a
+    // hosted clip completed on alibaba/wan-v2.6-r2v the same day.
+    expect(entry?.maxVideoReferences).toBe(3);
+  });
+});
+
+describe("how many references of each kind a model takes", () => {
+  const h3 = capabilities({
+    modelId: "minimax/minimax-h3",
+    referenceToVideo: true,
+    maxInputReferences: 9,
+    maxVideoReferences: 3,
+    maxVideoReferenceBytes: 50 * 1024 * 1024,
+    maxAudioReferences: 1,
+    maxAudioReferenceBytes: 15 * 1024 * 1024,
+  });
+  const request = {
+    resolution: "720p",
+    durationSeconds: 4,
+    aspectRatio: "16:9",
+  };
+
+  it("accepts the nine pictures and three clips it publishes", () => {
+    expect(
+      unsupportedVideoRequestReason(h3, {
+        ...request,
+        inputReferences: 9,
+        videoReferences: 3,
+        audioReferences: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a kind the model takes none of", () => {
+    const veo = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 3,
+      maxVideoReferences: 1,
+      maxAudioReferences: 0,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(veo, { ...request, audioReferences: 1 }),
+    ).toBe("audioReferenceCount");
+    expect(
+      unsupportedVideoRequestReason(veo, { ...request, videoReferences: 2 }),
+    ).toBe("videoReferenceCount");
+    expect(
+      unsupportedVideoRequestReason(veo, { ...request, inputReferences: 4 }),
+    ).toBe("inputReferenceCount");
+  });
+
+  it("still refuses every kind on a model that takes no references", () => {
+    const plain = capabilities({ referenceToVideo: false });
+
+    for (const carried of [
+      { inputReferences: 1 },
+      { videoReferences: 1 },
+      { audioReferences: 1 },
+    ]) {
+      expect(
+        unsupportedVideoRequestReason(plain, { ...request, ...carried }),
+        JSON.stringify(carried),
+      ).toBe("inputReferences");
+    }
   });
 });
 
@@ -243,5 +519,179 @@ describe("whether a registered model can serve anything", () => {
 
   it("keeps a model the provider does not list", () => {
     expect(isVideoModelUsable(undefined)).toBe(true);
+  });
+});
+
+describe("which registered models an operation cannot use", () => {
+  // Kling's motion-control models publish motion-control and nothing else:
+  // no text-to-video, and so no shape a generation could be built from.
+  const motionOnly = capabilities({
+    modelId: "klingai/kling-v3.0-motion-control",
+    promptToVideo: false,
+    motionControl: true,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "1:1"],
+    durations: [5, 10],
+  });
+  const motionRef = { modelId: motionOnly.modelId, provider: "openrouter" };
+  const known = new Map([
+    [aiCapabilityKey(motionRef.provider, motionRef.modelId), motionOnly],
+  ]);
+
+  it("keeps the motion model for the operation that needs it", () => {
+    // The regression this exists for: the console asked the generation
+    // question about every registered row, so the one model video.motion can
+    // run on was reported as certain to fail and told to be replaced.
+    expect(
+      unusableVideoModelsFor("video.motion", [motionRef], known),
+    ).toEqual(new Set());
+  });
+
+  it("still refuses it for a plain generation", () => {
+    expect(
+      unusableVideoModelsFor("video.generate", [motionRef], known),
+    ).toEqual(new Set([motionOnly.modelId]));
+  });
+
+  it("asks each source-video mode about its own capability", () => {
+    const grok = capabilities({
+      modelId: "spacexai/grok-imagine-video",
+      videoEditing: true,
+      videoExtension: true,
+      motionControl: false,
+    });
+    const grokRef = { modelId: grok.modelId, provider: "openrouter" };
+    const listed = new Map([
+      [aiCapabilityKey(grokRef.provider, grokRef.modelId), grok],
+    ]);
+
+    expect(unusableVideoModelsFor("video.edit", [grokRef], listed)).toEqual(
+      new Set(),
+    );
+    expect(
+      unusableVideoModelsFor("video.extend", [grokRef], listed),
+    ).toEqual(new Set());
+    expect(
+      unusableVideoModelsFor("video.motion", [grokRef], listed),
+    ).toEqual(new Set([grok.modelId]));
+  });
+
+  it("leaves alone a model the provider does not list", () => {
+    expect(
+      unusableVideoModelsFor(
+        "video.generate",
+        [{ modelId: "vendor/unlisted", provider: "openrouter" }],
+        new Map(),
+      ),
+    ).toEqual(new Set());
+  });
+});
+
+describe("the aggregate a model puts on its inputs", () => {
+  const request = {
+    resolution: "720p",
+    durationSeconds: 4,
+    aspectRatio: "16:9",
+  };
+
+  it("refuses a combination that fits each kind but not the total", () => {
+    // MiniMax H3 takes nine pictures and three clips but only five inputs in
+    // all. Checking the kinds separately let a request through that the
+    // provider refuses after it is charged.
+    const capped = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxVideoReferences: 3,
+      maxTotalReferences: 5,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(capped, {
+        ...request,
+        inputReferences: 4,
+        videoReferences: 1,
+      }),
+    ).toBeNull();
+    expect(
+      unsupportedVideoRequestReason(capped, {
+        ...request,
+        inputReferences: 5,
+        videoReferences: 1,
+      }),
+    ).toBe("totalReferenceCount");
+  });
+
+  it("refuses a reference bigger than the model takes, per kind", () => {
+    // The counts fit and the service-wide ceiling is clear, but the model
+    // publishes a smaller per-reference size. Without this the request passes
+    // here, reserves the usage, and is refused by the provider.
+    const small = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxReferenceBytes: 4 * 1024 * 1024,
+      maxVideoReferences: 3,
+      maxVideoReferenceBytes: 8 * 1024 * 1024,
+      maxAudioReferences: 1,
+      maxAudioReferenceBytes: 1024 * 1024,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        inputReferences: 1,
+        largestInputReferenceBytes: 4 * 1024 * 1024,
+      }),
+    ).toBeNull();
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        inputReferences: 1,
+        largestInputReferenceBytes: 4 * 1024 * 1024 + 1,
+      }),
+    ).toBe("inputReferenceBytes");
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        videoReferences: 1,
+        largestVideoReferenceBytes: 8 * 1024 * 1024 + 1,
+      }),
+    ).toBe("videoReferenceBytes");
+    expect(
+      unsupportedVideoRequestReason(small, {
+        ...request,
+        audioReferences: 1,
+        largestAudioReferenceBytes: 1024 * 1024 + 1,
+      }),
+    ).toBe("audioReferenceBytes");
+  });
+
+  it("says nothing about a size the request does not carry", () => {
+    // A request with no reference of a kind must not be refused for it, and a
+    // caller that does not measure must not be refused either.
+    const small = capabilities({
+      referenceToVideo: true,
+      maxReferenceBytes: 1,
+      maxVideoReferenceBytes: 1,
+      maxAudioReferenceBytes: 1,
+    });
+
+    expect(unsupportedVideoRequestReason(small, request)).toBeNull();
+  });
+
+  it("leaves a model that publishes no aggregate alone", () => {
+    const open = capabilities({
+      referenceToVideo: true,
+      maxInputReferences: 9,
+      maxVideoReferences: 3,
+      maxTotalReferences: null,
+    });
+
+    expect(
+      unsupportedVideoRequestReason(open, {
+        ...request,
+        inputReferences: 9,
+        videoReferences: 3,
+      }),
+    ).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AiModelChargeCapabilities } from "@beutl/core";
 import {
   consumeUsage,
   setDbProvider,
@@ -9,6 +10,7 @@ import {
   getEntitlements,
   getEntitlementSummary,
   loadAiModelCatalog,
+  aiCapabilityKey,
 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -31,12 +33,14 @@ describe("AI entitlements", () => {
     setDbProvider(async () => prisma as never);
   });
 
+  // Keyed the way the loader keys it: by provider and id together, because a
+  // model id alone does not identify an endpoint.
   const videoCapabilities = new Map([
-    ["google/veo-3.1", { durations: [4, 6, 8] }],
+    [aiCapabilityKey("openrouter", "google/veo-3.1"), { durations: [4, 6, 8] }],
   ]);
 
   const readEntitlements = (
-    capabilities: ReadonlyMap<string, { durations: readonly number[] }> =
+    capabilities: ReadonlyMap<string, AiModelChargeCapabilities> =
       videoCapabilities,
   ) => getEntitlements(USER_ID, { videoCapabilities: capabilities });
 
@@ -244,38 +248,130 @@ describe("AI entitlements", () => {
     expect(entitlements.availability["image.generate"]).toBe(false);
   });
 
-  it("uses each video model's shortest supported duration", async () => {
-    await activatePro();
-    for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
+  it.each(["video.generate", "video.extend", "video.motion"])(
+    "uses each %s model's shortest supported duration",
+    async (operation) => {
+      await activatePro();
+      for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
+        await upsertAiOperationModel({
+          operation,
+          modelId,
+          priceUnits: VIDEO_UNIT_PRICE,
+          displayName: null,
+          sortOrder,
+          enabled: true,
+          updatedBy: "admin-1",
+        });
+      }
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 3,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-video-model-minimum",
+      });
+
+      const entitlements = await readEntitlements(new Map([
+        [aiCapabilityKey("openrouter", "video/short"), { durations: [2, 4] }],
+        [aiCapabilityKey("openrouter", "video/long"), { durations: [5, 8] }],
+      ]));
+
+      expect(entitlements.modelAvailability[operation]).toEqual({
+        "video/short": true,
+        "video/long": false,
+      });
+      expect(entitlements.availability[operation]).toBe(true);
+    },
+  );
+
+  it.each(["video.extend", "video.motion"])(
+    "requires the exact minimum charge for %s on the selected provider",
+    async (operation) => {
+      await activatePro();
       await upsertAiOperationModel({
-        operation: "video.generate",
-        modelId,
+        operation,
+        modelId: "video/shared-id",
+        provider: "vercel-gateway",
         priceUnits: VIDEO_UNIT_PRICE,
         displayName: null,
-        sortOrder,
+        sortOrder: 0,
         enabled: true,
         updatedBy: "admin-1",
       });
-    }
-    await consumeUsage({
-      userId: USER_ID,
-      amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 3,
-      monthlyUsageLimit: MONTHLY_LIMIT,
-      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
-      aiJobId: "entitlements-video-model-minimum",
-    });
+      const capabilities = new Map([
+        [aiCapabilityKey("openrouter", "video/shared-id"), { durations: [1] }],
+        [aiCapabilityKey("vercel-gateway", "video/shared-id"), { durations: [8, 5] }],
+      ]);
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - VIDEO_UNIT_PRICE * 5,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-source-video-exact",
+      });
 
-    const entitlements = await readEntitlements(new Map([
-      ["video/short", { durations: [2, 4] }],
-      ["video/long", { durations: [5, 8] }],
-    ]));
+      const exact = await readEntitlements(capabilities);
+      expect(exact.availability[operation]).toBe(true);
+      expect(exact.modelAvailability[operation]["video/shared-id"]).toBe(true);
 
-    expect(entitlements.modelAvailability["video.generate"]).toEqual({
-      "video/short": true,
-      "video/long": false,
-    });
-    expect(entitlements.availability["video.generate"]).toBe(true);
-  });
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 1,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-source-video-short",
+      });
+
+      const short = await readEntitlements(capabilities);
+      expect(short.availability[operation]).toBe(false);
+      expect(short.modelAvailability[operation]["video/shared-id"]).toBe(false);
+    },
+  );
+
+  it.each([5, 4.1, null, undefined])(
+    "uses the edit source minimum %s for whole-second affordability",
+    async (minSourceVideoSeconds) => {
+      await activatePro();
+      await upsertAiOperationModel({
+        operation: "video.edit",
+        modelId: "video/editor",
+        provider: "vercel-gateway",
+        priceUnits: VIDEO_UNIT_PRICE,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+      const capabilities = new Map<string, AiModelChargeCapabilities>([
+        [aiCapabilityKey("openrouter", "video/editor"), { durations: [1], minSourceVideoSeconds: 1 }],
+        [aiCapabilityKey("vercel-gateway", "video/editor"), { durations: [], minSourceVideoSeconds }],
+      ]);
+      const minimumCharge = VIDEO_UNIT_PRICE * Math.ceil(minSourceVideoSeconds ?? 1);
+      await consumeUsage({
+        userId: USER_ID,
+        amount: MONTHLY_LIMIT - minimumCharge,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-edit-exact",
+      });
+
+      const exact = await readEntitlements(capabilities);
+      expect(exact.availability["video.edit"]).toBe(true);
+      expect(exact.modelAvailability["video.edit"]["video/editor"]).toBe(true);
+
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 1,
+        monthlyUsageLimit: MONTHLY_LIMIT,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: "entitlements-edit-short",
+      });
+
+      const short = await readEntitlements(capabilities);
+      expect(short.availability["video.edit"]).toBe(false);
+      expect(short.modelAvailability["video.edit"]["video/editor"]).toBe(false);
+    },
+  );
 
   it("says which models are affordable, and calls the operation available if any is", async () => {
     await activatePro();

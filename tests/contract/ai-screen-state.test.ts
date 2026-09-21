@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aiCapabilityKey } from "@beutl/api/ai/providers/types";
 import type { AiVideoModelCapabilities } from "@beutl/api/ai/video-model-capabilities";
 import type { AiAccess } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/shared";
 import { buildAiVideoScreenOptions } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video-options";
@@ -30,25 +31,28 @@ describe("video screen options", () => {
             displayName: "Supported",
             costTier: "low",
             available: true,
+            provider: "openrouter",
           },
           {
             id: unusable.modelId,
             displayName: "Unusable",
             costTier: "medium",
             available: true,
+            provider: "openrouter",
           },
           {
             id: "video/not-listed",
             displayName: "Provider list unavailable",
             costTier: "high",
             available: true,
+            provider: "openrouter",
           },
         ],
       },
     };
     const capabilities = new Map([
-      [supported.modelId, supported],
-      [unusable.modelId, unusable],
+      [aiCapabilityKey("openrouter", supported.modelId), supported],
+      [aiCapabilityKey("openrouter", unusable.modelId), unusable],
     ]);
 
     const { models, modelOptions } = buildAiVideoScreenOptions(

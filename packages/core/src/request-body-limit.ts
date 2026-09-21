@@ -26,6 +26,9 @@ export const MAX_INTERNAL_STORAGE_FINISH_BODY_BYTES =
   STORAGE_UPLOAD_FINISH_BODY_BYTES;
 export const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1024 * 1024;
 export const MAX_OPENROUTER_CALLBACK_BODY_BYTES = 64 * 1024;
+// The Gateway's delivery carries terminal facts only — no URLs and no bytes —
+// so the same cap is generous.
+export const MAX_AI_VIDEO_CALLBACK_BODY_BYTES = MAX_OPENROUTER_CALLBACK_BODY_BYTES;
 
 /** A request body crossed the limit while it was being consumed. */
 export class RequestBodyLimitExceededError extends Error {
@@ -56,9 +59,9 @@ export function apiRequestBodyLimit(
   if (normalizedMethod === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)) return STORAGE_UPLOAD_PART_BYTES;
   if (
     normalizedMethod === "POST" &&
-    /^\/api\/v3\/ai\/videos\/[^/]+\/openrouter-callback$/u.test(path)
+    /^\/api\/v3\/ai\/videos\/[^/]+\/(openrouter|gateway)-callback$/u.test(path)
   ) {
-    return MAX_OPENROUTER_CALLBACK_BODY_BYTES;
+    return MAX_AI_VIDEO_CALLBACK_BODY_BYTES;
   }
 
   // Kept explicit even though the standalone API does not currently mount the

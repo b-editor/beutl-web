@@ -36,6 +36,8 @@ export type AiSettingRow = {
 // its first selectable entry is what a request that names no model runs on.
 export type AiModelRow = {
   modelId: string;
+  /** Which provider runs it. Rows registered before the column say "openrouter". */
+  provider: string;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;

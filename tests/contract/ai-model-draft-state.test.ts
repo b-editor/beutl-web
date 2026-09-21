@@ -8,6 +8,7 @@ import type { AiOperationModelSnapshot } from "../../apps/admin/src/lib/ai-confi
 
 const row = (overrides: Partial<AiModelDraftRow> = {}): AiModelDraftRow => ({
   modelId: "model-a",
+  provider: "openrouter",
   priceUnits: 10,
   displayName: null,
   enabled: true,
@@ -45,8 +46,11 @@ describe("AI model draft state", () => {
       type: "set",
       operation: "image.generate",
       rows: [row({ priceUnits: 30 })],
-      saved: concurrent.map(({ modelId, priceUnits, displayName, enabled }) => ({
+      saved: concurrent.map((
+        { modelId, provider, priceUnits, displayName, enabled },
+      ) => ({
         modelId,
+        provider,
         priceUnits,
         displayName,
         enabled,

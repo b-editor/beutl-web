@@ -60,6 +60,11 @@ export interface Env {
   OPENROUTER_API_KEY?: string;
   OPENROUTER_WEBHOOK_SECRET?: string;
   OPENROUTER_REQUEST_TIMEOUT_MS?: string;
+  // Vercel AI Gateway. No webhook secret binding: the Gateway signs each job's
+  // deliveries with a secret of that job's own, returned on the start response
+  // and stored on the job row rather than held here.
+  VERCEL_AI_GATEWAY_API_KEY?: string;
+  VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS?: string;
 }
 
 type ExecutionContextLike = {

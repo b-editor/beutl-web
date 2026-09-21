@@ -27,11 +27,48 @@ describe("registering a model for an operation", () => {
       value: {
         operation: "image.generate",
         modelId: "openai/gpt-image-1",
+        // A row that names no provider belongs to the one that predates the
+        // column, so every registration made before it keeps running where it ran.
+        provider: "openrouter",
         priceUnits: 20,
         displayName: "Fast",
         enabled: true,
       },
     });
+  });
+
+  it("keeps a provider the row names", () => {
+    const result = validateAiOperationModelInput(
+      input({ provider: "vercel-gateway", operation: "video.generate" }),
+    );
+
+    expect(result.ok && result.value.provider).toBe("vercel-gateway");
+  });
+
+  it("refuses a row whose provider cannot run the operation", () => {
+    // Vercel AI Gateway has no named operation for background removal. Without
+    // this the row saves, and the request is refused only after the user has
+    // been charged.
+    const supportsOperation = (provider: string, operation: string) =>
+      provider === "openrouter" || operation === "video.generate";
+
+    const refused = validateAiOperationModelInput(
+      input({
+        provider: "vercel-gateway",
+        operation: "image.edit.remove_background",
+      }),
+      { supportsOperation },
+    );
+    expect(refused).toEqual({
+      ok: false,
+      message: "vercel-gateway cannot run image.edit.remove_background",
+    });
+
+    const accepted = validateAiOperationModelInput(
+      input({ provider: "vercel-gateway", operation: "video.generate" }),
+      { supportsOperation },
+    );
+    expect(accepted.ok).toBe(true);
   });
 
   it("treats a blank display name as absent", () => {
@@ -80,7 +117,10 @@ describe("registering a model for an operation", () => {
 });
 
 describe("keeping an operation startable", () => {
-  const minimumChargeOf = (_modelId: string, priceUnits: number) => priceUnits * 4;
+  const minimumChargeOf = (
+    _model: { modelId: string; provider: string },
+    priceUnits: number,
+  ) => priceUnits * 4;
 
   it("allows a model nobody can afford beside one they can", () => {
     // An expensive option is an offer, not a misconfiguration.
@@ -88,8 +128,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "affordable", priceUnits: 10, enabled: true },
-          { modelId: "expensive", priceUnits: 400, enabled: true },
+          { modelId: "affordable", provider: "openrouter", priceUnits: 10, enabled: true },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -101,8 +141,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "expensive", priceUnits: 200, enabled: true },
-          { modelId: "dearer", priceUnits: 400, enabled: true },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 200, enabled: true },
+          { modelId: "dearer", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -114,8 +154,8 @@ describe("keeping an operation startable", () => {
       aiOperationWouldGoOffline({
         minimumChargeOf,
         models: [
-          { modelId: "disabled", priceUnits: 10, enabled: false },
-          { modelId: "expensive", priceUnits: 400, enabled: true },
+          { modelId: "disabled", provider: "openrouter", priceUnits: 10, enabled: false },
+          { modelId: "expensive", provider: "openrouter", priceUnits: 400, enabled: true },
         ],
         allowance: 500,
       }),
@@ -126,7 +166,7 @@ describe("keeping an operation startable", () => {
     expect(
       aiOperationWouldGoOffline({
         minimumChargeOf: () => 0,
-        models: [{ modelId: "unsupported", priceUnits: 1, enabled: true }],
+        models: [{ modelId: "unsupported", provider: "openrouter", priceUnits: 1, enabled: true }],
         allowance: 500,
       }),
     ).toBe(true);

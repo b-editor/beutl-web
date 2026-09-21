@@ -31,8 +31,8 @@ export async function getAiScreenState(
       availability: entitlements.availability,
       // Built here rather than fetched from /ai/capabilities: these pages are
       // server components and can read the catalog directly. Only the id, the
-      // label, the tier and the yes/no are carried over — a price on this
-      // object would ship to the browser.
+      // label, the tier, who runs it and the yes/no are carried over — a
+      // price on this object would ship to the browser.
       models: Object.fromEntries(
         catalog.operations().map((operation) => [
           operation,
@@ -40,6 +40,7 @@ export async function getAiScreenState(
             id: entry.modelId,
             displayName: entry.displayName,
             costTier: entry.costTier,
+            provider: entry.provider,
             available:
               entitlements.modelAvailability[operation]?.[entry.modelId] ??
               false,

@@ -14,12 +14,22 @@
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
+import {
+  DEFAULT_AI_PROVIDER_ID,
+  isAiProviderConfigured,
+} from "./providers/registry";
 
 export type AiModelCostTier = "low" | "medium" | "high";
 
 export type AiOperationModelEntry = {
   operation: string;
   modelId: string;
+  /**
+   * Who runs this model. A request names only the model, so the catalog is
+   * where a model id becomes a provider — which is why one id may be
+   * registered for an operation exactly once.
+   */
+  provider: string;
   priceUnits: number;
   displayName: string;
   sortOrder: number;
@@ -77,11 +87,11 @@ function assignCostTiers(
 
 function builtInDefaultsOf(
   operation: string,
-): { model: string; price: number } | undefined {
+): { model: string; price: number; provider?: string } | undefined {
   return (
     AI_DEFAULT_OPERATION_MODELS as Record<
       string,
-      { model: string; price: number }
+      { model: string; price: number; provider?: string }
     >
   )[operation];
 }
@@ -99,10 +109,52 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
   return {
     operation,
     modelId: defaults.model,
+    // An operation whose built-in model exists on one provider only names it;
+    // everything older falls back to the one every registered row carries.
+    provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
     priceUnits: defaults.price,
     displayName: defaults.model,
     sortOrder: 0,
   };
+}
+
+/**
+ * The built-in entry for an operation with no rows, or nothing when that entry
+ * belongs to a provider this Worker cannot call. Web executes dashboard AI
+ * requests locally, and Web/API/admin each load this catalog. Configure the
+ * enabled Gateway provider on all three Workers as documented in
+ * docs/deployment.md#worker-settings.
+ *
+ * Upgrading adds operations to the code before an administrator has registered
+ * anything for them, and the three source-video modes exist on Vercel AI
+ * Gateway alone. Without this, an "OpenRouter alone" deployment puts edit,
+ * extend and motion on the screens with no key behind them: every submission
+ * reaches the provider call and fails there, after the usage is reserved,
+ * reading to the user as an outage rather than as a mode this installation
+ * does not have.
+ *
+ * Only an entry that names its provider is checked, which is what "this
+ * operation exists on that provider alone" is recorded as. The rest carry the
+ * historical default, whose absence is not a missing mode but a deployment
+ * with no AI at all — a different condition, reported elsewhere, and not one
+ * this PR introduced.
+ *
+ * A row an administrator registered is never filtered. That is a deliberate
+ * choice, and hiding it would conceal a misconfiguration instead of reporting
+ * it; the admin console already flags a row whose provider cannot serve its
+ * operation.
+ */
+function builtInFallbackFor(
+  operation: string,
+): Omit<AiOperationModelEntry, "costTier">[] {
+  const entry = builtInEntry(operation);
+  if (
+    builtInDefaultsOf(operation)?.provider !== undefined &&
+    !isAiProviderConfigured(entry.provider)
+  ) {
+    return [];
+  }
+  return [entry];
 }
 
 export async function loadAiModelCatalog({
@@ -123,6 +175,7 @@ export async function loadAiModelCatalog({
     entries.push({
       operation: row.operation,
       modelId: row.modelId,
+      provider: row.provider,
       priceUnits: row.priceUnits,
       displayName: row.displayName?.trim() || row.modelId,
       sortOrder: row.sortOrder,
@@ -135,7 +188,7 @@ export async function loadAiModelCatalog({
     // まだ 1 行も無い操作だけが組み込みの既定で動く。これは行を作る前の初期状態
     // であって、止められた状態ではない。
     const entries = byOperation.get(operation) ??
-      (configured.has(operation) ? [] : [builtInEntry(operation)]);
+      (configured.has(operation) ? [] : builtInFallbackFor(operation));
     resolved.set(operation, assignCostTiers(entries));
   }
 

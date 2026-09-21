@@ -174,9 +174,17 @@ function stubFetch(
   return mock;
 }
 
+// Every model in this file is served by OpenRouter. The provider is named
+// rather than assumed: a cost lookup is made at the provider that has the
+// model, and an id alone does not say which one that is.
+const onOpenRouter = (modelId: string) => ({
+  modelId,
+  provider: "openrouter",
+});
+
 async function estimatesByOperation(force = false) {
   const result = await loadAiCostEstimates({
-    modelsOf: (operation) => [DEFAULT_MODELS[operation]],
+    modelsOf: (operation) => [onOpenRouter(DEFAULT_MODELS[operation])],
     force,
   });
   return new Map(result.entries.map((entry) => [entry.operation, entry]));
@@ -289,7 +297,7 @@ describe("AI provider cost estimates", () => {
 
     const result = await loadAiCostEstimates({
       modelsOf: (operation) =>
-        operation === "image.generate" ? [modelId] : [],
+        operation === "image.generate" ? [onOpenRouter(modelId)] : [],
     });
 
     const estimate = result.entries[0]?.estimate;
@@ -323,7 +331,7 @@ describe("AI provider cost estimates", () => {
 
     const result = await loadAiCostEstimates({
       modelsOf: (operation) =>
-        operation === "image.generate" ? [modelId] : [],
+        operation === "image.generate" ? [onOpenRouter(modelId)] : [],
     });
 
     const estimate = result.entries[0]?.estimate;
@@ -390,7 +398,8 @@ describe("AI provider cost estimates", () => {
     );
 
     const result = await loadAiCostEstimates({
-      modelsOf: (candidate) => candidate === operation ? [modelId] : [],
+      modelsOf: (candidate) =>
+        candidate === operation ? [onOpenRouter(modelId)] : [],
     });
 
     const estimate = result.entries[0]?.estimate;
@@ -426,7 +435,7 @@ describe("AI provider cost estimates", () => {
 
     const result = await loadAiCostEstimates({
       modelsOf: (operation) =>
-        operation === "image.generate" ? [modelId] : [],
+        operation === "image.generate" ? [onOpenRouter(modelId)] : [],
     });
 
     expect(endpointCalls).toBe(2);
@@ -462,7 +471,7 @@ describe("AI provider cost estimates", () => {
 
     const result = await loadAiCostEstimates({
       modelsOf: (operation) =>
-        operation === "subtitle.translate" ? [modelId] : [],
+        operation === "subtitle.translate" ? [onOpenRouter(modelId)] : [],
     });
 
     expect(result.entries[0]?.estimate.status).toBe("estimated");
@@ -524,9 +533,11 @@ describe("AI provider cost estimates", () => {
     );
     const byOperation = await loadAiCostEstimates({
       modelsOf: (operation) => [
-        operation === "audio.transcribe"
-          ? "groq/some-unlisted-transcriber"
-          : DEFAULT_MODELS[operation],
+        onOpenRouter(
+          operation === "audio.transcribe"
+            ? "groq/some-unlisted-transcriber"
+            : DEFAULT_MODELS[operation],
+        ),
       ],
     }).then(
       (result) => new Map(result.entries.map((e) => [e.operation, e])),
@@ -588,7 +599,9 @@ describe("AI provider cost estimates", () => {
 
     const result = await loadAiCostEstimates({
       modelsOf: (operation) =>
-        operation === "video.generate" ? ["vendor/silent-video"] : [],
+        operation === "video.generate"
+          ? [onOpenRouter("vendor/silent-video")]
+          : [],
     });
 
     expect(result.entries[0]?.estimate).toMatchObject({

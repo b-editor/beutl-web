@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { setDbProvider } from "@beutl/db";
-import { setR2BucketProvider } from "@beutl/api";
+import { aiCapabilityKey, setR2BucketProvider } from "@beutl/api";
 
 // The dashboard AI server actions call @beutl/api shared logic directly.
 // Mock the provider layer so the actions can be exercised without a real
@@ -38,10 +38,8 @@ import {
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
   createReservedAiJob,
-  generateImage,
   readAiJsonResult,
   saveAiImage,
-  translateSegments,
   toAiRequestIdentity,
 } from "@beutl/api";
 import {
@@ -62,15 +60,29 @@ const createAndAttachVideoJob = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
 
+// The actions resolve a provider from the catalog rather than importing one,
+// so the registry accessors are pointed at the same mocks the assertions below
+// read. Keeping the identity means every `expect(generateImage)` still sees the
+// call the action made.
+const generateImage = vi.hoisted(() => vi.fn());
+const editImage = vi.hoisted(() => vi.fn());
+const translateSegments = vi.hoisted(() => vi.fn());
+const transcribeAudio = vi.hoisted(() => vi.fn());
+
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
   return {
     ...actual,
-    generateImage: vi.fn(),
+    generateImage,
+    editImage,
+    translateSegments,
+    transcribeAudio,
+    imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+    translationProviderFor: () => ({ translate: translateSegments }),
+    transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
     saveAiImage: vi.fn(),
     createReservedAiJob: vi.fn(),
     listAiJobsByUserId: vi.fn(),
-    translateSegments: vi.fn(),
     readAiJsonResult: vi.fn(),
     loadAiImageModelCapabilities,
     loadAiVideoModelCapabilities,
@@ -615,6 +627,38 @@ describe("dashboard AI actions", () => {
       );
     });
 
+    it("refuses a rerun once its model has moved to another provider", async () => {
+      // The user paid for a picture from this id on OpenRouter. An
+      // administrator re-pointing the same id at the Gateway makes it a
+      // different service with different behaviour and different billing, so
+      // the rerun is not the same request — and resolving by id alone would
+      // have dispatched it there without saying so.
+      await registerImageModels(true);
+      const job = await seedFailedImageJob();
+      await upsertAiOperationModel({
+        operation: "image.generate",
+        modelId: "dear/model",
+        provider: "vercel-gateway",
+        priceUnits: 44,
+        displayName: null,
+        sortOrder: 1,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+
+      const result = await retryJobAction(
+        job.id,
+        "3f1a0d0e-0000-4000-8000-000000000011",
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiModelUnavailable",
+      });
+      expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    });
+
     it("rejects a persisted retry prompt that would require trimming", async () => {
       await registerImageModels(true);
       const job = await createAiJob({
@@ -738,7 +782,7 @@ describe("dashboard AI actions", () => {
         model: "dear/model",
       });
       loadAiImageModelCapabilities.mockResolvedValue(new Map([
-        ["dear/model", {
+        [aiCapabilityKey("openrouter", "dear/model"), {
           modelId: "dear/model",
           aspectRatios: ["2:3"],
           backgrounds: ["auto", "opaque"],
@@ -801,7 +845,7 @@ describe("dashboard AI actions", () => {
           model: "dear/model",
         });
         loadAiImageModelCapabilities.mockResolvedValue(new Map([
-          ["dear/model", {
+          [aiCapabilityKey("openrouter", "dear/model"), {
             modelId: "dear/model",
             ...capabilities,
             inputReferences: false,
@@ -985,7 +1029,14 @@ describe("dashboard AI actions", () => {
       ["generateAudio", "false"], ["generateAudio", 0], ["generateAudio", null],
       ["firstFrame", null], ["firstFrame", false], ["firstFrame", {}],
       ["lastFrame", null], ["lastFrame", false], ["lastFrame", {}],
-    ] as const)("rejects present malformed video field %s before reservation", async (field, value) => {
+      ["firstFrame", { filename: "first.png", mimeType: "image/png" }],
+      ["lastFrame", { filename: "last.png", mimeType: "image/png" }],
+      ["inputReferences", [{ filename: "reference.mp4", mimeType: "video/mp4" }]],
+      ["inputReferences", []], ["inputReferences", null],
+      ["mode", "edit"], ["mode", "extend"], ["mode", "motion"],
+      ["characterImage", { filename: "character.png", mimeType: "image/png" }],
+      ["characterImage", null],
+    ] as const)("rejects non-replayable video field %s before reservation", async (field, value) => {
       await registerVideoModel();
       const inputParams: Record<string, unknown> = {
         prompt: "a cat", durationSeconds: 4, resolution: "720p", aspectRatio: "16:9",
@@ -998,6 +1049,9 @@ describe("dashboard AI actions", () => {
       const result = await retryJobAction(job.id, crypto.randomUUID());
       expect(result).toMatchObject({ success: false, message: "api-errors:invalidRequestBody" });
       expect(createReservedAiJob).not.toHaveBeenCalled();
+      expect(createAndAttachVideoJob).not.toHaveBeenCalled();
+      const history = await listJobsAction();
+      expect(history.jobs?.find((entry) => entry.id === job.id)?.canRetry).toBe(false);
     });
 
     it("rejects a retry when the confirmed job payload changed before reservation", async () => {

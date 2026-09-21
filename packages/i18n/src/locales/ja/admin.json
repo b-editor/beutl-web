@@ -135,6 +135,7 @@
       "description": "利用者はリクエストごとにこの中から 1 つ選び、そのモデルの単価が課金されます。指定がないときは既定のモデルで実行されます。ここでの変更はページ下部でまとめて保存します。",
       "emptyDescription": "未登録のため、この操作は下の組み込みモデルで実行します。登録するとそちらに置き換わります。",
       "modelId": "モデル ID",
+      "provider": "プロバイダー",
       "displayName": "表示名",
       "enabled": "選択可",
       "disabled": "選択不可",
@@ -258,7 +259,7 @@
         }
       },
       "providerCost": "推定原価 (1 回あたり)",
-      "costNote": "原価は OpenRouter の公表単価から算出した概算です。実際の請求額は記録していないため、実費とは差が出ます。",
+      "costNote": "原価は各プロバイダーの公表単価に基づく概算です。実際の請求額は記録していないため、実費と異なる場合があります。",
       "assumptionsLabel": "前提:",
       "assumption": {
         "imageTokens": "画像 1 枚 = {{tokens}} トークン",
@@ -374,7 +375,10 @@
       "image.edit.outpaint": "画像編集: 拡張",
       "audio.transcribe": "文字起こし (1 分単位・切り上げ)",
       "subtitle.translate": "字幕翻訳 (1,000 文字単位・切り上げ)",
-      "video.generate": "動画生成 (1 秒あたり)"
+      "video.generate": "動画生成 (1 秒あたり)",
+      "video.edit": "動画編集 (1 秒あたり)",
+      "video.extend": "動画延長 (1 秒あたり)",
+      "video.motion": "モーション適用 (1 秒あたり)"
     },
     "form": {
       "unsaved": "未保存",

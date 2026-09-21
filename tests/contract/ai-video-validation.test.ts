@@ -185,14 +185,38 @@ export function validWebmBytes(): Uint8Array {
 }
 
 describe("generated video container validation", () => {
+  it("reads the length out of the container", () => {
+    // An edit is charged for as many seconds as its source runs, and an
+    // uploaded source has no record anywhere else. Both fixtures declare one
+    // second, so this is the number a request would be billed on.
+    expect(
+      inspectGeneratedVideo(validMp4Bytes().buffer, "video/mp4")
+        .durationSeconds,
+    ).toBe(1);
+    expect(
+      inspectGeneratedVideo(validWebmBytes().buffer, "video/webm")
+        .durationSeconds,
+    ).toBe(1);
+  });
+
   it("accepts an MP4 video track with codec configuration and a referenced sample", () => {
     expect(inspectGeneratedVideo(validMp4Bytes().buffer, "video/mp4"))
-      .toEqual({ mimeType: "video/mp4", extension: "mp4" });
+      .toMatchObject({
+        mimeType: "video/mp4",
+        extension: "mp4",
+        // Read from the container, not from whoever sent it: a request priced
+        // against a source video is charged on this.
+        durationSeconds: expect.any(Number),
+      });
   });
 
   it("accepts a WebM video track with a valid VP8 keyframe in a cluster", () => {
     expect(inspectGeneratedVideo(validWebmBytes().buffer, "video/webm"))
-      .toEqual({ mimeType: "video/webm", extension: "webm" });
+      .toMatchObject({
+        mimeType: "video/webm",
+        extension: "webm",
+        durationSeconds: expect.any(Number),
+      });
   });
 
   it("rejects a WebM document type with an embedded NUL", () => {
@@ -367,7 +391,11 @@ describe("generated video container validation", () => {
         webmWithSample({ codec: "V_VP9", sample: vp9Keyframe() }).buffer,
         "video/webm",
       ),
-    ).toEqual({ mimeType: "video/webm", extension: "webm" });
+    ).toMatchObject({
+        mimeType: "video/webm",
+        extension: "webm",
+        durationSeconds: expect.any(Number),
+      });
   });
 
   it("rejects the four-byte VP9 false positive starting with 0x80", () => {
@@ -388,7 +416,11 @@ describe("generated video container validation", () => {
         webmWithSample({ codec: "V_AV1", sample: av1Keyframe() }).buffer,
         "video/webm",
       ),
-    ).toEqual({ mimeType: "video/webm", extension: "webm" });
+    ).toMatchObject({
+        mimeType: "video/webm",
+        extension: "webm",
+        durationSeconds: expect.any(Number),
+      });
   });
 
   it("rejects the AV1 false positive starting with a sequence-header OBU", () => {

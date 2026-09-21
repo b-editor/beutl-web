@@ -9,7 +9,9 @@ import {
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import { imageProviderFor } from "../../ai/providers/registry";
 import {
+  imageCapabilityOf,
   loadAiImageModelCapabilities,
   unsupportedImageRequestReason,
 } from "../../ai/image-model-capabilities";
@@ -416,8 +418,9 @@ const app = new Hono()
     }
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
-          selectedModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([selectedModel]),
+          selectedModel,
         ),
         {
           aspectRatio,
@@ -438,7 +441,7 @@ const app = new Hono()
     const reservation = await createReservedAiJob({
       userId,
       kind: "image",
-      provider: "openrouter",
+      provider: selectedModel.provider,
       status: "running",
       inputParams: {
         prompt,
@@ -474,7 +477,7 @@ const app = new Hono()
       | { ok: false; errorCode: "aiProviderError"; status: 500 }
     > => {
     try {
-      const result = await generateImage({
+      const result = await imageProviderFor(selectedModel.provider).generate({
         prompt,
         aspectRatio,
         ...(background ? { background } : {}),
@@ -744,8 +747,9 @@ const app = new Hono()
     }
     if (
       unsupportedImageRequestReason(
-        (await loadAiImageModelCapabilities([selectedModel.modelId])).get(
-          selectedModel.modelId,
+        imageCapabilityOf(
+          await loadAiImageModelCapabilities([selectedModel]),
+          selectedModel,
         ),
         {
           // The picture being edited.
@@ -767,7 +771,7 @@ const app = new Hono()
     const reservation = await createReservedAiJob({
       userId,
       kind: "image_edit",
-      provider: "openrouter",
+      provider: selectedModel.provider,
       status: "running",
       inputParams: {
         task: editTask,
@@ -790,7 +794,7 @@ const app = new Hono()
     }
 
     try {
-      const result = await editImage({
+      const result = await imageProviderFor(selectedModel.provider).edit({
         task: editTask,
         image: inputImage.bytes,
         mimeType: inputImage.mimeType,

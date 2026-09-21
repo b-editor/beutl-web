@@ -1,11 +1,27 @@
 import {
+  AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+  AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES,
   AI_VIDEO_ASPECT_RATIOS,
   AI_VIDEO_DURATIONS_SECONDS,
   AI_VIDEO_RESOLUTIONS,
+  MAX_AI_PROMPT_LENGTH,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_DURATION_SECONDS,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
   type AiVideoAspectRatio,
   type AiVideoResolution,
 } from "@beutl/core";
-import { listVideoModels } from "./openrouter-video";
+import { listAiProviders } from "./providers/registry";
+import {
+  aiCapabilityKey,
+  UNSTATED_VIDEO_INPUT_LIMITS,
+  type AiProviderId,
+  type AiVideoModelInputLimits,
+  type AiVideoProvider,
+} from "./providers/types";
 
 // What a video model will actually accept, narrowed to what this service can
 // ask for.
@@ -31,6 +47,43 @@ export type AiVideoModelCapabilities = {
   // 見えたまま拒否される。
   firstFrame: boolean;
   lastFrame: boolean;
+  // プロンプトから動画を作れるか。Vercel AI Gateway は motion-control 専用の
+  // モデルも並べており、そちらも解像度・尺・アスペクト比を普通に公開するので、
+  // それだけでは「使える」と誤判定する。公開されていないときは true。
+  promptToVideo: boolean;
+  // 参照画像で人物や物の見た目を揃えられるか。フレーム（動画が通過する瞬間）
+  // とは別の能力で、公開されていないときは「制限なし」ではなく false ——
+  // 受け取れないモデルに送っても黙って無視されるだけなので、offer しない。
+  referenceToVideo: boolean;
+  // 手持ちの動画を材料にする 3 つのモード。既定は false で、参照画像と同じ理由
+  // ——できないモデルに送っても断られるだけなので、公開されていないなら出さない。
+  videoEditing: boolean;
+  videoExtension: boolean;
+  motionControl: boolean;
+  // モデルが公開している受け入れ量を、このサービスの天井で挟んだもの。
+  // 「モデルが取れるだけ取る」と「Worker が抱えられる量に収める」の両方が
+  // 要る——公開値をそのまま出すと 30 枚や 200MB を offer してしまい、天井
+  // だけで決めると H3 の 9 枚が 3 枚に切り詰められる。
+  maxInputReferences: number;
+  // 参照画像 1 枚あたり。モデルのほうが小さければそちらが勝つ。
+  maxReferenceBytes: number;
+  // 素材動画 1 本あたりと、その長さの範囲。範囲は公開されていなければ null。
+  maxSourceVideoBytes: number;
+  minSourceVideoSeconds: number | null;
+  maxSourceVideoSeconds: number | null;
+  // このモデルが読むプロンプトの長さ。サービスの上限より短いモデルがあり、
+  // そこを見ないと「書けるのに必ず断られる」依頼が作れてしまう。
+  maxPromptCharacters: number;
+  // 参照として運べる動画と音声。画像とは別枠で、モデルは別々の数を公開する
+  // ——H3 は画像 9 枚に対して動画 3 本。0 なら、その種類は受け取らない。
+  maxVideoReferences: number;
+  maxVideoReferenceBytes: number;
+  maxAudioReferences: number;
+  maxAudioReferenceBytes: number;
+  // 種類ごとの上限とは別に、合計にも上限を置くモデルがある。画像 9 枚と動画
+  // 3 本を別々に許しても、合わせて 5 つまでのモデルには送れない。
+  // null は「合計の制限を公開していない」。
+  maxTotalReferences: number | null;
 };
 
 export type UnsupportedVideoRequestReason =
@@ -40,7 +93,26 @@ export type UnsupportedVideoRequestReason =
   | "generateAudio"
   | "seed"
   | "firstFrame"
-  | "lastFrame";
+  | "lastFrame"
+  | "inputReferences"
+  // 参照画像の枚数が、そのモデルの受け入れ枚数を超えている。
+  | "inputReferenceCount"
+  // 参照の動画・音声が、そのモデルの受け入れ数を超えている。0 のモデルに
+  // 送っても警告付きで捨てられるだけなので、枚数と同じく手前で断る。
+  | "videoReferenceCount"
+  | "audioReferenceCount"
+  // 種類ごとには収まっていても、合計がモデルの受け入れ数を超えている。
+  | "totalReferenceCount"
+  // 数は足りていても、1 つあたりの大きさがモデルの受け入れ量を超えている。
+  // サービス全体の天井より小さいモデルがあるので、ここを見ないと「送れるのに
+  // 必ず断られる」依頼が、利用枠を確保したあとで拒否される。
+  | "inputReferenceBytes"
+  | "videoReferenceBytes"
+  | "videoReferenceDuration"
+  | "audioReferenceBytes"
+  // プロンプトが、そのモデルが読む長さを超えている。サービスの上限より短い
+  // モデルがあるので、ここを見ないと「書けるのに必ず断られる」依頼が通る。
+  | "promptLength";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
@@ -50,10 +122,12 @@ type CacheEntry = {
   capabilities: Map<string, AiVideoModelCapabilities>;
 };
 
-let cache: CacheEntry | null = null;
+// Per provider: each publishes its own list on its own schedule, and one
+// provider's outage must not blank out another's capabilities.
+const caches = new Map<AiProviderId, CacheEntry>();
 
 export function clearAiVideoModelCapabilitiesCache(): void {
-  cache = null;
+  caches.clear();
 }
 
 function intersect<T extends string | number>(
@@ -74,7 +148,18 @@ function toCapabilities(model: {
   supportedFrameImages: readonly string[] | null;
   generateAudio: boolean | null;
   seed: boolean | null;
+  supportsPromptToVideo?: boolean | null;
+  supportsReferenceToVideo?: boolean | null;
+  supportsVideoEditing?: boolean | null;
+  supportsVideoExtension?: boolean | null;
+  supportsMotionControl?: boolean | null;
+  inputLimits?: AiVideoModelInputLimits;
 }): AiVideoModelCapabilities {
+  const limits = model.inputLimits ?? UNSTATED_VIDEO_INPUT_LIMITS;
+  // 公開値とサービスの天井の、小さいほう。公開していないモデルは天井のまま
+  // ——「言っていない」は「取れない」ではない。
+  const boundedBy = (published: number | null, ceiling: number): number =>
+    published === null ? ceiling : Math.min(published, ceiling);
   const firstFrame = !model.supportedFrameImages ||
     model.supportedFrameImages.includes("first_frame");
   return {
@@ -96,6 +181,62 @@ function toCapabilities(model: {
     lastFrame: firstFrame &&
       (!model.supportedFrameImages ||
         model.supportedFrameImages.includes("last_frame")),
+    promptToVideo: model.supportsPromptToVideo ?? true,
+    // 既定は false。参照画像を取れるモデルはごく一部で、取れないモデルに送って
+    // も警告付きで捨てられるだけ——「言っていない＝できる」にしてはならない。
+    referenceToVideo: model.supportsReferenceToVideo ?? false,
+    videoEditing: model.supportsVideoEditing ?? false,
+    videoExtension: model.supportsVideoExtension ?? false,
+    motionControl: model.supportsMotionControl ?? false,
+    maxInputReferences: boundedBy(
+      limits.maxImages,
+      AI_MAX_VIDEO_INPUT_REFERENCES,
+    ),
+    maxReferenceBytes: boundedBy(
+      limits.maxImageBytes,
+      MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+    ),
+    maxSourceVideoBytes: boundedBy(
+      limits.maxVideoBytes,
+      MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+    ),
+    minSourceVideoSeconds: limits.minVideoDurationSeconds,
+    // モデルの上限と、このサービスが読み取れる長さの、小さいほう。
+    maxSourceVideoSeconds: limits.maxVideoDurationSeconds === null
+      ? null
+      : Math.min(limits.maxVideoDurationSeconds, MAX_AI_VIDEO_DURATION_SECONDS),
+    maxPromptCharacters: boundedBy(
+      limits.maxPromptCharacters,
+      MAX_AI_PROMPT_LENGTH,
+    ),
+    // 公開していないモデルは 0。画像と違って「言っていない＝取れる」にしては
+    // ならない——取れないモデルに送っても警告付きで捨てられるだけで、課金だけ
+    // が残る。
+    maxVideoReferences: limits.maxVideos === null
+      ? 0
+      : Math.min(limits.maxVideos, AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES),
+    // 本数が 0 なら大きさも 0。「1 本あたり 32MiB まで、ただし 0 本」は読み手を
+    // 迷わせるだけで、どちらか一方を見た画面が欄を出してしまう。
+    maxVideoReferenceBytes: limits.maxVideos === null
+      ? 0
+      : boundedBy(limits.maxVideoBytes, MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES),
+    // 常に 0。メタデータは 13 モデルが音声を受けると言っており、
+    // inputReferences に載せれば Gateway は警告なしで受理もするが、実地で
+    // 確かめたところ**消費されている証拠が無い**（2026-09-20、alibaba/
+    // wan-v2.6-t2v 1280x720 2s で検証）：
+    //
+    //   無音の WAV を付けて送る            -> completed / 警告なし
+    //   audio/wav を名乗る壊れたバイト列   -> completed / 警告なし
+    //
+    // 読まれていれば後者は落ちる。落ちない以上、参照は素通しされているだけで、
+    // 欄を出せば「押しても何も起きない操作」を売ることになる——このコードベース
+    // が参照画像について何度も避けてきたのと同じ失敗。
+    //
+    // 読み取りと上限の計算はそのまま残してある。プロバイダが実際に使うように
+    // なったら、この 2 行を boundedBy 版に戻すだけで開く。
+    maxAudioReferences: 0,
+    maxAudioReferenceBytes: 0,
+    maxTotalReferences: limits.maxTotalInputs,
   };
 }
 
@@ -106,14 +247,17 @@ function toCapabilities(model: {
 // absent entry as "no restriction known", so an outage at the provider leaves
 // video generation working exactly as it did before capabilities were consulted
 // rather than taking it offline.
-export async function loadAiVideoModelCapabilities(
-  now = Date.now(),
+async function loadForProvider(
+  providerId: AiProviderId,
+  video: AiVideoProvider,
+  now: number,
 ): Promise<Map<string, AiVideoModelCapabilities>> {
-  if (cache && cache.expiresAt > now) return cache.capabilities;
+  const cached = caches.get(providerId);
+  if (cached && cached.expiresAt > now) return cached.capabilities;
   let capabilities: Map<string, AiVideoModelCapabilities>;
   let ttl = CACHE_TTL_MS;
   try {
-    const models = await listVideoModels();
+    const models = await video.listModels();
     capabilities = new Map(
       models.map((model) => [model.id, toCapabilities(model)]),
     );
@@ -122,14 +266,62 @@ export async function loadAiVideoModelCapabilities(
     // as a warning rather than turning a successfully rendered page into an
     // error event. Keep only the normalized message instead of serializing an
     // SDK error and its worker stack as the log message.
-    console.warn("Failed to read OpenRouter video model capabilities", {
+    console.warn(`Failed to read ${providerId} video model capabilities`, {
       message: error instanceof Error ? error.message : String(error),
     });
     capabilities = new Map();
     ttl = FAILURE_CACHE_TTL_MS;
   }
-  cache = { expiresAt: now + ttl, capabilities };
+  caches.set(providerId, { expiresAt: now + ttl, capabilities });
   return capabilities;
+}
+
+/**
+ * Every registered provider's video capabilities, keyed by
+ * {@link aiCapabilityKey}.
+ *
+ * Read an entry with {@link videoCapabilityOf} rather than indexing the map
+ * directly: the catalog only makes a model id unique within one operation, so
+ * the same id can name an OpenRouter endpoint for one operation and a Gateway
+ * endpoint for another, and those two publish different limits.
+ */
+export async function loadAiVideoModelCapabilities(
+  now = Date.now(),
+): Promise<Map<string, AiVideoModelCapabilities>> {
+  const perProvider = await Promise.all(
+    listAiProviders().flatMap((provider) =>
+      provider.video
+        ? [
+            loadForProvider(provider.id, provider.video, now).then(
+              (capabilities) => [provider.id, capabilities] as const,
+            ),
+          ]
+        : [],
+    ),
+  );
+  const merged = new Map<string, AiVideoModelCapabilities>();
+  for (const [providerId, capabilities] of perProvider) {
+    for (const [modelId, entry] of capabilities) {
+      merged.set(aiCapabilityKey(providerId, modelId), entry);
+    }
+  }
+  return merged;
+}
+
+/**
+ * The capabilities of one catalog entry, or undefined when the provider does
+ * not list it.
+ *
+ * The provider is part of the lookup because it is part of the identity: two
+ * catalog entries carrying the same model id under different providers are
+ * different endpoints, and answering either with the other's allowances builds
+ * a request the provider then refuses.
+ */
+export function videoCapabilityOf(
+  capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
+  model: { modelId: string; provider: string },
+): AiVideoModelCapabilities | undefined {
+  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.
@@ -147,6 +339,23 @@ export function unsupportedVideoRequestReason(
     seed?: number;
     firstFrame?: boolean;
     lastFrame?: boolean;
+    /** How many reference pictures the request carries, not merely whether it does. */
+    inputReferences?: number;
+    /** Reference clips and sounds, counted separately: a model allows each its own number. */
+    videoReferences?: number;
+    /** Measured container durations, before any billing rounding. */
+    videoReferenceDurationsSeconds?: readonly number[];
+    audioReferences?: number;
+    /**
+     * The largest single reference of each kind, in bytes.
+     *
+     * The largest is what decides it: a model states a per-reference limit, not
+     * a total, so a set passes exactly when its biggest member does.
+     */
+    largestInputReferenceBytes?: number;
+    largestVideoReferenceBytes?: number;
+    largestAudioReferenceBytes?: number;
+    promptCharacters?: number;
   },
 ): UnsupportedVideoRequestReason | null {
   if (!capabilities) return null;
@@ -176,17 +385,115 @@ export function unsupportedVideoRequestReason(
   if (request.lastFrame === true && !capabilities.lastFrame) {
     return "lastFrame";
   }
+  if (
+    ((request.inputReferences ?? 0) > 0 ||
+      (request.videoReferences ?? 0) > 0 ||
+      (request.audioReferences ?? 0) > 0) &&
+    !capabilities.referenceToVideo
+  ) {
+    return "inputReferences";
+  }
+  if ((request.inputReferences ?? 0) > capabilities.maxInputReferences) {
+    return "inputReferenceCount";
+  }
+  if ((request.videoReferences ?? 0) > capabilities.maxVideoReferences) {
+    return "videoReferenceCount";
+  }
+  if ((request.audioReferences ?? 0) > capabilities.maxAudioReferences) {
+    return "audioReferenceCount";
+  }
+  if (capabilities.maxTotalReferences !== null) {
+    const carried = (request.inputReferences ?? 0) +
+      (request.videoReferences ?? 0) +
+      (request.audioReferences ?? 0);
+    if (carried > capabilities.maxTotalReferences) {
+      return "totalReferenceCount";
+    }
+  }
+  if (
+    (request.largestInputReferenceBytes ?? 0) > capabilities.maxReferenceBytes
+  ) {
+    return "inputReferenceBytes";
+  }
+  if (
+    (request.largestVideoReferenceBytes ?? 0) >
+    capabilities.maxVideoReferenceBytes
+  ) {
+    return "videoReferenceBytes";
+  }
+  if (request.videoReferenceDurationsSeconds?.some((duration) =>
+    (capabilities.minSourceVideoSeconds !== null &&
+      duration < capabilities.minSourceVideoSeconds) ||
+    (capabilities.maxSourceVideoSeconds !== null &&
+      duration > capabilities.maxSourceVideoSeconds)
+  )) {
+    return "videoReferenceDuration";
+  }
+  if (
+    (request.largestAudioReferenceBytes ?? 0) >
+    capabilities.maxAudioReferenceBytes
+  ) {
+    return "audioReferenceBytes";
+  }
+  if (
+    request.promptCharacters !== undefined &&
+    request.promptCharacters > capabilities.maxPromptCharacters
+  ) {
+    return "promptLength";
+  }
   return null;
 }
 
 // Whether the model can serve any request at all. A model that shares no
-// resolution, duration or aspect ratio with this service is registered but
-// unusable, and offering it would only ever produce a refused request.
+// resolution, duration or aspect ratio with this service — or that does not
+// generate from a prompt in the first place — is registered but unusable, and
+// offering it would only ever produce a refused request.
+/**
+ * Of the models registered for an operation, the ones that cannot serve a
+ * single request it can build.
+ *
+ * Takes the operation because what makes a model usable is not a property of
+ * the model alone. A motion-control model publishes no text-to-video and is
+ * useless for a generation, which is exactly the model video.motion runs on;
+ * asking the generation question about every registered row condemned the only
+ * model that operation has.
+ *
+ * A model the provider says nothing about is left alone, the same way
+ * isVideoModelUsable does: a stale list must not take a working model offline.
+ */
+export function unusableVideoModelsFor(
+  operation: string,
+  // Whole rows, because who runs a model decides what it takes: the same id
+  // can name a different endpoint under a different provider.
+  models: readonly { modelId: string; provider: string }[],
+  capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
+): Set<string> {
+  // Model ids are returned bare, which stays unambiguous: the catalog keys a
+  // row by (operation, modelId), so one operation never holds the same id
+  // twice.
+  return new Set(
+    models
+      .filter(
+        (model) =>
+          !isVideoModelUsable(videoCapabilityOf(capabilities, model), operation),
+      )
+      .map((model) => model.modelId),
+  );
+}
+
 export function isVideoModelUsable(
   capabilities: AiVideoModelCapabilities | undefined,
+  operation = "video.generate",
 ): boolean {
   if (!capabilities) return true;
+  // 手持ちの動画を材料にするモードは、その 1 つの能力がすべて。尺や解像度は
+  // 素材の側が決めるか、そもそも受け付けられない。
+  if (operation === "video.edit") return capabilities.videoEditing;
+  if (operation === "video.extend") return capabilities.videoExtension;
+  if (operation === "video.motion") return capabilities.motionControl;
   return (
+    // 動画を作る以外の仕事のためのモデルは、ほかが何を公開していても使えない。
+    capabilities.promptToVideo !== false &&
     capabilities.resolutions.length > 0 &&
     capabilities.durations.length > 0 &&
     capabilities.aspectRatios.length > 0

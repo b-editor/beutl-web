@@ -28,7 +28,10 @@ import {
   loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
+  DEFAULT_AI_PROVIDER_ID,
   loadAiVideoModelCapabilities,
+  videoCapabilityOf,
+  providerSupportsOperation,
   discoverTopUpCheckoutAttempt,
   reconcilePackagePaymentRefundAttempt,
 } from "@beutl/api";
@@ -39,6 +42,7 @@ import {
   matchesAiOperationModelSnapshot,
   validateAiConfigurationChanges,
 } from "@/lib/ai-configuration-changes";
+import { DEFAULT_MODEL_PROVIDER } from "@/lib/ai-operation-model-changes";
 import {
   AI_DEFAULT_OPERATION_MODELS,
   aiMinimumChargeOf,
@@ -483,6 +487,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
             .list(operation)
             .map((entry) => ({
               modelId: entry.modelId,
+              provider: entry.provider,
               priceUnits: entry.priceUnits,
               enabled: true,
             })),
@@ -490,28 +495,29 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           const defaults = (
             AI_DEFAULT_OPERATION_MODELS as Record<
               string,
-              { model: string; price: number }
+              { model: string; price: number; provider?: string }
             >
           )[operation];
           return defaults
             ? [{
                 modelId: defaults.model,
+                // A built-in that names no provider runs on the default one,
+                // the same resolution the catalog makes.
+                provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
                 priceUnits: defaults.price,
                 enabled: true,
               }]
             : [];
         },
-        minimumChargeOf: (operation, modelId, priceUnits) => {
-          const durations = operation === "video.generate"
-            ? videoCapabilities.get(modelId)?.durations
-            : undefined;
-          if (durations) {
-            return durations.length === 0
-              ? 0
-              : priceUnits * Math.min(...durations);
-          }
-          return aiMinimumChargeOf(operation, priceUnits) ?? priceUnits;
-        },
+        minimumChargeOf: (operation, model, priceUnits) =>
+          aiMinimumChargeOf(
+            operation,
+            priceUnits,
+            videoCapabilityOf(videoCapabilities, model),
+          ) ?? priceUnits,
+        // Refuses a row whose provider has no surface for that operation,
+        // before it can be saved and charged against.
+        supportsOperation: providerSupportsOperation,
       });
       if (!validated.ok) {
         return { ok: false as const, message: validated.message };
@@ -522,6 +528,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           .filter((row) => row.operation === draft.operation)
           .map((row) => ({
             modelId: row.modelId,
+            provider: row.provider,
             priceUnits: row.priceUnits,
             displayName: row.displayName,
             enabled: row.enabled,
@@ -584,6 +591,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           const before = existing.find((row) => row.modelId === model.modelId);
           const unchanged =
             before !== undefined &&
+            before.provider === model.provider &&
             before.priceUnits === model.priceUnits &&
             before.displayName === model.displayName &&
             before.enabled === model.enabled &&
@@ -600,7 +608,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           await addAuditLog({
             userId: session.user.id,
             action: auditLogActions.admin.aiOperationModelSaved,
-            details: `operation: ${draft.operation}, model: ${model.modelId}, price: ${model.priceUnits}, order: ${index}, enabled: ${model.enabled}`,
+            details: `operation: ${draft.operation}, model: ${model.modelId}, provider: ${model.provider}, price: ${model.priceUnits}, order: ${index}, enabled: ${model.enabled}`,
             prisma: tx,
           });
         }
@@ -628,9 +636,19 @@ export async function lookupAiModelEconomics(input: unknown) {
   if (typeof input !== "object" || input === null) {
     return { success: false as const, message: "Invalid model" };
   }
-  const { operation, modelId } = input as Record<string, unknown>;
+  const { operation, modelId, provider } = input as Record<string, unknown>;
   if (typeof operation !== "string" || !isAiModelId(modelId)) {
     return { success: false as const, message: "Invalid model" };
+  }
+  // Which provider's rate card to read. A row that names none is one written
+  // before providers were told apart, which is the one that predates the
+  // column.
+  const resolvedProvider =
+    provider === undefined || provider === null
+      ? DEFAULT_MODEL_PROVIDER
+      : provider;
+  if (typeof resolvedProvider !== "string" || resolvedProvider.length === 0) {
+    return { success: false as const, message: "Invalid provider" };
   }
 
   return await adminAction(async () => {
@@ -638,7 +656,9 @@ export async function lookupAiModelEconomics(input: unknown) {
     // Stripe prices per request, so retyping an id costs one fetch at most.
     const prisma = await getDb();
     const [costs, pro, topUp] = await Promise.all([
-      loadAiCostEstimates({ modelsOf: () => [modelId] }),
+      loadAiCostEstimates({
+        modelsOf: () => [{ modelId, provider: resolvedProvider }],
+      }),
       resolveOfferPricing({ kind: "pro", prisma }),
       resolveOfferPricing({ kind: "top_up", prisma }),
     ]);

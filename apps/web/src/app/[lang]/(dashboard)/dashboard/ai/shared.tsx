@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { readVideoDurationSeconds, videoDurationStatus, type VideoDurationStatus } from "@/lib/ai-video-duration";
 import { listStorageFoldersAction, saveResultToStorageAction } from "./actions";
 import {
   FolderTreePicker,
@@ -333,6 +334,44 @@ export function AiUsageCard({
 // attempt — but only then. A run that is still going, or one whose paid result
 // could not be read, is not settled: the name it was sent under is the way back
 // to what it already bought, and a new one would buy it again.
+export function useVideoInputDurations(
+  files: readonly File[],
+  minimum: number | null,
+  maximum: number | null,
+): VideoDurationStatus {
+  const needsDuration = minimum !== null || maximum !== null;
+  const checkedFiles = useMemo(() => needsDuration ? files : [], [files, needsDuration]);
+  const [durations, setDurations] = useState<ReadonlyMap<File, number | null>>(new Map());
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.all(checkedFiles.map(async (file) => {
+      try {
+        return [file, await readVideoDurationSeconds(file, controller.signal)] as const;
+      } catch {
+        return [file, null] as const;
+      }
+    })).then((entries) => {
+      if (!controller.signal.aborted) setDurations(new Map(entries));
+    });
+    return () => controller.abort();
+  }, [checkedFiles]);
+  return videoDurationStatus(checkedFiles, durations, minimum, maximum);
+}
+
+export function VideoInputDurationNotice({ lang, status }: { lang: string; status: VideoDurationStatus }) {
+  const { t } = useTranslation(lang);
+  const error = status.error;
+  if (!status.reading && !error) return null;
+  const message = status.reading
+    ? t("dashboard:ai.videoInputDurationChecking")
+    : error?.reason === "tooShort"
+      ? t("dashboard:ai.videoInputDurationTooShort", { name: error.fileName, minimum: error.limit })
+      : error?.reason === "tooLong"
+        ? t("dashboard:ai.videoInputDurationTooLong", { name: error.fileName, maximum: error.limit })
+        : t("dashboard:ai.videoInputDurationUnreadable", { name: error?.fileName });
+  return <p role="status" className={error ? "break-words text-xs text-destructive" : "text-xs text-muted-foreground"}>{message}</p>;
+}
+
 /**
  * 選ばれているファイルの中身の見分けと、まだ読めていないかどうか。
  *
@@ -345,7 +384,7 @@ export function AiUsageCard({
  */
 export function useFileFingerprints(
   files: readonly File[],
-  limit: number,
+  limit: number | ((file: File) => number),
 ): { contents: string[]; reading: boolean } {
   const [read, setRead] = useState<{ files: readonly File[]; contents: string[] }>(
     { files: [], contents: [] },
@@ -353,7 +392,7 @@ export function useFileFingerprints(
 
   useEffect(() => {
     let current = true;
-    void Promise.all(files.map((file) => fileFingerprint(file, limit)))
+    void Promise.all(files.map((file) => fileFingerprint(file, typeof limit === "number" ? limit : limit(file))))
       .then((contents) => {
         if (current) setRead({ files, contents });
       })

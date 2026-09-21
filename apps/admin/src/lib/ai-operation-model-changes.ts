@@ -17,10 +17,15 @@ import {
 export type AiOperationModelInput = {
   operation: string;
   modelId: string;
+  /** Which provider runs it. Omitted rows belong to the one that predates the column. */
+  provider: string;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
 };
+
+/** What every row carried before providers were told apart. */
+export const DEFAULT_MODEL_PROVIDER = "openrouter";
 
 export const MAX_MODEL_DISPLAY_NAME_LENGTH = 80;
 
@@ -32,11 +37,24 @@ export type AiOperationModelValidation =
 // is checked here as well as the ranges.
 export function validateAiOperationModelInput(
   input: unknown,
+  options: {
+    /**
+     * Whether that provider can run that operation.
+     *
+     * Injected rather than imported so this stays a pure validator: the answer
+     * lives with the provider implementations in @beutl/api. It is the check
+     * that stops a model being registered for something its provider has no
+     * surface for — Vercel AI Gateway has no named operation for background
+     * removal, upscaling or outpainting, and a row like that would be refused
+     * only after the user had been charged.
+     */
+    supportsOperation?: (provider: string, operation: string) => boolean;
+  } = {},
 ): AiOperationModelValidation {
   if (typeof input !== "object" || input === null) {
     return { ok: false, message: "Invalid model" };
   }
-  const { operation, modelId, priceUnits, displayName, enabled } =
+  const { operation, modelId, provider, priceUnits, displayName, enabled } =
     input as Record<string, unknown>;
 
   if (
@@ -44,6 +62,22 @@ export function validateAiOperationModelInput(
     !(AI_OPERATIONS as readonly string[]).includes(operation)
   ) {
     return { ok: false, message: "Invalid operation" };
+  }
+  const resolvedProvider =
+    provider === undefined || provider === null
+      ? DEFAULT_MODEL_PROVIDER
+      : provider;
+  if (typeof resolvedProvider !== "string" || resolvedProvider.length === 0) {
+    return { ok: false, message: "Invalid provider" };
+  }
+  if (
+    options.supportsOperation &&
+    !options.supportsOperation(resolvedProvider, operation)
+  ) {
+    return {
+      ok: false,
+      message: `${resolvedProvider} cannot run ${operation}`,
+    };
   }
   if (typeof modelId !== "string") {
     return { ok: false, message: "Invalid model ID" };
@@ -83,6 +117,7 @@ export function validateAiOperationModelInput(
     value: {
       operation,
       modelId: trimmedModelId,
+      provider: resolvedProvider,
       priceUnits,
       displayName: trimmedDisplayName,
       enabled,
@@ -105,8 +140,19 @@ export function aiOperationWouldGoOffline({
   models,
   allowance,
 }: {
-  minimumChargeOf: (modelId: string, priceUnits: number) => number;
-  models: { modelId: string; priceUnits: number; enabled: boolean }[];
+  // Takes the whole row, not just an id: what a model's smallest request costs
+  // comes from its capabilities, and those belong to a provider-and-id pair
+  // rather than to an id alone.
+  minimumChargeOf: (
+    model: { modelId: string; provider: string },
+    priceUnits: number,
+  ) => number;
+  models: {
+    modelId: string;
+    provider: string;
+    priceUnits: number;
+    enabled: boolean;
+  }[];
   allowance: number;
 }): boolean {
   const enabled = models.filter((model) => model.enabled);
@@ -117,7 +163,7 @@ export function aiOperationWouldGoOffline({
   }
   return enabled.every(
     (model) => {
-      const minimumCharge = minimumChargeOf(model.modelId, model.priceUnits);
+      const minimumCharge = minimumChargeOf(model, model.priceUnits);
       return minimumCharge <= 0 || minimumCharge > allowance;
     },
   );
@@ -133,20 +179,25 @@ export function aiOperationsGoingOffline({
 }: {
   minimumChargeOf: (
     operation: string,
-    modelId: string,
+    model: { modelId: string; provider: string },
     priceUnits: number,
   ) => number;
   modelsByOperation: Record<
     string,
-    { modelId: string; priceUnits: number; enabled: boolean }[]
+    {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[]
   >;
   allowance: number;
 }): string[] {
   return Object.entries(modelsByOperation)
     .filter(([operation, models]) =>
       aiOperationWouldGoOffline({
-        minimumChargeOf: (modelId, priceUnits) =>
-          minimumChargeOf(operation, modelId, priceUnits),
+        minimumChargeOf: (model, priceUnits) =>
+          minimumChargeOf(operation, model, priceUnits),
         models,
         allowance,
       }),

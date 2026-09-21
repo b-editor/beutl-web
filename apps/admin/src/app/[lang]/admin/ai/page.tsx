@@ -50,12 +50,11 @@ export default async function Page(props: {
   const { lang } = await props.params;
   const { page } = await props.searchParams;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog, unusableVideoModels, storageInterventions, storageUploadInterventions, topUpInterventions, packagePaymentRefundPage] =
+  const [settings, registeredModels, catalog, storageInterventions, storageUploadInterventions, topUpInterventions, packagePaymentRefundPage] =
     await Promise.all([
       getAiSettings(),
       getAiOperationModels(),
       getAiModelCatalog(),
-      getUnusableVideoModels(),
       getStorageMultipartInterventions(),
       getStorageUploadInterventions(),
       getTopUpCheckoutInterventions(),
@@ -77,6 +76,7 @@ export default async function Page(props: {
     if (rows.length > 0) {
       return rows.map((row) => ({
         modelId: row.modelId,
+        provider: row.provider,
         priceUnits: row.priceUnits,
         displayName: row.displayName,
         enabled: row.enabled,
@@ -84,6 +84,7 @@ export default async function Page(props: {
     }
     return catalog.list(operation).map((entry) => ({
       modelId: entry.modelId,
+      provider: entry.provider,
       priceUnits: entry.priceUnits,
       displayName: null,
       enabled: true,
@@ -96,6 +97,7 @@ export default async function Page(props: {
         .filter((row) => row.operation === operation)
         .map((row) => ({
           modelId: row.modelId,
+          provider: row.provider,
           priceUnits: row.priceUnits,
           displayName: row.displayName,
           enabled: row.enabled,
@@ -104,6 +106,23 @@ export default async function Page(props: {
         })),
     }));
 
+  // Per operation as well. video.motion runs on models that publish
+  // motion-control and nothing else, so the generation question condemns them.
+  const unusableVideoModels = Object.fromEntries(
+    await Promise.all(
+      AI_OPERATIONS.filter((operation) => operation.startsWith("video."))
+        .map(async (operation) => [
+          operation,
+          await getUnusableVideoModels(
+            operation,
+            modelsOf(operation).map((model) => ({
+              modelId: model.modelId,
+              provider: model.provider,
+            })),
+          ),
+        ] as const),
+    ),
+  );
   // Per operation, because an image model that cannot take a picture is fine
   // for generation and useless for every edit.
   const unusableImageModels = Object.fromEntries(
@@ -113,7 +132,10 @@ export default async function Page(props: {
           operation,
           await getUnusableImageModels(
             operation,
-            modelsOf(operation).map((model) => model.modelId),
+            modelsOf(operation).map((model) => ({
+              modelId: model.modelId,
+              provider: model.provider,
+            })),
           ),
         ] as const),
     ),
@@ -276,7 +298,7 @@ export default async function Page(props: {
                 warningsByModel={Object.fromEntries(
                   modelsOf(operation)
                     .filter((model) =>
-                      unusableVideoModels.has(model.modelId)
+                      unusableVideoModels[operation]?.has(model.modelId)
                       || unusableImageModels[operation]?.has(model.modelId),
                     )
                     .map((model) => [

@@ -1,6 +1,59 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildAiVideoSubmission } from "../../apps/web/src/lib/ai-video-submit";
+import {
+  buildAiMotionVideoSubmission,
+  buildAiSourceVideoSubmission,
+  buildAiVideoSubmission,
+  selectVideoReferences,
+} from "../../apps/web/src/lib/ai-video-submit";
+
+describe("active video reference validation", () => {
+  const image = new File(["image"], "image.png", { type: "image/png" });
+  const video = new File(["video"], "video.mp4", { type: "video/mp4" });
+
+  it(
+    "does not block on retained references when the request will send none",
+    () => {
+      const kinds = [{ files: [image, video], maxCount: 1, maxBytes: 1 }];
+      expect(selectVideoReferences({ enabled: false, kinds, maxTotalReferences: 0 })).toEqual({
+        files: [], oversized: false, tooMany: false, tooManyInTotal: false,
+      });
+      expect(kinds[0].files).toEqual([image, video]);
+      expect(selectVideoReferences({ enabled: true, kinds, maxTotalReferences: 0 }))
+        .toMatchObject({ oversized: true, tooMany: true, tooManyInTotal: true });
+    },
+  );
+
+  it("ignores a retained unsupported reference kind while sending a supported kind", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [
+        { files: [image], maxCount: 1, maxBytes: image.size },
+        { files: [video], maxCount: 0, maxBytes: 0 },
+      ],
+      maxTotalReferences: 1,
+    })).toEqual({ files: [image], oversized: false, tooMany: false, tooManyInTotal: false });
+  });
+
+  it("still rejects excessive visible counts and sizes", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [{ files: [image, video], maxCount: 1, maxBytes: image.size - 1 }],
+      maxTotalReferences: null,
+    })).toEqual({ files: [image], oversized: true, tooMany: true, tooManyInTotal: false });
+  });
+
+  it("checks aggregate limits across active kinds without changing their order", () => {
+    expect(selectVideoReferences({
+      enabled: true,
+      kinds: [
+        { files: [image], maxCount: 1, maxBytes: image.size },
+        { files: [video], maxCount: 1, maxBytes: video.size },
+      ],
+      maxTotalReferences: 1,
+    })).toEqual({ files: [image, video], oversized: false, tooMany: true, tooManyInTotal: true });
+  });
+});
 
 const base = {
   prompt: "Waves crossing a quiet shore",
@@ -97,5 +150,65 @@ describe("dashboard video submission", () => {
     expect(source).not.toContain("useActionState");
     expect(source).not.toContain("createVideoAction");
     expect(actions).not.toContain("export async function createVideoAction");
+  });
+});
+
+describe("dashboard video submission from reference pictures", () => {
+  const references = [
+    new File(["one"], "one.png", { type: "image/png" }),
+    new File(["two"], "two.png", { type: "image/png" }),
+  ];
+
+  it("sends references as repeated parts on the multipart route", () => {
+    const submission = buildAiVideoSubmission({ ...base, references });
+
+    expect(submission.operation).toBe("videos/frames");
+    const body = submission.body as FormData;
+    expect(body.getAll("reference[]")).toEqual(references);
+    expect(body.get("firstFrame")).toBeNull();
+    expect(body.get("prompt")).toBe(base.prompt);
+  });
+
+  it("keeps the order the prompt refers to them in", () => {
+    const body = buildAiVideoSubmission({ ...base, references })
+      .body as FormData;
+
+    expect(
+      body.getAll("reference[]").map((entry) => (entry as File).name),
+    ).toEqual(["one.png", "two.png"]);
+  });
+
+  it("never sends references alongside a frame", () => {
+    // The API refuses the combination outright, because a provider given both
+    // ignores the references and warns. Sending them would buy a refusal.
+    const firstFrame = new File(["first"], "first.png", { type: "image/png" });
+    const body = buildAiVideoSubmission({ ...base, firstFrame, references })
+      .body as FormData;
+
+    expect(body.get("firstFrame")).toBe(firstFrame);
+    expect(body.getAll("reference[]")).toEqual([]);
+  });
+});
+
+describe("dashboard source video submission", () => {
+  const source = new File(["clip"], "clip.mp4", { type: "video/mp4" });
+  it.each(["edit", "extend"] as const)("uploads the source for %s", (mode) => {
+    const submission = buildAiSourceVideoSubmission({ mode, prompt: "change", source, durationSeconds: 6, model: "video/model" });
+    expect(submission.operation).toBe(`videos/${mode}`);
+    const body = submission.body as FormData;
+    expect(body.get("sourceVideo")).toBe(source);
+    expect(body.get("sourceJobId")).toBeNull();
+    expect(body.get("durationSeconds")).toBe(mode === "edit" ? null : "6");
+  });
+  it("uploads the motion source and character together", () => {
+    const characterImage = new File(["face"], "face.png", { type: "image/png" });
+    const submission = buildAiMotionVideoSubmission({ prompt: "walk", source, characterImage, durationSeconds: 5, orientation: "image", quality: "pro", model: "video/model" });
+    expect(submission.operation).toBe("videos/motion");
+    const body = submission.body as FormData;
+    expect(body.get("sourceVideo")).toBe(source);
+    expect(body.get("sourceJobId")).toBeNull();
+    expect(body.get("characterImage")).toBe(characterImage);
+    expect(body.get("orientation")).toBe("image");
+    expect(body.get("quality")).toBe("pro");
   });
 });

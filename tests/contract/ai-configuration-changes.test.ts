@@ -12,6 +12,7 @@ import {
   validateAiConfigurationChanges,
   type AiOperationModelSnapshot,
 } from "../../apps/admin/src/lib/ai-configuration-changes";
+import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
 
 const defaultModels = AI_DEFAULT_OPERATION_MODELS as Record<
   string,
@@ -21,6 +22,7 @@ const defaultModels = AI_DEFAULT_OPERATION_MODELS as Record<
 const builtInOf = (operation: string) => [
   {
     modelId: defaultModels[operation]!.model,
+    provider: "openrouter",
     priceUnits: defaultModels[operation]!.price,
     enabled: true,
   },
@@ -31,11 +33,16 @@ function validate(
   overrides: {
     storedModelsOf?: (
       operation: string,
-    ) => { modelId: string; priceUnits: number; enabled: boolean }[];
+    ) => {
+      modelId: string;
+      provider: string;
+      priceUnits: number;
+      enabled: boolean;
+    }[];
     currentSettingValueOf?: (key: string) => string;
     minimumChargeOf?: (
       operation: string,
-      modelId: string,
+      model: { modelId: string; provider: string },
       priceUnits: number,
     ) => number;
   } = {},
@@ -61,7 +68,7 @@ function validate(
     builtInModelsOf: builtInOf,
     minimumChargeOf:
       overrides.minimumChargeOf ??
-      ((operation, _modelId, priceUnits) =>
+      ((operation, _model, priceUnits) =>
         aiMinimumChargeOf(operation, priceUnits) ?? priceUnits),
   });
 }
@@ -122,7 +129,9 @@ describe("saving the AI configuration in one go", () => {
     expect(actionSource).toContain("matchesAiOperationModelSnapshot(actual, draft.expected)");
     expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
     expect(actionSource).toContain("loadAiVideoModelCapabilities");
-    expect(actionSource).toContain("videoCapabilities.get(modelId)?.durations");
+    expect(actionSource).toContain(
+      "videoCapabilityOf(videoCapabilities, model)",
+    );
   });
 
   it("accepts an allowance and a model list together", () => {
@@ -186,7 +195,12 @@ describe("saving the AI configuration in one go", () => {
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ modelId: "expensive/video", priceUnits: 200, enabled: true }]
+            ? [{
+                modelId: "expensive/video",
+                provider: "openrouter",
+                priceUnits: 200,
+                enabled: true,
+              }]
             : builtInOf(operation),
       },
     );
@@ -206,8 +220,8 @@ describe("saving the AI configuration in one go", () => {
         ],
       },
       {
-        minimumChargeOf: (operation, modelId, priceUnits) =>
-          operation === "video.generate" && modelId === "google/veo-3.1"
+        minimumChargeOf: (operation, model, priceUnits) =>
+          operation === "video.generate" && model.modelId === "google/veo-3.1"
             ? priceUnits * 4
             : priceUnits,
       },
@@ -215,6 +229,39 @@ describe("saving the AI configuration in one go", () => {
 
     expect(result).toMatchObject({ ok: false });
     expect(result.ok === false && result.message).toContain("video.generate");
+  });
+
+  it.each([
+    ["video.edit", 5],
+    ["video.edit", 4.1],
+    ["video.extend", 5],
+    ["video.motion", 5],
+  ] as const)("requires an affordable %s request with source minimum %s", (operation, minSourceVideoSeconds) => {
+    const capabilities = new Map([
+      [aiCapabilityKey("openrouter", "video/source"), { durations: [1], minSourceVideoSeconds: 1 }],
+      [aiCapabilityKey("vercel-gateway", "video/source"), { durations: [8, 5], minSourceVideoSeconds }],
+    ]);
+    const input = (priceUnits: number) => ({
+      settings: [{ key: AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, value: "500" }],
+      models: [{
+        operation,
+        models: [model({ modelId: "video/source", provider: "vercel-gateway", priceUnits })],
+      }],
+    });
+    const minimumChargeOf = (
+      operation: string,
+      model: { modelId: string; provider: string },
+      priceUnits: number,
+    ) => aiMinimumChargeOf(
+      operation,
+      priceUnits,
+      capabilities.get(aiCapabilityKey(model.provider, model.modelId)),
+    ) ?? priceUnits;
+
+    expect(validate(input(100), { minimumChargeOf })).toMatchObject({ ok: true });
+    const over = validate(input(101), { minimumChargeOf });
+    expect(over).toMatchObject({ ok: false });
+    expect(over.ok === false && over.message).toContain(operation);
   });
 
   it("falls back to the built-in model when every row is removed", () => {
@@ -228,10 +275,15 @@ describe("saving the AI configuration in one go", () => {
       {
         storedModelsOf: (operation) =>
           operation === "video.generate"
-            ? [{ modelId: "stored/video", priceUnits: 1, enabled: true }]
+            ? [{
+                modelId: "stored/video",
+                provider: "openrouter",
+                priceUnits: 1,
+                enabled: true,
+              }]
             : builtInOf(operation),
-        minimumChargeOf: (operation, modelId, priceUnits) =>
-          operation === "video.generate" && modelId === "google/veo-3.1"
+        minimumChargeOf: (operation, model, priceUnits) =>
+          operation === "video.generate" && model.modelId === "google/veo-3.1"
             ? priceUnits * 4
             : priceUnits,
       },

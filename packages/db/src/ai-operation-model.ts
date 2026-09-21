@@ -4,6 +4,8 @@ import type { PrismaTransaction } from "./transaction";
 export type AiOperationModelRecord = {
   operation: string;
   modelId: string;
+  /** Which provider runs this model. Rows predating the column say "openrouter". */
+  provider: string;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -25,6 +27,7 @@ export async function listAiOperationModels({
     select: {
       operation: true,
       modelId: true,
+      provider: true,
       priceUnits: true,
       displayName: true,
       sortOrder: true,
@@ -43,6 +46,7 @@ export async function listAiOperationModels({
 export async function upsertAiOperationModel({
   operation,
   modelId,
+  provider,
   priceUnits,
   displayName,
   sortOrder,
@@ -52,6 +56,13 @@ export async function upsertAiOperationModel({
 }: {
   operation: string;
   modelId: string;
+  /**
+   * Who runs the model. A new row without one belongs to the provider that
+   * existed before the column did; an existing row without one keeps the
+   * provider it has, because omitting a field is not a request to re-route a
+   * model that is already registered.
+   */
+  provider?: string;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -65,13 +76,21 @@ export async function upsertAiOperationModel({
     create: {
       operation,
       modelId,
+      provider: provider ?? "openrouter",
       priceUnits,
       displayName,
       sortOrder,
       enabled,
       updatedBy,
     },
-    update: { priceUnits, displayName, sortOrder, enabled, updatedBy },
+    update: {
+      ...(provider === undefined ? {} : { provider }),
+      priceUnits,
+      displayName,
+      sortOrder,
+      enabled,
+      updatedBy,
+    },
   });
 }
 
