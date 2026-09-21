@@ -197,6 +197,38 @@ describe("re-saving a registered model", () => {
     setDbProvider(async () => memory.prisma as never);
   });
 
+  it("moves an existing row to the provider explicitly selected by an administrator", async () => {
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/shared-model",
+      provider: "openrouter",
+      priceUnits: 10,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/shared-model",
+      provider: "vercel-gateway",
+      priceUnits: 10,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const catalog = await loadAiModelCatalog();
+    expect(catalog.list(OPERATION)).toEqual([
+      expect.objectContaining({
+        modelId: "vendor/shared-model",
+        provider: "vercel-gateway",
+      }),
+    ]);
+  });
+
   it("keeps the provider a row already has when the save omits one", async () => {
     // The provider decides which service the request is sent to. A caller that
     // only means to change a price would otherwise re-route the model to

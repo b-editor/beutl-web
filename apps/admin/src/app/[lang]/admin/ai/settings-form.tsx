@@ -110,6 +110,7 @@ export function useAiSettingField(key: string) {
 // The models an operation offers, with unsaved edits applied.
 export function useAiModels(operation: string): {
   models: AiModelRow[];
+  savedModels: AiModelRow[];
   changed: boolean;
   isPending: boolean;
   setModels(models: AiModelRow[]): void;
@@ -122,6 +123,10 @@ export function useAiModels(operation: string): {
   const draft = context.modelDrafts.get(operation);
   return {
     models: draft?.rows ?? saved,
+    // Provider-dependent previews need both sides of the draft: a row whose
+    // provider moved cannot reuse the server-rendered figures for the saved
+    // provider, while an unchanged row can.
+    savedModels: saved,
     changed: draft !== undefined,
     isPending: context.isPending,
     setModels: (models) => context.setModels(operation, models),

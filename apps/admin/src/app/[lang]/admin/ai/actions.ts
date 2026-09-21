@@ -49,6 +49,7 @@ import {
 } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
+import { getUnusableImageModels, getUnusableVideoModels } from "./queries";
 
 function parsePackageRefundInterventionInput(input: unknown) {
   if (!input || typeof input !== "object") return null;
@@ -625,13 +626,31 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
   });
 }
 
-// What one model would cost to run, for a row being added or edited.
+// Whether the draft provider/model pair can serve at least one request for the
+// operation. This intentionally mirrors the server-rendered warning on the
+// saved row; the draft must not keep showing that row's provider-dependent
+// answer after the provider changes.
+async function isModelUnsupportedForOperation(
+  operation: string,
+  model: { modelId: string; provider: string },
+): Promise<boolean> {
+  if (!providerSupportsOperation(model.provider, operation)) return true;
+  if (operation.startsWith("video.")) {
+    return (await getUnusableVideoModels(operation, [model])).has(model.modelId);
+  }
+  if (operation.startsWith("image.")) {
+    return (await getUnusableImageModels(operation, [model])).has(model.modelId);
+  }
+  return false;
+}
+
+// What one model would cost to run, and whether it can run the operation, for
+// a row being added or edited.
 //
-// The saved rows get their figures rendered on the server, but a model that is
-// only typed into the form has none: the provider's rate card is keyed by model
-// id, so there is nothing to look up until the id exists. Without this the one
-// number worth knowing while choosing a price — what share of it goes to the
-// provider — appears only after the price is already saved.
+// The saved rows get these values rendered on the server, but a provider/model
+// pair that only exists in the form has none. Looking it up before the page is
+// saved keeps the pricing decision and compatibility warning tied to the
+// provider the administrator actually selected.
 export async function lookupAiModelEconomics(input: unknown) {
   if (typeof input !== "object" || input === null) {
     return { success: false as const, message: "Invalid model" };
@@ -652,19 +671,23 @@ export async function lookupAiModelEconomics(input: unknown) {
   }
 
   return await adminAction(async () => {
-    // Both go over the network. The rate card is cached per URL path and the
-    // Stripe prices per request, so retyping an id costs one fetch at most.
+    // The provider catalogs, rate card and Stripe prices go over the network.
+    // They are cached at their existing boundaries, so retyping an id costs
+    // one fetch at most.
     const prisma = await getDb();
-    const [costs, pro, topUp] = await Promise.all([
+    const model = { modelId, provider: resolvedProvider };
+    const [costs, pro, topUp, unsupported] = await Promise.all([
       loadAiCostEstimates({
-        modelsOf: () => [{ modelId, provider: resolvedProvider }],
+        modelsOf: () => [model],
       }),
       resolveOfferPricing({ kind: "pro", prisma }),
       resolveOfferPricing({ kind: "top_up", prisma }),
+      isModelUnsupportedForOperation(operation, model),
     ]);
 
     return {
       success: true as const,
+      unsupported,
       estimate:
         costs.entries.find(
           (entry) =>
