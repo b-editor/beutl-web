@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
   countActiveSubscriptions,
   findCheckoutBillingOffer,
@@ -128,6 +128,58 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
     }, { timeout: 30_000 })).rejects.toBe(rollback);
 
     expect(await prisma.user.count({ where: { id: userId } })).toBe(0);
+  }, 45_000);
+
+  it("aggregates valid decimal rows beyond the individual ledger limit", async () => {
+    const userIds = [crypto.randomUUID(), crypto.randomUUID()];
+    const jobIds = [crypto.randomUUID(), crypto.randomUUID()];
+    const amount = "1500000000.062500";
+    const total = 3_000_000_000.125;
+    const rollback = new Error("Roll back large aggregate fixtures");
+
+    await expect(prisma.$transaction(async (tx) => {
+      const [newestJob, newestTransaction] = await Promise.all([
+        tx.aiJob.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+        tx.creditTransaction.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+      ]);
+      const since = new Date(Math.max(
+        Date.now(), newestJob?.createdAt.getTime() ?? 0, newestTransaction?.createdAt.getTime() ?? 0,
+      ) + 60_000);
+      const baseline = await getAiBalanceTotals({ now: since, prisma: tx });
+      await tx.user.createMany({ data: userIds.map((id) => ({ id, email: `${id}@aggregate-test.invalid` })) });
+      await tx.creditAccount.createMany({ data: userIds.map((userId) => ({
+        userId, monthlyUsageUsed: amount, purchasedCredits: amount, purchasedCreditDebt: amount,
+        usagePeriodEnd: new Date(since.getTime() + 86_400_000),
+      })) });
+      await tx.aiJob.createMany({ data: jobIds.map((id) => ({
+        id, userId: userIds[0], provider: "test", kind: "image", status: "succeeded",
+        usageUnits: amount, reservedUsageUnits: amount, createdAt: since,
+      })) });
+      await tx.creditTransaction.createMany({ data: [
+        ...jobIds.map((aiJobId) => ({ userId: userIds[0], aiJobId, kind: "usage", usageAmount: amount, creditAmount: 0, createdAt: since })),
+        ...userIds.flatMap((userId) => [
+          { userId, kind: "purchase", creditAmount: amount, usageAmount: 0, createdAt: since },
+          { userId, kind: "admin_usage_adjustment", creditAmount: 0, usageAmount: `-${amount}`, createdAt: since },
+          { userId, kind: "admin_credit_adjustment", creditAmount: 1_500_000_000, usageAmount: 0, createdAt: since },
+          { userId, kind: "admin_credit_adjustment", creditAmount: -1_500_000_000, usageAmount: 0, createdAt: since },
+        ]),
+      ] });
+
+      expect(await getAiJobUsageByKind({ since, prisma: tx })).toEqual([{ kind: "image", jobCount: 2, reservedUnits: total }]);
+      expect(await getTopAiUsers({ since, limit: 1, prisma: tx })).toEqual([{ userId: userIds[0], jobCount: 2, reservedUnits: total }]);
+      expect(await getAiUsageTotals({ since, prisma: tx })).toEqual({ consumedUnits: total, purchasedCredits: total, adminUsageAdjustment: -total });
+      expect(await getAdminCreditAdjustmentTotals({ since, prisma: tx })).toEqual({ granted: 3_000_000_000, revoked: 3_000_000_000 });
+      const addTotal = (value: number) => new Prisma.Decimal(value).plus(total).toNumber();
+      expect(await getAiBalanceTotals({ now: since, prisma: tx })).toEqual({
+        accountCount: baseline.accountCount + 2,
+        monthlyUsageUsed: addTotal(baseline.monthlyUsageUsed),
+        purchasedCredits: addTotal(baseline.purchasedCredits),
+        purchasedCreditDebt: addTotal(baseline.purchasedCreditDebt),
+      });
+      throw rollback;
+    }, { timeout: 30_000 })).rejects.toBe(rollback);
+
+    expect(await prisma.user.count({ where: { id: { in: userIds } } })).toBe(0);
   }, 45_000);
 
   it("runs every report query the admin console issues", async () => {

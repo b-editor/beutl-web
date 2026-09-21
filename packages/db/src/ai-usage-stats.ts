@@ -6,7 +6,6 @@
 import { getDb } from "./provider";
 import { USAGE_UNIT_MICROS_PER_UNIT } from "@beutl/core";
 import {
-  decimalNumber,
   decimalNumberRows,
   decimalNumbers,
 } from "./decimal";
@@ -63,15 +62,33 @@ type ReservationAggregate = {
 function sumOf(
   value: number | Prisma.Decimal | null | undefined,
 ): number {
-  return value == null ? 0 : decimalNumber(value);
+  return aggregateNumber(aggregateMicros(value));
 }
 
-function normalizedTotal(value: number): number {
-  const scaled = Math.round(value * USAGE_UNIT_MICROS_PER_UNIT);
-  if (!Number.isSafeInteger(scaled)) {
+// SUMs are not ledger rows: they can exceed the per-row limit. Keep decimal
+// aggregates and cross-kind cancellation in integer micro-units until the
+// final number boundary, without losing digits through Decimal.toNumber().
+function aggregateMicros(value: number | Prisma.Decimal | null | undefined): bigint {
+  if (value == null) return BigInt(0);
+  const fixed = value.toFixed(6);
+  if (!/^-?\d+\.\d{6}$/.test(fixed)) {
     throw new RangeError("AI usage aggregate is outside the supported range");
   }
-  return scaled / USAGE_UNIT_MICROS_PER_UNIT;
+  return BigInt(fixed.replace(".", ""));
+}
+
+function aggregateNumber(micros: bigint): number {
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  if (micros > max || micros < -max) {
+    throw new RangeError("AI usage aggregate is outside the supported range");
+  }
+  const result = Number(micros) / USAGE_UNIT_MICROS_PER_UNIT;
+  // Near the safe-integer ceiling, a floating-point unit value can still lose
+  // a micro-unit after division even though its scaled integer was safe.
+  if (aggregateMicros(result) !== micros) {
+    throw new RangeError("AI usage aggregate cannot retain six decimal places");
+  }
+  return result;
 }
 
 export async function getAiJobStatusCounts({
@@ -162,14 +179,14 @@ export async function getAiUsageTotals({
     },
   });
 
-  const totals: AiUsageTotals = {
-    consumedUnits: 0,
-    purchasedCredits: 0,
-    adminUsageAdjustment: 0,
+  const totals = {
+    consumedUnits: BigInt(0),
+    purchasedCredits: BigInt(0),
+    adminUsageAdjustment: BigInt(0),
   };
   for (const row of rows) {
-    const usageAmount = sumOf(row._sum.usageAmount);
-    const creditAmount = sumOf(row._sum.creditAmount);
+    const usageAmount = aggregateMicros(row._sum.usageAmount);
+    const creditAmount = aggregateMicros(row._sum.creditAmount);
     if ((CONSUMPTION_KINDS as readonly string[]).includes(row.kind)) {
       totals.consumedUnits += usageAmount - creditAmount;
       continue;
@@ -183,9 +200,9 @@ export async function getAiUsageTotals({
     }
   }
   return {
-    consumedUnits: normalizedTotal(totals.consumedUnits),
-    purchasedCredits: normalizedTotal(totals.purchasedCredits),
-    adminUsageAdjustment: normalizedTotal(totals.adminUsageAdjustment),
+    consumedUnits: aggregateNumber(totals.consumedUnits),
+    purchasedCredits: aggregateNumber(totals.purchasedCredits),
+    adminUsageAdjustment: aggregateNumber(totals.adminUsageAdjustment),
   };
 }
 
@@ -209,19 +226,19 @@ export async function getAdminCreditAdjustmentTotals({
       creditAmount: true,
     },
   });
-  let granted = 0;
-  let revoked = 0;
+  let granted = BigInt(0);
+  let revoked = BigInt(0);
   for (const row of rows) {
-    const amount = decimalNumber(row.creditAmount);
-    if (amount > 0) {
+    const amount = aggregateMicros(row.creditAmount);
+    if (amount > BigInt(0)) {
       granted += amount;
     } else {
       revoked += -amount;
     }
   }
   return {
-    granted: normalizedTotal(granted),
-    revoked: normalizedTotal(revoked),
+    granted: aggregateNumber(granted),
+    revoked: aggregateNumber(revoked),
   };
 }
 

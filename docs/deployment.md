@@ -265,6 +265,10 @@ original reservation. Purchases, administrator adjustments, and legacy ledger
 entries without a linked job still use their own transaction time. The
 distribution uses only current billing periods because an expired period's
 counter is not cleared until the account next runs a job.
+Report sums may exceed a single ledger row's limit. They retain exact integer
+micro-units until conversion to JavaScript numbers; unsafe totals are rejected
+rather than silently losing fractional units. Individual ledger row limits
+remain unchanged.
 
 Administrators can grant or revoke purchased credits and correct current-period
 usage from `/admin/users/<id>`. A grant settles credit debt first, a revoke
