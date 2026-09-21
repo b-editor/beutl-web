@@ -41,5 +41,6 @@ describe("locale formatting", () => {
     expect(formatCount(1234567, "ja")).toBe("1,234,567");
     expect(formatCount(1234567, "en")).toBe("1,234,567");
     expect(formatCount(0, "ja")).toBe("0");
+    expect(formatCount(0.00005, "en")).toBe("0.00005");
   });
 });

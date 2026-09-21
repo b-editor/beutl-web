@@ -42,5 +42,7 @@ export function formatDateTime(
 }
 
 export function formatCount(value: number, lang: string): string {
-  return new Intl.NumberFormat(toLocaleTag(lang)).format(value);
+  return new Intl.NumberFormat(toLocaleTag(lang), {
+    maximumFractionDigits: 6,
+  }).format(value);
 }

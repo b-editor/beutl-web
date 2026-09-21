@@ -460,11 +460,11 @@ model UserPaymentHistory {
 
 model CreditAccount {
   userId              String              @id
-  monthlyUsageUsed    Int                 @default(0)
+  monthlyUsageUsed    Decimal             @default(0) @db.Decimal(16, 6)
   usagePeriodStart    DateTime?
   usagePeriodEnd      DateTime?
-  purchasedCredits    Int                 @default(0)
-  purchasedCreditDebt Int                 @default(0)
+  purchasedCredits    Decimal             @default(0) @db.Decimal(16, 6)
+  purchasedCreditDebt Decimal             @default(0) @db.Decimal(16, 6)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
   user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -474,9 +474,9 @@ model CreditAccount {
 model CreditTransaction {
   id                     String                @id @default(uuid())
   userId                 String
-  creditAmount           Int
-  debtAmount             Int                   @default(0)
-  usageAmount            Int                   @default(0)
+  creditAmount           Decimal               @db.Decimal(16, 6)
+  debtAmount             Decimal               @default(0) @db.Decimal(16, 6)
+  usageAmount            Decimal               @default(0) @db.Decimal(16, 6)
   usagePeriodStart       DateTime?
   usagePeriodEnd         DateTime?
   kind                   String
@@ -543,7 +543,13 @@ model AiJob {
   status                     String
   inputParams                Json?
   resultFileId               String?             @unique
-  usageUnits                 Int
+  usageUnits                 Decimal             @db.Decimal(16, 6)
+  reservedUsageUnits         Decimal?            @db.Decimal(16, 6)
+  estimatedUsageUnits        Decimal?            @db.Decimal(16, 6)
+  usageUnitUsdMicros         Int?
+  usagePercent               Int                 @default(100)
+  providerCostUsdMicros      Int?
+  usageSettledAt             DateTime?            @db.Timestamptz(6)
   // どのモデルで走ったか。inputParams ではなく列にしているのは、履歴の
   // ホワイトリストに kind ごとに足さずに済み、利用状況の集計にモデル軸を
   // 足せるため。行が無い時代のジョブは null。
@@ -1039,6 +1045,9 @@ model AiOperationModel {
   // 送るのはモデル ID だけで、プロバイダを名乗らない。1 操作につき同じモデル ID は
   // 1 行、という制約を残すことで、ID からプロバイダが一意に決まる。
   provider      String   @default("openrouter")
+  usagePercent  Int      @default(100)
+  // Legacy reservation price kept during the rolling migration. New billing
+  // ignores it and settles provider cost multiplied by usagePercent.
   priceUnits    Int
   displayName   String?
   // 有効な行のうち sortOrder が最小のものが既定。「既定はちょうど 1 つ」を

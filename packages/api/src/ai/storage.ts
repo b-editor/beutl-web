@@ -1,4 +1,9 @@
-import { AI_TEXT_RESULT_RETENTION_MILLISECONDS, MAX_AI_RESULT_BYTES } from "@beutl/core";
+import {
+  AI_TEXT_RESULT_RETENTION_MILLISECONDS,
+  MAX_AI_RESULT_BYTES,
+  USD_MICROS_PER_DOLLAR,
+  usageUnitsForProviderCost,
+} from "@beutl/core";
 import {
   claimAiStorageCleanupForDeletion,
   completeAiJobWithOutput,
@@ -8,8 +13,15 @@ import {
   listDueAiStorageCleanups,
   makeAiStorageCleanupDue,
   registerAiStorageCleanup,
+  getAiJobById,
+  getSubscription,
+  settleUsage,
+  startRetryableTransaction,
 } from "@beutl/db";
 import { getR2Bucket } from "./r2-provider";
+import { loadAiSettings } from "./settings";
+import { PRO_PLAN } from "./pricing";
+import { providerCostUsdToMicros } from "./usage-cost";
 
 export { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "@beutl/core";
 export {
@@ -199,6 +211,7 @@ async function saveAiOutput({
   objectKey,
   finalizationToken,
   retentionMilliseconds,
+  providerCostUsd,
 }: {
   jobId: string;
   userId: string;
@@ -208,6 +221,7 @@ async function saveAiOutput({
   objectKey: string;
   finalizationToken?: string;
   retentionMilliseconds?: number;
+  providerCostUsd?: number;
 }) {
   if (
     retentionMilliseconds !== undefined &&
@@ -237,20 +251,75 @@ async function saveAiOutput({
       .join("");
 
     commitAttempted = true;
-    const file = await completeAiJobWithOutput({
-      jobId,
-      finalizationToken,
-      retentionExpiresAt: retentionMilliseconds === undefined
-        ? undefined
-        : new Date(Date.now() + retentionMilliseconds),
-      file: {
-        objectKey,
-        name: filename,
-        size: bytes.byteLength,
-        mimeType,
+    const file = await startRetryableTransaction(async (prisma) => {
+      const completed = await completeAiJobWithOutput({
+        jobId,
+        finalizationToken,
+        retentionExpiresAt: retentionMilliseconds === undefined
+          ? undefined
+          : new Date(Date.now() + retentionMilliseconds),
+        file: {
+          objectKey,
+          name: filename,
+          size: bytes.byteLength,
+          mimeType,
+          userId,
+          sha256,
+        },
+        prisma,
+      });
+      if (!completed) return null;
+
+      const [job, subscription, settings] = await Promise.all([
+        getAiJobById({ jobId, prisma }),
+        getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
+        loadAiSettings({ prisma }),
+      ]);
+      if (!job) throw new Error(`AI job ${jobId} disappeared during settlement`);
+      const usesActualCostBilling =
+        job.usageUnitUsdMicros !== null &&
+        job.reservedUsageUnits !== null;
+      const usdPerUsageUnit =
+        (job.usageUnitUsdMicros ?? Math.round(
+          settings.getProviderUsdPerUsageUnit() * USD_MICROS_PER_DOLLAR,
+        )) / USD_MICROS_PER_DOLLAR;
+      const actualUsageUnits =
+        !usesActualCostBilling || providerCostUsd === undefined
+          ? job.estimatedUsageUnits ?? job.reservedUsageUnits ?? job.usageUnits
+          : usageUnitsForProviderCost(
+              providerCostUsd,
+              usdPerUsageUnit,
+              job.usagePercent,
+            );
+      if (actualUsageUnits === null) {
+        throw new Error(`AI job ${jobId} provider cost could not be settled`);
+      }
+      const providerCostMicros =
+        !usesActualCostBilling || providerCostUsd === undefined
+        ? null
+        : providerCostUsdToMicros(providerCostUsd);
+      if (
+        usesActualCostBilling &&
+        providerCostUsd !== undefined &&
+        providerCostMicros === null
+      ) {
+        throw new Error(`AI job ${jobId} provider cost is out of range`);
+      }
+      await settleUsage({
         userId,
-        sha256,
-      },
+        aiJobId: jobId,
+        actualAmount: actualUsageUnits,
+        providerCostUsdMicros: providerCostMicros,
+        monthlyUsageLimit: settings.getMonthlyUsageLimit(),
+        currentUsagePeriod: subscription
+          ? {
+              start: subscription.currentPeriodStart,
+              end: subscription.currentPeriodEnd,
+            }
+          : { start: null, end: null },
+        prisma,
+      });
+      return completed;
     });
     if (!file) {
       throw new AiOutputCommitConflictError(jobId);
@@ -277,12 +346,14 @@ export async function saveAiImage({
   bytes,
   mimeType,
   filename,
+  providerCostUsd,
 }: {
   jobId: string;
   userId: string;
   bytes: ArrayBuffer;
   mimeType: string;
   filename: string;
+  providerCostUsd?: number;
 }) {
   return await saveAiOutput({
     jobId,
@@ -290,6 +361,7 @@ export async function saveAiImage({
     bytes,
     mimeType,
     filename,
+    providerCostUsd,
     objectKey: `ai/image/${jobId}/${crypto.randomUUID()}`,
   });
 }
@@ -302,6 +374,7 @@ export async function saveAiVideo({
   bytes,
   mimeType,
   filename,
+  providerCostUsd,
 }: {
   jobId: string;
   finalizationToken: string;
@@ -309,6 +382,7 @@ export async function saveAiVideo({
   bytes: ArrayBuffer;
   mimeType: string;
   filename: string;
+  providerCostUsd?: number;
 }) {
   return await saveAiOutput({
     jobId,
@@ -317,6 +391,7 @@ export async function saveAiVideo({
     bytes,
     mimeType,
     filename,
+    providerCostUsd,
     // A finalization token identifies the job lease, not an object lifetime.
     // A retry must never reuse a key that an expired cleaner may still delete.
     objectKey: `ai/video/${jobId}/${crypto.randomUUID()}`,
@@ -328,11 +403,13 @@ export async function saveAiJsonResult({
   userId,
   filename,
   result,
+  providerCostUsd,
 }: {
   jobId: string;
   userId: string;
   filename: string;
   result: unknown;
+  providerCostUsd?: number;
 }) {
   const serialized = JSON.stringify(result);
   if (serialized === undefined) {
@@ -352,6 +429,7 @@ export async function saveAiJsonResult({
     bytes,
     mimeType: "application/json",
     filename,
+    providerCostUsd,
     objectKey: `ai/text/${jobId}/${crypto.randomUUID()}`,
     retentionMilliseconds: AI_TEXT_RESULT_RETENTION_MILLISECONDS,
   });

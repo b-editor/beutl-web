@@ -73,6 +73,41 @@ const klingMotionControl = {
   },
 };
 
+const seedance25 = {
+  data: {
+    id: "bytedance/seedance-2.5",
+    endpoints: [
+      {
+        pricing: {
+          prompt: "0",
+          completion: "0",
+          video_token_pricing: {
+            tiers: [
+              {
+                resolution: "720p",
+                no_video_input: { cost_per_million_tokens: "10.7" },
+                with_video_input: { cost_per_million_tokens: "6.4" },
+              },
+              {
+                resolution: "1080p",
+                no_video_input: { cost_per_million_tokens: "11.7" },
+                with_video_input: { cost_per_million_tokens: "7" },
+              },
+            ],
+          },
+        },
+      },
+    ],
+  },
+};
+
+const flux3WithoutApiPrices = {
+  data: {
+    id: "bfl/flux-3-video",
+    endpoints: [{ pricing: { prompt: "0", completion: "0" } }],
+  },
+};
+
 const respondWith = (body: unknown, status = 200) =>
   (async () =>
     new Response(JSON.stringify(body), {
@@ -91,6 +126,54 @@ describe("reading a Gateway rate card", () => {
       { label: "2k", usdPerSecond: 0.13 },
       { label: "768p", usdPerSecond: 0.08 },
       { label: null, usdPerSecond: 0.13 },
+    ]);
+  });
+
+  it("converts Seedance token tiers into resolution-specific second rates", async () => {
+    const card = await loadGatewayRateCard(
+      "bytedance/seedance-2.5",
+      respondWith(seedance25),
+    );
+
+    expect(card.videoRates).toEqual([
+      {
+        label: "720p",
+        usdPerSecond: 0.23112,
+        videoInput: false,
+        tokenCalculation: { tokensPerSecond: 21600, resolution: "720p" },
+      },
+      {
+        label: "720p",
+        usdPerSecond: 0.13824,
+        videoInput: true,
+        tokenCalculation: { tokensPerSecond: 21600, resolution: "720p" },
+      },
+      {
+        label: "1080p",
+        usdPerSecond: 0.56862,
+        videoInput: false,
+        tokenCalculation: { tokensPerSecond: 48600, resolution: "1080p" },
+      },
+      {
+        label: "1080p",
+        usdPerSecond: 0.3402,
+        videoInput: true,
+        tokenCalculation: { tokensPerSecond: 48600, resolution: "1080p" },
+      },
+    ]);
+  });
+
+  it("uses the verified FLUX 3 full-render rates while its API price is empty", async () => {
+    const card = await loadGatewayRateCard(
+      "bfl/flux-3-video",
+      respondWith(flux3WithoutApiPrices),
+    );
+
+    expect(card.videoRates).toEqual([
+      { label: "hd", usdPerSecond: 0.17, videoInput: false },
+      { label: "fhd", usdPerSecond: 0.29, videoInput: false },
+      { label: "hd", usdPerSecond: 0.41, videoInput: true },
+      { label: "fhd", usdPerSecond: 0.53, videoInput: true },
     ]);
   });
 
@@ -187,6 +270,30 @@ describe("choosing the rate a request would be charged", () => {
       label: null,
       usdPerSecond: 0.168,
     });
+  });
+
+  it("keeps token rates correlated with source-video use", async () => {
+    const card = await loadGatewayRateCard(
+      "bytedance/seedance-2.5",
+      respondWith(seedance25),
+    );
+
+    expect(gatewayDearestVideoRate(card, { videoInput: false }))
+      .toMatchObject({ label: "1080p", usdPerSecond: 0.56862 });
+    expect(gatewayDearestVideoRate(card, { videoInput: true }))
+      .toMatchObject({ label: "1080p", usdPerSecond: 0.3402 });
+  });
+
+  it("keeps FLUX 3 generation and continuation rates separate", async () => {
+    const card = await loadGatewayRateCard(
+      "bfl/flux-3-video",
+      respondWith(flux3WithoutApiPrices),
+    );
+
+    expect(gatewayDearestVideoRate(card, { videoInput: false }))
+      .toMatchObject({ label: "fhd", usdPerSecond: 0.29 });
+    expect(gatewayDearestVideoRate(card, { videoInput: true }))
+      .toMatchObject({ label: "fhd", usdPerSecond: 0.53 });
   });
 
   it("reports nothing rather than free when no rate applies", async () => {
@@ -342,6 +449,72 @@ describe("costing an operation at the provider that serves it", () => {
       assumptions: [{ kind: "videoSku", value: "2k" }],
     });
     expect(calls.every((url) => url.includes("ai-gateway.vercel.sh"))).toBe(true);
+  });
+
+  it.each([
+    ["bytedance/seedance-2.0", "7.7", 0.37422],
+    ["bytedance/seedance-2.5", "11.7", 0.56862],
+  ])("prices %s from its 1080p video-token tier", async (
+    modelId,
+    costPerMillionTokens,
+    expected,
+  ) => {
+    stubGatewayFetch({
+      data: {
+        id: modelId,
+        endpoints: [{
+          pricing: {
+            video_token_pricing: {
+              tiers: [{
+                resolution: "1080p",
+                no_video_input: { cost_per_million_tokens: costPerMillionTokens },
+                with_video_input: { cost_per_million_tokens: "1" },
+              }],
+            },
+          },
+        }],
+      },
+    });
+
+    const estimate = await estimateFor(
+      "video.generate",
+      modelId,
+      "vercel-gateway",
+    );
+    expect(estimate).toMatchObject({
+      status: "estimated",
+      assumptions: [
+        { kind: "videoSku", value: "1080p" },
+        { kind: "videoTokens", tokensPerSecond: 48600, resolution: "1080p" },
+      ],
+    });
+    if (estimate?.status !== "estimated") return;
+    expect(estimate.usdMin).toBeCloseTo(expected, 8);
+    expect(estimate.usdMax).toBeCloseTo(expected, 8);
+  });
+
+  it("prices FLUX 3 generation from its verified full-render FHD rate", async () => {
+    stubGatewayFetch(flux3WithoutApiPrices);
+
+    expect(await estimateFor("video.generate", "bfl/flux-3-video", "vercel-gateway"))
+      .toEqual({
+        status: "estimated",
+        usdMin: 0.29,
+        usdMax: 0.29,
+        assumptions: [{ kind: "videoSku", value: "fhd" }],
+      });
+  });
+
+  it("prices FLUX 3 extension from its verified continuation FHD rate", async () => {
+    stubGatewayFetch(flux3WithoutApiPrices);
+
+    expect(await estimateFor("video.extend", "bfl/flux-3-video", "vercel-gateway"))
+      .toEqual({
+        status: "estimated",
+        usdMin: 0.53,
+        usdMax: 0.53,
+        assumptions: [{ kind: "videoSku", value: "fhd" }],
+      });
   });
 
   it("prices the three source-video operations as video", async () => {

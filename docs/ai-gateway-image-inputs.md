@@ -29,3 +29,12 @@ supports the adapter's plain `prompt: { text, images }` path for that exact
 model. A mask-only editing endpoint or support on another provider is not
 sufficient. Update this evidence and the capability tests together. Do not
 infer support from a family prefix or from the SDK's generic request type.
+
+`openai/gpt-image-2` is also the only model currently verified here for the
+background-removal path. [OpenAI documents transparent output for the model](https://developers.openai.com/api/docs/guides/image-generation)
+in preview when `background: "transparent"` is paired with PNG or WebP.
+[AI Gateway forwards options under the actual provider name](https://ai-sdk.dev/providers/ai-sdk-providers/ai-gateway#provider-options),
+so the adapter requests a transparent PNG and supplies a background-removal
+instruction alongside the source image. Other Gateway image models continue
+to advertise only `auto` until their transparent-output behavior is verified
+independently.

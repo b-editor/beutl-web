@@ -9,6 +9,7 @@ function input(overrides: Record<string, unknown> = {}) {
   return {
     operation: "image.generate",
     modelId: "openai/gpt-image-1",
+    usagePercent: 150,
     priceUnits: 20,
     displayName: null,
     enabled: true,
@@ -30,6 +31,7 @@ describe("registering a model for an operation", () => {
         // A row that names no provider belongs to the one that predates the
         // column, so every registration made before it keeps running where it ran.
         provider: "openrouter",
+        usagePercent: 150,
         priceUnits: 20,
         displayName: "Fast",
         enabled: true,
@@ -46,7 +48,7 @@ describe("registering a model for an operation", () => {
   });
 
   it("refuses a row whose provider cannot run the operation", () => {
-    // Vercel AI Gateway has no named operation for background removal. Without
+    // Vercel AI Gateway has no upscaling surface. Without
     // this the row saves, and the request is refused only after the user has
     // been charged.
     const supportsOperation = (provider: string, operation: string) =>
@@ -55,13 +57,13 @@ describe("registering a model for an operation", () => {
     const refused = validateAiOperationModelInput(
       input({
         provider: "vercel-gateway",
-        operation: "image.edit.remove_background",
+        operation: "image.edit.upscale",
       }),
       { supportsOperation },
     );
     expect(refused).toEqual({
       ok: false,
-      message: "vercel-gateway cannot run image.edit.remove_background",
+      message: "vercel-gateway cannot run image.edit.upscale",
     });
 
     const accepted = validateAiOperationModelInput(
@@ -94,6 +96,14 @@ describe("registering a model for an operation", () => {
   it("refuses a price that is not a whole number in range", () => {
     for (const priceUnits of [0, -1, 1.5, MAX_PRICE_UNITS + 1, "20"]) {
       expect(validateAiOperationModelInput(input({ priceUnits })).ok).toBe(
+        false,
+      );
+    }
+  });
+
+  it("refuses an invalid provider-cost percentage", () => {
+    for (const usagePercent of [0, -1, 1.5, 10_001, "150"]) {
+      expect(validateAiOperationModelInput(input({ usagePercent })).ok).toBe(
         false,
       );
     }

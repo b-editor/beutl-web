@@ -11,9 +11,8 @@ import {
 // is checked here as well as the value ranges. The batch is accepted or
 // rejected as a whole.
 //
-// What the allowance has to be checked against — every model's price — is not
-// in this batch and not in this module: it is rows in a table, so that rule
-// lives with the rows, in ai-operation-model-changes.
+// Model percentages live in their own rows; this batch contains the allowance
+// and the one shared USD-per-unit conversion.
 export type AiSettingChange = {
   key: string;
   // null resets the setting to its built-in default by removing the row.

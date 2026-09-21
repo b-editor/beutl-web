@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
+import { normalizeUsageUnits } from "@beutl/core";
 import { getDb } from "./provider";
+import { decimalNumberRows, decimalNumbers } from "./decimal";
 import {
   startRetryableTransaction,
   startTransaction,
@@ -63,6 +65,10 @@ export async function createAiJob({
   status,
   inputParams,
   usageUnits,
+  reservedUsageUnits,
+  estimatedUsageUnits,
+  usageUnitUsdMicros,
+  usagePercent,
   model,
   prisma,
 }: {
@@ -76,11 +82,41 @@ export async function createAiJob({
   status: string;
   inputParams?: object;
   usageUnits: number;
+  reservedUsageUnits?: number;
+  estimatedUsageUnits?: number;
+  usageUnitUsdMicros?: number;
+  usagePercent?: number;
   model?: string;
   prisma?: PrismaTransaction;
 }) {
+  const normalizedUsageUnits = normalizeUsageUnits(usageUnits);
+  const normalizedReservedUsageUnits = reservedUsageUnits === undefined
+    ? undefined
+    : normalizeUsageUnits(reservedUsageUnits);
+  const normalizedEstimatedUsageUnits = estimatedUsageUnits === undefined
+    ? undefined
+    : normalizeUsageUnits(estimatedUsageUnits);
+  if (normalizedUsageUnits === null || normalizedUsageUnits <= 0) {
+    throw new RangeError("usageUnits must be a positive usage-unit amount");
+  }
+  if (reservedUsageUnits !== undefined) {
+    if (
+      normalizedReservedUsageUnits == null ||
+      normalizedReservedUsageUnits < 0
+    ) {
+      throw new RangeError("reservedUsageUnits must be non-negative");
+    }
+  }
+  if (estimatedUsageUnits !== undefined) {
+    if (
+      normalizedEstimatedUsageUnits == null ||
+      normalizedEstimatedUsageUnits < 0
+    ) {
+      throw new RangeError("estimatedUsageUnits must be non-negative");
+    }
+  }
   const db = prisma ?? await getDb();
-  return await db.aiJob.create({
+  return decimalNumbers(await db.aiJob.create({
     data: {
       userId,
       kind,
@@ -91,10 +127,14 @@ export async function createAiJob({
       callbackNonceHash,
       status,
       inputParams: inputParams ?? undefined,
-      usageUnits,
+      usageUnits: normalizedUsageUnits,
+      reservedUsageUnits: normalizedReservedUsageUnits,
+      estimatedUsageUnits: normalizedEstimatedUsageUnits,
+      usageUnitUsdMicros,
+      usagePercent: usagePercent ?? 100,
       model,
     },
-  });
+  }));
 }
 
 export async function getAiJobByIdempotency({
@@ -107,7 +147,7 @@ export async function getAiJobByIdempotency({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiJob.findFirst({
+  const job = await db.aiJob.findFirst({
     where: {
       userId,
       idempotencyKeyHash,
@@ -116,6 +156,7 @@ export async function getAiJobByIdempotency({
       resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
+  return job ? decimalNumbers(job) : null;
 }
 
 export async function updateActiveAiJobToFailed({
@@ -302,12 +343,13 @@ export async function attachProviderJobIdToQueuedAiJob({
       finalizationLeaseExpiresAt: null,
     },
   });
-  const job = await db.aiJob.findFirst({
+  const storedJob = await db.aiJob.findFirst({
     where: { id: jobId, deletedAt: null },
   });
-  if (!job) {
+  if (!storedJob) {
     return { outcome: "notFound" as const, job: null };
   }
+  const job = decimalNumbers(storedJob);
   if (
     job.kind !== kind ||
     job.provider !== provider ||
@@ -333,9 +375,10 @@ export async function getAiJobByProviderJobId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiJob.findFirst({
+  const job = await db.aiJob.findFirst({
     where: { provider, providerJobId, deletedAt: null },
   });
+  return job ? decimalNumbers(job) : null;
 }
 
 export async function touchActiveAiJob({
@@ -636,7 +679,7 @@ export async function getAiJobById({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiJob.findFirst({
+  const job = await db.aiJob.findFirst({
     where: {
       id: jobId,
       deletedAt: null,
@@ -645,6 +688,7 @@ export async function getAiJobById({
       resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
+  return job ? decimalNumbers(job) : null;
 }
 
 export async function getAiJobResultFile({
@@ -715,7 +759,7 @@ export async function listAiJobsByUserId({
       resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
-  const page = jobs.slice(0, limit);
+  const page = decimalNumberRows(jobs.slice(0, limit));
   const last = page.at(-1);
 
   return {
@@ -737,7 +781,7 @@ export async function getAiJobByUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiJob.findFirst({
+  const job = await db.aiJob.findFirst({
     where: {
       id: jobId,
       userId,
@@ -747,6 +791,7 @@ export async function getAiJobByUserId({
       resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
     },
   });
+  return job ? decimalNumbers(job) : null;
 }
 
 export async function prepareAiJobDeletionByUserId({
@@ -1470,7 +1515,7 @@ export async function listActiveAiJobsForReconciliation({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.aiJob.findMany({
+  const jobs = await db.aiJob.findMany({
     where: {
       deletedAt: null,
       status: { in: ACTIVE_AI_JOB_STATUSES },
@@ -1479,6 +1524,7 @@ export async function listActiveAiJobsForReconciliation({
     orderBy: { updatedAt: "asc" },
     take: limit,
   });
+  return decimalNumberRows(jobs);
 }
 
 export async function enqueueUserRemoteAiJobCleanups({

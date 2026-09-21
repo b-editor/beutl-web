@@ -130,7 +130,7 @@ describe("POST /api/v3/user/ai-availability", () => {
         operation: "subtitle.translate",
         characterCount: 11_000,
       })).json(),
-    ).toEqual({ available: false });
+    ).toEqual({ available: true });
   });
 
   it("fails closed without an active plan", async () => {

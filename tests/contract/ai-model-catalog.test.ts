@@ -128,7 +128,7 @@ describe("AI model catalog", () => {
     expect(catalog.resolve(OPERATION)?.modelId).toBe("openai/gpt-image-1");
   });
 
-  it("ranks cost by price, not by display order", async () => {
+  it("does not claim a static cost tier for dynamically billed models", async () => {
     await register("cheap/model", 5, { sortOrder: 2 });
     await register("dear/model", 40, { sortOrder: 0 });
     await register("middling/model", 20, { sortOrder: 1 });
@@ -138,18 +138,16 @@ describe("AI model catalog", () => {
       catalog.list(OPERATION).map((entry) => [entry.modelId, entry.costTier]),
     );
 
-    expect(tierOf.get("cheap/model")).toBe("low");
-    expect(tierOf.get("middling/model")).toBe("medium");
-    expect(tierOf.get("dear/model")).toBe("high");
+    expect([...tierOf.values()]).toEqual([null, null, null]);
   });
 
-  it("splits two models into low and high, and leaves one untiered", async () => {
+  it("leaves any model count untiered until a request-specific quote", async () => {
     await register("cheap/model", 5);
     await register("dear/model", 40, { sortOrder: 1 });
 
     const two = await loadAiModelCatalog();
-    expect(two.resolve(OPERATION, "cheap/model")?.costTier).toBe("low");
-    expect(two.resolve(OPERATION, "dear/model")?.costTier).toBe("high");
+    expect(two.resolve(OPERATION, "cheap/model")?.costTier).toBeNull();
+    expect(two.resolve(OPERATION, "dear/model")?.costTier).toBeNull();
 
     // One model has nothing to be higher or lower than.
     expect(
@@ -225,6 +223,25 @@ describe("re-saving a registered model", () => {
       expect.objectContaining({
         modelId: "vendor/shared-model",
         provider: "vercel-gateway",
+      }),
+    ]);
+  });
+
+  it("keeps the provider-cost percentage with the selected model", async () => {
+    await upsertAiOperationModel({
+      operation: OPERATION,
+      modelId: "vendor/metered-model",
+      usagePercent: 150,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    expect((await loadAiModelCatalog()).list(OPERATION)).toEqual([
+      expect.objectContaining({
+        modelId: "vendor/metered-model",
+        usagePercent: 150,
       }),
     ]);
   });

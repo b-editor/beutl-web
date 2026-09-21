@@ -25,6 +25,7 @@
     "upload:admin": "pnpm --filter @beutl/admin upload",
     "preview": "pnpm --filter @beutl/web preview",
     "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach",
+    "migrate:ai-usage": "vp run --filter @beutl/web migrate:ai-usage",
     "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
   },
   "devDependencies": {

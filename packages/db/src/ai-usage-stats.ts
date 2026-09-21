@@ -4,13 +4,20 @@
 // rows. User-facing labels are resolved by the caller, so these queries stay
 // usable from any app that only has an account id.
 import { getDb } from "./provider";
+import { USAGE_UNIT_MICROS_PER_UNIT } from "@beutl/core";
+import {
+  decimalNumber,
+  decimalNumberRows,
+  decimalNumbers,
+} from "./decimal";
+import type { Prisma } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
 // Ledger kinds that represent actual consumption. A usage row stores the
 // monthly share in usageAmount and the purchased share as a negative
 // creditAmount; a refund row stores the mirror image. Net units consumed is
 // therefore sum(usageAmount) - sum(creditAmount) across both kinds.
-const CONSUMPTION_KINDS = ["usage", "refund"] as const;
+const CONSUMPTION_KINDS = ["usage", "refund", "usage_settlement"] as const;
 
 // A purchase row carries the credits bought; a reversal row carries the credits
 // taken back by a refund or dispute as a negative amount, and a later restore as
@@ -47,8 +54,18 @@ export type AiTopUser = {
   reservedUnits: number;
 };
 
-function sumOf(value: number | null | undefined): number {
-  return value ?? 0;
+function sumOf(
+  value: number | Prisma.Decimal | null | undefined,
+): number {
+  return value == null ? 0 : decimalNumber(value);
+}
+
+function normalizedTotal(value: number): number {
+  const scaled = Math.round(value * USAGE_UNIT_MICROS_PER_UNIT);
+  if (!Number.isSafeInteger(scaled)) {
+    throw new RangeError("AI usage aggregate is outside the supported range");
+  }
+  return scaled / USAGE_UNIT_MICROS_PER_UNIT;
 }
 
 export async function getAiJobStatusCounts({
@@ -153,7 +170,11 @@ export async function getAiUsageTotals({
       totals.adminUsageAdjustment += usageAmount;
     }
   }
-  return totals;
+  return {
+    consumedUnits: normalizedTotal(totals.consumedUnits),
+    purchasedCredits: normalizedTotal(totals.purchasedCredits),
+    adminUsageAdjustment: normalizedTotal(totals.adminUsageAdjustment),
+  };
 }
 
 // Grants and revokes cancel out inside one group, so count them per row.
@@ -179,13 +200,17 @@ export async function getAdminCreditAdjustmentTotals({
   let granted = 0;
   let revoked = 0;
   for (const row of rows) {
-    if (row.creditAmount > 0) {
-      granted += row.creditAmount;
+    const amount = decimalNumber(row.creditAmount);
+    if (amount > 0) {
+      granted += amount;
     } else {
-      revoked += -row.creditAmount;
+      revoked += -amount;
     }
   }
-  return { granted, revoked };
+  return {
+    granted: normalizedTotal(granted),
+    revoked: normalizedTotal(revoked),
+  };
 }
 
 export async function getAiBalanceTotals({
@@ -415,11 +440,12 @@ export async function findCreditAccount({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditAccount.findUnique({
+  const account = await db.creditAccount.findUnique({
     where: {
       userId,
     },
   });
+  return account ? decimalNumbers(account) : null;
 }
 
 export type CreditAccountUsageSnapshot = {
@@ -450,7 +476,7 @@ export async function listCreditAccountUsageSnapshot({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.creditAccount.findMany({
+  const rows = await db.creditAccount.findMany({
     select: {
       monthlyUsageUsed: true,
       purchasedCredits: true,
@@ -463,6 +489,7 @@ export async function listCreditAccountUsageSnapshot({
     },
     take: limit + 1,
   });
+  return decimalNumberRows(rows);
 }
 
 export async function listRecentAiJobsByUserId({
@@ -478,7 +505,7 @@ export async function listRecentAiJobsByUserId({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.aiJob.findMany({
+  const rows = await db.aiJob.findMany({
     where: {
       userId,
     },
@@ -493,6 +520,7 @@ export async function listRecentAiJobsByUserId({
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
+  return decimalNumberRows(rows);
 }
 
 export async function listRecentCreditTransactionsByUserId({
@@ -508,7 +536,7 @@ export async function listRecentCreditTransactionsByUserId({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.creditTransaction.findMany({
+  const rows = await db.creditTransaction.findMany({
     where: {
       userId,
     },
@@ -524,4 +552,5 @@ export async function listRecentCreditTransactionsByUserId({
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
+  return decimalNumberRows(rows);
 }

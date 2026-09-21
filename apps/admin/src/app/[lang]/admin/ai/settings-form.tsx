@@ -26,7 +26,7 @@ import { saveAiConfiguration } from "./actions";
 
 export type AiSettingRow = {
   key: string;
-  kind: "limit";
+  kind: "limit" | "usd_rate";
   value: string;
   source: "database" | "default";
   fallback: string;
@@ -38,6 +38,7 @@ export type AiModelRow = {
   modelId: string;
   /** Which provider runs it. Rows registered before the column say "openrouter". */
   provider: string;
+  usagePercent: number;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -155,6 +156,31 @@ export function useAiModelPrice(
     priceUnits: effective?.priceUnits ?? null,
     changed:
       drafted !== undefined && drafted.priceUnits !== saved?.priceUnits,
+  };
+}
+
+export function useAiModelUsagePercent(
+  operation: string,
+  modelId: string,
+): { usagePercent: number | null; changed: boolean } {
+  const context = useContext(FormContext);
+  if (!context) {
+    throw new Error(
+      "useAiModelUsagePercent must be used inside AiConfigurationForm",
+    );
+  }
+  const saved = (context.models.get(operation) ?? []).find(
+    (model) => model.modelId === modelId,
+  );
+  const drafted = context.modelDrafts
+    .get(operation)
+    ?.rows.find((model) => model.modelId === modelId);
+  const effective = drafted ?? saved;
+  return {
+    usagePercent: effective?.usagePercent ?? null,
+    changed:
+      drafted !== undefined &&
+      drafted.usagePercent !== saved?.usagePercent,
   };
 }
 

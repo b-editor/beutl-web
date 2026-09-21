@@ -12,7 +12,11 @@
 
 import { streamText, generateText, jsonSchema, Output } from "ai";
 import { AiProviderError } from "../errors";
-import type { AiTranslateRequest, TranslationSegment } from "../types";
+import type {
+  AiTranslateRequest,
+  AiTranslationResult,
+  TranslationSegment,
+} from "../types";
 import { createTranslationSegmentReader } from "../../translation-stream";
 import {
   parseTranslationContent,
@@ -26,6 +30,10 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { toGatewayProviderError } from "./errors";
+import {
+  gatewayProviderCostUsd,
+  withProviderCost,
+} from "../../provider-cost";
 
 const PROVIDER_LABEL = "Vercel AI Gateway";
 
@@ -65,7 +73,7 @@ function buildRequest(request: AiTranslateRequest) {
 
 export async function translateGatewaySegments(
   request: AiTranslateRequest,
-): Promise<TranslationSegment[]> {
+): Promise<AiTranslationResult> {
   const { system, user, output } = buildRequest(request);
   const model = createGatewayClient()(request.model);
 
@@ -81,6 +89,7 @@ export async function translateGatewaySegments(
   }
 
   let text: string;
+  let cost: number | undefined;
   try {
     const result = await generateText({
       model,
@@ -91,13 +100,17 @@ export async function translateGatewaySegments(
     });
     assertTranslationFinished(result.finishReason);
     text = result.text;
+    cost = gatewayProviderCostUsd(result.finalStep.providerMetadata);
   } catch (cause) {
     throw toGatewayProviderError(
       cause,
       "Vercel AI Gateway translation request failed",
     );
   }
-  return parseTranslationContent(text, request.segments, PROVIDER_LABEL);
+  return withProviderCost(
+    parseTranslationContent(text, request.segments, PROVIDER_LABEL),
+    cost,
+  );
 }
 
 async function translateStreaming({
@@ -114,12 +127,13 @@ async function translateStreaming({
   user: string;
   output: ReturnType<typeof buildRequest>["output"];
   onSegment: (segment: TranslationSegment) => void;
-}): Promise<TranslationSegment[]> {
+}): Promise<AiTranslationResult> {
   const reader = createTranslationSegmentReader();
   const wanted = new Set(request.segments.map((segment) => segment.id));
   const seen = new Set<string>();
   let content = "";
   let finished = false;
+  let cost: number | undefined;
 
   try {
     const result = streamText({
@@ -153,6 +167,7 @@ async function translateStreaming({
         onSegment(segment);
       }
     }
+    cost = gatewayProviderCostUsd(await result.providerMetadata);
   } catch (cause) {
     throw toGatewayProviderError(
       cause,
@@ -166,5 +181,8 @@ async function translateStreaming({
     );
   }
   // The previews were shown early; this is what is accepted.
-  return parseTranslationContent(content, request.segments, PROVIDER_LABEL);
+  return withProviderCost(
+    parseTranslationContent(content, request.segments, PROVIDER_LABEL),
+    cost,
+  );
 }

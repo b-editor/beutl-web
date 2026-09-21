@@ -193,7 +193,6 @@ const app = new Hono().post("/", async (c) => {
     });
   }
 
-  const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
   const rawModel = body["model"];
   if (rawModel !== undefined && typeof rawModel !== "string") {
     return c.json(await apiErrorResponse("invalidRequestBody"), {
@@ -246,12 +245,6 @@ const app = new Hono().post("/", async (c) => {
       status: 400,
     });
   }
-  const cost = selectedModel.priceUnits * minutes;
-  if (!Number.isSafeInteger(cost) || cost <= 0 || cost > 2_147_483_647) {
-    return c.json(await apiErrorResponse("invalidRequestBody"), {
-      status: 400,
-    });
-  }
   const reservation = await createReservedAiJob({
     userId,
     kind: "stt",
@@ -262,7 +255,7 @@ const app = new Hono().post("/", async (c) => {
       durationSeconds: parsedAudio.durationSeconds,
       ...(language ? { language } : {}),
     },
-    usageUnits: cost,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...requestIdentity,
   });
@@ -296,6 +289,7 @@ const app = new Hono().post("/", async (c) => {
       jobId: job.id,
       userId,
       filename: `transcription-${job.id}.json`,
+      providerCostUsd: result.providerCostUsd,
       result: {
         version: 1,
         kind: "stt",

@@ -1,4 +1,9 @@
 import { getDb } from "./provider";
+import { normalizeUsageUnits } from "@beutl/core";
+import {
+  decimalNumberRows,
+  decimalNumbers,
+} from "./decimal";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
@@ -55,6 +60,7 @@ type StripeCreditReversalInput = {
 const PURCHASE_REVERSAL_TRANSACTION_KIND = "purchase_reversal";
 export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
 export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
+export const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
 const MAX_REVERSAL_CAS_ATTEMPTS = 8;
 
 const TERMINAL_REFUND_STATUSES = new Set([
@@ -79,6 +85,31 @@ function assertNonNegativeInteger(value: number, name: string): void {
   if (!Number.isInteger(value) || value < 0) {
     throw new RangeError(`${name} must be a non-negative integer`);
   }
+}
+
+function normalizeUsageAmount(
+  value: number,
+  name: string,
+  allowZero: boolean,
+): number {
+  const normalized = normalizeUsageUnits(value);
+  if (
+    normalized === null ||
+    (allowZero ? normalized < 0 : normalized <= 0)
+  ) {
+    throw new RangeError(
+      `${name} must be ${allowZero ? "non-negative" : "positive"} and within the supported usage-unit range`,
+    );
+  }
+  return normalized;
+}
+
+function exactUsageAmount(value: number, name: string): number {
+  const normalized = normalizeUsageUnits(value);
+  if (normalized === null) {
+    throw new RangeError(`${name} is outside the supported usage-unit range`);
+  }
+  return normalized;
 }
 
 function assertNonEmpty(value: string, name: string): void {
@@ -195,7 +226,7 @@ async function getAccountForUsagePeriod({
   usagePeriod: UsagePeriod;
   prisma: PrismaTransaction;
 }) {
-  const account = await prisma.creditAccount.upsert({
+  const account = decimalNumbers(await prisma.creditAccount.upsert({
     where: {
       userId,
     },
@@ -205,14 +236,14 @@ async function getAccountForUsagePeriod({
       usagePeriodEnd: usagePeriod.end,
     },
     update: {},
-  });
+  }));
 
   const storedPeriod = {
     start: account.usagePeriodStart,
     end: account.usagePeriodEnd,
   };
   if (!usagePeriodsEqual(storedPeriod, usagePeriod)) {
-    return await prisma.creditAccount.update({
+    return decimalNumbers(await prisma.creditAccount.update({
       where: {
         userId,
       },
@@ -221,7 +252,7 @@ async function getAccountForUsagePeriod({
         usagePeriodStart: usagePeriod.start,
         usagePeriodEnd: usagePeriod.end,
       },
-    });
+    }));
   }
 
   // Refresh period metadata without resetting usage when Stripe only adjusted
@@ -230,7 +261,7 @@ async function getAccountForUsagePeriod({
     !datesEqual(account.usagePeriodStart, usagePeriod.start) ||
     !datesEqual(account.usagePeriodEnd, usagePeriod.end)
   ) {
-    return await prisma.creditAccount.update({
+    return decimalNumbers(await prisma.creditAccount.update({
       where: {
         userId,
       },
@@ -238,7 +269,7 @@ async function getAccountForUsagePeriod({
         usagePeriodStart: usagePeriod.start,
         usagePeriodEnd: usagePeriod.end,
       },
-    });
+    }));
   }
 
   return account;
@@ -252,7 +283,7 @@ export async function getCreditAccount({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditAccount.upsert({
+  return decimalNumbers(await db.creditAccount.upsert({
     where: {
       userId,
     },
@@ -260,7 +291,7 @@ export async function getCreditAccount({
       userId,
     },
     update: {},
-  });
+  }));
 }
 
 export async function getMonthlyUsageAccount({
@@ -291,14 +322,15 @@ async function attachStripePaymentDetails({
 }) {
   assertStripePaymentDetails(stripePayment, "stripePayment");
   const currency = normalizeCurrency(stripePayment.currency);
-  const purchase = await prisma.creditTransaction.findUnique({
+  const storedPurchase = await prisma.creditTransaction.findUnique({
     where: {
       stripePaymentId,
     },
   });
-  if (!purchase) {
+  if (!storedPurchase) {
     return null;
   }
+  const purchase = decimalNumbers(storedPurchase);
   if (purchase.kind !== "purchase") {
     throw new Error(
       `Stripe payment ${stripePaymentId} is not linked to a credit purchase`,
@@ -318,7 +350,7 @@ async function attachStripePaymentDetails({
     purchase.stripeCurrency === null ||
     purchase.stripeSourcePaymentId === null
   ) {
-    return await prisma.creditTransaction.update({
+    return decimalNumbers(await prisma.creditTransaction.update({
       where: {
         id: purchase.id,
       },
@@ -327,7 +359,7 @@ async function attachStripePaymentDetails({
         stripeCurrency: currency,
         stripeSourcePaymentId: stripePaymentId,
       },
-    });
+    }));
   }
   return purchase;
 }
@@ -345,7 +377,7 @@ async function applyPurchaseReversalTarget({
   reversalRevision: number;
   prisma: PrismaTransaction;
 }) {
-  const processed = await prisma.creditTransaction.findUnique({
+  const storedProcessed = await prisma.creditTransaction.findUnique({
     where: {
       stripeReversalKind_stripeReversalId_stripeReversalRevision: {
         stripeReversalKind: reversalKind,
@@ -354,18 +386,20 @@ async function applyPurchaseReversalTarget({
       },
     },
   });
-  if (processed) {
+  if (storedProcessed) {
+    const processed = decimalNumbers(storedProcessed);
     return await getCreditAccount({ userId: processed.userId, prisma });
   }
 
-  const purchase = await prisma.creditTransaction.findUnique({
+  const storedPurchase = await prisma.creditTransaction.findUnique({
     where: {
       stripePaymentId,
     },
   });
-  if (!purchase) {
+  if (!storedPurchase) {
     return null;
   }
+  const purchase = decimalNumbers(storedPurchase);
   if (
     purchase.kind !== "purchase" ||
     purchase.creditAmount <= 0 ||
@@ -406,12 +440,12 @@ async function applyPurchaseReversalTarget({
     ),
   );
 
-  const adjustments = await prisma.creditTransaction.findMany({
+  const adjustments = decimalNumberRows(await prisma.creditTransaction.findMany({
     where: {
       stripeSourcePaymentId: stripePaymentId,
       kind: PURCHASE_REVERSAL_TRANSACTION_KIND,
     },
-  });
+  }));
   const currentReversedCredits = -adjustments.reduce(
     (total, adjustment) => total + adjustment.creditAmount,
     0,
@@ -439,7 +473,7 @@ async function applyPurchaseReversalTarget({
     const debtAdded = reversalDelta - creditsConsumed;
     creditAmount = -reversalDelta;
     debtAmount = debtAdded;
-    updated = await prisma.creditAccount.update({
+    updated = decimalNumbers(await prisma.creditAccount.update({
       where: {
         userId: purchase.userId,
       },
@@ -447,14 +481,14 @@ async function applyPurchaseReversalTarget({
         purchasedCredits: account.purchasedCredits - creditsConsumed,
         purchasedCreditDebt: account.purchasedCreditDebt + debtAdded,
       },
-    });
+    }));
   } else if (reversalDelta < 0) {
     const restoredAmount = -reversalDelta;
     const debtPaid = Math.min(account.purchasedCreditDebt, restoredAmount);
     const creditsRestored = restoredAmount - debtPaid;
     creditAmount = restoredAmount;
     debtAmount = debtPaid === 0 ? 0 : -debtPaid;
-    updated = await prisma.creditAccount.update({
+    updated = decimalNumbers(await prisma.creditAccount.update({
       where: {
         userId: purchase.userId,
       },
@@ -462,7 +496,7 @@ async function applyPurchaseReversalTarget({
         purchasedCredits: account.purchasedCredits + creditsRestored,
         purchasedCreditDebt: account.purchasedCreditDebt - debtPaid,
       },
-    });
+    }));
   }
 
   await prisma.creditTransaction.create({
@@ -536,12 +570,13 @@ export async function addPurchasedCredits({
   }
   const run = async (tx: PrismaTransaction) => {
     const account = await getCreditAccount({ userId, prisma: tx });
-    const existing = await tx.creditTransaction.findUnique({
+    const storedExisting = await tx.creditTransaction.findUnique({
       where: {
         stripePaymentId,
       },
     });
-    if (existing) {
+    if (storedExisting) {
+      const existing = decimalNumbers(storedExisting);
       if (
         existing.userId !== userId ||
         existing.kind !== "purchase" ||
@@ -572,7 +607,7 @@ export async function addPurchasedCredits({
 
     const debtPaid = Math.min(account.purchasedCreditDebt, amount);
     const creditsAdded = amount - debtPaid;
-    const updated = await tx.creditAccount.update({
+    const updated = decimalNumbers(await tx.creditAccount.update({
       where: {
         userId,
       },
@@ -580,7 +615,7 @@ export async function addPurchasedCredits({
         purchasedCredits: account.purchasedCredits + creditsAdded,
         purchasedCreditDebt: account.purchasedCreditDebt - debtPaid,
       },
-    });
+    }));
 
     await tx.creditTransaction.create({
       data: {
@@ -776,7 +811,7 @@ export async function consumeUsage({
   aiJobId: string;
   prisma?: PrismaTransaction;
 }) {
-  assertPositiveInteger(amount, "amount");
+  const chargeAmount = normalizeUsageAmount(amount, "amount", false);
   assertNonNegativeInteger(monthlyUsageLimit, "monthlyUsageLimit");
 
   const run = async (tx: PrismaTransaction) => {
@@ -785,17 +820,21 @@ export async function consumeUsage({
       usagePeriod,
       prisma: tx,
     });
-    const existingUsage = await tx.creditTransaction.findFirst({
+    const storedExistingUsage = await tx.creditTransaction.findFirst({
       where: {
         userId,
         aiJobId,
         kind: "usage",
       },
     });
-    if (existingUsage) {
+    if (storedExistingUsage) {
+      const existingUsage = decimalNumbers(storedExistingUsage);
       const existingAmount =
-        existingUsage.usageAmount - existingUsage.creditAmount;
-      if (existingAmount !== amount) {
+        exactUsageAmount(
+          existingUsage.usageAmount - existingUsage.creditAmount,
+          "existingAmount",
+        );
+      if (existingAmount !== chargeAmount) {
         throw new Error(
           `AI job ${aiJobId} already has a different usage charge`,
         );
@@ -803,25 +842,34 @@ export async function consumeUsage({
       return account;
     }
 
-    const monthlyRemaining = Math.max(
-      monthlyUsageLimit - account.monthlyUsageUsed,
-      0,
+    const monthlyRemaining = exactUsageAmount(
+      Math.max(monthlyUsageLimit - account.monthlyUsageUsed, 0),
+      "monthlyRemaining",
     );
-    const monthlyUsed = Math.min(monthlyRemaining, amount);
-    const purchasedUsed = amount - monthlyUsed;
+    const monthlyUsed = Math.min(monthlyRemaining, chargeAmount);
+    const purchasedUsed = exactUsageAmount(
+      chargeAmount - monthlyUsed,
+      "purchasedUsed",
+    );
     if (account.purchasedCredits < purchasedUsed) {
       throw new AiUsageLimitExceededError();
     }
 
-    const updated = await tx.creditAccount.update({
+    const updated = decimalNumbers(await tx.creditAccount.update({
       where: {
         userId,
       },
       data: {
-        monthlyUsageUsed: account.monthlyUsageUsed + monthlyUsed,
-        purchasedCredits: account.purchasedCredits - purchasedUsed,
+        monthlyUsageUsed: exactUsageAmount(
+          account.monthlyUsageUsed + monthlyUsed,
+          "monthlyUsageUsed",
+        ),
+        purchasedCredits: exactUsageAmount(
+          account.purchasedCredits - purchasedUsed,
+          "purchasedCredits",
+        ),
       },
-    });
+    }));
 
     await tx.creditTransaction.create({
       data: {
@@ -842,6 +890,182 @@ export async function consumeUsage({
     return await run(prisma);
   }
   return await startRetryableTransaction(run);
+}
+
+// Replace a conservative reservation with the provider's actual charge. The
+// delta is append-only in the ledger; AiJob keeps both reservedUsageUnits and
+// the settled usageUnits so the decision remains auditable.
+export async function settleUsage({
+  userId,
+  aiJobId,
+  actualAmount,
+  providerCostUsdMicros,
+  monthlyUsageLimit,
+  currentUsagePeriod,
+  prisma,
+}: {
+  userId: string;
+  aiJobId: string;
+  actualAmount: number;
+  providerCostUsdMicros: number | null;
+  monthlyUsageLimit: number;
+  currentUsagePeriod: UsagePeriod;
+  prisma?: PrismaTransaction;
+}) {
+  const settledAmount = normalizeUsageAmount(
+    actualAmount,
+    "actualAmount",
+    true,
+  );
+  assertNonNegativeInteger(monthlyUsageLimit, "monthlyUsageLimit");
+  if (
+    providerCostUsdMicros !== null &&
+    (!Number.isSafeInteger(providerCostUsdMicros) ||
+      providerCostUsdMicros < 0)
+  ) {
+    throw new RangeError("providerCostUsdMicros must be null or non-negative");
+  }
+
+  const run = async (tx: PrismaTransaction) => {
+    const job = await tx.aiJob.findFirst({
+      where: { id: aiJobId, userId, deletedAt: null },
+    });
+    if (!job) throw new Error(`AI job ${aiJobId} was not found for user ${userId}`);
+    if (job.status !== "succeeded") {
+      throw new Error(`AI job ${aiJobId} must succeed before usage is settled`);
+    }
+    if (job.usageSettledAt !== null) {
+      return await getAccountForUsagePeriod({
+        userId,
+        usagePeriod: currentUsagePeriod,
+        prisma: tx,
+      });
+    }
+
+    const existing = await tx.creditTransaction.findFirst({
+      where: { userId, aiJobId, kind: AI_USAGE_SETTLEMENT_KIND },
+    });
+    if (existing) return await getAccountForUsagePeriod({
+      userId,
+      usagePeriod: currentUsagePeriod,
+      prisma: tx,
+    });
+
+    const storedUsage = await tx.creditTransaction.findFirst({
+      where: { userId, aiJobId, kind: "usage" },
+    });
+    if (!storedUsage) {
+      throw new Error(`Usage transaction for AI job ${aiJobId} was not found`);
+    }
+    const usage = decimalNumbers(storedUsage);
+    const reservedAmount = exactUsageAmount(
+      usage.usageAmount - usage.creditAmount,
+      "reservedAmount",
+    );
+    if (reservedAmount <= 0) {
+      throw new Error(`AI job ${aiJobId} has an invalid reservation`);
+    }
+
+    const account = await getAccountForUsagePeriod({
+      userId,
+      usagePeriod: currentUsagePeriod,
+      prisma: tx,
+    });
+    const transactionPeriod = {
+      start: usage.usagePeriodStart,
+      end: usage.usagePeriodEnd,
+    };
+    const samePeriod = usagePeriodsEqual(currentUsagePeriod, transactionPeriod);
+    const delta = exactUsageAmount(
+      settledAmount - reservedAmount,
+      "settlementDelta",
+    );
+    let usageAmount = 0;
+    let creditAmount = 0;
+    let debtAmount = 0;
+    let monthlyUsageUsed = account.monthlyUsageUsed;
+    let purchasedCredits = account.purchasedCredits;
+    let purchasedCreditDebt = account.purchasedCreditDebt;
+
+    if (delta < 0) {
+      const refund = -delta;
+      // consumeUsage spends allowance first, so settlement restores purchased
+      // credits first and only then the allowance portion.
+      const reservedPurchased = Math.max(-usage.creditAmount, 0);
+      const purchasedRestored = Math.min(reservedPurchased, refund);
+      const monthlyWanted = refund - purchasedRestored;
+      const monthlyRestored = samePeriod
+        ? Math.min(monthlyUsageUsed, monthlyWanted)
+        : 0;
+      const debtPaid = Math.min(purchasedCreditDebt, purchasedRestored);
+      purchasedCreditDebt -= debtPaid;
+      purchasedCredits += purchasedRestored - debtPaid;
+      monthlyUsageUsed -= monthlyRestored;
+      usageAmount = -monthlyRestored;
+      creditAmount = purchasedRestored;
+      debtAmount = debtPaid === 0 ? 0 : -debtPaid;
+    } else if (delta > 0) {
+      const monthlyRemaining = samePeriod
+        ? Math.max(monthlyUsageLimit - monthlyUsageUsed, 0)
+        : 0;
+      const monthlyAdded = Math.min(monthlyRemaining, delta);
+      const purchasedWanted = delta - monthlyAdded;
+      const purchasedAdded = Math.min(purchasedCredits, purchasedWanted);
+      const debtAdded = purchasedWanted - purchasedAdded;
+      monthlyUsageUsed += monthlyAdded;
+      purchasedCredits -= purchasedAdded;
+      purchasedCreditDebt += debtAdded;
+      usageAmount = monthlyAdded;
+      // Include debt in net consumption; debtAmount records which part could
+      // not be collected from the current balance.
+      creditAmount = -purchasedWanted;
+      debtAmount = debtAdded;
+    }
+
+    monthlyUsageUsed = exactUsageAmount(monthlyUsageUsed, "monthlyUsageUsed");
+    purchasedCredits = exactUsageAmount(purchasedCredits, "purchasedCredits");
+    purchasedCreditDebt = exactUsageAmount(
+      purchasedCreditDebt,
+      "purchasedCreditDebt",
+    );
+    usageAmount = exactUsageAmount(usageAmount, "usageAmount");
+    creditAmount = exactUsageAmount(creditAmount, "creditAmount");
+    debtAmount = exactUsageAmount(debtAmount, "debtAmount");
+
+    const updated = decimalNumbers(await tx.creditAccount.update({
+      where: { userId },
+      data: {
+        monthlyUsageUsed,
+        purchasedCredits,
+        purchasedCreditDebt,
+      },
+    }));
+    if (delta !== 0) {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          creditAmount,
+          debtAmount,
+          usageAmount,
+          usagePeriodStart: transactionPeriod.start,
+          usagePeriodEnd: transactionPeriod.end,
+          kind: AI_USAGE_SETTLEMENT_KIND,
+          aiJobId,
+        },
+      });
+    }
+    await tx.aiJob.update({
+      where: { id: aiJobId },
+      data: {
+        usageUnits: settledAmount,
+        providerCostUsdMicros,
+        usageSettledAt: new Date(),
+      },
+    });
+    return updated;
+  };
+
+  return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
 // Grant or revoke purchased credits by administrator decision. A grant settles
@@ -866,11 +1090,12 @@ export async function findAdminCreditAdjustment({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditTransaction.findUnique({
+  const adjustment = await db.creditTransaction.findUnique({
     where: {
       adminAdjustmentKey: adjustmentKey,
     },
   });
+  return adjustment ? decimalNumbers(adjustment) : null;
 }
 
 export async function adjustPurchasedCreditsByAdmin({
@@ -892,12 +1117,13 @@ export async function adjustPurchasedCreditsByAdmin({
   }
 
   const run = async (tx: PrismaTransaction) => {
-    const applied = await tx.creditTransaction.findUnique({
+    const storedApplied = await tx.creditTransaction.findUnique({
       where: {
         adminAdjustmentKey: adjustmentKey,
       },
     });
-    if (applied) {
+    if (storedApplied) {
+      const applied = decimalNumbers(storedApplied);
       // The key is unique across the whole ledger, so a replay that names a
       // different account or a different amount is not the same decision and
       // must not be answered as though it had been applied.
@@ -929,7 +1155,7 @@ export async function adjustPurchasedCreditsByAdmin({
       debtDelta = 0;
     }
 
-    const updated = await tx.creditAccount.update({
+    const updated = decimalNumbers(await tx.creditAccount.update({
       where: {
         userId,
       },
@@ -937,7 +1163,7 @@ export async function adjustPurchasedCreditsByAdmin({
         purchasedCredits: account.purchasedCredits + creditsDelta,
         purchasedCreditDebt: account.purchasedCreditDebt + debtDelta,
       },
-    });
+    }));
 
     await tx.creditTransaction.create({
       data: {
@@ -993,9 +1219,20 @@ export async function setMonthlyUsageUsedByAdmin({
   expectedMonthlyUsageUsed?: number;
   prisma?: PrismaTransaction;
 }) {
-  assertNonNegativeInteger(monthlyUsageUsed, "monthlyUsageUsed");
+  const normalizedMonthlyUsageUsed = normalizeUsageAmount(
+    monthlyUsageUsed,
+    "monthlyUsageUsed",
+    true,
+  );
+  const normalizedExpectedUsage = expectedMonthlyUsageUsed === undefined
+    ? undefined
+    : normalizeUsageAmount(
+        expectedMonthlyUsageUsed,
+        "expectedMonthlyUsageUsed",
+        true,
+      );
   assertNonNegativeInteger(monthlyUsageLimit, "monthlyUsageLimit");
-  if (monthlyUsageUsed > monthlyUsageLimit) {
+  if (normalizedMonthlyUsageUsed > monthlyUsageLimit) {
     throw new CreditAdjustmentRejectedError(
       "usageOutOfRange",
       `monthlyUsageUsed must not exceed the ${monthlyUsageLimit} unit allowance`,
@@ -1009,27 +1246,30 @@ export async function setMonthlyUsageUsedByAdmin({
       prisma: tx,
     });
     if (
-      expectedMonthlyUsageUsed !== undefined &&
-      account.monthlyUsageUsed !== expectedMonthlyUsageUsed
+      normalizedExpectedUsage !== undefined &&
+      account.monthlyUsageUsed !== normalizedExpectedUsage
     ) {
       throw new CreditAdjustmentRejectedError(
         "staleUsage",
-        `monthlyUsageUsed moved from ${expectedMonthlyUsageUsed} to ${account.monthlyUsageUsed} before this adjustment was applied`,
+        `monthlyUsageUsed moved from ${normalizedExpectedUsage} to ${account.monthlyUsageUsed} before this adjustment was applied`,
       );
     }
-    const delta = monthlyUsageUsed - account.monthlyUsageUsed;
+    const delta = exactUsageAmount(
+      normalizedMonthlyUsageUsed - account.monthlyUsageUsed,
+      "usageAdjustmentDelta",
+    );
     if (delta === 0) {
       return account;
     }
 
-    const updated = await tx.creditAccount.update({
+    const updated = decimalNumbers(await tx.creditAccount.update({
       where: {
         userId,
       },
       data: {
-        monthlyUsageUsed,
+        monthlyUsageUsed: normalizedMonthlyUsageUsed,
       },
-    });
+    }));
 
     await tx.creditTransaction.create({
       data: {
@@ -1081,16 +1321,17 @@ export async function refundUsage({
       return account;
     }
 
-    const usage = await tx.creditTransaction.findFirst({
+    const storedUsage = await tx.creditTransaction.findFirst({
       where: {
         userId,
         aiJobId,
         kind: "usage",
       },
     });
-    if (!usage) {
+    if (!storedUsage) {
       throw new Error(`Usage transaction for AI job ${aiJobId} was not found`);
     }
+    const usage = decimalNumbers(storedUsage);
 
     const transactionPeriod = {
       start: usage.usagePeriodStart,
@@ -1106,16 +1347,25 @@ export async function refundUsage({
     );
     const creditsRestored = purchasedRestored - debtPaid;
 
-    const updated = await tx.creditAccount.update({
+    const updated = decimalNumbers(await tx.creditAccount.update({
       where: {
         userId,
       },
       data: {
-        monthlyUsageUsed: account.monthlyUsageUsed - monthlyRestored,
-        purchasedCredits: account.purchasedCredits + creditsRestored,
-        purchasedCreditDebt: account.purchasedCreditDebt - debtPaid,
+        monthlyUsageUsed: exactUsageAmount(
+          account.monthlyUsageUsed - monthlyRestored,
+          "monthlyUsageUsed",
+        ),
+        purchasedCredits: exactUsageAmount(
+          account.purchasedCredits + creditsRestored,
+          "purchasedCredits",
+        ),
+        purchasedCreditDebt: exactUsageAmount(
+          account.purchasedCreditDebt - debtPaid,
+          "purchasedCreditDebt",
+        ),
       },
-    });
+    }));
 
     await tx.creditTransaction.create({
       data: {

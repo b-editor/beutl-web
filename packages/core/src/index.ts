@@ -119,14 +119,20 @@ export {
   AI_DEFAULT_OPERATION_MODELS,
   AI_OPERATIONS,
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
   AI_SETTINGS,
   AI_IMAGE_EDIT_TASKS,
   DEFAULT_MONTHLY_USAGE_LIMIT,
+  DEFAULT_PROVIDER_USD_PER_USAGE_UNIT,
   MAX_MODEL_ID_LENGTH,
   MIN_PRICE_UNITS,
   MAX_PRICE_UNITS,
+  MIN_MODEL_USAGE_PERCENT,
+  MAX_MODEL_USAGE_PERCENT,
   MIN_MONTHLY_USAGE_LIMIT,
   MAX_MONTHLY_USAGE_LIMIT,
+  MIN_PROVIDER_USD_PER_USAGE_UNIT,
+  MAX_PROVIDER_USD_PER_USAGE_UNIT,
   isAiModelId,
   isAiSettingKey,
   validateAiSettingValue,
@@ -148,12 +154,19 @@ export {
 export * from "./ai-capabilities";
 export * from "./request-body-limit";
 export type { AiBillingUnit, AiModelChargeCapabilities } from "./ai-pricing-catalog";
+export { addDecimalAmounts, multiplyDecimalAmounts } from "./decimal-arithmetic";
 export {
   derivePlanUnitValue,
   deriveTopUpUnitValue,
   describeAllowanceEquivalent,
   describeAllowanceEquivalents,
   operationAmount,
+  usageUnitsForProviderCost,
+  USD_MICROS_PER_DOLLAR,
+  USAGE_UNIT_MICROS_PER_UNIT,
+  MAX_USAGE_UNITS,
+  normalizeUsageUnits,
+  ceilUsageUnits,
 } from "./ai-allowance";
 export type {
   AiAllowanceEquivalent,

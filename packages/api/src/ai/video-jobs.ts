@@ -547,6 +547,7 @@ export async function synchronizeAiVideoJob({
       bytes,
       mimeType,
       filename: `ai-video-${job.id}.${extension}`,
+      providerCostUsd: providerJob.providerCostUsd,
     });
   } catch (error) {
     if (error instanceof AiOutputCommitConflictError) {

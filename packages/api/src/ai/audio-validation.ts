@@ -20,6 +20,7 @@ export type TranscriptionResult = {
   segments: TranscriptionSegment[];
   language?: string;
   words?: TranscriptionWord[];
+  providerCostUsd?: number;
 };
 
 export class InvalidTranscriptionResultError extends Error {

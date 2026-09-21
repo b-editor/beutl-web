@@ -1,5 +1,11 @@
 # Stripe AI billing migration safety
 
+For the September 21 actual-cost and fractional-usage migrations, follow the
+[AI usage maintenance cutover](ai-actual-cost-billing.md#migration-cutover).
+That column-copy migration requires stopping and draining AI, Stripe, and
+administrator ledger writers and deploying the Decimal-aware builds before
+traffic resumes.
+
 The AI top-up feature was not deployed before
 `20260808120000_replace_subscription_credits_with_monthly_usage`. The migration
 therefore expects no legacy `CreditTransaction` rows whose `kind` is

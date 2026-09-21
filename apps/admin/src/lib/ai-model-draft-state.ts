@@ -3,6 +3,7 @@ import type { AiOperationModelSnapshot } from "./ai-configuration-changes";
 export type AiModelDraftRow = {
   modelId: string;
   provider: string;
+  usagePercent: number;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -33,6 +34,7 @@ function sameModels(left: AiModelDraftRow[], right: AiModelDraftRow[]): boolean 
         // Switching the provider is a change like any other; without this the
         // save bar would stay hidden after one.
         model.provider === other.provider &&
+        model.usagePercent === other.usagePercent &&
         model.priceUnits === other.priceUnits &&
         model.displayName === other.displayName &&
         model.enabled === other.enabled

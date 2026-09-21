@@ -33,7 +33,7 @@ const numberFormatters = new Map<string, Intl.NumberFormat>();
 export function formatNumber(value: number, lang: string): string {
   let formatter = numberFormatters.get(lang);
   if (!formatter) {
-    formatter = new Intl.NumberFormat(lang);
+    formatter = new Intl.NumberFormat(lang, { maximumFractionDigits: 6 });
     numberFormatters.set(lang, formatter);
   }
   return formatter.format(value);

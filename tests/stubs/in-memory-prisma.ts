@@ -78,6 +78,12 @@ type AiJob = {
   model: string | null;
   resultFileId: string | null;
   usageUnits: number;
+  reservedUsageUnits: number | null;
+  estimatedUsageUnits: number | null;
+  usageUnitUsdMicros: number | null;
+  usagePercent: number;
+  providerCostUsdMicros: number | null;
+  usageSettledAt: Date | null;
   error: string | null;
   providerPollLeaseExpiresAt: Date | null;
   finalizationToken: string | null;
@@ -126,6 +132,8 @@ type AiSetting = {
 type AiOperationModel = {
   operation: string;
   modelId: string;
+  provider: string;
+  usagePercent: number;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -1813,6 +1821,10 @@ export function createInMemoryPrisma() {
           inputParams?: object;
           model?: string;
           usageUnits: number;
+          reservedUsageUnits?: number;
+          estimatedUsageUnits?: number;
+          usageUnitUsdMicros?: number;
+          usagePercent?: number;
         };
       }) => {
         if (
@@ -1855,6 +1867,12 @@ export function createInMemoryPrisma() {
           model: data.model ?? null,
           resultFileId: null,
           usageUnits: data.usageUnits,
+          reservedUsageUnits: data.reservedUsageUnits ?? null,
+          estimatedUsageUnits: data.estimatedUsageUnits ?? null,
+          usageUnitUsdMicros: data.usageUnitUsdMicros ?? null,
+          usagePercent: data.usagePercent ?? 100,
+          providerCostUsdMicros: null,
+          usageSettledAt: null,
           error: null,
           providerPollLeaseExpiresAt: null,
           finalizationToken: null,
@@ -1881,6 +1899,9 @@ export function createInMemoryPrisma() {
           providerPollLeaseExpiresAt?: Date | null;
           finalizationToken?: string | null;
           finalizationLeaseExpiresAt?: Date | null;
+          usageUnits?: number;
+          providerCostUsdMicros?: number | null;
+          usageSettledAt?: Date | null;
         };
       }) => {
         const existing = state.aiJobs.get(where.id);
@@ -1915,6 +1936,9 @@ export function createInMemoryPrisma() {
             | "providerPollLeaseExpiresAt"
             | "finalizationToken"
             | "finalizationLeaseExpiresAt"
+            | "usageUnits"
+            | "providerCostUsdMicros"
+            | "usageSettledAt"
           >
         >;
       }) => {
@@ -2885,7 +2909,12 @@ export function createInMemoryPrisma() {
         const existing = state.aiOperationModels.get(key);
         const record: AiOperationModel = existing
           ? { ...existing, ...update, updatedAt: now() }
-          : { ...create, createdAt: now(), updatedAt: now() };
+          : {
+              ...create,
+              usagePercent: create.usagePercent ?? 100,
+              createdAt: now(),
+              updatedAt: now(),
+            };
         state.aiOperationModels.set(key, record);
         return { ...record };
       },

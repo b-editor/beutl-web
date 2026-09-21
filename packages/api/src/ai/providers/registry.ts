@@ -72,9 +72,10 @@ export function videoProviderFor(id: string): AiVideoProvider {
 /**
  * The image half of a provider.
  *
- * Note this says nothing about which edit tasks it serves: a provider can hold
- * an image surface and still refuse background removal. `supports` answers
- * that, per operation.
+ * Note this says nothing about which edit tasks or models it serves: a provider
+ * can hold an image surface while a particular model still refuses transparent
+ * output. `supports` answers the operation-level question; image capabilities
+ * answer the model-level one.
  */
 export function imageProviderFor(id: string): AiImageProvider {
   const provider = providerFor(id);

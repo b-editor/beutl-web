@@ -384,13 +384,11 @@ describe("an image model Vercel AI Gateway runs", () => {
       modelId: "openai/gpt-image-2",
       seed: true,
       inputReferences: true,
+      backgrounds: ["auto", "transparent"],
     });
   });
 
-  it("offers no background control and no upscale", async () => {
-    // The SDK's image call has neither parameter. Publishing them as available
-    // would let a request ask for a transparent background, be charged, and get
-    // an opaque picture back with nothing reporting a problem.
+  it("offers verified transparent output but no upscale", async () => {
     const entry = imageCapabilityOf(
       await loadAiImageModelCapabilities([
         { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
@@ -398,14 +396,35 @@ describe("an image model Vercel AI Gateway runs", () => {
       { modelId: "openai/gpt-image-2", provider: "vercel-gateway" },
     );
 
-    expect(entry?.backgrounds).toEqual(["auto"]);
+    expect(entry?.backgrounds).toEqual(["auto", "transparent"]);
     expect(entry?.resolution).toBe(false);
     expect(unsupportedImageRequestReason(entry, { background: "transparent" }))
-      .toBe("background");
+      .toBeNull();
     expect(unsupportedImageRequestReason(entry, { resolution: true }))
       .toBe("resolution");
     expect(unsupportedImageRequestReason(entry, { background: "auto" }))
       .toBeNull();
+    expect(isImageModelUsable(entry, {
+      referenceImages: true,
+      background: "transparent",
+    })).toBe(true);
+  });
+
+  it("does not infer transparent output from image-input support", async () => {
+    const model = {
+      modelId: "bytedance/seedream-4.5",
+      provider: "vercel-gateway",
+    };
+    const entry = imageCapabilityOf(
+      await loadAiImageModelCapabilities([model]),
+      model,
+    );
+
+    expect(entry?.backgrounds).toEqual(["auto"]);
+    expect(isImageModelUsable(entry, {
+      referenceImages: true,
+      background: "transparent",
+    })).toBe(false);
   });
 
   it("still reads a bare id as OpenRouter's", async () => {

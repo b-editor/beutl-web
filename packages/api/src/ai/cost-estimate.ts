@@ -14,6 +14,8 @@
 //   - Where an assumption is needed to bridge a price to a chargeable unit, it
 //     is returned alongside the number so the UI can state it.
 
+import { addDecimalAmounts, multiplyDecimalAmounts } from "@beutl/core";
+
 export type AiCostUnknownReason =
   | "provider_unavailable"
   | "model_not_found"
@@ -119,13 +121,17 @@ function estimateImageEndpoint(
     if (!Number.isFinite(entry.costUsd) || entry.costUsd <= 0) return null;
     switch (entry.unit) {
       case "image":
-        return entry.costUsd * quantity;
+        return multiplyDecimalAmounts(entry.costUsd, quantity);
       case "megapixel":
         assumptions.push({
           kind: "imageMegapixels",
           value: ASSUMED_IMAGE_MEGAPIXELS,
         });
-        return entry.costUsd * ASSUMED_IMAGE_MEGAPIXELS * quantity;
+        return multiplyDecimalAmounts(
+          entry.costUsd,
+          ASSUMED_IMAGE_MEGAPIXELS,
+          quantity,
+        );
       case "token": {
         const tokens =
           billable === "output_image"
@@ -138,7 +144,7 @@ function estimateImageEndpoint(
               : "imageInputTokens",
           value: tokens,
         });
-        return entry.costUsd * tokens * quantity;
+        return multiplyDecimalAmounts(entry.costUsd, tokens, quantity);
       }
       default:
         return null;
@@ -163,7 +169,7 @@ function estimateImageEndpoint(
       // admin setting a price for it has to know it was not counted.
       assumptions.push({ kind: "imageInputNotPriced" });
     } else {
-      total += input;
+      total = addDecimalAmounts(total, input);
     }
     // Text prompt tokens are left out: they are about 1% of an image request
     // and cannot be sized without knowing the prompt.
@@ -219,7 +225,7 @@ export function estimateTranscriptionCost({
   }
   const perMinute =
     unit === "second"
-      ? promptPriceUsd * TRANSCRIPTION_SECONDS_PER_UNIT
+      ? multiplyDecimalAmounts(promptPriceUsd, TRANSCRIPTION_SECONDS_PER_UNIT)
       : promptPriceUsd;
   // Billing rounds up to a whole started minute, so a shorter clip costs the
   // same to the customer but less to serve. This is the ceiling.
@@ -248,7 +254,10 @@ export function estimateTranslationCost({
   const costFor = (tokensPerCharacter: number) => {
     const inputTokens = TRANSLATION_CHARACTERS_PER_UNIT * tokensPerCharacter;
     const outputTokens = inputTokens * TRANSLATION_OUTPUT_RATIO;
-    return inputTokens * promptPriceUsd + outputTokens * completionPriceUsd;
+    return addDecimalAmounts(
+      multiplyDecimalAmounts(inputTokens, promptPriceUsd),
+      multiplyDecimalAmounts(outputTokens, completionPriceUsd),
+    );
   };
   // The fixed system prompt and JSON envelope are excluded: they do not scale
   // with the 1,000 characters this unit measures.
@@ -365,9 +374,9 @@ export function estimateVideoCost({
     // of costing it against a guess.
     if (isPerToken && tokensPerSecond === null) continue;
     const usd = isCents
-      ? value / 100
+      ? multiplyDecimalAmounts(value, 0.01)
       : isPerToken
-        ? value * tokensPerSecond!
+        ? multiplyDecimalAmounts(value, tokensPerSecond!)
         : value;
     // Two SKUs can match equally well — same audio variant, neither naming a
     // resolution — and then the object's key order would decide the figure.

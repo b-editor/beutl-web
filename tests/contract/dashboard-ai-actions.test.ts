@@ -620,7 +620,7 @@ describe("dashboard AI actions", () => {
       expect(result.success).toBe(true);
       // Not the default, which is cheaper and would produce a different picture.
       expect(createReservedAiJob).toHaveBeenCalledWith(
-        expect.objectContaining({ model: "dear/model", usageUnits: 44 }),
+        expect.objectContaining({ model: "dear/model", usagePercent: 100 }),
       );
       expect(generateImage).toHaveBeenCalledWith(
         expect.objectContaining({ model: "dear/model" }),

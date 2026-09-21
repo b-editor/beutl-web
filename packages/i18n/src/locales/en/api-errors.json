@@ -39,6 +39,7 @@
   "aiRequestWasDeleted": "This AI request was deleted. Start a new request to run it again.",
   "aiModelUnavailable": "The model this request used is no longer available. Start a new request to choose another one.",
   "aiModelDoesNotSupportRequest": "The selected model does not support this combination. Change the resolution, length or aspect ratio, or pick another model.",
+  "aiProviderCostUnavailable": "The provider cost cannot be quoted right now. Try again later or choose another model.",
   "unknown": "An unknown error occurred.",
   "invalidVersionFormat": "Invalid version format.",
   "aiResultUnavailable": "The result of this request could not be read just now. Ask for it again — the same request is asked for, so what has already been paid for is not paid for twice.",

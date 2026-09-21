@@ -5,16 +5,16 @@
 // these definitions so validation remains consistent across entry points.
 //
 // Only settings that are genuinely one value belong here. Models and their
-// prices are per-operation lists an administrator edits at runtime, which is
-// the AiOperationModel table; they were briefly in both places, and a value
+// usage percentages are per-operation lists an administrator edits at runtime,
+// which is the AiOperationModel table; they were briefly in both places, and a value
 // that can be typed into two controls is one control that silently does
 // nothing.
 //
 // Secrets such as API keys must never be registered or stored in plaintext here.
 
-// One kind, because one setting: everything per-operation moved to the
+// Global billing settings only. Per-model provider and percentage live in the
 // AiOperationModel table.
-export type AiSettingKind = "limit";
+export type AiSettingKind = "limit" | "usd_rate";
 
 export type AiSettingDefinition = {
   key: string;
@@ -34,21 +34,28 @@ export const MAX_MODEL_ID_LENGTH = 128;
 export const MIN_MONTHLY_USAGE_LIMIT = 1;
 export const MAX_MONTHLY_USAGE_LIMIT = 1_000_000;
 
-// A model priced above the allowance is unstartable for everyone on the plan,
-// so the allowance is the real ceiling. It is configurable, which is why this
-// is not a smaller fixed number: pinning it to the built-in default meant
-// raising the allowance for a costlier model still needed a redeploy. The two
-// are checked against each other where a model row or the allowance is saved;
-// this range only keeps a single value inside what any allowance could ever be.
-// Zero would make an operation effectively unlimited and is not allowed.
+// Legacy fixed-price bounds retained while old Workers and the compatibility
+// column remain deployable. New billing ignores these values.
 export const MIN_PRICE_UNITS = 1;
 export const MAX_PRICE_UNITS = MAX_MONTHLY_USAGE_LIMIT;
+export const MIN_MODEL_USAGE_PERCENT = 1;
+export const MAX_MODEL_USAGE_PERCENT = 10_000;
 
 export const AI_PLAN_MONTHLY_USAGE_LIMIT_KEY = "plan.monthlyUsageLimit";
+export const AI_PROVIDER_USD_PER_USAGE_UNIT_KEY =
+  "billing.providerUsdPerUsageUnit";
 
 // The built-in monthly allowance. This is the only default for the value the
 // admin console overrides.
 export const DEFAULT_MONTHLY_USAGE_LIMIT = 500;
+
+// One shared conversion replaces per-model unit prices. Provider costs are
+// reported in USD, while balances retain up to six fractional usage-unit
+// places; one cent per unit is the safe, understandable default and can be
+// changed without touching every model row.
+export const DEFAULT_PROVIDER_USD_PER_USAGE_UNIT = 0.01;
+export const MIN_PROVIDER_USD_PER_USAGE_UNIT = 0.000001;
+export const MAX_PROVIDER_USD_PER_USAGE_UNIT = 1_000;
 
 export const AI_IMAGE_EDIT_TASKS = [
   "remove_background",
@@ -60,7 +67,7 @@ export const AI_IMAGE_EDIT_TASKS = [
 
 export type AiImageEditTask = (typeof AI_IMAGE_EDIT_TASKS)[number];
 
-// The built-in model and price for every operation.
+// The built-in model and legacy reservation fallback for every operation.
 //
 // This is the seed and the last-resort fallback rather than the whole story:
 // an operation's selectable models live in the AiOperationModel table, and one
@@ -117,6 +124,11 @@ export const AI_SETTINGS: Record<string, AiSettingDefinition> = {
     kind: "limit",
     fallback: String(DEFAULT_MONTHLY_USAGE_LIMIT),
   },
+  [AI_PROVIDER_USD_PER_USAGE_UNIT_KEY]: {
+    key: AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
+    kind: "usd_rate",
+    fallback: String(DEFAULT_PROVIDER_USD_PER_USAGE_UNIT),
+  },
 };
 
 export function isAiSettingKey(value: unknown): value is keyof typeof AI_SETTINGS {
@@ -137,7 +149,9 @@ export function isAiModelId(value: unknown): value is string {
 export type AiSettingValidationError =
   | "unknownKey"
   | "invalidLimit"
-  | "limitOutOfRange";
+  | "limitOutOfRange"
+  | "invalidUsdRate"
+  | "usdRateOutOfRange";
 
 export type AiSettingValidationResult =
   | { ok: true; value: string }
@@ -154,6 +168,22 @@ export function validateAiSettingValue(
     return { ok: false, error: "unknownKey" };
   }
   const trimmed = typeof value === "string" ? value.trim() : "";
+  if (definition.kind === "usd_rate") {
+    // At most six decimal places: the job snapshots the conversion rate in
+    // micro-USD. Actual provider costs retain their precision until conversion.
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(trimmed)) {
+      return { ok: false, error: "invalidUsdRate" };
+    }
+    const parsed = Number(trimmed);
+    if (
+      !Number.isFinite(parsed) ||
+      parsed < MIN_PROVIDER_USD_PER_USAGE_UNIT ||
+      parsed > MAX_PROVIDER_USD_PER_USAGE_UNIT
+    ) {
+      return { ok: false, error: "usdRateOutOfRange" };
+    }
+    return { ok: true, value: String(parsed) };
+  }
   // An allowance is whole usage units; reject a value that would need rounding.
   if (!/^\d+$/.test(trimmed)) {
     return { ok: false, error: "invalidLimit" };

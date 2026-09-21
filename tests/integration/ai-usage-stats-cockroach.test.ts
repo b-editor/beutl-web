@@ -53,9 +53,9 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
     expect(Array.isArray(kindUsage)).toBe(true);
     expect(Array.isArray(topUsers)).toBe(true);
     expect(topUsers.length).toBeLessThanOrEqual(10);
-    expect(Number.isSafeInteger(totals.consumedUnits)).toBe(true);
-    expect(Number.isSafeInteger(totals.purchasedCredits)).toBe(true);
-    expect(Number.isSafeInteger(totals.adminUsageAdjustment)).toBe(true);
+    expect(Number.isFinite(totals.consumedUnits)).toBe(true);
+    expect(Number.isFinite(totals.purchasedCredits)).toBe(true);
+    expect(Number.isFinite(totals.adminUsageAdjustment)).toBe(true);
     expect(Number.isSafeInteger(adjustments.granted)).toBe(true);
     expect(Number.isSafeInteger(adjustments.revoked)).toBe(true);
     expect(Number.isSafeInteger(balances.accountCount)).toBe(true);
@@ -85,7 +85,7 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
 
     expect(Array.isArray(accountUsage)).toBe(true);
     for (const row of accountUsage) {
-      expect(Number.isSafeInteger(row.monthlyUsageUsed)).toBe(true);
+      expect(Number.isFinite(row.monthlyUsageUsed)).toBe(true);
       // The report must not carry an account identifier.
       expect(row).not.toHaveProperty("userId");
     }

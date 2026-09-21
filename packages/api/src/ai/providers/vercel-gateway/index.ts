@@ -1,11 +1,10 @@
 // Vercel AI Gateway as a provider.
 //
-// `supports` is deliberately not "everything". The Gateway has no named
-// operation for background removal, upscaling or outpainting — the words appear
-// nowhere in its documentation or in @ai-sdk/gateway — and registering a model
-// for one of those would produce a request that can only be refused after the
-// user has been charged. Those three stay on OpenRouter; the catalog is
-// per-operation, so that is a matter of which rows an administrator creates.
+// `supports` is deliberately not "everything". Prompt-driven image editing
+// covers restyling, object removal and outpainting. Background removal also uses
+// that editing surface, with a provider option requesting transparent PNG
+// output; per-model capabilities decide whether that option is available.
+// Upscaling still has no equivalent here, so it remains on OpenRouter.
 
 import type { AiExecutionOutcome } from "../errors";
 import { AiProviderError } from "../errors";
@@ -52,12 +51,12 @@ const MAXIMUM_VIDEO_JOB_MILLISECONDS = 6 * 60 * 60 * 1000;
 
 // The operations this provider can actually run.
 //
-// image.edit.restyle and image.edit.remove_object are here because both are
-// "a picture plus an instruction", which is the one editing surface the SDK
-// offers. remove_background, upscale and outpaint are not: OpenRouter serves
-// them through provider parameters with no counterpart here, and outpaint is
-// ruled out structurally — a mask must match the source's size, so it cannot
-// address anything outside the frame.
+// The four supported image edits are all "a picture plus an instruction".
+// Outpainting receives an already-expanded transparent canvas from the web
+// client. Background removal adds OpenAI's transparent-output provider option,
+// and the model capability check admits only models verified to accept it.
+// Upscaling is different: it requires a requested output resolution, which the
+// Gateway adapter still has no operation-level surface for.
 const SUPPORTED_OPERATIONS = new Set([
   "video.generate",
   // The three that work from a video this service already holds. Only this
@@ -66,8 +65,10 @@ const SUPPORTED_OPERATIONS = new Set([
   "video.extend",
   "video.motion",
   "image.generate",
+  "image.edit.remove_background",
   "image.edit.restyle",
   "image.edit.remove_object",
+  "image.edit.outpaint",
   "audio.transcribe",
   "subtitle.translate",
 ]);

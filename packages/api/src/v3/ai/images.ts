@@ -435,9 +435,6 @@ const app = new Hono()
       });
     }
 
-    // The admin can change the model and price. Persist the reserved price on
-    // the job so later setting changes do not alter this operation or its refund.
-    const cost = selectedModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId,
       kind: "image",
@@ -452,7 +449,7 @@ const app = new Hono()
           ? { references: referenceFiles.map((file) => ({ filename: file.name })) }
           : {}),
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       ...requestIdentity,
     });
@@ -501,6 +498,7 @@ const app = new Hono()
         bytes,
         mimeType,
         filename: `ai-image-${job.id}.png`,
+        providerCostUsd: result.providerCostUsd,
       });
       return {
         ok: true as const,
@@ -767,7 +765,6 @@ const app = new Hono()
       });
     }
 
-    const cost = selectedModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId,
       kind: "image_edit",
@@ -778,7 +775,7 @@ const app = new Hono()
         filename: file.name,
         ...(editPrompt ? { prompt: editPrompt } : {}),
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       ...requestIdentity,
     });
@@ -810,6 +807,7 @@ const app = new Hono()
         bytes,
         mimeType: outputMimeType,
         filename: `ai-edit-${job.id}.png`,
+        providerCostUsd: result.providerCostUsd,
       });
       return c.json({
         jobId: job.id,

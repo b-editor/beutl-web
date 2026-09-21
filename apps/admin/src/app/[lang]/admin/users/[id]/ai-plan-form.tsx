@@ -18,7 +18,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@beutl/ui/ui/alert-dialog";
-import { randomUuid, type ActionResult } from "@beutl/core";
+import {
+  normalizeUsageUnits,
+  randomUuid,
+  type ActionResult,
+} from "@beutl/core";
 import { adjustAiCredits, setAiMonthlyUsage } from "./actions";
 
 function ConfirmButton({
@@ -132,11 +136,13 @@ export function AiPlanAdjustmentForm({
     parsedCreditDelta !== 0;
 
   const parsedUsage = Number(usageValue);
+  const normalizedUsage = normalizeUsageUnits(parsedUsage);
   const usageValid =
     usageValue.trim() !== "" &&
-    Number.isSafeInteger(parsedUsage) &&
-    parsedUsage >= 0 &&
-    parsedUsage <= monthlyUsageLimit;
+    normalizedUsage !== null &&
+    normalizedUsage === parsedUsage &&
+    normalizedUsage >= 0 &&
+    normalizedUsage <= monthlyUsageLimit;
 
   return (
     <div className="flex flex-col gap-6">
@@ -199,7 +205,7 @@ export function AiPlanAdjustmentForm({
           <Input
             id="ai-monthly-usage"
             type="number"
-            step={1}
+            step={0.000001}
             min={0}
             max={monthlyUsageLimit}
             className="w-40"
@@ -216,15 +222,16 @@ export function AiPlanAdjustmentForm({
               { value: usageValid ? parsedUsage : monthlyUsageUsed },
             )}
             disabled={isPending || !canAdjustMonthlyUsage || !usageValid}
-            onConfirm={() =>
+            onConfirm={() => {
+              if (!usageValid || normalizedUsage === null) return;
               run(() =>
                 setAiMonthlyUsage({
                   userId,
-                  monthlyUsageUsed: parsedUsage,
+                  monthlyUsageUsed: normalizedUsage,
                   expectedMonthlyUsageUsed: syncedUsage,
                 }),
-              )
-            }
+              );
+            }}
           />
           <ConfirmButton
             lang={lang}

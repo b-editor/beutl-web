@@ -7,6 +7,7 @@ import { getAiSettingMap } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
   AI_SETTINGS,
   validateAiSettingValue,
   type AiSettingDefinition,
@@ -38,9 +39,10 @@ function resolveDefinition(
 
 export type AiSettingsSnapshot = {
   // Monthly allowance an active Pro subscription receives, in usage units.
-  // Models and their prices are not here: they are per-operation lists, which
+  // Models and their percentages are not here: they are per-operation lists, which
   // loadAiModelCatalog resolves.
   getMonthlyUsageLimit(): number;
+  getProviderUsdPerUsageUnit(): number;
   all(): ResolvedAiSetting[];
 };
 
@@ -59,6 +61,8 @@ function toSnapshot(stored: Map<string, string>): AiSettingsSnapshot {
   return {
     getMonthlyUsageLimit: () =>
       Number(read(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY).value),
+    getProviderUsdPerUsageUnit: () =>
+      Number(read(AI_PROVIDER_USD_PER_USAGE_UNIT_KEY).value),
     all: () =>
       Object.values(AI_SETTINGS).map(
         (definition) => resolved.get(definition.key) as ResolvedAiSetting,

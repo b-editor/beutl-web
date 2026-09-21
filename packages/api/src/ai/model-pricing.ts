@@ -1,8 +1,10 @@
 // Fetching the published price list for the models currently configured, and
 // turning it into per-operation cost estimates.
 //
-// ADMIN CONSOLE ONLY, and never on a billing path: an operation is charged the
-// unit price recorded when it starts, not anything derived here.
+// Used by the admin catalog and by the conservative reservation made before a
+// provider call. The final charge never comes from this estimate: it is settled
+// from provider-reported cost, or from the unbuffered estimate only when the
+// provider supplies no actual cost.
 //
 // These endpoints are public, so no API key is involved. That is deliberate —
 // the admin Worker holds no provider credentials and does not need any to show
@@ -594,7 +596,12 @@ async function estimateGatewayOperation(
   }
 
   if (operation.startsWith("video.")) {
-    const rate = gatewayDearestVideoRate(pricing.card);
+    const rate = gatewayDearestVideoRate(pricing.card, {
+      // Edit, extension and motion always carry the source clip. Ordinary
+      // generation is priced as text/image-to-video; optional reference-video
+      // input is not treated as a different billing operation here.
+      videoInput: operation !== "video.generate",
+    });
     if (!rate) {
       return { status: "unknown", reason: "unsupported_pricing_shape" };
     }
@@ -605,7 +612,20 @@ async function estimateGatewayOperation(
       // Only when the provider tagged the rate. An untagged rate is the one
       // any request pays, and naming the model as the "SKU" would read as a
       // shape that was chosen rather than one that was never offered.
-      assumptions: rate.label ? [{ kind: "videoSku", value: rate.label }] : [],
+      assumptions: [
+        ...(rate.label
+          ? [{ kind: "videoSku" as const, value: rate.label }]
+          : []),
+        ...(rate.tokenCalculation
+          ? [
+              {
+                kind: "videoTokens" as const,
+                tokensPerSecond: rate.tokenCalculation.tokensPerSecond,
+                resolution: rate.tokenCalculation.resolution,
+              },
+            ]
+          : []),
+      ],
     };
   }
   if (operation === "audio.transcribe") {

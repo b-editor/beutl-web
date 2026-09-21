@@ -3,7 +3,7 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
-import { isAdmin } from "@beutl/core";
+import { isAdmin, normalizeUsageUnits } from "@beutl/core";
 import {
   adjustPurchasedCreditsByAdmin,
   CreditAdjustmentRejectedError,
@@ -378,17 +378,24 @@ export async function setAiMonthlyUsage({
     if (typeof userId !== "string" || userId.length === 0) {
       return { success: false, message: "Invalid user id" };
     }
+    const normalizedMonthlyUsageUsed = typeof monthlyUsageUsed === "number"
+      ? normalizeUsageUnits(monthlyUsageUsed)
+      : null;
     if (
-      typeof monthlyUsageUsed !== "number" ||
-      !Number.isSafeInteger(monthlyUsageUsed) ||
-      monthlyUsageUsed < 0
+      normalizedMonthlyUsageUsed === null ||
+      normalizedMonthlyUsageUsed !== monthlyUsageUsed ||
+      normalizedMonthlyUsageUsed < 0
     ) {
       return { success: false, message: "Invalid usage amount" };
     }
+    const normalizedExpectedUsage =
+      typeof expectedMonthlyUsageUsed === "number"
+        ? normalizeUsageUnits(expectedMonthlyUsageUsed)
+        : null;
     if (
-      typeof expectedMonthlyUsageUsed !== "number" ||
-      !Number.isSafeInteger(expectedMonthlyUsageUsed) ||
-      expectedMonthlyUsageUsed < 0
+      normalizedExpectedUsage === null ||
+      normalizedExpectedUsage !== expectedMonthlyUsageUsed ||
+      normalizedExpectedUsage < 0
     ) {
       return { success: false, message: "Invalid expected usage amount" };
     }
@@ -408,7 +415,7 @@ export async function setAiMonthlyUsage({
         }
         const settings = await loadAiSettings({ prisma: tx });
         const monthlyUsageLimit = settings.getMonthlyUsageLimit();
-        if (monthlyUsageUsed > monthlyUsageLimit) {
+        if (normalizedMonthlyUsageUsed > monthlyUsageLimit) {
           return {
             success: false as const,
             message: `The monthly allowance is ${monthlyUsageLimit} units`,
@@ -417,19 +424,19 @@ export async function setAiMonthlyUsage({
 
         await setMonthlyUsageUsedByAdmin({
           userId,
-          monthlyUsageUsed,
+          monthlyUsageUsed: normalizedMonthlyUsageUsed,
           monthlyUsageLimit,
           usagePeriod: {
             start: subscription.currentPeriodStart,
             end: subscription.currentPeriodEnd,
           },
-          expectedMonthlyUsageUsed,
+          expectedMonthlyUsageUsed: normalizedExpectedUsage,
           prisma: tx,
         });
         await addAuditLog({
           userId: session.user.id,
           action: auditLogActions.admin.aiMonthlyUsageAdjusted,
-          details: `userId: ${userId}, monthlyUsageUsed: ${monthlyUsageUsed}, monthlyUsageLimit: ${monthlyUsageLimit}`,
+          details: `userId: ${userId}, monthlyUsageUsed: ${normalizedMonthlyUsageUsed}, monthlyUsageLimit: ${monthlyUsageLimit}`,
           prisma: tx,
         });
         return { success: true as const };

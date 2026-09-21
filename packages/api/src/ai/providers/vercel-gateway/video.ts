@@ -44,6 +44,7 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { gatewayVideoResolution } from "./resolution";
+import { gatewayProviderCostUsd } from "../../provider-cost";
 
 /**
  * The job id the Gateway assigned, read off the start response.
@@ -62,6 +63,11 @@ function gatewayJobIdOf(providerMetadata: unknown): string | null {
   if (typeof asyncJob !== "object" || asyncJob === null) return null;
   const jobId = (asyncJob as Record<string, unknown>).jobId;
   return typeof jobId === "string" && jobId.length > 0 ? jobId : null;
+}
+
+function costOf(providerMetadata: unknown): { providerCostUsd?: number } {
+  const cost = gatewayProviderCostUsd(providerMetadata);
+  return cost === undefined ? {} : { providerCostUsd: cost };
 }
 
 // The three modes that work from a video are the one part of this provider
@@ -231,7 +237,12 @@ export async function startGatewayVideoJob(
       { outcome: "unknown" },
     );
   }
-  return { id: jobId, status: "pending", error: null };
+  return {
+    id: jobId,
+    status: "pending",
+    error: null,
+    ...costOf(result.providerMetadata),
+  };
 }
 
 export async function getGatewayVideoJob(
@@ -257,7 +268,13 @@ export async function getGatewayVideoJob(
 
   if (status.status === "completed") {
     const result: GatewayVideoResult = { videos: status.videos };
-    return { id: ref.providerJobId, status: "completed", error: null, result };
+    return {
+      id: ref.providerJobId,
+      status: "completed",
+      error: null,
+      result,
+      ...costOf(status.providerMetadata),
+    };
   }
   if (status.status === "error") {
     // The wire has a fourth state, "cancelled", which the SDK folds into this
@@ -266,9 +283,15 @@ export async function getGatewayVideoJob(
       id: ref.providerJobId,
       status: "failed",
       error: status.error,
+      ...costOf(status.providerMetadata),
     };
   }
-  return { id: ref.providerJobId, status: "pending", error: null };
+  return {
+    id: ref.providerJobId,
+    status: "pending",
+    error: null,
+    ...costOf(status.providerMetadata),
+  };
 }
 
 async function readBoundedBytes(response: Response): Promise<ArrayBuffer> {

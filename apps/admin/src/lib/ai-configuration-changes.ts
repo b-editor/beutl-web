@@ -1,4 +1,4 @@
-import { AI_OPERATIONS } from "@beutl/core";
+import { AI_OPERATIONS, MAX_MODEL_USAGE_PERCENT } from "@beutl/core";
 import {
   aiOperationsGoingOffline,
   validateAiOperationModelInput,
@@ -32,6 +32,8 @@ export type AiOperationModelSnapshot = {
   modelId: string;
   /** Absent on a page rendered before the column existed. */
   provider?: string;
+  /** Absent on a page rendered before actual-cost billing existed. */
+  usagePercent?: number;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -48,6 +50,7 @@ export function matchesAiOperationModelSnapshot(
     return snapshot !== undefined &&
       row.modelId === snapshot.modelId &&
       (row.provider ?? "openrouter") === (snapshot.provider ?? "openrouter") &&
+      (row.usagePercent ?? 100) === (snapshot.usagePercent ?? 100) &&
       row.priceUnits === snapshot.priceUnits &&
       row.displayName === snapshot.displayName &&
       row.enabled === snapshot.enabled &&
@@ -187,6 +190,11 @@ export function validateAiConfigurationChanges(
         typeof value.priceUnits !== "number" ||
         !Number.isSafeInteger(value.priceUnits) ||
         value.priceUnits < 0 ||
+        (value.usagePercent !== undefined &&
+          (typeof value.usagePercent !== "number" ||
+            !Number.isSafeInteger(value.usagePercent) ||
+            value.usagePercent < 1 ||
+            value.usagePercent > MAX_MODEL_USAGE_PERCENT)) ||
         (value.displayName !== null && typeof value.displayName !== "string") ||
         typeof value.enabled !== "boolean" ||
         typeof value.sortOrder !== "number" ||
@@ -203,6 +211,9 @@ export function validateAiConfigurationChanges(
           ? {}
           : { provider: value.provider as string }),
         priceUnits: value.priceUnits,
+        ...(value.usagePercent === undefined
+          ? {}
+          : { usagePercent: value.usagePercent as number }),
         displayName: value.displayName as string | null,
         enabled: value.enabled,
         sortOrder: value.sortOrder,

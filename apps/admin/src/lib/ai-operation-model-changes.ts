@@ -1,7 +1,9 @@
 import {
   AI_OPERATIONS,
+  MAX_MODEL_USAGE_PERCENT,
   MAX_MODEL_ID_LENGTH,
   MAX_PRICE_UNITS,
+  MIN_MODEL_USAGE_PERCENT,
   MIN_PRICE_UNITS,
   isAiModelId,
 } from "@beutl/core";
@@ -19,6 +21,9 @@ export type AiOperationModelInput = {
   modelId: string;
   /** Which provider runs it. Omitted rows belong to the one that predates the column. */
   provider: string;
+  /** Percentage of provider USD cost converted to usage units. */
+  usagePercent: number;
+  /** Legacy reservation price retained for rolling-deploy compatibility. */
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -44,9 +49,8 @@ export function validateAiOperationModelInput(
      * Injected rather than imported so this stays a pure validator: the answer
      * lives with the provider implementations in @beutl/api. It is the check
      * that stops a model being registered for something its provider has no
-     * surface for — Vercel AI Gateway has no named operation for background
-     * removal, upscaling or outpainting, and a row like that would be refused
-     * only after the user had been charged.
+     * surface for — Vercel AI Gateway still has no upscaling operation, and a
+     * row like that would be refused only after the user had been charged.
      */
     supportsOperation?: (provider: string, operation: string) => boolean;
   } = {},
@@ -54,8 +58,15 @@ export function validateAiOperationModelInput(
   if (typeof input !== "object" || input === null) {
     return { ok: false, message: "Invalid model" };
   }
-  const { operation, modelId, provider, priceUnits, displayName, enabled } =
-    input as Record<string, unknown>;
+  const {
+    operation,
+    modelId,
+    provider,
+    usagePercent,
+    priceUnits,
+    displayName,
+    enabled,
+  } = input as Record<string, unknown>;
 
   if (
     typeof operation !== "string" ||
@@ -89,11 +100,21 @@ export function validateAiOperationModelInput(
   if (!isAiModelId(trimmedModelId)) {
     return { ok: false, message: "Invalid model ID" };
   }
+  const resolvedUsagePercent = usagePercent ?? 100;
   if (
-    typeof priceUnits !== "number" ||
-    !Number.isSafeInteger(priceUnits) ||
-    priceUnits < MIN_PRICE_UNITS ||
-    priceUnits > MAX_PRICE_UNITS
+    typeof resolvedUsagePercent !== "number" ||
+    !Number.isSafeInteger(resolvedUsagePercent) ||
+    resolvedUsagePercent < MIN_MODEL_USAGE_PERCENT ||
+    resolvedUsagePercent > MAX_MODEL_USAGE_PERCENT
+  ) {
+    return { ok: false, message: "Invalid provider-cost percentage" };
+  }
+  const legacyPriceUnits = priceUnits ?? 1;
+  if (
+    typeof legacyPriceUnits !== "number" ||
+    !Number.isSafeInteger(legacyPriceUnits) ||
+    legacyPriceUnits < MIN_PRICE_UNITS ||
+    legacyPriceUnits > MAX_PRICE_UNITS
   ) {
     return { ok: false, message: "Invalid usage-unit price" };
   }
@@ -118,7 +139,8 @@ export function validateAiOperationModelInput(
       operation,
       modelId: trimmedModelId,
       provider: resolvedProvider,
-      priceUnits,
+      usagePercent: resolvedUsagePercent,
+      priceUnits: legacyPriceUnits,
       displayName: trimmedDisplayName,
       enabled,
     },
