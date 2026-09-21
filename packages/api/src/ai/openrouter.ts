@@ -820,9 +820,8 @@ function parseTranslationResponse(
       "OpenRouter returned an invalid translation completion",
     );
   }
-  // The model's own report that it gave up. A refusal or a stop for any other
-  // reason still has to parse as the requested JSON, which is checked below.
-  if (choice.finishReason === "error") {
+  // A complete-looking JSON object can precede a failure or truncation.
+  if (choice.finishReason && choice.finishReason !== "stop") {
     throw new AiProviderError("OpenRouter failed to translate segments");
   }
   if (typeof choice.message.content !== "string" || !choice.message.content) {
@@ -943,6 +942,7 @@ async function translateStreaming({
   const seen = new Set<string>();
   const reader = createTranslationSegmentReader();
   let content = "";
+  let finished = false;
   try {
     const stream = await client.chat.send(
       { chatRequest: { ...chatRequest, stream: true } },
@@ -961,6 +961,12 @@ async function translateStreaming({
           `OpenRouter failed to translate segments: ${chunk.error.message}`,
         );
       }
+      if (chunk.choices.some((choice) => choice.finishReason && choice.finishReason !== "stop")) {
+        throw new AiProviderError("OpenRouter did not finish translating segments");
+      }
+      if (chunk.choices.some((choice) => choice.index === 0 && choice.finishReason === "stop")) {
+        finished = true;
+      }
       const delta = chunk.choices[0]?.delta.content;
       if (typeof delta !== "string" || delta.length === 0) continue;
       content += delta;
@@ -976,6 +982,11 @@ async function translateStreaming({
     throw toAiProviderError(cause, "OpenRouter translation request failed");
   }
 
+  // The SDK closes its iterator for both [DONE] and an ordinary EOF. Require
+  // the model's completion signal before accepting otherwise valid JSON.
+  if (!finished) {
+    throw new AiProviderError("OpenRouter returned an incomplete translation stream");
+  }
   return parseTranslationContent(content, segments);
 }
 

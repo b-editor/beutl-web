@@ -10,13 +10,7 @@
 // a preview, and the whole text is validated at the end. A preview is never
 // what gets stored.
 
-import { streamText, generateText } from "ai";
-
-// Taken from the call rather than imported: @ai-sdk/provider, where the type is
-// declared, is not a direct dependency of this package.
-type GatewayProviderOptions = NonNullable<
-  Parameters<typeof generateText>[0]["providerOptions"]
->;
+import { streamText, generateText, jsonSchema, Output } from "ai";
 import { AiProviderError } from "../errors";
 import type { AiTranslateRequest, TranslationSegment } from "../types";
 import { createTranslationSegmentReader } from "../../translation-stream";
@@ -34,6 +28,12 @@ import {
 import { toGatewayProviderError } from "./errors";
 
 const PROVIDER_LABEL = "Vercel AI Gateway";
+
+function assertTranslationFinished(reason: string): void {
+  if (reason !== "stop") {
+    throw new AiProviderError(`${PROVIDER_LABEL} did not finish the translation (${reason})`);
+  }
+}
 
 function buildRequest(request: AiTranslateRequest) {
   const promptSegments = toTranslationPromptSegments(
@@ -53,29 +53,21 @@ function buildRequest(request: AiTranslateRequest) {
       style: request.style,
       segments: promptSegments,
     }),
-    // Named ids and a closed object, the same shape OpenRouter is sent. The
-    // Gateway carries it as the chat-completions response format.
-    responseFormat: {
-      type: "json_schema" as const,
-      json_schema: {
-        name: "subtitle_translation",
-        strict: true,
-        schema: translationJsonSchema(request.segments),
-      },
-    },
+    // The Gateway SDK uses the language-model protocol. Structured output
+    // belongs in `output`, which the SDK serializes as responseFormat;
+    // providerOptions.gateway.responseFormat does not configure it.
+    output: Output.object({
+      name: "subtitle_translation",
+      schema: jsonSchema(translationJsonSchema(request.segments)),
+    }),
   };
 }
 
 export async function translateGatewaySegments(
   request: AiTranslateRequest,
 ): Promise<TranslationSegment[]> {
-  const { system, user, responseFormat } = buildRequest(request);
+  const { system, user, output } = buildRequest(request);
   const model = createGatewayClient()(request.model);
-  // Cast because the schema is a JSON document the SDK only types as opaque
-  // JSON; its shape is checked where it is built, not here.
-  const providerOptions = {
-    gateway: { responseFormat },
-  } as unknown as GatewayProviderOptions;
 
   if (request.onSegment) {
     return await translateStreaming({
@@ -83,20 +75,22 @@ export async function translateGatewaySegments(
       model,
       system,
       user,
-      providerOptions,
+      output,
       onSegment: request.onSegment,
     });
   }
 
   let text: string;
   try {
-    ({ text } = await generateText({
+    const result = await generateText({
       model,
       system,
       prompt: user,
-      providerOptions,
+      output,
       abortSignal: gatewayRequestSignal(request.signal),
-    }));
+    });
+    assertTranslationFinished(result.finishReason);
+    text = result.text;
   } catch (cause) {
     throw toGatewayProviderError(
       cause,
@@ -111,30 +105,45 @@ async function translateStreaming({
   model,
   system,
   user,
-  providerOptions,
+  output,
   onSegment,
 }: {
   request: AiTranslateRequest;
   model: ReturnType<ReturnType<typeof createGatewayClient>>;
   system: string;
   user: string;
-  providerOptions: GatewayProviderOptions;
+  output: ReturnType<typeof buildRequest>["output"];
   onSegment: (segment: TranslationSegment) => void;
 }): Promise<TranslationSegment[]> {
   const reader = createTranslationSegmentReader();
   const wanted = new Set(request.segments.map((segment) => segment.id));
   const seen = new Set<string>();
   let content = "";
+  let finished = false;
 
   try {
     const result = streamText({
       model,
       system,
       prompt: user,
-      providerOptions,
+      output,
       abortSignal: gatewayRequestSignal(request.signal),
     });
-    for await (const delta of result.textStream) {
+    // textStream omits error/abort parts. Valid-looking JSON is not proof
+    // that the provider completed the request successfully.
+    for await (const part of result.fullStream) {
+      if (part.type === "error") {
+        throw new AiProviderError(`${PROVIDER_LABEL} translation stream failed`, { cause: part.error });
+      }
+      if (part.type === "abort") {
+        throw new AiProviderError(`${PROVIDER_LABEL} translation stream was aborted`);
+      }
+      if (part.type === "finish") {
+        assertTranslationFinished(part.finishReason);
+        finished = true;
+      }
+      if (part.type !== "text-delta") continue;
+      const delta = part.text;
       content += delta;
       for (const segment of reader.push(delta)) {
         // A preview for a subtitle nobody asked about, or a second one for the
@@ -151,9 +160,9 @@ async function translateStreaming({
     );
   }
 
-  if (content.length === 0) {
+  if (!finished || content.length === 0) {
     throw new AiProviderError(
-      "Vercel AI Gateway answered a streamed translation with nothing",
+      "Vercel AI Gateway returned an incomplete translation stream",
     );
   }
   // The previews were shown early; this is what is accepted.

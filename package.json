@@ -67,6 +67,9 @@
       "fast-uri": "3.1.6",
       "mysql2": "3.22.0",
       "@simplewebauthn/server": "13.3.2"
+    },
+    "patchedDependencies": {
+      "@ai-sdk/gateway@4.0.86": "patches/@ai-sdk__gateway@4.0.86.patch"
     }
   },
   "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a"

@@ -1,5 +1,5 @@
 import { boundedBody } from "@beutl/core";
-import { AiProviderError } from "../errors";
+import { AiProviderError, InvalidAiProviderOutputError } from "../errors";
 
 /**
  * Read a Gateway response, refusing one that is too large *while* it arrives.
@@ -35,7 +35,7 @@ export async function readBoundedJson(
   try {
     return JSON.parse(text) as unknown;
   } catch (cause) {
-    throw new AiProviderError("Vercel AI Gateway returned invalid JSON", {
+    throw new InvalidAiProviderOutputError("Vercel AI Gateway returned invalid JSON", {
       cause,
     });
   }

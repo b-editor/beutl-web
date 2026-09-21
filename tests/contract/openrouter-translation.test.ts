@@ -13,7 +13,7 @@ import {
 
 // A completion as OpenRouter actually returns one: the envelope fields are
 // what the client validates before it looks at the content.
-function chatCompletion(content: string): Response {
+function chatCompletion(content: string, finishReason = "stop"): Response {
   return new Response(
     JSON.stringify({
       id: "gen-1",
@@ -24,7 +24,7 @@ function chatCompletion(content: string): Response {
       choices: [
         {
           index: 0,
-          finish_reason: "stop",
+          finish_reason: finishReason,
           message: { role: "assistant", content },
         },
       ],
@@ -50,6 +50,16 @@ describe("OpenRouter subtitle translation contract", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(["error", "length", "content_filter"])("rejects a %s completion even with valid JSON", async (reason) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(chatCompletion(
+      JSON.stringify({ segments: [{ id: "line-1", text: "こんにちは" }] }), reason,
+    )));
+    await expect(translateSegments({
+      model: "openai/gpt-4.1-mini", targetLanguage: "ja",
+      segments: [{ id: "line-1", text: "Hello" }],
+    })).rejects.toBeInstanceOf(AiProviderError);
   });
 
   it("sends the exact strict structured-output payload", async () => {

@@ -20,6 +20,7 @@ export type AiCostUnknownReason =
   | "invalid_response"
   | "unsupported_pricing_shape"
   | "unknown_stt_pricing_unit"
+  | "price_not_published"
   | "zero_price_reported";
 
 export type AiCostAssumption =

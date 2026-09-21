@@ -48,41 +48,63 @@ export async function runAiStream<TResult>(
   });
 
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    // A completed idempotent request is replayed as ordinary JSON, even when
+    // this caller requested a stream.
+    if (response.ok) {
+      try {
+        return { ok: true, result: await response.json() as TResult };
+      } catch {
+        // The job succeeded, but its replay did not arrive intact. Keep the
+        // request recoverable under the same idempotency key.
+        return { ok: false, errorCode: "aiRequestInterrupted" };
+      }
+    }
     return { ok: false, errorCode: await errorCodeOf(response) };
   }
-  if (!response.body) return { ok: false, errorCode: "aiProviderError" };
+  if (!response.body) return { ok: false, errorCode: "aiRequestInterrupted" };
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let outcome: AiStreamOutcome<TResult> | null = null;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffer += decoder.decode(next.value, { stream: true });
-
-    let separator = EVENT_SEPARATOR.exec(buffer);
-    while (separator) {
-      const block = buffer.slice(0, separator.index);
-      buffer = buffer.slice(separator.index + separator[0].length);
-      const parsed = parseEvent(block);
-      if (parsed) {
-        if (parsed.event === "result") {
-          outcome = { ok: true, result: parsed.data as TResult };
-        } else if (parsed.event === "error") {
-          outcome = { ok: false, errorCode: errorCodeIn(parsed.data) };
-        } else {
-          onEvent(parsed.event, parsed.data);
-        }
+  try {
+    while (true) {
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try {
+        next = await reader.read();
+      } catch {
+        return { ok: false, errorCode: "aiRequestInterrupted" };
       }
-      separator = EVENT_SEPARATOR.exec(buffer);
+      if (next.done) break;
+      buffer += decoder.decode(next.value, { stream: true });
+
+      let separator = EVENT_SEPARATOR.exec(buffer);
+      while (separator) {
+        const block = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator[0].length);
+        const parsed = parseEvent(block);
+        if (parsed) {
+          // The server emits these only after persistence or failure handling.
+          // A subsequent socket close must not overturn a settled result.
+          if (parsed.event === "result") {
+            return { ok: true, result: parsed.data as TResult };
+          } else if (parsed.event === "error") {
+            return { ok: false, errorCode: errorCodeIn(parsed.data) };
+          } else {
+            onEvent(parsed.event, parsed.data);
+          }
+        }
+        separator = EVENT_SEPARATOR.exec(buffer);
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 
   // A stream always ends in one or the other; one that does not was cut off,
   // and the operation it was carrying may well have finished and been charged
   // for, which the job history is the place to settle.
-  return outcome ?? { ok: false, errorCode: "aiRequestInterrupted" };
+  return { ok: false, errorCode: "aiRequestInterrupted" };
 }
 
 function parseEvent(block: string): { event: string; data: unknown } | null {

@@ -16,13 +16,14 @@
 // does not choose.
 
 import { z } from "zod";
-import { AiProviderError } from "../errors";
+import { AiProviderError, InvalidAiProviderOutputError } from "../errors";
 import { readBoundedJson } from "./bounded";
 import { aiVideoResolutionOfGatewayLabel } from "./resolution";
 
 const ENDPOINTS_URL_BASE = "https://ai-gateway.vercel.sh/v1/models";
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_CATALOG_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 // Numbers arrive as strings ("0.00000012"), but a provider that switches to
 // JSON numbers should not read as a missing price.
@@ -70,6 +71,94 @@ export type GatewayRateCard = {
   completionUsd: number | null;
 };
 
+export type GatewayImagePrice = {
+  costUsd: number;
+  unit: "image" | "token";
+};
+
+const imageModelSchema = z.object({
+  id: z.string().min(1),
+  type: z.string().nullish(),
+  pricing: z.record(z.string(), z.unknown()).nullish(),
+});
+
+function positiveMoney(value: unknown): number | null {
+  const parsed = moneySchema.safeParse(value);
+  if (!parsed.success) return null;
+  const amount = toNumber(parsed.data);
+  return amount !== null && amount > 0 ? amount : null;
+}
+
+function imagePriceOf(model: z.infer<typeof imageModelSchema>): GatewayImagePrice | null {
+  const pricing = model.pricing;
+  if (!pricing) return null;
+
+  const perImage = positiveMoney(pricing.image);
+  if (perImage !== null) return { costUsd: perImage, unit: "image" };
+
+  // The adapter does not choose a size or quality. Only an explicit default
+  // applies; a price for 4K, vectorization or a particular style does not.
+  const variants = pricing.image_dimension_quality_pricing;
+  if (Array.isArray(variants)) {
+    for (const variant of variants) {
+      if (
+        typeof variant !== "object" || variant === null ||
+        variant.size !== "default" ||
+        Object.keys(variant).some((key) => key !== "size" && key !== "cost")
+      ) continue;
+      const costUsd = positiveMoney(variant.cost);
+      if (costUsd !== null) return { costUsd, unit: "image" };
+    }
+  }
+
+  // Dedicated image models (including GPT Image 2) publish image output
+  // tokens here. A language model's output price is for text, so it cannot
+  // stand in for a missing image price. The input field is likewise not a
+  // separate image-input rate and must not be charged for reference images.
+  const perToken = model.type === "image" ? positiveMoney(pricing.output) : null;
+  return perToken === null ? null : { costUsd: perToken, unit: "token" };
+}
+
+/**
+ * Image output prices from the public model catalog. The per-model endpoints
+ * route reports zero for image/image_output even for paid image models.
+ * Null means the model exists but publishes no usable image price.
+ * https://vercel.com/docs/ai-gateway/sdks-and-apis/rest-api#list-models
+ */
+export async function loadGatewayImagePrices(
+  fetchImpl: typeof fetch = fetch,
+): Promise<Map<string, GatewayImagePrice | null>> {
+  let response: Response;
+  try {
+    response = await fetchImpl(ENDPOINTS_URL_BASE, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { accept: "application/json" },
+    });
+  } catch (cause) {
+    throw new AiProviderError("Vercel AI Gateway image prices failed", { cause });
+  }
+  if (!response.ok) {
+    throw new AiProviderError(
+      `Vercel AI Gateway image prices failed: ${response.status}`,
+      { httpStatus: response.status },
+    );
+  }
+  const parsed = z.object({ data: z.array(z.unknown()) }).safeParse(
+    await readBoundedJson(response, MAX_CATALOG_RESPONSE_BYTES, "image prices"),
+  );
+  if (!parsed.success) {
+    throw new InvalidAiProviderOutputError("Vercel AI Gateway returned unreadable image prices", {
+      cause: parsed.error,
+    });
+  }
+  const prices = new Map<string, GatewayImagePrice | null>();
+  for (const raw of parsed.data.data) {
+    const model = imageModelSchema.safeParse(raw);
+    if (model.success) prices.set(model.data.id, imagePriceOf(model.data));
+  }
+  return prices;
+}
+
 
 /**
  * The published rates for one model.
@@ -109,7 +198,7 @@ export async function loadGatewayRateCard(
     await readBoundedJson(response, MAX_RESPONSE_BYTES, "rate card"),
   );
   if (!parsed.success) {
-    throw new AiProviderError(
+    throw new InvalidAiProviderOutputError(
       "Vercel AI Gateway returned an unreadable rate card",
       { cause: parsed.error },
     );

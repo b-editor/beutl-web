@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gatewayDearestVideoRate,
+  loadGatewayImagePrices,
   loadGatewayRateCard,
 } from "../../packages/api/src/ai/providers/vercel-gateway/pricing";
 import { AiProviderError } from "../../packages/api/src/ai/providers/errors";
@@ -66,24 +67,6 @@ const klingMotionControl = {
             { mode: "std", cost_per_second: "0.126" },
             { mode: "pro", cost_per_second: "0.168" },
           ],
-        },
-      },
-    ],
-  },
-};
-
-// Every image model in the Gateway's catalog reports zero for its picture
-// rates, including the ones it charges for.
-const fluxImage = {
-  data: {
-    id: "bfl/flux-2-flex",
-    endpoints: [
-      {
-        pricing: {
-          prompt: "0",
-          completion: "0",
-          image: "0",
-          image_output: "0",
         },
       },
     ],
@@ -229,6 +212,57 @@ describe("choosing the rate a request would be charged", () => {
   });
 });
 
+describe("reading Gateway image prices", () => {
+  it("keeps usable prices when another model or price field is malformed", async () => {
+    const prices = await loadGatewayImagePrices(respondWith({
+      data: [
+        null,
+        { id: 42 },
+        { id: "bfl/flux-pro-1.1", type: "image", pricing: { image: 0.04 } },
+        { id: "openai/gpt-image-2", type: "image", pricing: { image: {}, output: "0.00003" } },
+        { id: "bfl/flux-2-flex", type: "image", pricing: {} },
+      ],
+    }));
+
+    expect([...prices]).toEqual([
+      ["bfl/flux-pro-1.1", { costUsd: 0.04, unit: "image" }],
+      ["openai/gpt-image-2", { costUsd: 0.00003, unit: "token" }],
+      ["bfl/flux-2-flex", null],
+    ]);
+  });
+
+  it("does not invent image prices from text tokens or non-default variants", async () => {
+    const prices = await loadGatewayImagePrices(respondWith({
+      data: [
+        { id: "text/model", type: "language", pricing: { output: "0.00003" } },
+        { id: "image/variant", type: "image", pricing: {
+          image_dimension_quality_pricing: [
+            { size: "4K", cost: "0.24" },
+            { size: "default", quality: "high", cost: "0.1" },
+            { operation: "vectorize", cost: "0.15" },
+          ],
+        } },
+      ],
+    }));
+
+    expect([...prices.values()]).toEqual([null, null]);
+  });
+
+  it.each(["0", "-0.1", "NaN", "Infinity", "", null])("rejects the unusable price %s", async (price) => {
+    const prices = await loadGatewayImagePrices(respondWith({
+      data: [{ id: "image/model", type: "image", pricing: { image: price, output: price } }],
+    }));
+    expect(prices.get("image/model")).toBeNull();
+  });
+
+  it("preserves transport failures and rejects unreadable catalogs", async () => {
+    await expect(loadGatewayImagePrices(respondWith({}, 503)))
+      .rejects.toMatchObject({ httpStatus: 503 });
+    await expect(loadGatewayImagePrices(respondWith({ data: {} })))
+      .rejects.toBeInstanceOf(AiProviderError);
+  });
+});
+
 describe("costing an operation at the provider that serves it", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -257,6 +291,37 @@ describe("costing an operation at the provider that serves it", () => {
     });
     return costs.entries.find((entry) => entry.operation === operation)?.estimate;
   };
+
+  it.each(["image.generate", "video.generate"])("classifies malformed %s pricing replies as invalid responses", async (operation) => {
+    for (const body of ['{"data":42}', 'not JSON']) {
+      clearAiModelPricingCache();
+      const fetchMock = vi.fn(async () => new Response(body, {
+        headers: { "content-type": "application/json" },
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const expected = { status: "unknown", reason: "invalid_response" };
+      expect(await estimateFor(operation, "x/y", "vercel-gateway")).toEqual(expected);
+      expect(await estimateFor(operation, "x/y", "vercel-gateway")).toEqual(expected);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("keeps network, HTTP and interrupted-body failures distinct from malformed prices", async () => {
+    const cases = [
+      async () => { throw new TypeError("connection failed"); },
+      async () => new Response("not JSON", { status: 503 }),
+      async () => new Response(new ReadableStream({
+        start(controller) { controller.error(new Error("connection lost")); },
+      })),
+    ];
+    for (const fetchImpl of cases) {
+      clearAiModelPricingCache();
+      vi.stubGlobal("fetch", fetchImpl);
+      expect(await estimateFor("image.generate", "x/y", "vercel-gateway"))
+        .toEqual({ status: "unknown", reason: "provider_unavailable" });
+    }
+  });
 
   it("prices a Gateway video model instead of calling it missing", async () => {
     // The regression this exists for: the estimate used to be looked up in
@@ -302,12 +367,82 @@ describe("costing an operation at the provider that serves it", () => {
     }
   });
 
-  it("reads a Gateway image model's zero rates as no price, not a free one", async () => {
-    stubGatewayFetch(fluxImage);
+  it("reports an unpublished image price separately from a lookup failure", async () => {
+    stubGatewayFetch({
+      data: [{ id: "bfl/flux-2-flex", type: "image", pricing: {} }],
+    });
 
     expect(
       await estimateFor("image.generate", "bfl/flux-2-flex", "vercel-gateway"),
-    ).toEqual({ status: "unknown", reason: "zero_price_reported" });
+    ).toEqual({ status: "unknown", reason: "price_not_published" });
+  });
+
+  it("reads image prices from the model catalog rather than the zero endpoint prices", async () => {
+    const calls = stubGatewayFetch({
+      data: [{
+        id: "bytedance/seedream-4.5",
+        type: "image",
+        pricing: { image: "0.04" },
+      }],
+    });
+
+    for (const operation of ["image.generate", "image.edit.restyle", "image.edit.remove_object"]) {
+      expect(await estimateFor(operation, "bytedance/seedream-4.5", "vercel-gateway"))
+        .toEqual({
+          status: "estimated",
+          usdMin: 0.04,
+          usdMax: 0.04,
+          assumptions: [{ kind: "imageInputNotPriced" }],
+        });
+    }
+    expect(calls).toEqual(["https://ai-gateway.vercel.sh/v1/models"]);
+  });
+
+  it.each(["image.generate", "image.edit.restyle", "image.edit.remove_object"])("estimates GPT Image 2 output tokens for %s without using text input rates for references", async (operation) => {
+    stubGatewayFetch({
+      data: [{
+        id: "openai/gpt-image-2",
+        type: "image",
+        pricing: { input: "0.000005", output: "0.00003" },
+      }],
+    });
+
+    expect(await estimateFor(operation, "openai/gpt-image-2", "vercel-gateway"))
+      .toEqual({
+        status: "estimated",
+        usdMin: 1056 * 0.00003,
+        usdMax: 1056 * 0.00003,
+        assumptions: [
+          { kind: "imageOutputTokens", value: 1056 },
+          { kind: "imageInputNotPriced" },
+        ],
+      });
+  });
+
+  it("uses an explicit default image price instead of a language output-token price", async () => {
+    stubGatewayFetch({
+      data: [{
+        id: "google/gemini-3-pro-image",
+        type: "language",
+        pricing: {
+          output: "0.000012",
+          image_dimension_quality_pricing: [
+            { size: "4K", cost: "0.24" },
+            { size: "default", cost: "0.1344" },
+          ],
+        },
+      }],
+    });
+
+    expect(await estimateFor("image.generate", "google/gemini-3-pro-image", "vercel-gateway"))
+      .toEqual({ status: "estimated", usdMin: 0.1344, usdMax: 0.1344, assumptions: [] });
+  });
+
+  it("distinguishes a missing model from an image price that is not published", async () => {
+    stubGatewayFetch({ data: [] });
+
+    expect(await estimateFor("image.generate", "nope/nope", "vercel-gateway"))
+      .toEqual({ status: "unknown", reason: "model_not_found" });
   });
 
   it("keeps asking OpenRouter for an OpenRouter row", async () => {

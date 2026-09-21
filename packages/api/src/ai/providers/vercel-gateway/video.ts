@@ -78,7 +78,7 @@ function gatewayJobIdOf(providerMetadata: unknown): string | null {
 // edit — a different video, charged the same.
 function modeProviderOptions(
   request: AiVideoStartRequest,
-): Record<string, Record<string, unknown>> | undefined {
+): Parameters<typeof startVideo>[0]["providerOptions"] {
   if (request.mode === undefined) return undefined;
   if (!request.sourceVideoUrl) {
     throw new AiVideoSubmissionError(
@@ -88,9 +88,12 @@ function modeProviderOptions(
   }
 
   const creator = request.model.split("/")[0];
+  // The catalog renamed xAI's model prefix to spacexai, but the native
+  // options still belong to xai. A model creator is not an SDK namespace.
+  const namespace = creator === "spacexai" ? "xai" : creator;
   if (request.mode === "motion") {
     return {
-      [creator]: {
+      [namespace]: {
         videoUrl: request.sourceVideoUrl,
         characterOrientation: request.motionOrientation ?? "video",
         // "std" and "pro" are the provider's words for it.
@@ -99,7 +102,7 @@ function modeProviderOptions(
     };
   }
   return {
-    [creator]: {
+    [namespace]: {
       videoUrl: request.sourceVideoUrl,
       ...(request.mode === "extend" ? { mode: "extend-video" } : {}),
     },
@@ -186,7 +189,7 @@ export async function startGatewayVideoJob(
         : {}),
       ...(providerOptions === undefined
         ? {}
-        : { providerOptions: providerOptions as never }),
+        : { providerOptions }),
       // Frames win where both are given — the Gateway would ignore the
       // references and warn — so the entry point refuses the combination and
       // this never sends both.

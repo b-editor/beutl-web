@@ -1,0 +1,48 @@
+diff --git a/dist/index.js b/dist/index.js
+index e6ea132e212af89ed3b600faa2045f7fecab71ad..3ac7bd1b131551626f5e72e0ee0e24ccae8880cf 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1748,7 +1748,7 @@ var GatewayImageModel = class _GatewayImageModel {
+           n,
+           ...size && { size },
+           ...aspectRatio && { aspectRatio },
+-          ...seed && { seed },
++          ...seed != null && { seed },
+           ...providerOptions && { providerOptions },
+           ...files && {
+             files: files.map((file) => maybeEncodeImageFile(file))
+@@ -2135,7 +2135,7 @@ var GatewayVideoModel = class {
+       ...resolution && { resolution },
+       ...duration && { duration },
+       ...fps && { fps },
+-      ...seed && { seed },
++      ...seed != null && { seed },
+       ...generateAudio !== void 0 && { generateAudio },
+       ...providerOptions && { providerOptions },
+       ...image && { image: maybeEncodeVideoFile(image) },
+diff --git a/src/gateway-image-model.ts b/src/gateway-image-model.ts
+index 53379973c6bf6561f97f412db35a097c85363a0b..aaa5880f0d36d9b77db9e60edeb6ca731e8fdb1e 100644
+--- a/src/gateway-image-model.ts
++++ b/src/gateway-image-model.ts
+@@ -85,7 +85,7 @@ export class GatewayImageModel implements ImageModelV4 {
+           n,
+           ...(size && { size }),
+           ...(aspectRatio && { aspectRatio }),
+-          ...(seed && { seed }),
++          ...(seed != null && { seed }),
+           ...(providerOptions && { providerOptions }),
+           ...(files && {
+             files: files.map(file => maybeEncodeImageFile(file)),
+diff --git a/src/gateway-video-model.ts b/src/gateway-video-model.ts
+index 9c1a4e9f542565f4f609f4177ebcd9cff1ebec35..3646e8724b65083477153f8a152252ab222d38b3 100644
+--- a/src/gateway-video-model.ts
++++ b/src/gateway-video-model.ts
+@@ -352,7 +352,7 @@ export class GatewayVideoModel implements VideoModelV4 {
+       ...(resolution && { resolution }),
+       ...(duration && { duration }),
+       ...(fps && { fps }),
+-      ...(seed && { seed }),
++      ...(seed != null && { seed }),
+       ...(generateAudio !== undefined && { generateAudio }),
+       ...(providerOptions && { providerOptions }),
+       ...(image && { image: maybeEncodeVideoFile(image) }),
