@@ -34,6 +34,7 @@ type LookedUpEconomics = {
   estimate: AiCostEstimate | null;
   proOffer: OfferAmount;
   topUpUnitValue: AiUnitValue | null;
+  unsupported: boolean;
 };
 
 // What the row being typed would cost to run.
@@ -311,6 +312,80 @@ function ModelEditor({
   );
 }
 
+// Provider-dependent figures and compatibility for a model that exists only
+// in the local draft. Used while editing and after Apply: the server-rendered
+// row still describes the saved provider until the page-level save refreshes
+// it.
+function LookedUpModelEconomics({
+  lang,
+  operation,
+  modelId,
+  provider,
+  priceUnits,
+  panelClassName,
+  messageClassName,
+}: {
+  lang: string;
+  operation: string;
+  modelId: string;
+  provider: string;
+  priceUnits: number;
+  panelClassName: string;
+  messageClassName?: string;
+}) {
+  const { t } = useTranslation(lang);
+  const { economics, isLoading } = useModelEconomics(
+    operation,
+    modelId,
+    provider,
+  );
+  if (!Number.isSafeInteger(priceUnits) || priceUnits <= 0) {
+    return null;
+  }
+  if (!economics) {
+    return (
+      <p
+        className={`text-xs text-muted-foreground ${messageClassName ?? ""}`}
+      >
+        {isLoading
+          ? t("admin:ai.economics.loading")
+          : t("admin:ai.models.economicsPending")}
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {economics.unsupported && (
+        <p className={`text-xs text-destructive ${messageClassName ?? ""}`}>
+          {t("admin:ai.models.unsupportedByProvider")}
+        </p>
+      )}
+      <div className={panelClassName}>
+        <AiOperationEconomicsPanel
+          lang={lang}
+          operation={operation}
+          // This provider/model pair is not saved yet, so do not read the
+          // server row's draft price by id.
+          modelId=""
+          priceUnits={priceUnits}
+          livePrice={priceUnits}
+          // Undefined would read as "still loading"; a lookup that came back
+          // without a rate is a cost nobody knows.
+          estimate={
+            economics.estimate ?? {
+              status: "unknown",
+              reason: "provider_unavailable",
+            }
+          }
+          proOffer={economics.proOffer}
+          topUpUnitValue={economics.topUpUnitValue}
+        />
+      </div>
+    </>
+  );
+}
+
 // The same figures the saved rows carry, following the fields as they are
 // typed: what the allowance buys at this price, what the provider charges for
 // this model, and what share of the revenue that is.
@@ -323,47 +398,18 @@ function ModelEditorEconomics({
   operation: string;
   draft: Draft;
 }) {
-  const { t } = useTranslation(lang);
-  const { economics, isLoading } = useModelEconomics(
-    operation,
-    draft.modelId,
-    draft.provider,
-  );
-  const price = Number(draft.priceUnits);
-  if (!Number.isSafeInteger(price) || price <= 0) {
-    return null;
-  }
-  if (!economics) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        {isLoading
-          ? t("admin:ai.economics.loading")
-          : t("admin:ai.models.economicsPending")}
-      </p>
-    );
-  }
-
   return (
-    <div className="-mx-4 -mb-4 mt-1 overflow-hidden rounded-b-lg">
-      <AiOperationEconomicsPanel
-        lang={lang}
-        operation={operation}
-        // No saved row to read a price from while one is being typed.
-        modelId=""
-        priceUnits={price}
-        livePrice={price}
-        // Undefined would read as "still loading"; a lookup that came back
-        // without a rate is a cost nobody knows.
-        estimate={
-          economics.estimate ?? {
-            status: "unknown",
-            reason: "provider_unavailable",
-          }
-        }
-        proOffer={economics.proOffer}
-        topUpUnitValue={economics.topUpUnitValue}
-      />
-    </div>
+    <LookedUpModelEconomics
+      // Re-mount when the provider or typed id changes so the previous pair's
+      // answer is never painted during the debounce for the new lookup.
+      key={`${draft.provider}:${draft.modelId.trim()}`}
+      lang={lang}
+      operation={operation}
+      modelId={draft.modelId}
+      provider={draft.provider}
+      priceUnits={Number(draft.priceUnits)}
+      panelClassName="-mx-4 -mb-4 mt-1 overflow-hidden rounded-b-lg"
+    />
   );
 }
 
@@ -387,7 +433,8 @@ export function AiOperationModels({
   warningsByModel?: Record<string, string>;
 }) {
   const { t } = useTranslation(lang);
-  const { models, changed, isPending, setModels } = useAiModels(operation);
+  const { models, savedModels, changed, isPending, setModels } =
+    useAiModels(operation);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [adding, setAdding] = useState(false);
@@ -473,8 +520,15 @@ export function AiOperationModels({
         )}
       </div>
 
-      {models.map((model) =>
-        editing === model.modelId ? (
+      {models.map((model) => {
+        const savedModel = savedModels.find(
+          (candidate) => candidate.modelId === model.modelId,
+        );
+        // A newly added row also has no server preview. In both cases the
+        // provider/model pair in the draft must be looked up on the client.
+        const needsFreshProviderPreview =
+          savedModel === undefined || savedModel.provider !== model.provider;
+        return editing === model.modelId ? (
           <ModelEditor
             key={model.modelId}
             lang={lang}
@@ -565,15 +619,30 @@ export function AiOperationModels({
                 </Button>
               </div>
             </div>
-            {warningsByModel?.[model.modelId] && (
-              <p className="text-xs text-destructive">
-                {warningsByModel[model.modelId]}
-              </p>
+            {needsFreshProviderPreview ? (
+              <LookedUpModelEconomics
+                key={`${model.modelId}:${model.provider}`}
+                lang={lang}
+                operation={operation}
+                modelId={model.modelId}
+                provider={model.provider}
+                priceUnits={model.priceUnits}
+                panelClassName="overflow-hidden rounded-b-lg"
+                messageClassName="px-3 pb-3"
+              />
+            ) : (
+              <>
+                {warningsByModel?.[model.modelId] && (
+                  <p className="text-xs text-destructive">
+                    {warningsByModel[model.modelId]}
+                  </p>
+                )}
+                {economicsByModel[model.modelId]}
+              </>
             )}
-            {economicsByModel[model.modelId]}
           </div>
-        ),
-      )}
+        );
+      })}
 
       {adding && (
         <ModelEditor
