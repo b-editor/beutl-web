@@ -1639,13 +1639,23 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-          where: { userId?: string; aiJobId?: string; kind?: string; topUpCheckoutAttemptId?: string; stripePaymentId?: string };
+        where: {
+          userId?: string;
+          aiJobId?: string;
+          kind?: string;
+          topUpCheckoutAttemptId?: string;
+          stripePaymentId?: string;
+          usageAmount?: { lt: number };
+          createdAt?: { gte?: Date; lt?: Date };
+        };
       }) => {
         const item = state.creditTransactions.find(
           (transaction) =>
             (!where.userId || transaction.userId === where.userId) &&
             (!where.aiJobId || transaction.aiJobId === where.aiJobId) &&
             (!where.kind || transaction.kind === where.kind) &&
+            (!where.usageAmount || transaction.usageAmount < where.usageAmount.lt) &&
+            matchesCreatedAt(transaction.createdAt, where.createdAt) &&
             (!where.topUpCheckoutAttemptId || transaction.topUpCheckoutAttemptId === where.topUpCheckoutAttemptId) &&
             (!where.stripePaymentId || transaction.stripePaymentId === where.stripePaymentId),
         );

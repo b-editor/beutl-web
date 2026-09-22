@@ -16,6 +16,7 @@ import {
   listCreditAccountUsageSnapshot,
   listRecentAiJobsByUserId,
   setDbProvider,
+  setMonthlyUsageUsedByAdmin,
   settleUsage,
 } from "@beutl/db";
 
@@ -214,6 +215,38 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
       expect(rows[0].usagePeriodStart).toEqual(oldPeriod.start);
       expect((await getAiUsageTotals({ since, prisma: tx })).consumedUnits).toBe(17.5);
       expect((await getAiUsageTotals({ since: nextPeriod.start, prisma: tx })).consumedUnits).toBe(5);
+      throw rollback;
+    }, { timeout: 30_000 })).rejects.toBe(rollback);
+    expect(await prisma.user.count({ where: { id: userId } })).toBe(0);
+  }, 45_000);
+
+  it("preserves post-reset usage while recording the complete settlement delta", async () => {
+    const userId = crypto.randomUUID();
+    const rollback = new Error("Roll back administrator reset fixtures");
+    await expect(prisma.$transaction(async (tx) => {
+      const newest = await tx.aiJob.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+      const since = new Date(Math.max(Date.now(), newest?.createdAt.getTime() ?? 0) + 60_000);
+      const period = { start: since, end: new Date(since.getTime() + 86_400_000) };
+      await tx.user.create({ data: { id: userId, email: `${userId}@admin-reset-test.invalid` } });
+      await tx.creditAccount.create({ data: { userId, purchasedCredits: 10 } });
+      const oldJob = await createAiJob({ userId, kind: "image", provider: "test", status: "succeeded", usageUnits: 25, reservedUsageUnits: 25, usageUnitUsdMicros: 10_000, prisma: tx });
+      await tx.aiJob.update({ where: { id: oldJob.id }, data: { createdAt: since } });
+      await consumeUsage({ userId, aiJobId: oldJob.id, amount: 25, monthlyUsageLimit: 20, usagePeriod: period, prisma: tx });
+      await setMonthlyUsageUsedByAdmin({ userId, monthlyUsageUsed: 0, monthlyUsageLimit: 20, usagePeriod: period, prisma: tx });
+      const newJob = await createAiJob({ userId, kind: "image", provider: "test", status: "running", usageUnits: 10, prisma: tx });
+      await tx.aiJob.update({ where: { id: newJob.id }, data: { createdAt: since } });
+      await consumeUsage({ userId, aiJobId: newJob.id, amount: 10, monthlyUsageLimit: 20, usagePeriod: period, prisma: tx });
+      const settlement = { userId, aiJobId: oldJob.id, actualAmount: 12.5, providerCostUsdMicros: 125_000, monthlyUsageLimit: 20, currentUsagePeriod: period, prisma: tx };
+      await settleUsage(settlement);
+      await settleUsage(settlement);
+
+      expect(await getCreditAccount({ userId, prisma: tx })).toMatchObject({ monthlyUsageUsed: 10, purchasedCredits: 10, purchasedCreditDebt: 0 });
+      const rows = await tx.creditTransaction.findMany({ where: { userId, kind: "usage_settlement" } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].usageAmount.toNumber()).toBe(-7.5);
+      expect(rows[0].creditAmount.toNumber()).toBe(5);
+      expect(rows[0].usagePeriodStart).toEqual(period.start);
+      expect((await getAiUsageTotals({ since, prisma: tx })).consumedUnits).toBe(22.5);
       throw rollback;
     }, { timeout: 30_000 })).rejects.toBe(rollback);
     expect(await prisma.user.count({ where: { id: userId } })).toBe(0);

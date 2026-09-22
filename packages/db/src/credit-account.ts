@@ -994,7 +994,22 @@ export async function settleUsage({
       const reservedPurchased = Math.max(-usage.creditAmount, 0);
       const purchasedRestored = Math.min(reservedPurchased, refund);
       const monthlyWanted = refund - purchasedRestored;
-      const monthlyRestored = samePeriod
+      // Lowering the counter replaces its baseline: this reservation can no
+      // longer be assumed to be represented in it. Increases do not remove it.
+      // Include equal timestamps conservatively: ledger timestamps alone cannot
+      // order a reset and reservation recorded within the same millisecond.
+      const adjustedSinceReservation = samePeriod && monthlyWanted > 0
+        ? await tx.creditTransaction.findFirst({
+            where: {
+              userId,
+              kind: ADMIN_USAGE_ADJUSTMENT_KIND,
+              usageAmount: { lt: 0 },
+              createdAt: { gte: usage.createdAt },
+            },
+            select: { id: true },
+          })
+        : null;
+      const monthlyRestored = samePeriod && !adjustedSinceReservation
         ? Math.min(monthlyUsageUsed, monthlyWanted)
         : 0;
       const debtPaid = Math.min(purchasedCreditDebt, purchasedRestored);

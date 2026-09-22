@@ -117,13 +117,82 @@ describe("settling an AI reservation to actual provider cost", () => {
     expect((await getAiUsageTotals({ since: nextPeriod.start })).consumedUnits).toBe(5);
   });
 
-  it("retains the charge correction when a same-period admin reset limits restoration", async () => {
+  it("retains the charge correction without changing an administrator's new baseline", async () => {
     const job = await reserve(20);
     await setMonthlyUsageUsedByAdmin({ userId: USER_ID, monthlyUsageUsed: 5, monthlyUsageLimit: 20, usagePeriod: PERIOD });
     await settleUsage({ userId: USER_ID, aiJobId: job.id, actualAmount: 6, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD });
-    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(5);
     expect(memory.state.creditTransactions.find((row) => row.kind === "usage_settlement")).toMatchObject({ usageAmount: -14 });
     expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(6);
+  });
+
+  it.each([
+    { reserved: 20, actual: 18, purchased: 0, monthlyDelta: -2, creditDelta: 0 },
+    { reserved: 25, actual: 12.5, purchased: 10, monthlyDelta: -7.5, creditDelta: 5 },
+  ])("preserves post-reset usage when settling a pre-reset reservation: $reserved to $actual", async (test) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T00:00:00.000Z"));
+    if (test.purchased) {
+      await addPurchasedCredits({ userId: USER_ID, amount: test.purchased, stripePaymentId: "pi_admin_reset" });
+    }
+    const oldJob = await reserve(test.reserved, 20);
+    vi.advanceTimersByTime(1_000);
+    await setMonthlyUsageUsedByAdmin({ userId: USER_ID, monthlyUsageUsed: 0, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    vi.advanceTimersByTime(1_000);
+    const newJob = await reserve(10, 20);
+    const settlement = { userId: USER_ID, aiJobId: oldJob.id, actualAmount: test.actual, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD };
+    await settleUsage(settlement);
+    await settleUsage(settlement);
+
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({ monthlyUsageUsed: 10, purchasedCredits: test.purchased, purchasedCreditDebt: 0 });
+    const rows = memory.state.creditTransactions.filter((row) => row.kind === "usage_settlement");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ usageAmount: test.monthlyDelta, creditAmount: test.creditDelta });
+    expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(test.actual + 10);
+
+    // The reset must not prevent restoring a reservation made after it.
+    await settleUsage({ ...settlement, aiJobId: newJob.id, actualAmount: 8 });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(8);
+    expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(test.actual + 8);
+  });
+
+  it("protects post-reset usage when the reset shares the reservation timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T00:00:00.000Z"));
+    const job = await reserve(20);
+    await setMonthlyUsageUsedByAdmin({ userId: USER_ID, monthlyUsageUsed: 0, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    await reserve(10, 20);
+    await settleUsage({ userId: USER_ID, aiJobId: job.id, actualAmount: 18, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(10);
+    expect(memory.state.creditTransactions.find((row) => row.kind === "usage_settlement")).toMatchObject({ usageAmount: -2 });
+  });
+
+  it("still restores allowance after a no-op admin adjustment", async () => {
+    const job = await reserve(20);
+    await setMonthlyUsageUsedByAdmin({ userId: USER_ID, monthlyUsageUsed: 20, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    await settleUsage({ userId: USER_ID, aiJobId: job.id, actualAmount: 18, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(18);
+    expect(memory.state.creditTransactions.some((row) => row.kind === "admin_usage_adjustment")).toBe(false);
+  });
+
+  it("still restores allowance when an administrator only increases usage", async () => {
+    const job = await reserve(10, 20);
+    await setMonthlyUsageUsedByAdmin({ userId: USER_ID, monthlyUsageUsed: 15, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    await settleUsage({ userId: USER_ID, aiJobId: job.id, actualAmount: 8, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(13);
+  });
+
+  it("ignores another user's usage adjustment", async () => {
+    const job = await reserve(20);
+    const otherUserId = "22222222-2222-4222-8222-222222222222";
+    await setMonthlyUsageUsedByAdmin({ userId: otherUserId, monthlyUsageUsed: 5, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    await setMonthlyUsageUsedByAdmin({ userId: otherUserId, monthlyUsageUsed: 0, monthlyUsageLimit: 20, usagePeriod: PERIOD });
+    await settleUsage({ userId: USER_ID, aiJobId: job.id, actualAmount: 18, providerCostUsdMicros: null, monthlyUsageLimit: 20, currentUsagePeriod: PERIOD });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(18);
   });
 
   it("records an unexpected overrun as purchased-credit debt", async () => {
