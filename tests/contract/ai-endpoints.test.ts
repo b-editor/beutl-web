@@ -2243,7 +2243,8 @@ describe("v3 AI endpoints contract", () => {
       expect(job).toMatchObject({
         kind: "image_edit",
         status: "succeeded",
-        usageUnits: 5.28,
+        // No output ratio is fixed for this edit: use the largest token profile.
+        usageUnits: 7.392,
       });
       expect(vi.mocked(editImage)).toHaveBeenCalledWith({
         task: "remove_background",
@@ -2302,7 +2303,7 @@ describe("v3 AI endpoints contract", () => {
             filename: "source.webp",
             prompt,
           },
-          usageUnits: 5.28,
+          usageUnits: 7.392,
         });
       },
     );

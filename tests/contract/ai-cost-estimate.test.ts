@@ -208,22 +208,20 @@ describe("AI provider cost estimates", () => {
 
     expect([...byOperation.keys()].sort()).toEqual([...AI_OPERATIONS].sort());
 
-    // 1,056 output tokens at $0.00004 reproduces OpenAI's published $0.042, plus
-    // the pictures a generation may be guided by — AI_MAX_IMAGE_REFERENCES of
-    // them at 1,056 input tokens each. The estimate assumes the most a caller
-    // can send, because that is what the price has to cover; understating the
-    // cost is the direction that misleads.
+    // The admin has no requested ratio, so use the largest medium output in
+    // the baseline (1,584 tokens), plus the maximum reference set at 1,056
+    // input tokens each. Concrete requests use their own output geometry.
     const generate = byOperation.get("image.generate")?.estimate;
     expect(generate?.status).toBe("estimated");
     if (generate?.status === "estimated") {
-      expect(generate.usdMin).toBeCloseTo(0.08448, 8);
-      expect(generate.usdMax).toBeCloseTo(0.08448, 8);
+      expect(generate.usdMin).toBeCloseTo(0.1056, 8);
+      expect(generate.usdMax).toBeCloseTo(0.1056, 8);
     }
     const edit = byOperation.get("image.edit.remove_background")?.estimate;
     expect(edit?.status).toBe("estimated");
     if (edit?.status === "estimated") {
       // An edit sends one source image rather than generation's maximum four.
-      expect(edit.usdMin).toBeCloseTo(0.0528, 8);
+      expect(edit.usdMin).toBeCloseTo(0.07392, 8);
     }
     // Priced per image rather than per token, so no assumption is needed.
     expect(byOperation.get("image.edit.upscale")?.estimate).toMatchObject({
@@ -269,8 +267,8 @@ describe("AI provider cost estimates", () => {
   });
 
   it.each([
-    [0, 0.04224],
-    [2, 0.06336],
+    [0, 0.06336],
+    [2, 0.08448],
   ])("caps generation cost to a model limit of %i references", async (
     maxReferenceImages,
     expectedCost,
@@ -337,11 +335,11 @@ describe("AI provider cost estimates", () => {
     const estimate = result.entries[0]?.estimate;
     expect(estimate?.status).toBe("estimated");
     if (estimate?.status === "estimated") {
-      // Four cheap references cost 0.08448. The expensive endpoint accepts
-      // only one and costs 0.14784; applying the model-wide maximum to it
-      // would incorrectly report 0.46464 for a request it cannot serve.
-      expect(estimate.usdMin).toBeCloseTo(0.08448, 8);
-      expect(estimate.usdMax).toBeCloseTo(0.14784, 8);
+      // Four cheap references cost 0.1056 with the largest output geometry.
+      // The expensive endpoint accepts only one and costs 0.16896; applying
+      // the model-wide reference maximum would incorrectly report 0.48576.
+      expect(estimate.usdMin).toBeCloseTo(0.1056, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.16896, 8);
     }
   });
 
@@ -405,8 +403,8 @@ describe("AI provider cost estimates", () => {
     const estimate = result.entries[0]?.estimate;
     expect(estimate?.status).toBe("estimated");
     if (estimate?.status === "estimated") {
-      expect(estimate.usdMin).toBeCloseTo(0.0528, 8);
-      expect(estimate.usdMax).toBeCloseTo(0.0528, 8);
+      expect(estimate.usdMin).toBeCloseTo(0.07392, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.07392, 8);
     }
   });
 
@@ -442,8 +440,8 @@ describe("AI provider cost estimates", () => {
     const estimate = result.entries[0]?.estimate;
     expect(estimate?.status).toBe("estimated");
     if (estimate?.status === "estimated") {
-      expect(estimate.usdMin).toBeCloseTo(0.08448, 8);
-      expect(estimate.usdMax).toBeCloseTo(0.08448, 8);
+      expect(estimate.usdMin).toBeCloseTo(0.1056, 8);
+      expect(estimate.usdMax).toBeCloseTo(0.1056, 8);
     }
   });
 

@@ -83,6 +83,42 @@ jobs and as a last-resort quote fallback. It is no longer editable or
 used when a provider price or actual cost is available. New rows write `1` to
 that compatibility column.
 
+## Image token estimates
+
+Token-priced image quotes use the requested output aspect ratio on both
+OpenRouter and AI Gateway. The estimator retains its **medium-quality,
+approximately 1K-short-side assumption**; it does not change the provider's
+generation parameters. These are estimates, not a guarantee of the size or
+quality a provider chooses for `auto`. Actual reported USD costs still take
+precedence at settlement.
+
+For the existing legacy GPT Image baseline, the [official output-token table](https://developers.openai.com/api/docs/guides/image-generation#earlier-gpt-image-models)
+gives 1,056 tokens for 1024×1024, 1,568 for 1536×1024, and 1,584 for
+1024×1536. Other token-priced models without a verified profile retain this
+legacy proxy. Missing or unmodeled ratios use the largest profile value rather
+than silently assuming square output. Per-image prices and the separate
+reference-image token assumption are unchanged.
+
+`openai/gpt-image-2` and its `2026-04-21` snapshot use the distinct
+[official image token calculator](https://developers.openai.com/api/docs/guides/image-generation#cost-and-latency),
+checked on 2026-09-22. The medium grid has 48 cells along its longer side;
+the shorter grid side is rounded to nearest with ties to even. Tokens are
+`ceil(grid area × (2,000,000 + pixel area) / 4,000,000)`.
+Representative dimensions preserve the requested ratio, use multiples of
+16 pixels, and round the short side up to at least 1024 pixels:
+
+| Ratio | Assumed dimensions | Output tokens |
+| --- | --- | ---: |
+| 1:1 | 1024×1024 | 1,756 |
+| 3:2 / 2:3 | 1536×1024 / 1024×1536 | 1,372 |
+| 16:9 / 9:16 | 2048×1152 / 1152×2048 | 1,413 |
+| 4:3 / 3:4 | 1408×1056 / 1056×1408 | 1,507 |
+
+An unspecified output ratio uses the largest value in this profile. These
+profiles are not a bound on every resolution/quality the provider supports.
+Update the evidence and geometry tests together if the estimation assumptions
+or supported model profiles change.
+
 ## Migration cutover
 
 The fractional-ledger migration requires a maintenance window. It copies values

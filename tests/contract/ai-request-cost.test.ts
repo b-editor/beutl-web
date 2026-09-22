@@ -162,9 +162,9 @@ describe("request-shaped AI reservation estimates", () => {
     ]);
   });
 
-  async function activate(operation: string, modelId: string, consumed: number) {
+  async function activate(operation: string, modelId: string, consumed: number, provider = "openrouter") {
     await upsertSubscription({ userId, stripeSubscriptionId: "sub_request_cost", status: "active", planId: "pro", billingOfferId: "offer_pro_test", currentPeriodStart: period.start, currentPeriodEnd: period.end });
-    await upsertAiOperationModel({ operation, modelId, provider: "openrouter", usagePercent: 100, priceUnits: 100, displayName: null, enabled: true, sortOrder: 0, updatedBy: "admin" });
+    await upsertAiOperationModel({ operation, modelId, provider, usagePercent: 100, priceUnits: 100, displayName: null, enabled: true, sortOrder: 0, updatedBy: "admin" });
     await consumeUsage({ userId, amount: consumed, monthlyUsageLimit: 500, usagePeriod: period, aiJobId: "setup" });
   }
 
@@ -174,6 +174,67 @@ describe("request-shaped AI reservation estimates", () => {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
   }
+
+  function tokenImagePrices(provider: string, modelId: string) {
+    const endpoint = imageEndpoint();
+    endpoint.supported_parameters.aspect_ratio.values = ["1:1", "3:2", "2:3"];
+    endpoint.pricing[1] = { billable: "output_image", unit: "token", cost_usd: 0.00004 };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(provider === "openrouter"
+      ? { id: modelId, endpoints: [endpoint] }
+      : { data: [{ id: modelId, type: "image", pricing: { output: "0.00004" } }] },
+    )));
+  }
+
+  it.each(["openrouter", "vercel-gateway"])("uses requested image geometry through %s quotes and cached prices", async (provider) => {
+    const modelId = "openai/gpt-image-1";
+    tokenImagePrices(provider, modelId);
+    for (const [aspectRatio, usd] of [["1:1", 0.04224], ["3:2", 0.06272], ["2:3", 0.06336], ["1:1", 0.04224]] as const) {
+      expect(await quoteAiUsageReservation({ kind: "image", modelId, provider, inputParams: { aspectRatio } }))
+        .toMatchObject({ estimatedProviderCostUsd: usd });
+    }
+    expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+  });
+
+  it.each(["openrouter", "vercel-gateway"])("uses GPT Image 2's own geometry profile through %s", async (provider) => {
+    const modelId = "openai/gpt-image-2";
+    tokenImagePrices(provider, modelId);
+    for (const [aspectRatio, usd] of [["1:1", 0.07024], ["3:2", 0.05488], ["2:3", 0.05488]] as const) {
+      expect(await quoteAiUsageReservation({ kind: "image", modelId, provider, inputParams: { aspectRatio } }))
+        .toMatchObject({ estimatedProviderCostUsd: usd });
+    }
+  });
+
+  it.each(["openrouter", "vercel-gateway"])("rejects an unaffordable non-square %s image instead of reserving square tokens", async (provider) => {
+    const modelId = "openai/gpt-image-1";
+    tokenImagePrices(provider, modelId);
+    await activate("image.generate", modelId, 494, provider);
+    for (const aspectRatio of ["3:2", "2:3"]) {
+      const preflight = await availability({ operation: "image.generate", model: modelId, aspectRatio });
+      expect(preflight.status).toBe(200);
+      expect(await preflight.json()).toEqual({ available: false });
+      expect(await createReservedAiJob({ userId, kind: "image", provider, status: "running", model: modelId, inputParams: { aspectRatio } }))
+        .toEqual({ ok: false, errorCode: "aiUsageLimitExceeded", status: 402 });
+    }
+    expect(await (await availability({ operation: "image.generate", model: modelId, aspectRatio: "1:1" })).json()).toEqual({ available: true });
+    expect(memory.state.aiJobs.size).toBe(0);
+  });
+
+  it.each([
+    ["openrouter", "3:2", 7.5264, 6.272],
+    ["openrouter", "2:3", 7.6032, 6.336],
+    ["vercel-gateway", "3:2", 7.5264, 6.272],
+    ["vercel-gateway", "2:3", 7.6032, 6.336],
+  ] as const)("settles the %s %s image's own estimate without cost metadata", async (provider, aspectRatio, reserved, expected) => {
+    const modelId = "openai/gpt-image-1";
+    tokenImagePrices(provider, modelId);
+    await activate("image.generate", modelId, 480, provider);
+    const result = await createReservedAiJob({ userId, kind: "image", provider, status: "running", model: modelId, inputParams: { aspectRatio } });
+    expect(result).toMatchObject({ ok: true, job: { reservedUsageUnits: reserved, estimatedUsageUnits: expected } });
+    if (!result.ok) throw new Error("Expected an affordable reservation");
+    await saveAiImage({ userId, jobId: result.job.id, bytes: PNG, mimeType: "image/png", filename: "result.png" });
+    expect(memory.state.aiJobs.get(result.job.id)?.usageUnits).toBe(expected);
+    expect((await getCreditAccount({ userId })).monthlyUsageUsed).toBe(480 + expected);
+  });
 
   it.each([
     { kind: "image", operation: "image.generate", modelId: imageModel, consumed: 495, inputParams: { aspectRatio: "1:1" }, availabilityShape: { referenceImages: 0, aspectRatio: "1:1" }, expected: 4, reserved: 4.8 },

@@ -14,7 +14,7 @@
 //   - Where an assumption is needed to bridge a price to a chargeable unit, it
 //     is returned alongside the number so the UI can state it.
 
-import { addDecimalAmounts, multiplyDecimalAmounts } from "@beutl/core";
+import { addDecimalAmounts, multiplyDecimalAmounts, type AiImageAspectRatio } from "@beutl/core";
 import {
   aiVideoResolutionOfGatewayLabel,
   gatewayVideoResolution,
@@ -54,6 +54,53 @@ export type AiCostEstimate =
 // gpt-image-1 bills its output as tokens; 1024x1024 at medium quality is 1,056
 // of them, which reproduces OpenAI's published $0.042 per image.
 export const ASSUMED_IMAGE_OUTPUT_TOKENS = 1056;
+// Keep the existing medium-quality assumption, but do not reuse the square
+// count for portrait/landscape requests. Source and model-specific caveats:
+// docs/ai-actual-cost-billing.md#image-token-estimates.
+const LEGACY_IMAGE_OUTPUT_TOKENS: Readonly<Record<string, number>> = {
+  "1:1": ASSUMED_IMAGE_OUTPUT_TOKENS,
+  "3:2": 1568,
+  "2:3": 1584,
+};
+
+// Representative ~1K-short-side outputs. GPT Image 2 requires 16px multiples;
+// preserve the exact requested ratio while rounding the short side up to 1K.
+const GPT_IMAGE_2_GEOMETRY: Record<AiImageAspectRatio, readonly [number, number]> = {
+  "1:1": [1024, 1024],
+  "3:2": [1536, 1024],
+  "2:3": [1024, 1536],
+  "16:9": [2048, 1152],
+  "9:16": [1152, 2048],
+  "4:3": [1408, 1056],
+  "3:4": [1056, 1408],
+};
+
+function gptImage2MediumOutputTokens(width: number, height: number): number {
+  // OpenAI's official output-token calculator: a medium grid has 48 cells on
+  // its longer side, a ties-to-even rounded shorter side, and a pixel factor.
+  const shortGrid = 48 * Math.min(width, height) / Math.max(width, height);
+  const floor = Math.floor(shortGrid);
+  const rounded = shortGrid - floor === 0.5 ? floor + floor % 2 : Math.round(shortGrid);
+  return Math.ceil(48 * rounded * (2_000_000 + width * height) / 4_000_000);
+}
+
+const GPT_IMAGE_2_OUTPUT_TOKENS = Object.fromEntries(
+  Object.entries(GPT_IMAGE_2_GEOMETRY).map(([ratio, [width, height]]) =>
+    [ratio, gptImage2MediumOutputTokens(width, height)] as const
+  ),
+);
+
+function imageOutputTokens(model: string | undefined, aspectRatio: string | undefined): number {
+  const profile = model === "openai/gpt-image-2" || model === "openai/gpt-image-2-2026-04-21"
+    ? GPT_IMAGE_2_OUTPUT_TOKENS
+    : LEGACY_IMAGE_OUTPUT_TOKENS;
+  // Edits/admin estimates may not have a requested output ratio. Use the
+  // largest count in the profile instead of silently treating them as square.
+  return aspectRatio !== undefined && Object.hasOwn(profile, aspectRatio)
+    ? profile[aspectRatio]
+    : Math.max(...Object.values(profile));
+}
+
 export const ASSUMED_IMAGE_INPUT_TOKENS = 1056;
 // 1024 x 1024 expressed in megapixels, for models that bill by area.
 export const ASSUMED_IMAGE_MEGAPIXELS = (1024 * 1024) / 1_000_000;
@@ -113,7 +160,7 @@ export type ImagePricingEntry = {
 // treat a missing charge as free.
 function estimateImageEndpoint(
   entries: ImagePricingEntry[],
-  { referenceImages }: { referenceImages: number },
+  { referenceImages, model, aspectRatio }: { referenceImages: number; model?: string; aspectRatio?: string },
 ): { usd: number; assumptions: AiCostAssumption[] } | null {
   const assumptions: AiCostAssumption[] = [];
   const priceOf = (
@@ -139,7 +186,7 @@ function estimateImageEndpoint(
       case "token": {
         const tokens =
           billable === "output_image"
-            ? ASSUMED_IMAGE_OUTPUT_TOKENS
+            ? imageOutputTokens(model, aspectRatio)
             : ASSUMED_IMAGE_INPUT_TOKENS;
         assumptions.push({
           kind:
@@ -185,15 +232,21 @@ export function estimateImageCost({
   endpoints,
   referenceImages,
   referenceImagesByEndpoint,
+  model,
+  aspectRatio,
 }: {
   endpoints: ImagePricingEntry[][];
   referenceImages: number;
   referenceImagesByEndpoint?: readonly number[];
+  model?: string;
+  aspectRatio?: string;
 }): AiCostEstimate {
   const results = endpoints
     .map((entries, index) =>
       estimateImageEndpoint(entries, {
         referenceImages: referenceImagesByEndpoint?.[index] ?? referenceImages,
+        model,
+        aspectRatio,
       })
     )
     .filter((result): result is NonNullable<typeof result> => result !== null);

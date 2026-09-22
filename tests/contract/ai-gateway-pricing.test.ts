@@ -667,10 +667,10 @@ describe("costing an operation at the provider that serves it", () => {
     expect(await estimateFor(operation, "openai/gpt-image-2", "vercel-gateway"))
       .toEqual({
         status: "estimated",
-        usdMin: 1056 * 0.00003,
-        usdMax: 1056 * 0.00003,
+        usdMin: 0.05268,
+        usdMax: 0.05268,
         assumptions: [
-          { kind: "imageOutputTokens", value: 1056 },
+          { kind: "imageOutputTokens", value: 1756 },
           { kind: "imageInputNotPriced" },
         ],
       });

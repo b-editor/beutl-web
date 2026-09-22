@@ -372,6 +372,8 @@ async function estimateImageOperation(
   return estimateImageCost({
     endpoints,
     referenceImages,
+    model,
+    aspectRatio: request?.aspectRatio,
     ...(!request && correlateEndpointCapabilities && operation === "image.generate"
       ? {
           referenceImagesByEndpoint: applicable.map((endpoint) =>
@@ -584,6 +586,7 @@ async function estimateGatewayImageOperation(
   model: string,
   referenceImages: number,
   options: { force: boolean; now: number },
+  aspectRatio?: string,
 ): Promise<AiCostEstimate> {
   // Share one catalog request across all image models and operations.
   const outcome = await fetchPricing(
@@ -600,6 +603,8 @@ async function estimateGatewayImageOperation(
   return estimateImageCost({
     endpoints: [[{ billable: "output_image", ...price }]],
     referenceImages,
+    model,
+    aspectRatio,
   });
 }
 
@@ -683,6 +688,7 @@ async function estimateOperation(
               ?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES
           : 1),
         options,
+        request?.aspectRatio,
       );
     }
     return await estimateGatewayOperation(operation, model, options, request);
