@@ -8,7 +8,6 @@ import {
   getAiJobByIdempotency,
   getSubscription,
   refundUsage,
-  startRetryableTransaction,
   updateActiveAiJobToFailed,
   failAiJobOwnedByFinalizer,
   failAiJobOwnedByProviderPoll,
@@ -28,6 +27,7 @@ import {
   quoteAiUsageReservation,
 } from "./usage-cost";
 import { loadAiModelCatalog } from "./model-catalog";
+import { startAiJobTransaction } from "./transaction";
 
 function toUsagePeriod(subscription: {
   currentPeriodStart: Date | null;
@@ -236,7 +236,7 @@ export async function createReservedAiJob({
     }
   }
   try {
-    const result = await startRetryableTransaction(async (prisma) => {
+    const result = await startAiJobTransaction(async (prisma) => {
       if (idempotencyKeyHash && requestFingerprint) {
         const existing = await getAiJobByIdempotency({
           userId,
@@ -480,7 +480,7 @@ export async function failAiJobAndRefundUsage({
   error: string;
   expectedProviderJobId?: string | null;
 }) {
-  await startRetryableTransaction(async (prisma) => {
+  await startAiJobTransaction(async (prisma) => {
     const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
@@ -552,7 +552,7 @@ export async function failFinalizingAiJobAndRefundUsage({
   expectedProviderJobId: string;
   error: string;
 }) {
-  await startRetryableTransaction(async (prisma) => {
+  await startAiJobTransaction(async (prisma) => {
     const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
@@ -582,7 +582,7 @@ export async function failPolledAiJobAndRefundUsage({
   expectedProviderJobId: string;
   error: string;
 }) {
-  await startRetryableTransaction(async (prisma) => {
+  await startAiJobTransaction(async (prisma) => {
     const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)

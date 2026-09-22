@@ -16,13 +16,13 @@ import {
   getAiJobById,
   getSubscription,
   settleUsage,
-  startRetryableTransaction,
 } from "@beutl/db";
 import { getR2Bucket } from "./r2-provider";
 import { loadAiSettings } from "./settings";
 import { PRO_PLAN } from "./pricing";
 import { providerCostUsdToMicros } from "./usage-cost";
 import type { ProviderCostUsd } from "./provider-cost";
+import { startAiJobTransaction } from "./transaction";
 
 export { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "@beutl/core";
 export {
@@ -252,7 +252,7 @@ async function saveAiOutput({
       .join("");
 
     commitAttempted = true;
-    const file = await startRetryableTransaction(async (prisma) => {
+    const file = await startAiJobTransaction(async (prisma) => {
       const completed = await completeAiJobWithOutput({
         jobId,
         finalizationToken,
