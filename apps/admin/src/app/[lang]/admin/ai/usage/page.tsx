@@ -117,6 +117,7 @@ export default async function Page(props: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <AiUsageRangeFilter lang={lang} range={range} />
         <p className="text-xs text-muted-foreground">
+          {/* The translation leaves the timestamp raw; React escapes this text. */}
           {t("admin:ai.usage.since", {
             timestamp: formatTimestamp(report.since, lang),
           })}

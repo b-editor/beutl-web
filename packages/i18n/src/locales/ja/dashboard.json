@@ -12,6 +12,7 @@
   "overview": {
     "title": "概要",
     "greeting": "ようこそ、{{name}} さん",
+    "greetingWithoutName": "ようこそ",
     "storageUsage": "ストレージ使用量",
     "aiUsage": "AI利用状況",
     "aiNotSubscribed": "未加入",

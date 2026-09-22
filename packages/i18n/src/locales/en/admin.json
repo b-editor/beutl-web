@@ -151,7 +151,7 @@
       "remove": "Remove",
       "cancel": "Cancel",
       "apply": "Apply",
-      "openRouter": "Open on OpenRouter",
+      "openProvider": "Open on {{provider}}",
       "summaryCount": "{{total}} models",
       "summaryNone": "Nothing selectable",
       "economicsPending": "Enter a model ID to see what it costs to run."
@@ -299,7 +299,7 @@
     "usage": {
       "title": "AI usage",
       "description": "AI jobs and usage units aggregated over the selected window. Per-user balances are adjusted from each user's detail page.",
-      "since": "Since {{timestamp}}",
+      "since": "Since {{- timestamp}}",
       "range": {
         "24h": "Last 24 hours",
         "7d": "Last 7 days",

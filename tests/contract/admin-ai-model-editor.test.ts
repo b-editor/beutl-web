@@ -38,6 +38,13 @@ const economicsPanelSource = readFileSync(
 );
 
 describe("admin AI model editor", () => {
+  it("uses the actual provider for both the title and accessible link name", () => {
+    expect(source).toContain('t("admin:ai.models.openProvider", { provider: label })');
+    expect(source).toContain("title={linkLabel}");
+    expect(source).toContain('<span className="sr-only">{linkLabel}</span>');
+    expect(source).not.toContain("admin:ai.models.openRouter");
+  });
+
   it("allows an existing model's provider to be changed", () => {
     const start = source.indexOf(
       '<Field label={t("admin:ai.models.provider")}>',

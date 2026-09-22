@@ -12,6 +12,7 @@
   "overview": {
     "title": "Overview",
     "greeting": "Welcome back, {{name}}",
+    "greetingWithoutName": "Welcome back",
     "storageUsage": "Storage used",
     "aiUsage": "AI usage",
     "aiNotSubscribed": "Not subscribed",
