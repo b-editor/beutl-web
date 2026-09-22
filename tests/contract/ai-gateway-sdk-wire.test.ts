@@ -38,9 +38,32 @@ describe("Gateway requests through the installed SDK", () => {
       referenceImages: [{ bytes: IMAGE, mimeType: "image/png" }],
     });
     expect(image).toEqual({ b64Json: PNG, mediaType: "image/png" });
-    expect(sent[0].body).toMatchObject({ prompt: "A lighthouse", n: 1, aspectRatio: "1:1" });
+    expect(sent[0].body).toMatchObject({ prompt: "A lighthouse", n: 1, size: "1024x1024" });
+    expect(sent[0].body.aspectRatio).toBeUndefined();
     expect(sent[0].body.seed).toBe(seed);
     expect(sent[0].body.files[0]).toMatchObject({ type: "file", data: PNG, mediaType: "image/png" });
+  });
+
+  it.each([
+    ["1:1", "1024x1024"],
+    ["16:9", "2048x1152"],
+    ["9:16", "1152x2048"],
+    ["4:3", "1408x1056"],
+    ["3:4", "1056x1408"],
+    ["3:2", "1536x1024"],
+    ["2:3", "1024x1536"],
+  ] as const)("sends GPT Image 2 ratio %s as explicit size %s", async (aspectRatio, size) => {
+    for (const model of ["openai/gpt-image-2", "openai/gpt-image-2-2026-04-21"]) {
+      await generateGatewayImage({ model, prompt: "A lighthouse", aspectRatio });
+      expect(sent.at(-1)?.body.size).toBe(size);
+      expect(sent.at(-1)?.body.aspectRatio).toBeUndefined();
+    }
+  });
+
+  it("keeps aspectRatio for models whose provider supports it", async () => {
+    await generateGatewayImage({ model: "bfl/flux-2-pro", prompt: "A lighthouse", aspectRatio: "16:9" });
+    expect(sent[0].body.aspectRatio).toBe("16:9");
+    expect(sent[0].body.size).toBeUndefined();
   });
 
   it("requests a transparent PNG during image generation", async () => {
