@@ -1,13 +1,16 @@
 // What a monthly allowance actually buys, and what one usage unit is worth.
 //
-// ADMIN CONSOLE ONLY. These figures let an administrator judge whether a unit
-// price or an allowance is set sensibly. They must never reach an end user:
-// exposing what an operation costs would let anyone derive the per-operation
-// margin, which the account and billing surfaces deliberately withhold.
+// The allowance-equivalent and revenue figures in this file are for the admin
+// console only. The fixed-precision conversion helpers are also used by the
+// billing path, but none of those amounts are exposed to ordinary clients.
 //
 // Pure functions with no I/O, so the admin console can compute them during
 // server rendering and, later, preview an unsaved value in the browser.
 import { AI_PRICING_CATALOG, type AiBillingUnit } from "./ai-pricing-catalog";
+import {
+  decimalFraction,
+  parseNonNegativeDecimalFraction,
+} from "./decimal-arithmetic";
 
 // The quantity an administrator thinks in, which is not always the billing
 // unit: a thousand characters is billed as one unit but read as 1,000.
@@ -46,6 +49,70 @@ export type AiAllowanceEquivalent = {
 
 function isUsableAmount(value: number): boolean {
   return Number.isFinite(value) && value > 0;
+}
+
+export const USD_MICROS_PER_DOLLAR = 1_000_000;
+export const USAGE_UNIT_MICROS_PER_UNIT = 1_000_000;
+// Preserve the former INT4 range while allowing six fractional places. Keeping
+// the scaled value below Number.MAX_SAFE_INTEGER lets every application layer
+// round-trip a database DECIMAL without losing a micro-unit.
+export const MAX_USAGE_UNITS = 2_147_483_647;
+
+/** Normalize a usage-unit value to the six decimal places stored by the ledger. */
+export function normalizeUsageUnits(value: number): number | null {
+  if (!Number.isFinite(value) || Math.abs(value) > MAX_USAGE_UNITS) {
+    return null;
+  }
+  const scaled = Math.round(value * USAGE_UNIT_MICROS_PER_UNIT);
+  if (!Number.isSafeInteger(scaled)) return null;
+  return scaled / USAGE_UNIT_MICROS_PER_UNIT;
+}
+
+/** Round a positive charge up so conversion never undercharges provider cost. */
+export function ceilUsageUnits(value: number): number | null {
+  if (!Number.isFinite(value) || value < 0 || value > MAX_USAGE_UNITS) {
+    return null;
+  }
+  const { numerator, denominator } = decimalFraction(value);
+  const scaled = (
+    numerator * BigInt(USAGE_UNIT_MICROS_PER_UNIT) + denominator - BigInt(1)
+  ) / denominator;
+  return Number(scaled) / USAGE_UNIT_MICROS_PER_UNIT;
+}
+
+/** Provider-reported USD cost rounded up to the ledger's micro-unit. */
+export function usageUnitsForProviderCost(
+  costUsd: number | string,
+  usdPerUsageUnit: number,
+  usagePercent = 100,
+): number | null {
+  const cost = parseNonNegativeDecimalFraction(costUsd);
+  if (
+    cost === null ||
+    !isUsableAmount(usdPerUsageUnit) ||
+    !Number.isSafeInteger(usagePercent) ||
+    usagePercent <= 0
+  ) {
+    return null;
+  }
+  if (cost.numerator === BigInt(0)) return 0;
+  const rate = decimalFraction(usdPerUsageUnit);
+  // Round once, after conversion and the model percentage. All intermediate
+  // arithmetic stays exact, including scientific notation and repeating ratios.
+  const numerator =
+    cost.numerator *
+    rate.denominator *
+    BigInt(usagePercent) *
+    BigInt(USAGE_UNIT_MICROS_PER_UNIT);
+  const denominator = cost.denominator * rate.numerator * BigInt(100);
+  const usageMicros = (numerator + denominator - BigInt(1)) / denominator;
+  if (
+    usageMicros >
+      BigInt(MAX_USAGE_UNITS) * BigInt(USAGE_UNIT_MICROS_PER_UNIT)
+  ) {
+    return null;
+  }
+  return Number(usageMicros) / USAGE_UNIT_MICROS_PER_UNIT;
 }
 
 export function describeAllowanceEquivalent({

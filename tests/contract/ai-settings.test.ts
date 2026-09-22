@@ -7,7 +7,9 @@ import {
 } from "@beutl/db";
 import {
   AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
   AI_SETTINGS,
+  DEFAULT_PROVIDER_USD_PER_USAGE_UNIT,
   DEFAULT_MONTHLY_USAGE_LIMIT,
   MAX_MONTHLY_USAGE_LIMIT,
   MIN_MONTHLY_USAGE_LIMIT,
@@ -18,14 +20,21 @@ import { loadAiSettings } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 describe("AI settings registry", () => {
-  it("holds the allowance and nothing per-operation", () => {
+  it("holds the allowance and one shared provider-cost conversion", () => {
     // Models and their prices are rows in AiOperationModel. They were briefly
     // here as well, which put two controls on the admin page for one value and
     // left the one that no longer applied silently doing nothing.
-    expect(Object.keys(AI_SETTINGS)).toEqual([AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]);
+    expect(Object.keys(AI_SETTINGS)).toEqual([
+      AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+      AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
+    ]);
     expect(AI_SETTINGS[AI_PLAN_MONTHLY_USAGE_LIMIT_KEY]).toMatchObject({
       kind: "limit",
       fallback: String(DEFAULT_MONTHLY_USAGE_LIMIT),
+    });
+    expect(AI_SETTINGS[AI_PROVIDER_USD_PER_USAGE_UNIT_KEY]).toMatchObject({
+      kind: "usd_rate",
+      fallback: String(DEFAULT_PROVIDER_USD_PER_USAGE_UNIT),
     });
   });
 
@@ -55,6 +64,19 @@ describe("AI settings registry", () => {
   it("trims surrounding whitespace before persisting", () => {
     expect(validateAiSettingValue(AI_PLAN_MONTHLY_USAGE_LIMIT_KEY, " 900 "))
       .toEqual({ ok: true, value: "900" });
+  });
+
+  it.each([
+    ["0.000001", true],
+    ["0.01", true],
+    ["1000", true],
+    ["0", false],
+    ["0.0000001", false],
+    ["1.2.3", false],
+  ])("validates provider USD per unit %s as %s", (value, expected) => {
+    expect(
+      validateAiSettingValue(AI_PROVIDER_USD_PER_USAGE_UNIT_KEY, value).ok,
+    ).toBe(expected);
   });
 
   it("rejects unknown keys", () => {
@@ -103,6 +125,18 @@ describe("AI settings resolution", () => {
     expect(await listAiSettings()).toHaveLength(0);
   });
 
+  it("resolves the shared provider USD conversion from the database", async () => {
+    expect((await loadAiSettings()).getProviderUsdPerUsageUnit()).toBe(
+      DEFAULT_PROVIDER_USD_PER_USAGE_UNIT,
+    );
+    await upsertAiSetting({
+      key: AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
+      value: "0.0025",
+      updatedBy: "admin-1",
+    });
+    expect((await loadAiSettings()).getProviderUsdPerUsageUnit()).toBe(0.0025);
+  });
+
   it("ignores a stored allowance that no longer passes validation", async () => {
     // A future registry restriction must not pass stale invalid values onward.
     await upsertAiSetting({
@@ -128,6 +162,7 @@ describe("AI settings resolution", () => {
     const settings = await loadAiSettings();
     expect(settings.all().map((entry) => entry.key)).toEqual([
       AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+      AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
     ]);
   });
 });

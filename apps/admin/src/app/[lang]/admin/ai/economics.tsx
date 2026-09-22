@@ -1,16 +1,13 @@
 import type { OfferPricingResult } from "@/lib/stripe-pricing";
 import {
   AiOfferCardsPanel,
-  AiOperationEconomicsPanel,
   type OfferAmount,
   type PriceSourceState,
 } from "./economics-panel";
-import { aiCostEstimateKey } from "@beutl/api";
 import { getAiEconomics } from "./queries";
 
-// The server side of the economics panels: it only fetches what needs the
-// network — Stripe prices and the provider cost estimates — and hands it to the
-// client components, which recompute the derived figures as fields are edited.
+// Stripe-backed offer prices are fetched on the server and handed to the
+// client component, which recomputes the per-unit plan rate as fields change.
 
 function toOfferAmount(result: OfferPricingResult): OfferAmount {
   if (!result.effective) return null;
@@ -28,58 +25,6 @@ function toSourceState(result: OfferPricingResult): PriceSourceState {
     mismatch: result.mismatch,
     stripePriceId: result.effective?.stripePriceId ?? null,
   };
-}
-
-// What one model costs to run, shown under the row that configures it.
-export async function AiOperationEconomics({
-  lang,
-  operation,
-  model,
-  priceUnits,
-}: {
-  lang: string;
-  operation: string;
-  model: string;
-  priceUnits: number;
-}) {
-  const { pro, topUpUnitValue, costByModel } = await getAiEconomics();
-  return (
-    <AiOperationEconomicsPanel
-      lang={lang}
-      operation={operation}
-      modelId={model}
-      priceUnits={priceUnits}
-      estimate={costByModel.get(aiCostEstimateKey(operation, model))}
-      proOffer={toOfferAmount(pro)}
-      topUpUnitValue={topUpUnitValue}
-    />
-  );
-}
-
-// Rendered until the prices arrive. The allowance figure needs no network, so
-// the panel still computes and updates it while the rest is pending.
-export function AiOperationEconomicsFallback({
-  lang,
-  operation,
-  model,
-  priceUnits,
-}: {
-  lang: string;
-  operation: string;
-  model: string;
-  priceUnits: number;
-}) {
-  return (
-    <AiOperationEconomicsPanel
-      lang={lang}
-      operation={operation}
-      modelId={model}
-      priceUnits={priceUnits}
-      estimate={undefined}
-      proOffer={null}
-      topUpUnitValue={null}
-    />
-  );
 }
 
 export async function AiOfferCards({ lang }: { lang: string }) {

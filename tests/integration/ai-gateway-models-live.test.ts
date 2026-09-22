@@ -46,6 +46,30 @@ describeLive("Vercel AI Gateway image prices against the live catalog", () => {
 });
 
 describeLive("Vercel AI Gateway video models against the live list", () => {
+  it.each([
+    ["video.generate", "bytedance/seedance-2.0"],
+    ["video.generate", "bytedance/seedance-2.5"],
+    ["video.extend", "bytedance/seedance-2.5"],
+    ["video.generate", "bfl/flux-3-video"],
+    ["video.extend", "bfl/flux-3-video"],
+  ])("estimates the published price for %s on %s", async (
+    operation,
+    modelId,
+  ) => {
+    clearAiModelPricingCache();
+    const { entries } = await loadAiCostEstimates({
+      modelsOf: (candidate) =>
+        candidate === operation
+          ? [{ modelId, provider: "vercel-gateway" }]
+          : [],
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.estimate).toMatchObject({ status: "estimated" });
+    if (entries[0]?.estimate.status !== "estimated") return;
+    expect(entries[0].estimate.usdMin).toBeGreaterThan(0);
+  });
+
   it("still publishes capabilities this service can read", async () => {
     const models = await listGatewayVideoModels();
 

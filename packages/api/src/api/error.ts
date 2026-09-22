@@ -75,6 +75,7 @@ export const errorCodes = [
   "aiRequestWasDeleted",
   "aiModelUnavailable",
   "aiModelDoesNotSupportRequest",
+  "aiProviderCostUnavailable",
   "aiResultUnavailable",
   // 同じ名前で、前とは違う依頼が届いた。「本文が壊れている」とは別のことで、
   // 呼び出し側の出方も違う——中身を戻せばその名前で結果を取り戻せるし、戻さない

@@ -11,11 +11,13 @@
 // here and an unreadable one costs the estimate, not the page.
 //
 // Video is the one that differs from OpenRouter in substance. OpenRouter
-// publishes a map of named SKUs; the Gateway publishes a list of per-second
-// rates tagged either by resolution or, for Kling, by a `mode` this service
-// does not choose.
+// publishes a map of named SKUs; the Gateway publishes either per-second rates
+// or resolution tiers priced per million generated video tokens. Both are
+// normalized to a per-second figure before the admin console sees them.
 
 import { z } from "zod";
+import { multiplyDecimalAmounts } from "@beutl/core";
+import { videoTokensPerSecond } from "../../cost-estimate";
 import { AiProviderError, InvalidAiProviderOutputError } from "../errors";
 import { readBoundedJson } from "./bounded";
 import { aiVideoResolutionOfGatewayLabel } from "./resolution";
@@ -34,12 +36,27 @@ const videoDurationPricingSchema = z.object({
   cost_per_second: moneySchema,
 });
 
+const videoTokenRateSchema = z.object({
+  cost_per_million_tokens: moneySchema,
+});
+
+const videoTokenTierSchema = z.object({
+  resolution: z.string(),
+  no_video_input: videoTokenRateSchema.nullish(),
+  with_video_input: videoTokenRateSchema.nullish(),
+});
+
+const videoTokenPricingSchema = z.object({
+  tiers: z.array(z.unknown()).nullish(),
+});
+
 const endpointSchema = z.object({
   pricing: z
     .object({
       prompt: moneySchema,
       completion: moneySchema,
       video_duration_pricing: z.array(z.unknown()).nullish(),
+      video_token_pricing: z.unknown().nullish(),
     })
     .nullish(),
 });
@@ -60,10 +77,19 @@ export type GatewayVideoRate = {
   /** The label the provider tagged the rate with, or null for a rate that applies to any shape. */
   label: string | null;
   usdPerSecond: number;
+  /** Absent when the rate applies whether or not a source video is sent. */
+  videoInput?: boolean;
+  /** Present when a token rate was converted to the per-second figure above. */
+  tokenCalculation?: {
+    /** Original rate retained so request geometry can be priced without division/rounding. */
+    costPerMillionTokens: number;
+    tokensPerSecond: number;
+    resolution: string;
+  };
 };
 
 export type GatewayRateCard = {
-  /** Every per-second video rate published, in the order the provider listed them. */
+  /** Every usable video rate normalized to USD per second. */
   videoRates: GatewayVideoRate[];
   /** Per input token, in USD, or null when the model publishes none. */
   promptUsd: number | null;
@@ -74,6 +100,23 @@ export type GatewayRateCard = {
 export type GatewayImagePrice = {
   costUsd: number;
   unit: "image" | "token";
+};
+
+// GET /v1/models and /endpoints currently publish no price for FLUX 3, while
+// Vercel's model page publishes three configurations, and Gateway's pricing
+// documentation states that it adds no markup. This service never asks for
+// draft mode, so only the exact full-render HD/FHD rates are retained here for
+// text/image and source-video requests. Evidence and update rules:
+// docs/ai-gateway-video-pricing.md.
+const VERIFIED_VIDEO_RATE_FALLBACKS: Readonly<
+  Record<string, readonly GatewayVideoRate[]>
+> = {
+  "bfl/flux-3-video": [
+    { label: "hd", usdPerSecond: 0.17, videoInput: false },
+    { label: "fhd", usdPerSecond: 0.29, videoInput: false },
+    { label: "hd", usdPerSecond: 0.41, videoInput: true },
+    { label: "fhd", usdPerSecond: 0.53, videoInput: true },
+  ],
 };
 
 const imageModelSchema = z.object({
@@ -239,6 +282,52 @@ export async function loadGatewayRateCard(
         usdPerSecond,
       });
     }
+
+    const tokenPricing = videoTokenPricingSchema.safeParse(
+      pricing.video_token_pricing,
+    );
+    if (!tokenPricing.success) continue;
+    for (const rawTier of tokenPricing.data.tiers ?? []) {
+      const tier = videoTokenTierSchema.safeParse(rawTier);
+      if (!tier.success) continue;
+      const resolution = aiVideoResolutionOfGatewayLabel(
+        tier.data.resolution,
+      );
+      if (resolution === null) continue;
+      const tokensPerSecond = videoTokensPerSecond(resolution);
+      if (tokensPerSecond === null) continue;
+
+      for (const [videoInput, rawRate] of [
+        [false, tier.data.no_video_input],
+        [true, tier.data.with_video_input],
+      ] as const) {
+        const costPerMillionTokens = toNumber(
+          rawRate?.cost_per_million_tokens,
+        );
+        if (
+          costPerMillionTokens === null ||
+          costPerMillionTokens <= 0
+        ) continue;
+        videoRates.push({
+          label: tier.data.resolution,
+          usdPerSecond: multiplyDecimalAmounts(
+            costPerMillionTokens,
+            0.000001,
+            tokensPerSecond,
+          ),
+          videoInput,
+          tokenCalculation: { costPerMillionTokens, tokensPerSecond, resolution },
+        });
+      }
+    }
+  }
+
+  if (videoRates.length === 0) {
+    videoRates.push(
+      ...(VERIFIED_VIDEO_RATE_FALLBACKS[modelId] ?? []).map((rate) => ({
+        ...rate,
+      })),
+    );
   }
 
   return { videoRates, promptUsd, completionUsd };
@@ -261,11 +350,49 @@ export async function loadGatewayRateCard(
  */
 export function gatewayDearestVideoRate(
   rateCard: GatewayRateCard,
+  {
+    videoInput,
+    resolution,
+    aspectRatio,
+  }: {
+    /** Whether this operation always sends a source video. Omit to consider both. */
+    videoInput?: boolean;
+    /** When known, exclude tiers for resolutions this request does not use. */
+    resolution?: string;
+    aspectRatio?: string;
+  } = {},
 ): GatewayVideoRate | null {
+  const requestedResolution = resolution === undefined
+    ? undefined
+    : aiVideoResolutionOfGatewayLabel(resolution);
+  if (requestedResolution === null) return null;
   let best: GatewayVideoRate | null = null;
-  for (const rate of rateCard.videoRates) {
+  for (const original of rateCard.videoRates) {
+    let rate = original;
+    if (
+      videoInput !== undefined &&
+      rate.videoInput !== undefined &&
+      rate.videoInput !== videoInput
+    ) {
+      continue;
+    }
     if (rate.label !== null && aiVideoResolutionOfGatewayLabel(rate.label) === null) {
       continue;
+    }
+    if (
+      requestedResolution !== undefined && rate.label !== null &&
+      aiVideoResolutionOfGatewayLabel(rate.label) !== requestedResolution
+    ) continue;
+    if (aspectRatio !== undefined && rate.tokenCalculation) {
+      const tokensPerSecond = videoTokensPerSecond(rate.tokenCalculation.resolution, aspectRatio);
+      if (tokensPerSecond === null) continue;
+      rate = {
+        ...rate,
+        usdPerSecond: multiplyDecimalAmounts(
+          rate.tokenCalculation.costPerMillionTokens, 0.000001, tokensPerSecond,
+        ),
+        tokenCalculation: { ...rate.tokenCalculation, tokensPerSecond },
+      };
     }
     if (!best || rate.usdPerSecond > best.usdPerSecond) {
       best = rate;

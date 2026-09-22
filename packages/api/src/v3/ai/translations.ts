@@ -266,9 +266,6 @@ const app = new Hono().post("/", async (c) => {
     });
   }
   const characterCount = translationCharacterCount({ segments, style });
-  const usageUnits =
-    selectedModel.priceUnits *
-    Math.max(1, Math.ceil(characterCount / 1_000));
   const reservation = await createReservedAiJob({
     userId,
     kind: "translation",
@@ -280,7 +277,7 @@ const app = new Hono().post("/", async (c) => {
       segmentCount: segments.length,
       characterCount,
     },
-    usageUnits,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...requestIdentity,
   });
@@ -318,7 +315,7 @@ const app = new Hono().post("/", async (c) => {
         { start: context.start, end: context.end },
       ]),
     );
-    const translatedSegments = await translationProviderFor(
+    const translated = await translationProviderFor(
       selectedModel.provider,
     ).translate({
       ...(sourceLanguage ? { sourceLanguage } : {}),
@@ -332,10 +329,12 @@ const app = new Hono().post("/", async (c) => {
       signal: c.req.raw.signal,
       ...(onSegment ? { onSegment } : {}),
     });
+    const translatedSegments = translated;
     await saveAiJsonResult({
       jobId: job.id,
       userId,
       filename: `translation-${job.id}.json`,
+      providerCostUsd: translated.providerCostUsd,
       result: {
         version: 1,
         kind: "translation",

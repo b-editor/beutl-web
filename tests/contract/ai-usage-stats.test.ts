@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addPurchasedCredits,
   adjustPurchasedCreditsByAdmin,
@@ -10,11 +10,14 @@ import {
   getAiJobStatusCounts,
   getAiJobUsageByKind,
   getAiUsageTotals,
+  getCreditAccount,
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
+  listRecentAiJobsByUserId,
   reconcilePurchasedCreditReversal,
   refundUsage,
   setDbProvider,
+  settleUsage,
   setMonthlyUsageUsedByAdmin,
   upsertSubscription,
 } from "@beutl/db";
@@ -40,12 +43,14 @@ async function reserve({
   kind,
   status,
   units,
+  reservedUnits,
 }: {
   userId: string;
   jobId: string;
   kind: string;
   status: string;
   units: number;
+  reservedUnits?: number;
 }) {
   const job = await createAiJob({
     userId,
@@ -53,6 +58,7 @@ async function reserve({
     provider: "openrouter",
     status,
     usageUnits: units,
+    reservedUsageUnits: reservedUnits,
   });
   await consumeUsage({
     userId,
@@ -60,6 +66,26 @@ async function reserve({
     monthlyUsageLimit: MONTHLY_LIMIT,
     usagePeriod: PERIOD,
     aiJobId: job.id,
+  });
+  return job;
+}
+
+async function settledReservation(userId: string, kind: string, reserved: number, actual: number) {
+  const job = await reserve({
+    userId,
+    jobId: "settlement-fixture",
+    kind,
+    status: "succeeded",
+    units: reserved,
+    reservedUnits: reserved,
+  });
+  await settleUsage({
+    userId,
+    aiJobId: job.id,
+    actualAmount: actual,
+    providerCostUsdMicros: Math.round(actual * 10_000),
+    monthlyUsageLimit: MONTHLY_LIMIT,
+    currentUsagePeriod: PERIOD,
   });
   return job;
 }
@@ -77,6 +103,7 @@ describe("AI usage aggregates", () => {
     });
     setDbProvider(async () => memory.prisma as never);
   });
+  afterEach(() => vi.useRealTimers());
 
   it("counts jobs by status", async () => {
     await reserve({
@@ -136,6 +163,50 @@ describe("AI usage aggregates", () => {
     ]);
   });
 
+  it("keeps original reservations across settlements, refunds, and legacy jobs", async () => {
+    await settledReservation("user-a", "image", 3.125, 0.625);
+    await settledReservation("user-b", "video", 1.75, 4.25);
+    await settledReservation("user-a", "image", 0.125, 0);
+    await reserve({ userId: "user-a", jobId: "legacy", kind: "image", status: "succeeded", units: 0.5 });
+    await reserve({ userId: "user-c", jobId: "queued", kind: "image", status: "queued", units: 0.25, reservedUnits: 0.25 });
+    const failed = await reserve({ userId: "user-c", jobId: "failed", kind: "image", status: "failed", units: 1.125, reservedUnits: 1.125 });
+    await refundUsage({ userId: "user-c", aiJobId: failed.id, usagePeriod: PERIOD });
+
+    expect(await getAiJobUsageByKind({ since: SINCE })).toEqual([
+      { kind: "image", jobCount: 5, reservedUnits: 5.125 },
+      { kind: "video", jobCount: 1, reservedUnits: 1.75 },
+    ]);
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(5.625);
+    expect(await getAiJobUsageByKind({ since: new Date(Date.now() + 60_000) })).toEqual([]);
+  });
+
+  it("ranks and limits users by combined legacy and new reservations", async () => {
+    await settledReservation("user-a", "image", 3.125, 0.125);
+    await reserve({ userId: "user-a", jobId: "legacy-a", kind: "image", status: "succeeded", units: 2.25 });
+    await settledReservation("user-b", "video", 5.25, 20);
+    await reserve({ userId: "user-c", jobId: "legacy-c", kind: "image", status: "succeeded", units: 5.125 });
+    const old = await settledReservation("user-old", "video", 100, 100);
+    memory.state.aiJobs.get(old.id)!.createdAt = new Date(SINCE.getTime() - 1);
+
+    expect(await getTopAiUsers({ since: SINCE, limit: 3 })).toEqual([
+      { userId: "user-a", jobCount: 2, reservedUnits: 5.375 },
+      { userId: "user-b", jobCount: 1, reservedUnits: 5.25 },
+      { userId: "user-c", jobCount: 1, reservedUnits: 5.125 },
+    ]);
+    expect(await getTopAiUsers({ since: SINCE, limit: 1 })).toEqual([
+      { userId: "user-a", jobCount: 2, reservedUnits: 5.375 },
+    ]);
+  });
+
+  it("exposes reservations separately from actual usage in recent job rows", async () => {
+    const settled = await settledReservation("user-a", "image", 3.125, 0.125);
+    const legacy = await reserve({ userId: "user-a", jobId: "legacy-a", kind: "image", status: "succeeded", units: 2.25 });
+    const rows = await listRecentAiJobsByUserId({ userId: "user-a", limit: 10 });
+
+    expect(rows.find((row) => row.id === settled.id)).toMatchObject({ usageUnits: 0.125, reservedUnits: 3.125 });
+    expect(rows.find((row) => row.id === legacy.id)).toMatchObject({ usageUnits: 2.25, reservedUnits: 2.25 });
+  });
+
   it("reports consumption net of refunds across both balance sources", async () => {
     await addPurchasedCredits({
       userId: "user-a",
@@ -163,6 +234,110 @@ describe("AI usage aggregates", () => {
     totals = await getAiUsageTotals({ since: SINCE });
     expect(totals.consumedUnits).toBe(0);
     expect(totals.purchasedCredits).toBe(300);
+  });
+
+  it.each([0, 0.625, 4.25])("keeps an old reservation's settlement to %s units out of a newer window", async (actual) => {
+    const old = await settledReservation("user-old", "image", 3.125, actual);
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    memory.state.creditTransactions.find((row) => row.aiJobId === old.id && row.kind === "usage")!.createdAt = beforeWindow;
+    // A current job must contribute its whole charge, not that charge plus an
+    // unrelated delta from the old job. Soft deletion does not erase spend.
+    const current = await settledReservation("user-new", "image", 2.5, 2.25);
+    memory.state.aiJobs.get(current.id)!.createdAt = SINCE;
+    memory.state.aiJobs.get(current.id)!.deletedAt = new Date();
+
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(2.25);
+    expect((await getAiUsageTotals({ since: beforeWindow })).consumedUnits).toBe(actual + 2.25);
+    expect((await getAiUsageTotals({ since: new Date(SINCE.getTime() + 1) })).consumedUnits).toBe(0);
+  });
+
+  it("keeps a delayed refund with its reservation across both balance sources", async () => {
+    await addPurchasedCredits({ userId: "user-a", amount: 300, stripePaymentId: "pi_delayed_refund" });
+    const old = await reserve({ userId: "user-a", jobId: "old", kind: "video", status: "failed", units: 600 });
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    memory.state.creditTransactions.find((row) => row.aiJobId === old.id && row.kind === "usage")!.createdAt = beforeWindow;
+    await refundUsage({ userId: "user-a", aiJobId: old.id, usagePeriod: PERIOD });
+    await reserve({ userId: "user-b", jobId: "new", kind: "image", status: "running", units: 1.25 });
+
+    expect(await getAiUsageTotals({ since: SINCE })).toEqual({
+      consumedUnits: 1.25, purchasedCredits: 300, adminUsageAdjustment: 0,
+    });
+    expect((await getAiUsageTotals({ since: beforeWindow })).consumedUnits).toBe(1.25);
+  });
+
+  it.each([
+    { units: 3.125, monthlyLimit: 20, purchased: 0, monthlyRefund: -3.125, creditRefund: 0 },
+    { units: 25.375, monthlyLimit: 20, purchased: 10, monthlyRefund: -20, creditRefund: 5.375 },
+    { units: 0.125, monthlyLimit: 0, purchased: 10, monthlyRefund: 0, creditRefund: 0.125 },
+  ])("cancels a failed $units-unit reservation in its creation window after renewal", async (test) => {
+    vi.useFakeTimers();
+    const userId = "user-refund-rollover";
+    const beforeRenewal = new Date(PERIOD.end.getTime() - 1_000);
+    const nextPeriod = { start: PERIOD.end, end: new Date(PERIOD.end.getTime() + 30 * 86_400_000) };
+    vi.setSystemTime(beforeRenewal);
+    if (test.purchased) {
+      await addPurchasedCredits({ userId, amount: test.purchased, stripePaymentId: "pi_refund_rollover" });
+    }
+    const old = await createAiJob({ userId, kind: "image", provider: "test", status: "failed", usageUnits: test.units, reservedUsageUnits: test.units });
+    await consumeUsage({ userId, aiJobId: old.id, amount: test.units, monthlyUsageLimit: test.monthlyLimit, usagePeriod: PERIOD });
+
+    vi.setSystemTime(nextPeriod.start);
+    const current = await createAiJob({ userId, kind: "image", provider: "test", status: "running", usageUnits: 1.25 });
+    await consumeUsage({ userId, aiJobId: current.id, amount: 1.25, monthlyUsageLimit: 20, usagePeriod: nextPeriod });
+    expect((await getAiUsageTotals({ since: beforeRenewal })).consumedUnits).toBe(test.units + 1.25);
+    const refund = { userId, aiJobId: old.id, usagePeriod: nextPeriod };
+    await refundUsage(refund);
+    await refundUsage(refund);
+
+    // Expired allowance never reduces new-period usage, but the failed job's
+    // entire reservation must disappear from consumption in its own cohort.
+    expect(await getCreditAccount({ userId })).toMatchObject({ monthlyUsageUsed: 1.25, purchasedCredits: test.purchased, purchasedCreditDebt: 0 });
+    expect((await getAiUsageTotals({ since: beforeRenewal })).consumedUnits).toBe(1.25);
+    expect((await getAiUsageTotals({ since: nextPeriod.start })).consumedUnits).toBe(1.25);
+    const rows = memory.state.creditTransactions.filter((row) => row.kind === "refund");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ usageAmount: test.monthlyRefund, creditAmount: test.creditRefund, usagePeriodStart: PERIOD.start, usagePeriodEnd: PERIOD.end });
+    expect(await getAiJobUsageByKind({ since: beforeRenewal })).toEqual([
+      { kind: "image", jobCount: 2, reservedUnits: test.units + 1.25 },
+    ]);
+  });
+
+  it("retains transaction-time filtering for unlinked legacy consumption", async () => {
+    for (const [kind, usageAmount, createdAt] of [
+      ["usage", 5, new Date(SINCE.getTime() - 1)],
+      ["usage", 1.125, SINCE],
+      ["refund", -0.125, SINCE],
+    ] as const) {
+      await memory.prisma.creditTransaction.create({
+        data: { userId: "legacy", kind, usageAmount, creditAmount: 0 },
+      });
+      memory.state.creditTransactions.at(-1)!.createdAt = createdAt;
+    }
+    expect((await getAiUsageTotals({ since: SINCE })).consumedUnits).toBe(1);
+  });
+
+  it("keeps purchases and admin adjustments on transaction time even when linked to a job", async () => {
+    const beforeWindow = new Date(SINCE.getTime() - 1);
+    const old = await createAiJob({ userId: "user-a", kind: "image", provider: "test", status: "succeeded", usageUnits: 1 });
+    const current = await createAiJob({ userId: "user-a", kind: "image", provider: "test", status: "succeeded", usageUnits: 1 });
+    memory.state.aiJobs.get(old.id)!.createdAt = beforeWindow;
+    for (const [aiJobId, kind, creditAmount, usageAmount, createdAt] of [
+      [old.id, "purchase", 7, 0, SINCE],
+      [old.id, "purchase_reversal", -2, 0, SINCE],
+      [old.id, "admin_usage_adjustment", 0, 1.25, SINCE],
+      [current.id, "purchase", 11, 0, beforeWindow],
+      [current.id, "admin_usage_adjustment", 0, 3, beforeWindow],
+    ] as const) {
+      await memory.prisma.creditTransaction.create({
+        data: { userId: "user-a", aiJobId, kind, creditAmount, usageAmount },
+      });
+      memory.state.creditTransactions.at(-1)!.createdAt = createdAt;
+    }
+    expect(await getAiUsageTotals({ since: SINCE })).toEqual({
+      consumedUnits: 0, purchasedCredits: 5, adminUsageAdjustment: 1.25,
+    });
   });
 
   it("nets a reversed purchase out of the credits purchased", async () => {

@@ -1,12 +1,10 @@
 // Image generation and editing through Vercel AI Gateway.
 //
-// The Gateway has no named operation for background removal, upscaling or
-// outpainting — searching its documentation and the whole @ai-sdk/gateway dist
-// for those words returns nothing. OpenRouter serves them through provider
-// parameters (`background: "transparent"`, `resolution: "4K"`) that have no
-// counterpart here, so those three operations are declared unsupported rather
-// than approximated with a prompt that would quietly return something else.
-// See `supports` in ../vercel-gateway/index.ts.
+// Prompt-driven edits cover restyling, object removal and outpainting. The web
+// client prepares outpainting as a larger transparent canvas before it reaches
+// this adapter. Background removal uses the same image-edit request plus
+// OpenAI's transparent PNG provider options. Upscaling is the remaining edit
+// without an equivalent here; see `supports` in ../vercel-gateway/index.ts.
 //
 // What is here is the one surface the SDK offers: a prompt, optionally carrying
 // source images. `generateImage` with a plain string generates; the same call
@@ -29,16 +27,32 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { toGatewayProviderError } from "./errors";
+import { gatewayProviderCostUsd } from "../../provider-cost";
 
 function toGeneratedImage(image: {
   base64: string;
   mediaType: string;
-}): GeneratedImage {
+}, providerMetadata?: unknown): GeneratedImage {
   if (!image.base64) {
     throw new AiProviderError("Vercel AI Gateway returned an empty image");
   }
-  return { b64Json: image.base64, mediaType: image.mediaType };
+  const cost = gatewayProviderCostUsd(providerMetadata);
+  return {
+    b64Json: image.base64,
+    mediaType: image.mediaType,
+    ...(cost === undefined ? {} : { providerCostUsd: cost }),
+  };
 }
+
+// OpenAI requires a transparency-capable format whenever transparent output is
+// requested. AI Gateway passes these provider-specific options through under
+// the actual provider name.
+const OPENAI_TRANSPARENT_PNG_OPTIONS = {
+  openai: {
+    background: "transparent",
+    outputFormat: "png",
+  },
+} as const;
 
 export async function generateGatewayImage(
   request: AiImageGenerateRequest,
@@ -50,9 +64,9 @@ export async function generateGatewayImage(
     throw new AiProviderError("Too many reference images");
   }
 
-  // `background` has no top-level field here. Asking for a transparent one is
-  // refused by the capability check before this is reached, and "auto" means
-  // sending nothing — which is what happens either way.
+  // `background` is an OpenAI provider option rather than a top-level AI SDK
+  // field. "auto" means sending nothing; capability validation prevents this
+  // branch from being used with a model not verified for transparent output.
   try {
     const result = await generateImage({
       model: createGatewayClient().imageModel(request.model),
@@ -68,9 +82,12 @@ export async function generateGatewayImage(
       aspectRatio: request.aspectRatio,
       n: 1,
       ...(request.seed === undefined ? {} : { seed: request.seed }),
+      ...(request.background === "transparent"
+        ? { providerOptions: OPENAI_TRANSPARENT_PNG_OPTIONS }
+        : {}),
       abortSignal: gatewayRequestSignal(request.signal),
     });
-    return toGeneratedImage(result.image);
+    return toGeneratedImage(result.image, result.providerMetadata);
   } catch (cause) {
     throw toGatewayProviderError(
       cause,
@@ -82,10 +99,12 @@ export async function generateGatewayImage(
 export async function editGatewayImage(
   request: AiImageEditRequest,
 ): Promise<GeneratedImage> {
-  // Every edit the Gateway can serve is prompt-driven, so one is required. The
-  // operations OpenRouter serves without a prompt — background removal and
-  // upscaling — are the ones declared unsupported.
-  const prompt = request.prompt?.trim();
+  // The screen does not ask users for text when removing a background, but the
+  // Gateway edit surface is prompt-driven. Supply the operation's instruction
+  // here so the web action, v3 endpoint and retries all send the same request.
+  const prompt = request.task === "remove_background"
+    ? "Extract the foreground subject from the input image, preserve it exactly, and place it on a fully transparent background."
+    : request.prompt?.trim();
   if (!prompt) {
     throw new AiProviderError(`A prompt is required for ${request.task}`);
   }
@@ -98,9 +117,16 @@ export async function editGatewayImage(
         text: prompt,
       },
       n: 1,
+      // AI Gateway forwards options under the actual provider name. OpenAI
+      // requires PNG or WebP when a transparent background is requested.
+      ...(request.task === "remove_background"
+        ? {
+            providerOptions: OPENAI_TRANSPARENT_PNG_OPTIONS,
+          }
+        : {}),
       abortSignal: gatewayRequestSignal(request.signal),
     });
-    return toGeneratedImage(result.image);
+    return toGeneratedImage(result.image, result.providerMetadata);
   } catch (cause) {
     throw toGatewayProviderError(
       cause,

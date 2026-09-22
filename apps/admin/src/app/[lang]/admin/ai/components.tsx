@@ -4,17 +4,27 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { Input } from "@beutl/ui/ui/input";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
-import { MAX_MONTHLY_USAGE_LIMIT, MIN_MONTHLY_USAGE_LIMIT } from "@beutl/core";
+import {
+  MAX_MONTHLY_USAGE_LIMIT,
+  MAX_PROVIDER_USD_PER_USAGE_UNIT,
+  MIN_MONTHLY_USAGE_LIMIT,
+  MIN_PROVIDER_USD_PER_USAGE_UNIT,
+} from "@beutl/core";
 import { useAiSettingField, type AiSettingRow } from "./settings-form";
 
 export type { AiSettingRow };
 
 const LABEL_KEYS = {
   limit: "admin:ai.monthlyUsageLimit",
+  usd_rate: "admin:ai.providerUsdPerUsageUnit",
 } as const;
 
 const NUMBER_RANGES = {
   limit: { min: MIN_MONTHLY_USAGE_LIMIT, max: MAX_MONTHLY_USAGE_LIMIT },
+  usd_rate: {
+    min: MIN_PROVIDER_USD_PER_USAGE_UNIT,
+    max: MAX_PROVIDER_USD_PER_USAGE_UNIT,
+  },
 } as const;
 
 function SourceBadge({
@@ -60,7 +70,7 @@ export function AiSettingField({
           type="number"
           min={NUMBER_RANGES[setting.kind].min}
           max={NUMBER_RANGES[setting.kind].max}
-          step={1}
+          step={setting.kind === "usd_rate" ? 0.000001 : 1}
           className="w-32"
           value={value}
           disabled={isPending}

@@ -1,9 +1,9 @@
 // Estimating what one chargeable unit of an AI operation costs at the
 // provider's published rates.
 //
-// ADMIN CONSOLE ONLY. These figures exist so an administrator can tell whether
-// a unit price covers its cost. They are estimates from a price list, not what
-// was actually billed: nothing records the real per-job cost today.
+// Shared by admin summaries and request-shaped reservations. These figures
+// estimate published prices, not actual spend; provider-reported costs take
+// precedence when a successful job settles.
 //
 // Pure functions with no I/O. ./model-pricing fetches and normalizes the price
 // list, then hands it here.
@@ -13,6 +13,12 @@
 //     unknown. Never 0, never NaN. A zero would read as "this is free".
 //   - Where an assumption is needed to bridge a price to a chargeable unit, it
 //     is returned alongside the number so the UI can state it.
+
+import { addDecimalAmounts, multiplyDecimalAmounts, type AiImageAspectRatio } from "@beutl/core";
+import {
+  aiVideoResolutionOfGatewayLabel,
+  gatewayVideoResolution,
+} from "./providers/vercel-gateway/resolution";
 
 export type AiCostUnknownReason =
   | "provider_unavailable"
@@ -48,6 +54,53 @@ export type AiCostEstimate =
 // gpt-image-1 bills its output as tokens; 1024x1024 at medium quality is 1,056
 // of them, which reproduces OpenAI's published $0.042 per image.
 export const ASSUMED_IMAGE_OUTPUT_TOKENS = 1056;
+// Keep the existing medium-quality assumption, but do not reuse the square
+// count for portrait/landscape requests. Source and model-specific caveats:
+// docs/ai-actual-cost-billing.md#image-token-estimates.
+const LEGACY_IMAGE_OUTPUT_TOKENS: Readonly<Record<string, number>> = {
+  "1:1": ASSUMED_IMAGE_OUTPUT_TOKENS,
+  "3:2": 1568,
+  "2:3": 1584,
+};
+
+// Representative ~1K-short-side outputs. GPT Image 2 requires 16px multiples;
+// preserve the exact requested ratio while rounding the short side up to 1K.
+const GPT_IMAGE_2_GEOMETRY: Record<AiImageAspectRatio, readonly [number, number]> = {
+  "1:1": [1024, 1024],
+  "3:2": [1536, 1024],
+  "2:3": [1024, 1536],
+  "16:9": [2048, 1152],
+  "9:16": [1152, 2048],
+  "4:3": [1408, 1056],
+  "3:4": [1056, 1408],
+};
+
+function gptImage2MediumOutputTokens(width: number, height: number): number {
+  // OpenAI's official output-token calculator: a medium grid has 48 cells on
+  // its longer side, a ties-to-even rounded shorter side, and a pixel factor.
+  const shortGrid = 48 * Math.min(width, height) / Math.max(width, height);
+  const floor = Math.floor(shortGrid);
+  const rounded = shortGrid - floor === 0.5 ? floor + floor % 2 : Math.round(shortGrid);
+  return Math.ceil(48 * rounded * (2_000_000 + width * height) / 4_000_000);
+}
+
+const GPT_IMAGE_2_OUTPUT_TOKENS = Object.fromEntries(
+  Object.entries(GPT_IMAGE_2_GEOMETRY).map(([ratio, [width, height]]) =>
+    [ratio, gptImage2MediumOutputTokens(width, height)] as const
+  ),
+);
+
+function imageOutputTokens(model: string | undefined, aspectRatio: string | undefined): number {
+  const profile = model === "openai/gpt-image-2" || model === "openai/gpt-image-2-2026-04-21"
+    ? GPT_IMAGE_2_OUTPUT_TOKENS
+    : LEGACY_IMAGE_OUTPUT_TOKENS;
+  // Edits/admin estimates may not have a requested output ratio. Use the
+  // largest count in the profile instead of silently treating them as square.
+  return aspectRatio !== undefined && Object.hasOwn(profile, aspectRatio)
+    ? profile[aspectRatio]
+    : Math.max(...Object.values(profile));
+}
+
 export const ASSUMED_IMAGE_INPUT_TOKENS = 1056;
 // 1024 x 1024 expressed in megapixels, for models that bill by area.
 export const ASSUMED_IMAGE_MEGAPIXELS = (1024 * 1024) / 1_000_000;
@@ -107,7 +160,7 @@ export type ImagePricingEntry = {
 // treat a missing charge as free.
 function estimateImageEndpoint(
   entries: ImagePricingEntry[],
-  { referenceImages }: { referenceImages: number },
+  { referenceImages, model, aspectRatio }: { referenceImages: number; model?: string; aspectRatio?: string },
 ): { usd: number; assumptions: AiCostAssumption[] } | null {
   const assumptions: AiCostAssumption[] = [];
   const priceOf = (
@@ -119,17 +172,21 @@ function estimateImageEndpoint(
     if (!Number.isFinite(entry.costUsd) || entry.costUsd <= 0) return null;
     switch (entry.unit) {
       case "image":
-        return entry.costUsd * quantity;
+        return multiplyDecimalAmounts(entry.costUsd, quantity);
       case "megapixel":
         assumptions.push({
           kind: "imageMegapixels",
           value: ASSUMED_IMAGE_MEGAPIXELS,
         });
-        return entry.costUsd * ASSUMED_IMAGE_MEGAPIXELS * quantity;
+        return multiplyDecimalAmounts(
+          entry.costUsd,
+          ASSUMED_IMAGE_MEGAPIXELS,
+          quantity,
+        );
       case "token": {
         const tokens =
           billable === "output_image"
-            ? ASSUMED_IMAGE_OUTPUT_TOKENS
+            ? imageOutputTokens(model, aspectRatio)
             : ASSUMED_IMAGE_INPUT_TOKENS;
         assumptions.push({
           kind:
@@ -138,7 +195,7 @@ function estimateImageEndpoint(
               : "imageInputTokens",
           value: tokens,
         });
-        return entry.costUsd * tokens * quantity;
+        return multiplyDecimalAmounts(entry.costUsd, tokens, quantity);
       }
       default:
         return null;
@@ -163,7 +220,7 @@ function estimateImageEndpoint(
       // admin setting a price for it has to know it was not counted.
       assumptions.push({ kind: "imageInputNotPriced" });
     } else {
-      total += input;
+      total = addDecimalAmounts(total, input);
     }
     // Text prompt tokens are left out: they are about 1% of an image request
     // and cannot be sized without knowing the prompt.
@@ -175,15 +232,21 @@ export function estimateImageCost({
   endpoints,
   referenceImages,
   referenceImagesByEndpoint,
+  model,
+  aspectRatio,
 }: {
   endpoints: ImagePricingEntry[][];
   referenceImages: number;
   referenceImagesByEndpoint?: readonly number[];
+  model?: string;
+  aspectRatio?: string;
 }): AiCostEstimate {
   const results = endpoints
     .map((entries, index) =>
       estimateImageEndpoint(entries, {
         referenceImages: referenceImagesByEndpoint?.[index] ?? referenceImages,
+        model,
+        aspectRatio,
       })
     )
     .filter((result): result is NonNullable<typeof result> => result !== null);
@@ -219,7 +282,7 @@ export function estimateTranscriptionCost({
   }
   const perMinute =
     unit === "second"
-      ? promptPriceUsd * TRANSCRIPTION_SECONDS_PER_UNIT
+      ? multiplyDecimalAmounts(promptPriceUsd, TRANSCRIPTION_SECONDS_PER_UNIT)
       : promptPriceUsd;
   // Billing rounds up to a whole started minute, so a shorter clip costs the
   // same to the customer but less to serve. This is the ceiling.
@@ -248,7 +311,10 @@ export function estimateTranslationCost({
   const costFor = (tokensPerCharacter: number) => {
     const inputTokens = TRANSLATION_CHARACTERS_PER_UNIT * tokensPerCharacter;
     const outputTokens = inputTokens * TRANSLATION_OUTPUT_RATIO;
-    return inputTokens * promptPriceUsd + outputTokens * completionPriceUsd;
+    return addDecimalAmounts(
+      multiplyDecimalAmounts(inputTokens, promptPriceUsd),
+      multiplyDecimalAmounts(outputTokens, completionPriceUsd),
+    );
   };
   // The fixed system prompt and JSON envelope are excluded: they do not scale
   // with the 1,000 characters this unit measures.
@@ -292,14 +358,24 @@ const VIDEO_RESOLUTION_PIXELS: Record<string, number> = {
   "480p": 854 * 480,
   "720p": 1280 * 720,
   "1080p": 1920 * 1080,
+  "2k": 2560 * 1440,
   "4k": 3840 * 2160,
 };
 
 // Null for a resolution with no known pixel count, which leaves a token-priced
 // model reported as unknown rather than costed against a guess.
-export function videoTokensPerSecond(resolution: string): number | null {
-  const pixels = VIDEO_RESOLUTION_PIXELS[resolution.toLowerCase()];
+export function videoTokensPerSecond(resolution: string, aspectRatio?: string): number | null {
+  let pixels = VIDEO_RESOLUTION_PIXELS[resolution.toLowerCase()];
   if (pixels === undefined) return null;
+  if (aspectRatio !== undefined) {
+    // Use the same even pixel dimensions as generation instead of pricing a
+    // square/portrait request as a default landscape frame.
+    const label = aiVideoResolutionOfGatewayLabel(resolution);
+    const dimensions = label === null ? null : gatewayVideoResolution(label, aspectRatio);
+    if (dimensions === null) return null;
+    const [width, height] = dimensions.split("x").map(Number);
+    pixels = width * height;
+  }
   return (pixels * VIDEO_TOKEN_FPS) / VIDEO_PIXELS_PER_TOKEN;
 }
 
@@ -310,10 +386,12 @@ export function estimateVideoCost({
   pricingSkus,
   resolution,
   withAudio,
+  aspectRatio,
 }: {
   pricingSkus: Record<string, string>;
   resolution: string;
   withAudio: boolean;
+  aspectRatio?: string;
 }): AiCostEstimate {
   const candidates = Object.entries(pricingSkus).filter(
     ([key]) =>
@@ -326,7 +404,7 @@ export function estimateVideoCost({
   const audioSuffix = withAudio ? "_with_audio" : "_without_audio";
   const resolutionSuffix = `_${resolution.toLowerCase()}`;
 
-  const tokensPerSecond = videoTokensPerSecond(resolution);
+  const tokensPerSecond = videoTokensPerSecond(resolution, aspectRatio);
 
   const scoreOf = (key: string): number | null => {
     const prefix = [
@@ -365,9 +443,9 @@ export function estimateVideoCost({
     // of costing it against a guess.
     if (isPerToken && tokensPerSecond === null) continue;
     const usd = isCents
-      ? value / 100
+      ? multiplyDecimalAmounts(value, 0.01)
       : isPerToken
-        ? value * tokensPerSecond!
+        ? multiplyDecimalAmounts(value, tokensPerSecond!)
         : value;
     // Two SKUs can match equally well — same audio variant, neither naming a
     // resolution — and then the object's key order would decide the figure.

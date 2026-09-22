@@ -72,9 +72,10 @@ export function videoProviderFor(id: string): AiVideoProvider {
 /**
  * The image half of a provider.
  *
- * Note this says nothing about which edit tasks it serves: a provider can hold
- * an image surface and still refuse background removal. `supports` answers
- * that, per operation.
+ * Note this says nothing about which edit tasks or models it serves: a provider
+ * can hold an image surface while a particular model still refuses transparent
+ * output. `supports` answers the operation-level question; image capabilities
+ * answer the model-level one.
  */
 export function imageProviderFor(id: string): AiImageProvider {
   const provider = providerFor(id);
@@ -106,4 +107,14 @@ export function providerSupportsOperation(
   operation: string,
 ): boolean {
   return findAiProvider(id)?.supports(operation) ?? false;
+}
+
+// Gateway has no native canvas-expansion task. Its Web path is usable only
+// because the client supplies a pre-expanded transparent canvas; raw-image API
+// uploads must not advertise or execute that operation as ordinary outpainting.
+export function providerRequiresPreparedOutpaintCanvas(
+  id: string,
+  operation: string,
+): boolean {
+  return id === "vercel-gateway" && operation === "image.edit.outpaint";
 }

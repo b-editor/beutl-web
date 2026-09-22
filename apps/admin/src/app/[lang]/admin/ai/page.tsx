@@ -1,6 +1,10 @@
 import { getTranslation } from "@beutl/i18n";
 import { requireAdmin } from "@/lib/auth-guard";
-import { AI_OPERATIONS, AI_PLAN_MONTHLY_USAGE_LIMIT_KEY } from "@beutl/core";
+import {
+  AI_OPERATIONS,
+  AI_PLAN_MONTHLY_USAGE_LIMIT_KEY,
+  AI_PROVIDER_USD_PER_USAGE_UNIT_KEY,
+} from "@beutl/core";
 import { Separator } from "@beutl/ui/ui/separator";
 import { Suspense } from "react";
 import { AiSettingField } from "./components";
@@ -13,10 +17,7 @@ import {
 import {
   AiOfferCards,
   AiOfferCardsFallback,
-  AiOperationEconomics,
-  AiOperationEconomicsFallback,
 } from "./economics";
-import { AiUnaffordableAlert } from "./unaffordable-alert";
 import { AllowanceDigest, AllowanceDigestFallback } from "./digest";
 import { AiTabs } from "./tabs";
 import {
@@ -77,6 +78,7 @@ export default async function Page(props: {
       return rows.map((row) => ({
         modelId: row.modelId,
         provider: row.provider,
+        usagePercent: row.usagePercent,
         priceUnits: row.priceUnits,
         displayName: row.displayName,
         enabled: row.enabled,
@@ -85,6 +87,7 @@ export default async function Page(props: {
     return catalog.list(operation).map((entry) => ({
       modelId: entry.modelId,
       provider: entry.provider,
+      usagePercent: entry.usagePercent,
       priceUnits: entry.priceUnits,
       displayName: null,
       enabled: true,
@@ -98,6 +101,7 @@ export default async function Page(props: {
         .map((row) => ({
           modelId: row.modelId,
           provider: row.provider,
+          usagePercent: row.usagePercent,
           priceUnits: row.priceUnits,
           displayName: row.displayName,
           enabled: row.enabled,
@@ -251,6 +255,10 @@ export default async function Page(props: {
                 lang={lang}
                 settingKey={AI_PLAN_MONTHLY_USAGE_LIMIT_KEY}
               />
+              <AiSettingField
+                lang={lang}
+                settingKey={AI_PROVIDER_USD_PER_USAGE_UNIT_KEY}
+              />
             </div>
             <Suspense
               fallback={
@@ -264,7 +272,7 @@ export default async function Page(props: {
                 monthlyUsageLimit={monthlyUsageLimit}
               />
             </Suspense>
-            {/* The two prices every per-operation figure below derives from. */}
+            {/* The current subscription and top-up prices. */}
             <Suspense
               fallback={
                 <AiOfferCardsFallback label={t("admin:ai.economics.loading")} />
@@ -272,18 +280,6 @@ export default async function Page(props: {
             >
               <AiOfferCards lang={lang} />
             </Suspense>
-            <AiUnaffordableAlert
-              lang={lang}
-              modelsByOperation={Object.fromEntries(
-                AI_OPERATIONS.map((operation) => [
-                  operation,
-                  modelsOf(operation).map((model) => ({
-                    priceUnits: model.priceUnits,
-                    enabled: model.enabled,
-                  })),
-                ]),
-              )}
-            />
           </section>
 
           {/* Every model an operation offers, and nothing else: a second place
@@ -306,39 +302,8 @@ export default async function Page(props: {
                       t("admin:ai.models.unsupportedByProvider"),
                     ]),
                 )}
-                // Prices and provider costs are network calls, so each figure
-                // sits behind its own boundary and the rows stay interactive
-                // while they load. They all await the same cached lookup.
-                economicsByModel={Object.fromEntries(
-                  modelsOf(operation).map((model) => [
-                    model.modelId,
-                    <Suspense
-                      key={model.modelId}
-                      fallback={
-                        <AiOperationEconomicsFallback
-                          lang={lang}
-                          operation={operation}
-                          model={model.modelId}
-                          priceUnits={model.priceUnits}
-                        />
-                      }
-                    >
-                      <AiOperationEconomics
-                        lang={lang}
-                        operation={operation}
-                        model={model.modelId}
-                        priceUnits={model.priceUnits}
-                      />
-                    </Suspense>,
-                  ]),
-                )}
               />
           ))}
-
-          {/* Stated once rather than under every operation. */}
-          <p className="text-xs text-muted-foreground">
-            {t("admin:ai.economics.costNote")}
-          </p>
         </div>
       </AiConfigurationForm>
     </div>

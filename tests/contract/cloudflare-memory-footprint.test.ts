@@ -74,7 +74,7 @@ describe("Cloudflare Worker memory footprint", () => {
     expect(entitlements).not.toContain(
       'from "./video-model-capabilities"',
     );
-    expect(entitlements).toContain(
+    expect(entitlements).not.toContain(
       'import("./video-model-capabilities")',
     );
   });

@@ -198,7 +198,7 @@ describe("AI entitlements", () => {
     expect(catalogRead).not.toHaveBeenCalled();
   });
 
-  it("reports a video as startable only once the shortest clip is affordable", async () => {
+  it("keeps advisory availability open while any fractional unit remains", async () => {
     await activatePro();
     // Less than four seconds of allowance cannot start the shortest valid clip.
     await consumeUsage({
@@ -210,7 +210,7 @@ describe("AI entitlements", () => {
     });
 
     const short = await readEntitlements();
-    expect(short.availability["video.generate"]).toBe(false);
+    expect(short.availability["video.generate"]).toBe(true);
     // Operations billed per request are unaffected by the video minimum.
     expect(short.availability["image.edit.remove_background"]).toBe(true);
 
@@ -228,6 +228,21 @@ describe("AI entitlements", () => {
 
     const exact = await readEntitlements();
     expect(exact.availability["video.generate"]).toBe(true);
+
+    const fractionalMemory = createInMemoryPrisma();
+    state = fractionalMemory.state;
+    setDbProvider(async () => fractionalMemory.prisma as never);
+    await activatePro();
+    await consumeUsage({
+      userId: USER_ID,
+      amount: MONTHLY_LIMIT - 0.25,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "entitlements-fractional-remainder",
+    });
+
+    const fractional = await readEntitlements();
+    expect(fractional.availability["image.generate"]).toBe(true);
   });
 
   it("disables AI entitlements while account deletion is authorized", async () => {
@@ -249,7 +264,7 @@ describe("AI entitlements", () => {
   });
 
   it.each(["video.generate", "video.extend", "video.motion"])(
-    "uses each %s model's shortest supported duration",
+    "leaves request-specific quoting for each %s model to submission",
     async (operation) => {
       await activatePro();
       for (const [modelId, sortOrder] of [["video/short", 0], ["video/long", 1]] as const) {
@@ -278,14 +293,14 @@ describe("AI entitlements", () => {
 
       expect(entitlements.modelAvailability[operation]).toEqual({
         "video/short": true,
-        "video/long": false,
+        "video/long": true,
       });
       expect(entitlements.availability[operation]).toBe(true);
     },
   );
 
   it.each(["video.extend", "video.motion"])(
-    "requires the exact minimum charge for %s on the selected provider",
+    "keeps %s advisory availability independent of an old fixed price",
     async (operation) => {
       await activatePro();
       await upsertAiOperationModel({
@@ -323,13 +338,13 @@ describe("AI entitlements", () => {
       });
 
       const short = await readEntitlements(capabilities);
-      expect(short.availability[operation]).toBe(false);
-      expect(short.modelAvailability[operation]["video/shared-id"]).toBe(false);
+      expect(short.availability[operation]).toBe(true);
+      expect(short.modelAvailability[operation]["video/shared-id"]).toBe(true);
     },
   );
 
   it.each([5, 4.1, null, undefined])(
-    "uses the edit source minimum %s for whole-second affordability",
+    "quotes edit source minimum %s when the request is submitted",
     async (minSourceVideoSeconds) => {
       await activatePro();
       await upsertAiOperationModel({
@@ -368,8 +383,8 @@ describe("AI entitlements", () => {
       });
 
       const short = await readEntitlements(capabilities);
-      expect(short.availability["video.edit"]).toBe(false);
-      expect(short.modelAvailability["video.edit"]["video/editor"]).toBe(false);
+      expect(short.availability["video.edit"]).toBe(true);
+      expect(short.modelAvailability["video.edit"]["video/editor"]).toBe(true);
     },
   );
 
@@ -401,7 +416,7 @@ describe("AI entitlements", () => {
 
     expect(entitlements.modelAvailability["image.generate"]).toEqual({
       "cheap/model": true,
-      "dear/model": false,
+      "dear/model": true,
     });
     // Being unable to afford the dearest model is not the same as being unable
     // to generate an image at all.

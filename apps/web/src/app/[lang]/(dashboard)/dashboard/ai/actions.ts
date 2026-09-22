@@ -713,7 +713,6 @@ export async function generateImageAction(
     };
   }
 
-  const cost = selectedModel.priceUnits;
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "image",
@@ -730,7 +729,7 @@ export async function generateImageAction(
           }
         : {}),
     },
-    usageUnits: cost,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -767,6 +766,7 @@ export async function generateImageAction(
       bytes,
       mimeType: "image/png",
       filename: `ai-image-${job.id}.png`,
+      providerCostUsd: result.providerCostUsd,
     });
     return {
       success: true,
@@ -848,7 +848,6 @@ export async function editImageAction(
   if (!selectedModel) {
     return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
-  const cost = selectedModel.priceUnits;
   // An edit hands the model a picture, cuts out a background or asks for a
   // size; a model that takes none of those is refused before it is paid for.
   if (
@@ -888,7 +887,7 @@ export async function editImageAction(
       ...(editPrompt ? { prompt: editPrompt } : {}),
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
-    usageUnits: cost,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -917,6 +916,7 @@ export async function editImageAction(
       bytes,
       mimeType: "image/png",
       filename: `ai-edit-${job.id}.png`,
+      providerCostUsd: result.providerCostUsd,
     });
     return {
       success: true,
@@ -960,7 +960,6 @@ export async function transcribeAction(
   } catch {
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
-  const minutes = Math.max(1, Math.ceil(parsedAudio.durationSeconds / 60));
   const identity = await requestIdentityOf(formData, "audio.transcribe", {
     ...fingerprintModelOf(formData),
     // ブラウザが名乗る種類は数えない。同じ音声でも、選び方や取り込み元で
@@ -991,7 +990,6 @@ export async function transcribeAction(
   if (!selectedModel) {
     return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
-  const cost = selectedModel.priceUnits * minutes;
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "stt",
@@ -1002,7 +1000,7 @@ export async function transcribeAction(
       durationSeconds: parsedAudio.durationSeconds,
       ...(language ? { language } : {}),
     },
-    usageUnits: cost,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -1033,6 +1031,7 @@ export async function transcribeAction(
       jobId: job.id,
       userId: session.user.id,
       filename: `transcription-${job.id}.json`,
+      providerCostUsd: result.providerCostUsd,
       result: {
         version: 1,
         kind: "stt",
@@ -1149,9 +1148,6 @@ export async function translateAction(
     return { success: false, message: t("api-errors:aiModelUnavailable") };
   }
 
-  const usageUnits =
-    selectedModel.priceUnits *
-    Math.max(1, Math.ceil(characterCount / 1_000));
   const reservation = await createReservedAiJob({
     userId: session.user.id,
     kind: "translation",
@@ -1163,7 +1159,7 @@ export async function translateAction(
       segmentCount: segments.length,
       characterCount,
     },
-    usageUnits,
+    usagePercent: selectedModel.usagePercent,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -1180,7 +1176,7 @@ export async function translateAction(
   }
 
   try {
-    const translated = await translationProviderFor(
+    const translation = await translationProviderFor(
       selectedModel.provider,
     ).translate({
       ...(sourceLanguage ? { sourceLanguage } : {}),
@@ -1190,10 +1186,12 @@ export async function translateAction(
       ...(style ? { style } : {}),
       model: selectedModel.modelId,
     });
+    const translated = translation;
     await saveAiJsonResult({
       jobId: job.id,
       userId: session.user.id,
       filename: `translation-${job.id}.json`,
+      providerCostUsd: translation.providerCostUsd,
       result: {
         version: 1,
         kind: "translation",
@@ -1415,7 +1413,6 @@ export async function retryJobAction(
     if (!identity) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const cost = retryModel.priceUnits;
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "image",
@@ -1427,7 +1424,7 @@ export async function retryJobAction(
         ...(background ? { background } : {}),
         ...(seed === undefined ? {} : { seed }),
       },
-      usageUnits: cost,
+      usagePercent: retryModel.usagePercent,
       model: retryModel.modelId,
       ...identity,
     });
@@ -1457,6 +1454,7 @@ export async function retryJobAction(
         bytes,
         mimeType: "image/png",
         filename: `ai-image-${retried.id}.png`,
+        providerCostUsd: result.providerCostUsd,
       });
       return {
         success: true,
@@ -1555,7 +1553,6 @@ export async function retryJobAction(
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
     const callbackNonce = await createCallbackNonce();
-    const cost = retryModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId: session.user.id,
       kind: "video",
@@ -1569,7 +1566,7 @@ export async function retryJobAction(
         generateAudio: retryGenerateAudio,
         ...(retrySeed === undefined ? {} : { seed: retrySeed }),
       },
-      usageUnits: cost,
+      usagePercent: retryModel.usagePercent,
       model: retryModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,

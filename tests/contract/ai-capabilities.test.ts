@@ -388,16 +388,16 @@ describe("GET /api/v3/ai/capabilities", () => {
       headers: await authHeaders(),
     });
 
-    // Display order is the administrator's; the tiers follow the real prices,
-    // which is why the dearest model can still be shown first.
+    // Display order is the administrator's. Actual request cost is not known
+    // until the provider answers, so no static tier is advertised.
     expect(
       (await response.json()).operations["image.generate"].models,
     ).toEqual([
       // Each carries what it takes as well, exactly as a video model does; a
       // model the provider says nothing about keeps every shape on offer.
-      imageModel("dear/model", "Dear", "high", true),
-      imageModel("cheap/model", "cheap/model", "low", false),
-      imageModel("middling/model", "middling/model", "medium", false),
+      imageModel("dear/model", "Dear", null, true),
+      imageModel("cheap/model", "cheap/model", null, false),
+      imageModel("middling/model", "middling/model", null, false),
     ]);
   });
 

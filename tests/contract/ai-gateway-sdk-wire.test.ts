@@ -43,10 +43,53 @@ describe("Gateway requests through the installed SDK", () => {
     expect(sent[0].body.files[0]).toMatchObject({ type: "file", data: PNG, mediaType: "image/png" });
   });
 
+  it("requests a transparent PNG during image generation", async () => {
+    await generateGatewayImage({
+      model: "openai/gpt-image-2",
+      prompt: "A glass marble",
+      aspectRatio: "1:1",
+      background: "transparent",
+    });
+
+    expect(sent[0].body.providerOptions.openai).toEqual({
+      background: "transparent",
+      outputFormat: "png",
+    });
+  });
+
+  it.each(["0.05678", "0.0034567800000000000001"])("preserves the actual image charge %s reported by AI Gateway", async (cost) => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      images: [PNG],
+      providerMetadata: { gateway: { cost } },
+    })));
+
+    await expect(generateGatewayImage({
+      model: "openai/gpt-image-2",
+      prompt: "A marble",
+      aspectRatio: "1:1",
+    })).resolves.toMatchObject({ providerCostUsd: cost });
+  });
+
   it("carries an image edit source through the SDK", async () => {
     await editGatewayImage({ model: "openai/gpt-image-2", prompt: "Make it blue", task: "restyle", image: IMAGE, mimeType: "image/png" });
     expect(sent[0].body.files[0]).toMatchObject({ data: PNG, mediaType: "image/png" });
     expect(sent[0].body.prompt).toBe("Make it blue");
+  });
+
+  it("requests a transparent PNG when removing a background", async () => {
+    await editGatewayImage({
+      model: "openai/gpt-image-2",
+      task: "remove_background",
+      image: IMAGE,
+      mimeType: "image/png",
+    });
+
+    expect(sent[0].body.prompt).toContain("fully transparent background");
+    expect(sent[0].body.files[0]).toMatchObject({ data: PNG, mediaType: "image/png" });
+    expect(sent[0].body.providerOptions.openai).toEqual({
+      background: "transparent",
+      outputFormat: "png",
+    });
   });
 
   it.each([0, 42, undefined])("keeps video seed %s, audio=false, callback and idempotency key", async (seed) => {

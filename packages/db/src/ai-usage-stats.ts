@@ -4,13 +4,20 @@
 // rows. User-facing labels are resolved by the caller, so these queries stay
 // usable from any app that only has an account id.
 import { getDb } from "./provider";
+import { USAGE_UNIT_MICROS_PER_UNIT } from "@beutl/core";
+import {
+  decimalNumberRows,
+  decimalNumbers,
+} from "./decimal";
+import type { Prisma } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 
 // Ledger kinds that represent actual consumption. A usage row stores the
 // monthly share in usageAmount and the purchased share as a negative
 // creditAmount; a refund row stores the mirror image. Net units consumed is
-// therefore sum(usageAmount) - sum(creditAmount) across both kinds.
-const CONSUMPTION_KINDS = ["usage", "refund"] as const;
+// therefore sum(usageAmount) - sum(creditAmount) across these kinds. All rows
+// for one job belong to its creation window, even if it settles/refunds later.
+const CONSUMPTION_KINDS = ["usage", "refund", "usage_settlement"] as const;
 
 // A purchase row carries the credits bought; a reversal row carries the credits
 // taken back by a refund or dispute as a negative amount, and a later restore as
@@ -47,8 +54,41 @@ export type AiTopUser = {
   reservedUnits: number;
 };
 
-function sumOf(value: number | null | undefined): number {
-  return value ?? 0;
+type ReservationAggregate = {
+  jobCount: bigint;
+  reservedUnits: Prisma.Decimal;
+};
+
+function sumOf(
+  value: number | Prisma.Decimal | null | undefined,
+): number {
+  return aggregateNumber(aggregateMicros(value));
+}
+
+// SUMs are not ledger rows: they can exceed the per-row limit. Keep decimal
+// aggregates and cross-kind cancellation in integer micro-units until the
+// final number boundary, without losing digits through Decimal.toNumber().
+function aggregateMicros(value: number | Prisma.Decimal | null | undefined): bigint {
+  if (value == null) return BigInt(0);
+  const fixed = value.toFixed(6);
+  if (!/^-?\d+\.\d{6}$/.test(fixed)) {
+    throw new RangeError("AI usage aggregate is outside the supported range");
+  }
+  return BigInt(fixed.replace(".", ""));
+}
+
+function aggregateNumber(micros: bigint): number {
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  if (micros > max || micros < -max) {
+    throw new RangeError("AI usage aggregate is outside the supported range");
+  }
+  const result = Number(micros) / USAGE_UNIT_MICROS_PER_UNIT;
+  // Near the safe-integer ceiling, a floating-point unit value can still lose
+  // a micro-unit after division even though its scaled integer was safe.
+  if (aggregateMicros(result) !== micros) {
+    throw new RangeError("AI usage aggregate cannot retain six decimal places");
+  }
+  return result;
 }
 
 export async function getAiJobStatusCounts({
@@ -89,27 +129,21 @@ export async function getAiJobUsageByKind({
   prisma?: PrismaTransaction;
 }): Promise<AiJobKindUsage[]> {
   const db = prisma ?? await getDb();
-  const rows = await db.aiJob.groupBy({
-    by: ["kind"],
-    where: {
-      createdAt: {
-        gte: since,
-      },
-    },
-    _count: {
-      _all: true,
-    },
-    _sum: {
-      usageUnits: true,
-    },
-  });
-  return rows
-    .map((row) => ({
-      kind: row.kind,
-      jobCount: row._count._all,
-      reservedUnits: sumOf(row._sum.usageUnits),
-    }))
-    .sort((left, right) => right.reservedUnits - left.reservedUnits);
+  // Fall back per job, before aggregating: legacy and actual-cost jobs can
+  // share a group, and successful actual-cost jobs overwrite usageUnits.
+  const rows = await db.$queryRaw<(ReservationAggregate & { kind: string })[]>`
+    SELECT "kind", COUNT(*) AS "jobCount",
+      SUM(COALESCE("reservedUsageUnits", "usageUnits")) AS "reservedUnits"
+    FROM "AiJob"
+    WHERE "createdAt" >= ${since}
+    GROUP BY "kind"
+    ORDER BY "reservedUnits" DESC, "kind" ASC
+  `;
+  return rows.map((row) => ({
+    kind: row.kind,
+    jobCount: Number(row.jobCount),
+    reservedUnits: sumOf(row.reservedUnits),
+  }));
 }
 
 export async function getAiUsageTotals({
@@ -123,9 +157,21 @@ export async function getAiUsageTotals({
   const rows = await db.creditTransaction.groupBy({
     by: ["kind"],
     where: {
-      createdAt: {
-        gte: since,
-      },
+      OR: [
+        {
+          kind: { in: [...CONSUMPTION_KINDS] },
+          aiJob: { is: { createdAt: { gte: since } } },
+        },
+        {
+          createdAt: { gte: since },
+          // Purchases/adjustments retain transaction-time semantics. Legacy
+          // consumption without a job has no shared timestamp to use instead.
+          OR: [
+            { kind: { notIn: [...CONSUMPTION_KINDS] } },
+            { aiJobId: null },
+          ],
+        },
+      ],
     },
     _sum: {
       usageAmount: true,
@@ -133,14 +179,14 @@ export async function getAiUsageTotals({
     },
   });
 
-  const totals: AiUsageTotals = {
-    consumedUnits: 0,
-    purchasedCredits: 0,
-    adminUsageAdjustment: 0,
+  const totals = {
+    consumedUnits: BigInt(0),
+    purchasedCredits: BigInt(0),
+    adminUsageAdjustment: BigInt(0),
   };
   for (const row of rows) {
-    const usageAmount = sumOf(row._sum.usageAmount);
-    const creditAmount = sumOf(row._sum.creditAmount);
+    const usageAmount = aggregateMicros(row._sum.usageAmount);
+    const creditAmount = aggregateMicros(row._sum.creditAmount);
     if ((CONSUMPTION_KINDS as readonly string[]).includes(row.kind)) {
       totals.consumedUnits += usageAmount - creditAmount;
       continue;
@@ -153,7 +199,11 @@ export async function getAiUsageTotals({
       totals.adminUsageAdjustment += usageAmount;
     }
   }
-  return totals;
+  return {
+    consumedUnits: aggregateNumber(totals.consumedUnits),
+    purchasedCredits: aggregateNumber(totals.purchasedCredits),
+    adminUsageAdjustment: aggregateNumber(totals.adminUsageAdjustment),
+  };
 }
 
 // Grants and revokes cancel out inside one group, so count them per row.
@@ -176,16 +226,20 @@ export async function getAdminCreditAdjustmentTotals({
       creditAmount: true,
     },
   });
-  let granted = 0;
-  let revoked = 0;
+  let granted = BigInt(0);
+  let revoked = BigInt(0);
   for (const row of rows) {
-    if (row.creditAmount > 0) {
-      granted += row.creditAmount;
+    const amount = aggregateMicros(row.creditAmount);
+    if (amount > BigInt(0)) {
+      granted += amount;
     } else {
-      revoked += -row.creditAmount;
+      revoked += -amount;
     }
   }
-  return { granted, revoked };
+  return {
+    granted: aggregateNumber(granted),
+    revoked: aggregateNumber(revoked),
+  };
 }
 
 export async function getAiBalanceTotals({
@@ -244,30 +298,21 @@ export async function getTopAiUsers({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  const rows = await db.aiJob.groupBy({
-    by: ["userId"],
-    where: {
-      createdAt: {
-        gte: since,
-      },
-    },
-    _count: {
-      _all: true,
-    },
-    _sum: {
-      usageUnits: true,
-    },
-    orderBy: {
-      _sum: {
-        usageUnits: "desc",
-      },
-    },
-    take: limit,
-  });
+  // Rank the combined legacy/new reservation totals in SQL before LIMIT;
+  // limiting separate cohorts or sorting actual charges loses top users.
+  const rows = await db.$queryRaw<(ReservationAggregate & { userId: string })[]>`
+    SELECT "userId", COUNT(*) AS "jobCount",
+      SUM(COALESCE("reservedUsageUnits", "usageUnits")) AS "reservedUnits"
+    FROM "AiJob"
+    WHERE "createdAt" >= ${since}
+    GROUP BY "userId"
+    ORDER BY "reservedUnits" DESC, "userId" ASC
+    LIMIT ${limit}
+  `;
   return rows.map((row) => ({
     userId: row.userId,
-    jobCount: row._count._all,
-    reservedUnits: sumOf(row._sum.usageUnits),
+    jobCount: Number(row.jobCount),
+    reservedUnits: sumOf(row.reservedUnits),
   }));
 }
 
@@ -415,11 +460,12 @@ export async function findCreditAccount({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditAccount.findUnique({
+  const account = await db.creditAccount.findUnique({
     where: {
       userId,
     },
   });
+  return account ? decimalNumbers(account) : null;
 }
 
 export type CreditAccountUsageSnapshot = {
@@ -450,7 +496,7 @@ export async function listCreditAccountUsageSnapshot({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.creditAccount.findMany({
+  const rows = await db.creditAccount.findMany({
     select: {
       monthlyUsageUsed: true,
       purchasedCredits: true,
@@ -463,6 +509,7 @@ export async function listCreditAccountUsageSnapshot({
     },
     take: limit + 1,
   });
+  return decimalNumberRows(rows);
 }
 
 export async function listRecentAiJobsByUserId({
@@ -478,7 +525,7 @@ export async function listRecentAiJobsByUserId({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.aiJob.findMany({
+  const rows = await db.aiJob.findMany({
     where: {
       userId,
     },
@@ -487,12 +534,17 @@ export async function listRecentAiJobsByUserId({
       kind: true,
       status: true,
       usageUnits: true,
+      reservedUsageUnits: true,
       deletedAt: true,
       createdAt: true,
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
+  return decimalNumberRows(rows).map((row) => ({
+    ...row,
+    reservedUnits: row.reservedUsageUnits ?? row.usageUnits,
+  }));
 }
 
 export async function listRecentCreditTransactionsByUserId({
@@ -508,7 +560,7 @@ export async function listRecentCreditTransactionsByUserId({
     throw new RangeError("limit must be a positive integer");
   }
   const db = prisma ?? await getDb();
-  return await db.creditTransaction.findMany({
+  const rows = await db.creditTransaction.findMany({
     where: {
       userId,
     },
@@ -524,4 +576,5 @@ export async function listRecentCreditTransactionsByUserId({
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
+  return decimalNumberRows(rows);
 }

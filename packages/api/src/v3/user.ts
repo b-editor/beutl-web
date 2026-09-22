@@ -12,14 +12,23 @@ import {
 } from "../ai/upload-limits";
 import { z } from "zod";
 import { MAX_AI_AUDIO_DURATION_SECONDS } from "../ai/audio-metadata";
-import { isAiVideoDurationSeconds, MAX_MODEL_ID_LENGTH } from "@beutl/core";
+import {
+  AI_IMAGE_ASPECT_RATIOS, AI_IMAGE_BACKGROUNDS, AI_MAX_IMAGE_REFERENCES,
+  AI_VIDEO_ASPECT_RATIOS, AI_VIDEO_RESOLUTIONS,
+  isAiVideoDurationSeconds, MAX_MODEL_ID_LENGTH,
+} from "@beutl/core";
 
 // Which model the question is about. Omitting it asks about the operation's
 // default, which is what a client that never offers a choice will send.
 const model = z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional();
 
 const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
-  z.object({ operation: z.literal("image.generate"), model }).strict(),
+  z.object({
+    operation: z.literal("image.generate"), model,
+    referenceImages: z.number().int().min(0).max(AI_MAX_IMAGE_REFERENCES).optional(),
+    aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
+    background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
+  }).strict(),
   z.object({
     operation: z.enum([
       "image.edit.remove_background",
@@ -35,6 +44,9 @@ const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
     durationSeconds: z
       .number()
       .refine(isAiVideoDurationSeconds),
+    resolution: z.enum(AI_VIDEO_RESOLUTIONS).optional(),
+    generateAudio: z.boolean().optional(),
+    aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).optional(),
     model,
   }).strict(),
   z.object({
@@ -98,7 +110,7 @@ const app = new Hono().get("/", async (c) => {
     // its own connection, and this handler has no reason to hold two.
     const prisma = await getDb();
     const [entitlements, storage] = await Promise.all([
-      getEntitlements(currentUserId, { prisma }),
+      getEntitlements(currentUserId, { prisma, rawImageInputs: true }),
       getStorageEntitlement(currentUserId, { prisma }),
     ]);
     return c.json({ ...entitlements, storage });
@@ -130,6 +142,7 @@ const app = new Hono().get("/", async (c) => {
       available: await canStartAiOperation(
         currentUserId,
         parsed.data,
+        { rawImageInputs: true },
       ),
     });
   });

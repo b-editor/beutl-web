@@ -202,41 +202,53 @@ Purchases continue to settle against the stored terms.
 
 ### Models, prices, and allowances
 
-An operation can offer several models, each with its own usage-unit price. The
-caller selects one through `model` in a v3 request or the corresponding
-dashboard field. Omitting the field selects the operation's default. Unknown
-or disabled models are rejected instead of silently replaced, preventing a
-caller from being charged for a model it did not request.
+An operation can offer several models, each with a provider-cost usage
+percentage. The caller selects one through `model` in a v3 request or the
+corresponding dashboard field. Omitting the field selects the operation's
+default. Unknown or disabled models are rejected instead of silently replaced.
 
 Administrators register models per operation at `/admin/ai`. They are stored
 in `AiOperationModel`. An operation with no registered models uses its built-in
-model and price, subject to the provider configuration above. The monthly Pro
-allowance is configured in `AiSetting`. Values resolve from the database or
-their built-in defaults, including
-the default allowance of 500 units per period. Each settings change and account
-adjustment is written to the audit log in the same transaction as the change.
+model and a 100% usage percentage, subject to the provider configuration above.
+The monthly Pro allowance and shared provider-USD-per-unit conversion are
+configured in `AiSetting`. Values resolve from the database or their built-in
+defaults, including 500 units per period and $0.01 per unit. Each settings
+change and account adjustment is written to the audit log in the same
+transaction as the change.
 
-Clients discover models through `GET /api/v3/ai/capabilities`. It exposes model
-names and relative expense (`costTier`: `low`, `medium`, or `high`) without
-prices. `GET /api/v3/user/entitlements` exposes affordability through
+Clients discover model names through `GET /api/v3/ai/capabilities`. The
+`costTier` field remains for compatibility with older clients and is always
+`null`: request-dependent provider costs cannot be ranked into fixed relative
+price tiers. `GET /api/v3/user/entitlements` exposes affordability through
 `modelAvailability`. Prices and secret values never leave the server.
 
 Gateway image editing and reference-image inputs are enabled only for the
 exact models in the [verified image-input compatibility list](ai-gateway-image-inputs.md).
 Unlisted models remain available for plain text-to-image requests.
 
-Price and allowance changes affect only operations started afterwards. Each
-job records the price reserved at its start and uses that same price for a
-refund. Changing the allowance does not alter usage already consumed in the
-current billing period.
+Before a provider request, the service reserves a buffered public-price quote.
+On success it replaces that reservation with the provider-reported USD cost,
+multiplied by the model's usage percentage and converted with the job's saved
+USD-per-unit rate. A provider response without actual cost settles to the
+unbuffered quote. Percentage and conversion changes affect only jobs started
+afterwards. If actual cost exceeds the reservation, remaining allowance and
+purchased credits are consumed and any shortfall becomes purchased-credit debt
+that future top-ups settle first. Changing the allowance does not alter usage
+already consumed in the current billing period. Usage balances, ledger deltas,
+reservations, and settled charges retain six decimal places, so a provider cost
+below the value of one whole unit is not rounded up to one.
+See [AI actual-cost billing](ai-actual-cost-billing.md) for the formula,
+provider metadata sources and fallback behavior. The fractional ledger requires
+the [maintenance cutover](ai-actual-cost-billing.md#migration-cutover) using
+`vp run migrate:ai-usage`; all ledger writers must be stopped until the updated
+Web/API/Admin builds are deployed.
 
 ### Admin reporting and adjustments
 
-The AI settings page shows:
-
-- how many runs of each operation an allowance buys;
-- the monetary value of one unit for allowances and purchased credits; and
-- estimated provider cost and the resulting cost ratio.
+The AI settings page shows the allowance and USD conversion settings, observed
+allowance distribution, Stripe-backed offer prices, and each model's provider
+and usage percentage. Per-model cost and margin projections are deliberately
+not rendered.
 
 OpenRouter costs come from public price endpoints and require no OpenRouter
 credential on the admin Worker. The Gateway credential requirement for the
@@ -247,8 +259,16 @@ than free.
 
 `/admin/ai/usage` reports jobs and units for a selected window, current account
 balances, heavy consumers, and allowance consumption statistics. The
+consumed-units total groups each job's reservation, settlement, and refund by
+the job's creation time, so a later adjustment cannot appear without its
+original reservation. Purchases, administrator adjustments, and legacy ledger
+entries without a linked job still use their own transaction time. The
 distribution uses only current billing periods because an expired period's
 counter is not cleared until the account next runs a job.
+Report sums may exceed a single ledger row's limit. They retain exact integer
+micro-units until conversion to JavaScript numbers; unsafe totals are rejected
+rather than silently losing fractional units. Individual ledger row limits
+remain unchanged.
 
 Administrators can grant or revoke purchased credits and correct current-period
 usage from `/admin/users/<id>`. A grant settles credit debt first, a revoke

@@ -128,10 +128,8 @@ describe("saving the AI configuration in one go", () => {
     expect(formSource).toContain("serializeModelDrafts(modelDrafts)");
     expect(actionSource).toContain("matchesAiOperationModelSnapshot(actual, draft.expected)");
     expect(actionSource).toContain("return { ok: false as const, message: t(\"admin:ai.form.saveConflict\") }");
-    expect(actionSource).toContain("loadAiVideoModelCapabilities");
-    expect(actionSource).toContain(
-      "videoCapabilityOf(videoCapabilities, model)",
-    );
+    expect(actionSource).toContain("minimumChargeOf: () => 1");
+    expect(actionSource).toContain("before.usagePercent === model.usagePercent");
   });
 
   it("accepts an allowance and a model list together", () => {

@@ -127,6 +127,27 @@ describe("OpenRouter client contract", () => {
     });
   });
 
+  it("returns the actual image charge reported by OpenRouter", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      jsonResponse({
+        created: 1,
+        data: [{ b64_json: "AQID", media_type: "image/png" }],
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          total_tokens: 2,
+          cost: 0.04321,
+        },
+      }),
+    ));
+
+    await expect(generateImage({
+      prompt: "a lighthouse",
+      aspectRatio: "1:1",
+      model: "openai/gpt-image-1",
+    })).resolves.toMatchObject({ providerCostUsd: 0.04321 });
+  });
+
   it("sends a transparent background, a seed and a reference image only when asked", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -462,6 +483,7 @@ describe("OpenRouter client contract", () => {
           { start: 0, end: 0.5, word: " First " },
           { start: 0.5, end: 1, word: "line" },
         ],
+        usage: { cost: 0.0045 },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -485,6 +507,7 @@ describe("OpenRouter client contract", () => {
         { start: 0, end: 0.5, word: "First" },
         { start: 0.5, end: 1, word: "line" },
       ],
+      providerCostUsd: 0.0045,
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];

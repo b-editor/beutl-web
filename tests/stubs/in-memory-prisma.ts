@@ -78,6 +78,12 @@ type AiJob = {
   model: string | null;
   resultFileId: string | null;
   usageUnits: number;
+  reservedUsageUnits: number | null;
+  estimatedUsageUnits: number | null;
+  usageUnitUsdMicros: number | null;
+  usagePercent: number;
+  providerCostUsdMicros: number | null;
+  usageSettledAt: Date | null;
   error: string | null;
   providerPollLeaseExpiresAt: Date | null;
   finalizationToken: string | null;
@@ -126,6 +132,8 @@ type AiSetting = {
 type AiOperationModel = {
   operation: string;
   modelId: string;
+  provider: string;
+  usagePercent: number;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -704,6 +712,34 @@ function matchesCreatedAt(
   return true;
 }
 
+type CreditTransactionWhere = {
+  kind?: string | { in?: readonly string[]; notIn?: readonly string[] };
+  createdAt?: { gte?: Date; lt?: Date };
+  aiJobId?: string | null;
+  aiJob?: { is: { createdAt?: { gte?: Date; lt?: Date } } };
+  OR?: CreditTransactionWhere[];
+};
+
+function matchesCreditTransactionWhere(
+  transaction: CreditTransaction,
+  where: CreditTransactionWhere | undefined,
+  jobs: ReadonlyMap<string, AiJob>,
+): boolean {
+  if (!where) return true;
+  if (where.OR && !where.OR.some((clause) => matchesCreditTransactionWhere(transaction, clause, jobs))) return false;
+  if (typeof where.kind === "string" && transaction.kind !== where.kind) return false;
+  if (typeof where.kind === "object") {
+    if (where.kind.in && !where.kind.in.includes(transaction.kind)) return false;
+    if (where.kind.notIn?.includes(transaction.kind)) return false;
+  }
+  if (where.aiJobId !== undefined && transaction.aiJobId !== where.aiJobId) return false;
+  if (where.aiJob) {
+    const job = transaction.aiJobId === null ? undefined : jobs.get(transaction.aiJobId);
+    if (!job || !matchesCreatedAt(job.createdAt, where.aiJob.is.createdAt)) return false;
+  }
+  return matchesCreatedAt(transaction.createdAt, where.createdAt);
+}
+
 type DateFilter = { gt?: Date; gte?: Date; lt?: Date; lte?: Date };
 
 // NULL is outside every range, the way a SQL comparison against it is.
@@ -1202,6 +1238,23 @@ export function createInMemoryPrisma() {
 
   const prisma = {
     $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+      const sql = query.join("?");
+      if (sql.includes('SUM(COALESCE("reservedUsageUnits", "usageUnits"))')) {
+        const [since, limit] = values as [Date, number | undefined];
+        const key = sql.includes('GROUP BY "kind"') ? "kind" : "userId";
+        const groups = new Map<string, { jobCount: bigint; reservedUnits: number }>();
+        for (const job of state.aiJobs.values()) {
+          if (job.createdAt < since) continue;
+          const group = groups.get(job[key]) ?? { jobCount: BigInt(0), reservedUnits: 0 };
+          group.jobCount += BigInt(1);
+          group.reservedUnits += job.reservedUsageUnits ?? job.usageUnits;
+          groups.set(job[key], group);
+        }
+        const ordered = [...groups].sort(([leftKey, left], [rightKey, right]) =>
+          right.reservedUnits - left.reservedUnits || compareStrings(leftKey, rightKey),
+        );
+        return ordered.slice(0, limit).map(([value, totals]) => ({ [key]: value, ...totals }));
+      }
       if (query.join("?").includes('WITH RECURSIVE "storage_folder_descendants"')) {
         const [folderId, userId, descendantUserId, fileUserId] = values;
         if (userId !== descendantUserId || userId !== fileUserId)
@@ -1510,12 +1563,10 @@ export function createInMemoryPrisma() {
         where,
         ...args
       }: GroupByArgs & {
-        where?: { kind?: string; createdAt?: { gte?: Date; lt?: Date } };
+        where?: CreditTransactionWhere;
       }) => {
         const rows = state.creditTransactions.filter(
-          (transaction) =>
-            (!where?.kind || transaction.kind === where.kind) &&
-            matchesCreatedAt(transaction.createdAt, where?.createdAt),
+          (transaction) => matchesCreditTransactionWhere(transaction, where, state.aiJobs),
         );
         return groupRows(rows as unknown as Record<string, unknown>[], args);
       },
@@ -1588,13 +1639,23 @@ export function createInMemoryPrisma() {
       findFirst: async ({
         where,
       }: {
-          where: { userId?: string; aiJobId?: string; kind?: string; topUpCheckoutAttemptId?: string; stripePaymentId?: string };
+        where: {
+          userId?: string;
+          aiJobId?: string;
+          kind?: string;
+          topUpCheckoutAttemptId?: string;
+          stripePaymentId?: string;
+          usageAmount?: { lt: number };
+          createdAt?: { gte?: Date; lt?: Date };
+        };
       }) => {
         const item = state.creditTransactions.find(
           (transaction) =>
             (!where.userId || transaction.userId === where.userId) &&
             (!where.aiJobId || transaction.aiJobId === where.aiJobId) &&
             (!where.kind || transaction.kind === where.kind) &&
+            (!where.usageAmount || transaction.usageAmount < where.usageAmount.lt) &&
+            matchesCreatedAt(transaction.createdAt, where.createdAt) &&
             (!where.topUpCheckoutAttemptId || transaction.topUpCheckoutAttemptId === where.topUpCheckoutAttemptId) &&
             (!where.stripePaymentId || transaction.stripePaymentId === where.stripePaymentId),
         );
@@ -1813,6 +1874,10 @@ export function createInMemoryPrisma() {
           inputParams?: object;
           model?: string;
           usageUnits: number;
+          reservedUsageUnits?: number;
+          estimatedUsageUnits?: number;
+          usageUnitUsdMicros?: number;
+          usagePercent?: number;
         };
       }) => {
         if (
@@ -1855,6 +1920,12 @@ export function createInMemoryPrisma() {
           model: data.model ?? null,
           resultFileId: null,
           usageUnits: data.usageUnits,
+          reservedUsageUnits: data.reservedUsageUnits ?? null,
+          estimatedUsageUnits: data.estimatedUsageUnits ?? null,
+          usageUnitUsdMicros: data.usageUnitUsdMicros ?? null,
+          usagePercent: data.usagePercent ?? 100,
+          providerCostUsdMicros: null,
+          usageSettledAt: null,
           error: null,
           providerPollLeaseExpiresAt: null,
           finalizationToken: null,
@@ -1881,6 +1952,9 @@ export function createInMemoryPrisma() {
           providerPollLeaseExpiresAt?: Date | null;
           finalizationToken?: string | null;
           finalizationLeaseExpiresAt?: Date | null;
+          usageUnits?: number;
+          providerCostUsdMicros?: number | null;
+          usageSettledAt?: Date | null;
         };
       }) => {
         const existing = state.aiJobs.get(where.id);
@@ -1915,6 +1989,9 @@ export function createInMemoryPrisma() {
             | "providerPollLeaseExpiresAt"
             | "finalizationToken"
             | "finalizationLeaseExpiresAt"
+            | "usageUnits"
+            | "providerCostUsdMicros"
+            | "usageSettledAt"
           >
         >;
       }) => {
@@ -2885,7 +2962,12 @@ export function createInMemoryPrisma() {
         const existing = state.aiOperationModels.get(key);
         const record: AiOperationModel = existing
           ? { ...existing, ...update, updatedAt: now() }
-          : { ...create, createdAt: now(), updatedAt: now() };
+          : {
+              ...create,
+              usagePercent: create.usagePercent ?? 100,
+              createdAt: now(),
+              updatedAt: now(),
+            };
         state.aiOperationModels.set(key, record);
         return { ...record };
       },

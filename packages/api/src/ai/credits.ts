@@ -17,6 +17,17 @@ import { PRO_PLAN } from "./pricing";
 import { isActiveProSubscription } from "./entitlements";
 import { loadAiSettings } from "./settings";
 import { AI_TEXT_RESULT_RETENTION_MILLISECONDS } from "./storage";
+import {
+  ceilUsageUnits,
+  normalizeUsageUnits,
+  USD_MICROS_PER_DOLLAR,
+  usageUnitsForProviderCost,
+} from "@beutl/core";
+import {
+  billableRequestOf,
+  quoteAiUsageReservation,
+} from "./usage-cost";
+import { loadAiModelCatalog } from "./model-catalog";
 
 function toUsagePeriod(subscription: {
   currentPeriodStart: Date | null;
@@ -137,6 +148,7 @@ export async function createReservedAiJob({
   status,
   inputParams,
   usageUnits,
+  usagePercent = 100,
   model,
   activeJobLimit,
   idempotencyKeyHash,
@@ -149,9 +161,11 @@ export async function createReservedAiJob({
   provider: string;
   status: "queued" | "running";
   inputParams?: object;
-  usageUnits: number;
-  // The model this job was priced for and will run on. Resolved together with
-  // the price so the two can never disagree.
+  // Legacy callers may still reserve a fixed amount. Production model calls
+  // omit it and reserve from the provider's current public rate card.
+  usageUnits?: number;
+  usagePercent?: number;
+  // The model whose public quote is reserved and whose actual cost is settled.
   model?: string;
   activeJobLimit?: number;
   idempotencyKeyHash?: string;
@@ -161,6 +175,27 @@ export async function createReservedAiJob({
   compatibleRequestFingerprints?: readonly string[];
   callbackNonceHash?: string;
 }) {
+  if (
+    !Number.isSafeInteger(usagePercent) ||
+    usagePercent < 1 ||
+    usagePercent > 10_000
+  ) {
+    throw new RangeError("AI usage percentage must be between 1 and 10000");
+  }
+  const explicitUsageUnits = usageUnits === undefined
+    ? undefined
+    : normalizeUsageUnits(usageUnits);
+  if (usageUnits !== undefined) {
+    if (
+      explicitUsageUnits == null ||
+      explicitUsageUnits !== usageUnits ||
+      explicitUsageUnits <= 0
+    ) {
+      throw new RangeError(
+        "AI usage units must be positive with at most six decimal places",
+      );
+    }
+  }
   if ((idempotencyKeyHash === undefined) !== (requestFingerprint === undefined)) {
     throw new TypeError(
       "AI idempotency key hash and request fingerprint must be provided together",
@@ -173,6 +208,32 @@ export async function createReservedAiJob({
     throw new TypeError(
       "AI compatible request fingerprints require an idempotency identity",
     );
+  }
+  const quote = usageUnits === undefined && model
+    ? await quoteAiUsageReservation({
+        kind,
+        inputParams,
+        modelId: model,
+        provider,
+      })
+    : null;
+  let legacyReservationUnits: number | null = null;
+  if (usageUnits === undefined && !quote && model) {
+    const billable = billableRequestOf({ kind, inputParams });
+    if (billable) {
+      const entry = (await loadAiModelCatalog()).resolve(
+        billable.operation,
+        model,
+      );
+      const fallback = entry?.priceUnits
+        ? ceilUsageUnits(
+            (entry.priceUnits * billable.quantity * usagePercent) / 100,
+          )
+        : 0;
+      legacyReservationUnits = fallback !== null && fallback > 0
+        ? fallback
+        : null;
+    }
   }
   try {
     const result = await startRetryableTransaction(async (prisma) => {
@@ -198,6 +259,13 @@ export async function createReservedAiJob({
         }
       }
 
+      // Pricing is required only for a new reservation, never to recover an
+      // already-paid job (including one committed during the quote lookup).
+      // Keep the network lookup outside the retryable transaction itself.
+      if (usageUnits === undefined && !quote && legacyReservationUnits === null) {
+        return { outcome: "providerCostUnavailable" as const };
+      }
+
       if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
         return { outcome: "accountDeletionAuthorized" as const };
       }
@@ -217,13 +285,49 @@ export async function createReservedAiJob({
         }
       }
 
+      // Read both allowance and USD conversion in the reservation transaction.
+      // A concurrent admin edit must not combine an old quote conversion with
+      // a new balance limit.
+      const settings = await loadAiSettings({ prisma });
+      const usdPerUsageUnit = settings.getProviderUsdPerUsageUnit();
+      const resolvedUsageUnits = explicitUsageUnits ??
+        (quote
+          ? usageUnitsForProviderCost(
+              quote.providerCostUsd,
+              usdPerUsageUnit,
+              usagePercent,
+            )
+          : legacyReservationUnits);
+      const estimatedUsageUnits = explicitUsageUnits ??
+        (quote
+          ? usageUnitsForProviderCost(
+              quote.estimatedProviderCostUsd,
+              usdPerUsageUnit,
+              usagePercent,
+            )
+          : legacyReservationUnits);
+      if (
+        resolvedUsageUnits === null ||
+        estimatedUsageUnits === null ||
+        resolvedUsageUnits <= 0 ||
+        estimatedUsageUnits <= 0
+      ) {
+        throw new RangeError("AI provider cost could not be converted to usage units");
+      }
+
       const job = await createAiJob({
         userId,
         kind,
         provider,
         status,
         inputParams,
-        usageUnits,
+        usageUnits: resolvedUsageUnits,
+        reservedUsageUnits: resolvedUsageUnits,
+        estimatedUsageUnits,
+        usageUnitUsdMicros: usageUnits === undefined
+          ? Math.round(usdPerUsageUnit * USD_MICROS_PER_DOLLAR)
+          : undefined,
+        usagePercent,
         model,
         idempotencyKeyHash,
         requestFingerprint,
@@ -233,10 +337,9 @@ export async function createReservedAiJob({
       // Read the allowance inside the reservation transaction so a concurrent
       // change in the admin console cannot let a job spend against a limit that
       // no longer applies.
-      const settings = await loadAiSettings({ prisma });
       await consumeUsage({
         userId,
-        amount: usageUnits,
+        amount: resolvedUsageUnits,
         monthlyUsageLimit: settings.getMonthlyUsageLimit(),
         usagePeriod: toUsagePeriod(subscription),
         aiJobId: job.id,
@@ -246,6 +349,12 @@ export async function createReservedAiJob({
     });
 
     switch (result.outcome) {
+      case "providerCostUnavailable":
+        return {
+          ok: false as const,
+          errorCode: "aiProviderCostUnavailable" as const,
+          status: 503 as const,
+        };
       case "accountDeletionAuthorized":
         return {
           ok: false as const,

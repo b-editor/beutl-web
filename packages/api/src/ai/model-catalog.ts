@@ -1,16 +1,12 @@
-// Which models an operation can run on, and what each one costs.
+// Which models an operation can run on and what percentage of actual provider
+// cost each consumes.
 //
-// Price and model used to be resolved separately — `settings.getPrice(op)` at
-// the reservation and `settings.getModel(op)` at the provider call, sharing
-// nothing but the operation string. With several models per operation that
-// split is unsafe: the two lookups could disagree and the user would be charged
-// one model's price for another model's work. Everything here resolves both
-// together, from one row.
+// The provider, model and usage percentage resolve from one row so a request
+// cannot run one model and settle another model's percentage.
 //
-// `costTier` is the only thing a client learns about relative price. It is
-// derived from the ordering inside an operation, so it is always consistent
-// with the real prices while revealing no amount — see the comment on
-// `assignCostTiers`.
+// `costTier` remains in the wire shape for older clients, but dynamic billing
+// cannot rank models from a stored number: their provider costs vary by the
+// actual request. It is therefore null until a request-specific quote exists.
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
 import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
@@ -30,6 +26,9 @@ export type AiOperationModelEntry = {
    * registered for an operation exactly once.
    */
   provider: string;
+  /** Percentage applied to the provider's actual USD cost. */
+  usagePercent: number;
+  /** Legacy fixed price retained only for rolling-deploy compatibility. */
   priceUnits: number;
   displayName: string;
   sortOrder: number;
@@ -48,41 +47,10 @@ export type AiModelCatalog = {
   operations(): string[];
 };
 
-// Ordering only. Two models split into low/high, three or more into thirds by
-// price rank. A count of remaining runs would be the obvious alternative and is
-// deliberately not offered: purchased credits are shown to the user as a raw
-// number, so "you can run this 12 more times" would let anyone divide out the
-// unit price the server exists to keep.
 function assignCostTiers(
   entries: Omit<AiOperationModelEntry, "costTier">[],
 ): AiOperationModelEntry[] {
-  if (entries.length <= 1) {
-    return entries.map((entry) => ({ ...entry, costTier: null }));
-  }
-
-  const byPrice = [...entries].sort(
-    (left, right) =>
-      left.priceUnits - right.priceUnits ||
-      left.modelId.localeCompare(right.modelId),
-  );
-  const tierOf = new Map<string, AiModelCostTier>();
-  if (byPrice.length === 2) {
-    tierOf.set(byPrice[0].modelId, "low");
-    tierOf.set(byPrice[1].modelId, "high");
-  } else {
-    const third = byPrice.length / 3;
-    byPrice.forEach((entry, index) => {
-      tierOf.set(
-        entry.modelId,
-        index < third ? "low" : index < third * 2 ? "medium" : "high",
-      );
-    });
-  }
-
-  return entries.map((entry) => ({
-    ...entry,
-    costTier: tierOf.get(entry.modelId) ?? null,
-  }));
+  return entries.map((entry) => ({ ...entry, costTier: null }));
 }
 
 function builtInDefaultsOf(
@@ -112,6 +80,7 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
     // An operation whose built-in model exists on one provider only names it;
     // everything older falls back to the one every registered row carries.
     provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
+    usagePercent: 100,
     priceUnits: defaults.price,
     displayName: defaults.model,
     sortOrder: 0,
@@ -176,6 +145,7 @@ export async function loadAiModelCatalog({
       operation: row.operation,
       modelId: row.modelId,
       provider: row.provider,
+      usagePercent: row.usagePercent,
       priceUnits: row.priceUnits,
       displayName: row.displayName?.trim() || row.modelId,
       sortOrder: row.sortOrder,

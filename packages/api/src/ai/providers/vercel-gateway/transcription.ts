@@ -28,6 +28,7 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { toGatewayProviderError } from "./errors";
+import { gatewayProviderCostUsd } from "../../provider-cost";
 
 export async function transcribeGatewayAudio(
   request: AiTranscribeRequest,
@@ -52,13 +53,18 @@ export async function transcribeGatewayAudio(
   try {
     // The same validation OpenRouter's result goes through: a transcript whose
     // timings fall outside the audio it was given is not a transcript of it.
-    return validateTranscriptionResult(
+    const validated = validateTranscriptionResult(
       {
         segments,
         ...(result.language ? { language: result.language } : {}),
       },
       request.durationSeconds,
     );
+    const cost = gatewayProviderCostUsd(result.providerMetadata);
+    return {
+      ...validated,
+      ...(cost === undefined ? {} : { providerCostUsd: cost }),
+    };
   } catch (cause) {
     if (cause instanceof InvalidTranscriptionResultError) {
       throw new AiProviderError(

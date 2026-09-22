@@ -6,6 +6,7 @@ export type AiOperationModelRecord = {
   modelId: string;
   /** Which provider runs this model. Rows predating the column say "openrouter". */
   provider: string;
+  usagePercent: number;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -28,6 +29,7 @@ export async function listAiOperationModels({
       operation: true,
       modelId: true,
       provider: true,
+      usagePercent: true,
       priceUnits: true,
       displayName: true,
       sortOrder: true,
@@ -47,6 +49,7 @@ export async function upsertAiOperationModel({
   operation,
   modelId,
   provider,
+  usagePercent,
   priceUnits,
   displayName,
   sortOrder,
@@ -63,7 +66,9 @@ export async function upsertAiOperationModel({
    * model that is already registered.
    */
   provider?: string;
-  priceUnits: number;
+  usagePercent?: number;
+  /** Legacy value retained for compatibility with an older deployment. */
+  priceUnits?: number;
   displayName: string | null;
   sortOrder: number;
   enabled: boolean;
@@ -77,7 +82,8 @@ export async function upsertAiOperationModel({
       operation,
       modelId,
       provider: provider ?? "openrouter",
-      priceUnits,
+      usagePercent: usagePercent ?? 100,
+      priceUnits: priceUnits ?? 1,
       displayName,
       sortOrder,
       enabled,
@@ -85,7 +91,8 @@ export async function upsertAiOperationModel({
     },
     update: {
       ...(provider === undefined ? {} : { provider }),
-      priceUnits,
+      ...(usagePercent === undefined ? {} : { usagePercent }),
+      ...(priceUnits === undefined ? {} : { priceUnits }),
       displayName,
       sortOrder,
       enabled,

@@ -12,6 +12,7 @@ import {
   type VideoGenerationStatus,
   type VideoJobInfo,
 } from "./openrouter";
+import { providerCostUsd } from "./provider-cost";
 
 // The video endpoints go through OpenRouter's own SDK, like every other call
 // this service makes. What a video request may contain differs per model —
@@ -44,17 +45,20 @@ function toVideoJobInfo(response: {
   status: string;
   unsignedUrls?: string[] | undefined;
   error?: string | undefined;
+  usage?: { cost?: number | null } | undefined;
 }): VideoJobInfo {
   if (!response.id || !isVideoStatus(response.status)) {
     throw new AiProviderError("OpenRouter returned invalid video job data", {
       execution: "unknown",
     });
   }
+  const cost = providerCostUsd(response.usage?.cost);
   return {
     id: response.id,
     status: response.status,
     unsignedUrls: response.unsignedUrls,
     error: response.error || null,
+    ...(cost === undefined ? {} : { providerCostUsd: cost }),
   };
 }
 

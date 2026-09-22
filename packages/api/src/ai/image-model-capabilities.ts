@@ -314,6 +314,14 @@ const GATEWAY_IMAGE_REFERENCE_LIMITS = new Map<string, number>([
   ["spacexai/grok-imagine-image", 3],
 ]);
 
+// Transparent output is a separate model capability from accepting an input
+// image. Keep this exact rather than inferring it from the OpenAI family: the
+// Gateway will forward the option for any id, but an unsupported model may
+// ignore it and return an opaque result after the user has been charged.
+const GATEWAY_TRANSPARENT_BACKGROUND_MODELS = new Set<string>([
+  "openai/gpt-image-2",
+]);
+
 function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
   const maxReferenceImages = Math.min(
     GATEWAY_IMAGE_REFERENCE_LIMITS.get(modelId) ?? 0,
@@ -322,9 +330,11 @@ function gatewayImageCapabilities(modelId: string): AiImageModelCapabilities {
   return {
     modelId,
     aspectRatios: [...AI_IMAGE_ASPECT_RATIOS],
-    // No background parameter exists. Asking for a transparent one would be
-    // ignored, and the user billed for an opaque picture.
-    backgrounds: ["auto"],
+    // OpenAI provider options pass through the Gateway, but only exact models
+    // verified for transparent output may advertise it.
+    backgrounds: GATEWAY_TRANSPARENT_BACKGROUND_MODELS.has(modelId)
+      ? ["auto", "transparent"]
+      : ["auto"],
     seed: true,
     inputReferences: maxReferenceImages > 0,
     maxReferenceImages,

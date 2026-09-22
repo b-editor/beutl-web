@@ -214,7 +214,7 @@ export async function AiPlanSection({
                       {job.status}
                     </TableCell>
                     <TableCell className="text-right">
-                      {formatNumber(job.usageUnits, lang)}
+                      {formatNumber(job.reservedUnits, lang)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {formatTimestamp(job.createdAt, lang)}

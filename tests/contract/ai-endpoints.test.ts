@@ -1451,7 +1451,7 @@ describe("v3 AI endpoints contract", () => {
       await activatePro();
       await consumeUsage({
         userId: USER_ID,
-        amount: 490,
+        amount: 496,
         monthlyUsageLimit: 500,
         usagePeriod: { start: PERIOD_START, end: PERIOD_END },
         aiJobId: "setup-job",
@@ -1511,7 +1511,9 @@ describe("v3 AI endpoints contract", () => {
         // A request that still names a fixed size is recorded as the ratio it
         // always meant, so the history speaks one vocabulary.
         inputParams: { prompt: "test", aspectRatio: "1:1" },
-        usageUnits: 20,
+        // No reference images were submitted: only the output image is priced.
+        reservedUsageUnits: 5.0688,
+        usageUnits: 4.224,
         resultFileId: body.fileId,
       });
       expect(state.files.size).toBe(1);
@@ -1525,7 +1527,7 @@ describe("v3 AI endpoints contract", () => {
         state.creditTransactions.some(
           (t) =>
             t.kind === "usage" &&
-            t.usageAmount === 20 &&
+            t.usageAmount === 5.0688 &&
             t.creditAmount === 0 &&
             t.aiJobId === job.id,
         ),
@@ -1541,7 +1543,7 @@ describe("v3 AI endpoints contract", () => {
       });
       await consumeUsage({
         userId: USER_ID,
-        amount: 495,
+        amount: 498,
         monthlyUsageLimit: 500,
         usagePeriod: { start: PERIOD_START, end: PERIOD_END },
         aiJobId: "setup-job",
@@ -1569,8 +1571,12 @@ describe("v3 AI endpoints contract", () => {
           transaction.kind === "usage" && transaction.aiJobId !== "setup-job",
       );
       expect(usage).toMatchObject({
-        usageAmount: 5,
-        creditAmount: -15,
+        usageAmount: 2,
+        creditAmount: -3.0688,
+      });
+      expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+        monthlyUsageUsed: 500,
+        purchasedCredits: 97.776,
       });
     });
 
@@ -1602,12 +1608,12 @@ describe("v3 AI endpoints contract", () => {
       // Both the reservation and refund are recorded.
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "usage" && t.usageAmount === 20,
+          (t) => t.kind === "usage" && t.usageAmount === 5.0688,
         ),
       ).toBe(true);
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "refund" && t.usageAmount === -20,
+          (t) => t.kind === "refund" && t.usageAmount === -5.0688,
         ),
       ).toBe(true);
       // The balance is restored.
@@ -1829,6 +1835,8 @@ describe("v3 AI endpoints contract", () => {
       // The bytes are not stored, only the names — which is why the history
       // offers no retry for this job.
       expect([...state.aiJobs.values()][0]).toMatchObject({
+        reservedUsageUnits: 6.336,
+        usageUnits: 5.28,
         inputParams: {
           prompt: "in this style",
           aspectRatio: "1:1",
@@ -2235,7 +2243,8 @@ describe("v3 AI endpoints contract", () => {
       expect(job).toMatchObject({
         kind: "image_edit",
         status: "succeeded",
-        usageUnits: 10,
+        // No output ratio is fixed for this edit: use the largest token profile.
+        usageUnits: 7.392,
       });
       expect(vi.mocked(editImage)).toHaveBeenCalledWith({
         task: "remove_background",
@@ -2294,7 +2303,7 @@ describe("v3 AI endpoints contract", () => {
             filename: "source.webp",
             prompt,
           },
-          usageUnits: 20,
+          usageUnits: 7.392,
         });
       },
     );
@@ -2553,7 +2562,7 @@ describe("v3 AI endpoints contract", () => {
       },
     );
 
-    it("returns segments and five usage units per started minute", async () => {
+    it("returns segments and settles the fractional provider cost", async () => {
       await activatePro();
       vi.mocked(transcribeAudio).mockResolvedValue({
         segments: [
@@ -2586,7 +2595,7 @@ describe("v3 AI endpoints contract", () => {
       expect(job).toMatchObject({
         kind: "stt",
         status: "succeeded",
-        usageUnits: 10,
+        usageUnits: 0.03996,
         resultFileId: expect.any(String),
       });
       expect(putObject).toHaveBeenCalledOnce();
@@ -2615,7 +2624,7 @@ describe("v3 AI endpoints contract", () => {
         state.creditTransactions.some(
           (t) =>
             t.kind === "usage" &&
-            t.usageAmount === 10 &&
+            t.usageAmount === 0.047952 &&
             t.aiJobId === job.id,
         ),
       ).toBe(true);
@@ -2699,12 +2708,12 @@ describe("v3 AI endpoints contract", () => {
       );
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "usage" && t.usageAmount === 10,
+          (t) => t.kind === "usage" && t.usageAmount === 0.047952,
         ),
       ).toBe(true);
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "refund" && t.usageAmount === -10,
+          (t) => t.kind === "refund" && t.usageAmount === -0.047952,
         ),
       ).toBe(true);
       const account = await getCreditAccount({ userId: USER_ID });
@@ -2911,7 +2920,7 @@ describe("v3 AI endpoints contract", () => {
       clearAiVideoModelCapabilitiesCache();
     });
 
-    it("creates a job and reserves 40 usage units per second", async () => {
+    it("creates a job and reserves a buffered provider-cost quote", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockResolvedValue({
         id: "provider-video-1",
@@ -2945,14 +2954,16 @@ describe("v3 AI endpoints contract", () => {
           resolution: "720p",
         },
         providerJobId: "provider-video-1",
-        usageUnits: 160,
+        estimatedUsageUnits: 160,
+        reservedUsageUnits: 192,
+        usageUnits: 192,
       });
       // Reserve credits when the job is created.
       expect(
         state.creditTransactions.some(
           (t) =>
             t.kind === "usage" &&
-            t.usageAmount === 160 &&
+            t.usageAmount === 192 &&
             t.aiJobId === job.id,
         ),
       ).toBe(true);
@@ -3135,12 +3146,12 @@ describe("v3 AI endpoints contract", () => {
       // Record both reservation and refund, restoring the balance.
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "usage" && t.usageAmount === 160,
+          (t) => t.kind === "usage" && t.usageAmount === 192,
         ),
       ).toBe(true);
       expect(
         state.creditTransactions.some(
-          (t) => t.kind === "refund" && t.usageAmount === -160,
+          (t) => t.kind === "refund" && t.usageAmount === -192,
         ),
       ).toBe(true);
       const account = await getCreditAccount({ userId: USER_ID });
@@ -3207,7 +3218,7 @@ describe("v3 AI endpoints contract", () => {
       expect(state.aiJobs.get(createBody.jobId)).toMatchObject({
         status: "queued",
         providerJobId: null,
-        usageUnits: 160,
+        usageUnits: 192,
       });
       expect(
         state.creditTransactions.filter(
@@ -3903,7 +3914,7 @@ describe("v3 AI endpoints contract", () => {
         kind: "video",
         status: "running",
         providerJobId: "provider-video-frames-1",
-        usageUnits: 240,
+        usageUnits: 288,
         inputParams: {
           prompt: "Transition from sunrise to sunset",
           durationSeconds: 6,
@@ -4309,6 +4320,8 @@ describe("v3 AI endpoints contract", () => {
       expect(job).toMatchObject({
         status: "succeeded",
         resultFileId: body.fileId,
+        reservedUsageUnits: 192,
+        usageUnits: 160,
       });
       expect(state.files.size).toBe(1);
       expect([...state.files.values()][0]).toMatchObject({
@@ -4319,7 +4332,15 @@ describe("v3 AI endpoints contract", () => {
         state.creditTransactions.some(
           (t) =>
             t.kind === "usage" &&
-            t.usageAmount === 160 &&
+            t.usageAmount === 192 &&
+            t.aiJobId === job.id,
+        ),
+      ).toBe(true);
+      expect(
+        state.creditTransactions.some(
+          (t) =>
+            t.kind === "usage_settlement" &&
+            t.usageAmount === -32 &&
             t.aiJobId === job.id,
         ),
       ).toBe(true);

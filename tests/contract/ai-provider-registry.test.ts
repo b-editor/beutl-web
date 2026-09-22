@@ -59,8 +59,10 @@ describe("resolving a provider", () => {
     for (const operation of [
       "video.generate",
       "image.generate",
+      "image.edit.remove_background",
       "image.edit.restyle",
       "image.edit.remove_object",
+      "image.edit.outpaint",
       "audio.transcribe",
       "subtitle.translate",
     ]) {
@@ -68,21 +70,13 @@ describe("resolving a provider", () => {
     }
   });
 
-  it("refuses the edits Vercel AI Gateway has no surface for", () => {
-    // The Gateway has no named operation for background removal, upscaling or
-    // outpainting; OpenRouter serves them through provider parameters with no
-    // counterpart, and a mask cannot address anything outside the source frame.
-    // Saying so here is what stops a model being registered for one and failing
-    // only after the user has been charged.
-    for (const operation of [
-      "image.edit.remove_background",
-      "image.edit.upscale",
-      "image.edit.outpaint",
-    ]) {
-      expect(providerSupportsOperation("vercel-gateway", operation)).toBe(false);
-      // OpenRouter still serves all three, so the catalog keeps them offered.
-      expect(providerSupportsOperation("openrouter", operation)).toBe(true);
-    }
+  it("refuses the edit Vercel AI Gateway has no surface for", () => {
+    // Upscaling asks for a specific output resolution. Unlike the prompt-driven
+    // edits above, the Gateway adapter cannot express that operation yet.
+    expect(providerSupportsOperation("vercel-gateway", "image.edit.upscale"))
+      .toBe(false);
+    expect(providerSupportsOperation("openrouter", "image.edit.upscale"))
+      .toBe(true);
   });
 
   it("says which operations a provider can actually run", () => {

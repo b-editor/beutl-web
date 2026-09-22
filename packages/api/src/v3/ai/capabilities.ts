@@ -19,6 +19,7 @@ import {
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
+import { providerRequiresPreparedOutpaintCanvas } from "../../ai/providers/registry";
 import {
   isVideoModelUsable,
   loadAiVideoModelCapabilities,
@@ -138,7 +139,7 @@ function describeCatalogEntries(
     // The one a request that names no model runs on.
     isDefault: index === 0,
     provider: entry.provider,
-  }));
+  })).filter((entry) => !providerRequiresPreparedOutpaintCanvas(entry.provider, operation));
 }
 
 function describeModels(

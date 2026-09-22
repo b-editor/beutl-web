@@ -24,29 +24,20 @@ import {
   resumePackagePaymentRefundIntervention,
 } from "@beutl/db";
 import {
-  aiCostEstimateKey,
-  loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
   DEFAULT_AI_PROVIDER_ID,
-  loadAiVideoModelCapabilities,
-  videoCapabilityOf,
   providerSupportsOperation,
   discoverTopUpCheckoutAttempt,
   reconcilePackagePaymentRefundAttempt,
 } from "@beutl/api";
-import { getDb } from "@beutl/db";
-import { deriveTopUpUnitValue, isAiModelId } from "@beutl/core";
-import { resolveOfferPricing } from "@/lib/stripe-pricing";
+import { isAiModelId } from "@beutl/core";
 import {
   matchesAiOperationModelSnapshot,
   validateAiConfigurationChanges,
 } from "@/lib/ai-configuration-changes";
 import { DEFAULT_MODEL_PROVIDER } from "@/lib/ai-operation-model-changes";
-import {
-  AI_DEFAULT_OPERATION_MODELS,
-  aiMinimumChargeOf,
-} from "@beutl/core";
+import { AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
 import { getUnusableImageModels, getUnusableVideoModels } from "./queries";
@@ -464,7 +455,6 @@ export async function terminalizeOrphanTopUpResolution(
 export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<ActionResult> {
   const { t } = await getTranslation(lang);
   return await adminAction(async (session) => {
-    const videoCapabilities = await loadAiVideoModelCapabilities();
     // Validation reads inside the transaction because it is a cross-field rule
     // over state this save does not carry: the settings and operations it
     // leaves alone take part in it, so checking against a snapshot read
@@ -510,12 +500,10 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
               }]
             : [];
         },
-        minimumChargeOf: (operation, model, priceUnits) =>
-          aiMinimumChargeOf(
-            operation,
-            priceUnits,
-            videoCapabilityOf(videoCapabilities, model),
-          ) ?? priceUnits,
+        // Dynamic provider-cost billing reserves a request-specific quote.
+        // Every configured model needs only the smallest integer balance here;
+        // the actual reservation is enforced when the job starts.
+        minimumChargeOf: () => 1,
         // Refuses a row whose provider has no surface for that operation,
         // before it can be saved and charged against.
         supportsOperation: providerSupportsOperation,
@@ -530,6 +518,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           .map((row) => ({
             modelId: row.modelId,
             provider: row.provider,
+            usagePercent: row.usagePercent,
             priceUnits: row.priceUnits,
             displayName: row.displayName,
             enabled: row.enabled,
@@ -593,6 +582,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           const unchanged =
             before !== undefined &&
             before.provider === model.provider &&
+            before.usagePercent === model.usagePercent &&
             before.priceUnits === model.priceUnits &&
             before.displayName === model.displayName &&
             before.enabled === model.enabled &&
@@ -609,7 +599,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           await addAuditLog({
             userId: session.user.id,
             action: auditLogActions.admin.aiOperationModelSaved,
-            details: `operation: ${draft.operation}, model: ${model.modelId}, provider: ${model.provider}, price: ${model.priceUnits}, order: ${index}, enabled: ${model.enabled}`,
+            details: `operation: ${draft.operation}, model: ${model.modelId}, provider: ${model.provider}, usagePercent: ${model.usagePercent}, order: ${index}, enabled: ${model.enabled}`,
             prisma: tx,
           });
         }
@@ -644,14 +634,9 @@ async function isModelUnsupportedForOperation(
   return false;
 }
 
-// What one model would cost to run, and whether it can run the operation, for
-// a row being added or edited.
-//
-// The saved rows get these values rendered on the server, but a provider/model
-// pair that only exists in the form has none. Looking it up before the page is
-// saved keeps the pricing decision and compatibility warning tied to the
-// provider the administrator actually selected.
-export async function lookupAiModelEconomics(input: unknown) {
+// Whether a provider/model pair being added or edited can run the operation.
+// Saved rows receive the same answer during server rendering.
+export async function lookupAiModelCompatibility(input: unknown) {
   if (typeof input !== "object" || input === null) {
     return { success: false as const, message: "Invalid model" };
   }
@@ -671,37 +656,12 @@ export async function lookupAiModelEconomics(input: unknown) {
   }
 
   return await adminAction(async () => {
-    // The provider catalogs, rate card and Stripe prices go over the network.
-    // They are cached at their existing boundaries, so retyping an id costs
-    // one fetch at most.
-    const prisma = await getDb();
     const model = { modelId, provider: resolvedProvider };
-    const [costs, pro, topUp, unsupported] = await Promise.all([
-      loadAiCostEstimates({
-        modelsOf: () => [model],
-      }),
-      resolveOfferPricing({ kind: "pro", prisma }),
-      resolveOfferPricing({ kind: "top_up", prisma }),
-      isModelUnsupportedForOperation(operation, model),
-    ]);
+    const unsupported = await isModelUnsupportedForOperation(operation, model);
 
     return {
       success: true as const,
       unsupported,
-      estimate:
-        costs.entries.find(
-          (entry) =>
-            aiCostEstimateKey(entry.operation, entry.model) ===
-            aiCostEstimateKey(operation, modelId),
-        )?.estimate ?? null,
-      proOffer: pro.effective
-        ? {
-            unitAmount: pro.effective.unitAmount,
-            currency: pro.effective.currency,
-            creditAmount: pro.effective.creditAmount,
-          }
-        : null,
-      topUpUnitValue: deriveTopUpUnitValue(topUp.effective),
     };
   });
 }

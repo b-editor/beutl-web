@@ -1,8 +1,10 @@
 // Fetching the published price list for the models currently configured, and
 // turning it into per-operation cost estimates.
 //
-// ADMIN CONSOLE ONLY, and never on a billing path: an operation is charged the
-// unit price recorded when it starts, not anything derived here.
+// Used by the admin catalog and by the conservative reservation made before a
+// provider call. The final charge never comes from this estimate: it is settled
+// from provider-reported cost, or from the unbuffered estimate only when the
+// provider supplies no actual cost.
 //
 // These endpoints are public, so no API key is involved. That is deliberate —
 // the admin Worker holds no provider credentials and does not need any to show
@@ -61,13 +63,9 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
 const MAX_CACHE_ENTRIES = 64;
 
-// A video is charged per second at one rate whatever its resolution, so the
-// margin has to hold at the dearest resolution a caller can ask for, not the
-// one the schema happens to default to. That differs per model now: one that
-// renders only at 2K is never asked for 1080p, and one that stops at 720p is
-// never asked for more. AI_VIDEO_RESOLUTIONS is ordered smallest first, so the
-// last one both sides offer is the dearest. Models that cannot generate audio
-// are priced against the silent request shape the API forces for them.
+// Admin estimates use the dearest supported shape, while concrete reservations
+// use the submitted resolution and audio flag. AI_VIDEO_RESOLUTIONS is ordered
+// smallest first, so the last resolution both sides offer is the admin bound.
 function dearestOfferedResolution(
   supported: readonly string[] | null | undefined,
 ): string {
@@ -325,6 +323,7 @@ async function estimateImageOperation(
   referenceImages: number,
   correlateEndpointCapabilities: boolean,
   options: { force: boolean; now: number },
+  request?: AiCostRequestShape,
 ): Promise<AiCostEstimate> {
   const parts = splitModelId(model);
   if (!parts) {
@@ -348,13 +347,20 @@ async function estimateImageOperation(
       .length > 0
   );
   const applicable = correlateEndpointCapabilities
-    ? response.endpoints.filter((endpoint) =>
-        imageEndpointSupportsOperation(
-          endpoint.supportedParameters,
+    ? response.endpoints.filter((endpoint) => {
+        const parameters = endpoint.supportedParameters;
+        if (!imageEndpointSupportsOperation(
+          parameters,
           operation,
           modelPublishesAspectRatios,
-        )
-      )
+        )) return false;
+        if (!request) return true;
+        if ((request.referenceImages ?? referenceImages) > imageEndpointReferenceMaximum(parameters)) return false;
+        const ratios = imageEndpointEnumValues(parameters, "aspect_ratio");
+        if (request.aspectRatio && ratios?.length && !ratios.includes(request.aspectRatio)) return false;
+        return !request.background || request.background === "auto" ||
+          imageEndpointAccepts(parameters, "background", request.background);
+      })
     : response.endpoints;
   const endpoints: ImagePricingEntry[][] = applicable.map((endpoint) =>
     endpoint.pricing.map((entry) => ({
@@ -366,7 +372,9 @@ async function estimateImageOperation(
   return estimateImageCost({
     endpoints,
     referenceImages,
-    ...(correlateEndpointCapabilities && operation === "image.generate"
+    model,
+    aspectRatio: request?.aspectRatio,
+    ...(!request && correlateEndpointCapabilities && operation === "image.generate"
       ? {
           referenceImagesByEndpoint: applicable.map((endpoint) =>
             imageEndpointReferenceMaximum(endpoint.supportedParameters)
@@ -410,6 +418,7 @@ async function loadModelPricing(
 async function estimateVideoOperation(
   model: string,
   options: { force: boolean; now: number },
+  request?: AiCostRequestShape,
 ): Promise<AiCostEstimate> {
   const outcome = await fetchPricing(
     "video-models",
@@ -430,10 +439,21 @@ async function estimateVideoOperation(
   }
   return estimateVideoCost({
     pricingSkus: entry.pricingSkus,
-    resolution: dearestOfferedResolution(entry.supportedResolutions),
-    withAudio: entry.generateAudio ?? true,
+    resolution: request?.resolution ?? dearestOfferedResolution(entry.supportedResolutions),
+    withAudio: request?.generateAudio ?? entry.generateAudio ?? true,
+    aspectRatio: request?.aspectRatio,
   });
 }
+
+// Concrete submitted fields, separate from the admin's maximum-shape estimate.
+// Only public rate cards are cached; estimates are recomputed for every shape.
+export type AiCostRequestShape = {
+  referenceImages?: number;
+  resolution?: string;
+  generateAudio?: boolean;
+  aspectRatio?: string;
+  background?: string;
+};
 
 /** A model to price, and who serves it. */
 export type AiPricingModelRef = {
@@ -459,6 +479,7 @@ export async function loadAiCostEstimates({
   modelsOf,
   now = new Date(),
   force = false,
+  request,
 }: {
   // Who serves a model comes with it. There is no default: a model id alone
   // does not say which provider has it, and guessing produced a "model not
@@ -466,6 +487,8 @@ export async function loadAiCostEstimates({
   modelsOf: (operation: string) => AiPricingModelRef[];
   now?: Date;
   force?: boolean;
+  /** Omit only for the admin's worst-case, model-wide estimate. */
+  request?: AiCostRequestShape;
 }): Promise<AiCostEstimates> {
   const options = { force, now: now.getTime() };
   const pairs = Object.keys(AI_PRICING_CATALOG).flatMap((operation) => {
@@ -487,7 +510,7 @@ export async function loadAiCostEstimates({
   const generationModels = [
     ...new Map(
       pairs
-        .filter(({ operation }) => operation === "image.generate")
+        .filter(({ operation }) => operation === "image.generate" && request === undefined)
         .map((pair) => [
           `${pair.provider} ${pair.model}`,
           { modelId: pair.model, provider: pair.provider },
@@ -514,6 +537,7 @@ export async function loadAiCostEstimates({
           provider,
           imageCapabilities,
           options,
+          request,
         );
         return { operation, model, estimate };
       } catch (error) {
@@ -562,6 +586,7 @@ async function estimateGatewayImageOperation(
   model: string,
   referenceImages: number,
   options: { force: boolean; now: number },
+  aspectRatio?: string,
 ): Promise<AiCostEstimate> {
   // Share one catalog request across all image models and operations.
   const outcome = await fetchPricing(
@@ -578,6 +603,8 @@ async function estimateGatewayImageOperation(
   return estimateImageCost({
     endpoints: [[{ billable: "output_image", ...price }]],
     referenceImages,
+    model,
+    aspectRatio,
   });
 }
 
@@ -587,6 +614,7 @@ async function estimateGatewayOperation(
   operation: string,
   model: string,
   options: { force: boolean; now: number },
+  request?: AiCostRequestShape,
 ): Promise<AiCostEstimate> {
   const pricing = await loadGatewayPricing(model, options);
   if (!pricing.ok) {
@@ -594,7 +622,14 @@ async function estimateGatewayOperation(
   }
 
   if (operation.startsWith("video.")) {
-    const rate = gatewayDearestVideoRate(pricing.card);
+    const rate = gatewayDearestVideoRate(pricing.card, {
+      // Edit, extension and motion always carry the source clip. Ordinary
+      // generation is priced as text/image-to-video; optional reference-video
+      // input is not treated as a different billing operation here.
+      videoInput: operation !== "video.generate",
+      resolution: request?.resolution,
+      aspectRatio: request?.aspectRatio,
+    });
     if (!rate) {
       return { status: "unknown", reason: "unsupported_pricing_shape" };
     }
@@ -605,7 +640,20 @@ async function estimateGatewayOperation(
       // Only when the provider tagged the rate. An untagged rate is the one
       // any request pays, and naming the model as the "SKU" would read as a
       // shape that was chosen rather than one that was never offered.
-      assumptions: rate.label ? [{ kind: "videoSku", value: rate.label }] : [],
+      assumptions: [
+        ...(rate.label
+          ? [{ kind: "videoSku" as const, value: rate.label }]
+          : []),
+        ...(rate.tokenCalculation
+          ? [
+              {
+                kind: "videoTokens" as const,
+                tokensPerSecond: rate.tokenCalculation.tokensPerSecond,
+                resolution: rate.tokenCalculation.resolution,
+              },
+            ]
+          : []),
+      ],
     };
   }
   if (operation === "audio.transcribe") {
@@ -629,42 +677,44 @@ async function estimateOperation(
   provider: string,
   imageCapabilities: ReadonlyMap<string, AiImageModelCapabilities>,
   options: { force: boolean; now: number },
+  request?: AiCostRequestShape,
 ): Promise<AiCostEstimate> {
   if (provider !== DEFAULT_AI_PROVIDER_ID) {
     if (operation.startsWith("image.")) {
       return await estimateGatewayImageOperation(
         model,
-        operation === "image.generate"
+        request?.referenceImages ?? (operation === "image.generate"
           ? imageCapabilityOf(imageCapabilities, { modelId: model, provider })
               ?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES
-          : 1,
+          : 1),
         options,
+        request?.aspectRatio,
       );
     }
-    return await estimateGatewayOperation(operation, model, options);
+    return await estimateGatewayOperation(operation, model, options, request);
   }
   // Every video operation is metered per second of output and priced off the
   // same rate card, so they resolve together. Matching only video.generate
   // here would send an edit, an extension or a motion job down the text path,
   // where its model is not a model at all and the lookup answers 404.
   if (operation.startsWith("video.")) {
-    return await estimateVideoOperation(model, options);
+    return await estimateVideoOperation(model, options, request);
   }
   if (operation.startsWith("image.")) {
-    // Every edit sends exactly one source image. Generation is costed with the
-    // maximum reference set because the configured unit price must cover its
-    // most expensive valid request shape.
+    // Every edit sends one source image. Only the admin estimate uses the
+    // maximum reference set; reservations use the submitted count.
     return await estimateImageOperation(
       model,
       operation,
-      operation === "image.generate"
+      request?.referenceImages ?? (operation === "image.generate"
         ? imageCapabilityOf(imageCapabilities, { modelId: model, provider })
             ?.maxReferenceImages ?? AI_MAX_IMAGE_REFERENCES
-        : 1,
-      operation !== "image.generate" ||
+        : 1),
+      request !== undefined || operation !== "image.generate" ||
         imageCapabilityOf(imageCapabilities, { modelId: model, provider }) !==
           undefined,
       options,
+      request,
     );
   }
 

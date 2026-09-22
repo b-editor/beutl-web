@@ -308,6 +308,7 @@ describe("OpenRouter video client contract", () => {
             unsigned_urls: [
               "https://openrouter.ai/api/v1/videos/video-1/content?index=0",
             ],
+            usage: { cost: 0.42 },
           },
           200,
         ),
@@ -321,6 +322,7 @@ describe("OpenRouter video client contract", () => {
         "https://openrouter.ai/api/v1/videos/video-1/content?index=0",
       ],
       error: null,
+      providerCostUsd: 0.42,
     });
   });
 

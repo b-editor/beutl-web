@@ -2,17 +2,15 @@ import "server-only";
 import { cache } from "react";
 import { getDb, listAiOperationModels, listPackagePaymentRefundInterventions, listStorageMultipartInterventions, listStorageUploadInterventions, listTopUpCheckoutInterventions } from "@beutl/db";
 import {
-  aiCostEstimateKey,
   imageCapabilityOf,
   isImageModelUsable,
   unusableVideoModelsFor,
   loadAiImageModelCapabilities,
-  loadAiCostEstimates,
   loadAiModelCatalog,
   loadAiSettings,
   loadAiVideoModelCapabilities,
 } from "@beutl/api";
-import { derivePlanUnitValue, deriveTopUpUnitValue } from "@beutl/core";
+import { deriveTopUpUnitValue } from "@beutl/core";
 import { resolveOfferPricing } from "@/lib/stripe-pricing";
 
 export const getAiSettings = cache(async () => await loadAiSettings());
@@ -92,51 +90,21 @@ export const getUnusableImageModels = cache(
   },
 );
 
-// What each operation can actually run on, fallback included. The economics
-// panels price these, since a fallback costs the operator just as much as a
-// registered row does.
+// What each operation can actually run on, fallback included.
 export const getAiModelCatalog = cache(async () => await loadAiModelCatalog());
 
-// Prices and provider costs both go over the network, so every place that shows
-// them sits behind its own Suspense boundary. They all await this one call:
-// React's cache keeps it to a single fetch per request no matter how many
-// operation sections ask for it.
+// Offer prices go over the network, so the cards sit behind a Suspense boundary.
 export const getAiEconomics = cache(async () => {
-  const [settings, catalog] = await Promise.all([
-    getAiSettings(),
-    getAiModelCatalog(),
-  ]);
-  const monthlyUsageLimit = settings.getMonthlyUsageLimit();
-
   // Explicitly share the render-scoped client across both offer reads.
   const prisma = await getDb();
-  const [pro, topUp, costs] = await Promise.all([
+  const [pro, topUp] = await Promise.all([
     resolveOfferPricing({ kind: "pro", prisma }),
     resolveOfferPricing({ kind: "top_up", prisma }),
-    loadAiCostEstimates({
-      modelsOf: (operation) =>
-        catalog.list(operation).map((entry) => ({
-          modelId: entry.modelId,
-          provider: entry.provider,
-        })),
-    }),
   ]);
 
   return {
     pro,
     topUp,
-    // Keyed by operation and model together: one operation now has several, and
-    // two operations sharing a model still cost different amounts per run.
-    costByModel: new Map(
-      costs.entries.map((entry) => [
-        aiCostEstimateKey(entry.operation, entry.model),
-        entry.estimate,
-      ]),
-    ),
-    // What the plan earns per unit from a subscriber who spends the whole
-    // allowance. Operation prices are valued at this rate because it is the
-    // floor of Pro revenue, which is what a provider cost has to fit under.
-    planUnitValue: derivePlanUnitValue(pro.effective, monthlyUsageLimit),
     topUpUnitValue: deriveTopUpUnitValue(topUp.effective),
   };
 });

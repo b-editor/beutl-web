@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { decimalNumberRows, decimalNumbers } from "./decimal";
 import type { PrismaTransaction } from "./transaction";
 
 export async function getCreditTransactionsByUserId({
@@ -9,7 +10,7 @@ export async function getCreditTransactionsByUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditTransaction.findMany({
+  const rows = await db.creditTransaction.findMany({
     where: {
       userId,
     },
@@ -17,6 +18,7 @@ export async function getCreditTransactionsByUserId({
       createdAt: "desc",
     },
   });
+  return decimalNumberRows(rows);
 }
 
 // Only the money-in side of the credit ledger. Usage rows are deliberately
@@ -31,7 +33,7 @@ export async function getCreditPurchasesByUserId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  const purchases = await db.creditTransaction.findMany({
+  const purchases = decimalNumberRows(await db.creditTransaction.findMany({
     where: {
       userId,
       kind: "purchase",
@@ -40,17 +42,17 @@ export async function getCreditPurchasesByUserId({
     orderBy: {
       createdAt: "desc",
     },
-  });
+  }));
   if (purchases.length === 0) {
     return [];
   }
 
-  const reversals = await db.creditTransaction.findMany({
+  const reversals = decimalNumberRows(await db.creditTransaction.findMany({
     where: {
       userId,
       kind: "purchase_reversal",
     },
-  });
+  }));
   const reversedByPayment = new Map<string, number>();
   for (const reversal of reversals) {
     const paymentId = reversal.stripeSourcePaymentId;
@@ -104,7 +106,7 @@ export async function findCreditPurchaseByStripePaymentId({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.creditTransaction.findFirst({
+  const purchase = await db.creditTransaction.findFirst({
     where: {
       stripePaymentId,
       kind: "purchase",
@@ -118,4 +120,5 @@ export async function findCreditPurchaseByStripePaymentId({
       stripeCurrency: true,
     },
   });
+  return purchase ? decimalNumbers(purchase) : null;
 }

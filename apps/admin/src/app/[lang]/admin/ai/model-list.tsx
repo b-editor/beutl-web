@@ -19,31 +19,25 @@ import {
 } from "@beutl/ui/ui/collapsible";
 import { Separator } from "@beutl/ui/ui/separator";
 import { ChevronRight, ExternalLink } from "lucide-react";
-import { MAX_PRICE_UNITS, MIN_PRICE_UNITS } from "@beutl/core";
+import {
+  MAX_MODEL_USAGE_PERCENT,
+  MIN_MODEL_USAGE_PERCENT,
+} from "@beutl/core";
 import {
   DEFAULT_MODEL_PROVIDER,
   MAX_MODEL_DISPLAY_NAME_LENGTH,
 } from "@/lib/ai-operation-model-changes";
-import { isAiModelId, type AiUnitValue } from "@beutl/core";
-import type { AiCostEstimate } from "@beutl/api";
-import { AiOperationEconomicsPanel, type OfferAmount } from "./economics-panel";
-import { lookupAiModelEconomics } from "./actions";
+import { isAiModelId } from "@beutl/core";
+import { lookupAiModelCompatibility } from "./actions";
 import { useAiModels, type AiModelRow } from "./settings-form";
 
-type LookedUpEconomics = {
-  estimate: AiCostEstimate | null;
-  proOffer: OfferAmount;
-  topUpUnitValue: AiUnitValue | null;
+type LookedUpCompatibility = {
   unsupported: boolean;
 };
 
-// What the row being typed would cost to run.
-//
-// The saved rows have these figures rendered on the server, but a model that
-// only exists in the form has none: the provider's rate card is keyed by model
-// id. Looking it up as the id settles is what makes the cost ratio available
-// while the price is being chosen rather than after it is saved.
-function useModelEconomics(
+// Whether the provider/model pair being typed can run this operation. Kept
+// separate from pricing: model rows no longer render economic projections.
+function useModelCompatibility(
   operation: string,
   modelId: string,
   // Which provider's rate card to read. The same id can name a model at one
@@ -51,28 +45,29 @@ function useModelEconomics(
   // rather than defaulting.
   provider: string,
 ) {
-  const [economics, setEconomics] = useState<LookedUpEconomics | null>(null);
+  const [compatibility, setCompatibility] =
+    useState<LookedUpCompatibility | null>(null);
   const [isLoading, startLookup] = useTransition();
   const trimmed = modelId.trim();
 
   useEffect(() => {
     if (!isAiModelId(trimmed)) {
-      setEconomics(null);
+      setCompatibility(null);
       return;
     }
     let current = true;
     // Half-typed ids would each cost a request; wait for the typing to stop.
     const timer = setTimeout(() => {
       startLookup(async () => {
-        const result = await lookupAiModelEconomics({
+        const result = await lookupAiModelCompatibility({
           operation,
           modelId: trimmed,
           provider,
         });
         if (!current) return;
-        setEconomics(
-          result.success && "estimate" in result
-            ? (result as LookedUpEconomics & { success: true })
+        setCompatibility(
+          result.success && "unsupported" in result
+            ? (result as LookedUpCompatibility & { success: true })
             : null,
         );
       });
@@ -83,7 +78,7 @@ function useModelEconomics(
     };
   }, [operation, trimmed, provider]);
 
-  return { economics, isLoading };
+  return { compatibility, isLoading };
 }
 
 // Nothing here writes to the server. Every button edits the draft the page
@@ -95,6 +90,8 @@ type Draft = {
   modelId: string;
   provider: string;
   displayName: string;
+  usagePercent: string;
+  // Hidden compatibility value for a database column older Workers still read.
   priceUnits: string;
   enabled: boolean;
 };
@@ -104,6 +101,7 @@ function draftOf(row: AiModelRow): Draft {
     modelId: row.modelId,
     provider: row.provider,
     displayName: row.displayName ?? "",
+    usagePercent: String(row.usagePercent),
     priceUnits: String(row.priceUnits),
     enabled: row.enabled,
   };
@@ -113,7 +111,8 @@ const EMPTY_DRAFT: Draft = {
   modelId: "",
   provider: DEFAULT_MODEL_PROVIDER,
   displayName: "",
-  priceUnits: "",
+  usagePercent: "100",
+  priceUnits: "1",
   enabled: true,
 };
 
@@ -252,15 +251,17 @@ function ModelEditor({
             onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
           />
         </Field>
-        <Field label={t("admin:ai.price")}>
+        <Field label={t("admin:ai.models.usagePercent")}>
           <Input
             type="number"
-            min={MIN_PRICE_UNITS}
-            max={MAX_PRICE_UNITS}
+            min={MIN_MODEL_USAGE_PERCENT}
+            max={MAX_MODEL_USAGE_PERCENT}
             step={1}
-            value={draft.priceUnits}
+            value={draft.usagePercent}
             disabled={isPending}
-            onChange={(e) => setDraft({ ...draft, priceUnits: e.target.value })}
+            onChange={(e) =>
+              setDraft({ ...draft, usagePercent: e.target.value })
+            }
           />
         </Field>
         <label className="flex items-end gap-2 pb-2">
@@ -307,109 +308,43 @@ function ModelEditor({
           />
         )}
       </div>
-      <ModelEditorEconomics lang={lang} operation={operation} draft={draft} />
+      <LookedUpModelCompatibility
+        lang={lang}
+        operation={operation}
+        modelId={draft.modelId}
+        provider={draft.provider}
+      />
     </div>
   );
 }
 
-// Provider-dependent figures and compatibility for a model that exists only
-// in the local draft. Used while editing and after Apply: the server-rendered
-// row still describes the saved provider until the page-level save refreshes
-// it.
-function LookedUpModelEconomics({
+// Provider compatibility for a model that exists only in the local draft.
+// Used while editing and after Apply: the server-rendered row still describes
+// the saved provider until the page-level save refreshes it.
+function LookedUpModelCompatibility({
   lang,
   operation,
   modelId,
   provider,
-  priceUnits,
-  panelClassName,
   messageClassName,
 }: {
   lang: string;
   operation: string;
   modelId: string;
   provider: string;
-  priceUnits: number;
-  panelClassName: string;
   messageClassName?: string;
 }) {
   const { t } = useTranslation(lang);
-  const { economics, isLoading } = useModelEconomics(
+  const { compatibility, isLoading } = useModelCompatibility(
     operation,
     modelId,
     provider,
   );
-  if (!Number.isSafeInteger(priceUnits) || priceUnits <= 0) {
-    return null;
-  }
-  if (!economics) {
-    return (
-      <p
-        className={`text-xs text-muted-foreground ${messageClassName ?? ""}`}
-      >
-        {isLoading
-          ? t("admin:ai.economics.loading")
-          : t("admin:ai.models.economicsPending")}
-      </p>
-    );
-  }
-
+  if (isLoading || !compatibility?.unsupported) return null;
   return (
-    <>
-      {economics.unsupported && (
-        <p className={`text-xs text-destructive ${messageClassName ?? ""}`}>
-          {t("admin:ai.models.unsupportedByProvider")}
-        </p>
-      )}
-      <div className={panelClassName}>
-        <AiOperationEconomicsPanel
-          lang={lang}
-          operation={operation}
-          // This provider/model pair is not saved yet, so do not read the
-          // server row's draft price by id.
-          modelId=""
-          priceUnits={priceUnits}
-          livePrice={priceUnits}
-          // Undefined would read as "still loading"; a lookup that came back
-          // without a rate is a cost nobody knows.
-          estimate={
-            economics.estimate ?? {
-              status: "unknown",
-              reason: "provider_unavailable",
-            }
-          }
-          proOffer={economics.proOffer}
-          topUpUnitValue={economics.topUpUnitValue}
-        />
-      </div>
-    </>
-  );
-}
-
-// The same figures the saved rows carry, following the fields as they are
-// typed: what the allowance buys at this price, what the provider charges for
-// this model, and what share of the revenue that is.
-function ModelEditorEconomics({
-  lang,
-  operation,
-  draft,
-}: {
-  lang: string;
-  operation: string;
-  draft: Draft;
-}) {
-  return (
-    <LookedUpModelEconomics
-      // Re-mount when the provider or typed id changes so the previous pair's
-      // answer is never painted during the debounce for the new lookup.
-      key={`${draft.provider}:${draft.modelId.trim()}`}
-      lang={lang}
-      operation={operation}
-      modelId={draft.modelId}
-      provider={draft.provider}
-      priceUnits={Number(draft.priceUnits)}
-      panelClassName="-mx-4 -mb-4 mt-1 overflow-hidden rounded-b-lg"
-    />
+    <p className={`text-xs text-destructive ${messageClassName ?? ""}`}>
+      {t("admin:ai.models.unsupportedByProvider")}
+    </p>
   );
 }
 
@@ -417,15 +352,11 @@ export function AiOperationModels({
   lang,
   operation,
   title,
-  economicsByModel,
   warningsByModel,
 }: {
   lang: string;
   operation: string;
   title: string;
-  // What each model costs to run, rendered under its own row so the figures do
-  // not have to be matched back to a model by eye.
-  economicsByModel: Record<string, ReactNode>;
   // Why a registered model cannot serve this operation, keyed by model id. A
   // model the provider will refuse every request for looks identical to a
   // working one here otherwise, and the failure only shows up as "the provider
@@ -445,6 +376,7 @@ export function AiOperationModels({
     provider: current.provider,
     // An empty name is absent, and the row then shows the id.
     displayName: current.displayName.trim() || null,
+    usagePercent: Number(current.usagePercent),
     priceUnits: Number(current.priceUnits),
     enabled: current.enabled,
   });
@@ -461,7 +393,7 @@ export function AiOperationModels({
   const defaultModel = models.find((model) => model.enabled);
 
   return (
-    // Collapsed to start: nine operations of rows and figures is more than any
+    // Collapsed to start: nine operations of model rows is more than any
     // one edit needs on screen, so the header carries what the section would
     // have shown at a glance — which model a request lands on, how many are on
     // offer, and whether it holds an unsaved edit.
@@ -577,7 +509,9 @@ export function AiOperationModels({
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-muted-foreground">
-                  {t("admin:ai.models.priceValue", { units: model.priceUnits })}
+                  {t("admin:ai.models.usagePercentValue", {
+                    percent: model.usagePercent,
+                  })}
                 </span>
                 <ModelDetailLink
                   lang={lang}
@@ -620,14 +554,12 @@ export function AiOperationModels({
               </div>
             </div>
             {needsFreshProviderPreview ? (
-              <LookedUpModelEconomics
+              <LookedUpModelCompatibility
                 key={`${model.modelId}:${model.provider}`}
                 lang={lang}
                 operation={operation}
                 modelId={model.modelId}
                 provider={model.provider}
-                priceUnits={model.priceUnits}
-                panelClassName="overflow-hidden rounded-b-lg"
                 messageClassName="px-3 pb-3"
               />
             ) : (
@@ -637,7 +569,6 @@ export function AiOperationModels({
                     {warningsByModel[model.modelId]}
                   </p>
                 )}
-                {economicsByModel[model.modelId]}
               </>
             )}
           </div>

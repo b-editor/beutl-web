@@ -260,6 +260,29 @@ describe("administrator monthly usage adjustments", () => {
     });
   });
 
+  it("preserves a fractional consumed amount", async () => {
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 1.25,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: PERIOD,
+      aiJobId: "job-usage-fractional",
+    });
+
+    const account = await setMonthlyUsageUsedByAdmin({
+      userId: USER_ID,
+      monthlyUsageUsed: 0.375,
+      monthlyUsageLimit: MONTHLY_LIMIT,
+      usagePeriod: PERIOD,
+    });
+
+    expect(account.monthlyUsageUsed).toBe(0.375);
+    expect(state.creditTransactions.at(-1)).toMatchObject({
+      kind: "admin_usage_adjustment",
+      usageAmount: -0.875,
+    });
+  });
+
   it("restores the full allowance when reset to zero", async () => {
     await consumeUsage({
       userId: USER_ID,

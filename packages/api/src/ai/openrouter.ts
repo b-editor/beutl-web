@@ -8,6 +8,11 @@ import type {
 import type { ChatRequest } from "@openrouter/sdk/models";
 import { createTranslationSegmentReader } from "./translation-stream";
 import {
+  providerCostUsd,
+  withProviderCost,
+  type ProviderCostUsd,
+} from "./provider-cost";
+import {
   parseTranslationContent as parseSharedTranslationContent,
   toTranslationPromptSegments,
   translationJsonSchema,
@@ -594,9 +599,13 @@ function parseGeneratedImage(response: CreateImagesResponse): GeneratedImage {
   if (!image || image.b64Json.length === 0) {
     throw new AiProviderError("OpenRouter returned invalid image data");
   }
+  const cost = providerCostUsd(
+    "usage" in response ? response.usage?.cost : undefined,
+  );
   return {
     b64Json: image.b64Json,
     mediaType: image.mediaType || "image/png",
+    ...(cost === undefined ? {} : { providerCostUsd: cost }),
   };
 }
 
@@ -697,9 +706,11 @@ async function readGeneratedImageStream(
         if (event.b64Json.length === 0) {
           throw new AiProviderError("OpenRouter returned invalid image data");
         }
+        const cost = providerCostUsd(event.usage?.cost);
         generated = {
           b64Json: event.b64Json,
           mediaType: event.mediaType || "image/png",
+          ...(cost === undefined ? {} : { providerCostUsd: cost }),
         };
         break;
       case "error":
@@ -808,7 +819,7 @@ function parseTranslationContent(
 function parseTranslationResponse(
   response: SendChatCompletionRequestResponse,
   inputSegments: TranslationSegment[],
-): TranslationSegment[] {
+): TranslationSegment[] & { providerCostUsd?: ProviderCostUsd } {
   // A request for one completion that comes back with none or several is not an
   // answer to it.
   const choice =
@@ -830,7 +841,11 @@ function parseTranslationResponse(
     );
   }
 
-  return parseTranslationContent(choice.message.content, inputSegments);
+  const cost = providerCostUsd("usage" in response ? response.usage?.cost : undefined);
+  return withProviderCost(
+    parseTranslationContent(choice.message.content, inputSegments),
+    cost,
+  );
 }
 
 // What the model said, judged the same way whether it arrived in one piece or
@@ -859,7 +874,7 @@ export async function translateSegments({
   // progress. Asking for it is what makes the reply stream; what comes back at
   // the end is the same either way, checked the same way.
   onSegment?: (segment: TranslationSegment) => void;
-}): Promise<TranslationSegment[]> {
+}): Promise<TranslationSegment[] & { providerCostUsd?: ProviderCostUsd }> {
   const promptSegments = toTranslationPromptSegments(segments, contexts);
   const client = createOpenRouterClient();
   const chatRequest: Omit<ChatRequest, "stream"> = {
@@ -937,12 +952,13 @@ async function translateStreaming({
   segments: TranslationSegment[];
   signal?: AbortSignal;
   onSegment: (segment: TranslationSegment) => void;
-}): Promise<TranslationSegment[]> {
+}): Promise<TranslationSegment[] & { providerCostUsd?: ProviderCostUsd }> {
   const wanted = new Set(segments.map((segment) => segment.id));
   const seen = new Set<string>();
   const reader = createTranslationSegmentReader();
   let content = "";
   let finished = false;
+  let cost: ProviderCostUsd | undefined;
   try {
     const stream = await client.chat.send(
       { chatRequest: { ...chatRequest, stream: true } },
@@ -955,6 +971,7 @@ async function translateStreaming({
     }
 
     for await (const chunk of stream) {
+      cost = providerCostUsd(chunk.usage?.cost) ?? cost;
       // A stream that carries an error carries it instead of an answer.
       if (chunk.error) {
         throw new AiProviderError(
@@ -987,7 +1004,7 @@ async function translateStreaming({
   if (!finished) {
     throw new AiProviderError("OpenRouter returned an incomplete translation stream");
   }
-  return parseTranslationContent(content, segments);
+  return withProviderCost(parseTranslationContent(content, segments), cost);
 }
 
 // verbose_json is restricted to OpenAI-compatible STT providers and supplies
@@ -1043,7 +1060,16 @@ export async function transcribeAudio({
   });
 
   try {
-    return validateTranscriptionResult(data, durationSeconds);
+    const result = validateTranscriptionResult(data, durationSeconds);
+    const cost =
+      typeof data === "object" && data !== null && "usage" in data
+        ? providerCostUsd(
+            typeof data.usage === "object" && data.usage !== null
+              ? (data.usage as Record<string, unknown>).cost
+              : undefined,
+          )
+        : undefined;
+    return { ...result, ...(cost === undefined ? {} : { providerCostUsd: cost }) };
   } catch (cause) {
     if (cause instanceof InvalidTranscriptionResultError) {
       throw new AiProviderError(

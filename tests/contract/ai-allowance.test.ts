@@ -11,6 +11,7 @@ import {
   formatAmount,
   formatFractionalAmount,
   operationAmount,
+  usageUnitsForProviderCost,
 } from "@beutl/core";
 
 const defaultPriceOf = (operation: string) =>
@@ -203,6 +204,44 @@ describe("usage unit value", () => {
     expect(amount?.minorUnits).toBeCloseTo(59.2, 10);
     expect(operationAmount(value, 0)).toBeNull();
     expect(operationAmount(null, 20)).toBeNull();
+  });
+});
+
+describe("actual provider cost conversion", () => {
+  it.each([
+    [0.04, 0.01, 100, 4],
+    [0.04, 0.01, 150, 6],
+    [0.04, 0.01, 50, 2],
+    [0.001, 0.01, 100, 0.1],
+    [0.001, 0.01, 150, 0.15],
+    [0.000001, 0.01, 50, 0.00005],
+    [0.00345678, 0.01, 100, 0.345678],
+    [0.00345678, 0.01, 150, 0.518517],
+    [0.0000005, 0.01, 100, 0.00005],
+    [0.0000005, 0.01, 50, 0.000025],
+    [0.01, 0.03, 100, 0.333334],
+    [0.000000000001, 1000, 1, 0.000001],
+    [0, 0.01, 150, 0],
+  ])("converts $%s at $%s/unit and %s%% to %s units", (
+    cost,
+    rate,
+    percent,
+    expected,
+  ) => {
+    expect(usageUnitsForProviderCost(cost, rate, percent)).toBe(expected);
+  });
+
+  it.each([
+    [Number.MAX_VALUE, 0.01, 100],
+    [1, Number.MIN_VALUE, 100],
+    [Number.NaN, 0.01, 100],
+    [Number.POSITIVE_INFINITY, 0.01, 100],
+    [-0.01, 0.01, 100],
+    [0.01, 0, 100],
+    [0.01, Number.NaN, 100],
+    [0.01, 0.01, 1.5],
+  ])("rejects invalid or out-of-range conversion (%s, %s, %s)", (cost, rate, percent) => {
+    expect(usageUnitsForProviderCost(cost, rate, percent)).toBeNull();
   });
 });
 

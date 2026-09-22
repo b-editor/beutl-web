@@ -86,7 +86,7 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
         kind: "image",
         provider: "test",
         status: "running",
-        usageUnits: 300,
+        usageUnits: 300.125,
       });
 
     const results = await Promise.all([reserve(), reserve()]);
@@ -100,7 +100,7 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
     const account = await prisma.creditAccount.findUniqueOrThrow({
       where: { userId: USER_ID },
     });
-    expect(account.monthlyUsageUsed).toBe(300);
+    expect(account.monthlyUsageUsed.toNumber()).toBe(300.125);
     expect(
       await prisma.creditTransaction.count({
         where: { userId: USER_ID, kind: "usage" },

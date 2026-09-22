@@ -609,8 +609,6 @@ const app = new Hono()
     requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
-    const cost = selectedModel.priceUnits * durationSeconds;
-
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
@@ -624,7 +622,7 @@ const app = new Hono()
         generateAudio,
         ...(seed === undefined ? {} : { seed }),
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
@@ -1087,7 +1085,6 @@ const app = new Hono()
     requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
-    const cost = selectedModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
@@ -1125,7 +1122,7 @@ const app = new Hono()
             }
           : {}),
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
@@ -1456,7 +1453,6 @@ const app = new Hono()
     requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
-    const cost = selectedModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
@@ -1467,7 +1463,7 @@ const app = new Hono()
         durationSeconds,
         mode,
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
@@ -1725,7 +1721,6 @@ const app = new Hono()
     requestSignal.throwIfAborted();
 
     const callbackNonce = await createCallbackNonce();
-    const cost = selectedModel.priceUnits * durationSeconds;
     const reservation = await createReservedAiJob({
       userId,
       kind: "video",
@@ -1742,7 +1737,7 @@ const app = new Hono()
           mimeType: validatedImage.mimeType,
         },
       },
-      usageUnits: cost,
+      usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
       activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,

@@ -7,11 +7,16 @@ import {
   type PrismaTransaction,
   usagePeriodsEqual,
 } from "@beutl/db";
-import { aiMinimumChargeOf, type AiModelChargeCapabilities } from "@beutl/core";
+import {
+  ceilUsageUnits,
+  USAGE_UNIT_MICROS_PER_UNIT,
+  usageUnitsForProviderCost,
+} from "@beutl/core";
 import { AI_PRICING_CATALOG, PRO_PLAN } from "./pricing";
 import { loadAiSettings } from "./settings";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
-import { aiCapabilityKey } from "./providers/types";
+import { quoteAiOperationReservation } from "./usage-cost";
+import { providerRequiresPreparedOutpaintCanvas } from "./providers/registry";
 
 export type AiBalanceSnapshot = {
   monthlyUsage: {
@@ -89,7 +94,11 @@ export function toAiBalanceSnapshot(
 }
 
 export function getMonthlyUsageRemaining(balance: AiBalanceSnapshot): number {
-  return Math.max(balance.monthlyUsage.limit - balance.monthlyUsage.used, 0);
+  return Math.max(
+    Math.round(balance.monthlyUsage.limit * USAGE_UNIT_MICROS_PER_UNIT) -
+      Math.round(balance.monthlyUsage.used * USAGE_UNIT_MICROS_PER_UNIT),
+    0,
+  ) / USAGE_UNIT_MICROS_PER_UNIT;
 }
 
 export function toUsedPercent(used: number, limit: number): number {
@@ -128,10 +137,7 @@ export function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
   catalog: AiModelCatalog,
-  videoCapabilities: ReadonlyMap<
-    string,
-    AiModelChargeCapabilities
-  > = new Map(),
+  rawImageInputs = false,
 ): { availability: AiOperationAvailability; modelAvailability: AiModelAvailability } {
   const available = getMonthlyUsageRemaining(balance) + balance.additionalCredits;
   const availability: AiOperationAvailability = {};
@@ -139,13 +145,9 @@ export function toAiOperationAvailability(
   for (const operation of Object.keys(AI_PRICING_CATALOG)) {
     const models: Record<string, boolean> = {};
     for (const entry of catalog.list(operation)) {
-      const minimumCharge = aiMinimumChargeOf(
-        operation,
-        entry.priceUnits,
-        videoCapabilities.get(aiCapabilityKey(entry.provider, entry.modelId)),
-      ) ?? 0;
+      if (rawImageInputs && providerRequiresPreparedOutpaintCanvas(entry.provider, operation)) continue;
       models[entry.modelId] =
-        canUseAi && minimumCharge > 0 && available >= minimumCharge;
+        canUseAi && available > 0;
     }
     modelAvailability[operation] = models;
     availability[operation] = Object.values(models).some(Boolean);
@@ -279,9 +281,10 @@ export async function getEntitlements(
     // without serializing the rest of the snapshot behind it.
     catalog?: AiModelCatalog | PromiseLike<AiModelCatalog>;
     prisma?: PrismaTransaction;
-    videoCapabilities?:
-      | ReadonlyMap<string, AiModelChargeCapabilities>
-      | PromiseLike<ReadonlyMap<string, AiModelChargeCapabilities>>;
+    /** Retained for callers compiled against fixed-price affordability. */
+    videoCapabilities?: unknown;
+    /** The v3 API accepts raw images, unlike the Web's prepared canvas. */
+    rawImageInputs?: boolean;
   } = {},
 ): Promise<EntitlementsResponse> {
   // This is an advisory presentation snapshot. Every paid operation repeats
@@ -291,13 +294,9 @@ export async function getEntitlements(
   // boundary as getEntitlementSummary(), with the catalog joined for the model
   // availability shown by AI screens and clients.
   const prisma = options.prisma ?? await getDb();
-  const [{ summary, balance }, catalog, videoCapabilities] = await Promise.all([
+  const [{ summary, balance }, catalog] = await Promise.all([
     loadEntitlementSnapshot(userId, prisma),
     options.catalog ?? loadAiModelCatalog({ prisma }),
-    options.videoCapabilities ??
-      import("./video-model-capabilities").then(
-        ({ loadAiVideoModelCapabilities }) => loadAiVideoModelCapabilities(),
-      ),
   ]);
 
   return {
@@ -306,7 +305,7 @@ export async function getEntitlements(
       balance,
       summary.canUseAi,
       catalog,
-      videoCapabilities,
+      options.rawImageInputs,
     ),
   };
 }
@@ -318,52 +317,68 @@ export async function canStartAiOperation(
     model?: string;
     durationSeconds?: number;
     characterCount?: number;
+    referenceImages?: number;
+    resolution?: string;
+    generateAudio?: boolean;
+    aspectRatio?: string;
+    background?: string;
   },
+  options: { rawImageInputs?: boolean } = {},
 ): Promise<boolean> {
   const { operation } = request;
   if (!(operation in AI_PRICING_CATALOG)) {
     throw new RangeError("operation must identify a billable AI operation");
   }
+  const [settings, catalog] = await Promise.all([
+    loadAiSettings(),
+    loadAiModelCatalog(),
+  ]);
+  const selectedModel = catalog.resolve(operation, request.model);
+  if (!selectedModel) return false;
+  if (options.rawImageInputs && providerRequiresPreparedOutpaintCanvas(selectedModel.provider, operation)) return false;
+  const quantity = operation === "video.generate"
+    ? request.durationSeconds
+    : operation === "audio.transcribe"
+      ? request.durationSeconds === undefined
+        ? undefined
+        : Math.max(1, Math.ceil(request.durationSeconds / 60))
+      : operation === "subtitle.translate"
+        ? request.characterCount === undefined
+          ? undefined
+          : Math.max(1, Math.ceil(request.characterCount / 1_000))
+        : 1;
+  if (
+    quantity === undefined ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0
+  ) {
+    throw new RangeError("operation quantity must be a positive integer");
+  }
+  const quote = await quoteAiOperationReservation({
+    operation,
+    quantity,
+    modelId: selectedModel.modelId,
+    provider: selectedModel.provider,
+    request,
+  });
+  const requiredUsage = quote === null
+    ? ceilUsageUnits(
+        (selectedModel.priceUnits * quantity * selectedModel.usagePercent) /
+          100,
+      )
+    : usageUnitsForProviderCost(
+        quote.reservationProviderCostUsd,
+        settings.getProviderUsdPerUsageUnit(),
+        selectedModel.usagePercent,
+      );
+  if (requiredUsage === null || requiredUsage <= 0) return false;
+
   return await startRetryableTransaction(async (prisma) => {
     if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
       return false;
     }
     const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
     if (!subscription || !isActiveProSubscription(subscription)) {
-      return false;
-    }
-
-    const [settings, catalog] = await Promise.all([
-      loadAiSettings({ prisma }),
-      loadAiModelCatalog({ prisma }),
-    ]);
-    // An unknown or disabled model cannot be started at any balance, and
-    // answering "yes" for it would send the user into a request the entry point
-    // refuses.
-    const selectedModel = catalog.resolve(operation, request.model);
-    if (!selectedModel) {
-      return false;
-    }
-    const quantity = operation === "video.generate"
-      ? request.durationSeconds
-      : operation === "audio.transcribe"
-        ? request.durationSeconds === undefined
-          ? undefined
-          : Math.max(1, Math.ceil(request.durationSeconds / 60))
-        : operation === "subtitle.translate"
-          ? request.characterCount === undefined
-            ? undefined
-            : Math.max(1, Math.ceil(request.characterCount / 1_000))
-          : 1;
-    if (
-      quantity === undefined ||
-      !Number.isSafeInteger(quantity) ||
-      quantity <= 0
-    ) {
-      throw new RangeError("operation quantity must be a positive integer");
-    }
-    const requiredUsage = selectedModel.priceUnits * quantity;
-    if (!Number.isSafeInteger(requiredUsage) || requiredUsage <= 0) {
       return false;
     }
 
@@ -388,10 +403,13 @@ export async function canStartAiOperation(
       },
       settings.getMonthlyUsageLimit(),
     );
-    return (
-      getMonthlyUsageRemaining(balance) + balance.additionalCredits >=
-      requiredUsage
-    );
+    // Compare fixed-precision integers, like the reservation writer. Comparing
+    // 500 - 499.8 directly with 0.2 would reject an exactly sufficient balance.
+    const availableMicros =
+      Math.round(getMonthlyUsageRemaining(balance) * USAGE_UNIT_MICROS_PER_UNIT) +
+      Math.round(balance.additionalCredits * USAGE_UNIT_MICROS_PER_UNIT);
+    return availableMicros >=
+      Math.round(requiredUsage * USAGE_UNIT_MICROS_PER_UNIT);
   });
 }
 

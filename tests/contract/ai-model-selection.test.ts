@@ -5,6 +5,7 @@ import {
   getCreditAccount,
   setDbProvider,
   upsertAiOperationModel,
+  upsertAiSetting,
   upsertSubscription,
 } from "@beutl/db";
 import { setR2BucketProvider, v3 } from "@beutl/api";
@@ -41,6 +42,7 @@ vi.mock(
 );
 
 import { generateImage } from "../../packages/api/src/ai/openrouter";
+import { gatewayProviderCostUsd } from "../../packages/api/src/ai/provider-cost";
 
 const USER_ID = "user-model-selection";
 const JWT_SECRET = "test-secret-for-model-selection";
@@ -85,6 +87,7 @@ async function registerImageModels() {
   await upsertAiOperationModel({
     operation: "image.generate",
     modelId: "cheap/model",
+    usagePercent: 50,
     priceUnits: 7,
     displayName: null,
     sortOrder: 0,
@@ -94,6 +97,7 @@ async function registerImageModels() {
   await upsertAiOperationModel({
     operation: "image.generate",
     modelId: "dear/model",
+    usagePercent: 150,
     priceUnits: 31,
     displayName: "Dear",
     sortOrder: 1,
@@ -136,6 +140,7 @@ describe("choosing a model per request", () => {
     vi.mocked(generateImage).mockResolvedValue({
       b64Json: PNG_BASE64,
       mediaType: "image/png",
+      providerCostUsd: 0.04,
     });
     await activatePro();
     await registerImageModels();
@@ -146,7 +151,7 @@ describe("choosing a model per request", () => {
     delete process.env.PUBLIC_ORIGIN;
   });
 
-  it("charges the chosen model's price and runs the request on it", async () => {
+  it("applies the chosen model's percentage to actual provider cost", async () => {
     const response = await generateWith({ model: "dear/model" });
 
     expect(response.status).toBe(200);
@@ -154,9 +159,14 @@ describe("choosing a model per request", () => {
       expect.objectContaining({ model: "dear/model" }),
     );
     const job = [...state.aiJobs.values()][0];
-    expect(job).toMatchObject({ usageUnits: 31, model: "dear/model" });
+    expect(job).toMatchObject({
+      usageUnits: 6,
+      usagePercent: 150,
+      providerCostUsdMicros: 40_000,
+      model: "dear/model",
+    });
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
-      .toBe(31);
+      .toBe(6);
   });
 
   it("runs on the first model in display order when none is named", async () => {
@@ -167,9 +177,87 @@ describe("choosing a model per request", () => {
       expect.objectContaining({ model: "cheap/model" }),
     );
     expect([...state.aiJobs.values()][0]).toMatchObject({
-      usageUnits: 7,
+      usageUnits: 2,
+      usagePercent: 50,
       model: "cheap/model",
     });
+  });
+
+  it.each([
+    [0.00345678, 0.518517],
+    [0.0000005, 0.000075],
+  ])("settles the original $%s cost at 150%% without rounding USD first", async (providerCostUsd, expectedUnits) => {
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json: PNG_BASE64,
+      mediaType: "image/png",
+      providerCostUsd,
+    });
+    const response = await generateWith({ model: "dear/model" });
+    expect(response.status).toBe(200);
+    expect([...state.aiJobs.values()][0].usageUnits).toBe(expectedUnits);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed)
+      .toBe(expectedUnits);
+  });
+
+  it.each([
+    ["0.0034567800000000000001", 0.518518],
+    ["3.4567800000000000001E-3", 0.518518],
+    ["1e-400", 0.000001],
+  ] as const)("settles every digit of the provider's $%s string", async (cost, expectedUnits) => {
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json: PNG_BASE64,
+      mediaType: "image/png",
+      providerCostUsd: gatewayProviderCostUsd({ gateway: { cost } }),
+    });
+    expect((await generateWith({ model: "dear/model" })).status).toBe(200);
+    expect([...state.aiJobs.values()][0].usageUnits).toBe(expectedUnits);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(expectedUnits);
+  });
+
+  it.each([
+    ["2147.483647", 2.147484, 2_147_483_647],
+    ["2147.4836470000001", 2.147484, null],
+    [3000, 3, null],
+    ["3000", 3, null],
+  ] as const)("settles a valid $%s charge even when its optional audit field overflows", async (cost, units, auditMicros) => {
+    await upsertAiSetting({ key: "billing.providerUsdPerUsageUnit", value: "1000", updatedBy: "admin" });
+    await upsertAiOperationModel({
+      operation: "image.generate", modelId: "dear/model", usagePercent: 100,
+      priceUnits: 31, displayName: "Dear", sortOrder: 1, enabled: true, updatedBy: "admin",
+    });
+    vi.mocked(generateImage).mockResolvedValue({
+      b64Json: PNG_BASE64, mediaType: "image/png", providerCostUsd: cost,
+    });
+
+    const first = await generateWith({ model: "dear/model" }, "audit-range-replay");
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    const job = [...state.aiJobs.values()][0];
+    expect(job).toMatchObject({
+      status: "succeeded", usageUnits: units, usageUnitUsdMicros: 1_000_000_000,
+      providerCostUsdMicros: auditMicros, resultFileId: body.fileId,
+    });
+    expect(state.files.size).toBe(1);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(units);
+    expect(state.creditTransactions.filter((row) => row.kind === "refund")).toHaveLength(0);
+    const replay = await generateWith({ model: "dear/model" }, "audit-range-replay");
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(body);
+    expect(vi.mocked(generateImage)).toHaveBeenCalledOnce();
+    expect(state.creditTransactions.filter((row) => row.kind === "usage_settlement")).toHaveLength(1);
+  });
+
+  it.each([-1, Number.NaN, "100000000"])("still rejects invalid or unrepresentable actual charges: %s", async (cost) => {
+    vi.mocked(generateImage).mockResolvedValue({ b64Json: PNG_BASE64, mediaType: "image/png", providerCostUsd: cost });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await generateWith({ model: "dear/model" })).status).toBe(500);
+      expect([...state.aiJobs.values()][0].status).toBe("failed");
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+      expect(state.creditTransactions.filter((row) => row.kind === "usage_settlement")).toHaveLength(0);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("refuses an unknown model without reserving or charging", async () => {
@@ -297,7 +385,7 @@ describe("choosing a model per request", () => {
       expect.objectContaining({ model: "dear/model" }),
     );
     expect([...state.aiJobs.values()][0]).toMatchObject({
-      usageUnits: 31,
+      usageUnits: 6,
       model: "dear/model",
     });
   });
@@ -312,13 +400,13 @@ describe("choosing a model per request", () => {
       expect.objectContaining({
         id: "cheap/model",
         displayName: "cheap/model",
-        costTier: "low",
+        costTier: null,
         isDefault: true,
       }),
       expect.objectContaining({
         id: "dear/model",
         displayName: "Dear",
-        costTier: "high",
+        costTier: null,
         isDefault: false,
       }),
     ]);

@@ -6,11 +6,11 @@
 // imports from there has to change.
 //
 // A provider implements only the operations it can actually serve. That is not
-// a convenience — Vercel AI Gateway has no surface for background removal,
-// upscaling or outpainting, and an interface that forced it to declare them
-// would turn "this provider cannot do that" into a runtime failure the user
-// pays for. `supports` is how the catalog refuses to register a model for an
-// operation its provider cannot run.
+// a convenience — providers do not necessarily expose every operation. An
+// interface that forced them to declare unsupported operations would turn
+// "this provider cannot do that" into a runtime failure the user pays for.
+// `supports` is how the catalog refuses to register a model for an operation
+// its provider cannot run; per-model capabilities narrow that answer further.
 
 import type {
   AiImageAspectRatio,
@@ -19,6 +19,7 @@ import type {
   AiVideoResolution,
 } from "@beutl/core";
 import type { TranscriptionResult } from "../audio-validation";
+import type { ProviderCostUsd } from "../provider-cost";
 import type {
   GeneratedVideoExtension,
   GeneratedVideoMimeType,
@@ -90,6 +91,8 @@ export type AiVideoJobInfo = {
   id: string;
   status: AiVideoJobStatus;
   error?: string | null;
+  /** Actual provider charge in USD, available on a terminal response. */
+  providerCostUsd?: ProviderCostUsd;
   /**
    * Whatever the provider needs to hand the finished bytes over, opaque to
    * everything but the provider that produced it. OpenRouter downloads by job
@@ -295,6 +298,7 @@ export type ImageReference = {
 export type GeneratedImage = {
   b64Json: string;
   mediaType: string;
+  providerCostUsd?: ProviderCostUsd;
 };
 
 /** A rough version of the picture, sent while the final one is still coming. */
@@ -364,6 +368,10 @@ export type TranslationSegmentContext = {
   end: number;
 };
 
+export type AiTranslationResult = TranslationSegment[] & {
+  providerCostUsd?: ProviderCostUsd;
+};
+
 export type AiTranslateRequest = {
   sourceLanguage?: string;
   targetLanguage: string;
@@ -377,7 +385,7 @@ export type AiTranslateRequest = {
 };
 
 export interface AiTranslationProvider {
-  translate(request: AiTranslateRequest): Promise<TranslationSegment[]>;
+  translate(request: AiTranslateRequest): Promise<AiTranslationResult>;
 }
 
 /* --------------------------------------------------------------- provider */

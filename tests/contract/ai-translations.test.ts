@@ -458,7 +458,7 @@ describe("POST /api/v3/ai/translations contract", () => {
       kind: "translation",
       provider: "openrouter",
       status: "succeeded",
-      usageUnits: 10,
+      usageUnits: 0.4,
       inputParams: {
         sourceLanguage: "en",
         targetLanguage: "ja",
@@ -499,7 +499,7 @@ describe("POST /api/v3/ai/translations contract", () => {
       ),
     ).toEqual([
       expect.objectContaining({
-        usageAmount: 10,
+        usageAmount: 0.48,
         aiJobId: job.id,
       }),
     ]);
@@ -549,7 +549,7 @@ describe("POST /api/v3/ai/translations contract", () => {
     expect(job).toMatchObject({
       kind: "translation",
       status: "failed",
-      usageUnits: 5,
+      usageUnits: 0.24,
       error: "AI translation failed",
       inputParams: {
         sourceLanguage: "en",
@@ -566,8 +566,8 @@ describe("POST /api/v3/ai/translations contract", () => {
         usageAmount: transaction.usageAmount,
       })),
     ).toEqual([
-      { kind: "usage", usageAmount: 5 },
-      { kind: "refund", usageAmount: -5 },
+      { kind: "usage", usageAmount: 0.24 },
+      { kind: "refund", usageAmount: -0.24 },
     ]);
     const account = await getCreditAccount({ userId: USER_ID });
     expect(account.monthlyUsageUsed).toBe(0);
@@ -593,9 +593,10 @@ describe("POST /api/v3/ai/translations contract", () => {
       .toBe(0);
   });
 
-  it("charges the administrator-registered price and calls that model", async () => {
+  it("uses the provider quote and calls the administrator-selected model", async () => {
     await activatePro();
-    // Simulate an admin change. Pricing is per 1,000 characters, so this costs one unit.
+    // Simulate an admin change. The provider-reported amount settles below one
+    // unit instead of being rounded up.
     await upsertAiOperationModel({
       operation: "subtitle.translate",
       modelId: "anthropic/claude-haiku-4.5",
@@ -621,10 +622,9 @@ describe("POST /api/v3/ai/translations contract", () => {
       model: "anthropic/claude-haiku-4.5",
       signal: expect.any(AbortSignal),
     });
-    // The job records its reservation price and uses that value for refunds.
-    expect([...state.aiJobs.values()][0]).toMatchObject({ usageUnits: 37 });
+    expect([...state.aiJobs.values()][0]).toMatchObject({ usageUnits: 0.6 });
     const account = await getCreditAccount({ userId: USER_ID });
-    expect(account.monthlyUsageUsed).toBe(37);
+    expect(account.monthlyUsageUsed).toBe(0.6);
   });
 
   it("keeps an in-flight job on its reserved price when it is repriced mid-run", async () => {
@@ -655,8 +655,8 @@ describe("POST /api/v3/ai/translations contract", () => {
         usageAmount: transaction.usageAmount,
       })),
     ).toEqual([
-      { kind: "usage", usageAmount: 5 },
-      { kind: "refund", usageAmount: -5 },
+      { kind: "usage", usageAmount: 0.24 },
+      { kind: "refund", usageAmount: -0.24 },
     ]);
     const account = await getCreditAccount({ userId: USER_ID });
     expect(account.monthlyUsageUsed).toBe(0);
@@ -681,6 +681,6 @@ describe("POST /api/v3/ai/translations contract", () => {
     // that reaches the provider, so it is billed like the segments are;
     // otherwise it rides along free on every repeat.
     const job = [...state.aiJobs.values()][0];
-    expect(job.usageUnits).toBeGreaterThan(5);
+    expect(job.usageUnits).toBeGreaterThan(1);
   });
 });

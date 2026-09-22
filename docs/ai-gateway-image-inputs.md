@@ -29,3 +29,23 @@ supports the adapter's plain `prompt: { text, images }` path for that exact
 model. A mask-only editing endpoint or support on another provider is not
 sufficient. Update this evidence and the capability tests together. Do not
 infer support from a family prefix or from the SDK's generic request type.
+
+`openai/gpt-image-2` is also the only model currently verified here for the
+background-removal path. [OpenAI documents transparent output for the model](https://developers.openai.com/api/docs/guides/image-generation)
+in preview when `background: "transparent"` is paired with PNG or WebP.
+[AI Gateway forwards options under the actual provider name](https://ai-sdk.dev/providers/ai-sdk-providers/ai-gateway#provider-options),
+so the adapter requests a transparent PNG and supplies a background-removal
+instruction alongside the source image. Other Gateway image models continue
+to advertise only `auto` until their transparent-output behavior is verified
+independently.
+
+## Outpainting input boundary
+
+Gateway outpainting is supported only by the Web workflow, which expands the
+source into a transparent canvas before submitting the edit. The v3 image-edit
+API accepts raw source images and does not perform that expansion, so Gateway
+outpainting models are omitted from API capabilities and availability and new
+requests are rejected before reserving usage or calling the provider. Native
+OpenRouter outpainting, other Gateway edits, and retrieval of previously paid
+results remain available. Do not re-enable this raw-image API path without
+server-side canvas preparation or a validated expanded-input contract.
