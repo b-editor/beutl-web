@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addPurchasedCredits,
   adjustPurchasedCreditsByAdmin,
@@ -10,6 +10,7 @@ import {
   getAiJobStatusCounts,
   getAiJobUsageByKind,
   getAiUsageTotals,
+  getCreditAccount,
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
   listRecentAiJobsByUserId,
@@ -102,6 +103,7 @@ describe("AI usage aggregates", () => {
     });
     setDbProvider(async () => memory.prisma as never);
   });
+  afterEach(() => vi.useRealTimers());
 
   it("counts jobs by status", async () => {
     await reserve({
@@ -263,6 +265,43 @@ describe("AI usage aggregates", () => {
       consumedUnits: 1.25, purchasedCredits: 300, adminUsageAdjustment: 0,
     });
     expect((await getAiUsageTotals({ since: beforeWindow })).consumedUnits).toBe(1.25);
+  });
+
+  it.each([
+    { units: 3.125, monthlyLimit: 20, purchased: 0, monthlyRefund: -3.125, creditRefund: 0 },
+    { units: 25.375, monthlyLimit: 20, purchased: 10, monthlyRefund: -20, creditRefund: 5.375 },
+    { units: 0.125, monthlyLimit: 0, purchased: 10, monthlyRefund: 0, creditRefund: 0.125 },
+  ])("cancels a failed $units-unit reservation in its creation window after renewal", async (test) => {
+    vi.useFakeTimers();
+    const userId = "user-refund-rollover";
+    const beforeRenewal = new Date(PERIOD.end.getTime() - 1_000);
+    const nextPeriod = { start: PERIOD.end, end: new Date(PERIOD.end.getTime() + 30 * 86_400_000) };
+    vi.setSystemTime(beforeRenewal);
+    if (test.purchased) {
+      await addPurchasedCredits({ userId, amount: test.purchased, stripePaymentId: "pi_refund_rollover" });
+    }
+    const old = await createAiJob({ userId, kind: "image", provider: "test", status: "failed", usageUnits: test.units, reservedUsageUnits: test.units });
+    await consumeUsage({ userId, aiJobId: old.id, amount: test.units, monthlyUsageLimit: test.monthlyLimit, usagePeriod: PERIOD });
+
+    vi.setSystemTime(nextPeriod.start);
+    const current = await createAiJob({ userId, kind: "image", provider: "test", status: "running", usageUnits: 1.25 });
+    await consumeUsage({ userId, aiJobId: current.id, amount: 1.25, monthlyUsageLimit: 20, usagePeriod: nextPeriod });
+    expect((await getAiUsageTotals({ since: beforeRenewal })).consumedUnits).toBe(test.units + 1.25);
+    const refund = { userId, aiJobId: old.id, usagePeriod: nextPeriod };
+    await refundUsage(refund);
+    await refundUsage(refund);
+
+    // Expired allowance never reduces new-period usage, but the failed job's
+    // entire reservation must disappear from consumption in its own cohort.
+    expect(await getCreditAccount({ userId })).toMatchObject({ monthlyUsageUsed: 1.25, purchasedCredits: test.purchased, purchasedCreditDebt: 0 });
+    expect((await getAiUsageTotals({ since: beforeRenewal })).consumedUnits).toBe(1.25);
+    expect((await getAiUsageTotals({ since: nextPeriod.start })).consumedUnits).toBe(1.25);
+    const rows = memory.state.creditTransactions.filter((row) => row.kind === "refund");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ usageAmount: test.monthlyRefund, creditAmount: test.creditRefund, usagePeriodStart: PERIOD.start, usagePeriodEnd: PERIOD.end });
+    expect(await getAiJobUsageByKind({ since: beforeRenewal })).toEqual([
+      { kind: "image", jobCount: 2, reservedUnits: test.units + 1.25 },
+    ]);
   });
 
   it("retains transaction-time filtering for unlinked legacy consumption", async () => {

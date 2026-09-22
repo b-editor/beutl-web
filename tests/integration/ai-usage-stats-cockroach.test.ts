@@ -15,6 +15,7 @@ import {
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
   listRecentAiJobsByUserId,
+  refundUsage,
   setDbProvider,
   setMonthlyUsageUsedByAdmin,
   settleUsage,
@@ -215,6 +216,46 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
       expect(rows[0].usagePeriodStart).toEqual(oldPeriod.start);
       expect((await getAiUsageTotals({ since, prisma: tx })).consumedUnits).toBe(17.5);
       expect((await getAiUsageTotals({ since: nextPeriod.start, prisma: tx })).consumedUnits).toBe(5);
+      throw rollback;
+    }, { timeout: 30_000 })).rejects.toBe(rollback);
+    expect(await prisma.user.count({ where: { id: userId } })).toBe(0);
+  }, 45_000);
+
+  it.each([
+    { units: 3.125, purchased: 0, monthlyRefund: -3.125, creditRefund: 0 },
+    { units: 25.375, purchased: 10, monthlyRefund: -20, creditRefund: 5.375 },
+  ])("cancels a failed $units-unit reservation after allowance rollover in SQL", async (test) => {
+    const userId = crypto.randomUUID();
+    const rollback = new Error("Roll back failed reservation rollover fixtures");
+    await expect(prisma.$transaction(async (tx) => {
+      const newest = await tx.aiJob.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+      const since = new Date(Math.max(Date.now(), newest?.createdAt.getTime() ?? 0) + 60_000);
+      const oldPeriod = { start: since, end: new Date(since.getTime() + 86_400_000) };
+      const nextPeriod = { start: oldPeriod.end, end: new Date(oldPeriod.end.getTime() + 86_400_000) };
+      await tx.user.create({ data: { id: userId, email: `${userId}@refund-rollover-test.invalid` } });
+      await tx.creditAccount.create({ data: { userId, purchasedCredits: test.purchased } });
+      const oldJob = await createAiJob({ userId, kind: "image", provider: "test", status: "failed", usageUnits: test.units, reservedUsageUnits: test.units, prisma: tx });
+      await tx.aiJob.update({ where: { id: oldJob.id }, data: { createdAt: since } });
+      await consumeUsage({ userId, aiJobId: oldJob.id, amount: test.units, monthlyUsageLimit: 20, usagePeriod: oldPeriod, prisma: tx });
+      const newJob = await createAiJob({ userId, kind: "image", provider: "test", status: "running", usageUnits: 1.25, prisma: tx });
+      await tx.aiJob.update({ where: { id: newJob.id }, data: { createdAt: nextPeriod.start } });
+      await consumeUsage({ userId, aiJobId: newJob.id, amount: 1.25, monthlyUsageLimit: 20, usagePeriod: nextPeriod, prisma: tx });
+      const refund = { userId, aiJobId: oldJob.id, usagePeriod: nextPeriod, prisma: tx };
+      await refundUsage(refund);
+      await refundUsage(refund);
+
+      expect(await getCreditAccount({ userId, prisma: tx })).toMatchObject({ monthlyUsageUsed: 1.25, purchasedCredits: test.purchased, purchasedCreditDebt: 0 });
+      const rows = await tx.creditTransaction.findMany({ where: { userId, kind: "refund" } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].usageAmount.toNumber()).toBe(test.monthlyRefund);
+      expect(rows[0].creditAmount.toNumber()).toBe(test.creditRefund);
+      expect(rows[0].usagePeriodStart).toEqual(oldPeriod.start);
+      expect(rows[0].usagePeriodEnd).toEqual(oldPeriod.end);
+      expect((await getAiUsageTotals({ since, prisma: tx })).consumedUnits).toBe(1.25);
+      expect((await getAiUsageTotals({ since: nextPeriod.start, prisma: tx })).consumedUnits).toBe(1.25);
+      expect(await getAiJobUsageByKind({ since, prisma: tx })).toEqual([
+        { kind: "image", jobCount: 2, reservedUnits: test.units + 1.25 },
+      ]);
       throw rollback;
     }, { timeout: 30_000 })).rejects.toBe(rollback);
     expect(await prisma.user.count({ where: { id: userId } })).toBe(0);

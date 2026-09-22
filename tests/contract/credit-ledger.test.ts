@@ -372,7 +372,9 @@ describe("AI usage ledger", () => {
       ),
     ).toMatchObject({
       creditAmount: 50,
-      usageAmount: 0,
+      usageAmount: -100,
+      usagePeriodStart: PERIOD_ONE.start,
+      usagePeriodEnd: PERIOD_ONE.end,
     });
   });
 

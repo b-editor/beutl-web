@@ -1355,8 +1355,9 @@ export async function refundUsage({
       start: usage.usagePeriodStart,
       end: usage.usagePeriodEnd,
     };
+    const monthlyReserved = Math.max(usage.usageAmount, 0);
     const monthlyRestored = usagePeriodsEqual(usagePeriod, transactionPeriod)
-      ? Math.min(account.monthlyUsageUsed, Math.max(usage.usageAmount, 0))
+      ? Math.min(account.monthlyUsageUsed, monthlyReserved)
       : 0;
     const purchasedRestored = Math.max(-usage.creditAmount, 0);
     const debtPaid = Math.min(
@@ -1390,7 +1391,9 @@ export async function refundUsage({
         userId,
         creditAmount: purchasedRestored,
         debtAmount: debtPaid === 0 ? 0 : -debtPaid,
-        usageAmount: monthlyRestored === 0 ? 0 : -monthlyRestored,
+        // Cancel the full reservation in its original consumption cohort even
+        // when expired allowance cannot be restored to the current counter.
+        usageAmount: monthlyReserved === 0 ? 0 : -monthlyReserved,
         usagePeriodStart: transactionPeriod.start,
         usagePeriodEnd: transactionPeriod.end,
         kind: "refund",
