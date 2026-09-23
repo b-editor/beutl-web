@@ -72,7 +72,8 @@ skipped when their respective variables are absent.
 
 ## Deployment
 
-Production is split across three Cloudflare Workers. The longest matching
+Production is split across the Web, desktop API, admin, and private image-edit
+Workers. The longest matching
 Cloudflare route sends desktop API traffic to the dedicated API Worker.
 
 | Worker | Routes | Command |
@@ -80,6 +81,10 @@ Cloudflare route sends desktop API traffic to the dedicated API Worker.
 | `beutl-web` | `beutl.beditor.net/*`, except the desktop API routes | `pnpm deploy:web` |
 | `beutl-web-api` | `beutl.beditor.net/api/v{1,2,3}/*` | `pnpm deploy:api` |
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `pnpm deploy:admin` |
+| `beutl-ai-images` | Service binding only; no public route | `vp run --filter @beutl/api deploy:image-worker` |
+
+Deploy `beutl-ai-images` and configure its secrets before deploying a Web
+version that binds to it.
 
 Before deploying, read [Deployment configuration](docs/deployment.md) for
 cross-Worker secrets, admin session sharing, Paid AI settings, and required

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { v3 } from "@beutl/api";
 import { auth } from "@/lib/better-auth";
+import { getImageWorkerBinding } from "@/lib/ai-image-worker-binding";
 import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
 
 // The dashboard's way in to the AI endpoints, for the screens that show an
@@ -28,9 +29,18 @@ export async function POST(request: Request): Promise<Response> {
   if (!userId) return unauthorizedResponse();
   request.signal.throwIfAborted();
 
-  const secret = process.env.JWT_SECRET;
+  const url = new URL(request.url);
+  url.pathname = url.pathname.replace(/^\/api\/internal\/ai\//, "/api/v3/ai/");
+  const imageWorker = url.pathname === "/api/v3/ai/images/edit"
+    ? getImageWorkerBinding()
+    : null;
+  const secret = imageWorker
+    ? process.env.AI_IMAGE_WORKER_JWT_SECRET
+    : process.env.JWT_SECRET;
   if (!secret) {
-    throw new Error("JWT_SECRET is not configured");
+    throw new Error(imageWorker
+      ? "AI_IMAGE_WORKER_JWT_SECRET is not configured"
+      : "JWT_SECRET is not configured");
   }
   const now = Math.floor(Date.now() / 1000);
   const token = await sign(
@@ -38,8 +48,12 @@ export async function POST(request: Request): Promise<Response> {
       [NAME_IDENTIFIER_CLAIM]: userId,
       iat: now,
       exp: now + TOKEN_LIFETIME_SECONDS,
-      ...(process.env.JWT_ISSUER ? { iss: process.env.JWT_ISSUER } : {}),
-      ...(process.env.JWT_AUDIENCE ? { aud: process.env.JWT_AUDIENCE } : {}),
+      ...(imageWorker
+        ? { iss: "beutl-web-image-edit", aud: "beutl-ai-images" }
+        : {
+            ...(process.env.JWT_ISSUER ? { iss: process.env.JWT_ISSUER } : {}),
+            ...(process.env.JWT_AUDIENCE ? { aud: process.env.JWT_AUDIENCE } : {}),
+          }),
     },
     secret,
     "HS256",
@@ -49,19 +63,24 @@ export async function POST(request: Request): Promise<Response> {
   // The same request, at the same path under the API's own prefix, carrying the
   // token instead of the cookie. Everything past this point — what the request
   // may ask for, what it costs, what it gets back — is the API's to decide.
-  const url = new URL(request.url);
-  url.pathname = url.pathname.replace(/^\/api\/internal\/ai\//, "/api/v3/ai/");
   const headers = new Headers(request.headers);
   headers.set("Authorization", `Bearer ${token}`);
   headers.delete("cookie");
 
-  return await app.request(
-    new Request(url, {
-      method: "POST",
-      headers,
-      body: request.body,
-      signal: request.signal,
-      duplex: "half",
-    } as RequestInit & { duplex: "half" }),
-  );
+  const forwarded = new Request(url, {
+    method: "POST",
+    headers,
+    body: request.body,
+    signal: request.signal,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
+  if (imageWorker) {
+    // Keep decoding, provider output, and storage writes out of OpenNext's
+    // already-heavy isolate. next dev has no Cloudflare context and retains
+    // the local in-process route; production must have the service binding.
+    return await imageWorker.fetch(forwarded);
+  }
+
+  return await app.request(forwarded);
 }

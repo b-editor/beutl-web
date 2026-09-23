@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": "src/image-worker.ts",
+  "name": "beutl-ai-images",
+  "compatibility_date": "2025-04-04",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public", "enable_request_signal"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "keep_vars": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "hyperdrive": [
+    {
+      "binding": "BEUTL_DATABASE_HYPERDRIVE",
+      "id": "34ad44345f2f45ea97c3608b0567a878"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "BEUTL_R2_BUCKET", "bucket_name": "beutl-dev" }
+  ],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://beutl.beditor.net",
+    "JWT_ISSUER": "beutl-web-image-edit",
+    "JWT_AUDIENCE": "beutl-ai-images",
+    "OPENROUTER_REQUEST_TIMEOUT_MS": "120000",
+    "VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS": "120000"
+  }
+}
