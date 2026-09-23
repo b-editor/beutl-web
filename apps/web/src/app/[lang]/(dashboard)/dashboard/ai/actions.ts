@@ -25,6 +25,7 @@ import {
   readAiJsonResult,
   saveAiImage,
   saveAiJsonResult,
+  settleDeferredGatewayVideoUsage,
   sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
   MAX_TRANSLATION_SEGMENTS,
@@ -1568,7 +1569,6 @@ export async function retryJobAction(
       },
       usagePercent: retryModel.usagePercent,
       model: retryModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...identity,
     });
@@ -1661,6 +1661,7 @@ export async function deleteJobAction(jobId: string): Promise<AiActionResult> {
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
+  await settleDeferredGatewayVideoUsage({ userId: session.user.id, jobId });
   const prepared = await prepareAiJobDeletionByUserId({
     userId: session.user.id,
     jobId,

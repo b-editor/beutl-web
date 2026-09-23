@@ -21,6 +21,7 @@ import {
   experimental_getVideoStatus as getVideoStatus,
   experimental_startVideo as startVideo,
 } from "ai";
+import { GatewayResponseError } from "@ai-sdk/gateway";
 import {
   AiProviderError,
   AiVideoSubmissionError,
@@ -44,7 +45,98 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { gatewayVideoResolution } from "./resolution";
-import { gatewayProviderCostUsd, type ProviderCostUsd } from "../../provider-cost";
+import { gatewayProviderCostUsd, providerCostUsd, type ProviderCostUsd } from "../../provider-cost";
+
+const GENERATION_COST_LOOKUP_TIMEOUT_MS = 5_000;
+
+function generationCostFromSchemaError(
+  error: GatewayResponseError,
+  generationId: string,
+  model: string,
+): ProviderCostUsd | undefined {
+  // The SDK retains the parsed response after its strict text-metrics schema
+  // rejects a valid video result. Read only the verified identity and cost;
+  // the response may contain signed URLs or other provider data.
+  if (error.statusCode !== 200 || typeof error.response !== "object" || error.response === null) {
+    return undefined;
+  }
+  const data = (error.response as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null) return undefined;
+  const entry = data as Record<string, unknown>;
+  if (entry.id !== generationId || entry.model !== model) return undefined;
+  return providerCostUsd(entry.total_cost);
+}
+
+function generationIdOf(providerMetadata: unknown): string | null {
+  if (typeof providerMetadata !== "object" || providerMetadata === null) return null;
+  const gateway = (providerMetadata as Record<string, unknown>).gateway;
+  if (typeof gateway !== "object" || gateway === null) return null;
+  const generationId = (gateway as Record<string, unknown>).generationId;
+  return typeof generationId === "string" && /^gen_[0-9A-Za-z]{20,32}$/u.test(generationId)
+    ? generationId
+    : null;
+}
+
+async function completedVideoCost(
+  providerMetadata: unknown,
+  model: string,
+): Promise<ProviderCostUsd | undefined> {
+  const inlineCost = gatewayProviderCostUsd(providerMetadata);
+  if (inlineCost !== undefined) return inlineCost;
+  const generationId = generationIdOf(providerMetadata);
+  if (!generationId) return undefined;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new AiProviderError("Gateway generation cost lookup timed out")),
+        GENERATION_COST_LOOKUP_TIMEOUT_MS,
+      );
+    });
+    const details = await Promise.race([
+      createGatewayClient().getGenerationInfo({ id: generationId }),
+      deadline,
+    ]);
+    // A mismatched response must not bill this job at someone else's price.
+    if (details.id !== generationId || details.model !== model) return undefined;
+    return providerCostUsd(details.totalCost);
+  } catch (error) {
+    if (GatewayResponseError.isInstance(error)) {
+      // The generation ledger is populated asynchronously. A 404 just after
+      // video completion means a later status poll should try again.
+      if (error.statusCode === 404) return undefined;
+      const cost = generationCostFromSchemaError(error, generationId, model);
+      if (cost !== undefined) return cost;
+      const response = error.response;
+      const data = typeof response === "object" && response !== null
+        ? (response as Record<string, unknown>).data
+        : undefined;
+      const value = typeof data === "object" && data !== null
+        ? data as Record<string, unknown>
+        : null;
+      console.warn("Gateway video generation info fields did not match", {
+        model,
+        statusCode: error.statusCode ?? null,
+        responseFields: typeof response === "object" && response !== null
+          ? Object.keys(response).slice(0, 12)
+          : [],
+        dataFields: value ? Object.keys(value).slice(0, 16) : [],
+        generationMatches: value?.id === generationId,
+        modelMatches: value?.model === model,
+        actualModel: typeof value?.model === "string" ? value.model.slice(0, 80) : null,
+        costType: typeof value?.total_cost,
+      });
+    }
+    console.warn("Gateway video actual-cost lookup failed", {
+      model,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * The job id the Gateway assigned, read off the start response.
@@ -220,6 +312,13 @@ export async function startGatewayVideoJob(
       cause,
       "Vercel AI Gateway video submission failed",
     );
+    // Submission failures otherwise become only a generic user error. Record
+    // the status and model, never the response body, prompt, or signed URLs.
+    console.warn("Gateway video submission failed", {
+      model: request.model,
+      httpStatus: error.httpStatus,
+      errorType: cause instanceof Error ? cause.name : typeof cause,
+    });
     throw new AiVideoSubmissionError(error.message, {
       outcome: gatewayExecutionOf(cause),
       cause,
@@ -260,20 +359,43 @@ export async function getGatewayVideoJob(
   try {
     status = await getVideoStatus(createGatewayClient().videoModel(ref.model), {
       operation: { gatewayJobId: ref.providerJobId },
-      abortSignal: gatewayRequestSignal(undefined),
+      abortSignal: gatewayRequestSignal(ref.signal),
     });
   } catch (cause) {
     throw toGatewayProviderError(cause, "Vercel AI Gateway video poll failed");
   }
 
   if (status.status === "completed") {
-    const result: GatewayVideoResult = { videos: status.videos };
+    const actualCost = await completedVideoCost(status.providerMetadata, ref.model);
+    if (actualCost === undefined) {
+      // Gateway usage events can be ingested after video completion. The
+      // finished video is still usable now; its reservation is settled later.
+      // Keep only field names in the log; metadata may contain signed video
+      // URLs and a per-job webhook signing secret.
+      const metadata = status.providerMetadata;
+      const fields = (value: unknown) =>
+        typeof value === "object" && value !== null
+          ? Object.keys(value).filter((key) => key !== "webhookSigningSecret").slice(0, 12)
+          : [];
+      const gateway = typeof metadata === "object" && metadata !== null
+        ? (metadata as Record<string, unknown>).gateway
+        : undefined;
+      const asyncJob = typeof gateway === "object" && gateway !== null
+        ? (gateway as Record<string, unknown>).asyncJob
+        : undefined;
+      console.warn("Gateway video completed without provider cost", {
+        model: ref.model,
+        metadataFields: fields(metadata),
+        gatewayFields: fields(gateway),
+        asyncJobFields: fields(asyncJob),
+      });
+    }
     return {
       id: ref.providerJobId,
       status: "completed",
       error: null,
-      result,
-      ...costOf(status.providerMetadata),
+      result: { videos: status.videos } satisfies GatewayVideoResult,
+      ...(actualCost === undefined ? {} : { providerCostUsd: actualCost }),
     };
   }
   if (status.status === "error") {

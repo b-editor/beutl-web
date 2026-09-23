@@ -173,6 +173,8 @@ export type AiVideoStartRequest = {
 export type AiVideoJobRef = {
   providerJobId: string;
   model: string | null;
+  /** Optional shorter deadline for background cost-only checks. */
+  signal?: AbortSignal;
 };
 
 /** What a provider publishes about one video model. */
@@ -183,6 +185,8 @@ export type AiVideoModelDescriptor = {
   supportedAspectRatios: readonly string[] | null;
   supportedFrameImages: readonly string[] | null;
   generateAudio: boolean | null;
+  /** The model always includes audio; generating it and disabling it are distinct capabilities. */
+  audioRequired?: boolean;
   seed: boolean | null;
   /**
    * Whether the model takes reference pictures to keep a likeness consistent.
@@ -415,7 +419,7 @@ export interface AiProvider {
   executionOf(cause: unknown): AiExecutionOutcome;
   /**
    * The longest a submitted job can still deliver a usable result. Past it, a
-   * job whose id never reached us is refunded instead of holding a slot.
+   * job whose id never reached us is refunded instead of holding reserved units.
    */
   maximumVideoJobMilliseconds(): number;
 }

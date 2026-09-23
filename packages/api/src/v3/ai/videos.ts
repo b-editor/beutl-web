@@ -624,7 +624,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1124,7 +1123,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
       compatibleRequestFingerprints,
@@ -1465,7 +1463,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1528,10 +1525,9 @@ const app = new Hono()
       if (handling.action === "keepQueued") {
         // The provider may have taken the job: its answer was lost, not
         // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation once the slot
-        // clears, while the first one is still queued and may yet arrive by
-        // callback. The queued job is what the generation routes return, and
-        // what the client can keep polling.
+        // idempotency key and start a second paid generation while the first
+        // is still queued and may yet arrive by callback. Return the queued
+        // job so the client can keep polling it.
         console.error(
           `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,
@@ -1739,7 +1735,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1812,10 +1807,9 @@ const app = new Hono()
       if (handling.action === "keepQueued") {
         // The provider may have taken the job: its answer was lost, not
         // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation once the slot
-        // clears, while the first one is still queued and may yet arrive by
-        // callback. The queued job is what the generation routes return, and
-        // what the client can keep polling.
+        // idempotency key and start a second paid generation while the first
+        // is still queued and may yet arrive by callback. Return the queued
+        // job so the client can keep polling it.
         console.error(
           `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,
@@ -1898,19 +1892,35 @@ const app = new Hono()
     const currentJob = claimed.job;
 
     if (currentJob.status !== "succeeded" && currentJob.status !== "failed") {
-      try {
-        await synchronizeAiVideoJob({ job: currentJob });
-      } catch (error) {
+      const finish = () => synchronizeAiVideoJob({ job: currentJob });
+      const reportFailure = (error: unknown) => {
         console.error(
           `Failed to synchronize Vercel AI Gateway callback for AI job ${currentJob.id}`,
           error,
         );
-        return new Response(null, { status: 500 });
+      };
+      // Gateway callbacks have a short response deadline. A completed video
+      // still needs a status read, download, and atomic DB/R2 settlement, which
+      // may outlive that deadline. The Cron reconciler recovers a cancelled or
+      // failed background finalizer after its lease expires.
+      let executionCtx: { waitUntil(promise: Promise<unknown>): void } | null = null;
+      try {
+        executionCtx = c.executionCtx;
+      } catch {
+        // Hono's direct request path in local tests/dev has no Worker context.
+      }
+      if (executionCtx) {
+        executionCtx.waitUntil(finish().catch(reportFailure));
+      } else {
+        try {
+          await finish();
+        } catch (error) {
+          reportFailure(error);
+          return new Response(null, { status: 500 });
+        }
       }
     }
-    // The Gateway expects a 2xx inside ten seconds and retries otherwise, with
-    // the same x-ai-gateway-idempotency-key; a repeat lands on the terminal
-    // status check above and does nothing.
+    // A repeat lands on the same job and its leases prevent a second charge.
     return new Response(null, { status: 204 });
   })
   // The pictures a submitted job works from, for the provider to fetch.

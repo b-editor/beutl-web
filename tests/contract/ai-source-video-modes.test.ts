@@ -25,6 +25,7 @@ vi.mock("../../packages/api/src/ai/video-validation", async (original) => ({
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const JWT_SECRET = "test-secret-for-source-video-modes";
 const SOURCE_JOB_ID = "22222222-2222-4222-8222-222222222222";
+const ACTIVE_JOB_ID = "33333333-3333-4333-8333-333333333333";
 
 function makeApp() {
   return new Hono().basePath("/api/v3").route("/", v3);
@@ -102,6 +103,15 @@ function sourceVideoJob() {
     deletedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+  } as never;
+}
+
+function activeVideoJob() {
+  return {
+    ...sourceVideoJob(),
+    id: ACTIVE_JOB_ID,
+    status: "queued",
+    resultFileId: null,
   } as never;
 }
 
@@ -239,11 +249,12 @@ describe("uploaded video sources and rejection of removed job references", () =>
   it("keeps an ambiguous edit queued instead of reporting a failure", async () => {
     // When the provider may have taken the job and only its answer was lost,
     // reporting a failure has the client drop the idempotency key and start a
-    // second paid generation once the slot clears — while the first is still
-    // queued and may yet arrive by callback. The generation routes return the
-    // queued job for this; these three used to return 500.
+    // second paid generation while the first is still queued and may yet
+    // arrive by callback. The generation routes return the queued job for
+    // this; these three used to return 500.
     await activatePro();
     state.aiJobs.set(SOURCE_JOB_ID, sourceVideoJob());
+    state.aiJobs.set(ACTIVE_JOB_ID, activeVideoJob());
     state.files.set("file-1", sourceVideoFile());
     createAndAttachVideoJob.mockRejectedValue(
       new AiVideoSubmissionError("Vercel AI Gateway request timed out", {
@@ -276,6 +287,7 @@ describe("uploaded video sources and rejection of removed job references", () =>
     // The motion route carried its own copy of the same branch.
     await activatePro();
     state.aiJobs.set(SOURCE_JOB_ID, sourceVideoJob());
+    state.aiJobs.set(ACTIVE_JOB_ID, activeVideoJob());
     state.files.set("file-1", sourceVideoFile());
     createAndAttachVideoJob.mockRejectedValue(
       new AiVideoSubmissionError("Vercel AI Gateway request timed out", {
@@ -305,6 +317,27 @@ describe("uploaded video sources and rejection of removed job references", () =>
     expect(
       state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(0);
+  });
+
+  it("starts an extension while another video job is active", async () => {
+    await activatePro();
+    state.aiJobs.set(ACTIVE_JOB_ID, activeVideoJob());
+    const form = new FormData();
+    form.set("prompt", "keep going");
+    form.set("durationSeconds", "5");
+    form.set("sourceVideo", new File(["clip"], "clip.mp4", { type: "video/mp4" }));
+    const { "content-type": _contentType, ...headers } = await authHeaders();
+
+    const response = await makeApp().request("/api/v3/ai/videos/extend", {
+      method: "POST",
+      headers,
+      body: form,
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.aiJobs.size).toBe(2);
+    expect(state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(createAndAttachVideoJob).toHaveBeenCalledOnce();
   });
 
   it("refuses a body it does not recognise", async () => {

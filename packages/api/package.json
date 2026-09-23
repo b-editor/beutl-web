@@ -11,6 +11,7 @@
     "./ai/model-catalog": "./src/ai/model-catalog.ts",
     "./ai/video-model-capabilities": "./src/ai/video-model-capabilities.ts",
     "./ai/r2-provider": "./src/ai/r2-provider.ts",
+    "./ai/reconcile-jobs": "./src/ai/reconcile-jobs.ts",
     "./storage/bucket-from-env": "./src/storage/bucket-from-env.ts",
     "./storage/s3-compatible-bucket": "./src/storage/s3-compatible-bucket.ts",
     "./storage/management": "./src/storage/management.ts",

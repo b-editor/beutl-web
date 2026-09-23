@@ -3,27 +3,34 @@ import {
   hasFreshAiJobFinalizationLease,
   isActiveAiJobStatus,
   listActiveAiJobsForReconciliation,
+  listUnsettledGatewayVideoJobsForReconciliation,
   touchActiveAiJob,
 } from "@beutl/db";
 import { failAiJobAndRefundUsage } from "./credits";
-import { reconcileAiStorageCleanups } from "./storage";
+import { reconcileAiStorageCleanups, settleDeferredGatewayVideoUsage } from "./storage";
 import { synchronizeAiVideoJob } from "./video-jobs";
 import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
+import type { ProviderCostUsd } from "./provider-cost";
 import {
   DEFAULT_AI_PROVIDER_ID,
   findAiProvider,
   providerFor,
+  videoProviderFor,
 } from "./providers/registry";
 
 const SCAN_DELAY_MILLISECONDS = 60 * 1000;
 const ABANDONED_SYNCHRONOUS_JOB_MILLISECONDS = 30 * 60 * 1000;
+const GATEWAY_VIDEO_COST_GRACE_MILLISECONDS = 15 * 60 * 1000;
+const GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS = 10 * 1000;
+// Each check can spend up to 10s on status and 5s on generation cost.
+const MAX_DEFERRED_COST_JOBS_PER_SCAN = 10;
 
 // How long a job of this provider's can still deliver something usable.
 //
 // A provider that is not registered cannot say, and this is reached from a
 // catch block where throwing would lose the row: fall back to the default
 // provider's window, which is the flat one every job used before providers
-// were told apart. Never fall back to "forever" — that pins the user's slot.
+// were told apart. Never fall back to "forever" — that holds reserved units.
 function maximumVideoJobAgeOf(provider: string): number {
   return (
     findAiProvider(provider) ?? providerFor(DEFAULT_AI_PROVIDER_ID)
@@ -39,6 +46,11 @@ export type AiJobReconciliationResult = {
   cleanupInspected: number;
   cleanupDeleted: number;
   cleanupErrors: number;
+  deferredCostInspected: number;
+  deferredCostSettled: number;
+  deferredCostEstimated: number;
+  deferredCostPending: number;
+  deferredCostErrors: number;
 };
 
 export async function reconcileAiJobs(
@@ -57,6 +69,11 @@ export async function reconcileAiJobs(
     cleanupInspected: cleanup.inspected,
     cleanupDeleted: cleanup.deleted,
     cleanupErrors: cleanup.errors,
+    deferredCostInspected: 0,
+    deferredCostSettled: 0,
+    deferredCostEstimated: 0,
+    deferredCostPending: 0,
+    deferredCostErrors: 0,
   };
 
   const recordFailureOutcome = async (jobId: string) => {
@@ -94,7 +111,7 @@ export async function reconcileAiJobs(
         // accepted and charged for a job whose ID only arrives by callback.
         // Keep the reservation active for the provider's maximum job window.
         // Once that window has elapsed, no usable result can still be delivered,
-        // so refund the user instead of pinning their one-video slot forever.
+        // so refund the user instead of holding reserved units forever.
         // How long that window is belongs to the provider that took the job.
         if (age < maximumVideoJobAgeOf(job.provider)) {
           await touchActiveAiJob({
@@ -179,6 +196,63 @@ export async function reconcileAiJobs(
         console.error(`Failed to rotate AI job ${job.id}`, touchError);
       });
       result.errors++;
+    }
+  }
+
+  // Publishing a completed video does not wait for the Gateway usage event.
+  // The reservation remains until this pass obtains the actual charge. After
+  // a bounded grace period, settle the original estimate so an unavailable
+  // Gateway ledger cannot hold excess units indefinitely.
+  const deferred = await listUnsettledGatewayVideoJobsForReconciliation({
+    updatedBefore: new Date(now.getTime() - SCAN_DELAY_MILLISECONDS),
+    limit: MAX_DEFERRED_COST_JOBS_PER_SCAN,
+  });
+  result.deferredCostInspected = deferred.length;
+  for (const job of deferred) {
+    const completedAt = job.resultFile?.createdAt ?? job.updatedAt;
+    const graceExpired = now.getTime() - completedAt.getTime() >=
+      GATEWAY_VIDEO_COST_GRACE_MILLISECONDS;
+    let providerCostUsd: ProviderCostUsd | undefined;
+    if (job.providerJobId && job.model) {
+      try {
+        const remote = await videoProviderFor("vercel-gateway").status({
+          providerJobId: job.providerJobId,
+          model: job.model,
+          signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
+        });
+        if (remote.status === "completed") providerCostUsd = remote.providerCostUsd;
+      } catch (error) {
+        if (!graceExpired) {
+          console.warn("Gateway video cost check failed", {
+            jobId: job.id,
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
+          result.deferredCostErrors++;
+          continue;
+        }
+        console.warn(`Gateway video cost unavailable after grace period for AI job ${job.id}`);
+      }
+    }
+    if (providerCostUsd === undefined && !graceExpired) {
+      result.deferredCostPending++;
+      continue;
+    }
+    try {
+      const settled = await settleDeferredGatewayVideoUsage({
+        jobId: job.id,
+        userId: job.userId,
+        providerCostUsd,
+      });
+      if (settled) {
+        if (providerCostUsd === undefined) result.deferredCostEstimated++;
+        else result.deferredCostSettled++;
+      }
+    } catch (error) {
+      console.error("Gateway video cost settlement failed", {
+        jobId: job.id,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      result.deferredCostErrors++;
     }
   }
 

@@ -548,6 +548,10 @@ export async function synchronizeAiVideoJob({
       mimeType,
       filename: `ai-video-${job.id}.${extension}`,
       providerCostUsd: providerJob.providerCostUsd,
+      // A completed Gateway video is usable even when its generation charge
+      // has not reached the Gateway ledger yet. Keep its reservation for the
+      // reconciler instead of withholding the output or charging an estimate.
+      deferProviderCostSettlement: job.provider === "vercel-gateway",
     });
   } catch (error) {
     if (error instanceof AiOutputCommitConflictError) {

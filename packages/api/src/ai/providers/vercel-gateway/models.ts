@@ -167,6 +167,11 @@ export function toVideoModelDescriptor(
       ? frameImagesOf(operations)
       : null,
     generateAudio: capabilities.generate_audio ?? null,
+    // H3's joint audio/video output ignores generateAudio=false. The catalog's
+    // generate_audio flag only says audio can be produced, not switched off.
+    // Verified against a live silent-output request and the H3 parameter list:
+    // https://vercel.com/ai-gateway/models/minimax-h3
+    ...(model.id === "minimax/minimax-h3" ? { audioRequired: true } : {}),
     // The Gateway publishes nothing about deterministic seeds, and the request
     // API takes one, so nothing is stated rather than nothing is supported.
     seed: null,

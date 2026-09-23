@@ -16,6 +16,7 @@ import {
   getAiJobById,
   getSubscription,
   settleUsage,
+  type PrismaTransaction,
 } from "@beutl/db";
 import { getR2Bucket } from "./r2-provider";
 import { loadAiSettings } from "./settings";
@@ -203,6 +204,85 @@ async function compensateAiOutputWrite(
   throw originalError;
 }
 
+type CompletedAiJob = NonNullable<Awaited<ReturnType<typeof getAiJobById>>>;
+
+async function settleCompletedAiJobUsage({
+  job,
+  providerCostUsd,
+  prisma,
+}: {
+  job: CompletedAiJob;
+  providerCostUsd?: ProviderCostUsd;
+  prisma: PrismaTransaction;
+}): Promise<void> {
+  const [subscription, settings] = await Promise.all([
+    getSubscription({ userId: job.userId, planId: PRO_PLAN.id, prisma }),
+    loadAiSettings({ prisma }),
+  ]);
+  const usesActualCostBilling =
+    job.usageUnitUsdMicros !== null && job.reservedUsageUnits !== null;
+  const usdPerUsageUnit =
+    (job.usageUnitUsdMicros ?? Math.round(
+      settings.getProviderUsdPerUsageUnit() * USD_MICROS_PER_DOLLAR,
+    )) / USD_MICROS_PER_DOLLAR;
+  const actualUsageUnits =
+    !usesActualCostBilling || providerCostUsd === undefined
+      ? job.estimatedUsageUnits ?? job.reservedUsageUnits ?? job.usageUnits
+      : usageUnitsForProviderCost(
+          providerCostUsd,
+          usdPerUsageUnit,
+          job.usagePercent,
+        );
+  if (actualUsageUnits === null) {
+    throw new Error(`AI job ${job.id} provider cost could not be settled`);
+  }
+  const providerCostMicros =
+    !usesActualCostBilling || providerCostUsd === undefined
+      ? null
+      : providerCostUsdToMicros(providerCostUsd);
+  // The optional legacy INT4 audit field can overflow while the actual usage
+  // charge is valid. Omit the audit value, not the settlement.
+  await settleUsage({
+    userId: job.userId,
+    aiJobId: job.id,
+    actualAmount: actualUsageUnits,
+    providerCostUsdMicros: providerCostMicros,
+    monthlyUsageLimit: settings.getMonthlyUsageLimit(),
+    currentUsagePeriod: subscription
+      ? {
+          start: subscription.currentPeriodStart,
+          end: subscription.currentPeriodEnd,
+        }
+      : { start: null, end: null },
+    prisma,
+  });
+}
+
+/** Finish a successful Gateway video's reservation after its output is usable. */
+export async function settleDeferredGatewayVideoUsage({
+  jobId,
+  userId,
+  providerCostUsd,
+}: {
+  jobId: string;
+  userId: string;
+  providerCostUsd?: ProviderCostUsd;
+}): Promise<boolean> {
+  return await startAiJobTransaction(async (prisma) => {
+    const job = await getAiJobById({ jobId, prisma });
+    if (
+      !job || job.userId !== userId || job.kind !== "video" ||
+      job.provider !== "vercel-gateway" || job.status !== "succeeded" ||
+      job.usageSettledAt !== null || job.usageUnitUsdMicros === null ||
+      job.reservedUsageUnits === null
+    ) {
+      return false;
+    }
+    await settleCompletedAiJobUsage({ job, providerCostUsd, prisma });
+    return true;
+  });
+}
+
 async function saveAiOutput({
   jobId,
   userId,
@@ -213,6 +293,7 @@ async function saveAiOutput({
   finalizationToken,
   retentionMilliseconds,
   providerCostUsd,
+  deferProviderCostSettlement = false,
 }: {
   jobId: string;
   userId: string;
@@ -223,6 +304,7 @@ async function saveAiOutput({
   finalizationToken?: string;
   retentionMilliseconds?: number;
   providerCostUsd?: ProviderCostUsd;
+  deferProviderCostSettlement?: boolean;
 }) {
   if (
     retentionMilliseconds !== undefined &&
@@ -271,50 +353,16 @@ async function saveAiOutput({
       });
       if (!completed) return null;
 
-      const [job, subscription, settings] = await Promise.all([
-        getAiJobById({ jobId, prisma }),
-        getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
-        loadAiSettings({ prisma }),
-      ]);
+      const job = await getAiJobById({ jobId, prisma });
       if (!job) throw new Error(`AI job ${jobId} disappeared during settlement`);
-      const usesActualCostBilling =
-        job.usageUnitUsdMicros !== null &&
-        job.reservedUsageUnits !== null;
-      const usdPerUsageUnit =
-        (job.usageUnitUsdMicros ?? Math.round(
-          settings.getProviderUsdPerUsageUnit() * USD_MICROS_PER_DOLLAR,
-        )) / USD_MICROS_PER_DOLLAR;
-      const actualUsageUnits =
-        !usesActualCostBilling || providerCostUsd === undefined
-          ? job.estimatedUsageUnits ?? job.reservedUsageUnits ?? job.usageUnits
-          : usageUnitsForProviderCost(
-              providerCostUsd,
-              usdPerUsageUnit,
-              job.usagePercent,
-            );
-      if (actualUsageUnits === null) {
-        throw new Error(`AI job ${jobId} provider cost could not be settled`);
+      if (
+        !deferProviderCostSettlement ||
+        providerCostUsd !== undefined ||
+        job.usageUnitUsdMicros === null ||
+        job.reservedUsageUnits === null
+      ) {
+        await settleCompletedAiJobUsage({ job, providerCostUsd, prisma });
       }
-      const providerCostMicros =
-        !usesActualCostBilling || providerCostUsd === undefined
-        ? null
-        : providerCostUsdToMicros(providerCostUsd);
-      // This optional legacy INT4 audit field can overflow while the actual
-      // usage charge above is valid. Omit the audit value, not the settlement.
-      await settleUsage({
-        userId,
-        aiJobId: jobId,
-        actualAmount: actualUsageUnits,
-        providerCostUsdMicros: providerCostMicros,
-        monthlyUsageLimit: settings.getMonthlyUsageLimit(),
-        currentUsagePeriod: subscription
-          ? {
-              start: subscription.currentPeriodStart,
-              end: subscription.currentPeriodEnd,
-            }
-          : { start: null, end: null },
-        prisma,
-      });
       return completed;
     });
     if (!file) {
@@ -371,6 +419,7 @@ export async function saveAiVideo({
   mimeType,
   filename,
   providerCostUsd,
+  deferProviderCostSettlement,
 }: {
   jobId: string;
   finalizationToken: string;
@@ -379,6 +428,7 @@ export async function saveAiVideo({
   mimeType: string;
   filename: string;
   providerCostUsd?: ProviderCostUsd;
+  deferProviderCostSettlement?: boolean;
 }) {
   return await saveAiOutput({
     jobId,
@@ -388,6 +438,7 @@ export async function saveAiVideo({
     mimeType,
     filename,
     providerCostUsd,
+    deferProviderCostSettlement,
     // A finalization token identifies the job lease, not an object lifetime.
     // A retry must never reuse a key that an expired cleaner may still delete.
     objectKey: `ai/video/${jobId}/${crypto.randomUUID()}`,

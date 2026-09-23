@@ -53,7 +53,7 @@ import type {
 export const PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS = 30 * 1000;
 
 // The longest OpenRouter keeps a video job. Past it no usable result can still
-// arrive, so a submission whose id never reached us stops holding a slot.
+// arrive, so a submission whose id never reached us stops holding reserved units.
 const MAXIMUM_VIDEO_JOB_MILLISECONDS = 6 * 60 * 60 * 1000;
 
 const video: AiVideoProvider = {

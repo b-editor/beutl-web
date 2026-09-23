@@ -125,6 +125,24 @@ describe("Gateway requests through the installed SDK", () => {
     expect(sent[0].headers.get("idempotency-key")).toBe("request-1");
   });
 
+  it("logs only safe fields when Gateway rejects a video submission", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: { message: "secret-response-detail" },
+    }, { status: 400 })));
+
+    await expect(startGatewayVideoJob(VIDEO_REQUEST)).rejects.toMatchObject({
+      httpStatus: 400,
+    });
+    expect(warning).toHaveBeenCalledWith("Gateway video submission failed", {
+      model: VIDEO_REQUEST.model,
+      httpStatus: 400,
+      errorType: expect.any(String),
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("secret-response-detail");
+    warning.mockRestore();
+  });
+
   it.each(["edit", "extend"] as const)("uses xai options for Grok video %s", async (mode) => {
     await startGatewayVideoJob({ ...VIDEO_REQUEST, mode, sourceVideoUrl: "https://example.com/source.mp4" });
     expect(sent[0].body.providerOptions.xai).toEqual({
@@ -147,6 +165,7 @@ describe("Gateway requests through the installed SDK", () => {
   it.each(["pending", "completed", "error", "cancelled"])("reads video status %s through the SDK", async (status) => {
     const fetchMock = vi.fn(async () => Response.json({
       status, ...(status === "completed" ? { videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }] } : {}),
+      ...(status === "completed" ? { providerMetadata: { gateway: { cost: "0.42" } } } : {}),
       ...(status === "error" ? { error: "failed" } : {}),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -154,6 +173,127 @@ describe("Gateway requests through the installed SDK", () => {
     expect(job.status).toBe(status === "error" || status === "cancelled" ? "failed" : status);
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ operation: { gatewayJobId: "job_test" } });
+  });
+
+  it("reports omitted video cost without logging provider metadata values", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      status: "completed",
+      videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+      providerMetadata: { gateway: {
+        asyncJob: { jobId: "job_test", webhookSigningSecret: "never-log-this" },
+      } },
+    })));
+
+    const job = await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
+    expect(job).toMatchObject({ status: "completed" });
+    expect(job).toHaveProperty("result");
+    expect(job).not.toHaveProperty("providerCostUsd");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("never-log-this");
+    expect(warning).toHaveBeenCalledWith(
+      "Gateway video completed without provider cost",
+      expect.objectContaining({
+        model: VIDEO_REQUEST.model,
+        metadataFields: ["gateway"],
+        gatewayFields: ["asyncJob"],
+        asyncJobFields: ["jobId"],
+      }),
+    );
+    warning.mockRestore();
+  });
+
+  it("waits for an asynchronously ingested Gateway charge before completing video", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AD";
+    let lookups = 0;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      if (String(url).includes("/video-model/status")) {
+        return Response.json({
+          status: "completed",
+          videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+          providerMetadata: { gateway: { generationId } },
+        });
+      }
+      lookups++;
+      return lookups === 1
+        ? Response.json({ error: { message: "Usage event not found" } }, { status: 404 })
+        : Response.json({ data: { id: generationId, model: VIDEO_REQUEST.model, total_cost: "0.85" } });
+    }));
+
+    const ref = { model: VIDEO_REQUEST.model, providerJobId: "job_test" };
+    const first = await getGatewayVideoJob(ref);
+    expect(first).toMatchObject({ status: "completed" });
+    expect(first).toHaveProperty("result");
+    expect(first).not.toHaveProperty("providerCostUsd");
+    expect(warning.mock.calls.map(([message]) => message))
+      .not.toContain("Gateway video generation info fields did not match");
+
+    await expect(getGatewayVideoJob(ref)).resolves.toMatchObject({
+      status: "completed",
+      providerCostUsd: "0.85",
+    });
+    expect(lookups).toBe(2);
+    warning.mockRestore();
+  });
+
+  it("resolves the actual completed-video cost by Gateway generation ID", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AB";
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      requested.push(String(url));
+      if (String(url).includes("/video-model/status")) {
+        return Response.json({
+          status: "completed",
+          videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+          providerMetadata: { gateway: { generationId } },
+        });
+      }
+      return Response.json({ data: {
+        id: generationId,
+        model: VIDEO_REQUEST.model,
+        total_cost: 0.4321,
+        upstream_inference_cost: 0,
+        usage: 0.4321,
+        created_at: "2026-09-23T00:00:00Z",
+        is_byok: false,
+        provider_name: "test",
+        streamed: false,
+        finish_reason: "stop",
+        latency: 0,
+        generation_time: 0,
+        native_tokens_prompt: 0,
+        native_tokens_completion: 0,
+        native_tokens_reasoning: 0,
+        native_tokens_cached: 0,
+        native_tokens_cache_creation: 0,
+        billable_web_search_calls: 0,
+      } });
+    }));
+
+    await expect(getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" }))
+      .resolves.toMatchObject({ status: "completed", providerCostUsd: 0.4321 });
+    expect(requested).toHaveLength(2);
+    expect(requested[1]).toContain(`/v1/generation?id=${generationId}`);
+  });
+
+  it("reads a valid video cost when the SDK rejects absent text metrics", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AC";
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      requested.push(String(url));
+      return String(url).includes("/video-model/status")
+        ? Response.json({
+            status: "completed",
+            videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+            providerMetadata: { gateway: { generationId } },
+          })
+        : Response.json({ data: { id: generationId, model: VIDEO_REQUEST.model, total_cost: "0.321234" } });
+    }));
+
+    await expect(getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" }))
+      .resolves.toMatchObject({ status: "completed", providerCostUsd: "0.321234" });
+    expect(requested).toHaveLength(2);
+    expect(requested[1]).toContain(`/v1/generation?id=${generationId}`);
   });
 
   it("reads transcription segments and detects the audio format", async () => {

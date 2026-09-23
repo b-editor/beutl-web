@@ -582,6 +582,8 @@ describe("dashboard AI actions", () => {
           },
         }),
       );
+      expect(vi.mocked(createReservedAiJob).mock.calls.at(-1)?.[0])
+        .not.toHaveProperty("activeJobLimit");
       expect(createAndAttachVideoJob).toHaveBeenCalledWith(
         expect.objectContaining({
           prompt: "legacy video",

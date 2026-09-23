@@ -3021,12 +3021,13 @@ describe("v3 AI endpoints contract", () => {
       ).toHaveLength(1);
     });
 
-    it("returns 429 aiJobLimitReached while another job is active", async () => {
+    it("allows another video while the first job is active", async () => {
       await activatePro();
-      vi.mocked(createVideoJob).mockResolvedValue({
-        id: "provider-video-1",
+      let nextId = 0;
+      vi.mocked(createVideoJob).mockImplementation(async () => ({
+        id: `provider-video-${++nextId}`,
         status: "pending",
-      });
+      }));
 
       // Create the first job.
       const first = await makeApp().request("/api/v3/ai/videos", {
@@ -3039,7 +3040,7 @@ describe("v3 AI endpoints contract", () => {
       });
       expect(first.status).toBe(200);
 
-      // Reject the second job with 429.
+      // Each request owns a separate reservation and provider job.
       const second = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: {
@@ -3048,13 +3049,25 @@ describe("v3 AI endpoints contract", () => {
         },
         body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
       });
-      expect(second.status).toBe(429);
-      expect(await second.json()).toMatchObject({
-        error_code: "aiJobLimitReached",
+      expect(second.status).toBe(200);
+      expect(state.aiJobs.size).toBe(2);
+      expect(state.creditTransactions.filter((transaction) => transaction.kind === "usage")).toHaveLength(2);
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(384);
+
+      const unaffordable = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
       });
+      expect(unaffordable.status).toBe(402);
+      expect(await unaffordable.json()).toMatchObject({ error_code: "aiUsageLimitExceeded" });
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledTimes(2);
     });
 
-    it("does not count a running image job against the video job limit", async () => {
+    it("reserves video usage alongside a running image job", async () => {
       await activatePro();
       const imageReservation = await createReservedAiJob({
         userId: USER_ID,
@@ -3084,12 +3097,18 @@ describe("v3 AI endpoints contract", () => {
       expect(state.aiJobs.size).toBe(2);
     });
 
-    it("reserves only one video job for concurrent requests", async () => {
+    it("reserves six concurrent video jobs while sufficient credits remain", async () => {
       await activatePro();
-      vi.mocked(createVideoJob).mockResolvedValue({
-        id: "provider-video-1",
-        status: "pending",
+      await addPurchasedCredits({
+        userId: USER_ID,
+        amount: 1000,
+        stripePaymentId: "pi_parallel_video_test",
       });
+      let nextId = 0;
+      vi.mocked(createVideoJob).mockImplementation(async () => ({
+        id: `provider-video-${++nextId}`,
+        status: "pending",
+      }));
       const request = async () =>
         await makeApp().request("/api/v3/ai/videos", {
           method: "POST",
@@ -3100,18 +3119,20 @@ describe("v3 AI endpoints contract", () => {
           body: JSON.stringify({ prompt: "test", durationSeconds: 4 }),
         });
 
-      const responses = await Promise.all([request(), request()]);
+      const responses = await Promise.all(Array.from({ length: 6 }, request));
 
-      expect(responses.map((response) => response.status).sort()).toEqual([
-        200,
-        429,
-      ]);
-      expect(state.aiJobs.size).toBe(1);
+      expect(responses.map((response) => response.status)).toEqual(Array(6).fill(200));
+      expect(state.aiJobs.size).toBe(6);
       expect(
         state.creditTransactions.filter(
           (transaction) => transaction.kind === "usage",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(6);
+      expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+        monthlyUsageUsed: 500,
+        purchasedCredits: 348,
+        purchasedCreditDebt: 0,
+      });
     });
 
     it("returns 500 and refunds reserved usage after a definite OpenRouter 4xx", async () => {
@@ -3193,7 +3214,7 @@ describe("v3 AI endpoints contract", () => {
       ).toHaveLength(1);
     });
 
-    it("keeps an ambiguous submission pending, pollable, and duplicate-blocking", async () => {
+    it("keeps an ambiguous submission pending without blocking another request", async () => {
       await activatePro();
       vi.mocked(createVideoJob).mockRejectedValue(
         new AiVideoSubmissionError("OpenRouter request timed out", {
@@ -3239,7 +3260,7 @@ describe("v3 AI endpoints contract", () => {
       });
       expect(vi.mocked(getVideoJob)).not.toHaveBeenCalled();
 
-      const duplicate = await makeApp().request("/api/v3/ai/videos", {
+      const another = await makeApp().request("/api/v3/ai/videos", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -3247,11 +3268,10 @@ describe("v3 AI endpoints contract", () => {
         },
         body: JSON.stringify({ prompt: "duplicate", durationSeconds: 4 }),
       });
-      expect(duplicate.status).toBe(429);
-      expect(await duplicate.json()).toMatchObject({
-        error_code: "aiJobLimitReached",
-      });
-      expect(vi.mocked(createVideoJob)).toHaveBeenCalledOnce();
+      expect(another.status).toBe(200);
+      const anotherBody = await another.json();
+      expect(anotherBody.jobId).not.toBe(createBody.jobId);
+      expect(vi.mocked(createVideoJob)).toHaveBeenCalledTimes(2);
     });
 
     it("queues remote cleanup when account deletion wins during provider submission", async () => {
@@ -4194,9 +4214,7 @@ describe("v3 AI endpoints contract", () => {
       };
 
       const jobA = await create("video-callback-a", "first");
-      // The normal one-video limit intentionally prevents a second active job.
-      // Mark A terminal without attaching a provider ID, then reserve B.
-      state.aiJobs.get(jobA.jobId)!.status = "failed";
+      // Both jobs stay active; A's signed callback cannot finalize B.
       const jobB = await create("video-callback-b", "second");
       const callbackA = new URL(
         vi.mocked(createVideoJob).mock.calls[0][0].callbackUrl,

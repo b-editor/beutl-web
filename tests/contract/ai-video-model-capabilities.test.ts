@@ -33,6 +33,8 @@ import {
   MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
 } from "@beutl/core";
 import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
+import { buildAiVideoScreenOptions } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video-options";
+import type { AiAccess } from "../../apps/web/src/lib/ai-screen";
 import {
   clearAiVideoModelCapabilitiesCache,
   isVideoModelUsable,
@@ -338,14 +340,35 @@ describe("refusing a request the model would reject", () => {
   });
 
   it("lets a silent clip through a model that cannot speak", () => {
-    // The flag says the model can produce audio, so asking it not to is always
-    // fine; only asking for audio it cannot make is a refusal.
+    // A silent-only model does not need the always-on audio restriction.
     expect(
       unsupportedVideoRequestReason(capabilities({ generateAudio: false }), {
         ...request,
         generateAudio: false,
       }),
     ).toBeNull();
+  });
+
+  it("rejects disabling audio on an always-on model before reserving usage", () => {
+    const alwaysOn = capabilities({ generateAudio: true, audioRequired: true });
+    expect(unsupportedVideoRequestReason(alwaysOn, { ...request, generateAudio: false }))
+      .toBe("generateAudio");
+    expect(unsupportedVideoRequestReason(alwaysOn, { ...request, generateAudio: true }))
+      .toBeNull();
+    expect(unsupportedVideoRequestReason(alwaysOn, { ...request, generateAudio: undefined }))
+      .toBeNull();
+  });
+
+  it("shows an always-on audio model as non-optional in the generation screen", () => {
+    const modelId = "minimax/minimax-h3";
+    const model = { id: modelId, provider: "vercel-gateway", available: true };
+    const access = { models: { "video.generate": [model] } } as unknown as AiAccess;
+    const supported = capabilities({ modelId, resolutions: ["2K"], durations: [4], audioRequired: true });
+    const options = buildAiVideoScreenOptions(access, new Map([
+      [aiCapabilityKey("vercel-gateway", modelId), supported],
+    ]));
+
+    expect(options.modelOptions[modelId]).toMatchObject({ generateAudio: true, audioRequired: true });
   });
 
   it("refuses reference pictures on a model that does not take them", () => {

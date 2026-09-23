@@ -2107,11 +2107,17 @@ export function createInMemoryPrisma() {
         orderBy,
         take,
         include,
+        select,
       }: {
         where?: {
           userId?: string;
+          kind?: string;
+          provider?: string;
           deletedAt?: null;
-          status?: { in: string[] };
+          status?: string | { in: string[] };
+          usageSettledAt?: null;
+          usageUnitUsdMicros?: { not: null };
+          reservedUsageUnits?: { not: null };
           updatedAt?: { lte: Date };
           OR?: Array<{
             createdAt?: Date | { lt: Date };
@@ -2126,16 +2132,35 @@ export function createInMemoryPrisma() {
             >;
         take?: number;
         include?: { resultFile?: unknown };
+        select?: Record<string, unknown>;
       }) => {
         let jobs = [...state.aiJobs.values()];
         if (where?.userId) {
           jobs = jobs.filter((job) => job.userId === where.userId);
         }
+        if (where?.kind) {
+          jobs = jobs.filter((job) => job.kind === where.kind);
+        }
+        if (where?.provider) {
+          jobs = jobs.filter((job) => job.provider === where.provider);
+        }
         if (where?.deletedAt === null) {
           jobs = jobs.filter((job) => job.deletedAt === null);
         }
         if (where?.status) {
-          jobs = jobs.filter((job) => where.status!.in.includes(job.status));
+          const status = where.status;
+          jobs = jobs.filter((job) => typeof status === "string"
+            ? job.status === status
+            : status.in.includes(job.status));
+        }
+        if (where?.usageSettledAt === null) {
+          jobs = jobs.filter((job) => job.usageSettledAt === null);
+        }
+        if (where?.usageUnitUsdMicros) {
+          jobs = jobs.filter((job) => job.usageUnitUsdMicros !== null);
+        }
+        if (where?.reservedUsageUnits) {
+          jobs = jobs.filter((job) => job.reservedUsageUnits !== null);
         }
         if (where?.updatedAt) {
           jobs = jobs.filter(
@@ -2184,7 +2209,7 @@ export function createInMemoryPrisma() {
           );
         }
         const page = take === undefined ? jobs : jobs.slice(0, take);
-        return page.map((job) => aiJobWithResultFile(job, include));
+        return page.map((job) => aiJobWithResultFile(job, include, select));
       },
     },
     subscription: {
