@@ -32,11 +32,13 @@ vi.mock("@/lib/content-url", () => ({
 import {
   generateImageAction,
   listJobsAction,
+  refreshVideoJobAction,
   retryJobAction,
   translateAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
+  AiProviderError,
   createReservedAiJob,
   readAiJsonResult,
   saveAiImage,
@@ -59,6 +61,7 @@ const loadAiVideoModelCapabilities = vi.hoisted(() =>
 const createAndAttachVideoJob = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
+const synchronizeAiVideoJob = vi.hoisted(() => vi.fn());
 
 // The actions resolve a provider from the catalog rather than importing one,
 // so the registry accessors are pointed at the same mocks the assertions below
@@ -87,6 +90,7 @@ vi.mock("@beutl/api", async (importOriginal) => {
     loadAiImageModelCapabilities,
     loadAiVideoModelCapabilities,
     createAndAttachVideoJob,
+    synchronizeAiVideoJob,
   };
 });
 
@@ -110,6 +114,34 @@ describe("dashboard AI actions", () => {
     loadAiVideoModelCapabilities.mockResolvedValue(new Map());
     createAndAttachVideoJob.mockReset();
     createAndAttachVideoJob.mockResolvedValue(undefined);
+    synchronizeAiVideoJob.mockReset();
+  });
+
+  it("explains a provider 402 when refreshing a video job", async () => {
+    const job = await createAiJob({
+      userId: "user-1", kind: "video", provider: "vercel-gateway",
+      providerJobId: "job-gateway-1", status: "running", usageUnits: 32,
+      model: "minimax/minimax-h3",
+    });
+    synchronizeAiVideoJob.mockRejectedValue(
+      new AiProviderError("sensitive upstream billing detail", { httpStatus: 402 }),
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const result = await refreshVideoJobAction(job.id);
+
+    expect(result).toMatchObject({
+      success: false,
+      message: "api-errors:aiProviderBillingUnavailable",
+    });
+    expect(warning).toHaveBeenCalledWith("Failed to synchronize AI video job", {
+      jobId: job.id,
+      httpStatus: 402,
+      errorType: "AiProviderError",
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("sensitive upstream billing detail");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("sensitive upstream billing detail");
   });
 
   // Every submission carries the key that makes a resubmission land on the job

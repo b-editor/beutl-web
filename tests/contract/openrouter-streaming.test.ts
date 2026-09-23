@@ -259,6 +259,21 @@ describe("streaming a translation", () => {
       model: "openai/gpt-4.1-mini", targetLanguage: "ja", segments, onSegment: vi.fn(),
     })).rejects.toBeInstanceOf(AiProviderError);
   });
+
+  it("preserves HTTP 402 from a streamed translation error chunk", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(eventStream([{
+      id: "gen-1", object: "chat.completion.chunk", created: 1,
+      model: "openai/gpt-4.1-mini", choices: [],
+      error: { code: 402, message: "upstream billing refusal" },
+    }])));
+
+    await expect(translateSegments({
+      model: "openai/gpt-4.1-mini", targetLanguage: "ja", segments,
+      onSegment: vi.fn(),
+    })).rejects.toMatchObject({
+      httpStatus: 402,
+    });
+  });
 });
 
 describe("streaming an image", () => {

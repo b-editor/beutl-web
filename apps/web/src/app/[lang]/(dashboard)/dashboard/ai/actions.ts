@@ -1646,8 +1646,16 @@ export async function refreshVideoJobAction(jobId: string): Promise<AiActionResu
         url: current.resultFileId ? await getContentUrl(current.resultFileId) : null,
       };
     } catch (error) {
-      console.error(`Failed to synchronize AI video job ${job.id}`, error);
-      return { success: false, message: t("api-errors:aiProviderError") };
+      if (error instanceof AiProviderError) {
+        console.warn("Failed to synchronize AI video job", {
+          jobId: job.id,
+          httpStatus: error.httpStatus,
+          errorType: error.name,
+        });
+      } else {
+        console.error(`Failed to synchronize AI video job ${job.id}`, error);
+      }
+      return { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) };
     }
   }
   return {

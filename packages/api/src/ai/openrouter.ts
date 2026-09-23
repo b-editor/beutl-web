@@ -976,8 +976,12 @@ async function translateStreaming({
       cost = providerCostUsd(chunk.usage?.cost) ?? cost;
       // A stream that carries an error carries it instead of an answer.
       if (chunk.error) {
+        const code = chunk.error.code;
         throw new AiProviderError(
           `OpenRouter failed to translate segments: ${chunk.error.message}`,
+          Number.isSafeInteger(code) && code >= 400 && code <= 599
+            ? { httpStatus: code }
+            : undefined,
         );
       }
       if (chunk.choices.some((choice) => choice.finishReason && choice.finishReason !== "stop")) {
