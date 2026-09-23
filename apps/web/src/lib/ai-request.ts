@@ -46,11 +46,13 @@ export async function runAiRequest<TResult>(
 
   if (!response.ok) {
     const errorCode = errorCodeIn(parsed.value);
-    // The video API uses aiProviderError only after a definite failure was
+    // These provider codes are returned only after a definite failure was
     // refunded. Any other 5xx can have happened after reservation or provider
     // acceptance, so treating it as terminal would discard the only key that
     // can recover the paid job.
-    if (response.status >= 500 && errorCode !== "aiProviderError") {
+    if (response.status >= 500 &&
+      errorCode !== "aiProviderError" &&
+      errorCode !== "aiProviderBillingUnavailable") {
       return { ok: false, errorCode: "aiRequestInterrupted" };
     }
     return {

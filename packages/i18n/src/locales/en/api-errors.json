@@ -31,6 +31,7 @@
   "aiPlanRequired": "A Beutl AI subscription is required to use AI features.",
   "aiUsageLimitExceeded": "Your monthly AI allowance and additional credits are insufficient.",
   "aiProviderError": "The AI provider returned an error. Please try again later.",
+  "aiProviderBillingUnavailable": "The AI provider rejected this request because of a billing or quota issue (HTTP 402). Choose another model or contact the administrator.",
   "aiRequestInterrupted": "The connection dropped before the answer arrived. Run it again — the same request is asked for, so a run that finished is not paid for twice.",
   "aiJobNotFound": "AI job not found.",
   "aiJobLimitReached": "A video generation job is already in progress. Please wait for it to complete.",

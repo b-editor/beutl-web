@@ -32,6 +32,7 @@ import {
 import {
   AiProviderError,
   AiVideoSubmissionError,
+  aiProviderFailureCode,
   verifyOpenRouterWebhookSignature,
   type VideoFrameImage,
 } from "../../ai/openrouter";
@@ -684,7 +685,7 @@ const app = new Hono()
           error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
           ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }
@@ -1187,7 +1188,7 @@ const app = new Hono()
           error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
           ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }
@@ -1518,7 +1519,7 @@ const app = new Hono()
             ? { expectedProviderJobId: null }
             : {}),
         });
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }
@@ -1800,7 +1801,7 @@ const app = new Hono()
             ? { expectedProviderJobId: null }
             : {}),
         });
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }
@@ -1991,7 +1992,7 @@ const app = new Hono()
       return c.json(await publicAiJobPayload(current, c.req.raw));
     } catch (err) {
       if (err instanceof AiProviderError) {
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }

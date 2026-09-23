@@ -7,6 +7,7 @@ import { headers } from "next/headers";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
+  aiProviderFailureCode,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
@@ -364,7 +365,7 @@ async function handleVideoSubmissionFailure({
       error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
       ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
     });
-    return { success: false, message: t("api-errors:aiProviderError") };
+    return { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) };
   }
   if (handling.action === "keepQueued") {
     // The provider may still call back, so the job stays queued rather than
@@ -526,7 +527,7 @@ function readTranslationStyle(formData: FormData): TranslationStyle | undefined 
 
 function errorMessage(error: unknown): string {
   if (error instanceof AiProviderError) {
-    return "aiProviderError";
+    return aiProviderFailureCode(error);
   }
   console.error("AI action failed", error);
   return "unknown";

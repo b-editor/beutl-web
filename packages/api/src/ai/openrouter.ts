@@ -48,6 +48,7 @@ import {
 
 import {
   AiProviderError,
+  aiProviderFailureCode,
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
   isDefiniteVideoSubmissionFailure,
@@ -71,6 +72,7 @@ import type {
 // re-exported so every existing import of "./openrouter" keeps resolving.
 export {
   AiProviderError,
+  aiProviderFailureCode,
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
   isDefiniteVideoSubmissionFailure,

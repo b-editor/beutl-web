@@ -18,6 +18,7 @@ import {
 } from "../../ai/upload-limits";
 import {
   AiProviderError,
+  aiProviderFailureCode,
   transcribeAudio,
 } from "../../ai/openrouter";
 import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
@@ -312,7 +313,7 @@ const app = new Hono().post("/", async (c) => {
       error: AI_JOB_FAILURE_MESSAGES.transcription,
     });
     if (err instanceof AiProviderError) {
-      return c.json(await apiErrorResponse("aiProviderError"), {
+      return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
         status: 500,
       });
     }

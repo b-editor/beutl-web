@@ -28,6 +28,7 @@ import {
 } from "../../ai/upload-limits";
 import {
   AiProviderError,
+  aiProviderFailureCode,
   editImage,
   generateImage,
 } from "../../ai/openrouter";
@@ -472,7 +473,7 @@ const app = new Hono()
       onPartialImage?: (partial: { index: number; b64Json: string }) => void,
     ): Promise<
       | { ok: true; payload: unknown }
-      | { ok: false; errorCode: "aiProviderError"; status: 500 }
+      | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
     > => {
     try {
       const result = await imageProviderFor(selectedModel.provider).generate({
@@ -525,7 +526,7 @@ const app = new Hono()
       }
       return {
         ok: false as const,
-        errorCode: "aiProviderError" as const,
+        errorCode: aiProviderFailureCode(err),
         status: 500 as const,
       };
     }
@@ -832,7 +833,7 @@ const app = new Hono()
         error: AI_JOB_FAILURE_MESSAGES.imageEdit,
       });
       if (err instanceof AiProviderError) {
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }

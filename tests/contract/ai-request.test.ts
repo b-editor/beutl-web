@@ -148,6 +148,22 @@ describe("the browser's non-streaming AI request", () => {
     ).resolves.toEqual({ ok: false, errorCode: "aiProviderError" });
   });
 
+  it("shows a refunded provider billing refusal without treating it as interrupted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({ error_code: "aiProviderBillingUnavailable" }, { status: 500 }),
+      ),
+    );
+
+    await expect(
+      runAiRequest("videos", {
+        body: "{}",
+        idempotencyKey: "video-request-provider-billing",
+      }),
+    ).resolves.toEqual({ ok: false, errorCode: "aiProviderBillingUnavailable" });
+  });
+
   it("passes the caller's signal through and preserves abort rejection", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(

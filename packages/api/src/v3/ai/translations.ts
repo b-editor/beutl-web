@@ -9,6 +9,7 @@ import {
 } from "../../ai/credits";
 import {
   AiProviderError,
+  aiProviderFailureCode,
   translateSegments,
 } from "../../ai/openrouter";
 import { MAX_MODEL_ID_LENGTH } from "@beutl/core";
@@ -299,7 +300,7 @@ const app = new Hono().post("/", async (c) => {
     onSegment?: (segment: { id: string; text: string }) => void,
   ): Promise<
     | { ok: true; payload: unknown }
-    | { ok: false; errorCode: "aiProviderError"; status: 500 }
+    | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
   > => {
   try {
     const contextById = new Map(
@@ -363,7 +364,7 @@ const app = new Hono().post("/", async (c) => {
     if (!(error instanceof AiProviderError)) {
       console.error("Failed to persist AI translation result", error);
     }
-    return { ok: false as const, errorCode: "aiProviderError" as const, status: 500 as const };
+    return { ok: false as const, errorCode: aiProviderFailureCode(error), status: 500 as const };
   }
   };
 

@@ -1622,6 +1622,23 @@ describe("v3 AI endpoints contract", () => {
       expect(account.purchasedCredits).toBe(0);
     });
 
+    it("identifies a provider billing refusal after refunding image generation", async () => {
+      await activatePro();
+      vi.mocked(generateImage).mockRejectedValue(
+        new AiProviderError("Gateway payment required", { httpStatus: 402 }),
+      );
+
+      const res = await makeApp().request("/api/v3/ai/images", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ prompt: "billing diagnostic", size: "1024x1024" }),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+      expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+    });
+
     it("refunds usage when the provider execution outcome is unknown", async () => {
       await activatePro();
       vi.mocked(generateImage).mockRejectedValue(
@@ -3178,6 +3195,26 @@ describe("v3 AI endpoints contract", () => {
       const account = await getCreditAccount({ userId: USER_ID });
       expect(account.monthlyUsageUsed).toBe(0);
       expect(account.purchasedCredits).toBe(0);
+    });
+
+    it("identifies a provider billing refusal after refunding a video submission", async () => {
+      await activatePro();
+      vi.mocked(createVideoJob).mockRejectedValue(
+        new AiVideoSubmissionError("Gateway payment required", {
+          outcome: "definite_failure",
+          httpStatus: 402,
+        }),
+      );
+
+      const res = await makeApp().request("/api/v3/ai/videos", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ prompt: "billing diagnostic", durationSeconds: 4 }),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+      expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
     });
 
     it("refunds when callback configuration fails after reservation", async () => {
