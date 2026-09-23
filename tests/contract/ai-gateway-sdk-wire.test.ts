@@ -276,7 +276,9 @@ describe("Gateway requests through the installed SDK", () => {
       }
       return Response.json({ data: {
         id: generationId,
-        model: VIDEO_REQUEST.model,
+        // The catalog calls this creator spacexai; the generation ledger still
+        // writes its original xai namespace for the same model and job id.
+        model: "xai/grok-imagine-video",
         total_cost: 0.4321,
         upstream_inference_cost: 0,
         usage: 0.4321,
@@ -313,13 +315,36 @@ describe("Gateway requests through the installed SDK", () => {
             videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
             providerMetadata: { gateway: { generationId } },
           })
-        : Response.json({ data: { id: generationId, model: VIDEO_REQUEST.model, total_cost: "0.321234" } });
+        : Response.json({ data: { id: generationId, model: "xai/grok-imagine-video", total_cost: "0.321234" } });
     }));
 
     await expect(getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" }))
       .resolves.toMatchObject({ status: "completed", providerCostUsd: "0.321234" });
     expect(requested).toHaveLength(2);
     expect(requested[1]).toContain(`/v1/generation?id=${generationId}`);
+  });
+
+  it("rejects a charge from a different creator despite a matching model suffix", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AE";
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async (url) =>
+      String(url).includes("/video-model/status")
+        ? Response.json({
+            status: "completed",
+            videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+            providerMetadata: { gateway: { generationId } },
+          })
+        : Response.json({ data: {
+            id: generationId,
+            model: "other/grok-imagine-video",
+            total_cost: "0.321234",
+          } }),
+    ));
+
+    const job = await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
+    expect(job).toMatchObject({ status: "completed" });
+    expect(job).not.toHaveProperty("providerCostUsd");
+    warning.mockRestore();
   });
 
   it("reads transcription segments and detects the audio format", async () => {
