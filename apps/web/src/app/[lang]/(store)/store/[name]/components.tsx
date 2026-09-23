@@ -43,6 +43,7 @@ import {
   AlertDialogTitle,
 } from "@beutl/ui/ui/alert-dialog";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import { DesktopInstallButton } from "@/components/desktop-install-button";
 
 const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
   extension: "store:typeExtension",
@@ -207,14 +208,22 @@ export function ClientPage({
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
-            <GetButton
-              pkgId={pkg.id}
-              owned={owned}
-              price={price}
-              paied={paied}
-              lang={lang}
-            />
-            {message && <p>{t("store:openDesktopAppToInstall")}</p>}
+            {owned ? (
+              <DesktopInstallButton
+                packageName={pkg.name}
+                version={selectedRelease?.version}
+                lang={lang}
+              />
+            ) : (
+              <GetButton
+                pkgId={pkg.id}
+                owned={owned}
+                price={price}
+                paied={paied}
+                lang={lang}
+              />
+            )}
+            {message && !owned && <p>{t("store:openDesktopAppToInstall")}</p>}
           </div>
         </div>
         <DropdownMenu>
