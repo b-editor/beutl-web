@@ -134,13 +134,10 @@ host-only session cookies when enabling session sharing.
 
 ### Worker settings
 
-Provider credentials are local to each Worker. Most dashboard AI requests run
-in the Web Worker. Non-outpaint dashboard image edits are sent through its
-`BEUTL_API_WORKER` service binding to the desktop API Worker so the large
-generated image response does not share the OpenNext isolate's memory. Deploy
-the API Worker before the Web Worker, and keep their JWT settings identical.
-Web, desktop API, and admin all load the AI model catalog, so keep their enabled
-Gateway configuration aligned:
+Provider credentials are local to each Worker. The Web Worker executes
+dashboard AI requests through `/api/internal/ai/*` in its own process; it does
+not forward them to the desktop API Worker. Web, desktop API, and admin all
+load the AI model catalog, so keep their enabled Gateway configuration aligned:
 
 | Setting | Web | Desktop API | Admin |
 | --- | --- | --- | --- |

@@ -8,14 +8,14 @@ export type AiRequestOutcome<TResult> =
 const MAX_AI_REQUEST_RESPONSE_BYTES = 64 * 1024;
 
 /**
- * Sends one of the video requests whose first response is ordinary JSON.
+ * Sends a dashboard AI request whose first response is ordinary JSON.
  *
  * The caller owns cancellation. In particular, an abort is allowed to reject
- * this promise instead of being mistaken for an API refusal: a video request
+ * this promise instead of being mistaken for an API refusal: a paid request
  * may have reached the API even when its response did not reach the browser.
  */
 export async function runAiRequest<TResult>(
-  operation: AiVideoOperationPath,
+  operation: AiVideoOperationPath | "images/edit",
   {
     body,
     idempotencyKey,

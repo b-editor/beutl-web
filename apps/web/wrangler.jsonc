@@ -36,10 +36,6 @@
       // The service should match the "name" of your worker
       "service": "beutl-web",
     },
-    {
-      "binding": "BEUTL_API_WORKER",
-      "service": "beutl-web-api",
-    },
   ],
   "observability": {
     "enabled": true,
