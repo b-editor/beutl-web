@@ -4,8 +4,10 @@ export const MAX_AI_GENERATED_IMAGE_PIXELS = 16_777_216;
 
 const MAX_PNG_DECODED_BYTES = 64 * 1024 * 1024;
 // Workers expose streaming DEFLATE but no portable JPEG/WebP pixel decoder.
-// Provider requests therefore require PNG, whose chunks, CRCs, decompressed
-// scanlines, filters, and dimensions can all be verified in this runtime.
+// Most provider results therefore require PNG, whose chunks, CRCs,
+// decompressed scanlines, filters, and dimensions can be verified here.
+// Non-transparent image edits may accept structurally checked JPEG through
+// inspectGeneratedJpeg in input-image-validation.ts.
 const GENERATED_IMAGE_MIME_TYPE = "image/png" as const;
 
 export class InvalidGeneratedImageError extends Error {

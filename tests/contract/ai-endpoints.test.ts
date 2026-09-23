@@ -2282,6 +2282,72 @@ describe("v3 AI endpoints contract", () => {
       });
     });
 
+    it("stores a valid JPEG when an upscale provider ignores the requested PNG format", async () => {
+      await activatePro();
+      vi.mocked(editImage).mockResolvedValue({
+        b64Json: Buffer.from(JPEG_BYTES).toString("base64"),
+        mediaType: "image/jpeg",
+        providerCostUsd: 0.04,
+      });
+      const form = new FormData();
+      form.append("task", "upscale");
+      form.append("file", new File([PNG_BYTES], "source.png", { type: "image/png" }));
+
+      const response = await makeApp().request("/api/v3/ai/images/edit", {
+        method: "POST", headers: await authHeaders("jpeg-upscale"), body: form,
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toMatchObject({
+        fileName: `ai-edit-${body.jobId}.jpg`,
+        contentType: "image/jpeg",
+      });
+      expect([...state.files.values()][0]).toMatchObject({ mimeType: "image/jpeg" });
+      expect([...state.aiJobs.values()][0]).toMatchObject({
+        status: "succeeded", providerCostUsdMicros: 40_000,
+      });
+    });
+
+    it("rejects a truncated JPEG upscale result and refunds the reservation", async () => {
+      await activatePro();
+      vi.mocked(editImage).mockResolvedValue({
+        b64Json: Buffer.from(JPEG_BYTES.slice(0, -2)).toString("base64"),
+        mediaType: "image/jpeg",
+      });
+      const form = new FormData();
+      form.append("task", "upscale");
+      form.append("file", new File([PNG_BYTES], "source.png", { type: "image/png" }));
+
+      const response = await makeApp().request("/api/v3/ai/images/edit", {
+        method: "POST", headers: await authHeaders("truncated-jpeg-upscale"), body: form,
+      });
+
+      expect(response.status).toBe(500);
+      expect([...state.aiJobs.values()][0]?.status).toBe("failed");
+      expect([...state.creditTransactions.values()].some((row) => row.kind === "refund")).toBe(true);
+      expect(state.files.size).toBe(0);
+    });
+
+    it("still refuses opaque JPEG for background removal", async () => {
+      await activatePro();
+      vi.mocked(editImage).mockResolvedValue({
+        b64Json: Buffer.from(JPEG_BYTES).toString("base64"),
+        mediaType: "image/jpeg",
+      });
+      const form = new FormData();
+      form.append("task", "remove_background");
+      form.append("file", new File([PNG_BYTES], "source.png", { type: "image/png" }));
+
+      const response = await makeApp().request("/api/v3/ai/images/edit", {
+        method: "POST", headers: await authHeaders("opaque-background"), body: form,
+      });
+
+      expect(response.status).toBe(500);
+      expect([...state.aiJobs.values()][0]?.status).toBe("failed");
+      expect(state.files.size).toBe(0);
+    });
+
     it.each([
       ["restyle", "Restyle this portrait as a charcoal drawing"],
       ["remove_object", "Remove the lamp from the table"],
