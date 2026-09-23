@@ -53,6 +53,24 @@ import { gatewayProviderCostUsd, providerCostUsd, type ProviderCostUsd } from ".
 
 const GENERATION_COST_LOOKUP_TIMEOUT_MS = 5_000;
 
+function gatewayProviderNamespace(creator: string): string {
+  // The public catalog renamed xAI to SpaceXAI, while native options and
+  // generation-ledger rows still use the former namespace.
+  return creator === "spacexai" ? "xai" : creator;
+}
+
+function sameGatewayVideoModel(requested: string, billed: string): boolean {
+  const canonical = (model: string) => {
+    const separator = model.indexOf("/");
+    return separator < 1
+      ? model
+      : gatewayProviderNamespace(model.slice(0, separator)) + model.slice(separator);
+  };
+  // The generation id must also match at the call site. Never accept a cost
+  // merely because two different creators published the same model suffix.
+  return canonical(requested) === canonical(billed);
+}
+
 function generationCostFromSchemaError(
   error: GatewayResponseError,
   generationId: string,
@@ -67,7 +85,9 @@ function generationCostFromSchemaError(
   const data = (error.response as Record<string, unknown>).data;
   if (typeof data !== "object" || data === null) return undefined;
   const entry = data as Record<string, unknown>;
-  if (entry.id !== generationId || entry.model !== model) return undefined;
+  if (entry.id !== generationId ||
+    typeof entry.model !== "string" ||
+    !sameGatewayVideoModel(model, entry.model)) return undefined;
   return providerCostUsd(entry.total_cost);
 }
 
@@ -103,7 +123,9 @@ async function completedVideoCost(
       deadline,
     ]);
     // A mismatched response must not bill this job at someone else's price.
-    if (details.id !== generationId || details.model !== model) return undefined;
+    if (details.id !== generationId || !sameGatewayVideoModel(model, details.model)) {
+      return undefined;
+    }
     return providerCostUsd(details.totalCost);
   } catch (error) {
     if (GatewayResponseError.isInstance(error)) {
@@ -127,7 +149,8 @@ async function completedVideoCost(
           : [],
         dataFields: value ? Object.keys(value).slice(0, 16) : [],
         generationMatches: value?.id === generationId,
-        modelMatches: value?.model === model,
+        modelMatches: typeof value?.model === "string" &&
+          sameGatewayVideoModel(model, value.model),
         actualModel: typeof value?.model === "string" ? value.model.slice(0, 80) : null,
         costType: typeof value?.total_cost,
       });
@@ -190,9 +213,8 @@ function modeProviderOptions(
   }
 
   const creator = request.model.split("/")[0];
-  // The catalog renamed xAI's model prefix to spacexai, but the native
-  // options still belong to xai. A model creator is not an SDK namespace.
-  const namespace = creator === "spacexai" ? "xai" : creator;
+  // A model creator is not always its SDK provider-options namespace.
+  const namespace = gatewayProviderNamespace(creator);
   if (request.mode === "motion") {
     return {
       [namespace]: {
