@@ -1,6 +1,7 @@
 "use client";
 
 import { formatDateTime, randomUuid } from "@beutl/core";
+import { browserTimeZone } from "@/lib/client-time-zone";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import {
@@ -148,6 +149,9 @@ export function JobHistory({
 }) {
   const { t } = useTranslation(lang);
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  // Jobs are fetched after hydration. The server and first client render both
+  // show skeletons; once rows arrive, display them in the viewer's local zone.
+  const timeZone = jobs === null ? "UTC" : browserTimeZone();
   const [jobsMessage, setJobsMessage] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();
   const [isDeleting, startDelete] = useTransition();
@@ -577,7 +581,7 @@ export function JobHistory({
                         </p>
                       )}
                       <p className="text-xs text-muted-foreground">
-                        {formatDateTime(job.createdAt, lang)}
+                        {formatDateTime(job.createdAt, lang, timeZone)}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
