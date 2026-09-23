@@ -3197,25 +3197,30 @@ describe("v3 AI endpoints contract", () => {
       expect(account.purchasedCredits).toBe(0);
     });
 
-    it("identifies a provider billing refusal after refunding a video submission", async () => {
-      await activatePro();
-      vi.mocked(createVideoJob).mockRejectedValue(
-        new AiVideoSubmissionError("Gateway payment required", {
-          outcome: "definite_failure",
-          httpStatus: 402,
-        }),
-      );
+    it.each(["submission", "bare-provider"] as const)(
+      "identifies a %s billing refusal after refunding a video submission",
+      async (errorKind) => {
+        await activatePro();
+        vi.mocked(createVideoJob).mockRejectedValue(
+          errorKind === "submission"
+            ? new AiVideoSubmissionError("Gateway payment required", {
+                outcome: "definite_failure",
+                httpStatus: 402,
+              })
+            : new AiProviderError("OpenRouter payment required", { httpStatus: 402 }),
+        );
 
-      const res = await makeApp().request("/api/v3/ai/videos", {
-        method: "POST",
-        headers: { "content-type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ prompt: "billing diagnostic", durationSeconds: 4 }),
-      });
-      expect(res.status).toBe(500);
-      expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
-      expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
-      expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
-    });
+        const res = await makeApp().request("/api/v3/ai/videos", {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(await authHeaders()) },
+          body: JSON.stringify({ prompt: "billing diagnostic", durationSeconds: 4 }),
+        });
+        expect(res.status).toBe(500);
+        expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+        expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+        expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+      },
+    );
 
     it("refunds when callback configuration fails after reservation", async () => {
       await activatePro();
