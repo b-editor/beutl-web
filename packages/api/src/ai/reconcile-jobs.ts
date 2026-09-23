@@ -30,7 +30,7 @@ const MAX_DEFERRED_COST_JOBS_PER_SCAN = 10;
 // A provider that is not registered cannot say, and this is reached from a
 // catch block where throwing would lose the row: fall back to the default
 // provider's window, which is the flat one every job used before providers
-// were told apart. Never fall back to "forever" — that pins the user's slot.
+// were told apart. Never fall back to "forever" — that holds reserved units.
 function maximumVideoJobAgeOf(provider: string): number {
   return (
     findAiProvider(provider) ?? providerFor(DEFAULT_AI_PROVIDER_ID)
@@ -111,7 +111,7 @@ export async function reconcileAiJobs(
         // accepted and charged for a job whose ID only arrives by callback.
         // Keep the reservation active for the provider's maximum job window.
         // Once that window has elapsed, no usable result can still be delivered,
-        // so refund the user instead of pinning their one-video slot forever.
+        // so refund the user instead of holding reserved units forever.
         // How long that window is belongs to the provider that took the job.
         if (age < maximumVideoJobAgeOf(job.provider)) {
           await touchActiveAiJob({

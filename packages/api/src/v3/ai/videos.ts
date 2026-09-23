@@ -624,7 +624,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1124,7 +1123,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
       compatibleRequestFingerprints,
@@ -1465,7 +1463,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1528,10 +1525,9 @@ const app = new Hono()
       if (handling.action === "keepQueued") {
         // The provider may have taken the job: its answer was lost, not
         // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation once the slot
-        // clears, while the first one is still queued and may yet arrive by
-        // callback. The queued job is what the generation routes return, and
-        // what the client can keep polling.
+        // idempotency key and start a second paid generation while the first
+        // is still queued and may yet arrive by callback. Return the queued
+        // job so the client can keep polling it.
         console.error(
           `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,
@@ -1739,7 +1735,6 @@ const app = new Hono()
       },
       usagePercent: selectedModel.usagePercent,
       model: selectedModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...requestIdentity,
     });
@@ -1812,10 +1807,9 @@ const app = new Hono()
       if (handling.action === "keepQueued") {
         // The provider may have taken the job: its answer was lost, not
         // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation once the slot
-        // clears, while the first one is still queued and may yet arrive by
-        // callback. The queued job is what the generation routes return, and
-        // what the client can keep polling.
+        // idempotency key and start a second paid generation while the first
+        // is still queued and may yet arrive by callback. Return the queued
+        // job so the client can keep polling it.
         console.error(
           `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
           err,

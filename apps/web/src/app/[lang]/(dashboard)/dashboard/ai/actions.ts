@@ -1569,7 +1569,6 @@ export async function retryJobAction(
       },
       usagePercent: retryModel.usagePercent,
       model: retryModel.modelId,
-      activeJobLimit: 1,
       callbackNonceHash: callbackNonce.hash,
       ...identity,
     });

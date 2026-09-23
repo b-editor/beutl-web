@@ -45,7 +45,7 @@ const POLL_LEASE_MARGIN_MILLISECONDS = 30 * 1000;
 
 // Vercel publishes no retention window for a video job. Six hours is
 // OpenRouter's, and using it keeps the one thing that matters true: a paid job
-// whose id never reached us stops holding the user's slot at some point rather
+// whose id never reached us stops holding reserved units at some point rather
 // than never.
 const MAXIMUM_VIDEO_JOB_MILLISECONDS = 6 * 60 * 60 * 1000;
 

@@ -109,7 +109,7 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
     expect(await prisma.aiJob.count({ where: { userId: USER_ID } })).toBe(1);
   });
 
-  it("enforces the one-video limit transactionally", async () => {
+  it("allows concurrent video reservations within the remaining allowance", async () => {
     const reserve = async () =>
       await createReservedAiJob({
         userId: USER_ID,
@@ -117,23 +117,18 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
         provider: "test",
         status: "queued",
         usageUnits: 200,
-        activeJobLimit: 1,
       });
 
     const results = await Promise.all([reserve(), reserve()]);
 
-    expect(results.filter((result) => result.ok)).toHaveLength(1);
-    expect(
-      results.filter(
-        (result) => !result.ok && result.errorCode === "aiJobLimitReached",
-      ),
-    ).toHaveLength(1);
-    expect(await prisma.aiJob.count({ where: { userId: USER_ID } })).toBe(1);
+    expect(results.filter((result) => result.ok)).toHaveLength(2);
+    expect(await prisma.aiJob.count({ where: { userId: USER_ID } })).toBe(2);
     expect(
       await prisma.creditTransaction.count({
         where: { userId: USER_ID, kind: "usage" },
       }),
-    ).toBe(1);
+    ).toBe(2);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(400);
   });
 
   it("persists reversal debt and settles it before adding new credits", async () => {

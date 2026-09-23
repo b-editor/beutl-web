@@ -419,7 +419,7 @@ export interface AiProvider {
   executionOf(cause: unknown): AiExecutionOutcome;
   /**
    * The longest a submitted job can still deliver a usable result. Past it, a
-   * job whose id never reached us is refunded instead of holding a slot.
+   * job whose id never reached us is refunded instead of holding reserved units.
    */
   maximumVideoJobMilliseconds(): number;
 }
