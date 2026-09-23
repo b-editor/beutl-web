@@ -220,6 +220,26 @@ describe("Gateway requests through the installed SDK", () => {
     expect(requested[1]).toContain(`/v1/generation?id=${generationId}`);
   });
 
+  it("reads a valid video cost when the SDK rejects absent text metrics", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AC";
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      requested.push(String(url));
+      return String(url).includes("/video-model/status")
+        ? Response.json({
+            status: "completed",
+            videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+            providerMetadata: { gateway: { generationId } },
+          })
+        : Response.json({ data: { id: generationId, model: VIDEO_REQUEST.model, total_cost: "0.321234" } });
+    }));
+
+    await expect(getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" }))
+      .resolves.toMatchObject({ status: "completed", providerCostUsd: "0.321234" });
+    expect(requested).toHaveLength(2);
+    expect(requested[1]).toContain(`/v1/generation?id=${generationId}`);
+  });
+
   it("reads transcription segments and detects the audio format", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url, init: RequestInit) => {
       sent.push({ url: String(url), body: JSON.parse(init.body as string), headers: new Headers(init.headers) });

@@ -21,6 +21,7 @@ import {
   experimental_getVideoStatus as getVideoStatus,
   experimental_startVideo as startVideo,
 } from "ai";
+import { GatewayResponseError } from "@ai-sdk/gateway";
 import {
   AiProviderError,
   AiVideoSubmissionError,
@@ -47,6 +48,24 @@ import { gatewayVideoResolution } from "./resolution";
 import { gatewayProviderCostUsd, providerCostUsd, type ProviderCostUsd } from "../../provider-cost";
 
 const GENERATION_COST_LOOKUP_TIMEOUT_MS = 5_000;
+
+function generationCostFromSchemaError(
+  error: GatewayResponseError,
+  generationId: string,
+  model: string,
+): ProviderCostUsd | undefined {
+  // The SDK retains the parsed response after its strict text-metrics schema
+  // rejects a valid video result. Read only the verified identity and cost;
+  // the response may contain signed URLs or other provider data.
+  if (error.statusCode !== 200 || typeof error.response !== "object" || error.response === null) {
+    return undefined;
+  }
+  const data = (error.response as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null) return undefined;
+  const entry = data as Record<string, unknown>;
+  if (entry.id !== generationId || entry.model !== model) return undefined;
+  return providerCostUsd(entry.total_cost);
+}
 
 function generationIdOf(providerMetadata: unknown): string | null {
   if (typeof providerMetadata !== "object" || providerMetadata === null) return null;
@@ -83,6 +102,10 @@ async function completedVideoCost(
     if (details.id !== generationId || details.model !== model) return undefined;
     return providerCostUsd(details.totalCost);
   } catch (error) {
+    if (GatewayResponseError.isInstance(error)) {
+      const cost = generationCostFromSchemaError(error, generationId, model);
+      if (cost !== undefined) return cost;
+    }
     console.warn("Gateway video actual-cost lookup failed", {
       model,
       errorType: error instanceof Error ? error.name : typeof error,
