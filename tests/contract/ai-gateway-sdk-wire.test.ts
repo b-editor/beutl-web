@@ -125,6 +125,31 @@ describe("Gateway requests through the installed SDK", () => {
     expect(sent[0].headers.get("idempotency-key")).toBe("request-1");
   });
 
+  it("logs the Gateway's 402 response type without its sensitive message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: {
+        type: "quota_for_entity_exceeded",
+        message: "sensitive account and billing detail",
+      },
+    }, { status: 402 })));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(startGatewayVideoJob(VIDEO_REQUEST)).rejects.toMatchObject({
+        httpStatus: 402,
+        outcome: "definite_failure",
+      });
+      expect(warning).toHaveBeenCalledWith("Gateway video submission failed", {
+        model: VIDEO_REQUEST.model,
+        httpStatus: 402,
+        errorType: "GatewayInternalServerError",
+        gatewayErrorType: "quota_for_entity_exceeded",
+      });
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("sensitive account and billing detail");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("logs only safe fields when Gateway rejects a video submission", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({
