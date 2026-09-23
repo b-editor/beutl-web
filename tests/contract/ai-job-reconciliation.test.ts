@@ -608,6 +608,9 @@ describe("AI job reconciliation", () => {
     });
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(50);
     expect(store.state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+    expect(store.state.creditTransactions.filter((item) =>
+      item.aiJobId === job.id && item.kind === "usage_estimate_pending"
+    )).toHaveLength(1);
     expect(gatewayVideoDownload).toHaveBeenCalledOnce();
     vi.setSystemTime(new Date(now.getTime() + 36 * 60 * 1000));
     const repeated = await reconcileAiJobs(new Date(now.getTime() + 36 * 60 * 1000));

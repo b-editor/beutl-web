@@ -827,7 +827,7 @@ export function createInMemoryPrisma() {
     providerCostUsdMicros?: null;
     usageUnitUsdMicros?: { not: null };
     reservedUsageUnits?: { not: null };
-    transactions?: { none: { kind: string } };
+    transactions?: { some?: { kind: string }; none?: { kind: string } };
     OR?: AiJobWhere[];
     AND?: AiJobWhere[];
   };
@@ -884,8 +884,10 @@ export function createInMemoryPrisma() {
       (where.providerCostUsdMicros === undefined || job.providerCostUsdMicros === null) &&
       (!where.usageUnitUsdMicros || job.usageUnitUsdMicros !== null) &&
       (!where.reservedUsageUnits || job.reservedUsageUnits !== null) &&
-      (!where.transactions || !state.creditTransactions.some((row) =>
-        row.aiJobId === job.id && row.kind === where.transactions!.none.kind)) &&
+      (!where.transactions?.some || state.creditTransactions.some((row) =>
+        row.aiJobId === job.id && row.kind === where.transactions!.some!.kind)) &&
+      (!where.transactions?.none || !state.creditTransactions.some((row) =>
+        row.aiJobId === job.id && row.kind === where.transactions!.none!.kind)) &&
       statusMatches &&
       updatedAtMatches &&
       deletedAtMatches &&
@@ -2143,7 +2145,7 @@ export function createInMemoryPrisma() {
           usageUnitUsdMicros?: { not: null };
           reservedUsageUnits?: { not: null };
           updatedAt?: { lte: Date };
-          transactions?: { none: { kind: string } };
+          transactions?: { some?: { kind: string }; none?: { kind: string } };
           OR?: Array<{
             createdAt?: Date | { lt: Date };
             id?: { lt: string };
@@ -2206,9 +2208,13 @@ export function createInMemoryPrisma() {
               job.updatedAt.getTime() <= where.updatedAt!.lte.getTime(),
           );
         }
-        if (where?.transactions) {
+        if (where?.transactions?.some) {
+          jobs = jobs.filter((job) => state.creditTransactions.some((row) =>
+            row.aiJobId === job.id && row.kind === where.transactions!.some!.kind));
+        }
+        if (where?.transactions?.none) {
           jobs = jobs.filter((job) => !state.creditTransactions.some((row) =>
-            row.aiJobId === job.id && row.kind === where.transactions!.none.kind));
+            row.aiJobId === job.id && row.kind === where.transactions!.none!.kind));
         }
         if (where?.OR) {
           jobs = jobs.filter((job) =>

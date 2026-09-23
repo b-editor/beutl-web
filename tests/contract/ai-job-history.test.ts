@@ -18,6 +18,7 @@ import {
   upsertSubscription,
 } from "@beutl/db";
 import {
+  correctEstimatedGatewayVideoUsage,
   createReservedAiJob,
   reconcileAiJobs,
   parseReplayableAiJobInput,
@@ -973,7 +974,7 @@ describe("v3 AI job history contract", () => {
     expect(deleteObject).toHaveBeenCalledWith("ai/video/pending-cost");
   });
 
-  it("keeps a completed Gateway video until its cost grace expires", async () => {
+  it("deletes a completed Gateway video after grace without losing late billing", async () => {
     await upsertSubscription({
       userId: USER_ID,
       stripeSubscriptionId: "sub_gateway_video_pending_delete",
@@ -1035,13 +1036,23 @@ describe("v3 AI job history contract", () => {
     });
     expect(afterGrace.status).toBe(200);
     expect(state.aiJobs.get(job.id)).toMatchObject({
-      providerJobId: null,
+      providerJobId: "gateway-video-pending-delete",
       usageUnits: 50,
       usageSettledAt: expect.any(Date),
       deletedAt: expect.any(Date),
     });
     expect(status).toHaveBeenCalledTimes(2);
     expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+    expect(state.creditTransactions.filter((item) => item.kind === "usage_estimate_pending")).toHaveLength(1);
+
+    expect(await correctEstimatedGatewayVideoUsage({
+      jobId: job.id, userId: USER_ID, providerCostUsd: "0.40",
+    })).toBe(true);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      providerJobId: null,
+      usageUnits: 40,
+      deletedAt: expect.any(Date),
+    });
   });
 
   it("does not let reconciliation estimate while deletion is fetching actual cost", async () => {

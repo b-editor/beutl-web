@@ -61,6 +61,7 @@ const PURCHASE_REVERSAL_TRANSACTION_KIND = "purchase_reversal";
 export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
 export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
 export const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
+export const AI_USAGE_ESTIMATE_PENDING_KIND = "usage_estimate_pending";
 export const AI_USAGE_ACTUAL_CORRECTION_KIND = "usage_actual_correction";
 const MAX_REVERSAL_CAS_ATTEMPTS = 8;
 
@@ -903,6 +904,7 @@ export async function settleUsage({
   providerCostUsdMicros,
   monthlyUsageLimit,
   currentUsagePeriod,
+  estimatedProviderCost = false,
   allowActualCorrection = false,
   prisma,
 }: {
@@ -912,6 +914,8 @@ export async function settleUsage({
   providerCostUsdMicros: number | null;
   monthlyUsageLimit: number;
   currentUsagePeriod: UsagePeriod;
+  /** The Gateway video cost was unavailable, so this first settlement is an estimate. */
+  estimatedProviderCost?: boolean;
   /** Correct a succeeded Gateway video previously settled to its estimate. */
   allowActualCorrection?: boolean;
   prisma?: PrismaTransaction;
@@ -932,14 +936,20 @@ export async function settleUsage({
 
   const run = async (tx: PrismaTransaction) => {
     const job = await tx.aiJob.findFirst({
-      where: { id: aiJobId, userId, deletedAt: null },
+      where: { id: aiJobId, userId, ...(allowActualCorrection ? {} : { deletedAt: null }) },
     });
     if (!job) throw new Error(`AI job ${aiJobId} was not found for user ${userId}`);
     if (job.status !== "succeeded") {
       throw new Error(`AI job ${aiJobId} must succeed before usage is settled`);
     }
     const correctingEstimate = job.usageSettledAt !== null;
-    if (correctingEstimate && !(allowActualCorrection &&
+    const estimateMarker = correctingEstimate && allowActualCorrection
+      ? await tx.creditTransaction.findFirst({
+          where: { userId, aiJobId, kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+          select: { id: true },
+        })
+      : null;
+    if (correctingEstimate && !(allowActualCorrection && estimateMarker &&
       job.kind === "video" && job.provider === "vercel-gateway" &&
       job.providerCostUsdMicros === null && job.usageUnitUsdMicros !== null)) {
       return await getAccountForUsagePeriod({
@@ -1106,11 +1116,30 @@ export async function settleUsage({
         },
       });
     }
+    if (!correctingEstimate && estimatedProviderCost) {
+      if (job.kind !== "video" || job.provider !== "vercel-gateway" ||
+          providerCostUsdMicros !== null) {
+        throw new Error("Only an unpriced Gateway video may be marked as estimated");
+      }
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          creditAmount: 0,
+          debtAmount: 0,
+          usageAmount: 0,
+          usagePeriodStart: transactionPeriod.start,
+          usagePeriodEnd: transactionPeriod.end,
+          kind: AI_USAGE_ESTIMATE_PENDING_KIND,
+          aiJobId,
+        },
+      });
+    }
     await tx.aiJob.update({
       where: { id: aiJobId },
       data: {
         usageUnits: settledAmount,
         providerCostUsdMicros,
+        ...(correctingEstimate && job.deletedAt !== null ? { providerJobId: null } : {}),
         ...(correctingEstimate ? {} : { usageSettledAt: new Date() }),
       },
     });

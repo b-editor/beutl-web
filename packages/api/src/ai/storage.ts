@@ -6,6 +6,7 @@ import {
 } from "@beutl/core";
 import {
   AI_USAGE_ACTUAL_CORRECTION_KIND,
+  AI_USAGE_ESTIMATE_PENDING_KIND,
   claimAiStorageCleanupForDeletion,
   claimGatewayVideoCostSettlement,
   completeAiJobWithOutput,
@@ -263,6 +264,8 @@ async function settleCompletedAiJobUsage({
           end: subscription.currentPeriodEnd,
         }
       : { start: null, end: null },
+    estimatedProviderCost: usesActualCostBilling && job.kind === "video" &&
+      job.provider === "vercel-gateway" && providerCostUsd === undefined,
     allowActualCorrection,
     prisma,
   });
@@ -308,11 +311,10 @@ export async function correctEstimatedGatewayVideoUsage({
   providerCostUsd: ProviderCostUsd;
 }): Promise<boolean> {
   return await startAiJobTransaction(async (prisma) => {
-    const job = await getAiJobById({ jobId, prisma });
+    const job = await getAiJobById({ jobId, includeDeleted: true, prisma });
     if (
       !job || job.userId !== userId || job.kind !== "video" ||
       job.provider !== "vercel-gateway" || job.status !== "succeeded" ||
-      job.deletedAt !== null ||
       job.usageSettledAt === null || job.providerCostUsdMicros !== null ||
       job.usageUnitUsdMicros === null || job.reservedUsageUnits === null
     ) {
@@ -323,6 +325,11 @@ export async function correctEstimatedGatewayVideoUsage({
       select: { id: true },
     });
     if (previous) return false;
+    const estimate = await prisma.creditTransaction.findFirst({
+      where: { userId, aiJobId: jobId, kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+      select: { id: true },
+    });
+    if (!estimate) return false;
     await settleCompletedAiJobUsage({
       job,
       providerCostUsd,

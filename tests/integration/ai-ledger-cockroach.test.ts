@@ -104,7 +104,7 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
     await markAiJobSucceeded({ jobId: job.id });
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 42,
-      providerCostUsdMicros: null, monthlyUsageLimit: 100,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 100,
       currentUsagePeriod: period,
     });
 

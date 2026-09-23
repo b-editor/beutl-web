@@ -5,7 +5,9 @@ import {
   createAiJob,
   getCreditAccount,
   getAiUsageTotals,
+  listEstimatedGatewayVideoJobsForReconciliation,
   markAiJobSucceeded,
+  prepareAiJobDeletionByUserId,
   setDbProvider,
   settleUsage,
   setMonthlyUsageUsedByAdmin,
@@ -50,11 +52,12 @@ describe("settling an AI reservation to actual provider cost", () => {
     return job;
   }
 
-  async function reserveVideo(units: number, monthlyLimit = units) {
+  async function reserveVideo(units: number, monthlyLimit = units, providerJobId?: string) {
     const job = await createAiJob({
       userId: USER_ID, kind: "video", provider: "vercel-gateway",
       status: "running", usageUnits: units, reservedUsageUnits: units,
       usageUnitUsdMicros: 10_000, usagePercent: 100,
+      providerJobId,
       model: "spacexai/grok-imagine-video",
     });
     await consumeUsage({
@@ -132,6 +135,7 @@ describe("settling an AI reservation to actual provider cost", () => {
       aiJobId: job.id,
       actualAmount: 42,
       providerCostUsdMicros: null,
+      estimatedProviderCost: true,
       monthlyUsageLimit: 100,
       currentUsagePeriod: PERIOD,
     });
@@ -169,7 +173,7 @@ describe("settling an AI reservation to actual provider cost", () => {
       providerCostUsdMicros: null, monthlyUsageLimit: 20,
       currentUsagePeriod: PERIOD,
     };
-    await settleUsage(base);
+    await settleUsage({ ...base, estimatedProviderCost: true });
     await settleUsage({ ...base, allowActualCorrection: true });
     await settleUsage({ ...base, allowActualCorrection: true });
 
@@ -187,7 +191,7 @@ describe("settling an AI reservation to actual provider cost", () => {
       userId: USER_ID, aiJobId: job.id, actualAmount: 20,
       monthlyUsageLimit: 20, currentUsagePeriod: PERIOD,
     };
-    await settleUsage({ ...base, providerCostUsdMicros: null });
+    await settleUsage({ ...base, providerCostUsdMicros: null, estimatedProviderCost: true });
     await settleUsage({ ...base, providerCostUsdMicros: 200_000, allowActualCorrection: true });
     await settleUsage({ ...base, providerCostUsdMicros: 200_000, allowActualCorrection: true });
 
@@ -198,12 +202,56 @@ describe("settling an AI reservation to actual provider cost", () => {
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(20);
   });
 
+  it("does not reprice an already actual-billed video whose audit value is null", async () => {
+    const job = await reserveVideo(20);
+    const base = {
+      userId: USER_ID, aiJobId: job.id, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD, providerCostUsdMicros: null,
+    };
+    await settleUsage({ ...base, actualAmount: 18 });
+    await settleUsage({ ...base, actualAmount: 12, allowActualCorrection: true });
+
+    expect(memory.state.aiJobs.get(job.id)?.usageUnits).toBe(18);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(18);
+    expect(memory.state.creditTransactions.some((row) =>
+      row.aiJobId === job.id && row.kind === "usage_estimate_pending"
+    )).toBe(false);
+  });
+
+  it("retains a deleted video's billing identity until its estimate is corrected", async () => {
+    const job = await reserveVideo(20, 20, "provider-deleted-estimate");
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 18,
+      providerCostUsdMicros: null, estimatedProviderCost: true,
+      monthlyUsageLimit: 20, currentUsagePeriod: PERIOD,
+    });
+
+    await prepareAiJobDeletionByUserId({ userId: USER_ID, jobId: job.id });
+    expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+      deletedAt: expect.any(Date), providerJobId: "provider-deleted-estimate",
+      inputParams: null,
+    });
+    expect(await listEstimatedGatewayVideoJobsForReconciliation({
+      updatedBefore: new Date(Date.now() + 60_000),
+    })).toEqual([expect.objectContaining({ id: job.id })]);
+
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 16,
+      providerCostUsdMicros: 160_000, allowActualCorrection: true,
+      monthlyUsageLimit: 20, currentUsagePeriod: PERIOD,
+    });
+    expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+      providerJobId: null, usageUnits: 16, deletedAt: expect.any(Date),
+    });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(16);
+  });
+
   it("restores the remaining purchased share before monthly allowance", async () => {
     await addPurchasedCredits({ userId: USER_ID, amount: 10, stripePaymentId: "pi_late_cost" });
     const job = await reserveVideo(25, 20);
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 22,
-      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 20,
       currentUsagePeriod: PERIOD,
     });
     await settleUsage({
@@ -226,7 +274,7 @@ describe("settling an AI reservation to actual provider cost", () => {
     const job = await reserveVideo(20);
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 18,
-      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 20,
       currentUsagePeriod: PERIOD,
     });
     const nextPeriod = { start: PERIOD.end, end: new Date("2026-11-01T00:00:00.000Z") };
@@ -260,7 +308,7 @@ describe("settling an AI reservation to actual provider cost", () => {
     const job = await reserveVideo(20);
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 18,
-      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 20,
       currentUsagePeriod: PERIOD,
     });
     vi.advanceTimersByTime(1_000);
@@ -292,7 +340,7 @@ describe("settling an AI reservation to actual provider cost", () => {
     const job = await reserveVideo(5);
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 8,
-      providerCostUsdMicros: null, monthlyUsageLimit: 5,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 5,
       currentUsagePeriod: PERIOD,
     });
     await settleUsage({
@@ -313,7 +361,7 @@ describe("settling an AI reservation to actual provider cost", () => {
     const job = await reserveVideo(5);
     await settleUsage({
       userId: USER_ID, aiJobId: job.id, actualAmount: 4,
-      providerCostUsdMicros: null, monthlyUsageLimit: 5,
+      providerCostUsdMicros: null, estimatedProviderCost: true, monthlyUsageLimit: 5,
       currentUsagePeriod: PERIOD,
     });
     await settleUsage({
