@@ -18,6 +18,8 @@
     "enable_request_signal",
   ],
   "keep_vars": true,
+  // The billing migration leaves old Worker preview URLs disabled.
+  "preview_urls": false,
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
