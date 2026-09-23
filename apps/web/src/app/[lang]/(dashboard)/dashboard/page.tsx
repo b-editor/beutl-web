@@ -7,6 +7,7 @@ import { HardDrive, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { LibraryPackageCard } from "./library/package-card";
 import { retrieveDashboardOverview } from "./queries";
+import { getDashboardGreeting } from "./greeting";
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
@@ -42,9 +43,7 @@ export default async function Page(props: {
   return (
     <div className="flex flex-col gap-8">
       <h1 className="text-2xl font-bold">
-        {t("dashboard:overview.greeting", {
-          name: session.user?.name ?? session.user?.email,
-        })}
+        {getDashboardGreeting(t, session.user.name)}
       </h1>
 
       <div className="flex flex-col gap-4 md:flex-row md:flex-wrap">

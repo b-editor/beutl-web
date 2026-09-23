@@ -153,18 +153,17 @@ function ModelDetailLink({
   if (!href) return null;
   const label = PROVIDER_OPTIONS.find((option) => option.id === provider)
     ?.label ?? provider;
+  const linkLabel = t("admin:ai.models.openProvider", { provider: label });
   return (
     <Button asChild size="sm" variant="ghost">
       <a
         href={href}
         target="_blank"
         rel="noreferrer noopener"
-        title={`${t("admin:ai.models.openRouter")} (${label})`}
+        title={linkLabel}
       >
         <ExternalLink className="h-4 w-4" />
-        <span className="sr-only">
-          {`${t("admin:ai.models.openRouter")} (${label})`}
-        </span>
+        <span className="sr-only">{linkLabel}</span>
       </a>
     </Button>
   );

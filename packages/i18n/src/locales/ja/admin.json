@@ -151,7 +151,7 @@
       "remove": "削除",
       "cancel": "キャンセル",
       "apply": "反映",
-      "openRouter": "OpenRouter で開く",
+      "openProvider": "{{provider}} で開く",
       "summaryCount": "{{total}} モデル",
       "summaryNone": "選択できるモデルがありません",
       "economicsPending": "モデル ID を入力すると、実行にかかる原価を表示します。"
@@ -299,7 +299,7 @@
     "usage": {
       "title": "AI 利用状況",
       "description": "指定した期間の AI ジョブと使用ユニットの集計です。個別の残高調整は各ユーザーの詳細ページから行えます。",
-      "since": "{{timestamp}} 以降",
+      "since": "{{- timestamp}} 以降",
       "range": {
         "24h": "過去 24 時間",
         "7d": "過去 7 日間",
