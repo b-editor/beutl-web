@@ -147,6 +147,7 @@ describe("Gateway requests through the installed SDK", () => {
   it.each(["pending", "completed", "error", "cancelled"])("reads video status %s through the SDK", async (status) => {
     const fetchMock = vi.fn(async () => Response.json({
       status, ...(status === "completed" ? { videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }] } : {}),
+      ...(status === "completed" ? { providerMetadata: { gateway: { cost: "0.42" } } } : {}),
       ...(status === "error" ? { error: "failed" } : {}),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -166,7 +167,10 @@ describe("Gateway requests through the installed SDK", () => {
       } },
     })));
 
-    await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
+    const job = await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
+    expect(job).toMatchObject({ status: "in_progress" });
+    expect(job).not.toHaveProperty("result");
+    expect(job).not.toHaveProperty("providerCostUsd");
     expect(JSON.stringify(warning.mock.calls)).not.toContain("never-log-this");
     expect(warning).toHaveBeenCalledWith(
       "Gateway video completed without provider cost",
@@ -177,6 +181,40 @@ describe("Gateway requests through the installed SDK", () => {
         asyncJobFields: ["jobId"],
       }),
     );
+    warning.mockRestore();
+  });
+
+  it("waits for an asynchronously ingested Gateway charge before completing video", async () => {
+    const generationId = "gen_01JQZBWGM1DEMO0123456789AD";
+    let lookups = 0;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      if (String(url).includes("/video-model/status")) {
+        return Response.json({
+          status: "completed",
+          videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+          providerMetadata: { gateway: { generationId } },
+        });
+      }
+      lookups++;
+      return lookups === 1
+        ? Response.json({ error: { message: "Usage event not found" } }, { status: 404 })
+        : Response.json({ data: { id: generationId, model: VIDEO_REQUEST.model, total_cost: "0.85" } });
+    }));
+
+    const ref = { model: VIDEO_REQUEST.model, providerJobId: "job_test" };
+    const first = await getGatewayVideoJob(ref);
+    expect(first).toMatchObject({ status: "in_progress" });
+    expect(first).not.toHaveProperty("result");
+    expect(first).not.toHaveProperty("providerCostUsd");
+    expect(warning.mock.calls.map(([message]) => message))
+      .not.toContain("Gateway video generation info fields did not match");
+
+    await expect(getGatewayVideoJob(ref)).resolves.toMatchObject({
+      status: "completed",
+      providerCostUsd: "0.85",
+    });
+    expect(lookups).toBe(2);
     warning.mockRestore();
   });
 

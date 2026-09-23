@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimAiJobForFinalization,
+  consumeUsage,
   createAiJob,
   getCreditAccount,
   getAiJobById,
@@ -37,6 +38,18 @@ vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {
   return {
     ...original,
     downloadVideoContent: vi.fn(),
+  };
+});
+const gatewayVideoStatus = vi.hoisted(() => vi.fn());
+const gatewayVideoDownload = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/api/src/ai/providers/vercel-gateway/video", async (importOriginal) => {
+  const original = await importOriginal<
+    typeof import("../../packages/api/src/ai/providers/vercel-gateway/video")
+  >();
+  return {
+    ...original,
+    getGatewayVideoJob: gatewayVideoStatus,
+    downloadGatewayVideoContent: gatewayVideoDownload,
   };
 });
 
@@ -470,6 +483,64 @@ describe("AI job reconciliation", () => {
     expect(
       store.state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(0);
+  });
+
+  it("keeps a Gateway video reserved until its delayed actual charge can be settled", async () => {
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      status: "queued",
+      usageUnits: 102,
+      reservedUsageUnits: 102,
+      estimatedUsageUnits: 85,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "bfl/flux-3-video",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 102,
+      monthlyUsageLimit: 200,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: job.id,
+    });
+    await setQueuedAiJobRunning({ jobId: job.id, providerJobId: "gateway-video-1" });
+    const now = new Date();
+    const stored = store.state.aiJobs.get(job.id)!;
+    stored.createdAt = new Date(now.getTime() - 5 * 60 * 1000);
+    stored.updatedAt = new Date(now.getTime() - 2 * 60 * 1000);
+    gatewayVideoStatus
+      .mockResolvedValueOnce({ id: "gateway-video-1", status: "in_progress" })
+      .mockResolvedValueOnce({
+        id: "gateway-video-1",
+        status: "completed",
+        providerCostUsd: "0.85",
+        result: { videos: [{ type: "url", url: "https://example.com/video.mp4" }] },
+      });
+    gatewayVideoDownload.mockResolvedValue({
+      bytes: new Uint8Array([0, 1, 2, 3]).buffer,
+      mimeType: "video/mp4",
+      extension: "mp4",
+    });
+
+    const pending = await reconcileAiJobs(now);
+    expect(pending).toMatchObject({ pending: 1, succeeded: 0, failed: 0 });
+    expect(store.state.aiJobs.get(job.id)).toMatchObject({ status: "running", usageUnits: 102 });
+    expect(store.state.files.size).toBe(0);
+    expect(store.state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(0);
+    expect(gatewayVideoDownload).not.toHaveBeenCalled();
+
+    const completed = await reconcileAiJobs(new Date(now.getTime() + 5 * 60 * 1000));
+    expect(completed).toMatchObject({ pending: 0, succeeded: 1, failed: 0 });
+    expect(store.state.aiJobs.get(job.id)).toMatchObject({
+      status: "succeeded",
+      usageUnits: 85,
+      providerCostUsdMicros: 850_000,
+    });
+    expect(store.state.files.size).toBe(1);
+    expect(store.state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(85);
   });
 
   it("fails and refunds a completed provider job with invalid video output", async () => {

@@ -103,6 +103,9 @@ async function completedVideoCost(
     return providerCostUsd(details.totalCost);
   } catch (error) {
     if (GatewayResponseError.isInstance(error)) {
+      // The generation ledger is populated asynchronously. A 404 just after
+      // video completion means a later status poll should try again.
+      if (error.statusCode === 404) return undefined;
       const cost = generationCostFromSchemaError(error, generationId, model);
       if (cost !== undefined) return cost;
       const response = error.response;
@@ -356,15 +359,13 @@ export async function getGatewayVideoJob(
   }
 
   if (status.status === "completed") {
-    const result: GatewayVideoResult = { videos: status.videos };
     const actualCost = await completedVideoCost(status.providerMetadata, ref.model);
-    const providerCost = actualCost === undefined
-      ? {}
-      : { providerCostUsd: actualCost };
-    if (providerCost.providerCostUsd === undefined) {
-      // The result can be stored with an estimate when the Gateway supplies no
-      // cost. Keep only metadata field names in the log: the payload may hold
-      // signed video URLs and a per-job webhook signing secret.
+    if (actualCost === undefined) {
+      // Gateway usage events can be ingested after video completion. Do not
+      // commit the output and settle an estimate: a later poll (including the
+      // scheduled reconciler) can read the same result with its actual cost.
+      // Keep only field names in the log; metadata may contain signed video
+      // URLs and a per-job webhook signing secret.
       const metadata = status.providerMetadata;
       const fields = (value: unknown) =>
         typeof value === "object" && value !== null
@@ -382,13 +383,18 @@ export async function getGatewayVideoJob(
         gatewayFields: fields(gateway),
         asyncJobFields: fields(asyncJob),
       });
+      return {
+        id: ref.providerJobId,
+        status: "in_progress",
+        error: null,
+      };
     }
     return {
       id: ref.providerJobId,
       status: "completed",
       error: null,
-      result,
-      ...providerCost,
+      result: { videos: status.videos } satisfies GatewayVideoResult,
+      providerCostUsd: actualCost,
     };
   }
   if (status.status === "error") {
