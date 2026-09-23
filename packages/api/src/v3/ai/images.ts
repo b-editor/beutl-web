@@ -147,7 +147,7 @@ async function decodeImageResult(
   }
 }
 
-const app = new Hono()
+const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
   .post("/", async (c) => {
     const userId = await getUserId(c);
     if (!userId) {
@@ -663,7 +663,20 @@ const app = new Hono()
         status: 400,
       });
     }
-    const editPrompt = requiresPrompt ? userPrompt : undefined;
+    const preparedOutpaint = editTask === "outpaint" &&
+      c.env?.AI_IMAGE_PREPARED_OUTPAINT === true;
+    const outpaintExpansion = preparedOutpaint
+      ? Number(body["outpaintExpansion"])
+      : null;
+    if (preparedOutpaint && (outpaintExpansion === null ||
+      ![10, 25, 50].includes(outpaintExpansion))) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
+    }
+    const editPrompt = !requiresPrompt
+      ? undefined
+      : preparedOutpaint
+        ? `Extend the image naturally into the transparent canvas while preserving the original center. ${userPrompt}`
+        : userPrompt;
     const inputImage = await validateAiInputImage(
       file,
       supportedInputImageTypes,
@@ -752,7 +765,8 @@ const app = new Hono()
     }
     // Do not send unchanged raw bytes to a prompt-only outpainting adapter.
     // Keep this after replay so previously paid outputs remain retrievable.
-    if (providerRequiresPreparedOutpaintCanvas(selectedModel.provider, `image.edit.${editTask}`)) {
+    if (providerRequiresPreparedOutpaintCanvas(selectedModel.provider, `image.edit.${editTask}`) &&
+      !preparedOutpaint) {
       return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
         status: 400,
       });
@@ -788,6 +802,7 @@ const app = new Hono()
         task: editTask,
         filename: file.name,
         ...(editPrompt ? { prompt: editPrompt } : {}),
+        ...(preparedOutpaint ? { outpaintExpansion } : {}),
       },
       usagePercent: selectedModel.usagePercent,
       imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,

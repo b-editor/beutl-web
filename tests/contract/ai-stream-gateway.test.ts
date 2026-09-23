@@ -3,16 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The session the browser's cookie stands for. The gateway's whole job is to
 // turn that into a token for the AI API, so the session is what is mocked.
 const getSession = vi.hoisted(() => vi.fn());
+const getImageWorkerBinding = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession } } }));
+vi.mock("@/lib/ai-image-worker-binding", () => ({ getImageWorkerBinding }));
 
 // Stands in for the AI API so the gateway can be watched on its own: a real
 // Hono app, because the route mounts what it is given.
 const forwarded = vi.hoisted(() => [] as Request[]);
+const forwardedPrepared = vi.hoisted(() => [] as boolean[]);
 vi.mock("@beutl/api", async () => {
   const { Hono } = await import("hono");
   return {
     v3: new Hono().all("/*", (c) => {
       forwarded.push(c.req.raw);
+      forwardedPrepared.push((c.env as { AI_IMAGE_PREPARED_OUTPAINT?: boolean })?.AI_IMAGE_PREPARED_OUTPAINT === true);
       return new Response("ok", {
         headers: { "content-type": "text/event-stream" },
       });
@@ -37,8 +41,11 @@ function post(headers: Record<string, string> = {}, signal?: AbortSignal): Reque
 describe("the dashboard's way in to the AI API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getImageWorkerBinding.mockReturnValue(null);
     process.env.JWT_SECRET = "test-secret-for-the-gateway";
+    process.env.AI_IMAGE_WORKER_JWT_SECRET = "test-secret-for-image-worker";
     forwarded.length = 0;
+    forwardedPrepared.length = 0;
     getSession.mockResolvedValue({ user: { id: "user-1" } });
   });
 
@@ -51,6 +58,7 @@ describe("the dashboard's way in to the AI API", () => {
     expect(request.headers.get("authorization")).toMatch(/^Bearer \S+$/);
     // The cookie has done its work here and has no business going further.
     expect(request.headers.get("cookie")).toBeNull();
+    expect(forwardedPrepared).toEqual([false]);
   });
 
   it("keeps browser cancellation connected to the forwarded API request", async () => {
@@ -64,6 +72,66 @@ describe("the dashboard's way in to the AI API", () => {
 
     expect(request.signal.aborted).toBe(true);
     expect(request.signal.reason).toMatchObject({ name: "AbortError" });
+  });
+
+  it("streams image edits to the isolated service after session authentication", async () => {
+    const serviceFetch = vi.fn(async (request: Request) => {
+      forwarded.push(request);
+      return Response.json({ jobId: "image-job" });
+    });
+    getImageWorkerBinding.mockReturnValue({ fetch: serviceFetch });
+    const request = new Request(`${SITE}/api/internal/ai/images/edit`, {
+      method: "POST",
+      headers: {
+        [INTERNAL_REQUEST_HEADER]: "1",
+        cookie: "session=private",
+        "content-type": "multipart/form-data; boundary=test",
+      },
+      body: "image body stream",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(new URL(forwarded[0]!.url).pathname).toBe("/api/v3/ai/images/edit");
+    expect(getImageWorkerBinding).toHaveBeenCalledOnce();
+    expect(serviceFetch).toHaveBeenCalledOnce();
+    expect(forwarded).toHaveLength(1);
+    expect(new URL(forwarded[0]!.url).pathname).toBe("/api/v3/ai/images/edit");
+    expect(forwarded[0]!.headers.get("authorization")).toMatch(/^Bearer \S+$/);
+    const token = forwarded[0]!.headers.get("authorization")!.slice("Bearer ".length);
+    const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    expect(claims).toMatchObject({ iss: "beutl-web-image-edit", aud: "beutl-ai-images" });
+    expect(forwarded[0]!.headers.get("cookie")).toBeNull();
+    expect(await forwarded[0]!.text()).toBe("image body stream");
+  });
+
+  it("keeps the prepared outpaint contract in local Next development", async () => {
+    const request = new Request(`${SITE}/api/internal/ai/images/edit`, {
+      method: "POST",
+      headers: { [INTERNAL_REQUEST_HEADER]: "1" },
+      body: "prepared image body stream",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(forwardedPrepared).toEqual([true]);
+    expect(new URL(forwarded[0]!.url).pathname).toBe("/api/v3/ai/images/edit");
+  });
+
+  it("does not run a production image edit in Web when the service binding is missing", async () => {
+    getImageWorkerBinding.mockImplementation(() => {
+      throw new Error("AI_IMAGE_WORKER service binding is missing");
+    });
+    const request = new Request(`${SITE}/api/internal/ai/images/edit`, {
+      method: "POST",
+      headers: { [INTERNAL_REQUEST_HEADER]: "1" },
+      body: "image body stream",
+    });
+
+    await expect(POST(request)).rejects.toThrow("AI_IMAGE_WORKER service binding is missing");
+    expect(forwarded).toHaveLength(0);
   });
 
   it("refuses a request that does not carry this site's own header", async () => {

@@ -31,7 +31,7 @@ import {
   aiImageEditTaskRequiresPrompt,
   type AiImageEditTask,
 } from "@beutl/core";
-import { editImageAction, type AiActionResult } from "./actions";
+import type { AiActionResult } from "./actions";
 import { submitAiImageEdit } from "@/lib/ai-image-edit-request";
 import {
   preparedImageEditSourceWithinLimit,
@@ -297,28 +297,23 @@ export function ImageEditForm({
   async function submitEdit(
     formData: FormData,
     idempotencyKey: string,
-    submittedTask: string,
   ) {
     setIsPending(true);
     try {
-      if (submittedTask === "outpaint") {
-        setState(await editImageAction({ success: false }, formData));
-      } else {
-        const outcome = await submitAiImageEdit(formData, idempotencyKey);
-        setState(outcome.ok
-          ? {
-              success: true,
-              jobId: outcome.jobId,
-              url: outcome.url,
-              fileName: outcome.fileName,
-              contentType: outcome.contentType,
-            }
-          : {
-              success: false,
-              message: t(`api-errors:${outcome.errorCode}`),
-              keepIdempotencyKey: outcome.keepIdempotencyKey,
-            });
-      }
+      const outcome = await submitAiImageEdit(formData, idempotencyKey);
+      setState(outcome.ok
+        ? {
+            success: true,
+            jobId: outcome.jobId,
+            url: outcome.url,
+            fileName: outcome.fileName,
+            contentType: outcome.contentType,
+          }
+        : {
+            success: false,
+            message: t(`api-errors:${outcome.errorCode}`),
+            keepIdempotencyKey: outcome.keepIdempotencyKey,
+          });
     } catch {
       setState({
         success: false,
@@ -378,7 +373,7 @@ export function ImageEditForm({
           if (!idempotencyKey) return;
           setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
           next.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
-          await submitEdit(next, idempotencyKey, editTask);
+          await submitEdit(next, idempotencyKey);
         } catch {
           // 元のファイルをそのまま送ると、拡張されていない画像を outpaint の
           // 料金で処理することになる。送らずに失敗として伝える。
@@ -396,7 +391,7 @@ export function ImageEditForm({
     if (!idempotencyKey) return;
     formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
     rememberSentModel(selectedModel);
-    await submitEdit(formData, idempotencyKey, editTask);
+    await submitEdit(formData, idempotencyKey);
   }
 
   function handleSourceChange(event: ChangeEvent<HTMLInputElement>) {

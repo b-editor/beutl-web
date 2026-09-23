@@ -1,7 +1,7 @@
 # Deployment configuration
 
 This document records configuration and operational requirements shared by the
-three Cloudflare Workers. Worker routes and deploy commands are listed in the
+four Cloudflare Workers. Worker routes and deploy commands are listed in the
 root [README](../README.md#deployment).
 
 ## Configuration sources
@@ -10,6 +10,7 @@ Cloudflare bindings are declared alongside each deployable application:
 
 - Web: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
 - Desktop API: [`packages/api/wrangler.jsonc`](../packages/api/wrangler.jsonc)
+- Private image edit: [`packages/api/wrangler-ai-images.jsonc`](../packages/api/wrangler-ai-images.jsonc)
 - Admin: [`apps/admin/wrangler.jsonc`](../apps/admin/wrangler.jsonc)
 
 Local environment placeholders are documented in
@@ -21,6 +22,16 @@ commit secret values.
 `JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` must match between the Web and
 desktop API Workers. The Web Worker issues the JWTs that the API Worker
 validates.
+
+The private image-edit Worker has a separate JWT signing key. Set the same
+new random value as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web` and
+`JWT_SECRET` on `beutl-ai-images`; do not reuse the desktop API JWT secret.
+The image Worker fixes `JWT_ISSUER=beutl-web-image-edit` and
+`JWT_AUDIENCE=beutl-ai-images` in its Wrangler configuration. It has no
+public route or workers.dev URL. Its database Hyperdrive, R2 binding, storage
+configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
+must address the same production resources as Web before the Web service
+binding is deployed. Other Web/API routes retain their existing behavior.
 
 ## Object storage
 
@@ -40,8 +51,8 @@ other one wrote. The admin Worker takes the same configuration so that
 
 ### S3 compatible storage
 
-Set `BEUTL_STORAGE_PROVIDER=s3` on all three Workers (Web, desktop API, and
-admin) together with:
+Set `BEUTL_STORAGE_PROVIDER=s3` on all four Workers (Web, desktop API, admin,
+and private image edit) together with:
 
 - `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,
   `https://<account>.r2.cloudflarestorage.com`, or an endpoint with a path
@@ -135,16 +146,17 @@ host-only session cookies when enabling session sharing.
 ### Worker settings
 
 Provider credentials are local to each Worker. The Web Worker executes
-dashboard AI requests through `/api/internal/ai/*` in its own process; it does
-not forward them to the desktop API Worker. Web, desktop API, and admin all
-load the AI model catalog, so keep their enabled Gateway configuration aligned:
+dashboard AI requests through `/api/internal/ai/*`; only image edits are
+forwarded to the private image Worker. It does not forward them to the desktop
+API Worker. All four Workers load the AI model catalog, so keep their enabled
+Gateway configuration aligned:
 
-| Setting | Web | Desktop API | Admin |
-| --- | --- | --- | --- |
-| `OPENROUTER_API_KEY` | Required for OpenRouter operations | Required for OpenRouter operations and reconciliation | Not needed for public catalog and price reads |
-| `VERCEL_AI_GATEWAY_API_KEY` | Required when Gateway is enabled | Required when Gateway is enabled | Required when Gateway is enabled, including built-in model visibility |
+| Setting | Web | Desktop API | Admin | Image edit |
+| --- | --- | --- | --- | --- |
+| `OPENROUTER_API_KEY` | Required for OpenRouter operations | Required for OpenRouter operations and reconciliation | Not needed for public catalog and price reads | Required for OpenRouter edits |
+| `VERCEL_AI_GATEWAY_API_KEY` | Required when Gateway is enabled | Required when Gateway is enabled | Required when Gateway is enabled, including built-in model visibility | Required for Gateway edits |
 
-Configure `VERCEL_AI_GATEWAY_API_KEY` as a secret on **all three Workers** when
+Configure `VERCEL_AI_GATEWAY_API_KEY` as a secret on **all four Workers** when
 enabling Gateway, including an upgrade that relies on the built-in
 `video.edit`, `video.extend`, and `video.motion` models before any rows have
 been registered. Setting it only on the desktop API Worker leaves those modes
@@ -153,7 +165,7 @@ the same provider account so scheduled reconciliation can retrieve jobs
 started by either Worker. Configure secrets separately for each deployed
 Worker/environment; they are not inherited from another Worker.
 
-An OpenRouter-only installation may omit the Gateway key on all three Workers;
+An OpenRouter-only installation may omit the Gateway key on all four Workers;
 the Gateway-only built-in modes then remain unavailable. Gateway supports
 image, transcription, and translation operations as well as video, so the key
 requirement is not limited to registered video models. There is no

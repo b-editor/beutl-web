@@ -34,7 +34,8 @@ const model = "openai/gpt-image-2";
 const prompt = "Extend the landscape";
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const bytes = Uint8Array.from(Buffer.from(PNG, "base64")).buffer;
-const app = () => new Hono().basePath("/api/v3").route("/", v3);
+const app = () => new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
+  .basePath("/api/v3").route("/", v3);
 
 async function headers(key = "outpaint-request") {
   const token = await sign({ "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": userId, exp: Math.floor(Date.now() / 1000) + 300 }, "outpaint-test-secret", "HS256");
@@ -72,6 +73,49 @@ describe("Gateway outpainting is not a raw-image API operation", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error_code: "aiModelDoesNotSupportRequest" });
     expect(vi.mocked(editGatewayImage)).not.toHaveBeenCalled();
+    expect(memory.state.aiJobs.size).toBe(0);
+    expect(memory.state.creditTransactions).toHaveLength(0);
+  });
+
+  it("accepts a Web-prepared outpaint canvas only on the trusted internal path", async () => {
+    const form = new FormData();
+    const preparedPrompt = `Extend the image naturally into the transparent canvas while preserving the original center. ${prompt}`;
+    form.set("task", "outpaint");
+    form.set("prompt", prompt);
+    form.set("outpaintExpansion", "25");
+    form.set("model", model);
+    form.set("file", new File([bytes], "prepared.png", { type: "image/png" }));
+
+    const response = await app().request(
+      "/api/v3/ai/images/edit",
+      { method: "POST", headers: await headers("prepared-outpaint"), body: form },
+      { AI_IMAGE_PREPARED_OUTPAINT: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(editGatewayImage)).toHaveBeenCalledWith(
+      expect.objectContaining({ task: "outpaint", prompt: preparedPrompt }),
+    );
+    expect(memory.state.aiJobs.size).toBe(1);
+    expect([...memory.state.aiJobs.values()][0]?.inputParams).toMatchObject({ outpaintExpansion: 25 });
+    expect((await getCreditAccount({ userId })).monthlyUsageUsed).toBeGreaterThan(0);
+  });
+
+  it("rejects an invalid prepared expansion before reserving usage", async () => {
+    const form = new FormData();
+    form.set("task", "outpaint");
+    form.set("prompt", prompt);
+    form.set("outpaintExpansion", "9");
+    form.set("model", model);
+    form.set("file", new File([bytes], "prepared.png", { type: "image/png" }));
+
+    const response = await app().request(
+      "/api/v3/ai/images/edit",
+      { method: "POST", headers: await headers("invalid-prepared-outpaint"), body: form },
+      { AI_IMAGE_PREPARED_OUTPAINT: true },
+    );
+
+    expect(response.status).toBe(400);
     expect(memory.state.aiJobs.size).toBe(0);
     expect(memory.state.creditTransactions).toHaveLength(0);
   });
