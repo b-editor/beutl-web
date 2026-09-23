@@ -17,7 +17,6 @@ import {
   WandSparkles,
 } from "lucide-react";
 import {
-  useActionState,
   useEffect,
   useMemo,
   useState,
@@ -32,7 +31,8 @@ import {
   aiImageEditTaskRequiresPrompt,
   type AiImageEditTask,
 } from "@beutl/core";
-import { editImageAction } from "./actions";
+import { editImageAction, type AiActionResult } from "./actions";
+import { submitAiImageEdit } from "@/lib/ai-image-edit-request";
 import {
   preparedImageEditSourceWithinLimit,
   rawImageEditSourceExceedsLimit,
@@ -94,13 +94,12 @@ export function ImageEditForm({
   access: AiAccess;
 }) {
   const { t } = useTranslation(lang);
-  // Outpaint has to redraw the upload on a canvas before it can be sent, so this
-  // form submits through onSubmit instead of `action={dispatch}`. That is also
-  // why it reads `isPending` here: useFormStatus only reports a form that React
-  // owns the submission of, so SubmitButton cannot disable itself on this one.
-  const [state, dispatch, isPending] = useActionState(editImageAction, {
-    success: false,
-  });
+  // Outpainting still uses its canvas-preparing Server Action. Other edits go
+  // through the dashboard API route, whose production image response was
+  // verified without exhausting the Web Worker's memory. This form owns the
+  // pending state because it prevents native submission in onSubmit.
+  const [state, setState] = useState<AiActionResult>({ success: false });
+  const [isPending, setIsPending] = useState(false);
   const [chosenTask, setChosenTask] = useState<string>("");
   // task ごとのモデル。5 つの task は 5 つの操作で、それぞれ別のモデルを持つ
   // ——1 つしか覚えないと、別の task を見て戻ってきたときにモデルが変わり、
@@ -295,6 +294,42 @@ export function ImageEditForm({
     });
   }
 
+  async function submitEdit(
+    formData: FormData,
+    idempotencyKey: string,
+    submittedTask: string,
+  ) {
+    setIsPending(true);
+    try {
+      if (submittedTask === "outpaint") {
+        setState(await editImageAction({ success: false }, formData));
+      } else {
+        const outcome = await submitAiImageEdit(formData, idempotencyKey);
+        setState(outcome.ok
+          ? {
+              success: true,
+              jobId: outcome.jobId,
+              url: outcome.url,
+              fileName: outcome.fileName,
+              contentType: outcome.contentType,
+            }
+          : {
+              success: false,
+              message: t(`api-errors:${outcome.errorCode}`),
+              keepIdempotencyKey: outcome.keepIdempotencyKey,
+            });
+      }
+    } catch {
+      setState({
+        success: false,
+        message: t("api-errors:aiRequestInterrupted"),
+        keepIdempotencyKey: true,
+      });
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // Pressing Enter in a field submits even while the button is disabled, so
@@ -343,7 +378,7 @@ export function ImageEditForm({
           if (!idempotencyKey) return;
           setPreparedFor((current) => ({ ...current, [signature]: preparedSignature }));
           next.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
-          dispatch(next);
+          await submitEdit(next, idempotencyKey, editTask);
         } catch {
           // 元のファイルをそのまま送ると、拡張されていない画像を outpaint の
           // 料金で処理することになる。送らずに失敗として伝える。
@@ -361,7 +396,7 @@ export function ImageEditForm({
     if (!idempotencyKey) return;
     formData.set(IDEMPOTENCY_KEY_FIELD, idempotencyKey);
     rememberSentModel(selectedModel);
-    dispatch(formData);
+    await submitEdit(formData, idempotencyKey, editTask);
   }
 
   function handleSourceChange(event: ChangeEvent<HTMLInputElement>) {
