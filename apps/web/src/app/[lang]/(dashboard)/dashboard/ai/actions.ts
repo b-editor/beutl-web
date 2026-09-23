@@ -28,7 +28,7 @@ import {
   readAiJsonResult,
   saveAiImage,
   saveAiJsonResult,
-  settleDeferredGatewayVideoUsage,
+  prepareGatewayVideoUsageForDeletion,
   sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
   MAX_TRANSLATION_SEGMENTS,
@@ -1679,7 +1679,13 @@ export async function deleteJobAction(jobId: string): Promise<AiActionResult> {
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
-  await settleDeferredGatewayVideoUsage({ userId: session.user.id, jobId });
+  const billing = await prepareGatewayVideoUsageForDeletion({
+    userId: session.user.id,
+    jobId,
+  });
+  if (billing === "pending") {
+    return { success: false, message: t("api-errors:aiJobBillingInProgress") };
+  }
   const prepared = await prepareAiJobDeletionByUserId({
     userId: session.user.id,
     jobId,

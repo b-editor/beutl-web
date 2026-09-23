@@ -36,6 +36,7 @@
   "aiJobNotFound": "AI job not found.",
   "aiJobLimitReached": "A video generation job is already in progress. Please wait for it to complete.",
   "aiJobIsActive": "An active AI job cannot be deleted.",
+  "aiJobBillingInProgress": "This video's provider cost is still being finalized. Please try deleting it again shortly.",
   "aiRequestInProgress": "This AI request is still in progress. Please try again shortly.",
   "aiRequestWasDeleted": "This AI request was deleted. Start a new request to run it again.",
   "aiModelUnavailable": "The model this request used is no longer available. Start a new request to choose another one.",

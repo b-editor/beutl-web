@@ -23,6 +23,7 @@ import {
   parseReplayableAiJobInput,
   setR2BucketProvider,
   v3,
+  videoProviderFor,
 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -894,7 +895,7 @@ describe("v3 AI job history contract", () => {
     expect(deleteObject).toHaveBeenCalledOnce();
   });
 
-  it("settles a successful Gateway video's pending reservation before deletion", async () => {
+  it("uses the Gateway's actual video cost before deleting its billing identity", async () => {
     await upsertSubscription({
       userId: USER_ID,
       stripeSubscriptionId: "sub_gateway_video_delete",
@@ -933,6 +934,17 @@ describe("v3 AI job history contract", () => {
       visibility: "PRIVATE",
     });
     state.aiJobs.get(job.id)!.resultFileId = file.id;
+    const status = vi.spyOn(videoProviderFor("vercel-gateway"), "status")
+      .mockImplementation(async (ref) => {
+        expect(state.aiJobs.get(job.id)?.providerJobId).toBe("gateway-video-delete");
+        expect(ref.providerJobId).toBe("gateway-video-delete");
+        return {
+          id: ref.providerJobId,
+          status: "completed",
+          error: null,
+          providerCostUsd: "0.30",
+        };
+      });
 
     const otherUser = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
       method: "DELETE",
@@ -940,6 +952,7 @@ describe("v3 AI job history contract", () => {
     });
     expect(otherUser.status).toBe(404);
     expect(state.aiJobs.get(job.id)?.usageSettledAt).toBeNull();
+    expect(status).not.toHaveBeenCalled();
 
     const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
       method: "DELETE",
@@ -951,12 +964,162 @@ describe("v3 AI job history contract", () => {
       status: "succeeded",
       deletedAt: expect.any(Date),
       providerJobId: null,
-      usageUnits: 50,
+      usageUnits: 30,
       usageSettledAt: expect.any(Date),
     });
-    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(50);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(30);
+    expect(status).toHaveBeenCalledOnce();
     expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
     expect(deleteObject).toHaveBeenCalledWith("ai/video/pending-cost");
+  });
+
+  it("keeps a completed Gateway video until its cost grace expires", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_gateway_video_pending_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
+    });
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: "gateway-video-pending-delete",
+      status: "succeeded",
+      usageUnits: 60,
+      reservedUsageUnits: 60,
+      estimatedUsageUnits: 50,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "minimax/minimax-h3",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 60,
+      monthlyUsageLimit: 200,
+      usagePeriod: ACTIVE_PERIOD,
+      aiJobId: job.id,
+    });
+    const file = await createFile({
+      userId: USER_ID,
+      name: "pending-video.mp4",
+      objectKey: "ai/video/still-pending-cost",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    state.aiJobs.get(job.id)!.resultFileId = file.id;
+    const status = vi.spyOn(videoProviderFor("vercel-gateway"), "status")
+      .mockResolvedValue({ id: "gateway-video-pending-delete", status: "completed", error: null });
+
+    const pending = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    expect(pending.status).toBe(409);
+    expect(await pending.json()).toMatchObject({ error_code: "aiJobBillingInProgress" });
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      providerJobId: "gateway-video-pending-delete",
+      usageSettledAt: null,
+      deletedAt: null,
+    });
+    expect(deleteObject).not.toHaveBeenCalled();
+
+    state.files.get(file.id)!.createdAt = new Date(Date.now() - 16 * 60 * 1000);
+    const afterGrace = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    expect(afterGrace.status).toBe(200);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      providerJobId: null,
+      usageUnits: 50,
+      usageSettledAt: expect.any(Date),
+      deletedAt: expect.any(Date),
+    });
+    expect(status).toHaveBeenCalledTimes(2);
+    expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+  });
+
+  it("does not let reconciliation estimate while deletion is fetching actual cost", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_gateway_video_concurrent_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
+    });
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: "gateway-video-concurrent-delete",
+      status: "succeeded",
+      usageUnits: 60,
+      reservedUsageUnits: 60,
+      estimatedUsageUnits: 50,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "minimax/minimax-h3",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 60,
+      monthlyUsageLimit: 200,
+      usagePeriod: ACTIVE_PERIOD,
+      aiJobId: job.id,
+    });
+    const file = await createFile({
+      userId: USER_ID,
+      name: "concurrent-video.mp4",
+      objectKey: "ai/video/concurrent-delete",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    state.aiJobs.get(job.id)!.resultFileId = file.id;
+    state.files.get(file.id)!.createdAt = new Date(Date.now() - 16 * 60 * 1000);
+    const started = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const status = vi.spyOn(videoProviderFor("vercel-gateway"), "status")
+      .mockImplementation(async (ref) => {
+        started.resolve();
+        await resume.promise;
+        return {
+          id: ref.providerJobId,
+          status: "completed",
+          error: null,
+          providerCostUsd: "0.30",
+        };
+      });
+
+    const deletion = makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    await started.promise;
+    try {
+      const reconciliation = await reconcileAiJobs(new Date(Date.now() + 61 * 1000));
+      expect(reconciliation.deferredCostPending).toBe(1);
+      expect(status).toHaveBeenCalledOnce();
+      expect(state.aiJobs.get(job.id)?.usageSettledAt).toBeNull();
+    } finally {
+      resume.resolve();
+    }
+    const response = await deletion;
+    expect(response.status).toBe(200);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      usageUnits: 30,
+      providerCostUsdMicros: 300_000,
+      providerJobId: null,
+      deletedAt: expect.any(Date),
+    });
+    expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
   });
 
   it("retains an idempotency tombstone when a job is deleted", async () => {

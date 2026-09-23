@@ -36,6 +36,7 @@
   "aiJobNotFound": "AIジョブが見つかりませんでした。",
   "aiJobLimitReached": "進行中の動画生成ジョブがあります。完了するまでお待ちください。",
   "aiJobIsActive": "実行中のAIジョブは削除できません。",
+  "aiJobBillingInProgress": "この動画のプロバイダー原価を確認中です。少し待ってから削除を再試行してください。",
   "aiRequestInProgress": "このAIリクエストは処理中です。少し待ってから再試行してください。",
   "aiRequestWasDeleted": "このAIリクエストは削除されています。再実行するには新しいリクエストを開始してください。",
   "aiModelUnavailable": "このリクエストで使ったモデルは現在利用できません。新しいリクエストで別のモデルを選んでください。",

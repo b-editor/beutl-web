@@ -14,6 +14,7 @@ const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
 const AI_JOB_RESULT_FILE_SELECT = {
   name: true,
   mimeType: true,
+  createdAt: true,
 } as const;
 
 export class StorageCleanupBusyError extends Error {
@@ -1561,6 +1562,58 @@ export async function listUnsettledGatewayVideoJobsForReconciliation({
     },
   });
   return decimalNumberRows(jobs);
+}
+
+/** Serialize the remote-cost decision shared by deletion and reconciliation. */
+export async function claimGatewayVideoCostSettlement({
+  jobId,
+  now,
+  leaseExpiresAt,
+  prisma,
+}: {
+  jobId: string;
+  now: Date;
+  leaseExpiresAt: Date;
+  prisma?: PrismaTransaction;
+}): Promise<boolean> {
+  if (leaseExpiresAt.getTime() <= now.getTime()) {
+    throw new RangeError("Gateway video cost lease must expire in the future");
+  }
+  const db = prisma ?? await getDb();
+  const result = await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      deletedAt: null,
+      usageSettledAt: null,
+      usageUnitUsdMicros: { not: null },
+      reservedUsageUnits: { not: null },
+      OR: [
+        { providerPollLeaseExpiresAt: null },
+        { providerPollLeaseExpiresAt: { lte: now } },
+      ],
+    },
+    data: { providerPollLeaseExpiresAt: leaseExpiresAt },
+  });
+  return result.count === 1;
+}
+
+export async function releaseGatewayVideoCostSettlement({
+  jobId,
+  leaseExpiresAt,
+  prisma,
+}: {
+  jobId: string;
+  leaseExpiresAt: Date;
+  prisma?: PrismaTransaction;
+}): Promise<void> {
+  const db = prisma ?? await getDb();
+  await db.aiJob.updateMany({
+    where: { id: jobId, providerPollLeaseExpiresAt: leaseExpiresAt },
+    data: { providerPollLeaseExpiresAt: null },
+  });
 }
 
 export async function enqueueUserRemoteAiJobCleanups({

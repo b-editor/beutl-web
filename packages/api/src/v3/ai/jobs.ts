@@ -7,7 +7,7 @@ import {
 } from "@beutl/db";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { deleteAiOutputObject, settleDeferredGatewayVideoUsage } from "../../ai/storage";
+import { deleteAiOutputObject, prepareGatewayVideoUsageForDeletion } from "../../ai/storage";
 import { MAX_AI_PROMPT_LENGTH } from "../../ai/upload-limits";
 import {
   AI_IMAGE_ASPECT_RATIOS,
@@ -395,13 +395,14 @@ const app = new Hono()
         status: 400,
       });
     }
-    // A successful video may still hold its buffered reservation while the
-    // Gateway ledger catches up. Deleting its billing identity must not strand
-    // those units, so settle the estimate before scrubbing the job.
-    await settleDeferredGatewayVideoUsage({
+    // Keep the billing identity until actual cost arrives or its grace expires.
+    const billing = await prepareGatewayVideoUsageForDeletion({
       userId,
       jobId: params.data.id,
     });
+    if (billing === "pending") {
+      return c.json(await apiErrorResponse("aiJobBillingInProgress"), { status: 409 });
+    }
     const prepared = await prepareAiJobDeletionByUserId({
       userId,
       jobId: params.data.id,

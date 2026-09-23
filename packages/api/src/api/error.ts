@@ -72,6 +72,7 @@ export const errorCodes = [
   "aiJobNotFound",
   "aiJobLimitReached",
   "aiJobIsActive",
+  "aiJobBillingInProgress",
   "aiRequestInProgress",
   "aiRequestWasDeleted",
   "aiModelUnavailable",
