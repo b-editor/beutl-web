@@ -1,6 +1,7 @@
 "use client";
 
 import { formatDateTime, randomUuid } from "@beutl/core";
+import { browserTimeZone } from "@/lib/client-time-zone";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import {
@@ -148,6 +149,7 @@ export function JobHistory({
 }) {
   const { t } = useTranslation(lang);
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  const [timeZone, setTimeZone] = useState("UTC");
   const [jobsMessage, setJobsMessage] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();
   const [isDeleting, startDelete] = useTransition();
@@ -235,6 +237,9 @@ export function JobHistory({
     try {
       const result = await listJobsAction();
       if (result.success) {
+        // Both initial renders use UTC and show skeletons. Read the browser's
+        // zone only after hydration, in the same update that reveals the rows.
+        setTimeZone(browserTimeZone());
         setJobs((result.jobs ?? []) as Job[]);
         setNextCursor(result.nextCursor ?? null);
         setShowingMorePages(false);
@@ -577,7 +582,7 @@ export function JobHistory({
                         </p>
                       )}
                       <p className="text-xs text-muted-foreground">
-                        {formatDateTime(job.createdAt, lang)}
+                        {formatDateTime(job.createdAt, lang, timeZone)}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
