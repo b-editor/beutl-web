@@ -4,7 +4,10 @@
 // the configuration names.
 // Keep this module dependency-free: instrumentation imports it during Worker
 // startup, before any API route or AI provider implementation is needed.
+import { AsyncLocalStorage } from "node:async_hooks";
+
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
+const SCOPE_KEY = "__BEUTL_R2_BUCKET_PROVIDER_SCOPE__";
 
 /**
  * A stream body must reach the service with a known length: S3 compatible
@@ -49,12 +52,22 @@ export type R2BucketLike = {
 
 type R2BucketProvider = () => R2BucketLike;
 
+function providerScope(): AsyncLocalStorage<R2BucketProvider> {
+  const global = globalThis as Record<string, unknown>;
+  return (global[SCOPE_KEY] ??= new AsyncLocalStorage<R2BucketProvider>()) as AsyncLocalStorage<R2BucketProvider>;
+}
+
+/** Bind a bucket to one scheduled invocation without changing concurrent requests. */
+export function runWithR2BucketProvider<T>(fn: R2BucketProvider, callback: () => Promise<T>): Promise<T> {
+  return providerScope().run(fn, callback);
+}
+
 export function setR2BucketProvider(fn: R2BucketProvider): void {
   (globalThis as Record<string, unknown>)[GLOBAL_KEY] = fn;
 }
 
 export function getR2Bucket(): R2BucketLike {
-  const provider = (globalThis as Record<string, unknown>)[GLOBAL_KEY] as
+  const provider = (providerScope().getStore() ?? (globalThis as Record<string, unknown>)[GLOBAL_KEY]) as
     | R2BucketProvider
     | undefined;
   if (!provider) {
