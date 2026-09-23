@@ -128,6 +128,39 @@ describe("AI model catalog", () => {
     expect(catalog.resolve(OPERATION)?.modelId).toBe("openai/gpt-image-1");
   });
 
+  it("carries administrator-selected behavior independently of the model ID", async () => {
+    await upsertAiOperationModel({
+      operation: "image.generate",
+      modelId: "example/new-image-model",
+      provider: "vercel-gateway",
+      priceUnits: 1,
+      imageSizeMode: "explicit_1k",
+      imageOutputTokenProfile: "grid_48_medium",
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+    await upsertAiOperationModel({
+      operation: "video.generate",
+      modelId: "example/new-video-model",
+      provider: "vercel-gateway",
+      priceUnits: 1,
+      videoAudioRequired: true,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+    const catalog = await loadAiModelCatalog();
+    expect(catalog.resolve("image.generate", "example/new-image-model")).toMatchObject({
+      imageSizeMode: "explicit_1k",
+      imageOutputTokenProfile: "grid_48_medium",
+    });
+    expect(catalog.resolve("video.generate", "example/new-video-model")?.videoAudioRequired)
+      .toBe(true);
+  });
+
   it("does not claim a static cost tier for dynamically billed models", async () => {
     await register("cheap/model", 5, { sortOrder: 2 });
     await register("dear/model", 40, { sortOrder: 0 });

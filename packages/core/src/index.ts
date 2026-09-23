@@ -152,6 +152,7 @@ export {
   aiMinimumQuantityOf,
 } from "./ai-pricing-catalog";
 export * from "./ai-capabilities";
+export * from "./ai-model-options";
 export * from "./request-body-limit";
 export type { AiBillingUnit, AiModelChargeCapabilities } from "./ai-pricing-catalog";
 export {

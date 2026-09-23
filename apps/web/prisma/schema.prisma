@@ -1046,6 +1046,13 @@ model AiOperationModel {
   // 1 行、という制約を残すことで、ID からプロバイダが一意に決まる。
   provider      String   @default("openrouter")
   usagePercent  Int      @default(100)
+  // Provider metadata cannot tell whether audio is mandatory. Null follows
+  // the provider; an administrator may explicitly require or permit silence.
+  videoAudioRequired Boolean?
+  // Request shape and output-token estimate are independent: an image model
+  // may need an explicit size but use a different billing formula.
+  imageSizeMode String @default("aspect_ratio")
+  imageOutputTokenProfile String @default("legacy")
   // Legacy reservation price kept during the rolling migration. New billing
   // ignores it and settles provider cost multiplied by usagePercent.
   priceUnits    Int

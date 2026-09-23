@@ -152,6 +152,29 @@ describe("what an AI screen will send", () => {
     )).toEqual([image, video]);
   });
 
+  it("restores a held video's full options and mandatory-audio override", () => {
+    const now = 10_000_000;
+    const entry = {
+      digest: "a".repeat(64), key: "video-key", model: "example/video",
+      capability: {
+        resolutions: ["2K"], durations: [4], aspectRatios: ["16:9"],
+        generateAudio: true, audioRequired: true, seed: false,
+        firstFrame: true, lastFrame: true, referenceToVideo: true,
+        maxInputReferences: 4, maxReferenceBytes: 1_000_000,
+        maxSourceVideoBytes: 10_000_000,
+        minSourceVideoSeconds: null, maxSourceVideoSeconds: 10,
+        maxPromptCharacters: 4000, maxVideoReferences: 1,
+        maxVideoReferenceBytes: 5_000_000, maxAudioReferences: 0,
+        maxAudioReferenceBytes: 0, maxTotalReferences: 5,
+      }, updatedAt: now,
+    };
+    expect(restoreAiRecoveryEntries(serializeAiRecoveryEntries([entry]), now))
+      .toEqual([entry]);
+    const malformed = { ...entry, capability: { ...entry.capability, audioRequired: "yes" } };
+    expect(restoreAiRecoveryEntries(serializeAiRecoveryEntries([malformed]), now))
+      .toEqual([{ ...malformed, capability: null }]);
+  });
+
   it("nulls malformed capabilities and garbage-collects unsafe snapshots", () => {
     const now = 10_000_000;
     const entry = (digest: string, capability: unknown) => ({

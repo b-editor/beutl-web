@@ -3,23 +3,22 @@ import { estimateImageCost } from "../../packages/api/src/ai/cost-estimate";
 
 describe("image output-token geometry assumptions", () => {
   it.each([
-    ["openai/gpt-image-1", "1:1", 1056],
-    ["openai/gpt-image-1", "3:2", 1568],
-    ["openai/gpt-image-1", "2:3", 1584],
-    ["openai/gpt-image-1", undefined, 1584],
-    ["openai/gpt-image-1", "16:9", 1584],
-    ["openai/gpt-image-2", "1:1", 1756],
-    ["openai/gpt-image-2", "3:2", 1372],
-    ["openai/gpt-image-2", "2:3", 1372],
-    ["openai/gpt-image-2", "16:9", 1413],
-    ["openai/gpt-image-2", "9:16", 1413],
-    ["openai/gpt-image-2", "4:3", 1507],
-    ["openai/gpt-image-2", "3:4", 1507],
-    ["openai/gpt-image-2", undefined, 1756],
-    ["openai/gpt-image-2-2026-04-21", "2:3", 1372],
-  ] as const)("uses %s / %s output geometry (%s tokens)", (model, aspectRatio, tokens) => {
+    ["legacy", "1:1", 1056],
+    ["legacy", "3:2", 1568],
+    ["legacy", "2:3", 1584],
+    ["legacy", undefined, 1584],
+    ["legacy", "16:9", 1584],
+    ["grid_48_medium", "1:1", 1756],
+    ["grid_48_medium", "3:2", 1372],
+    ["grid_48_medium", "2:3", 1372],
+    ["grid_48_medium", "16:9", 1413],
+    ["grid_48_medium", "9:16", 1413],
+    ["grid_48_medium", "4:3", 1507],
+    ["grid_48_medium", "3:4", 1507],
+    ["grid_48_medium", undefined, 1756],
+  ] as const)("uses %s / %s output geometry (%s tokens)", (outputTokenProfile, aspectRatio, tokens) => {
     const estimate = estimateImageCost({
-      model, aspectRatio, referenceImages: 0,
+      outputTokenProfile, aspectRatio, referenceImages: 0,
       endpoints: [[{ billable: "output_image", unit: "token", costUsd: 0.00004 }]],
     });
     expect(estimate).toMatchObject({ status: "estimated", assumptions: [{ kind: "imageOutputTokens", value: tokens }] });
@@ -30,7 +29,7 @@ describe("image output-token geometry assumptions", () => {
 
   it("does not change reference-image tokens to the output shape", () => {
     expect(estimateImageCost({
-      model: "openai/gpt-image-1", aspectRatio: "2:3", referenceImages: 1,
+      outputTokenProfile: "legacy", aspectRatio: "2:3", referenceImages: 1,
       endpoints: [[
         { billable: "output_image", unit: "token", costUsd: 0.00004 },
         { billable: "input_image", unit: "token", costUsd: 0.00001 },
@@ -43,7 +42,7 @@ describe("image output-token geometry assumptions", () => {
 
   it("keeps flat per-image prices independent of token geometry", () => {
     expect(estimateImageCost({
-      model: "openai/gpt-image-2", aspectRatio: "2:3", referenceImages: 0,
+      outputTokenProfile: "grid_48_medium", aspectRatio: "2:3", referenceImages: 0,
       endpoints: [[{ billable: "output_image", unit: "image", costUsd: 0.04 }]],
     })).toEqual({ status: "estimated", usdMin: 0.04, usdMax: 0.04, assumptions: [] });
   });

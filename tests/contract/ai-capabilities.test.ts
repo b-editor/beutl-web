@@ -205,6 +205,7 @@ describe("GET /api/v3/ai/capabilities", () => {
         resolutions: ["480p", "720p", "1080p", "2K"],
         aspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
         audio: true,
+        audioRequired: false,
         seed: true,
         firstFrame: true,
         lastFrame: true,
@@ -269,6 +270,7 @@ describe("GET /api/v3/ai/capabilities", () => {
         resolutions: ["720p"],
         aspectRatios: ["16:9"],
         audio: false,
+        audioRequired: false,
         seed: false,
         // 開始フレームだけを取るモデル。ひとまとめのフラグでは、終了フレームも
         // 受け付けるように見えてしまっていた。

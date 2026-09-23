@@ -1,11 +1,15 @@
 import {
   AI_OPERATIONS,
+  AI_IMAGE_OUTPUT_TOKEN_PROFILES,
+  AI_IMAGE_SIZE_MODES,
   MAX_MODEL_USAGE_PERCENT,
   MAX_MODEL_ID_LENGTH,
   MAX_PRICE_UNITS,
   MIN_MODEL_USAGE_PERCENT,
   MIN_PRICE_UNITS,
   isAiModelId,
+  type AiImageOutputTokenProfile,
+  type AiImageSizeMode,
 } from "@beutl/core";
 
 // Validation for one registered model row.
@@ -23,6 +27,9 @@ export type AiOperationModelInput = {
   provider: string;
   /** Percentage of provider USD cost converted to usage units. */
   usagePercent: number;
+  videoAudioRequired?: boolean | null;
+  imageSizeMode?: AiImageSizeMode;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
   /** Legacy reservation price retained for rolling-deploy compatibility. */
   priceUnits: number;
   displayName: string | null;
@@ -63,6 +70,9 @@ export function validateAiOperationModelInput(
     modelId,
     provider,
     usagePercent,
+    videoAudioRequired,
+    imageSizeMode,
+    imageOutputTokenProfile,
     priceUnits,
     displayName,
     enabled,
@@ -109,6 +119,32 @@ export function validateAiOperationModelInput(
   ) {
     return { ok: false, message: "Invalid provider-cost percentage" };
   }
+  const resolvedAudioRequired = videoAudioRequired ?? null;
+  if (
+    (resolvedAudioRequired !== null && typeof resolvedAudioRequired !== "boolean") ||
+    (!operation.startsWith("video.") && resolvedAudioRequired !== null)
+  ) {
+    return { ok: false, message: "Invalid video audio requirement" };
+  }
+  const resolvedImageSizeMode = imageSizeMode ?? "aspect_ratio";
+  if (
+    typeof resolvedImageSizeMode !== "string" ||
+    !AI_IMAGE_SIZE_MODES.includes(resolvedImageSizeMode as AiImageSizeMode) ||
+    (resolvedImageSizeMode !== "aspect_ratio" &&
+      (operation !== "image.generate" || resolvedProvider !== "vercel-gateway"))
+  ) {
+    return { ok: false, message: "Invalid image size mode" };
+  }
+  const resolvedImageOutputTokenProfile = imageOutputTokenProfile ?? "legacy";
+  if (
+    typeof resolvedImageOutputTokenProfile !== "string" ||
+    !AI_IMAGE_OUTPUT_TOKEN_PROFILES.includes(
+      resolvedImageOutputTokenProfile as AiImageOutputTokenProfile,
+    ) ||
+    (!operation.startsWith("image.") && resolvedImageOutputTokenProfile !== "legacy")
+  ) {
+    return { ok: false, message: "Invalid image output token profile" };
+  }
   const legacyPriceUnits = priceUnits ?? 1;
   if (
     typeof legacyPriceUnits !== "number" ||
@@ -140,6 +176,9 @@ export function validateAiOperationModelInput(
       modelId: trimmedModelId,
       provider: resolvedProvider,
       usagePercent: resolvedUsagePercent,
+      videoAudioRequired: resolvedAudioRequired,
+      imageSizeMode: resolvedImageSizeMode as AiImageSizeMode,
+      imageOutputTokenProfile: resolvedImageOutputTokenProfile as AiImageOutputTokenProfile,
       priceUnits: legacyPriceUnits,
       displayName: trimmedDisplayName,
       enabled,

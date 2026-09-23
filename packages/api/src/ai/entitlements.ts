@@ -359,6 +359,7 @@ export async function canStartAiOperation(
     quantity,
     modelId: selectedModel.modelId,
     provider: selectedModel.provider,
+    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
     request,
   });
   const requiredUsage = quote === null

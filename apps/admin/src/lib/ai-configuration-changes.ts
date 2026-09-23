@@ -1,4 +1,11 @@
-import { AI_OPERATIONS, MAX_MODEL_USAGE_PERCENT } from "@beutl/core";
+import {
+  AI_OPERATIONS,
+  AI_IMAGE_OUTPUT_TOKEN_PROFILES,
+  AI_IMAGE_SIZE_MODES,
+  MAX_MODEL_USAGE_PERCENT,
+  type AiImageOutputTokenProfile,
+  type AiImageSizeMode,
+} from "@beutl/core";
 import {
   aiOperationsGoingOffline,
   validateAiOperationModelInput,
@@ -34,6 +41,9 @@ export type AiOperationModelSnapshot = {
   provider?: string;
   /** Absent on a page rendered before actual-cost billing existed. */
   usagePercent?: number;
+  videoAudioRequired?: boolean | null;
+  imageSizeMode?: AiImageSizeMode;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -51,6 +61,10 @@ export function matchesAiOperationModelSnapshot(
       row.modelId === snapshot.modelId &&
       (row.provider ?? "openrouter") === (snapshot.provider ?? "openrouter") &&
       (row.usagePercent ?? 100) === (snapshot.usagePercent ?? 100) &&
+      (row.videoAudioRequired ?? null) === (snapshot.videoAudioRequired ?? null) &&
+      (row.imageSizeMode ?? "aspect_ratio") === (snapshot.imageSizeMode ?? "aspect_ratio") &&
+      (row.imageOutputTokenProfile ?? "legacy") ===
+        (snapshot.imageOutputTokenProfile ?? "legacy") &&
       row.priceUnits === snapshot.priceUnits &&
       row.displayName === snapshot.displayName &&
       row.enabled === snapshot.enabled &&
@@ -195,6 +209,17 @@ export function validateAiConfigurationChanges(
             !Number.isSafeInteger(value.usagePercent) ||
             value.usagePercent < 1 ||
             value.usagePercent > MAX_MODEL_USAGE_PERCENT)) ||
+        (value.videoAudioRequired !== undefined &&
+          value.videoAudioRequired !== null &&
+          typeof value.videoAudioRequired !== "boolean") ||
+        (value.imageSizeMode !== undefined &&
+          (typeof value.imageSizeMode !== "string" ||
+            !AI_IMAGE_SIZE_MODES.includes(value.imageSizeMode as AiImageSizeMode))) ||
+        (value.imageOutputTokenProfile !== undefined &&
+          (typeof value.imageOutputTokenProfile !== "string" ||
+            !AI_IMAGE_OUTPUT_TOKEN_PROFILES.includes(
+              value.imageOutputTokenProfile as AiImageOutputTokenProfile,
+            ))) ||
         (value.displayName !== null && typeof value.displayName !== "string") ||
         typeof value.enabled !== "boolean" ||
         typeof value.sortOrder !== "number" ||
@@ -214,6 +239,17 @@ export function validateAiConfigurationChanges(
         ...(value.usagePercent === undefined
           ? {}
           : { usagePercent: value.usagePercent as number }),
+        ...(value.videoAudioRequired === undefined
+          ? {}
+          : { videoAudioRequired: value.videoAudioRequired as boolean | null }),
+        ...(value.imageSizeMode === undefined
+          ? {}
+          : { imageSizeMode: value.imageSizeMode as AiImageSizeMode }),
+        ...(value.imageOutputTokenProfile === undefined
+          ? {}
+          : {
+              imageOutputTokenProfile: value.imageOutputTokenProfile as AiImageOutputTokenProfile,
+            }),
         displayName: value.displayName as string | null,
         enabled: value.enabled,
         sortOrder: value.sortOrder,

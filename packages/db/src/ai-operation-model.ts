@@ -1,5 +1,6 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
+import type { AiImageOutputTokenProfile, AiImageSizeMode } from "@beutl/core";
 
 export type AiOperationModelRecord = {
   operation: string;
@@ -7,6 +8,9 @@ export type AiOperationModelRecord = {
   /** Which provider runs this model. Rows predating the column say "openrouter". */
   provider: string;
   usagePercent: number;
+  videoAudioRequired: boolean | null;
+  imageSizeMode: string;
+  imageOutputTokenProfile: string;
   priceUnits: number;
   displayName: string | null;
   sortOrder: number;
@@ -30,6 +34,9 @@ export async function listAiOperationModels({
       modelId: true,
       provider: true,
       usagePercent: true,
+      videoAudioRequired: true,
+      imageSizeMode: true,
+      imageOutputTokenProfile: true,
       priceUnits: true,
       displayName: true,
       sortOrder: true,
@@ -50,6 +57,9 @@ export async function upsertAiOperationModel({
   modelId,
   provider,
   usagePercent,
+  videoAudioRequired,
+  imageSizeMode,
+  imageOutputTokenProfile,
   priceUnits,
   displayName,
   sortOrder,
@@ -67,6 +77,9 @@ export async function upsertAiOperationModel({
    */
   provider?: string;
   usagePercent?: number;
+  videoAudioRequired?: boolean | null;
+  imageSizeMode?: AiImageSizeMode;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
   /** Legacy value retained for compatibility with an older deployment. */
   priceUnits?: number;
   displayName: string | null;
@@ -83,6 +96,9 @@ export async function upsertAiOperationModel({
       modelId,
       provider: provider ?? "openrouter",
       usagePercent: usagePercent ?? 100,
+      videoAudioRequired: videoAudioRequired ?? null,
+      imageSizeMode: imageSizeMode ?? "aspect_ratio",
+      imageOutputTokenProfile: imageOutputTokenProfile ?? "legacy",
       priceUnits: priceUnits ?? 1,
       displayName,
       sortOrder,
@@ -92,6 +108,9 @@ export async function upsertAiOperationModel({
     update: {
       ...(provider === undefined ? {} : { provider }),
       ...(usagePercent === undefined ? {} : { usagePercent }),
+      ...(videoAudioRequired === undefined ? {} : { videoAudioRequired }),
+      ...(imageSizeMode === undefined ? {} : { imageSizeMode }),
+      ...(imageOutputTokenProfile === undefined ? {} : { imageOutputTokenProfile }),
       ...(priceUnits === undefined ? {} : { priceUnits }),
       displayName,
       sortOrder,

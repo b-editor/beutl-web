@@ -322,9 +322,29 @@ export async function loadAiVideoModelCapabilities(
  */
 export function videoCapabilityOf(
   capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
-  model: { modelId: string; provider: string },
+  model: { modelId: string; provider: string; videoAudioRequired?: boolean | null },
 ): AiVideoModelCapabilities | undefined {
-  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
+  const published = capabilities.get(aiCapabilityKey(model.provider, model.modelId));
+  if (model.videoAudioRequired === null || model.videoAudioRequired === undefined) {
+    return published;
+  }
+  // An explicit admin setting survives an optional provider-catalog outage.
+  // The fallback mirrors the unrestricted choices the UI already shows when
+  // the provider publishes no capabilities at all.
+  const base = published ?? toCapabilities({
+    id: model.modelId,
+    supportedResolutions: null,
+    supportedDurations: null,
+    supportedAspectRatios: null,
+    supportedFrameImages: null,
+    generateAudio: null,
+    seed: null,
+  });
+  return {
+    ...base,
+    generateAudio: model.videoAudioRequired || base.generateAudio,
+    audioRequired: model.videoAudioRequired,
+  };
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.

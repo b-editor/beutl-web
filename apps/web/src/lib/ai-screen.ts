@@ -2,8 +2,16 @@
 // ボタンとキーボード送信が同じ答えを使えるし、そのまま試験できる。
 
 import {
+  AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES,
+  AI_MAX_VIDEO_INPUT_REFERENCES,
+  AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES,
   AI_TEXT_RESULT_RETENTION_MILLISECONDS,
   MAX_AI_PROMPT_LENGTH,
+  MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
+  MAX_AI_VIDEO_DURATION_SECONDS,
+  MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
+  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
+  MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
   MAX_MODEL_ID_LENGTH,
 } from "@beutl/core";
 
@@ -36,6 +44,8 @@ export type AiScreenModel = {
   // the two publish different limits. Not shown anywhere — it exists so the
   // screen looks a model's capabilities up as the server does.
   provider: string;
+  /** Null/absent follows the provider's published audio behavior. */
+  videoAudioRequired?: boolean | null;
 };
 
 export type AiBalance = {
@@ -389,31 +399,69 @@ function isBoundedInteger(value: unknown, minimum: number, maximum: number): val
     value >= minimum && value <= maximum;
 }
 
+function isOptionalVideoDuration(value: unknown): boolean {
+  return value === null ||
+    (typeof value === "number" && Number.isFinite(value) &&
+      value >= 0 && value <= MAX_AI_VIDEO_DURATION_SECONDS);
+}
+
+const LEGACY_VIDEO_RECOVERY_KEYS = [
+  "resolutions", "durations", "aspectRatios", "generateAudio", "seed",
+  "firstFrame", "lastFrame",
+] as const;
+const CURRENT_VIDEO_RECOVERY_KEYS = [
+  ...LEGACY_VIDEO_RECOVERY_KEYS,
+  "referenceToVideo", "maxInputReferences", "maxReferenceBytes",
+  "maxSourceVideoBytes", "minSourceVideoSeconds", "maxSourceVideoSeconds",
+  "maxPromptCharacters", "maxVideoReferences", "maxVideoReferenceBytes",
+  "maxAudioReferences", "maxAudioReferenceBytes", "maxTotalReferences",
+] as const;
+
 function normalizeRecoveryCapability(value: unknown): unknown | null {
   if (value === null || !isPlainJsonObject(value)) return null;
   const capability = value as Record<string, unknown>;
   const keys = new Set(Object.keys(capability));
   const imageKeys = new Set(["aspectRatios", "backgrounds", "seed", "maxReferenceImages"]);
-  const videoKeys = new Set([
-    "resolutions", "durations", "aspectRatios", "generateAudio", "seed",
-    "firstFrame", "lastFrame",
-  ]);
   const hasVideoField = ["resolutions", "durations", "generateAudio", "firstFrame", "lastFrame"]
     .some((key) => keys.has(key));
-  const expected = hasVideoField ? videoKeys : imageKeys;
-  if (keys.size !== expected.size || [...keys].some((key) => !expected.has(key))) return null;
   if (hasVideoField) {
-    return isStringArray(capability.resolutions) &&
+    // Newer video forms persist the complete per-model option set, including
+    // administrator overrides. Preserve older seven-field snapshots as well.
+    const required = keys.has("maxInputReferences")
+      ? CURRENT_VIDEO_RECOVERY_KEYS
+      : LEGACY_VIDEO_RECOVERY_KEYS;
+    const allowed = new Set<string>([...required, "audioRequired"]);
+    if (
+      required.some((key) => !keys.has(key)) ||
+      [...keys].some((key) => !allowed.has(key)) ||
+      (keys.has("audioRequired") && !isBoolean(capability.audioRequired))
+    ) return null;
+    const validBase = isStringArray(capability.resolutions) &&
       Array.isArray(capability.durations) &&
       capability.durations.every((duration) => isBoundedInteger(duration, 1, 60)) &&
       isStringArray(capability.aspectRatios) &&
       isBoolean(capability.generateAudio) &&
       isBoolean(capability.seed) &&
       isBoolean(capability.firstFrame) &&
-      isBoolean(capability.lastFrame)
-      ? value
-      : null;
+      isBoolean(capability.lastFrame);
+    if (!validBase) return null;
+    if (required === LEGACY_VIDEO_RECOVERY_KEYS) return value;
+    return isBoolean(capability.referenceToVideo) &&
+      isBoundedInteger(capability.maxInputReferences, 0, AI_MAX_VIDEO_INPUT_REFERENCES) &&
+      isBoundedInteger(capability.maxReferenceBytes, 0, MAX_AI_VIDEO_FRAME_UPLOAD_BYTES) &&
+      isBoundedInteger(capability.maxSourceVideoBytes, 0, MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES) &&
+      isOptionalVideoDuration(capability.minSourceVideoSeconds) &&
+      isOptionalVideoDuration(capability.maxSourceVideoSeconds) &&
+      isBoundedInteger(capability.maxPromptCharacters, 0, MAX_AI_PROMPT_LENGTH) &&
+      isBoundedInteger(capability.maxVideoReferences, 0, AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES) &&
+      isBoundedInteger(capability.maxVideoReferenceBytes, 0, MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES) &&
+      isBoundedInteger(capability.maxAudioReferences, 0, AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES) &&
+      isBoundedInteger(capability.maxAudioReferenceBytes, 0, MAX_AI_VIDEO_INPUT_AUDIO_BYTES) &&
+      (capability.maxTotalReferences === null ||
+        isBoundedInteger(capability.maxTotalReferences, 0, Number.MAX_SAFE_INTEGER))
+      ? value : null;
   }
+  if (keys.size !== imageKeys.size || [...keys].some((key) => !imageKeys.has(key))) return null;
   return isStringArray(capability.aspectRatios) &&
     isStringArray(capability.backgrounds) &&
     isBoolean(capability.seed) &&

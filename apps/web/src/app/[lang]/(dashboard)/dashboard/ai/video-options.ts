@@ -23,6 +23,7 @@ function optionsFor(
       const supported = videoCapabilityOf(capabilities, {
         modelId: model.id,
         provider: model.provider,
+        videoAudioRequired: model.videoAudioRequired,
       });
       return supported
         ? [
@@ -74,6 +75,7 @@ export function buildAiVideoScreenOptions(
       videoCapabilityOf(capabilities, {
         modelId: model.id,
         provider: model.provider,
+        videoAudioRequired: model.videoAudioRequired,
       }),
     )
   );
@@ -113,6 +115,7 @@ export function buildAiSourceVideoScreenOptions(
         videoCapabilityOf(capabilities, {
           modelId: model.id,
           provider: model.provider,
+          videoAudioRequired: model.videoAudioRequired,
         }),
         operation,
       ),

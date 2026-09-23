@@ -32,6 +32,9 @@ describe("registering a model for an operation", () => {
         // column, so every registration made before it keeps running where it ran.
         provider: "openrouter",
         usagePercent: 150,
+        videoAudioRequired: null,
+        imageSizeMode: "aspect_ratio",
+        imageOutputTokenProfile: "legacy",
         priceUnits: 20,
         displayName: "Fast",
         enabled: true,

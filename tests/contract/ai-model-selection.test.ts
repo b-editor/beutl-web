@@ -416,6 +416,7 @@ describe("choosing a model per request", () => {
     const videoKeys = [
       "aspectRatios",
       "audio",
+      "audioRequired",
       "costTier",
       "displayName",
       "durationsSeconds",

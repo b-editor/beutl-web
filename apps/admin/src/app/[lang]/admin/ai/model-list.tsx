@@ -91,6 +91,9 @@ type Draft = {
   provider: string;
   displayName: string;
   usagePercent: string;
+  videoAudioRequired: "provider" | "required" | "optional";
+  imageSizeMode: "aspect_ratio" | "explicit_1k";
+  imageOutputTokenProfile: "legacy" | "grid_48_medium";
   // Hidden compatibility value for a database column older Workers still read.
   priceUnits: string;
   enabled: boolean;
@@ -102,6 +105,11 @@ function draftOf(row: AiModelRow): Draft {
     provider: row.provider,
     displayName: row.displayName ?? "",
     usagePercent: String(row.usagePercent),
+    videoAudioRequired: row.videoAudioRequired === null || row.videoAudioRequired === undefined
+      ? "provider"
+      : row.videoAudioRequired ? "required" : "optional",
+    imageSizeMode: row.imageSizeMode ?? "aspect_ratio",
+    imageOutputTokenProfile: row.imageOutputTokenProfile ?? "legacy",
     priceUnits: String(row.priceUnits),
     enabled: row.enabled,
   };
@@ -112,6 +120,9 @@ const EMPTY_DRAFT: Draft = {
   provider: DEFAULT_MODEL_PROVIDER,
   displayName: "",
   usagePercent: "100",
+  videoAudioRequired: "provider",
+  imageSizeMode: "aspect_ratio",
+  imageOutputTokenProfile: "legacy",
   priceUnits: "1",
   enabled: true,
 };
@@ -232,7 +243,13 @@ function ModelEditor({
             // the transactional save validates the new pairing before it is
             // committed.
             disabled={isPending}
-            onChange={(e) => setDraft({ ...draft, provider: e.target.value })}
+            onChange={(e) => setDraft({
+              ...draft,
+              provider: e.target.value,
+              imageSizeMode: e.target.value === "vercel-gateway"
+                ? draft.imageSizeMode
+                : "aspect_ratio",
+            })}
           >
             {PROVIDER_OPTIONS.map((option) => (
               <option key={option.id} value={option.id}>
@@ -263,6 +280,55 @@ function ModelEditor({
             }
           />
         </Field>
+        {operation.startsWith("video.") && (
+          <Field label={t("admin:ai.models.videoAudioRequired")}>
+            <select
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={draft.videoAudioRequired}
+              disabled={isPending}
+              onChange={(e) => setDraft({
+                ...draft,
+                videoAudioRequired: e.target.value as Draft["videoAudioRequired"],
+              })}
+            >
+              <option value="provider">{t("admin:ai.models.videoAudioProvider")}</option>
+              <option value="required">{t("admin:ai.models.videoAudioAlways")}</option>
+              <option value="optional">{t("admin:ai.models.videoAudioOptional")}</option>
+            </select>
+          </Field>
+        )}
+        {operation === "image.generate" && draft.provider === "vercel-gateway" && (
+          <Field label={t("admin:ai.models.imageSizeMode")}>
+            <select
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={draft.imageSizeMode}
+              disabled={isPending}
+              onChange={(e) => setDraft({
+                ...draft,
+                imageSizeMode: e.target.value as Draft["imageSizeMode"],
+              })}
+            >
+              <option value="aspect_ratio">{t("admin:ai.models.imageSizeAspectRatio")}</option>
+              <option value="explicit_1k">{t("admin:ai.models.imageSizeExplicit1k")}</option>
+            </select>
+          </Field>
+        )}
+        {operation.startsWith("image.") && (
+          <Field label={t("admin:ai.models.imageOutputTokenProfile")}>
+            <select
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={draft.imageOutputTokenProfile}
+              disabled={isPending}
+              onChange={(e) => setDraft({
+                ...draft,
+                imageOutputTokenProfile: e.target.value as Draft["imageOutputTokenProfile"],
+              })}
+            >
+              <option value="legacy">{t("admin:ai.models.imageTokensLegacy")}</option>
+              <option value="grid_48_medium">{t("admin:ai.models.imageTokensGrid48")}</option>
+            </select>
+          </Field>
+        )}
         <label className="flex items-end gap-2 pb-2">
           <Checkbox
             checked={draft.enabled}
@@ -376,6 +442,11 @@ export function AiOperationModels({
     // An empty name is absent, and the row then shows the id.
     displayName: current.displayName.trim() || null,
     usagePercent: Number(current.usagePercent),
+    videoAudioRequired: current.videoAudioRequired === "provider"
+      ? null
+      : current.videoAudioRequired === "required",
+    imageSizeMode: current.imageSizeMode,
+    imageOutputTokenProfile: current.imageOutputTokenProfile,
     priceUnits: Number(current.priceUnits),
     enabled: current.enabled,
   });

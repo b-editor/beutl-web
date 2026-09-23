@@ -41,6 +41,9 @@ export async function getAiScreenState(
             displayName: entry.displayName,
             costTier: entry.costTier,
             provider: entry.provider,
+            ...(operation.startsWith("video.")
+              ? { videoAudioRequired: entry.videoAudioRequired }
+              : {}),
             available:
               entitlements.modelAvailability[operation]?.[entry.modelId] ??
               false,

@@ -28,6 +28,19 @@ const snapshot = (
 });
 
 describe("AI model draft state", () => {
+  it("keeps a per-model capability edit in the unsaved draft", () => {
+    const drafts = reduceModelDrafts(new Map(), {
+      type: "set",
+      operation: "image.generate",
+      rows: [row({ imageSizeMode: "explicit_1k", imageOutputTokenProfile: "grid_48_medium" })],
+      saved: [row()],
+      snapshot: [snapshot()],
+    });
+    expect(serializeModelDrafts(drafts)[0]?.models[0]).toMatchObject({
+      imageSizeMode: "explicit_1k",
+      imageOutputTokenProfile: "grid_48_medium",
+    });
+  });
   it("serializes a provider-only edit to an existing model", () => {
     const baseline = [snapshot({ provider: "openrouter" })];
     const drafts = reduceModelDrafts(new Map(), {

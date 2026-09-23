@@ -195,13 +195,20 @@ describe("request-shaped AI reservation estimates", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
   });
 
-  it.each(["openrouter", "vercel-gateway"])("uses GPT Image 2's own geometry profile through %s", async (provider) => {
+  it.each(["openrouter", "vercel-gateway"])("uses the configured image geometry profile through %s", async (provider) => {
     const modelId = "openai/gpt-image-2";
     tokenImagePrices(provider, modelId);
     for (const [aspectRatio, usd] of [["1:1", 0.07024], ["3:2", 0.05488], ["2:3", 0.05488]] as const) {
-      expect(await quoteAiUsageReservation({ kind: "image", modelId, provider, inputParams: { aspectRatio } }))
+      expect(await quoteAiUsageReservation({
+        kind: "image", modelId, provider,
+        imageOutputTokenProfile: "grid_48_medium",
+        inputParams: { aspectRatio },
+      }))
         .toMatchObject({ estimatedProviderCostUsd: usd });
     }
+    expect(await quoteAiUsageReservation({
+      kind: "image", modelId, provider, inputParams: { aspectRatio: "1:1" },
+    })).toMatchObject({ estimatedProviderCostUsd: 0.04224 });
   });
 
   it.each(["openrouter", "vercel-gateway"])("rejects an unaffordable non-square %s image instead of reserving square tokens", async (provider) => {

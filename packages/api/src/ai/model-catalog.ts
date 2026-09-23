@@ -9,7 +9,14 @@
 // actual request. It is therefore null until a request-specific quote exists.
 import { listAiOperationModels } from "@beutl/db";
 import type { PrismaTransaction } from "@beutl/db";
-import { AI_OPERATIONS, AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
+import {
+  AI_OPERATIONS,
+  AI_DEFAULT_OPERATION_MODELS,
+  AI_IMAGE_OUTPUT_TOKEN_PROFILES,
+  AI_IMAGE_SIZE_MODES,
+  type AiImageOutputTokenProfile,
+  type AiImageSizeMode,
+} from "@beutl/core";
 import {
   DEFAULT_AI_PROVIDER_ID,
   isAiProviderConfigured,
@@ -28,6 +35,9 @@ export type AiOperationModelEntry = {
   provider: string;
   /** Percentage applied to the provider's actual USD cost. */
   usagePercent: number;
+  videoAudioRequired: boolean | null;
+  imageSizeMode: AiImageSizeMode;
+  imageOutputTokenProfile: AiImageOutputTokenProfile;
   /** Legacy fixed price retained only for rolling-deploy compatibility. */
   priceUnits: number;
   displayName: string;
@@ -81,6 +91,9 @@ function builtInEntry(operation: string): Omit<AiOperationModelEntry, "costTier"
     // everything older falls back to the one every registered row carries.
     provider: defaults.provider ?? DEFAULT_AI_PROVIDER_ID,
     usagePercent: 100,
+    videoAudioRequired: null,
+    imageSizeMode: "aspect_ratio",
+    imageOutputTokenProfile: "legacy",
     priceUnits: defaults.price,
     displayName: defaults.model,
     sortOrder: 0,
@@ -146,6 +159,15 @@ export async function loadAiModelCatalog({
       modelId: row.modelId,
       provider: row.provider,
       usagePercent: row.usagePercent,
+      videoAudioRequired: row.videoAudioRequired,
+      imageSizeMode: AI_IMAGE_SIZE_MODES.includes(row.imageSizeMode as AiImageSizeMode)
+        ? row.imageSizeMode as AiImageSizeMode
+        : "aspect_ratio",
+      imageOutputTokenProfile: AI_IMAGE_OUTPUT_TOKEN_PROFILES.includes(
+        row.imageOutputTokenProfile as AiImageOutputTokenProfile,
+      )
+        ? row.imageOutputTokenProfile as AiImageOutputTokenProfile
+        : "legacy",
       priceUnits: row.priceUnits,
       displayName: row.displayName?.trim() || row.modelId,
       sortOrder: row.sortOrder,

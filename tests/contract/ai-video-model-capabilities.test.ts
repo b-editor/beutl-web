@@ -361,14 +361,26 @@ describe("refusing a request the model would reject", () => {
 
   it("shows an always-on audio model as non-optional in the generation screen", () => {
     const modelId = "minimax/minimax-h3";
-    const model = { id: modelId, provider: "vercel-gateway", available: true };
+    const model = { id: modelId, provider: "vercel-gateway", available: true, videoAudioRequired: true };
     const access = { models: { "video.generate": [model] } } as unknown as AiAccess;
-    const supported = capabilities({ modelId, resolutions: ["2K"], durations: [4], audioRequired: true });
+    const supported = capabilities({ modelId, resolutions: ["2K"], durations: [4] });
     const options = buildAiVideoScreenOptions(access, new Map([
       [aiCapabilityKey("vercel-gateway", modelId), supported],
     ]));
 
     expect(options.modelOptions[modelId]).toMatchObject({ generateAudio: true, audioRequired: true });
+  });
+
+  it("keeps an administrator's audio requirement when provider metadata is unavailable", () => {
+    const modelId = "example/future-video-model";
+    const chosen = { modelId, provider: "vercel-gateway", videoAudioRequired: true };
+    const supported = videoCapabilityOf(new Map(), chosen);
+    expect(supported?.audioRequired).toBe(true);
+    expect(unsupportedVideoRequestReason(supported, {
+      resolution: "720p",
+      durationSeconds: 4,
+      generateAudio: false,
+    })).toBe("generateAudio");
   });
 
   it("refuses reference pictures on a model that does not take them", () => {
