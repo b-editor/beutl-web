@@ -105,6 +105,25 @@ async function completedVideoCost(
     if (GatewayResponseError.isInstance(error)) {
       const cost = generationCostFromSchemaError(error, generationId, model);
       if (cost !== undefined) return cost;
+      const response = error.response;
+      const data = typeof response === "object" && response !== null
+        ? (response as Record<string, unknown>).data
+        : undefined;
+      const value = typeof data === "object" && data !== null
+        ? data as Record<string, unknown>
+        : null;
+      console.warn("Gateway video generation info fields did not match", {
+        model,
+        statusCode: error.statusCode ?? null,
+        responseFields: typeof response === "object" && response !== null
+          ? Object.keys(response).slice(0, 12)
+          : [],
+        dataFields: value ? Object.keys(value).slice(0, 16) : [],
+        generationMatches: value?.id === generationId,
+        modelMatches: value?.model === model,
+        actualModel: typeof value?.model === "string" ? value.model.slice(0, 80) : null,
+        costType: typeof value?.total_cost,
+      });
     }
     console.warn("Gateway video actual-cost lookup failed", {
       model,
