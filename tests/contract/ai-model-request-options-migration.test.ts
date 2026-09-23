@@ -19,13 +19,18 @@ describe("per-model request options migration", () => {
     expect(relock).toBeGreaterThan(migration.indexOf("grid_48_medium"));
   });
 
-  it("preserves existing Gateway registrations without runtime model-ID checks", () => {
+  it("preserves existing registrations without runtime model-ID checks", () => {
     expect(migration).toContain("'minimax/minimax-h3'");
     expect(migration).toContain("'openai/gpt-image-2'");
     expect(migration).toContain("'openai/gpt-image-2-2026-04-21'");
     expect(migration).toContain('"videoAudioRequired" IS NULL');
     expect(migration).toContain('"imageSizeMode" = \'aspect_ratio\'');
     expect(migration).toContain('"imageOutputTokenProfile" = \'legacy\'');
+    const tokenBackfill = migration.slice(
+      migration.indexOf('SET "imageOutputTokenProfile"'),
+      migration.indexOf('SET "imageSizeMode"'),
+    );
+    expect(tokenBackfill).not.toContain('"provider"');
     const videoParser = readFileSync(
       new URL("../../packages/api/src/ai/providers/vercel-gateway/models.ts", import.meta.url),
       "utf8",

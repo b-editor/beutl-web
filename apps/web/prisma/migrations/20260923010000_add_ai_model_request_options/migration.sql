@@ -18,8 +18,7 @@ WHERE "provider" = 'vercel-gateway'
 
 UPDATE "AiOperationModel"
 SET "imageOutputTokenProfile" = 'grid_48_medium'
-WHERE "provider" = 'vercel-gateway'
-  AND "operation" LIKE 'image.%'
+WHERE "operation" LIKE 'image.%'
   AND "modelId" IN ('openai/gpt-image-2', 'openai/gpt-image-2-2026-04-21')
   AND "imageOutputTokenProfile" = 'legacy';
 

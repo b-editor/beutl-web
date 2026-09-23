@@ -46,7 +46,7 @@ export const getUnusableVideoModels = cache(
   async (
     operation: string,
     // Who runs a model decides what it takes, so the rows come through whole.
-    models: readonly { modelId: string; provider: string }[],
+    models: readonly { modelId: string; provider: string; videoAudioRequired?: boolean | null }[],
   ) => {
     return unusableVideoModelsFor(
       operation,

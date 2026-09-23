@@ -339,6 +339,12 @@ export function videoCapabilityOf(
     supportedFrameImages: null,
     generateAudio: null,
     seed: null,
+    // Missing provider metadata used to leave every registered source-video
+    // operation available. An audio override must not turn that unknown into
+    // a false claim that edit, extension, or motion is unsupported.
+    supportsVideoEditing: true,
+    supportsVideoExtension: true,
+    supportsMotionControl: true,
   });
   return {
     ...base,
@@ -490,7 +496,7 @@ export function unusableVideoModelsFor(
   operation: string,
   // Whole rows, because who runs a model decides what it takes: the same id
   // can name a different endpoint under a different provider.
-  models: readonly { modelId: string; provider: string }[],
+  models: readonly { modelId: string; provider: string; videoAudioRequired?: boolean | null }[],
   capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
 ): Set<string> {
   // Model ids are returned bare, which stays unambiguous: the catalog keys a

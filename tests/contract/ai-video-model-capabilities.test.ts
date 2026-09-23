@@ -33,7 +33,7 @@ import {
   MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
 } from "@beutl/core";
 import { aiCapabilityKey } from "../../packages/api/src/ai/providers/types";
-import { buildAiVideoScreenOptions } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video-options";
+import { buildAiSourceVideoScreenOptions, buildAiVideoScreenOptions } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/video-options";
 import type { AiAccess } from "../../apps/web/src/lib/ai-screen";
 import {
   clearAiVideoModelCapabilitiesCache,
@@ -382,6 +382,29 @@ describe("refusing a request the model would reject", () => {
       generateAudio: false,
     })).toBe("generateAudio");
   });
+
+  it.each(
+    (["video.edit", "video.extend", "video.motion"] as const).flatMap(
+      (operation) => [true, false].map((videoAudioRequired) => [operation, videoAudioRequired] as const),
+    ),
+  )(
+    "keeps %s usable with audioRequired=%s during a provider catalog outage",
+    (operation, videoAudioRequired) => {
+      const modelId = "example/source-video-model";
+      const model = {
+        id: modelId, provider: "vercel-gateway", available: true,
+        videoAudioRequired,
+      };
+      const chosen = { modelId, provider: model.provider, videoAudioRequired };
+      const supported = videoCapabilityOf(new Map(), chosen);
+      expect(isVideoModelUsable(supported, operation)).toBe(true);
+      expect(unusableVideoModelsFor(operation, [chosen], new Map())).toEqual(new Set());
+      const access = { models: { [operation]: [model] } } as unknown as AiAccess;
+      const screen = buildAiSourceVideoScreenOptions(access, new Map());
+      expect(screen[operation].models).toHaveLength(1);
+      expect(screen[operation].modelOptions[modelId]?.audioRequired).toBe(videoAudioRequired);
+    },
+  );
 
   it("refuses reference pictures on a model that does not take them", () => {
     // Unlike every other field here, an unstated answer is "no". A provider

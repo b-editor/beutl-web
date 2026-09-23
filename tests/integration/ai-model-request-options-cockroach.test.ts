@@ -28,6 +28,7 @@ describeWithCockroach("per-model request options on locked Cockroach tables", ()
       await client.query(`INSERT INTO "AiOperationModel" ("operation", "modelId", "provider") VALUES
         ('video.generate', 'minimax/minimax-h3', 'vercel-gateway'),
         ('image.generate', 'openai/gpt-image-2', 'vercel-gateway'),
+        ('image.edit.remove_object', 'openai/gpt-image-2', 'openrouter'),
         ('image.edit.restyle', 'openai/gpt-image-2', 'vercel-gateway'),
         ('image.generate', 'example/other-image', 'vercel-gateway')`);
       await client.query('ALTER TABLE "AiOperationModel" SET (schema_locked = true)');
@@ -45,6 +46,8 @@ describeWithCockroach("per-model request options on locked Cockroach tables", ()
         "videoAudioRequired", "imageSizeMode", "imageOutputTokenProfile"
         FROM "AiOperationModel" ORDER BY "operation", "modelId"`);
       expect(rows).toEqual([
+        { operation: "image.edit.remove_object", modelId: "openai/gpt-image-2", videoAudioRequired: null,
+          imageSizeMode: "aspect_ratio", imageOutputTokenProfile: "grid_48_medium" },
         { operation: "image.edit.restyle", modelId: "openai/gpt-image-2", videoAudioRequired: null,
           imageSizeMode: "aspect_ratio", imageOutputTokenProfile: "grid_48_medium" },
         { operation: "image.generate", modelId: "example/other-image", videoAudioRequired: null,
