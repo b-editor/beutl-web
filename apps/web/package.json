@@ -30,7 +30,7 @@
     "@beutl/email": "workspace:*",
     "@beutl/i18n": "workspace:*",
     "@beutl/next": "workspace:*",
-    "@hono/zod-validator": "^0.7.6",
+    "@hono/zod-validator": "^0.9.1",
     "@opennextjs/cloudflare": "^1.20.2",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
