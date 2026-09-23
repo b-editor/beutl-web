@@ -181,6 +181,23 @@ describe("settling an AI reservation to actual provider cost", () => {
     });
   });
 
+  it("records a matching actual cost without a zero-valued ledger row", async () => {
+    const job = await reserveVideo(20);
+    const base = {
+      userId: USER_ID, aiJobId: job.id, actualAmount: 20,
+      monthlyUsageLimit: 20, currentUsagePeriod: PERIOD,
+    };
+    await settleUsage({ ...base, providerCostUsdMicros: null });
+    await settleUsage({ ...base, providerCostUsdMicros: 200_000, allowActualCorrection: true });
+    await settleUsage({ ...base, providerCostUsdMicros: 200_000, allowActualCorrection: true });
+
+    expect(memory.state.aiJobs.get(job.id)?.providerCostUsdMicros).toBe(200_000);
+    expect(memory.state.creditTransactions.some((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toBe(false);
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(20);
+  });
+
   it("restores the remaining purchased share before monthly allowance", async () => {
     await addPurchasedCredits({ userId: USER_ID, amount: 10, stripePaymentId: "pi_late_cost" });
     const job = await reserveVideo(25, 20);

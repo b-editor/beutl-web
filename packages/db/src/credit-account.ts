@@ -1092,7 +1092,7 @@ export async function settleUsage({
         purchasedCreditDebt,
       },
     }));
-    if (delta !== 0 || correctingEstimate) {
+    if (delta !== 0 || (correctingEstimate && providerCostUsdMicros === null)) {
       await tx.creditTransaction.create({
         data: {
           userId,
