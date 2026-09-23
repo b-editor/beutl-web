@@ -12,8 +12,10 @@ export const POST = (request: Request) => {
   // Worker context and retains Hono's synchronous fallback.
   let context: ReturnType<typeof getCloudflareContext> | null = null;
   try { context = getCloudflareContext(); } catch { /* Next dev has none. */ }
-  return context
-    ? app.fetch(request, context.env, context.ctx)
+  const executionCtx = context?.ctx;
+  return context && executionCtx && typeof executionCtx === "object" &&
+    "waitUntil" in executionCtx && typeof executionCtx.waitUntil === "function"
+    ? app.fetch(request, context.env, executionCtx as Parameters<typeof app.fetch>[2])
     : app.fetch(request);
 };
 export const PUT = handle(app);
