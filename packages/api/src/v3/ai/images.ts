@@ -54,6 +54,7 @@ import {
 } from "../../ai/image-validation";
 import {
   validateAiInputImage,
+  inspectGeneratedJpeg,
   type AiInputImageMimeType,
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
@@ -129,10 +130,13 @@ function optionalMultipartField(
 
 async function decodeImageResult(
   result: { b64Json: string; mediaType: string },
+  allowJpeg = false,
 ): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
   try {
     const bytes = decodeGeneratedImageBase64(result.b64Json);
-    const metadata = await inspectGeneratedImage(bytes, result.mediaType);
+    const metadata = allowJpeg && result.mediaType === "image/jpeg"
+      ? inspectGeneratedJpeg(bytes)
+      : await inspectGeneratedImage(bytes, result.mediaType);
     return {
       bytes,
       mimeType: metadata.mimeType,
@@ -830,13 +834,13 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
         signal: c.req.raw.signal,
       });
       const { bytes, mimeType: outputMimeType } =
-        await decodeImageResult(result);
+        await decodeImageResult(result, editTask !== "remove_background");
       const saved = await saveAiImage({
         jobId: job.id,
         userId,
         bytes,
         mimeType: outputMimeType,
-        filename: `ai-edit-${job.id}.png`,
+        filename: `ai-edit-${job.id}.${outputMimeType === "image/jpeg" ? "jpg" : "png"}`,
         providerCostUsd: result.providerCostUsd,
       });
       return c.json({

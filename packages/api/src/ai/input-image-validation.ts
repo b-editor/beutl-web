@@ -1,5 +1,7 @@
 import {
   inspectInputPng,
+  InvalidGeneratedImageError,
+  MAX_AI_GENERATED_IMAGE_BYTES,
   MAX_AI_GENERATED_IMAGE_DIMENSION,
   MAX_AI_GENERATED_IMAGE_PIXELS,
 } from "./image-validation";
@@ -45,7 +47,7 @@ function hasAsciiAt(bytes: Uint8Array, offset: number, value: string): boolean {
   return true;
 }
 
-function inspectJpeg(bytes: Uint8Array): void {
+function inspectJpeg(bytes: Uint8Array): { width: number; height: number } {
   if (
     bytes.length < 16 ||
     bytes[0] !== 0xff ||
@@ -63,6 +65,8 @@ function inspectJpeg(bytes: Uint8Array): void {
   let sawFrame = false;
   let sawScan = false;
   let entropyBytes = 0;
+  let frameWidth = 0;
+  let frameHeight = 0;
 
   while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) {
@@ -76,7 +80,7 @@ function inspectJpeg(bytes: Uint8Array): void {
       if (!sawFrame || !sawScan || entropyBytes === 0 || offset !== bytes.length) {
         throw new Error("Incomplete JPEG image");
       }
-      return;
+      return { width: frameWidth, height: frameHeight };
     }
     if (
       marker === 0x00 ||
@@ -110,6 +114,8 @@ function inspectJpeg(bytes: Uint8Array): void {
         throw new Error("Invalid JPEG frame header");
       }
       assertDimensions(width, height);
+      frameWidth = width;
+      frameHeight = height;
       sawFrame = true;
     }
 
@@ -155,6 +161,23 @@ function inspectJpeg(bytes: Uint8Array): void {
   }
 
   throw new Error("JPEG has no end marker");
+}
+
+// Some image-to-image providers return JPEG despite output_format=png. Reuse
+// the bounded input JPEG parser for non-transparent generated edits without
+// decoding a 4K raster inside the Worker isolate.
+export function inspectGeneratedJpeg(
+  value: ArrayBuffer,
+): { mimeType: "image/jpeg"; width: number; height: number } {
+  if (value.byteLength === 0 || value.byteLength > MAX_AI_GENERATED_IMAGE_BYTES) {
+    throw new InvalidGeneratedImageError("Generated JPEG size is invalid");
+  }
+  try {
+    const dimensions = inspectJpeg(new Uint8Array(value));
+    return { mimeType: "image/jpeg", ...dimensions };
+  } catch (cause) {
+    throw new InvalidGeneratedImageError("Generated JPEG is invalid", { cause });
+  }
 }
 
 function readUint24LittleEndian(bytes: Uint8Array, offset: number): number {
