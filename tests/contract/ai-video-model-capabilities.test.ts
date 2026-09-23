@@ -399,10 +399,17 @@ describe("refusing a request the model would reject", () => {
       const supported = videoCapabilityOf(new Map(), chosen);
       expect(isVideoModelUsable(supported, operation)).toBe(true);
       expect(unusableVideoModelsFor(operation, [chosen], new Map())).toEqual(new Set());
+      expect(unsupportedVideoRequestReason(supported, {
+        resolution: "720p",
+        durationSeconds: 4,
+        generateAudio: videoAudioRequired,
+        inputReferences: 1,
+      })).toBeNull();
       const access = { models: { [operation]: [model] } } as unknown as AiAccess;
       const screen = buildAiSourceVideoScreenOptions(access, new Map());
       expect(screen[operation].models).toHaveLength(1);
       expect(screen[operation].modelOptions[modelId]?.audioRequired).toBe(videoAudioRequired);
+      expect(screen[operation].modelOptions[modelId]?.referenceToVideo).toBe(false);
     },
   );
 
