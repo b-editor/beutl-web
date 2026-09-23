@@ -5,7 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Hono } from "hono";
 import { boundedBody, apiRequestBodyLimit } from "@beutl/core";
-import { setDbProvider } from "@beutl/db";
+import { runWithDbProvider } from "@beutl/db";
 import { apiErrorResponse, apiOnErrorHandler, fileTooLargeApiResponse } from "./api/error";
 import { getUserIdFromHeaders } from "./api/auth";
 import { setR2BucketProvider, type R2BucketLike } from "./ai/r2-provider";
@@ -50,7 +50,7 @@ const app = new Hono()
   .route("/", aiImages)
   .onError(apiOnErrorHandler);
 
-function configureRuntime(env: ImageWorkerEnv): void {
+function configureRuntime(env: ImageWorkerEnv): string {
   const connectionString = env.BEUTL_DATABASE_HYPERDRIVE?.connectionString;
   if (!connectionString) throw new Error("Image Worker database binding is missing");
   if (!env.JWT_SECRET) throw new Error("Image Worker JWT secret is missing");
@@ -58,10 +58,8 @@ function configureRuntime(env: ImageWorkerEnv): void {
     const value = env[key];
     if (typeof value === "string") process.env[key] = value;
   }
-  setDbProvider(async () => new PrismaClient({
-    adapter: new PrismaPg({ connectionString, maxUses: 1 }),
-  }));
   setR2BucketProvider(() => resolveStorageBucket(env));
+  return connectionString;
 }
 
 export async function fetchImageEdit(request: Request, env: ImageWorkerEnv): Promise<Response> {
@@ -82,31 +80,44 @@ export async function fetchImageEdit(request: Request, env: ImageWorkerEnv): Pro
       return await fileTooLargeApiResponse();
     }
   }
-  configureRuntime(env);
+  const connectionString = configureRuntime(env);
   // Reject unauthenticated requests before locking the body into a stream
   // wrapper. The image endpoint verifies the same token again before billing.
   if (!await getUserIdFromHeaders(request.headers)) {
     await request.body?.cancel();
     return Response.json(await apiErrorResponse("authenticationIsRequired"), { status: 401 });
   }
-  let bodyLimitExceeded = false;
-  const headers = new Headers(request.headers);
-  headers.delete("content-length");
-  const bounded = request.body
-    ? new Request(request.url, {
-        method: "POST",
-        headers,
-        body: boundedBody(request.body, limit, () => { bodyLimitExceeded = true; }),
-        signal: request.signal,
-        duplex: "half",
-      } as RequestInit & { duplex: "half" })
-    : request;
+  const db = new PrismaClient({
+    adapter: new PrismaPg({ connectionString, maxUses: 1 }),
+  });
   try {
-    const response = await app.fetch(bounded, env);
-    return bodyLimitExceeded ? await fileTooLargeApiResponse() : response;
-  } catch (error) {
-    if (bodyLimitExceeded) return await fileTooLargeApiResponse();
-    throw error;
+    return await runWithDbProvider(async () => db, async () => {
+      let bodyLimitExceeded = false;
+      const headers = new Headers(request.headers);
+      headers.delete("content-length");
+      const bounded = request.body
+        ? new Request(request.url, {
+            method: "POST",
+            headers,
+            body: boundedBody(request.body, limit, () => { bodyLimitExceeded = true; }),
+            signal: request.signal,
+            duplex: "half",
+          } as RequestInit & { duplex: "half" })
+        : request;
+      try {
+        const response = await app.fetch(bounded, {
+          ...env,
+          // Only the private Web-authenticated path sends prepared canvases.
+          AI_IMAGE_PREPARED_OUTPAINT: true,
+        });
+        return bodyLimitExceeded ? await fileTooLargeApiResponse() : response;
+      } catch (error) {
+        if (bodyLimitExceeded) return await fileTooLargeApiResponse();
+        throw error;
+      }
+    });
+  } finally {
+    await db.$disconnect();
   }
 }
 

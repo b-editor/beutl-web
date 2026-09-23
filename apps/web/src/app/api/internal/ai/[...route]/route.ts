@@ -82,5 +82,9 @@ export async function POST(request: Request): Promise<Response> {
     return await imageWorker.fetch(forwarded);
   }
 
-  return await app.request(forwarded);
+  return await app.request(forwarded, undefined, {
+    // next dev has no service binding; preserve the authenticated Web form's
+    // prepared-canvas behavior without changing the public raw API contract.
+    AI_IMAGE_PREPARED_OUTPAINT: true,
+  });
 }
