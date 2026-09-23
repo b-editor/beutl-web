@@ -143,12 +143,21 @@ async function translateStreaming({
       prompt: user,
       output,
       abortSignal: gatewayRequestSignal(request.signal),
+      // The SDK otherwise console.error's the entire error object, including
+      // requestBodyValues with the user's subtitle text. Log only safe fields.
+      onError({ error }) {
+        const providerError = toGatewayProviderError(error, `${PROVIDER_LABEL} translation stream failed`);
+        console.warn("Gateway translation stream failed", {
+          httpStatus: providerError.httpStatus,
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+      },
     });
     // textStream omits error/abort parts. Valid-looking JSON is not proof
     // that the provider completed the request successfully.
     for await (const part of result.fullStream) {
       if (part.type === "error") {
-        throw new AiProviderError(`${PROVIDER_LABEL} translation stream failed`, { cause: part.error });
+        throw toGatewayProviderError(part.error, `${PROVIDER_LABEL} translation stream failed`);
       }
       if (part.type === "abort") {
         throw new AiProviderError(`${PROVIDER_LABEL} translation stream was aborted`);
