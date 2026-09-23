@@ -31,7 +31,8 @@ export async function POST(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   url.pathname = url.pathname.replace(/^\/api\/internal\/ai\//, "/api/v3/ai/");
-  const imageWorker = url.pathname === "/api/v3/ai/images/edit"
+  const isImageEdit = url.pathname === "/api/v3/ai/images/edit";
+  const imageWorker = isImageEdit
     ? getImageWorkerBinding()
     : null;
   const secret = imageWorker
@@ -82,9 +83,12 @@ export async function POST(request: Request): Promise<Response> {
     return await imageWorker.fetch(forwarded);
   }
 
-  return await app.request(forwarded, undefined, {
+  if (isImageEdit) {
     // next dev has no service binding; preserve the authenticated Web form's
     // prepared-canvas behavior without changing the public raw API contract.
-    AI_IMAGE_PREPARED_OUTPAINT: true,
-  });
+    return await app.request(forwarded, undefined, {
+      AI_IMAGE_PREPARED_OUTPAINT: true,
+    });
+  }
+  return await app.request(forwarded);
 }

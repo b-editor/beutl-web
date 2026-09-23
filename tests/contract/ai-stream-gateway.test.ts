@@ -10,11 +10,13 @@ vi.mock("@/lib/ai-image-worker-binding", () => ({ getImageWorkerBinding }));
 // Stands in for the AI API so the gateway can be watched on its own: a real
 // Hono app, because the route mounts what it is given.
 const forwarded = vi.hoisted(() => [] as Request[]);
+const forwardedPrepared = vi.hoisted(() => [] as boolean[]);
 vi.mock("@beutl/api", async () => {
   const { Hono } = await import("hono");
   return {
     v3: new Hono().all("/*", (c) => {
       forwarded.push(c.req.raw);
+      forwardedPrepared.push((c.env as { AI_IMAGE_PREPARED_OUTPAINT?: boolean })?.AI_IMAGE_PREPARED_OUTPAINT === true);
       return new Response("ok", {
         headers: { "content-type": "text/event-stream" },
       });
@@ -43,6 +45,7 @@ describe("the dashboard's way in to the AI API", () => {
     process.env.JWT_SECRET = "test-secret-for-the-gateway";
     process.env.AI_IMAGE_WORKER_JWT_SECRET = "test-secret-for-image-worker";
     forwarded.length = 0;
+    forwardedPrepared.length = 0;
     getSession.mockResolvedValue({ user: { id: "user-1" } });
   });
 
@@ -55,6 +58,7 @@ describe("the dashboard's way in to the AI API", () => {
     expect(request.headers.get("authorization")).toMatch(/^Bearer \S+$/);
     // The cookie has done its work here and has no business going further.
     expect(request.headers.get("cookie")).toBeNull();
+    expect(forwardedPrepared).toEqual([false]);
   });
 
   it("keeps browser cancellation connected to the forwarded API request", async () => {
@@ -100,6 +104,20 @@ describe("the dashboard's way in to the AI API", () => {
     expect(claims).toMatchObject({ iss: "beutl-web-image-edit", aud: "beutl-ai-images" });
     expect(forwarded[0]!.headers.get("cookie")).toBeNull();
     expect(await forwarded[0]!.text()).toBe("image body stream");
+  });
+
+  it("keeps the prepared outpaint contract in local Next development", async () => {
+    const request = new Request(`${SITE}/api/internal/ai/images/edit`, {
+      method: "POST",
+      headers: { [INTERNAL_REQUEST_HEADER]: "1" },
+      body: "prepared image body stream",
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(forwardedPrepared).toEqual([true]);
+    expect(new URL(forwarded[0]!.url).pathname).toBe("/api/v3/ai/images/edit");
   });
 
   it("does not run a production image edit in Web when the service binding is missing", async () => {
