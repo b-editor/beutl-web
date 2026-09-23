@@ -149,9 +149,7 @@ export function JobHistory({
 }) {
   const { t } = useTranslation(lang);
   const [jobs, setJobs] = useState<Job[] | null>(null);
-  // Jobs are fetched after hydration. The server and first client render both
-  // show skeletons; once rows arrive, display them in the viewer's local zone.
-  const timeZone = jobs === null ? "UTC" : browserTimeZone();
+  const [timeZone, setTimeZone] = useState("UTC");
   const [jobsMessage, setJobsMessage] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();
   const [isDeleting, startDelete] = useTransition();
@@ -239,6 +237,9 @@ export function JobHistory({
     try {
       const result = await listJobsAction();
       if (result.success) {
+        // Both initial renders use UTC and show skeletons. Read the browser's
+        // zone only after hydration, in the same update that reveals the rows.
+        setTimeZone(browserTimeZone());
         setJobs((result.jobs ?? []) as Job[]);
         setNextCursor(result.nextCursor ?? null);
         setShowingMorePages(false);
