@@ -106,6 +106,30 @@ describe("POST /api/v3/ai/videos/:id/gateway-callback", () => {
     expect(state.aiJobs.get(JOB_ID)?.status).not.toBe("succeeded");
   });
 
+  it("acknowledges a verified callback before the slow provider status request finishes", async () => {
+    const provider = Promise.withResolvers<{
+      id: string; status: "pending"; error: null;
+    }>();
+    getGatewayVideoJob.mockReturnValue(provider.promise);
+    const background: Promise<unknown>[] = [];
+    const response = await makeApp().fetch(
+      new Request(`https://beutl.beditor.net/api/v3/ai/videos/${JOB_ID}/gateway-callback?nonce=${nonce.nonce}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: delivery(),
+      }),
+      undefined,
+      { waitUntil: (work: Promise<unknown>) => { background.push(work); } } as never,
+    );
+
+    expect(response.status).toBe(204);
+    expect(background).toHaveLength(1);
+    expect(state.aiJobs.get(JOB_ID)?.status).toBe("running");
+    provider.resolve({ id: PROVIDER_JOB_ID, status: "pending", error: null });
+    await Promise.all(background);
+    expect(getGatewayVideoJob).toHaveBeenCalledOnce();
+  });
+
   it("refuses a delivery that cannot present the job's nonce", async () => {
     // The nonce is the whole of the authentication here. Without this check the
     // endpoint would let anyone who can guess a job id spend its poll lease.
