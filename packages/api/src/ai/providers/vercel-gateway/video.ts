@@ -359,7 +359,7 @@ export async function getGatewayVideoJob(
   try {
     status = await getVideoStatus(createGatewayClient().videoModel(ref.model), {
       operation: { gatewayJobId: ref.providerJobId },
-      abortSignal: gatewayRequestSignal(undefined),
+      abortSignal: gatewayRequestSignal(ref.signal),
     });
   } catch (cause) {
     throw toGatewayProviderError(cause, "Vercel AI Gateway video poll failed");
@@ -368,9 +368,8 @@ export async function getGatewayVideoJob(
   if (status.status === "completed") {
     const actualCost = await completedVideoCost(status.providerMetadata, ref.model);
     if (actualCost === undefined) {
-      // Gateway usage events can be ingested after video completion. Do not
-      // commit the output and settle an estimate: a later poll (including the
-      // scheduled reconciler) can read the same result with its actual cost.
+      // Gateway usage events can be ingested after video completion. The
+      // finished video is still usable now; its reservation is settled later.
       // Keep only field names in the log; metadata may contain signed video
       // URLs and a per-job webhook signing secret.
       const metadata = status.providerMetadata;
@@ -390,18 +389,13 @@ export async function getGatewayVideoJob(
         gatewayFields: fields(gateway),
         asyncJobFields: fields(asyncJob),
       });
-      return {
-        id: ref.providerJobId,
-        status: "in_progress",
-        error: null,
-      };
     }
     return {
       id: ref.providerJobId,
       status: "completed",
       error: null,
       result: { videos: status.videos } satisfies GatewayVideoResult,
-      providerCostUsd: actualCost,
+      ...(actualCost === undefined ? {} : { providerCostUsd: actualCost }),
     };
   }
   if (status.status === "error") {

@@ -173,6 +173,8 @@ export type AiVideoStartRequest = {
 export type AiVideoJobRef = {
   providerJobId: string;
   model: string | null;
+  /** Optional shorter deadline for background cost-only checks. */
+  signal?: AbortSignal;
 };
 
 /** What a provider publishes about one video model. */

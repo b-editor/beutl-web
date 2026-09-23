@@ -15,6 +15,7 @@ import {
   getTopAiUsers,
   listCreditAccountUsageSnapshot,
   listRecentAiJobsByUserId,
+  listUnsettledGatewayVideoJobsForReconciliation,
   refundUsage,
   setDbProvider,
   setMonthlyUsageUsedByAdmin,
@@ -349,6 +350,65 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
       expect(row).not.toHaveProperty("userId");
     }
   });
+
+  it("finds only successful Gateway videos awaiting cost in real SQL", async () => {
+    const userId = crypto.randomUUID();
+    const old = new Date("2020-01-01T00:00:00.000Z");
+    const cutoff = new Date("2020-01-02T00:00:00.000Z");
+    const rollback = new Error("Roll back deferred video cost fixtures");
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.user.create({ data: { id: userId, email: `${userId}@deferred-cost-test.invalid` } });
+      const file = await tx.file.create({ data: {
+        userId,
+        name: "video.mp4",
+        size: 4,
+        mimeType: "video/mp4",
+        objectKey: `ai/video/${userId}/test`,
+        visibility: "PRIVATE",
+        createdAt: old,
+      } });
+      const waiting = await tx.aiJob.create({ data: {
+        userId,
+        kind: "video",
+        provider: "vercel-gateway",
+        status: "succeeded",
+        model: "minimax/minimax-h3",
+        providerJobId: `job_${userId.replaceAll("-", "")}`,
+        resultFileId: file.id,
+        usageUnits: 60,
+        reservedUsageUnits: 60,
+        estimatedUsageUnits: 50,
+        usageUnitUsdMicros: 10_000,
+        createdAt: old,
+        updatedAt: old,
+      } });
+      await tx.aiJob.create({ data: {
+        userId,
+        kind: "video",
+        provider: "openrouter",
+        status: "succeeded",
+        usageUnits: 20,
+        reservedUsageUnits: 20,
+        usageUnitUsdMicros: 10_000,
+        createdAt: old,
+        updatedAt: old,
+      } });
+      const rows = await listUnsettledGatewayVideoJobsForReconciliation({
+        updatedBefore: cutoff,
+        prisma: tx,
+      });
+      expect(rows.filter((row) => row.userId === userId)).toEqual([
+        expect.objectContaining({
+          id: waiting.id,
+          providerJobId: waiting.providerJobId,
+          resultFile: { createdAt: old },
+        }),
+      ]);
+      throw rollback;
+    }, { timeout: 30_000 })).rejects.toBe(rollback);
+    expect(await prisma.user.count({ where: { id: userId } })).toBe(0);
+  }, 45_000);
 
   // The reports all open with a range predicate on createdAt, so an index that
   // cannot serve one is useless to them — which is how the first version of

@@ -1527,6 +1527,42 @@ export async function listActiveAiJobsForReconciliation({
   return decimalNumberRows(jobs);
 }
 
+/** Successful Gateway videos whose output is available but reservation is not final. */
+export async function listUnsettledGatewayVideoJobsForReconciliation({
+  updatedBefore,
+  limit = 100,
+  prisma,
+}: {
+  updatedBefore: Date;
+  limit?: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  const jobs = await db.aiJob.findMany({
+    where: {
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      deletedAt: null,
+      usageSettledAt: null,
+      usageUnitUsdMicros: { not: null },
+      reservedUsageUnits: { not: null },
+      updatedAt: { lte: updatedBefore },
+    },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+    select: {
+      id: true,
+      userId: true,
+      providerJobId: true,
+      model: true,
+      updatedAt: true,
+      resultFile: { select: { createdAt: true } },
+    },
+  });
+  return decimalNumberRows(jobs);
+}
+
 export async function enqueueUserRemoteAiJobCleanups({
   userId,
   now,

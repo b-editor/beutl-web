@@ -186,8 +186,8 @@ describe("Gateway requests through the installed SDK", () => {
     })));
 
     const job = await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
-    expect(job).toMatchObject({ status: "in_progress" });
-    expect(job).not.toHaveProperty("result");
+    expect(job).toMatchObject({ status: "completed" });
+    expect(job).toHaveProperty("result");
     expect(job).not.toHaveProperty("providerCostUsd");
     expect(JSON.stringify(warning.mock.calls)).not.toContain("never-log-this");
     expect(warning).toHaveBeenCalledWith(
@@ -222,8 +222,8 @@ describe("Gateway requests through the installed SDK", () => {
 
     const ref = { model: VIDEO_REQUEST.model, providerJobId: "job_test" };
     const first = await getGatewayVideoJob(ref);
-    expect(first).toMatchObject({ status: "in_progress" });
-    expect(first).not.toHaveProperty("result");
+    expect(first).toMatchObject({ status: "completed" });
+    expect(first).toHaveProperty("result");
     expect(first).not.toHaveProperty("providerCostUsd");
     expect(warning.mock.calls.map(([message]) => message))
       .not.toContain("Gateway video generation info fields did not match");

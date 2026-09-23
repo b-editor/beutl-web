@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import {
+  consumeUsage,
   createAiJob,
   createFile,
   deleteFileWithStorageCleanup,
   findFileForApi,
   findFileForContentAccess,
+  getCreditAccount,
   retrieveFilesByIdsAndUserId,
   retrieveStorageFilesByUserId,
   prepareAiJobDeletionByUserId,
@@ -890,6 +892,71 @@ describe("v3 AI job history contract", () => {
     );
     expect(repeated.status).toBe(200);
     expect(deleteObject).toHaveBeenCalledOnce();
+  });
+
+  it("settles a successful Gateway video's pending reservation before deletion", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_gateway_video_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
+    });
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: "gateway-video-delete",
+      status: "succeeded",
+      usageUnits: 60,
+      reservedUsageUnits: 60,
+      estimatedUsageUnits: 50,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "minimax/minimax-h3",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 60,
+      monthlyUsageLimit: 200,
+      usagePeriod: ACTIVE_PERIOD,
+      aiJobId: job.id,
+    });
+    const file = await createFile({
+      userId: USER_ID,
+      name: "gateway-video.mp4",
+      objectKey: "ai/video/pending-cost",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    state.aiJobs.get(job.id)!.resultFileId = file.id;
+
+    const otherUser = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(OTHER_USER_ID),
+    });
+    expect(otherUser.status).toBe(404);
+    expect(state.aiJobs.get(job.id)?.usageSettledAt).toBeNull();
+
+    const response = await makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      status: "succeeded",
+      deletedAt: expect.any(Date),
+      providerJobId: null,
+      usageUnits: 50,
+      usageSettledAt: expect.any(Date),
+    });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(50);
+    expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+    expect(deleteObject).toHaveBeenCalledWith("ai/video/pending-cost");
   });
 
   it("retains an idempotency tombstone when a job is deleted", async () => {
