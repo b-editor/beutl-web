@@ -14,6 +14,7 @@ const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
 const AI_JOB_RESULT_FILE_SELECT = {
   name: true,
   mimeType: true,
+  createdAt: true,
 } as const;
 
 export class StorageCleanupBusyError extends Error {

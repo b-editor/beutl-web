@@ -7,7 +7,12 @@ import {
   touchActiveAiJob,
 } from "@beutl/db";
 import { failAiJobAndRefundUsage } from "./credits";
-import { reconcileAiStorageCleanups, settleDeferredGatewayVideoUsage } from "./storage";
+import {
+  GATEWAY_VIDEO_COST_GRACE_MILLISECONDS,
+  GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS,
+  reconcileAiStorageCleanups,
+  settleDeferredGatewayVideoUsage,
+} from "./storage";
 import { synchronizeAiVideoJob } from "./video-jobs";
 import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
 import type { ProviderCostUsd } from "./provider-cost";
@@ -20,8 +25,6 @@ import {
 
 const SCAN_DELAY_MILLISECONDS = 60 * 1000;
 const ABANDONED_SYNCHRONOUS_JOB_MILLISECONDS = 30 * 60 * 1000;
-const GATEWAY_VIDEO_COST_GRACE_MILLISECONDS = 15 * 60 * 1000;
-const GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS = 10 * 1000;
 // Each check can spend up to 10s on status and 5s on generation cost.
 const MAX_DEFERRED_COST_JOBS_PER_SCAN = 10;
 

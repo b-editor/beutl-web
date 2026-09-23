@@ -30,6 +30,7 @@ vi.mock("@/lib/content-url", () => ({
 }));
 
 import {
+  deleteJobAction,
   generateImageAction,
   listJobsAction,
   retryJobAction,
@@ -43,11 +44,16 @@ import {
   toAiRequestIdentity,
 } from "@beutl/api";
 import {
+  consumeUsage,
   createAiJob,
+  createFile,
+  getCreditAccount,
   getAiJobById,
   getAiJobResultFile,
   upsertAiOperationModel,
+  upsertSubscription,
 } from "@beutl/db";
+import { videoProviderFor } from "@beutl/api";
 import { retryJobFingerprint } from "../../apps/web/src/lib/ai-retry-attempt";
 
 const loadAiImageModelCapabilities = vi.hoisted(() =>
@@ -392,6 +398,75 @@ describe("dashboard AI actions", () => {
     expect(result.message).toContain("invalidRequestBody");
     expect(createReservedAiJob).not.toHaveBeenCalled();
     expect(translateSegments).not.toHaveBeenCalled();
+  });
+
+  it("settles actual Gateway cost before dashboard deletion", async () => {
+    const memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+    const now = Date.now();
+    const usagePeriod = {
+      start: new Date(now - 24 * 60 * 60 * 1000),
+      end: new Date(now + 24 * 60 * 60 * 1000),
+    };
+    await upsertSubscription({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_dashboard_video_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: usagePeriod.start,
+      currentPeriodEnd: usagePeriod.end,
+    });
+    const job = await createAiJob({
+      userId: "user-1",
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: "gateway-dashboard-delete",
+      status: "succeeded",
+      usageUnits: 60,
+      reservedUsageUnits: 60,
+      estimatedUsageUnits: 50,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "minimax/minimax-h3",
+    });
+    await consumeUsage({
+      userId: "user-1",
+      amount: 60,
+      monthlyUsageLimit: 200,
+      usagePeriod,
+      aiJobId: job.id,
+    });
+    const file = await createFile({
+      userId: "user-1",
+      name: "dashboard-video.mp4",
+      objectKey: "ai/video/dashboard-delete",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    memory.state.aiJobs.get(job.id)!.resultFileId = file.id;
+    const status = vi.spyOn(videoProviderFor("vercel-gateway"), "status")
+      .mockResolvedValue({
+        id: "gateway-dashboard-delete",
+        status: "completed",
+        error: null,
+        providerCostUsd: "0.30",
+      });
+    try {
+      const result = await deleteJobAction(job.id);
+      expect(result).toMatchObject({ success: true });
+      expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+        providerJobId: null,
+        usageUnits: 30,
+        usageSettledAt: expect.any(Date),
+        deletedAt: expect.any(Date),
+      });
+      expect((await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed).toBe(30);
+      expect(status).toHaveBeenCalledOnce();
+    } finally {
+      status.mockRestore();
+    }
   });
 
   it("lists jobs for the signed-in user", async () => {
