@@ -445,6 +445,16 @@ export function toAiProviderError(
   });
 }
 
+function streamErrorHttpStatus(code: unknown): number | null {
+  if (typeof code === "string" && /^[45][0-9]{2}$/.test(code)) {
+    return Number(code);
+  }
+  return typeof code === "number" && Number.isSafeInteger(code) &&
+      code >= 400 && code <= 599
+    ? code
+    : null;
+}
+
 async function request(
   path: string,
   init: RequestInit,
@@ -715,10 +725,13 @@ async function readGeneratedImageStream(
           ...(cost === undefined ? {} : { providerCostUsd: cost }),
         };
         break;
-      case "error":
+      case "error": {
+        const imageStatus = streamErrorHttpStatus(event.error.code);
         throw new AiProviderError(
           `OpenRouter image generation failed: ${event.error.message}`,
+          imageStatus === null ? undefined : { httpStatus: imageStatus },
         );
+      }
       default:
         break;
     }
@@ -976,12 +989,10 @@ async function translateStreaming({
       cost = providerCostUsd(chunk.usage?.cost) ?? cost;
       // A stream that carries an error carries it instead of an answer.
       if (chunk.error) {
-        const code = chunk.error.code;
+        const status = streamErrorHttpStatus(chunk.error.code);
         throw new AiProviderError(
           `OpenRouter failed to translate segments: ${chunk.error.message}`,
-          Number.isSafeInteger(code) && code >= 400 && code <= 599
-            ? { httpStatus: code }
-            : undefined,
+          status === null ? undefined : { httpStatus: status },
         );
       }
       if (chunk.choices.some((choice) => choice.finishReason && choice.finishReason !== "stop")) {

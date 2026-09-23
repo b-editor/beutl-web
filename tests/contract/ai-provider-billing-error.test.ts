@@ -4,6 +4,7 @@ import {
   AiVideoSubmissionError,
   aiProviderFailureCode,
 } from "../../packages/api/src/ai/providers/errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../packages/api/src/ai/job-errors";
 
 describe("provider billing refusal", () => {
   it("recognizes a definite Gateway 402 without relying on the SDK error name", () => {
@@ -21,5 +22,17 @@ describe("provider billing refusal", () => {
     expect(aiProviderFailureCode(new AiProviderError("bad input", { httpStatus: 400 })))
       .toBe("aiProviderError");
     expect(aiProviderFailureCode(new Error("storage failed"))).toBe("aiProviderError");
+  });
+
+  it("stores only a safe billing classification for later idempotent replay", () => {
+    const raw = "sensitive upstream billing detail";
+    const stored = aiJobFailureMessage(
+      new AiProviderError(raw, { httpStatus: 402 }),
+      AI_JOB_FAILURE_MESSAGES.videoSubmission,
+    );
+    expect(stored).toBe(AI_JOB_FAILURE_MESSAGES.providerBilling);
+    expect(stored).not.toContain(raw);
+    expect(publicAiJobError(stored)).toBe("aiProviderBillingUnavailable");
+    expect(publicAiJobError(AI_JOB_FAILURE_MESSAGES.videoSubmission)).toBe("aiProviderError");
   });
 });

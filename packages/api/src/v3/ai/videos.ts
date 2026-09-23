@@ -62,7 +62,7 @@ import {
   getAiJobById,
   getAiJobByProviderJobId,
 } from "@beutl/db";
-import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage } from "../../ai/job-errors";
 import {
   callbackNonceMatches,
   createCallbackNonce,
@@ -682,7 +682,7 @@ const app = new Hono()
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
           ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
         return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
@@ -1185,7 +1185,7 @@ const app = new Hono()
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
           ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
         });
         return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
@@ -1514,7 +1514,7 @@ const app = new Hono()
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
           ...(handling.detachProviderJob
             ? { expectedProviderJobId: null }
             : {}),
@@ -1796,7 +1796,7 @@ const app = new Hono()
         await failAiJobAndRefundUsage({
           userId,
           aiJobId: job.id,
-          error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
           ...(handling.detachProviderJob
             ? { expectedProviderJobId: null }
             : {}),

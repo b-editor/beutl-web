@@ -18,7 +18,7 @@ import {
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
   parseJsonWithBodyLimit,
 } from "../../ai/upload-limits";
-import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
@@ -143,7 +143,7 @@ function isJsonRequest(request: Request): boolean {
 // 同じ形で返す。
 async function answerFromExistingTranslation(
   c: Context,
-  job: { id: string; status: string; resultFileId: string | null },
+  job: { id: string; status: string; resultFileId: string | null; error?: string | null },
   {
     userId,
     segments,
@@ -187,7 +187,7 @@ async function answerFromExistingTranslation(
   ) {
     return c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
   }
-  return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+  return c.json(await apiErrorResponse(publicAiJobError(job.error)), { status: 500 });
 }
 
 const app = new Hono().post("/", async (c) => {
@@ -359,7 +359,7 @@ const app = new Hono().post("/", async (c) => {
     await failAiJobAndRefundUsage({
       userId,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.translation,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
     });
     if (!(error instanceof AiProviderError)) {
       console.error("Failed to persist AI translation result", error);

@@ -379,4 +379,15 @@ describe("streaming an image", () => {
       }),
     ).rejects.toBeInstanceOf(AiProviderError);
   });
+
+  it("preserves billing status from an image stream error code", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(eventStream([{
+      type: "error", error: { message: "upstream billing refusal", code: "402" },
+    }])));
+
+    await expect(generateImage({
+      prompt: "a lighthouse", aspectRatio: "16:9", model: "openai/gpt-image-1",
+      onPartialImage: () => undefined,
+    })).rejects.toMatchObject({ httpStatus: 402 });
+  });
 });

@@ -38,6 +38,7 @@ import {
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
+  AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
   createReservedAiJob,
   readAiJsonResult,
@@ -375,6 +376,27 @@ describe("dashboard AI actions", () => {
       ]);
       // The provider must not be called again for work already charged for.
       expect(translateSegments).not.toHaveBeenCalled();
+    });
+
+    it("retains a provider billing refusal on an image replay", async () => {
+      vi.mocked(createReservedAiJob).mockResolvedValue({
+        ok: true,
+        outcome: "existing",
+        job: {
+          id: "job-billing",
+          status: "failed",
+          resultFileId: null,
+          error: AI_JOB_FAILURE_MESSAGES.providerBilling,
+        },
+      });
+
+      const result = await generateImageAction({ success: false }, generateForm());
+
+      expect(result).toMatchObject({
+        success: false,
+        message: "api-errors:aiProviderBillingUnavailable",
+      });
+      expect(generateImage).not.toHaveBeenCalled();
     });
 
     it("reports a failure rather than an empty screen when the stored result does not match", async () => {

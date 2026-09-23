@@ -1627,16 +1627,24 @@ describe("v3 AI endpoints contract", () => {
       vi.mocked(generateImage).mockRejectedValue(
         new AiProviderError("Gateway payment required", { httpStatus: 402 }),
       );
+      const idempotencyKey = crypto.randomUUID();
+      const headers = { "content-type": "application/json", ...(await authHeaders(idempotencyKey)) };
+      const body = JSON.stringify({ prompt: "billing diagnostic", size: "1024x1024" });
 
       const res = await makeApp().request("/api/v3/ai/images", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ prompt: "billing diagnostic", size: "1024x1024" }),
+        headers,
+        body,
       });
       expect(res.status).toBe(500);
       expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
       expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
       expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+      const replay = await makeApp().request("/api/v3/ai/images", { method: "POST", headers, body });
+      expect(replay.status).toBe(500);
+      expect(await replay.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+      expect(state.aiJobs.size).toBe(1);
+      expect(state.creditTransactions.filter(({ kind }) => kind === "refund")).toHaveLength(1);
     });
 
     it("refunds usage when the provider execution outcome is unknown", async () => {
@@ -3209,16 +3217,24 @@ describe("v3 AI endpoints contract", () => {
               })
             : new AiProviderError("OpenRouter payment required", { httpStatus: 402 }),
         );
+        const idempotencyKey = crypto.randomUUID();
+        const headers = { "content-type": "application/json", ...(await authHeaders(idempotencyKey)) };
+        const body = JSON.stringify({ prompt: "billing diagnostic", durationSeconds: 4 });
 
         const res = await makeApp().request("/api/v3/ai/videos", {
           method: "POST",
-          headers: { "content-type": "application/json", ...(await authHeaders()) },
-          body: JSON.stringify({ prompt: "billing diagnostic", durationSeconds: 4 }),
+          headers,
+          body,
         });
         expect(res.status).toBe(500);
         expect(await res.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
         expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
         expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(0);
+        const replay = await makeApp().request("/api/v3/ai/videos", { method: "POST", headers, body });
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toMatchObject({ status: "failed", error: "aiProviderBillingUnavailable" });
+        expect(state.aiJobs.size).toBe(1);
+        expect(state.creditTransactions.filter(({ kind }) => kind === "refund")).toHaveLength(1);
       },
     );
 

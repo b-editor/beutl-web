@@ -269,6 +269,7 @@ describe("Gateway subtitle translation", () => {
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": userId,
       exp: Math.floor(Date.now() / 1000) + 300,
     }, jwtSecret, "HS256");
+    const idempotencyKey = crypto.randomUUID();
 
     const response = await new Hono().basePath("/api/v3").route("/", v3).request(
       "/api/v3/ai/translations",
@@ -278,7 +279,7 @@ describe("Gateway subtitle translation", () => {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
           accept: "text/event-stream",
-          "Idempotency-Key": crypto.randomUUID(),
+          "Idempotency-Key": idempotencyKey,
         },
         body: JSON.stringify({ model: MODEL, targetLanguage: "ja", segments: INPUT }),
       },
@@ -287,6 +288,22 @@ describe("Gateway subtitle translation", () => {
     expect(await response.text()).toContain('"error_code":"aiProviderBillingUnavailable"');
     expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
     expect(state.creditTransactions.some(({ kind }) => kind === "refund")).toBe(true);
+    const replay = await new Hono().basePath("/api/v3").route("/", v3).request(
+      "/api/v3/ai/translations",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ model: MODEL, targetLanguage: "ja", segments: INPUT }),
+      },
+    );
+    expect(replay.status).toBe(500);
+    expect(await replay.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+    expect(state.creditTransactions.filter(({ kind }) => kind === "refund")).toHaveLength(1);
   });
 
   it.each([

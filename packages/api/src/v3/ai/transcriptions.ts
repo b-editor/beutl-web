@@ -21,7 +21,7 @@ import {
   aiProviderFailureCode,
   transcribeAudio,
 } from "../../ai/openrouter";
-import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import {
@@ -51,7 +51,7 @@ const languageSchema = z
 // 同じ形で返す。
 async function answerFromExistingTranscription(
   c: Context,
-  job: { id: string; status: string; resultFileId: string | null },
+  job: { id: string; status: string; resultFileId: string | null; error?: string | null },
   { userId, durationSeconds }: { userId: string; durationSeconds: number },
 ) {
   if (job.status === "succeeded" && job.resultFileId) {
@@ -89,7 +89,7 @@ async function answerFromExistingTranscription(
   ) {
     return c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 });
   }
-  return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+  return c.json(await apiErrorResponse(publicAiJobError(job.error)), { status: 500 });
 }
 
 const app = new Hono().post("/", async (c) => {
@@ -310,7 +310,7 @@ const app = new Hono().post("/", async (c) => {
     await failAiJobAndRefundUsage({
       userId,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.transcription,
+      error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.transcription),
     });
     if (err instanceof AiProviderError) {
       return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
