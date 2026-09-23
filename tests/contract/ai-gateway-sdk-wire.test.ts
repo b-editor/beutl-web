@@ -125,6 +125,24 @@ describe("Gateway requests through the installed SDK", () => {
     expect(sent[0].headers.get("idempotency-key")).toBe("request-1");
   });
 
+  it("logs only safe fields when Gateway rejects a video submission", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: { message: "secret-response-detail" },
+    }, { status: 400 })));
+
+    await expect(startGatewayVideoJob(VIDEO_REQUEST)).rejects.toMatchObject({
+      httpStatus: 400,
+    });
+    expect(warning).toHaveBeenCalledWith("Gateway video submission failed", {
+      model: VIDEO_REQUEST.model,
+      httpStatus: 400,
+      errorType: expect.any(String),
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("secret-response-detail");
+    warning.mockRestore();
+  });
+
   it.each(["edit", "extend"] as const)("uses xai options for Grok video %s", async (mode) => {
     await startGatewayVideoJob({ ...VIDEO_REQUEST, mode, sourceVideoUrl: "https://example.com/source.mp4" });
     expect(sent[0].body.providerOptions.xai).toEqual({

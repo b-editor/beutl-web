@@ -312,6 +312,13 @@ export async function startGatewayVideoJob(
       cause,
       "Vercel AI Gateway video submission failed",
     );
+    // Submission failures otherwise become only a generic user error. Record
+    // the status and model, never the response body, prompt, or signed URLs.
+    console.warn("Gateway video submission failed", {
+      model: request.model,
+      httpStatus: error.httpStatus,
+      errorType: cause instanceof Error ? cause.name : typeof cause,
+    });
     throw new AiVideoSubmissionError(error.message, {
       outcome: gatewayExecutionOf(cause),
       cause,
