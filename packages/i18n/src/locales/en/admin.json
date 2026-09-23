@@ -59,6 +59,8 @@
     "aiTransactionKinds": {
       "purchase": "Purchase",
       "usage": "Usage",
+      "usage_settlement": "Usage settlement",
+      "usage_actual_correction": "Actual-cost correction",
       "refund": "Refund",
       "purchase_reversal": "Purchase reversal",
       "admin_credit_adjustment": "Administrator credit adjustment",

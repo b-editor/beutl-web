@@ -5,6 +5,7 @@ import {
   usageUnitsForProviderCost,
 } from "@beutl/core";
 import {
+  AI_USAGE_ACTUAL_CORRECTION_KIND,
   claimAiStorageCleanupForDeletion,
   claimGatewayVideoCostSettlement,
   completeAiJobWithOutput,
@@ -215,10 +216,12 @@ type CompletedAiJob = NonNullable<Awaited<ReturnType<typeof getAiJobById>>>;
 async function settleCompletedAiJobUsage({
   job,
   providerCostUsd,
+  allowActualCorrection = false,
   prisma,
 }: {
   job: CompletedAiJob;
   providerCostUsd?: ProviderCostUsd;
+  allowActualCorrection?: boolean;
   prisma: PrismaTransaction;
 }): Promise<void> {
   const [subscription, settings] = await Promise.all([
@@ -260,6 +263,7 @@ async function settleCompletedAiJobUsage({
           end: subscription.currentPeriodEnd,
         }
       : { start: null, end: null },
+    allowActualCorrection,
     prisma,
   });
 }
@@ -289,6 +293,42 @@ export async function settleDeferredGatewayVideoUsage({
       return false;
     }
     await settleCompletedAiJobUsage({ job, providerCostUsd, prisma });
+    return true;
+  });
+}
+
+/** Replace an already-published estimate when the Gateway ledger arrives later. */
+export async function correctEstimatedGatewayVideoUsage({
+  jobId,
+  userId,
+  providerCostUsd,
+}: {
+  jobId: string;
+  userId: string;
+  providerCostUsd: ProviderCostUsd;
+}): Promise<boolean> {
+  return await startAiJobTransaction(async (prisma) => {
+    const job = await getAiJobById({ jobId, prisma });
+    if (
+      !job || job.userId !== userId || job.kind !== "video" ||
+      job.provider !== "vercel-gateway" || job.status !== "succeeded" ||
+      job.deletedAt !== null ||
+      job.usageSettledAt === null || job.providerCostUsdMicros !== null ||
+      job.usageUnitUsdMicros === null || job.reservedUsageUnits === null
+    ) {
+      return false;
+    }
+    const previous = await prisma.creditTransaction.findFirst({
+      where: { userId, aiJobId: jobId, kind: AI_USAGE_ACTUAL_CORRECTION_KIND },
+      select: { id: true },
+    });
+    if (previous) return false;
+    await settleCompletedAiJobUsage({
+      job,
+      providerCostUsd,
+      allowActualCorrection: true,
+      prisma,
+    });
     return true;
   });
 }

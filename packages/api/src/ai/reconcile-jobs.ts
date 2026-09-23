@@ -1,15 +1,18 @@
 import {
   claimGatewayVideoCostSettlement,
+  deferEstimatedGatewayVideoCostLookup,
   getAiJobById,
   hasFreshAiJobFinalizationLease,
   isActiveAiJobStatus,
   listActiveAiJobsForReconciliation,
+  listEstimatedGatewayVideoJobsForReconciliation,
   listUnsettledGatewayVideoJobsForReconciliation,
   releaseGatewayVideoCostSettlement,
   touchActiveAiJob,
 } from "@beutl/db";
 import { failAiJobAndRefundUsage } from "./credits";
 import {
+  correctEstimatedGatewayVideoUsage,
   GATEWAY_VIDEO_COST_GRACE_MILLISECONDS,
   GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS,
   GATEWAY_VIDEO_COST_SETTLEMENT_LEASE_MILLISECONDS,
@@ -30,6 +33,8 @@ const SCAN_DELAY_MILLISECONDS = 60 * 1000;
 const ABANDONED_SYNCHRONOUS_JOB_MILLISECONDS = 30 * 60 * 1000;
 // Each check can spend up to 10s on status and 5s on generation cost.
 const MAX_DEFERRED_COST_JOBS_PER_SCAN = 10;
+const MAX_LATE_COST_JOBS_PER_SCAN = 10;
+const LATE_COST_RETRY_DELAY_MILLISECONDS = 15 * 60 * 1000;
 
 // How long a job of this provider's can still deliver something usable.
 //
@@ -57,6 +62,10 @@ export type AiJobReconciliationResult = {
   deferredCostEstimated: number;
   deferredCostPending: number;
   deferredCostErrors: number;
+  lateCostInspected: number;
+  lateCostCorrected: number;
+  lateCostPending: number;
+  lateCostErrors: number;
 };
 
 export async function reconcileAiJobs(
@@ -80,6 +89,10 @@ export async function reconcileAiJobs(
     deferredCostEstimated: 0,
     deferredCostPending: 0,
     deferredCostErrors: 0,
+    lateCostInspected: 0,
+    lateCostCorrected: 0,
+    lateCostPending: 0,
+    lateCostErrors: 0,
   };
 
   const recordFailureOutcome = async (jobId: string) => {
@@ -293,6 +306,46 @@ export async function reconcileAiJobs(
         });
         result.deferredCostErrors++;
       }
+    }
+  }
+
+  // The video is usable after estimate settlement. A later Gateway usage
+  // event can still replace that estimate without delaying the user's output.
+  const late = await listEstimatedGatewayVideoJobsForReconciliation({
+    updatedBefore: new Date(now.getTime() - LATE_COST_RETRY_DELAY_MILLISECONDS),
+    limit: MAX_LATE_COST_JOBS_PER_SCAN,
+  });
+  result.lateCostInspected = late.length;
+  for (const job of late) {
+    try {
+      if (!job.providerJobId || !job.model) {
+        throw new Error("Estimated Gateway video is missing billing identity");
+      }
+      const remote = await videoProviderFor("vercel-gateway").status({
+        providerJobId: job.providerJobId,
+        model: job.model,
+        signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
+      });
+      if (remote.status === "completed" && remote.providerCostUsd !== undefined) {
+        const corrected = await correctEstimatedGatewayVideoUsage({
+          jobId: job.id,
+          userId: job.userId,
+          providerCostUsd: remote.providerCostUsd,
+        });
+        if (corrected) result.lateCostCorrected++;
+        else result.lateCostPending++;
+      } else {
+        await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now });
+        result.lateCostPending++;
+      }
+    } catch (error) {
+      await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now })
+        .catch(() => undefined);
+      console.warn("Gateway late video cost check failed", {
+        jobId: job.id,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      result.lateCostErrors++;
     }
   }
 

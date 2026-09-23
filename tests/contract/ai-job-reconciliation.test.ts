@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimAiJobForFinalization,
   consumeUsage,
@@ -67,6 +67,8 @@ describe("AI job reconciliation", () => {
   let store: ReturnType<typeof createInMemoryPrisma>;
   let putObject: ReturnType<typeof vi.fn>;
   let deleteObject: ReturnType<typeof vi.fn>;
+
+  afterEach(() => vi.useRealTimers());
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -572,6 +574,8 @@ describe("AI job reconciliation", () => {
     });
     await setQueuedAiJobRunning({ jobId: job.id, providerJobId: "gateway-video-no-cost" });
     const now = new Date();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     const stored = store.state.aiJobs.get(job.id)!;
     stored.createdAt = new Date(now.getTime() - 5 * 60 * 1000);
     stored.updatedAt = new Date(now.getTime() - 2 * 60 * 1000);
@@ -590,10 +594,12 @@ describe("AI job reconciliation", () => {
     expect(store.state.aiJobs.get(job.id)).toMatchObject({
       status: "succeeded", usageUnits: 60, usageSettledAt: null,
     });
+    vi.setSystemTime(new Date(now.getTime() + 5 * 60 * 1000));
     const waiting = await reconcileAiJobs(new Date(now.getTime() + 5 * 60 * 1000));
     expect(waiting.deferredCostPending).toBe(1);
     expect(store.state.aiJobs.get(job.id)?.usageSettledAt).toBeNull();
 
+    vi.setSystemTime(new Date(now.getTime() + 20 * 60 * 1000));
     const fallback = await reconcileAiJobs(new Date(now.getTime() + 20 * 60 * 1000));
     expect(fallback.deferredCostEstimated).toBe(1);
     expect(store.state.aiJobs.get(job.id)).toMatchObject({
@@ -603,9 +609,34 @@ describe("AI job reconciliation", () => {
     expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(50);
     expect(store.state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
     expect(gatewayVideoDownload).toHaveBeenCalledOnce();
-    const repeated = await reconcileAiJobs(new Date(now.getTime() + 25 * 60 * 1000));
+    vi.setSystemTime(new Date(now.getTime() + 36 * 60 * 1000));
+    const repeated = await reconcileAiJobs(new Date(now.getTime() + 36 * 60 * 1000));
     expect(repeated.deferredCostInspected).toBe(0);
+    expect(repeated.lateCostPending).toBe(1);
     expect(store.state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+    vi.setSystemTime(new Date(now.getTime() + 38 * 60 * 1000));
+    const coolingDown = await reconcileAiJobs(new Date(now.getTime() + 38 * 60 * 1000));
+    expect(coolingDown.lateCostInspected).toBe(0);
+
+    gatewayVideoStatus.mockResolvedValueOnce({
+      id: "gateway-video-no-cost",
+      status: "completed",
+      providerCostUsd: "0.42",
+      result: { videos: [{ type: "url", url: "https://example.com/video.mp4" }] },
+    });
+    vi.setSystemTime(new Date(now.getTime() + 52 * 60 * 1000));
+    const corrected = await reconcileAiJobs(new Date(now.getTime() + 52 * 60 * 1000));
+    expect(corrected.lateCostCorrected).toBe(1);
+    expect(store.state.aiJobs.get(job.id)).toMatchObject({
+      status: "succeeded", usageUnits: 42, providerCostUsdMicros: 420_000,
+    });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(42);
+    expect(store.state.creditTransactions.filter((item) =>
+      item.kind === "usage_actual_correction" && item.aiJobId === job.id
+    )).toEqual([expect.objectContaining({ usageAmount: -8 })]);
+    vi.setSystemTime(new Date(now.getTime() + 58 * 60 * 1000));
+    const again = await reconcileAiJobs(new Date(now.getTime() + 58 * 60 * 1000));
+    expect(again.lateCostInspected).toBe(0);
   });
 
   it("fails and refunds a completed provider job with invalid video output", async () => {

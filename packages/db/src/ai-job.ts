@@ -8,6 +8,7 @@ import {
   type PrismaTransaction,
 } from "./transaction";
 import { STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS } from "./storage-multipart-cleanup";
+import { AI_USAGE_ACTUAL_CORRECTION_KIND } from "./credit-account";
 
 const ACTIVE_AI_JOB_STATUSES = ["queued", "running", "finalizing"];
 const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
@@ -1562,6 +1563,69 @@ export async function listUnsettledGatewayVideoJobsForReconciliation({
     },
   });
   return decimalNumberRows(jobs);
+}
+
+/** Estimated Gateway videos that may still have an actual ledger charge. */
+export async function listEstimatedGatewayVideoJobsForReconciliation({
+  updatedBefore,
+  limit = 10,
+  prisma,
+}: {
+  updatedBefore: Date;
+  limit?: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.aiJob.findMany({
+    where: {
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      deletedAt: null,
+      providerJobId: { not: null },
+      model: { not: null },
+      usageSettledAt: { not: null },
+      providerCostUsdMicros: null,
+      usageUnitUsdMicros: { not: null },
+      reservedUsageUnits: { not: null },
+      updatedAt: { lte: updatedBefore },
+      transactions: { none: { kind: AI_USAGE_ACTUAL_CORRECTION_KIND } },
+    },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+    select: {
+      id: true,
+      userId: true,
+      providerJobId: true,
+      model: true,
+    },
+  });
+}
+
+/** Rotate a still-unpriced row so one missing Gateway ledger event cannot starve newer jobs. */
+export async function deferEstimatedGatewayVideoCostLookup({
+  jobId,
+  now,
+  prisma,
+}: {
+  jobId: string;
+  now: Date;
+  prisma?: PrismaTransaction;
+}): Promise<void> {
+  const db = prisma ?? await getDb();
+  await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      deletedAt: null,
+      usageSettledAt: { not: null },
+      providerCostUsdMicros: null,
+      transactions: { none: { kind: AI_USAGE_ACTUAL_CORRECTION_KIND } },
+    },
+    data: { updatedAt: now },
+  });
 }
 
 /** Serialize the remote-cost decision shared by deletion and reconciliation. */

@@ -17,7 +17,12 @@ import type { PrismaTransaction } from "./transaction";
 // creditAmount; a refund row stores the mirror image. Net units consumed is
 // therefore sum(usageAmount) - sum(creditAmount) across these kinds. All rows
 // for one job belong to its creation window, even if it settles/refunds later.
-const CONSUMPTION_KINDS = ["usage", "refund", "usage_settlement"] as const;
+const CONSUMPTION_KINDS = [
+  "usage",
+  "refund",
+  "usage_settlement",
+  "usage_actual_correction",
+] as const;
 
 // A purchase row carries the credits bought; a reversal row carries the credits
 // taken back by a refund or dispute as a negative amount, and a later restore as

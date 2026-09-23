@@ -50,6 +50,21 @@ describe("settling an AI reservation to actual provider cost", () => {
     return job;
   }
 
+  async function reserveVideo(units: number, monthlyLimit = units) {
+    const job = await createAiJob({
+      userId: USER_ID, kind: "video", provider: "vercel-gateway",
+      status: "running", usageUnits: units, reservedUsageUnits: units,
+      usageUnitUsdMicros: 10_000, usagePercent: 100,
+      model: "spacexai/grok-imagine-video",
+    });
+    await consumeUsage({
+      userId: USER_ID, amount: units, monthlyUsageLimit: monthlyLimit,
+      usagePeriod: PERIOD, aiJobId: job.id,
+    });
+    await markAiJobSucceeded({ jobId: job.id });
+    return job;
+  }
+
   it("returns the unused reservation and records the actual charge", async () => {
     const job = await reserve(20);
 
@@ -89,6 +104,236 @@ describe("settling an AI reservation to actual provider cost", () => {
         (transaction) => transaction.kind === "usage_settlement",
       ),
     ).toHaveLength(1);
+  });
+
+  it("corrects an estimated Gateway video after its actual charge arrives", async () => {
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      status: "running",
+      usageUnits: 50.4,
+      reservedUsageUnits: 50.4,
+      estimatedUsageUnits: 42,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "spacexai/grok-imagine-video",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 50.4,
+      monthlyUsageLimit: 100,
+      usagePeriod: PERIOD,
+      aiJobId: job.id,
+    });
+    await markAiJobSucceeded({ jobId: job.id });
+    await settleUsage({
+      userId: USER_ID,
+      aiJobId: job.id,
+      actualAmount: 42,
+      providerCostUsdMicros: null,
+      monthlyUsageLimit: 100,
+      currentUsagePeriod: PERIOD,
+    });
+    const correction = {
+      userId: USER_ID,
+      aiJobId: job.id,
+      actualAmount: 40.042,
+      providerCostUsdMicros: 400_420,
+      monthlyUsageLimit: 100,
+      currentUsagePeriod: PERIOD,
+      allowActualCorrection: true,
+    };
+    await settleUsage(correction);
+    await settleUsage(correction);
+
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+      monthlyUsageUsed: 40.042,
+      purchasedCredits: 0,
+    });
+    expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+      usageUnits: 40.042,
+      reservedUsageUnits: 50.4,
+      providerCostUsdMicros: 400_420,
+    });
+    expect(memory.state.creditTransactions.filter((row) =>
+      row.kind === "usage_actual_correction" && row.aiJobId === job.id
+    )).toEqual([expect.objectContaining({ usageAmount: -1.958, creditAmount: 0 })]);
+    expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(40.042);
+  });
+
+  it("records a zero-delta correction so an audit-null actual cost is not retried", async () => {
+    const job = await reserveVideo(20);
+    const base = {
+      userId: USER_ID, aiJobId: job.id, actualAmount: 20,
+      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    };
+    await settleUsage(base);
+    await settleUsage({ ...base, allowActualCorrection: true });
+    await settleUsage({ ...base, allowActualCorrection: true });
+
+    expect(memory.state.creditTransactions.filter((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toHaveLength(1);
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+      monthlyUsageUsed: 20,
+    });
+  });
+
+  it("restores the remaining purchased share before monthly allowance", async () => {
+    await addPurchasedCredits({ userId: USER_ID, amount: 10, stripePaymentId: "pi_late_cost" });
+    const job = await reserveVideo(25, 20);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 22,
+      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 18,
+      providerCostUsdMicros: 180_000, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD, allowActualCorrection: true,
+    });
+
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+      monthlyUsageUsed: 18, purchasedCredits: 10, purchasedCreditDebt: 0,
+    });
+    expect(memory.state.creditTransactions.find((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toMatchObject({ usageAmount: -2, creditAmount: 2, debtAmount: 0 });
+  });
+
+  it("keeps a late correction in its original period without crediting a renewed one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T23:59:00.000Z"));
+    const job = await reserveVideo(20);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 18,
+      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    });
+    const nextPeriod = { start: PERIOD.end, end: new Date("2026-11-01T00:00:00.000Z") };
+    vi.setSystemTime(new Date("2026-10-01T00:01:00.000Z"));
+    const current = await createAiJob({
+      userId: USER_ID, kind: "image", provider: "test", status: "running", usageUnits: 5,
+    });
+    await consumeUsage({
+      userId: USER_ID, aiJobId: current.id, amount: 5,
+      monthlyUsageLimit: 20, usagePeriod: nextPeriod,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 16,
+      providerCostUsdMicros: 160_000, monthlyUsageLimit: 20,
+      currentUsagePeriod: nextPeriod, allowActualCorrection: true,
+    });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(5);
+    expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(21);
+    expect((await getAiUsageTotals({ since: nextPeriod.start })).consumedUnits).toBe(5);
+    expect(memory.state.creditTransactions.find((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toMatchObject({
+      usageAmount: -2, usagePeriodStart: PERIOD.start, usagePeriodEnd: PERIOD.end,
+    });
+  });
+
+  it("does not lower an administrator's post-reservation usage baseline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T00:00:00.000Z"));
+    const job = await reserveVideo(20);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 18,
+      providerCostUsdMicros: null, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    });
+    vi.advanceTimersByTime(1_000);
+    await setMonthlyUsageUsedByAdmin({
+      userId: USER_ID, monthlyUsageUsed: 0, monthlyUsageLimit: 20,
+      usagePeriod: PERIOD,
+    });
+    vi.advanceTimersByTime(1_000);
+    const newer = await createAiJob({
+      userId: USER_ID, kind: "image", provider: "test", status: "running", usageUnits: 10,
+    });
+    await consumeUsage({
+      userId: USER_ID, aiJobId: newer.id, amount: 10,
+      monthlyUsageLimit: 20, usagePeriod: PERIOD,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 16,
+      providerCostUsdMicros: 160_000, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD, allowActualCorrection: true,
+    });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(10);
+    expect(memory.state.creditTransactions.find((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toMatchObject({ usageAmount: -2, creditAmount: 0 });
+  });
+
+  it("pays down estimate overrun debt when the actual charge is lower", async () => {
+    const job = await reserveVideo(5);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 8,
+      providerCostUsdMicros: null, monthlyUsageLimit: 5,
+      currentUsagePeriod: PERIOD,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 6,
+      providerCostUsdMicros: 60_000, monthlyUsageLimit: 5,
+      currentUsagePeriod: PERIOD, allowActualCorrection: true,
+    });
+
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+      monthlyUsageUsed: 5, purchasedCredits: 0, purchasedCreditDebt: 1,
+    });
+    expect(memory.state.creditTransactions.find((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toMatchObject({ usageAmount: 0, creditAmount: 2, debtAmount: -2 });
+  });
+
+  it("charges only the additional actual cost when it exceeds the estimate", async () => {
+    const job = await reserveVideo(5);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 4,
+      providerCostUsdMicros: null, monthlyUsageLimit: 5,
+      currentUsagePeriod: PERIOD,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 7,
+      providerCostUsdMicros: 70_000, monthlyUsageLimit: 5,
+      currentUsagePeriod: PERIOD, allowActualCorrection: true,
+    });
+
+    expect(await getCreditAccount({ userId: USER_ID })).toMatchObject({
+      monthlyUsageUsed: 5, purchasedCredits: 0, purchasedCreditDebt: 2,
+    });
+    expect(memory.state.creditTransactions.find((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toMatchObject({ usageAmount: 1, creditAmount: -2, debtAmount: 2 });
+    expect((await getAiUsageTotals({ since: PERIOD.start })).consumedUnits).toBe(7);
+  });
+
+  it("never revises an already actual-billed non-video job", async () => {
+    const job = await reserve(20);
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 6,
+      providerCostUsdMicros: 40_000, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 5,
+      providerCostUsdMicros: 50_000, monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD, allowActualCorrection: true,
+    });
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(6);
+    expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+      usageUnits: 6, providerCostUsdMicros: 40_000,
+    });
+    expect(memory.state.creditTransactions.some((row) =>
+      row.aiJobId === job.id && row.kind === "usage_actual_correction"
+    )).toBe(false);
   });
 
   it.each([

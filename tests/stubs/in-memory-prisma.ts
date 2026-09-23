@@ -812,7 +812,8 @@ export function createInMemoryPrisma() {
     userId?: string;
     kind?: string;
     provider?: string;
-    providerJobId?: string | null;
+    providerJobId?: string | null | { not: null };
+    model?: { not: null };
     idempotencyKeyHash?: string | null;
     callbackNonceHash?: string | null;
     status?: string | { in?: string[]; notIn?: string[] };
@@ -822,6 +823,11 @@ export function createInMemoryPrisma() {
     finalizationToken?: string | null;
     finalizationLeaseExpiresAt?: null | { lte: Date };
     resultFileId?: string | null | { not: null };
+    usageSettledAt?: null | { not?: null; gte?: Date };
+    providerCostUsdMicros?: null;
+    usageUnitUsdMicros?: { not: null };
+    reservedUsageUnits?: { not: null };
+    transactions?: { none: { kind: string } };
     OR?: AiJobWhere[];
     AND?: AiJobWhere[];
   };
@@ -865,7 +871,21 @@ export function createInMemoryPrisma() {
       (!where.kind || job.kind === where.kind) &&
       (!where.provider || job.provider === where.provider) &&
       (where.providerJobId === undefined ||
-        job.providerJobId === where.providerJobId) &&
+        (where.providerJobId !== null && typeof where.providerJobId === "object"
+          ? job.providerJobId !== null
+          : job.providerJobId === where.providerJobId)) &&
+      (!where.model || job.model !== null) &&
+      (where.usageSettledAt === undefined ||
+        (where.usageSettledAt === null
+          ? job.usageSettledAt === null
+          : job.usageSettledAt !== null &&
+            (!where.usageSettledAt.gte ||
+              job.usageSettledAt.getTime() >= where.usageSettledAt.gte.getTime()))) &&
+      (where.providerCostUsdMicros === undefined || job.providerCostUsdMicros === null) &&
+      (!where.usageUnitUsdMicros || job.usageUnitUsdMicros !== null) &&
+      (!where.reservedUsageUnits || job.reservedUsageUnits !== null) &&
+      (!where.transactions || !state.creditTransactions.some((row) =>
+        row.aiJobId === job.id && row.kind === where.transactions!.none.kind)) &&
       statusMatches &&
       updatedAtMatches &&
       deletedAtMatches &&
@@ -1992,6 +2012,7 @@ export function createInMemoryPrisma() {
             | "usageUnits"
             | "providerCostUsdMicros"
             | "usageSettledAt"
+            | "updatedAt"
           >
         >;
       }) => {
@@ -2017,7 +2038,7 @@ export function createInMemoryPrisma() {
               ...data,
               inputParams:
                 "inputParams" in data ? null : job.inputParams,
-              updatedAt: now(),
+              updatedAt: data.updatedAt ?? now(),
             });
             count++;
           }
@@ -2113,12 +2134,16 @@ export function createInMemoryPrisma() {
           userId?: string;
           kind?: string;
           provider?: string;
+          providerJobId?: { not: null };
+          model?: { not: null };
           deletedAt?: null;
           status?: string | { in: string[] };
-          usageSettledAt?: null;
+          usageSettledAt?: null | { not?: null; gte?: Date };
+          providerCostUsdMicros?: null;
           usageUnitUsdMicros?: { not: null };
           reservedUsageUnits?: { not: null };
           updatedAt?: { lte: Date };
+          transactions?: { none: { kind: string } };
           OR?: Array<{
             createdAt?: Date | { lt: Date };
             id?: { lt: string };
@@ -2144,6 +2169,12 @@ export function createInMemoryPrisma() {
         if (where?.provider) {
           jobs = jobs.filter((job) => job.provider === where.provider);
         }
+        if (where?.providerJobId) {
+          jobs = jobs.filter((job) => job.providerJobId !== null);
+        }
+        if (where?.model) {
+          jobs = jobs.filter((job) => job.model !== null);
+        }
         if (where?.deletedAt === null) {
           jobs = jobs.filter((job) => job.deletedAt === null);
         }
@@ -2155,6 +2186,13 @@ export function createInMemoryPrisma() {
         }
         if (where?.usageSettledAt === null) {
           jobs = jobs.filter((job) => job.usageSettledAt === null);
+        } else if (where?.usageSettledAt) {
+          jobs = jobs.filter((job) => job.usageSettledAt !== null &&
+            (!where.usageSettledAt!.gte ||
+              job.usageSettledAt.getTime() >= where.usageSettledAt!.gte.getTime()));
+        }
+        if (where?.providerCostUsdMicros === null) {
+          jobs = jobs.filter((job) => job.providerCostUsdMicros === null);
         }
         if (where?.usageUnitUsdMicros) {
           jobs = jobs.filter((job) => job.usageUnitUsdMicros !== null);
@@ -2167,6 +2205,10 @@ export function createInMemoryPrisma() {
             (job) =>
               job.updatedAt.getTime() <= where.updatedAt!.lte.getTime(),
           );
+        }
+        if (where?.transactions) {
+          jobs = jobs.filter((job) => !state.creditTransactions.some((row) =>
+            row.aiJobId === job.id && row.kind === where.transactions!.none.kind));
         }
         if (where?.OR) {
           jobs = jobs.filter((job) =>

@@ -11,9 +11,15 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import {
   addPurchasedCredits,
+  consumeUsage,
+  createAiJob,
+  deferEstimatedGatewayVideoCostLookup,
   getCreditAccount,
+  listEstimatedGatewayVideoJobsForReconciliation,
+  markAiJobSucceeded,
   reconcilePurchasedCreditReversal,
   setDbProvider,
+  settleUsage,
   upsertSubscription,
 } from "@beutl/db";
 import { createReservedAiJob } from "@beutl/api";
@@ -77,6 +83,71 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
       USER_ID,
     );
     await prisma.$disconnect();
+  });
+
+  it("corrects one estimated Gateway job exactly once in CockroachDB", async () => {
+    const period = {
+      start: new Date("2026-08-01T00:00:00.000Z"),
+      end: new Date("2099-09-01T00:00:00.000Z"),
+    };
+    const job = await createAiJob({
+      userId: USER_ID, kind: "video", provider: "vercel-gateway",
+      providerJobId: `job-late-cost-${crypto.randomUUID()}`,
+      status: "running", usageUnits: 50.4, reservedUsageUnits: 50.4,
+      estimatedUsageUnits: 42, usageUnitUsdMicros: 10_000,
+      usagePercent: 100, model: "spacexai/grok-imagine-video",
+    });
+    await consumeUsage({
+      userId: USER_ID, amount: 50.4, monthlyUsageLimit: 100,
+      usagePeriod: period, aiJobId: job.id,
+    });
+    await markAiJobSucceeded({ jobId: job.id });
+    await settleUsage({
+      userId: USER_ID, aiJobId: job.id, actualAmount: 42,
+      providerCostUsdMicros: null, monthlyUsageLimit: 100,
+      currentUsagePeriod: period,
+    });
+
+    const selection = {
+      updatedBefore: new Date(Date.now() + 1_000),
+      prisma,
+    };
+    expect((await listEstimatedGatewayVideoJobsForReconciliation(selection))
+      .map((candidate) => candidate.id)).toContain(job.id);
+    const deferredAt = new Date(Date.now() + 5_000);
+    await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now: deferredAt, prisma });
+    expect((await listEstimatedGatewayVideoJobsForReconciliation({
+      ...selection,
+      updatedBefore: new Date(deferredAt.getTime() - 1),
+    })).map((candidate) => candidate.id)).not.toContain(job.id);
+    expect((await listEstimatedGatewayVideoJobsForReconciliation({
+      ...selection,
+      updatedBefore: new Date(deferredAt.getTime() + 1),
+    })).map((candidate) => candidate.id)).toContain(job.id);
+
+    const correction = {
+      userId: USER_ID, aiJobId: job.id, actualAmount: 40.042,
+      providerCostUsdMicros: 400_420, monthlyUsageLimit: 100,
+      currentUsagePeriod: period, allowActualCorrection: true,
+    };
+    await Promise.all([settleUsage(correction), settleUsage(correction)]);
+
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(40.042);
+    const stored = await prisma.aiJob.findUnique({ where: { id: job.id } });
+    expect(Number(stored?.usageUnits)).toBe(40.042);
+    expect(stored?.providerCostUsdMicros).toBe(400_420);
+    expect(await prisma.creditTransaction.count({
+      where: { aiJobId: job.id, kind: "usage_actual_correction" },
+    })).toBe(1);
+    const ledger = await prisma.creditTransaction.findMany({
+      where: { aiJobId: job.id },
+      select: { usageAmount: true, creditAmount: true },
+    });
+    expect(ledger.reduce((total, row) =>
+      total + Number(row.usageAmount) - Number(row.creditAmount), 0
+    )).toBe(40.042);
+    expect((await listEstimatedGatewayVideoJobsForReconciliation(selection))
+      .map((candidate) => candidate.id)).not.toContain(job.id);
   });
 
   it("does not overdraw the monthly allowance under concurrent reservations", async () => {
