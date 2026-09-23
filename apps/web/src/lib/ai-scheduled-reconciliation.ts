@@ -17,19 +17,15 @@ export async function reconcileWebAiJobs(
   const connectionString = env.BEUTL_DATABASE_HYPERDRIVE?.connectionString;
   if (!connectionString) throw new Error("BEUTL_DATABASE_HYPERDRIVE binding not found");
 
-  const clients: PrismaClient[] = [];
+  const client = new PrismaClient({
+    adapter: new PrismaPg({ connectionString, maxUses: 1 }),
+  });
   try {
-    return await runWithDbProvider(async () => {
-      const client = new PrismaClient({
-        adapter: new PrismaPg({ connectionString, maxUses: 1 }),
-      });
-      clients.push(client);
-      return client;
-    }, () => runWithR2BucketProvider(
+    return await runWithDbProvider(async () => client, () => runWithR2BucketProvider(
       () => resolveStorageBucket(env),
       () => reconcileAiJobs(now),
     ));
   } finally {
-    await Promise.all(clients.map((client) => client.$disconnect()));
+    await client.$disconnect();
   }
 }

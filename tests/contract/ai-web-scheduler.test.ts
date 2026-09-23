@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { getDb, runWithDbProvider, setDbProvider } from "@beutl/db";
 import {
@@ -8,6 +8,18 @@ import {
 } from "../../packages/api/src/ai/r2-provider";
 
 const reconcileAiJobs = vi.hoisted(() => vi.fn());
+const prismaCalls = vi.hoisted(() => ({
+  construct: vi.fn(),
+  disconnect: vi.fn(async () => undefined),
+}));
+vi.mock("@prisma/client", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@prisma/client")>(),
+  PrismaClient: class {
+    constructor() { prismaCalls.construct(); }
+    $transaction() { return undefined; }
+    $disconnect() { return prismaCalls.disconnect(); }
+  },
+}));
 vi.mock("../../packages/api/src/ai/reconcile-jobs", () => ({ reconcileAiJobs }));
 
 import { reconcileWebAiJobs } from "../../apps/web/src/lib/ai-scheduled-reconciliation";
@@ -18,6 +30,8 @@ const emptyResult = {
 };
 
 describe("Web Worker AI cron bindings", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("runs reconciliation with its own database and storage bindings", async () => {
     const bucket = { put: vi.fn(async () => undefined) };
     const env = {
@@ -37,6 +51,43 @@ describe("Web Worker AI cron bindings", () => {
     const result = await reconcileWebAiJobs(env, at);
     expect(result).toEqual(emptyResult);
     expect(reconcileAiJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it("constructs and disconnects one client across multiple database helpers", async () => {
+    const env = {
+      BEUTL_DATABASE_HYPERDRIVE: {
+        connectionString: "postgresql://test:test@127.0.0.1:5432/scheduler_test",
+      },
+      BEUTL_R2_BUCKET: { put: vi.fn(async () => undefined) },
+    };
+    reconcileAiJobs.mockImplementationOnce(async () => {
+      const first = await getDb();
+      const second = await getDb();
+      expect(first).toBe(second);
+      return emptyResult;
+    });
+
+    await reconcileWebAiJobs(env, new Date("2026-09-23T00:05:00Z"));
+    expect(prismaCalls.construct).toHaveBeenCalledTimes(1);
+    expect(prismaCalls.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("disconnects the invocation client when reconciliation fails", async () => {
+    const env = {
+      BEUTL_DATABASE_HYPERDRIVE: {
+        connectionString: "postgresql://test:test@127.0.0.1:5432/scheduler_test",
+      },
+      BEUTL_R2_BUCKET: { put: vi.fn(async () => undefined) },
+    };
+    reconcileAiJobs.mockImplementationOnce(async () => {
+      await getDb();
+      throw new Error("reconciliation failed");
+    });
+
+    await expect(reconcileWebAiJobs(env, new Date("2026-09-23T00:05:00Z")))
+      .rejects.toThrow("reconciliation failed");
+    expect(prismaCalls.construct).toHaveBeenCalledTimes(1);
+    expect(prismaCalls.disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("does not replace a concurrent Web request's providers", async () => {
