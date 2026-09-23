@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fetchWithBodyLimit } from "../../apps/web/src/lib/worker-body-limit";
+import { refuseOversizedAiUpload } from "../../apps/web/src/lib/ai-upload-guard";
 import {
+  aiScreenUploadLimit,
   MAX_AUTH_REQUEST_BODY_BYTES,
   MAX_INTERNAL_STORAGE_START_BODY_BYTES,
   MAX_STRIPE_WEBHOOK_BODY_BYTES,
@@ -28,6 +30,55 @@ async function expectFileTooLarge(response: Response): Promise<void> {
 }
 
 describe("OpenNext outer body limit", () => {
+  it.each([true, false])("passes a small AI Server Action through middleware (declared length: %s)", async (declared) => {
+    const response = await fetchWithBodyLimit(
+      new Request("https://beutl.beditor.net/ja/dashboard/ai/generate", {
+        method: "POST",
+        headers: declared ? { "content-length": "2" } : {},
+        body: chunked(2),
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+      {}, {},
+      async (request) => {
+        expect(request.headers.get("content-length")).toBeNull();
+        const rejection = refuseOversizedAiUpload({
+          method: request.method,
+          nextUrl: new URL(request.url),
+          headers: request.headers,
+        } as Parameters<typeof refuseOversizedAiUpload>[0]);
+        if (rejection) return rejection;
+        expect((await request.arrayBuffer()).byteLength).toBe(2);
+        return new Response("action reached");
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("action reached");
+  });
+
+  it.each([true, false])("still rejects oversized AI bytes after middleware (forged length: %s)", async (forged) => {
+    const url = "https://beutl.beditor.net/ja/dashboard/ai/edit";
+    const response = await fetchWithBodyLimit(
+      new Request(url, {
+        method: "POST",
+        headers: forged ? { "content-length": "2" } : {},
+        body: chunked(aiScreenUploadLimit(new URL(url).pathname)! + 1),
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+      {}, {},
+      async (request) => {
+        const rejection = refuseOversizedAiUpload({
+          method: request.method,
+          nextUrl: new URL(request.url),
+          headers: request.headers,
+        } as Parameters<typeof refuseOversizedAiUpload>[0]);
+        if (rejection) return rejection;
+        await request.arrayBuffer();
+        return new Response("unexpected");
+      },
+    );
+    await expectFileTooLarge(response);
+  });
+
   it("maps a generated handler buffer rejection to 413", async () => {
     const response = await fetchWithBodyLimit(
       new Request("https://beutl.beditor.net/ja/dashboard", {

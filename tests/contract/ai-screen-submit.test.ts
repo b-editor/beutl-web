@@ -951,12 +951,12 @@ describe("what the AI upload guard refuses", () => {
     ).toBeNull();
   });
 
-  it("refuses a body that does not say how long it is", () => {
-    // 量が分からないまま通すことになる。この画面へ本文を送るのはブラウザの
-    // フォームと Server Action だけで、どちらも長さを付ける。
+  it("accepts a body whose length was stripped by the outer streaming guard", () => {
+    // Worker は実バイト数を制限したストリームを渡し、宣言値は削除する。
+    // Middleware で 411 にすると、小さな Server Action まで到達できない。
     expect(
-      refuseOversizedAiUpload(requestOf("/ja/dashboard/ai/edit", {}))?.status,
-    ).toBe(411);
+      refuseOversizedAiUpload(requestOf("/ja/dashboard/ai/edit", {})),
+    ).toBeNull();
   });
 
   it("says nothing about a path it does not know", () => {
