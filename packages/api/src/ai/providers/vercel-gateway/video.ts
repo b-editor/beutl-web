@@ -268,12 +268,35 @@ export async function getGatewayVideoJob(
 
   if (status.status === "completed") {
     const result: GatewayVideoResult = { videos: status.videos };
+    const providerCost = costOf(status.providerMetadata);
+    if (providerCost.providerCostUsd === undefined) {
+      // The result can be stored with an estimate when the Gateway supplies no
+      // cost. Keep only metadata field names in the log: the payload may hold
+      // signed video URLs and a per-job webhook signing secret.
+      const metadata = status.providerMetadata;
+      const fields = (value: unknown) =>
+        typeof value === "object" && value !== null
+          ? Object.keys(value).filter((key) => key !== "webhookSigningSecret").slice(0, 12)
+          : [];
+      const gateway = typeof metadata === "object" && metadata !== null
+        ? (metadata as Record<string, unknown>).gateway
+        : undefined;
+      const asyncJob = typeof gateway === "object" && gateway !== null
+        ? (gateway as Record<string, unknown>).asyncJob
+        : undefined;
+      console.warn("Gateway video completed without provider cost", {
+        model: ref.model,
+        metadataFields: fields(metadata),
+        gatewayFields: fields(gateway),
+        asyncJobFields: fields(asyncJob),
+      });
+    }
     return {
       id: ref.providerJobId,
       status: "completed",
       error: null,
       result,
-      ...costOf(status.providerMetadata),
+      ...providerCost,
     };
   }
   if (status.status === "error") {

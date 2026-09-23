@@ -156,6 +156,30 @@ describe("Gateway requests through the installed SDK", () => {
     expect(JSON.parse(init.body as string)).toEqual({ operation: { gatewayJobId: "job_test" } });
   });
 
+  it("reports omitted video cost without logging provider metadata values", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      status: "completed",
+      videos: [{ type: "url", url: "https://example.com/video.mp4", mediaType: "video/mp4" }],
+      providerMetadata: { gateway: {
+        asyncJob: { jobId: "job_test", webhookSigningSecret: "never-log-this" },
+      } },
+    })));
+
+    await getGatewayVideoJob({ model: VIDEO_REQUEST.model, providerJobId: "job_test" });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("never-log-this");
+    expect(warning).toHaveBeenCalledWith(
+      "Gateway video completed without provider cost",
+      expect.objectContaining({
+        model: VIDEO_REQUEST.model,
+        metadataFields: ["gateway"],
+        gatewayFields: ["asyncJob"],
+        asyncJobFields: ["jobId"],
+      }),
+    );
+    warning.mockRestore();
+  });
+
   it("reads transcription segments and detects the audio format", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url, init: RequestInit) => {
       sent.push({ url: String(url), body: JSON.parse(init.body as string), headers: new Headers(init.headers) });
