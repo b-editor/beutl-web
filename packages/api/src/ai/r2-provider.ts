@@ -2,10 +2,8 @@
 // The shape is the R2 binding's; storage/s3-compatible-bucket.ts adapts S3
 // compatible services to it, and storage/bucket-from-env.ts picks which one
 // the configuration names.
-// Keep this module dependency-free: instrumentation imports it during Worker
-// startup, before any API route or AI provider implementation is needed.
-import { AsyncLocalStorage } from "node:async_hooks";
-
+// Keep its startup path dependency-free: instrumentation imports it before any
+// API route. The Cron-only scope loads async_hooks on demand.
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
 const SCOPE_KEY = "__BEUTL_R2_BUCKET_PROVIDER_SCOPE__";
 
@@ -52,14 +50,15 @@ export type R2BucketLike = {
 
 type R2BucketProvider = () => R2BucketLike;
 
-function providerScope(): AsyncLocalStorage<R2BucketProvider> {
+async function providerScope() {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
   const global = globalThis as Record<string, unknown>;
-  return (global[SCOPE_KEY] ??= new AsyncLocalStorage<R2BucketProvider>()) as AsyncLocalStorage<R2BucketProvider>;
+  return (global[SCOPE_KEY] ??= new AsyncLocalStorage<R2BucketProvider>()) as InstanceType<typeof AsyncLocalStorage<R2BucketProvider>>;
 }
 
 /** Bind a bucket to one scheduled invocation without changing concurrent requests. */
-export function runWithR2BucketProvider<T>(fn: R2BucketProvider, callback: () => Promise<T>): Promise<T> {
-  return providerScope().run(fn, callback);
+export async function runWithR2BucketProvider<T>(fn: R2BucketProvider, callback: () => Promise<T>): Promise<T> {
+  return (await providerScope()).run(fn, callback);
 }
 
 export function setR2BucketProvider(fn: R2BucketProvider): void {
@@ -67,7 +66,9 @@ export function setR2BucketProvider(fn: R2BucketProvider): void {
 }
 
 export function getR2Bucket(): R2BucketLike {
-  const provider = (providerScope().getStore() ?? (globalThis as Record<string, unknown>)[GLOBAL_KEY]) as
+  const global = globalThis as Record<string, unknown>;
+  const scope = global[SCOPE_KEY] as { getStore(): R2BucketProvider | undefined } | undefined;
+  const provider = (scope?.getStore() ?? global[GLOBAL_KEY]) as
     | R2BucketProvider
     | undefined;
   if (!provider) {
