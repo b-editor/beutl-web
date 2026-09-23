@@ -103,6 +103,56 @@ describe("saving the AI configuration in one go", () => {
     )).toBe(false);
   });
 
+  it("detects a concurrent model capability change", () => {
+    const baseline = [snapshot({ imageSizeMode: "aspect_ratio" })];
+    expect(matchesAiOperationModelSnapshot(
+      [snapshot({ imageSizeMode: "explicit_1k" })],
+      baseline,
+    )).toBe(false);
+  });
+
+  it("validates per-model image and video behavior", () => {
+    const image = validate({
+      settings: [],
+      models: [{
+        operation: "image.generate",
+        models: [model({
+          provider: "vercel-gateway",
+          imageSizeMode: "explicit_1k",
+          imageOutputTokenProfile: "grid_48_medium",
+        })],
+      }],
+    });
+    expect(image).toMatchObject({
+      ok: true,
+      models: [{ models: [{
+        imageSizeMode: "explicit_1k",
+        imageOutputTokenProfile: "grid_48_medium",
+      }] }],
+    });
+    expect(validate({
+      settings: [],
+      models: [{
+        operation: "image.generate",
+        models: [model({ imageSizeMode: "explicit_1k" })],
+      }],
+    })).toMatchObject({ ok: false, message: "Invalid image size mode" });
+    expect(validate({
+      settings: [],
+      models: [{
+        operation: "video.generate",
+        models: [model({ modelId: "example/video", videoAudioRequired: true })],
+      }],
+    })).toMatchObject({ ok: true });
+    expect(validate({
+      settings: [],
+      models: [{
+        operation: "image.generate",
+        models: [model({ videoAudioRequired: true })],
+      }],
+    })).toMatchObject({ ok: false, message: "Invalid video audio requirement" });
+  });
+
   it("detects a concurrent add instead of deleting it as stale", () => {
     const baseline = [snapshot()];
     const concurrent = [

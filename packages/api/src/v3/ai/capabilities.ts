@@ -97,6 +97,7 @@ type VideoModelDescription = ModelDescription & {
   resolutions: string[];
   aspectRatios: string[];
   audio: boolean;
+  audioRequired: boolean;
   seed: boolean;
   // 開始フレームと終了フレームは別々に扱う。片方しか取らないモデルがある。
   firstFrame: boolean;
@@ -130,7 +131,7 @@ type VideoModelDescription = ModelDescription & {
 function describeCatalogEntries(
   catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
   operation: string,
-): (ModelDescription & { provider: string })[] {
+): (ModelDescription & { provider: string; videoAudioRequired: boolean | null })[] {
   const entries = catalog.list(operation);
   return entries.map((entry, index) => ({
     id: entry.modelId,
@@ -139,6 +140,7 @@ function describeCatalogEntries(
     // The one a request that names no model runs on.
     isDefault: index === 0,
     provider: entry.provider,
+    videoAudioRequired: entry.videoAudioRequired,
   })).filter((entry) => !providerRequiresPreparedOutpaintCanvas(entry.provider, operation));
 }
 
@@ -147,7 +149,7 @@ function describeModels(
   operation: string,
 ): ModelDescription[] {
   return describeCatalogEntries(catalog, operation).map(
-    ({ provider: _provider, ...model }) => model,
+    ({ provider: _provider, videoAudioRequired: _audioRequired, ...model }) => model,
   );
 }
 
@@ -174,7 +176,7 @@ const app = new Hono().get("/", async (c) => {
     ),
   ]);
   const describeImageModels = (operation: string): ImageModelDescription[] =>
-    describeCatalogEntries(catalog, operation).map(({ provider, ...model }) => {
+    describeCatalogEntries(catalog, operation).map(({ provider, videoAudioRequired: _audioRequired, ...model }) => {
       const supported = imageCapabilityOf(imageCapabilities, {
         modelId: model.id,
         provider,
@@ -200,13 +202,15 @@ const app = new Hono().get("/", async (c) => {
         videoCapabilityOf(videoCapabilities, {
           modelId: model.id,
           provider: model.provider,
+          videoAudioRequired: model.videoAudioRequired,
         }),
         operation,
       ),
-    ).map(({ provider, ...model }) => {
+    ).map(({ provider, videoAudioRequired, ...model }) => {
       const supported = videoCapabilityOf(videoCapabilities, {
         modelId: model.id,
         provider,
+        videoAudioRequired,
       });
       return {
         ...model,
@@ -233,13 +237,15 @@ const app = new Hono().get("/", async (c) => {
       videoCapabilityOf(videoCapabilities, {
         modelId: model.id,
         provider: model.provider,
+        videoAudioRequired: model.videoAudioRequired,
       }),
       "video.generate",
     ),
-  ).map(({ provider, ...model }) => {
+  ).map(({ provider, videoAudioRequired, ...model }) => {
     const supported = videoCapabilityOf(videoCapabilities, {
       modelId: model.id,
       provider,
+      videoAudioRequired,
     });
     return {
       ...model,
@@ -252,6 +258,7 @@ const app = new Hono().get("/", async (c) => {
         ? supported.aspectRatios
         : [...AI_VIDEO_ASPECT_RATIOS],
       audio: supported ? supported.generateAudio : true,
+      audioRequired: supported?.audioRequired ?? false,
       seed: supported ? supported.seed : true,
       firstFrame: supported ? supported.firstFrame : true,
       lastFrame: supported ? supported.lastFrame : true,

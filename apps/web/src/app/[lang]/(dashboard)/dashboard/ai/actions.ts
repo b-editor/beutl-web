@@ -731,6 +731,7 @@ export async function generateImageAction(
         : {}),
     },
     usagePercent: selectedModel.usagePercent,
+    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -747,6 +748,7 @@ export async function generateImageAction(
     const result = await imageProviderFor(selectedModel.provider).generate({
       prompt,
       aspectRatio,
+      imageSizeMode: selectedModel.imageSizeMode,
       ...(background !== "auto" ? { background } : {}),
       ...(references.length > 0
         ? {
@@ -889,6 +891,7 @@ export async function editImageAction(
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
     usagePercent: selectedModel.usagePercent,
+    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
     model: selectedModel.modelId,
     ...identity,
   });
@@ -1426,6 +1429,7 @@ export async function retryJobAction(
         ...(seed === undefined ? {} : { seed }),
       },
       usagePercent: retryModel.usagePercent,
+      imageOutputTokenProfile: retryModel.imageOutputTokenProfile,
       model: retryModel.modelId,
       ...identity,
     });
@@ -1443,6 +1447,7 @@ export async function retryJobAction(
       const result = await imageProviderFor(retryModel.provider).generate({
         prompt: input.prompt,
         aspectRatio,
+        imageSizeMode: retryModel.imageSizeMode,
         ...(background ? { background } : {}),
         ...(seed === undefined ? {} : { seed }),
         model: retryModel.modelId,

@@ -28,7 +28,7 @@ import {
 } from "./config";
 import { toGatewayProviderError } from "./errors";
 import { gatewayProviderCostUsd } from "../../provider-cost";
-import { gptImage2OutputSize, isGptImage2Model } from "../../image-output-geometry";
+import { explicit1kOutputSize } from "../../image-output-geometry";
 
 function toGeneratedImage(image: {
   base64: string;
@@ -80,8 +80,8 @@ export async function generateGatewayImage(
               text: request.prompt,
             }
           : request.prompt,
-      ...(isGptImage2Model(request.model)
-        ? { size: gptImage2OutputSize(request.aspectRatio) }
+      ...(request.imageSizeMode === "explicit_1k"
+        ? { size: explicit1kOutputSize(request.aspectRatio) }
         : { aspectRatio: request.aspectRatio }),
       n: 1,
       ...(request.seed === undefined ? {} : { seed: request.seed }),

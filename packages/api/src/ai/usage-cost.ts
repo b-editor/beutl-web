@@ -2,6 +2,7 @@ import {
   multiplyDecimalAmounts,
   parseNonNegativeDecimalFraction,
   USD_MICROS_PER_DOLLAR,
+  type AiImageOutputTokenProfile,
 } from "@beutl/core";
 import { loadAiCostEstimates, type AiCostRequestShape } from "./model-pricing";
 import type { ProviderCostUsd } from "./provider-cost";
@@ -82,11 +83,13 @@ export async function quoteAiUsageReservation({
   inputParams,
   modelId,
   provider,
+  imageOutputTokenProfile,
 }: {
   kind: string;
   inputParams?: object;
   modelId: string;
   provider: string;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
 }): Promise<{
   providerCostUsd: number;
   estimatedProviderCostUsd: number;
@@ -100,6 +103,7 @@ export async function quoteAiUsageReservation({
     quantity: billable.quantity,
     modelId,
     provider,
+    imageOutputTokenProfile,
     request: {
       referenceImages: kind === "image"
         ? Array.isArray(input.references) ? input.references.length : 0
@@ -125,12 +129,14 @@ export async function quoteAiOperationReservation({
   modelId,
   provider,
   request = {},
+  imageOutputTokenProfile,
 }: {
   operation: string;
   quantity: number;
   modelId: string;
   provider: string;
   request?: AiCostRequestShape;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
 }): Promise<{
   estimatedProviderCostUsd: number;
   reservationProviderCostUsd: number;
@@ -138,7 +144,7 @@ export async function quoteAiOperationReservation({
   if (!Number.isFinite(quantity) || quantity <= 0) return null;
   const { entries } = await loadAiCostEstimates({
     modelsOf: (candidate) =>
-      candidate === operation ? [{ modelId, provider }] : [],
+      candidate === operation ? [{ modelId, provider, imageOutputTokenProfile }] : [],
     request: {
       ...request,
       referenceImages: operation === "image.generate"

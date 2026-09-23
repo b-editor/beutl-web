@@ -451,6 +451,7 @@ const app = new Hono()
           : {}),
       },
       usagePercent: selectedModel.usagePercent,
+      imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
       model: selectedModel.modelId,
       ...requestIdentity,
     });
@@ -478,6 +479,7 @@ const app = new Hono()
       const result = await imageProviderFor(selectedModel.provider).generate({
         prompt,
         aspectRatio,
+        imageSizeMode: selectedModel.imageSizeMode,
         ...(background ? { background } : {}),
         ...(references.length > 0
           ? {
@@ -785,6 +787,7 @@ const app = new Hono()
         ...(editPrompt ? { prompt: editPrompt } : {}),
       },
       usagePercent: selectedModel.usagePercent,
+      imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
       model: selectedModel.modelId,
       ...requestIdentity,
     });

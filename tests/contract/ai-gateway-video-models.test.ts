@@ -69,8 +69,8 @@ const motionControl = {
 };
 
 describe("reading one Gateway video model", () => {
-  it("distinguishes H3's always-on audio from a model with optional audio", () => {
-    expect(toVideoModelDescriptor(minimax).audioRequired).toBe(true);
+  it("does not infer mandatory audio from a model ID or generate_audio", () => {
+    expect(toVideoModelDescriptor(minimax).audioRequired).toBeUndefined();
     expect(toVideoModelDescriptor(veo).audioRequired).toBeUndefined();
     expect(toVideoModelDescriptor({ id: "minimax/future-model", type: "video" }).audioRequired)
       .toBeUndefined();

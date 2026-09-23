@@ -519,6 +519,9 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
             modelId: row.modelId,
             provider: row.provider,
             usagePercent: row.usagePercent,
+            videoAudioRequired: row.videoAudioRequired,
+            imageSizeMode: row.imageSizeMode as import("@beutl/core").AiImageSizeMode,
+            imageOutputTokenProfile: row.imageOutputTokenProfile as import("@beutl/core").AiImageOutputTokenProfile,
             priceUnits: row.priceUnits,
             displayName: row.displayName,
             enabled: row.enabled,
@@ -583,6 +586,10 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
             before !== undefined &&
             before.provider === model.provider &&
             before.usagePercent === model.usagePercent &&
+            before.videoAudioRequired === (model.videoAudioRequired ?? null) &&
+            before.imageSizeMode === (model.imageSizeMode ?? "aspect_ratio") &&
+            before.imageOutputTokenProfile ===
+              (model.imageOutputTokenProfile ?? "legacy") &&
             before.priceUnits === model.priceUnits &&
             before.displayName === model.displayName &&
             before.enabled === model.enabled &&
@@ -599,7 +606,7 @@ export async function saveAiConfiguration(input: unknown, lang = "en"): Promise<
           await addAuditLog({
             userId: session.user.id,
             action: auditLogActions.admin.aiOperationModelSaved,
-            details: `operation: ${draft.operation}, model: ${model.modelId}, provider: ${model.provider}, usagePercent: ${model.usagePercent}, order: ${index}, enabled: ${model.enabled}`,
+            details: `operation: ${draft.operation}, model: ${model.modelId}, provider: ${model.provider}, usagePercent: ${model.usagePercent}, videoAudioRequired: ${model.videoAudioRequired ?? "provider"}, imageSizeMode: ${model.imageSizeMode ?? "aspect_ratio"}, imageOutputTokenProfile: ${model.imageOutputTokenProfile ?? "legacy"}, order: ${index}, enabled: ${model.enabled}`,
             prisma: tx,
           });
         }

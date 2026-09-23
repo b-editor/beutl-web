@@ -49,6 +49,7 @@ import {
   AI_MAX_IMAGE_REFERENCES,
   AI_PRICING_CATALOG,
   AI_VIDEO_RESOLUTIONS,
+  type AiImageOutputTokenProfile,
 } from "@beutl/core";
 import {
   clearAiImageModelCapabilitiesCache,
@@ -324,6 +325,7 @@ async function estimateImageOperation(
   correlateEndpointCapabilities: boolean,
   options: { force: boolean; now: number },
   request?: AiCostRequestShape,
+  outputTokenProfile: AiImageOutputTokenProfile = "legacy",
 ): Promise<AiCostEstimate> {
   const parts = splitModelId(model);
   if (!parts) {
@@ -372,7 +374,7 @@ async function estimateImageOperation(
   return estimateImageCost({
     endpoints,
     referenceImages,
-    model,
+    outputTokenProfile,
     aspectRatio: request?.aspectRatio,
     ...(!request && correlateEndpointCapabilities && operation === "image.generate"
       ? {
@@ -459,6 +461,7 @@ export type AiCostRequestShape = {
 export type AiPricingModelRef = {
   modelId: string;
   provider: string;
+  imageOutputTokenProfile?: AiImageOutputTokenProfile;
 };
 
 export type AiCostEstimateEntry = {
@@ -505,6 +508,7 @@ export async function loadAiCostEstimates({
       operation,
       model: ref.modelId,
       provider: ref.provider,
+      imageOutputTokenProfile: ref.imageOutputTokenProfile ?? "legacy",
     }));
   });
   const generationModels = [
@@ -529,7 +533,7 @@ export async function loadAiCostEstimates({
     : new Map<string, AiImageModelCapabilities>();
 
   const entries = await Promise.all(
-    pairs.map(async ({ operation, model, provider }): Promise<AiCostEstimateEntry> => {
+    pairs.map(async ({ operation, model, provider, imageOutputTokenProfile }): Promise<AiCostEstimateEntry> => {
       try {
         const estimate = await estimateOperation(
           operation,
@@ -538,6 +542,7 @@ export async function loadAiCostEstimates({
           imageCapabilities,
           options,
           request,
+          imageOutputTokenProfile,
         );
         return { operation, model, estimate };
       } catch (error) {
@@ -587,6 +592,7 @@ async function estimateGatewayImageOperation(
   referenceImages: number,
   options: { force: boolean; now: number },
   aspectRatio?: string,
+  outputTokenProfile: AiImageOutputTokenProfile = "legacy",
 ): Promise<AiCostEstimate> {
   // Share one catalog request across all image models and operations.
   const outcome = await fetchPricing(
@@ -603,7 +609,7 @@ async function estimateGatewayImageOperation(
   return estimateImageCost({
     endpoints: [[{ billable: "output_image", ...price }]],
     referenceImages,
-    model,
+    outputTokenProfile,
     aspectRatio,
   });
 }
@@ -678,6 +684,7 @@ async function estimateOperation(
   imageCapabilities: ReadonlyMap<string, AiImageModelCapabilities>,
   options: { force: boolean; now: number },
   request?: AiCostRequestShape,
+  outputTokenProfile: AiImageOutputTokenProfile = "legacy",
 ): Promise<AiCostEstimate> {
   if (provider !== DEFAULT_AI_PROVIDER_ID) {
     if (operation.startsWith("image.")) {
@@ -689,6 +696,7 @@ async function estimateOperation(
           : 1),
         options,
         request?.aspectRatio,
+        outputTokenProfile,
       );
     }
     return await estimateGatewayOperation(operation, model, options, request);
@@ -715,6 +723,7 @@ async function estimateOperation(
           undefined,
       options,
       request,
+      outputTokenProfile,
     );
   }
 

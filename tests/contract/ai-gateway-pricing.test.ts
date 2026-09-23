@@ -427,10 +427,15 @@ describe("costing an operation at the provider that serves it", () => {
     return calls;
   };
 
-  const estimateFor = async (operation: string, modelId: string, provider: string) => {
+  const estimateFor = async (
+    operation: string,
+    modelId: string,
+    provider: string,
+    imageOutputTokenProfile: "legacy" | "grid_48_medium" = "legacy",
+  ) => {
     const costs = await loadAiCostEstimates({
       modelsOf: (candidate) =>
-        candidate === operation ? [{ modelId, provider }] : [],
+        candidate === operation ? [{ modelId, provider, imageOutputTokenProfile }] : [],
     });
     return costs.entries.find((entry) => entry.operation === operation)?.estimate;
   };
@@ -664,7 +669,7 @@ describe("costing an operation at the provider that serves it", () => {
       }],
     });
 
-    expect(await estimateFor(operation, "openai/gpt-image-2", "vercel-gateway"))
+    expect(await estimateFor(operation, "openai/gpt-image-2", "vercel-gateway", "grid_48_medium"))
       .toEqual({
         status: "estimated",
         usdMin: 0.05268,

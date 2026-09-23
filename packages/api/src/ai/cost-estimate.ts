@@ -14,8 +14,8 @@
 //   - Where an assumption is needed to bridge a price to a chargeable unit, it
 //     is returned alongside the number so the UI can state it.
 
-import { addDecimalAmounts, multiplyDecimalAmounts } from "@beutl/core";
-import { GPT_IMAGE_2_GEOMETRY, isGptImage2Model } from "./image-output-geometry";
+import { addDecimalAmounts, multiplyDecimalAmounts, type AiImageOutputTokenProfile } from "@beutl/core";
+import { EXPLICIT_1K_IMAGE_GEOMETRY } from "./image-output-geometry";
 import {
   aiVideoResolutionOfGatewayLabel,
   gatewayVideoResolution,
@@ -64,7 +64,7 @@ const LEGACY_IMAGE_OUTPUT_TOKENS: Readonly<Record<string, number>> = {
   "2:3": 1584,
 };
 
-function gptImage2MediumOutputTokens(width: number, height: number): number {
+function grid48MediumOutputTokens(width: number, height: number): number {
   // OpenAI's official output-token calculator: a medium grid has 48 cells on
   // its longer side, a ties-to-even rounded shorter side, and a pixel factor.
   const shortGrid = 48 * Math.min(width, height) / Math.max(width, height);
@@ -73,21 +73,21 @@ function gptImage2MediumOutputTokens(width: number, height: number): number {
   return Math.ceil(48 * rounded * (2_000_000 + width * height) / 4_000_000);
 }
 
-const GPT_IMAGE_2_OUTPUT_TOKENS = Object.fromEntries(
-  Object.entries(GPT_IMAGE_2_GEOMETRY).map(([ratio, [width, height]]) =>
-    [ratio, gptImage2MediumOutputTokens(width, height)] as const
+const GRID_48_MEDIUM_OUTPUT_TOKENS = Object.fromEntries(
+  Object.entries(EXPLICIT_1K_IMAGE_GEOMETRY).map(([ratio, [width, height]]) =>
+    [ratio, grid48MediumOutputTokens(width, height)] as const
   ),
 );
 
-function imageOutputTokens(model: string | undefined, aspectRatio: string | undefined): number {
-  const profile = isGptImage2Model(model)
-    ? GPT_IMAGE_2_OUTPUT_TOKENS
+function imageOutputTokens(profile: AiImageOutputTokenProfile, aspectRatio: string | undefined): number {
+  const tokens = profile === "grid_48_medium"
+    ? GRID_48_MEDIUM_OUTPUT_TOKENS
     : LEGACY_IMAGE_OUTPUT_TOKENS;
   // Edits/admin estimates may not have a requested output ratio. Use the
   // largest count in the profile instead of silently treating them as square.
-  return aspectRatio !== undefined && Object.hasOwn(profile, aspectRatio)
-    ? profile[aspectRatio]
-    : Math.max(...Object.values(profile));
+  return aspectRatio !== undefined && Object.hasOwn(tokens, aspectRatio)
+    ? tokens[aspectRatio]
+    : Math.max(...Object.values(tokens));
 }
 
 export const ASSUMED_IMAGE_INPUT_TOKENS = 1056;
@@ -149,7 +149,15 @@ export type ImagePricingEntry = {
 // treat a missing charge as free.
 function estimateImageEndpoint(
   entries: ImagePricingEntry[],
-  { referenceImages, model, aspectRatio }: { referenceImages: number; model?: string; aspectRatio?: string },
+  {
+    referenceImages,
+    outputTokenProfile,
+    aspectRatio,
+  }: {
+    referenceImages: number;
+    outputTokenProfile: AiImageOutputTokenProfile;
+    aspectRatio?: string;
+  },
 ): { usd: number; assumptions: AiCostAssumption[] } | null {
   const assumptions: AiCostAssumption[] = [];
   const priceOf = (
@@ -175,7 +183,7 @@ function estimateImageEndpoint(
       case "token": {
         const tokens =
           billable === "output_image"
-            ? imageOutputTokens(model, aspectRatio)
+            ? imageOutputTokens(outputTokenProfile, aspectRatio)
             : ASSUMED_IMAGE_INPUT_TOKENS;
         assumptions.push({
           kind:
@@ -221,20 +229,20 @@ export function estimateImageCost({
   endpoints,
   referenceImages,
   referenceImagesByEndpoint,
-  model,
+  outputTokenProfile = "legacy",
   aspectRatio,
 }: {
   endpoints: ImagePricingEntry[][];
   referenceImages: number;
   referenceImagesByEndpoint?: readonly number[];
-  model?: string;
+  outputTokenProfile?: AiImageOutputTokenProfile;
   aspectRatio?: string;
 }): AiCostEstimate {
   const results = endpoints
     .map((entries, index) =>
       estimateImageEndpoint(entries, {
         referenceImages: referenceImagesByEndpoint?.[index] ?? referenceImages,
-        model,
+        outputTokenProfile,
         aspectRatio,
       })
     )

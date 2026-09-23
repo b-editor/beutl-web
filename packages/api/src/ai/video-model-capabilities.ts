@@ -37,6 +37,8 @@ import {
 // is not the same as restricting to nothing — those stay unconstrained.
 export type AiVideoModelCapabilities = {
   modelId: string;
+  /** An admin audio override exists, but the optional provider catalog was unavailable. */
+  providerMetadataUnavailable?: true;
   resolutions: AiVideoResolution[];
   durations: number[];
   aspectRatios: AiVideoAspectRatio[];
@@ -322,9 +324,30 @@ export async function loadAiVideoModelCapabilities(
  */
 export function videoCapabilityOf(
   capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
-  model: { modelId: string; provider: string },
+  model: { modelId: string; provider: string; videoAudioRequired?: boolean | null },
 ): AiVideoModelCapabilities | undefined {
-  return capabilities.get(aiCapabilityKey(model.provider, model.modelId));
+  const published = capabilities.get(aiCapabilityKey(model.provider, model.modelId));
+  if (model.videoAudioRequired === null || model.videoAudioRequired === undefined) {
+    return published;
+  }
+  // An explicit admin setting survives an optional provider-catalog outage.
+  // The fallback mirrors the unrestricted choices the UI already shows when
+  // the provider publishes no capabilities at all.
+  const base = published ?? toCapabilities({
+    id: model.modelId,
+    supportedResolutions: null,
+    supportedDurations: null,
+    supportedAspectRatios: null,
+    supportedFrameImages: null,
+    generateAudio: null,
+    seed: null,
+  });
+  return {
+    ...base,
+    ...(published ? {} : { providerMetadataUnavailable: true as const }),
+    generateAudio: model.videoAudioRequired || base.generateAudio,
+    audioRequired: model.videoAudioRequired,
+  };
 }
 
 // Why the provider would refuse this request, or null if nothing rules it out.
@@ -362,6 +385,14 @@ export function unsupportedVideoRequestReason(
   },
 ): UnsupportedVideoRequestReason | null {
   if (!capabilities) return null;
+  // A missing catalog used to impose no model-specific restrictions. Preserve
+  // that behavior while enforcing only the administrator's known audio rule;
+  // the UI still hides unverified reference inputs until metadata returns.
+  if (capabilities.providerMetadataUnavailable) {
+    return request.generateAudio === false && capabilities.audioRequired
+      ? "generateAudio"
+      : null;
+  }
   if (!capabilities.resolutions.includes(request.resolution as AiVideoResolution)) {
     return "resolution";
   }
@@ -470,7 +501,7 @@ export function unusableVideoModelsFor(
   operation: string,
   // Whole rows, because who runs a model decides what it takes: the same id
   // can name a different endpoint under a different provider.
-  models: readonly { modelId: string; provider: string }[],
+  models: readonly { modelId: string; provider: string; videoAudioRequired?: boolean | null }[],
   capabilities: ReadonlyMap<string, AiVideoModelCapabilities>,
 ): Set<string> {
   // Model ids are returned bare, which stays unambiguous: the catalog keys a
@@ -490,7 +521,7 @@ export function isVideoModelUsable(
   capabilities: AiVideoModelCapabilities | undefined,
   operation = "video.generate",
 ): boolean {
-  if (!capabilities) return true;
+  if (!capabilities || capabilities.providerMetadataUnavailable) return true;
   // 手持ちの動画を材料にするモードは、その 1 つの能力がすべて。尺や解像度は
   // 素材の側が決めるか、そもそも受け付けられない。
   if (operation === "video.edit") return capabilities.videoEditing;

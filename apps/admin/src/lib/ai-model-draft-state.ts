@@ -4,6 +4,9 @@ export type AiModelDraftRow = {
   modelId: string;
   provider: string;
   usagePercent: number;
+  videoAudioRequired?: boolean | null;
+  imageSizeMode?: import("@beutl/core").AiImageSizeMode;
+  imageOutputTokenProfile?: import("@beutl/core").AiImageOutputTokenProfile;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;
@@ -35,6 +38,10 @@ function sameModels(left: AiModelDraftRow[], right: AiModelDraftRow[]): boolean 
         // save bar would stay hidden after one.
         model.provider === other.provider &&
         model.usagePercent === other.usagePercent &&
+        (model.videoAudioRequired ?? null) === (other.videoAudioRequired ?? null) &&
+        (model.imageSizeMode ?? "aspect_ratio") === (other.imageSizeMode ?? "aspect_ratio") &&
+        (model.imageOutputTokenProfile ?? "legacy") ===
+          (other.imageOutputTokenProfile ?? "legacy") &&
         model.priceUnits === other.priceUnits &&
         model.displayName === other.displayName &&
         model.enabled === other.enabled

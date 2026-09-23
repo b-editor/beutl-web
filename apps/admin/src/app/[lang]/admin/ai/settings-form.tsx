@@ -39,6 +39,9 @@ export type AiModelRow = {
   /** Which provider runs it. Rows registered before the column say "openrouter". */
   provider: string;
   usagePercent: number;
+  videoAudioRequired?: boolean | null;
+  imageSizeMode?: import("@beutl/core").AiImageSizeMode;
+  imageOutputTokenProfile?: import("@beutl/core").AiImageOutputTokenProfile;
   priceUnits: number;
   displayName: string | null;
   enabled: boolean;

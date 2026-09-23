@@ -149,6 +149,7 @@ export async function createReservedAiJob({
   inputParams,
   usageUnits,
   usagePercent = 100,
+  imageOutputTokenProfile,
   model,
   activeJobLimit,
   idempotencyKeyHash,
@@ -165,6 +166,7 @@ export async function createReservedAiJob({
   // omit it and reserve from the provider's current public rate card.
   usageUnits?: number;
   usagePercent?: number;
+  imageOutputTokenProfile?: import("@beutl/core").AiImageOutputTokenProfile;
   // The model whose public quote is reserved and whose actual cost is settled.
   model?: string;
   activeJobLimit?: number;
@@ -215,6 +217,7 @@ export async function createReservedAiJob({
         inputParams,
         modelId: model,
         provider,
+        imageOutputTokenProfile,
       })
     : null;
   let legacyReservationUnits: number | null = null;

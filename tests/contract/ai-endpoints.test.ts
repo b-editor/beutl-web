@@ -1520,6 +1520,7 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(generateImage)).toHaveBeenCalledWith({
         prompt: "test",
         aspectRatio: "1:1",
+        imageSizeMode: "aspect_ratio",
         model: "openai/gpt-image-1",
         signal: expect.any(AbortSignal),
       });
@@ -1771,6 +1772,7 @@ describe("v3 AI endpoints contract", () => {
       expect(vi.mocked(generateImage)).toHaveBeenCalledWith({
         prompt: "a title card",
         aspectRatio: "16:9",
+        imageSizeMode: "aspect_ratio",
         background: "transparent",
         seed: 42,
         model: "openai/gpt-image-1",

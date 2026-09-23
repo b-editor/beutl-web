@@ -315,6 +315,8 @@ export type PartialImage = {
 export type AiImageGenerateRequest = {
   prompt: string;
   aspectRatio: AiImageAspectRatio;
+  /** Selected by the administrator for this registered operation/model row. */
+  imageSizeMode?: import("@beutl/core").AiImageSizeMode;
   background?: AiImageBackground;
   referenceImages?: ImageReference[];
   seed?: number;
