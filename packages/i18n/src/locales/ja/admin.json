@@ -59,6 +59,9 @@
     "aiTransactionKinds": {
       "purchase": "購入",
       "usage": "消費",
+      "usage_settlement": "利用量の精算",
+      "usage_estimate_pending": "実費待ちの見積精算",
+      "usage_actual_correction": "実費との差額補正",
       "refund": "返却",
       "purchase_reversal": "購入の取り消し",
       "admin_credit_adjustment": "管理者によるクレジット調整",

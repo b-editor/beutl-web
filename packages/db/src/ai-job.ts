@@ -8,6 +8,10 @@ import {
   type PrismaTransaction,
 } from "./transaction";
 import { STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS } from "./storage-multipart-cleanup";
+import {
+  AI_USAGE_ACTUAL_CORRECTION_KIND,
+  AI_USAGE_ESTIMATE_PENDING_KIND,
+} from "./credit-account";
 
 const ACTIVE_AI_JOB_STATUSES = ["queued", "running", "finalizing"];
 const MAX_AI_JOB_HISTORY_PAGE_SIZE = 100;
@@ -674,16 +678,18 @@ export async function completeAiJobWithOutput({
 
 export async function getAiJobById({
   jobId,
+  includeDeleted = false,
   prisma,
 }: {
   jobId: string;
+  includeDeleted?: boolean;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
   const job = await db.aiJob.findFirst({
     where: {
       id: jobId,
-      deletedAt: null,
+      ...(includeDeleted ? {} : { deletedAt: null }),
     },
     include: {
       resultFile: { select: AI_JOB_RESULT_FILE_SELECT },
@@ -819,6 +825,18 @@ export async function prepareAiJobDeletionByUserId({
     }
 
     if (job.deletedAt === null) {
+      const estimatedCostPending = job.kind === "video" &&
+        job.provider === "vercel-gateway" && job.status === "succeeded" &&
+        job.usageSettledAt !== null && job.providerCostUsdMicros === null &&
+        job.providerJobId !== null &&
+        await tx.creditTransaction.findFirst({
+          where: { userId, aiJobId: jobId, kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+          select: { id: true },
+        }) &&
+        !await tx.creditTransaction.findFirst({
+          where: { userId, aiJobId: jobId, kind: AI_USAGE_ACTUAL_CORRECTION_KIND },
+          select: { id: true },
+        });
       const updated = await tx.aiJob.updateMany({
         where: {
           id: jobId,
@@ -829,7 +847,7 @@ export async function prepareAiJobDeletionByUserId({
         data: {
           inputParams: Prisma.DbNull,
           error: null,
-          providerJobId: null,
+          ...(estimatedCostPending ? {} : { providerJobId: null }),
           callbackNonceHash: null,
           providerPollLeaseExpiresAt: null,
           deletedAt: new Date(),
@@ -1562,6 +1580,74 @@ export async function listUnsettledGatewayVideoJobsForReconciliation({
     },
   });
   return decimalNumberRows(jobs);
+}
+
+/** Estimated Gateway videos that may still have an actual ledger charge. */
+export async function listEstimatedGatewayVideoJobsForReconciliation({
+  updatedBefore,
+  limit = 10,
+  prisma,
+}: {
+  updatedBefore: Date;
+  limit?: number;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.aiJob.findMany({
+    where: {
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      providerJobId: { not: null },
+      model: { not: null },
+      usageSettledAt: { not: null },
+      providerCostUsdMicros: null,
+      usageUnitUsdMicros: { not: null },
+      reservedUsageUnits: { not: null },
+      updatedAt: { lte: updatedBefore },
+      transactions: {
+        some: { kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+        none: { kind: AI_USAGE_ACTUAL_CORRECTION_KIND },
+      },
+    },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+    select: {
+      id: true,
+      userId: true,
+      providerJobId: true,
+      model: true,
+      usageSettledAt: true,
+    },
+  });
+}
+
+/** Rotate a still-unpriced row so one missing Gateway ledger event cannot starve newer jobs. */
+export async function deferEstimatedGatewayVideoCostLookup({
+  jobId,
+  updatedAt,
+  prisma,
+}: {
+  jobId: string;
+  updatedAt: Date;
+  prisma?: PrismaTransaction;
+}): Promise<void> {
+  const db = prisma ?? await getDb();
+  await db.aiJob.updateMany({
+    where: {
+      id: jobId,
+      provider: "vercel-gateway",
+      kind: "video",
+      status: "succeeded",
+      usageSettledAt: { not: null },
+      providerCostUsdMicros: null,
+      transactions: {
+        some: { kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+        none: { kind: AI_USAGE_ACTUAL_CORRECTION_KIND },
+      },
+    },
+    data: { updatedAt },
+  });
 }
 
 /** Serialize the remote-cost decision shared by deletion and reconciliation. */

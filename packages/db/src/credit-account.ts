@@ -61,6 +61,8 @@ const PURCHASE_REVERSAL_TRANSACTION_KIND = "purchase_reversal";
 export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
 export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
 export const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
+export const AI_USAGE_ESTIMATE_PENDING_KIND = "usage_estimate_pending";
+export const AI_USAGE_ACTUAL_CORRECTION_KIND = "usage_actual_correction";
 const MAX_REVERSAL_CAS_ATTEMPTS = 8;
 
 const TERMINAL_REFUND_STATUSES = new Set([
@@ -902,6 +904,8 @@ export async function settleUsage({
   providerCostUsdMicros,
   monthlyUsageLimit,
   currentUsagePeriod,
+  estimatedProviderCost = false,
+  allowActualCorrection = false,
   prisma,
 }: {
   userId: string;
@@ -910,6 +914,10 @@ export async function settleUsage({
   providerCostUsdMicros: number | null;
   monthlyUsageLimit: number;
   currentUsagePeriod: UsagePeriod;
+  /** The Gateway video cost was unavailable, so this first settlement is an estimate. */
+  estimatedProviderCost?: boolean;
+  /** Correct a succeeded Gateway video previously settled to its estimate. */
+  allowActualCorrection?: boolean;
   prisma?: PrismaTransaction;
 }) {
   const settledAmount = normalizeUsageAmount(
@@ -928,13 +936,22 @@ export async function settleUsage({
 
   const run = async (tx: PrismaTransaction) => {
     const job = await tx.aiJob.findFirst({
-      where: { id: aiJobId, userId, deletedAt: null },
+      where: { id: aiJobId, userId, ...(allowActualCorrection ? {} : { deletedAt: null }) },
     });
     if (!job) throw new Error(`AI job ${aiJobId} was not found for user ${userId}`);
     if (job.status !== "succeeded") {
       throw new Error(`AI job ${aiJobId} must succeed before usage is settled`);
     }
-    if (job.usageSettledAt !== null) {
+    const correctingEstimate = job.usageSettledAt !== null;
+    const estimateMarker = correctingEstimate && allowActualCorrection
+      ? await tx.creditTransaction.findFirst({
+          where: { userId, aiJobId, kind: AI_USAGE_ESTIMATE_PENDING_KIND },
+          select: { id: true },
+        })
+      : null;
+    if (correctingEstimate && !(allowActualCorrection && estimateMarker &&
+      job.kind === "video" && job.provider === "vercel-gateway" &&
+      job.providerCostUsdMicros === null && job.usageUnitUsdMicros !== null)) {
       return await getAccountForUsagePeriod({
         userId,
         usagePeriod: currentUsagePeriod,
@@ -942,8 +959,11 @@ export async function settleUsage({
       });
     }
 
+    const transactionKind = correctingEstimate
+      ? AI_USAGE_ACTUAL_CORRECTION_KIND
+      : AI_USAGE_SETTLEMENT_KIND;
     const existing = await tx.creditTransaction.findFirst({
-      where: { userId, aiJobId, kind: AI_USAGE_SETTLEMENT_KIND },
+      where: { userId, aiJobId, kind: transactionKind },
     });
     if (existing) return await getAccountForUsagePeriod({
       userId,
@@ -958,12 +978,27 @@ export async function settleUsage({
       throw new Error(`Usage transaction for AI job ${aiJobId} was not found`);
     }
     const usage = decimalNumbers(storedUsage);
+    const priorSettlement = correctingEstimate
+      ? await tx.creditTransaction.findFirst({
+          where: { userId, aiJobId, kind: AI_USAGE_SETTLEMENT_KIND },
+        }).then((row) => row ? decimalNumbers(row) : null)
+      : null;
     const reservedAmount = exactUsageAmount(
       usage.usageAmount - usage.creditAmount,
       "reservedAmount",
     );
     if (reservedAmount <= 0) {
       throw new Error(`AI job ${aiJobId} has an invalid reservation`);
+    }
+    const previousAmount = correctingEstimate
+      ? exactUsageAmount(decimalNumbers(job).usageUnits, "previousAmount")
+      : reservedAmount;
+    if (correctingEstimate && exactUsageAmount(
+      reservedAmount + (priorSettlement?.usageAmount ?? 0) -
+        (priorSettlement?.creditAmount ?? 0),
+      "priorLedgerAmount",
+    ) !== previousAmount) {
+      throw new Error(`AI job ${aiJobId} settled usage does not match its ledger`);
     }
 
     const account = await getAccountForUsagePeriod({
@@ -977,7 +1012,7 @@ export async function settleUsage({
     };
     const samePeriod = usagePeriodsEqual(currentUsagePeriod, transactionPeriod);
     const delta = exactUsageAmount(
-      settledAmount - reservedAmount,
+      settledAmount - previousAmount,
       "settlementDelta",
     );
     let usageAmount = 0;
@@ -988,12 +1023,21 @@ export async function settleUsage({
     let purchasedCreditDebt = account.purchasedCreditDebt;
 
     if (delta < 0) {
-      const refund = -delta;
+      const refund = exactUsageAmount(-delta, "refund");
       // consumeUsage spends allowance first, so settlement restores purchased
       // credits first and only then the allowance portion.
-      const reservedPurchased = Math.max(-usage.creditAmount, 0);
-      const purchasedRestored = Math.min(reservedPurchased, refund);
-      const monthlyWanted = refund - purchasedRestored;
+      const reservedPurchased = exactUsageAmount(Math.max(
+        -(usage.creditAmount + (priorSettlement?.creditAmount ?? 0)),
+        0,
+      ), "reservedPurchased");
+      const purchasedRestored = exactUsageAmount(
+        Math.min(reservedPurchased, refund),
+        "purchasedRestored",
+      );
+      const monthlyWanted = exactUsageAmount(
+        refund - purchasedRestored,
+        "monthlyWanted",
+      );
       // Lowering the counter replaces its baseline: this reservation can no
       // longer be assumed to be represented in it. Increases do not remove it.
       // Include equal timestamps conservatively: ledger timestamps alone cannot
@@ -1019,7 +1063,7 @@ export async function settleUsage({
       // The ledger records the full correction to this job's original period.
       // Counter restoration is separately clamped above: expired allowance
       // must never credit a new period, nor undo an administrator's reset.
-      usageAmount = -monthlyWanted;
+      usageAmount = monthlyWanted === 0 ? 0 : -monthlyWanted;
       creditAmount = purchasedRestored;
       debtAmount = debtPaid === 0 ? 0 : -debtPaid;
     } else if (delta > 0) {
@@ -1058,7 +1102,7 @@ export async function settleUsage({
         purchasedCreditDebt,
       },
     }));
-    if (delta !== 0) {
+    if (delta !== 0 || (correctingEstimate && providerCostUsdMicros === null)) {
       await tx.creditTransaction.create({
         data: {
           userId,
@@ -1067,7 +1111,25 @@ export async function settleUsage({
           usageAmount,
           usagePeriodStart: transactionPeriod.start,
           usagePeriodEnd: transactionPeriod.end,
-          kind: AI_USAGE_SETTLEMENT_KIND,
+          kind: transactionKind,
+          aiJobId,
+        },
+      });
+    }
+    if (!correctingEstimate && estimatedProviderCost) {
+      if (job.kind !== "video" || job.provider !== "vercel-gateway" ||
+          providerCostUsdMicros !== null) {
+        throw new Error("Only an unpriced Gateway video may be marked as estimated");
+      }
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          creditAmount: 0,
+          debtAmount: 0,
+          usageAmount: 0,
+          usagePeriodStart: transactionPeriod.start,
+          usagePeriodEnd: transactionPeriod.end,
+          kind: AI_USAGE_ESTIMATE_PENDING_KIND,
           aiJobId,
         },
       });
@@ -1077,7 +1139,8 @@ export async function settleUsage({
       data: {
         usageUnits: settledAmount,
         providerCostUsdMicros,
-        usageSettledAt: new Date(),
+        ...(correctingEstimate && job.deletedAt !== null ? { providerJobId: null } : {}),
+        ...(correctingEstimate ? {} : { usageSettledAt: new Date() }),
       },
     });
     return updated;
