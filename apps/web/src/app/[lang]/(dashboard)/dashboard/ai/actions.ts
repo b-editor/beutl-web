@@ -4,6 +4,7 @@ import { throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
@@ -94,6 +95,7 @@ import { copyAiResultToStorage } from "@/lib/storage";
 import { revalidatePath } from "next/cache";
 import { aiFailureResult } from "@/lib/ai-screen";
 import { retryJobFingerprint } from "@/lib/ai-retry-attempt";
+import { forwardImageEditToAiApiWorker } from "@/lib/ai-image-edit-worker";
 
 export type AiActionResult = {
   success: boolean;
@@ -818,6 +820,49 @@ export async function editImageAction(
   }
   if (task === "outpaint" && ![10, 25, 50].includes(outpaintExpansion)) {
     return { success: false, message: t("api-errors:invalidRequestBody") };
+  }
+  if (task !== "outpaint") {
+    // A synchronous image response is base64 JSON. The API Worker validates,
+    // runs and saves non-outpaint edits in its own smaller isolate, so the
+    // OpenNext Worker never holds the uploaded and generated images together.
+    let worker: { fetch(request: Request): Promise<Response> } | undefined;
+    try {
+      worker = (await getCloudflareContext({ async: true })).env.BEUTL_API_WORKER;
+    } catch {
+      // Next dev has no Cloudflare bindings and keeps the in-process path.
+    }
+    if (worker) {
+      try {
+        const forwarded = await forwardImageEditToAiApiWorker({
+          worker,
+          userId: session.user.id,
+          origin: await resolveOrigin(),
+          formData,
+        });
+        return forwarded.ok
+          ? {
+              success: true,
+              jobId: forwarded.jobId,
+              url: forwarded.url,
+              fileName: forwarded.fileName,
+              contentType: forwarded.contentType,
+            }
+          : {
+              success: false,
+              message: t(`api-errors:${forwarded.errorCode}`),
+              keepIdempotencyKey: forwarded.keepIdempotencyKey,
+            };
+      } catch (error) {
+        console.error("AI image edit delegation failed", {
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+        return { success: false, message: t("api-errors:aiProviderError") };
+      }
+    }
+    if (process.env.NODE_ENV === "production") {
+      console.error("BEUTL_API_WORKER binding is missing for an AI image edit");
+      return { success: false, message: t("api-errors:aiProviderError") };
+    }
   }
   const validated = await validateAiInputImage(file, supportedEditImageTypes);
   if (!validated) {

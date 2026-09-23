@@ -47,7 +47,7 @@ export function unauthorizedResponse(): Response {
  * where it is known and the read is stopped where it is not.
  */
 export async function readJsonWithLimit(
-  request: Request,
+  request: Pick<Request, "headers" | "body">,
   maximumBytes: number,
 ): Promise<{ ok: true; value: unknown } | { ok: false }> {
   const declared = request.headers.get("content-length");

@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { sign } from "hono/jwt";
 import { v3 } from "@beutl/api";
 import { auth } from "@/lib/better-auth";
 import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
+import { issueAiApiToken } from "@/lib/ai-api-token";
 
 // The dashboard's way in to the AI endpoints, for the screens that show an
 // answer while it is still arriving.
@@ -14,10 +14,6 @@ import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
 // here, for the user the session names and for the next minute only. The token
 // is never sent to the browser.
 
-const NAME_IDENTIFIER_CLAIM =
-  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
-const TOKEN_LIFETIME_SECONDS = 60;
-
 const app = new Hono().basePath("/api/v3").route("/", v3);
 
 export async function POST(request: Request): Promise<Response> {
@@ -28,22 +24,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!userId) return unauthorizedResponse();
   request.signal.throwIfAborted();
 
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error("JWT_SECRET is not configured");
-  }
-  const now = Math.floor(Date.now() / 1000);
-  const token = await sign(
-    {
-      [NAME_IDENTIFIER_CLAIM]: userId,
-      iat: now,
-      exp: now + TOKEN_LIFETIME_SECONDS,
-      ...(process.env.JWT_ISSUER ? { iss: process.env.JWT_ISSUER } : {}),
-      ...(process.env.JWT_AUDIENCE ? { aud: process.env.JWT_AUDIENCE } : {}),
-    },
-    secret,
-    "HS256",
-  );
+  const token = await issueAiApiToken(userId);
   request.signal.throwIfAborted();
 
   // The same request, at the same path under the API's own prefix, carrying the
