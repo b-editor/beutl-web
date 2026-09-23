@@ -44,7 +44,54 @@ import {
   gatewayRequestSignal,
 } from "./config";
 import { gatewayVideoResolution } from "./resolution";
-import { gatewayProviderCostUsd, type ProviderCostUsd } from "../../provider-cost";
+import { gatewayProviderCostUsd, providerCostUsd, type ProviderCostUsd } from "../../provider-cost";
+
+const GENERATION_COST_LOOKUP_TIMEOUT_MS = 5_000;
+
+function generationIdOf(providerMetadata: unknown): string | null {
+  if (typeof providerMetadata !== "object" || providerMetadata === null) return null;
+  const gateway = (providerMetadata as Record<string, unknown>).gateway;
+  if (typeof gateway !== "object" || gateway === null) return null;
+  const generationId = (gateway as Record<string, unknown>).generationId;
+  return typeof generationId === "string" && /^gen_[0-9A-Za-z]{20,32}$/u.test(generationId)
+    ? generationId
+    : null;
+}
+
+async function completedVideoCost(
+  providerMetadata: unknown,
+  model: string,
+): Promise<ProviderCostUsd | undefined> {
+  const inlineCost = gatewayProviderCostUsd(providerMetadata);
+  if (inlineCost !== undefined) return inlineCost;
+  const generationId = generationIdOf(providerMetadata);
+  if (!generationId) return undefined;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new AiProviderError("Gateway generation cost lookup timed out")),
+        GENERATION_COST_LOOKUP_TIMEOUT_MS,
+      );
+    });
+    const details = await Promise.race([
+      createGatewayClient().getGenerationInfo({ id: generationId }),
+      deadline,
+    ]);
+    // A mismatched response must not bill this job at someone else's price.
+    if (details.id !== generationId || details.model !== model) return undefined;
+    return providerCostUsd(details.totalCost);
+  } catch (error) {
+    console.warn("Gateway video actual-cost lookup failed", {
+      model,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * The job id the Gateway assigned, read off the start response.
@@ -268,7 +315,10 @@ export async function getGatewayVideoJob(
 
   if (status.status === "completed") {
     const result: GatewayVideoResult = { videos: status.videos };
-    const providerCost = costOf(status.providerMetadata);
+    const actualCost = await completedVideoCost(status.providerMetadata, ref.model);
+    const providerCost = actualCost === undefined
+      ? {}
+      : { providerCostUsd: actualCost };
     if (providerCost.providerCostUsd === undefined) {
       // The result can be stored with an estimate when the Gateway supplies no
       // cost. Keep only metadata field names in the log: the payload may hold
