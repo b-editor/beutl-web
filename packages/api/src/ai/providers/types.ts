@@ -183,6 +183,8 @@ export type AiVideoModelDescriptor = {
   supportedAspectRatios: readonly string[] | null;
   supportedFrameImages: readonly string[] | null;
   generateAudio: boolean | null;
+  /** The model always includes audio; generating it and disabling it are distinct capabilities. */
+  audioRequired?: boolean;
   seed: boolean | null;
   /**
    * Whether the model takes reference pictures to keep a likeness consistent.

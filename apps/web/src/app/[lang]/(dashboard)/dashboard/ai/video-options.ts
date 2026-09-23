@@ -33,6 +33,7 @@ function optionsFor(
                 durations: supported.durations,
                 aspectRatios: supported.aspectRatios,
                 generateAudio: supported.generateAudio,
+                audioRequired: supported.audioRequired,
                 seed: supported.seed,
                 firstFrame: supported.firstFrame,
                 lastFrame: supported.lastFrame,

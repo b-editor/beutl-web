@@ -86,6 +86,7 @@
       "high": "Costs more"
     },
     "generateAudio": "Generate audio",
+    "audioRequired": "This model always generates video with audio. Audio cannot be turned off.",
     "referenceImage": "Reference image (optional)",
     "referenceImageHint": "Hand it pictures to work from — their style and subject guide the result (up to {{maximum}}).",
     "referenceImageRemove": "Remove {{name}}",

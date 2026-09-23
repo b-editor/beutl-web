@@ -69,6 +69,13 @@ const motionControl = {
 };
 
 describe("reading one Gateway video model", () => {
+  it("distinguishes H3's always-on audio from a model with optional audio", () => {
+    expect(toVideoModelDescriptor(minimax).audioRequired).toBe(true);
+    expect(toVideoModelDescriptor(veo).audioRequired).toBeUndefined();
+    expect(toVideoModelDescriptor({ id: "minimax/future-model", type: "video" }).audioRequired)
+      .toBeUndefined();
+  });
+
   it("drops the sizes this service will not price", () => {
     // 4K carries four times 1080p's pixels at a price set against 1080p, and
     // 768p has no name here at all. Both have to disappear before a screen can

@@ -252,6 +252,7 @@ export type AiVideoModelOptions = {
   durations: number[];
   aspectRatios: string[];
   generateAudio: boolean;
+  audioRequired?: boolean;
   seed: boolean;
   firstFrame: boolean;
   lastFrame: boolean;
@@ -313,6 +314,7 @@ function optionsOf(capabilities: Record<string, AiVideoModelOptions> | undefined
       ? supported.aspectRatios
       : [...AI_VIDEO_ASPECT_RATIOS],
     generateAudio: supported?.generateAudio ?? true,
+    audioRequired: supported?.audioRequired ?? false,
     seed: supported?.seed ?? true,
     firstFrame: supported?.firstFrame ?? true,
     lastFrame: supported?.lastFrame ?? true,
@@ -440,7 +442,7 @@ export function VideoForm({
   const resolution = firstSupported(videoResolution, options.resolutions);
   const aspectRatio = firstSupported(videoAspectRatio, options.aspectRatios);
   // A model that cannot produce sound would refuse the request outright.
-  const audio = options.generateAudio && generateAudio;
+  const audio = options.audioRequired || (options.generateAudio && generateAudio);
   // 選ばれた時に一度だけ読む。名前と大きさだけでは、中身の違う同名同サイズの絵が
   // 同じ依頼に見え、片方が走っている間もう片方を始められない。
   // モデルが受け取るものだけを読む。非対応モデルへ切り替えたときに、画面から
@@ -859,7 +861,7 @@ export function VideoForm({
           <Checkbox
             id="videoAudio"
             checked={audio}
-            disabled={!options.generateAudio}
+            disabled={!options.generateAudio || options.audioRequired}
             onCheckedChange={(checked) => setGenerateAudio(checked === true)}
           />
           <Label htmlFor="videoAudio" className="font-normal">
@@ -867,6 +869,12 @@ export function VideoForm({
           </Label>
           <input type="hidden" name="generateAudio" value={audio ? "true" : "false"} />
         </div>
+
+        {options.audioRequired && (
+          <p className="text-xs text-muted-foreground">
+            {t("dashboard:ai.audioRequired")}
+          </p>
+        )}
 
         <AdvancedOptions lang={lang}>
           <div className="flex flex-col space-y-1.5">

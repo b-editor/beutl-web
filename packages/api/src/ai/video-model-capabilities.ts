@@ -41,6 +41,7 @@ export type AiVideoModelCapabilities = {
   durations: number[];
   aspectRatios: AiVideoAspectRatio[];
   generateAudio: boolean;
+  audioRequired?: boolean;
   seed: boolean;
   // 開始フレームと終了フレームは別の能力。片方しか取らないモデルを「フレーム
   // 対応」とひとまとめにすると、終了フレーム付きの依頼が受け付けられるように
@@ -147,6 +148,7 @@ function toCapabilities(model: {
   supportedAspectRatios: readonly string[] | null;
   supportedFrameImages: readonly string[] | null;
   generateAudio: boolean | null;
+  audioRequired?: boolean;
   seed: boolean | null;
   supportsPromptToVideo?: boolean | null;
   supportsReferenceToVideo?: boolean | null;
@@ -171,6 +173,7 @@ function toCapabilities(model: {
       model.supportedAspectRatios,
     ),
     generateAudio: model.generateAudio ?? true,
+    ...(model.audioRequired ? { audioRequired: true } : {}),
     seed: model.seed ?? true,
     // 何も公開していないモデルは制限なしとして扱う（null は「制限なし」であって
     // 「何も取らない」ではない）。
@@ -371,9 +374,11 @@ export function unsupportedVideoRequestReason(
   ) {
     return "aspectRatio";
   }
-  // Asking for audio from a model that cannot produce it is a refusal; asking
-  // it not to is always fine.
+  // A model may either forbid audio or require it for every output.
   if (request.generateAudio === true && !capabilities.generateAudio) {
+    return "generateAudio";
+  }
+  if (request.generateAudio === false && capabilities.audioRequired) {
     return "generateAudio";
   }
   if (request.seed !== undefined && !capabilities.seed) {

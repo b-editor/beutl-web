@@ -86,6 +86,7 @@
       "high": "消費が多め"
     },
     "generateAudio": "音声を生成する",
+    "audioRequired": "このモデルは常に音声付きの動画を生成します。音声をオフにすることはできません。",
     "referenceImage": "参照画像 (任意)",
     "referenceImageHint": "手元の画像を渡すと、その絵柄や被写体を踏まえて生成します (最大 {{maximum}} 枚)。",
     "referenceImageRemove": "{{name}} を外す",
