@@ -870,12 +870,6 @@ export function VideoForm({
           <input type="hidden" name="generateAudio" value={audio ? "true" : "false"} />
         </div>
 
-        {options.audioRequired && (
-          <p className="text-xs text-muted-foreground">
-            {t("dashboard:ai.audioRequired")}
-          </p>
-        )}
-
         <AdvancedOptions lang={lang}>
           <div className="flex flex-col space-y-1.5">
             <Label htmlFor="videoSeed">{t("dashboard:ai.seed")}</Label>
