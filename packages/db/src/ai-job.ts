@@ -1617,6 +1617,7 @@ export async function listEstimatedGatewayVideoJobsForReconciliation({
       userId: true,
       providerJobId: true,
       model: true,
+      usageSettledAt: true,
     },
   });
 }
@@ -1624,11 +1625,11 @@ export async function listEstimatedGatewayVideoJobsForReconciliation({
 /** Rotate a still-unpriced row so one missing Gateway ledger event cannot starve newer jobs. */
 export async function deferEstimatedGatewayVideoCostLookup({
   jobId,
-  now,
+  updatedAt,
   prisma,
 }: {
   jobId: string;
-  now: Date;
+  updatedAt: Date;
   prisma?: PrismaTransaction;
 }): Promise<void> {
   const db = prisma ?? await getDb();
@@ -1645,7 +1646,7 @@ export async function deferEstimatedGatewayVideoCostLookup({
         none: { kind: AI_USAGE_ACTUAL_CORRECTION_KIND },
       },
     },
-    data: { updatedAt: now },
+    data: { updatedAt },
   });
 }
 

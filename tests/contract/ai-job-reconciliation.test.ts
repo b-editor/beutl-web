@@ -15,6 +15,7 @@ import {
   MAX_AI_TEXT_RESULT_BYTES,
   createReservedAiJob,
   failAiJobAndRefundUsage,
+  lateCostRetryUpdatedAt,
   reconcileAiJobs,
   reconcileAiStorageCleanups,
   saveAiJsonResult,
@@ -64,6 +65,18 @@ const PERIOD_START = new Date("2026-08-01T00:00:00.000Z");
 const PERIOD_END = new Date("2099-09-01T00:00:00.000Z");
 
 describe("AI job reconciliation", () => {
+  it.each([
+    { days: 0, retryMinutes: 15 },
+    { days: 2, retryMinutes: 60 },
+    { days: 8, retryMinutes: 24 * 60 },
+  ])("backs off a $days-day-old missing Gateway cost without abandoning it", ({ days, retryMinutes }) => {
+    const now = new Date("2026-09-24T00:00:00.000Z");
+    const settledAt = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const updatedAt = lateCostRetryUpdatedAt(now, settledAt);
+    expect(updatedAt.getTime() + 15 * 60 * 1000 - now.getTime())
+      .toBe(retryMinutes * 60 * 1000);
+  });
+
   let store: ReturnType<typeof createInMemoryPrisma>;
   let putObject: ReturnType<typeof vi.fn>;
   let deleteObject: ReturnType<typeof vi.fn>;

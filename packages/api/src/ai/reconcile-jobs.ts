@@ -35,6 +35,23 @@ const ABANDONED_SYNCHRONOUS_JOB_MILLISECONDS = 30 * 60 * 1000;
 const MAX_DEFERRED_COST_JOBS_PER_SCAN = 10;
 const MAX_LATE_COST_JOBS_PER_SCAN = 10;
 const LATE_COST_RETRY_DELAY_MILLISECONDS = 15 * 60 * 1000;
+const LATE_COST_HOURLY_AFTER_MILLISECONDS = 24 * 60 * 60 * 1000;
+const LATE_COST_DAILY_AFTER_MILLISECONDS = 7 * LATE_COST_HOURLY_AFTER_MILLISECONDS;
+
+// Keep eventual actual-cost correction possible without polling a missing
+// Gateway ledger entry every 15 minutes forever. No provider retention cutoff
+// is assumed: old jobs are still retried, but only once a day.
+export function lateCostRetryUpdatedAt(now: Date, settledAt: Date): Date {
+  const age = Math.max(0, now.getTime() - settledAt.getTime());
+  const delay = age < LATE_COST_HOURLY_AFTER_MILLISECONDS
+    ? LATE_COST_RETRY_DELAY_MILLISECONDS
+    : age < LATE_COST_DAILY_AFTER_MILLISECONDS
+      ? 60 * 60 * 1000
+      : 24 * 60 * 60 * 1000;
+  // The scan selects updatedAt <= now - 15 minutes. Move the timestamp
+  // forward so that same predicate becomes due after the chosen delay.
+  return new Date(now.getTime() + delay - LATE_COST_RETRY_DELAY_MILLISECONDS);
+}
 
 // How long a job of this provider's can still deliver something usable.
 //
@@ -317,6 +334,7 @@ export async function reconcileAiJobs(
   });
   result.lateCostInspected = late.length;
   for (const job of late) {
+    const retryUpdatedAt = lateCostRetryUpdatedAt(now, job.usageSettledAt ?? now);
     try {
       if (!job.providerJobId || !job.model) {
         throw new Error("Estimated Gateway video is missing billing identity");
@@ -335,11 +353,11 @@ export async function reconcileAiJobs(
         if (corrected) result.lateCostCorrected++;
         else result.lateCostPending++;
       } else {
-        await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now });
+        await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, updatedAt: retryUpdatedAt });
         result.lateCostPending++;
       }
     } catch (error) {
-      await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now })
+      await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, updatedAt: retryUpdatedAt })
         .catch(() => undefined);
       console.warn("Gateway late video cost check failed", {
         jobId: job.id,

@@ -115,7 +115,7 @@ describeWithCockroach("AI ledger on CockroachDB", () => {
     expect((await listEstimatedGatewayVideoJobsForReconciliation(selection))
       .map((candidate) => candidate.id)).toContain(job.id);
     const deferredAt = new Date(Date.now() + 5_000);
-    await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, now: deferredAt, prisma });
+    await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, updatedAt: deferredAt, prisma });
     expect((await listEstimatedGatewayVideoJobsForReconciliation({
       ...selection,
       updatedBefore: new Date(deferredAt.getTime() - 1),
