@@ -6,7 +6,7 @@ import { setR2BucketProvider, v3 } from "@beutl/api";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { translateGatewaySegments } from "../../packages/api/src/ai/providers/vercel-gateway/translation";
 import { translationJsonSchema } from "../../packages/api/src/ai/translation-contract";
-import { AiProviderError } from "../../packages/api/src/ai/providers/errors";
+import { AiProviderError, aiProviderFailureCode } from "../../packages/api/src/ai/providers/errors";
 
 const MODEL = "openai/gpt-5.6-luna";
 const INPUT = [
@@ -126,6 +126,32 @@ describe("Gateway subtitle translation", () => {
     expect(onSegment.mock.calls.map(([segment]) => segment)).toEqual(TRANSLATED);
   });
 
+  it("keeps a Gateway 402 visible through the streaming translation adapter", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: { type: "quota_for_entity_exceeded", message: "quota reached" },
+    }, { status: 402 })));
+
+    let failure: unknown;
+    try {
+      await translateGatewaySegments({
+        model: MODEL, targetLanguage: "ja", segments: INPUT, onSegment: vi.fn(),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AiProviderError);
+    expect((failure as AiProviderError).httpStatus).toBe(402);
+    expect(aiProviderFailureCode(failure)).toBe("aiProviderBillingUnavailable");
+    expect(warning).toHaveBeenCalledWith("Gateway translation stream failed", {
+      httpStatus: 402,
+      errorType: "GatewayInternalServerError",
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("quota reached");
+    expect(errorLog).not.toHaveBeenCalled();
+  });
+
   it.each(["error", "length", "content-filter"])("rejects a %s completion in both response modes", async (reason) => {
     for (const streaming of [false, true]) {
       vi.stubGlobal("fetch", vi.fn(async () => gatewayResponse(
@@ -214,6 +240,70 @@ describe("Gateway subtitle translation", () => {
       segments: TRANSLATED,
     });
     expect(state.creditTransactions.filter(({ kind }) => kind === "refund")).toHaveLength(0);
+  });
+
+  it("emits the billing error and refunds a rejected streaming translation", async () => {
+    const userId = "gateway-translation-billing-user";
+    const jwtSecret = "gateway-translation-billing-test";
+    vi.stubEnv("JWT_SECRET", jwtSecret);
+    const { prisma, state } = createInMemoryPrisma();
+    setDbProvider(async () => prisma as never);
+    setR2BucketProvider(() => ({ put: vi.fn(), delete: vi.fn() }));
+    await upsertSubscription({
+      userId,
+      stripeSubscriptionId: "sub_gateway_translation_billing",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date(Date.now() - 86_400_000),
+      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
+    await upsertAiOperationModel({
+      operation: "subtitle.translate", modelId: MODEL, provider: "vercel-gateway",
+      priceUnits: 5, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      error: { type: "quota_for_entity_exceeded", message: "quota reached" },
+    }, { status: 402 })));
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": userId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+    }, jwtSecret, "HS256");
+    const idempotencyKey = crypto.randomUUID();
+
+    const response = await new Hono().basePath("/api/v3").route("/", v3).request(
+      "/api/v3/ai/translations",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ model: MODEL, targetLanguage: "ja", segments: INPUT }),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"error_code":"aiProviderBillingUnavailable"');
+    expect([...state.aiJobs.values()][0]).toMatchObject({ status: "failed" });
+    expect(state.creditTransactions.some(({ kind }) => kind === "refund")).toBe(true);
+    const replay = await new Hono().basePath("/api/v3").route("/", v3).request(
+      "/api/v3/ai/translations",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ model: MODEL, targetLanguage: "ja", segments: INPUT }),
+      },
+    );
+    expect(replay.status).toBe(500);
+    expect(await replay.json()).toMatchObject({ error_code: "aiProviderBillingUnavailable" });
+    expect(state.creditTransactions.filter(({ kind }) => kind === "refund")).toHaveLength(1);
   });
 
   it.each([

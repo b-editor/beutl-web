@@ -28,6 +28,7 @@ import {
 } from "../../ai/upload-limits";
 import {
   AiProviderError,
+  aiProviderFailureCode,
   editImage,
   generateImage,
 } from "../../ai/openrouter";
@@ -57,7 +58,7 @@ import {
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
 import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
-import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
 import {
   getAiIdempotencyKeyHash,
   getAiRequestIdentity,
@@ -372,6 +373,7 @@ const app = new Hono()
       id: string;
       status: string;
       resultFileId: string | null;
+      error?: string | null;
       resultFile?: { name: string; mimeType: string } | null;
     }) => {
       if (existingJob.status === "succeeded" && existingJob.resultFileId) {
@@ -394,7 +396,7 @@ const app = new Hono()
           status: 409,
         });
       }
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      return c.json(await apiErrorResponse(publicAiJobError(existingJob.error)), { status: 500 });
     };
 
     const replay = await findReplayableAiJob({ userId, ...requestIdentity });
@@ -473,7 +475,7 @@ const app = new Hono()
       onPartialImage?: (partial: { index: number; b64Json: string }) => void,
     ): Promise<
       | { ok: true; payload: unknown }
-      | { ok: false; errorCode: "aiProviderError"; status: 500 }
+      | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
     > => {
     try {
       const result = await imageProviderFor(selectedModel.provider).generate({
@@ -520,14 +522,14 @@ const app = new Hono()
       await failAiJobAndRefundUsage({
         userId,
         aiJobId: job.id,
-        error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
+        error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageGeneration),
       });
       if (!(err instanceof AiProviderError)) {
         console.error("Failed to generate an AI image", err);
       }
       return {
         ok: false as const,
-        errorCode: "aiProviderError" as const,
+        errorCode: aiProviderFailureCode(err),
         status: 500 as const,
       };
     }
@@ -703,6 +705,7 @@ const app = new Hono()
       id: string;
       status: string;
       resultFileId: string | null;
+      error?: string | null;
       resultFile?: { name: string; mimeType: string } | null;
     }) => {
       if (existingJob.status === "succeeded" && existingJob.resultFileId) {
@@ -725,7 +728,7 @@ const app = new Hono()
           status: 409,
         });
       }
-      return c.json(await apiErrorResponse("aiProviderError"), { status: 500 });
+      return c.json(await apiErrorResponse(publicAiJobError(existingJob.error)), { status: 500 });
     };
 
     const replay = await findReplayableAiJob({ userId, ...requestIdentity });
@@ -832,10 +835,10 @@ const app = new Hono()
       await failAiJobAndRefundUsage({
         userId,
         aiJobId: job.id,
-        error: AI_JOB_FAILURE_MESSAGES.imageEdit,
+        error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageEdit),
       });
       if (err instanceof AiProviderError) {
-        return c.json(await apiErrorResponse("aiProviderError"), {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });
       }

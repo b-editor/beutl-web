@@ -397,6 +397,12 @@ export function classifyVideoSubmissionFailure(
     return { action: "refund", detachProviderJob: false };
   }
   if (error instanceof AiProviderError) {
+    // OpenRouter may rethrow an already-normalized provider error without the
+    // submission wrapper. An HTTP 402 is an explicit pre-dispatch refusal;
+    // keeping it queued would retain usage for work the provider never began.
+    if (error.httpStatus === 402) {
+      return { action: "refund", detachProviderJob: false };
+    }
     return { action: "keepQueued" };
   }
   return { action: "rethrow" };

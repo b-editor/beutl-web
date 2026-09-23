@@ -1,10 +1,11 @@
 import { getContentUrl } from "../content-url";
-import { PUBLIC_AI_JOB_ERROR } from "./job-errors";
+import { publicAiJobError } from "./job-errors";
 
 export type PublicAiJobRecord = {
   id: string;
   status: string;
   resultFileId: string | null;
+  error?: string | null;
   resultFile?: {
     name: string;
     mimeType: string;
@@ -36,6 +37,6 @@ export async function publicAiJobPayload(
       : null,
     fileName: job.resultFile?.name ?? null,
     contentType: job.resultFile?.mimeType ?? null,
-    error: job.status === "failed" ? PUBLIC_AI_JOB_ERROR : null,
+    error: job.status === "failed" ? publicAiJobError(job.error) : null,
   };
 }

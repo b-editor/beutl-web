@@ -68,6 +68,7 @@ export const errorCodes = [
   "aiPlanRequired",
   "aiUsageLimitExceeded",
   "aiProviderError",
+  "aiProviderBillingUnavailable",
   "aiJobNotFound",
   "aiJobLimitReached",
   "aiJobIsActive",

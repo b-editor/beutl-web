@@ -32,6 +32,15 @@ export class AiProviderError extends Error {
   }
 }
 
+/** A 402 belongs to the upstream provider, never to the Beutl account. */
+export function aiProviderFailureCode(
+  error: unknown,
+): "aiProviderBillingUnavailable" | "aiProviderError" {
+  return error instanceof AiProviderError && error.httpStatus === 402
+    ? "aiProviderBillingUnavailable"
+    : "aiProviderError";
+}
+
 export class InvalidAiProviderOutputError extends AiProviderError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, { ...options, execution: "definite_failure" });

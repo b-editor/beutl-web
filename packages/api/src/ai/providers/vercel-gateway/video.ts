@@ -27,7 +27,11 @@ import {
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
 } from "../errors";
-import { gatewayExecutionOf, toGatewayProviderError } from "./errors";
+import {
+  gatewayExecutionOf,
+  gatewayResponseErrorType,
+  toGatewayProviderError,
+} from "./errors";
 import { readBoundedBytes as readBoundedGatewayBytes } from "./bounded";
 import type {
   AiVideoContent,
@@ -312,12 +316,18 @@ export async function startGatewayVideoJob(
       cause,
       "Vercel AI Gateway video submission failed",
     );
+    const gatewayErrorType = error.httpStatus === 402
+      ? gatewayResponseErrorType(cause)
+      : null;
     // Submission failures otherwise become only a generic user error. Record
     // the status and model, never the response body, prompt, or signed URLs.
     console.warn("Gateway video submission failed", {
       model: request.model,
       httpStatus: error.httpStatus,
       errorType: cause instanceof Error ? cause.name : typeof cause,
+      ...(gatewayErrorType === null
+        ? {}
+        : { gatewayErrorType }),
     });
     throw new AiVideoSubmissionError(error.message, {
       outcome: gatewayExecutionOf(cause),

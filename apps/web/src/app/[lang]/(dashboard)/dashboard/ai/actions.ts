@@ -7,6 +7,9 @@ import { headers } from "next/headers";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
+  aiProviderFailureCode,
+  aiJobFailureMessage,
+  publicAiJobError,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
@@ -222,7 +225,7 @@ function reservationFailure(
 
 // 文字起こしと翻訳は保存した JSON を読み直して返す。
 async function answerFromExistingTranscriptionJob(
-  job: { id: string; status: string; resultFileId: string | null },
+  job: { id: string; status: string; resultFileId: string | null; error?: string | null },
   { userId, durationSeconds }: { userId: string; durationSeconds: number },
   t: (key: string) => string,
 ): Promise<AiActionResult> {
@@ -249,11 +252,11 @@ async function answerFromExistingTranscriptionJob(
       message: t("api-errors:aiRequestInProgress"),
       keepIdempotencyKey: true,
     }
-    : { success: false, message: t("api-errors:aiProviderError") };
+    : { success: false, message: t(`api-errors:${publicAiJobError(job.error)}`) };
 }
 
 async function answerFromExistingTranslationJob(
-  job: { id: string; status: string; resultFileId: string | null },
+  job: { id: string; status: string; resultFileId: string | null; error?: string | null },
   {
     userId,
     segments,
@@ -275,7 +278,7 @@ async function answerFromExistingTranslationJob(
       message: t("api-errors:aiRequestInProgress"),
       keepIdempotencyKey: true,
     }
-    : { success: false, message: t("api-errors:aiProviderError") };
+    : { success: false, message: t(`api-errors:${publicAiJobError(job.error)}`) };
 }
 
 // 画像と画像編集はどちらもファイルひとつを返す。
@@ -284,6 +287,7 @@ async function answerFromExistingFileJob(
     id: string;
     status: string;
     resultFileId: string | null;
+    error?: string | null;
     resultFile?: { name: string; mimeType: string } | null;
   },
   t: (key: string) => string,
@@ -303,7 +307,7 @@ async function answerFromExistingFileJob(
       message: t("api-errors:aiRequestInProgress"),
       keepIdempotencyKey: true,
     }
-    : { success: false, message: t("api-errors:aiProviderError") };
+    : { success: false, message: t(`api-errors:${publicAiJobError(job.error)}`) };
 }
 
 // Video submissions are asynchronous, but an idempotency replay still has to
@@ -316,6 +320,7 @@ async function answerFromExistingVideoJob(
     id: string;
     status: string;
     resultFileId: string | null;
+    error?: string | null;
   },
   t: (key: string) => string,
 ): Promise<AiActionResult> {
@@ -337,7 +342,7 @@ async function answerFromExistingVideoJob(
   }
   return {
     success: false,
-    message: t("api-errors:aiProviderError"),
+    message: t(`api-errors:${publicAiJobError(job.error)}`),
     status: job.status,
   };
 }
@@ -361,10 +366,10 @@ async function handleVideoSubmissionFailure({
     await failAiJobAndRefundUsage({
       userId,
       aiJobId: jobId,
-      error: AI_JOB_FAILURE_MESSAGES.videoSubmission,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.videoSubmission),
       ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
     });
-    return { success: false, message: t("api-errors:aiProviderError") };
+    return { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) };
   }
   if (handling.action === "keepQueued") {
     // The provider may still call back, so the job stays queued rather than
@@ -526,7 +531,7 @@ function readTranslationStyle(formData: FormData): TranslationStyle | undefined 
 
 function errorMessage(error: unknown): string {
   if (error instanceof AiProviderError) {
-    return "aiProviderError";
+    return aiProviderFailureCode(error);
   }
   console.error("AI action failed", error);
   return "unknown";
@@ -782,7 +787,7 @@ export async function generateImageAction(
     await failAiJobAndRefundUsage({
       userId: session.user.id,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
     });
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
@@ -933,7 +938,7 @@ export async function editImageAction(
     await failAiJobAndRefundUsage({
       userId: session.user.id,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.imageEdit,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageEdit),
     });
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
@@ -1055,7 +1060,7 @@ export async function transcribeAction(
     await failAiJobAndRefundUsage({
       userId: session.user.id,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.transcription,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.transcription),
     });
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
@@ -1214,7 +1219,7 @@ export async function translateAction(
     await failAiJobAndRefundUsage({
       userId: session.user.id,
       aiJobId: job.id,
-      error: AI_JOB_FAILURE_MESSAGES.translation,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
     });
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
@@ -1473,7 +1478,7 @@ export async function retryJobAction(
       await failAiJobAndRefundUsage({
         userId: session.user.id,
         aiJobId: retried.id,
-        error: AI_JOB_FAILURE_MESSAGES.imageGeneration,
+        error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
       });
       return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
     }
@@ -1650,8 +1655,16 @@ export async function refreshVideoJobAction(jobId: string): Promise<AiActionResu
         url: current.resultFileId ? await getContentUrl(current.resultFileId) : null,
       };
     } catch (error) {
-      console.error(`Failed to synchronize AI video job ${job.id}`, error);
-      return { success: false, message: t("api-errors:aiProviderError") };
+      if (error instanceof AiProviderError) {
+        console.warn("Failed to synchronize AI video job", {
+          jobId: job.id,
+          httpStatus: error.httpStatus,
+          errorType: error.name,
+        });
+      } else {
+        console.error(`Failed to synchronize AI video job ${job.id}`, error);
+      }
+      return { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) };
     }
   }
   return {

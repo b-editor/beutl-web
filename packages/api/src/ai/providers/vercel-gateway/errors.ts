@@ -28,6 +28,34 @@ export function gatewayExecutionOf(cause: unknown): AiExecutionOutcome {
   return "unknown";
 }
 
+/** The SDK normalizes unknown Gateway error types to internal_server_error.
+ * Recover only the bounded machine-readable type from its API response; the
+ * response message can contain account, billing, or credential details.
+ */
+export function gatewayResponseErrorType(cause: unknown): string | null {
+  if (!(cause instanceof GatewayError)) return null;
+  const apiError = cause.cause;
+  if (typeof apiError !== "object" || apiError === null) return null;
+  const record = apiError as Record<string, unknown>;
+  const raw = record.data ?? record.responseBody;
+  let response: unknown = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 4096) return null;
+    try {
+      response = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof response !== "object" || response === null) return null;
+  const error = (response as Record<string, unknown>).error;
+  if (typeof error !== "object" || error === null) return null;
+  const type = (error as Record<string, unknown>).type;
+  return typeof type === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(type)
+    ? type
+    : null;
+}
+
 function gatewayMessage(cause: unknown, fallback: string): string {
   if (cause instanceof GatewayError) {
     return `${fallback}: ${cause.statusCode} ${cause.message}`;

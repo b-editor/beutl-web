@@ -23,7 +23,7 @@ import {
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { getContentUrl } from "../../content-url";
-import { PUBLIC_AI_JOB_ERROR } from "../../ai/job-errors";
+import { publicAiJobError } from "../../ai/job-errors";
 import { publicAiJobStatus, type PublicAiJobStatus } from "../../ai/job-response";
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -310,7 +310,7 @@ async function toSummary(
       : null,
     fileName: job.resultFile?.name ?? null,
     contentType: job.resultFile?.mimeType ?? null,
-    error: job.status === "failed" ? PUBLIC_AI_JOB_ERROR : null,
+    error: job.status === "failed" ? publicAiJobError(job.error) : null,
     canRetry: canRetry(job),
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
