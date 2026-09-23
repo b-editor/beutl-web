@@ -1044,6 +1044,84 @@ describe("v3 AI job history contract", () => {
     expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
   });
 
+  it("does not let reconciliation estimate while deletion is fetching actual cost", async () => {
+    await upsertSubscription({
+      userId: USER_ID,
+      stripeSubscriptionId: "sub_gateway_video_concurrent_delete",
+      status: "active",
+      planId: "pro",
+      billingOfferId: "offer_pro_test",
+      currentPeriodStart: ACTIVE_PERIOD.start,
+      currentPeriodEnd: ACTIVE_PERIOD.end,
+    });
+    const job = await createAiJob({
+      userId: USER_ID,
+      kind: "video",
+      provider: "vercel-gateway",
+      providerJobId: "gateway-video-concurrent-delete",
+      status: "succeeded",
+      usageUnits: 60,
+      reservedUsageUnits: 60,
+      estimatedUsageUnits: 50,
+      usageUnitUsdMicros: 10_000,
+      usagePercent: 100,
+      model: "minimax/minimax-h3",
+    });
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 60,
+      monthlyUsageLimit: 200,
+      usagePeriod: ACTIVE_PERIOD,
+      aiJobId: job.id,
+    });
+    const file = await createFile({
+      userId: USER_ID,
+      name: "concurrent-video.mp4",
+      objectKey: "ai/video/concurrent-delete",
+      size: 4,
+      mimeType: "video/mp4",
+      visibility: "PRIVATE",
+    });
+    state.aiJobs.get(job.id)!.resultFileId = file.id;
+    state.files.get(file.id)!.createdAt = new Date(Date.now() - 16 * 60 * 1000);
+    const started = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const status = vi.spyOn(videoProviderFor("vercel-gateway"), "status")
+      .mockImplementation(async (ref) => {
+        started.resolve();
+        await resume.promise;
+        return {
+          id: ref.providerJobId,
+          status: "completed",
+          error: null,
+          providerCostUsd: "0.30",
+        };
+      });
+
+    const deletion = makeApp().request(`/api/v3/ai/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    await started.promise;
+    try {
+      const reconciliation = await reconcileAiJobs(new Date(Date.now() + 61 * 1000));
+      expect(reconciliation.deferredCostPending).toBe(1);
+      expect(status).toHaveBeenCalledOnce();
+      expect(state.aiJobs.get(job.id)?.usageSettledAt).toBeNull();
+    } finally {
+      resume.resolve();
+    }
+    const response = await deletion;
+    expect(response.status).toBe(200);
+    expect(state.aiJobs.get(job.id)).toMatchObject({
+      usageUnits: 30,
+      providerCostUsdMicros: 300_000,
+      providerJobId: null,
+      deletedAt: expect.any(Date),
+    });
+    expect(state.creditTransactions.filter((item) => item.kind === "usage_settlement")).toHaveLength(1);
+  });
+
   it("retains an idempotency tombstone when a job is deleted", async () => {
     await upsertSubscription({
       userId: USER_ID,

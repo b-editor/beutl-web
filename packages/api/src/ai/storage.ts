@@ -6,15 +6,17 @@ import {
 } from "@beutl/core";
 import {
   claimAiStorageCleanupForDeletion,
+  claimGatewayVideoCostSettlement,
   completeAiJobWithOutput,
   deleteAiStorageCleanup,
   finalizeReconciledAiStorageCleanup,
   findCommittedAiOutput,
   listDueAiStorageCleanups,
   makeAiStorageCleanupDue,
-  registerAiStorageCleanup,
   getAiJobById,
   getSubscription,
+  registerAiStorageCleanup,
+  releaseGatewayVideoCostSettlement,
   settleUsage,
   type PrismaTransaction,
 } from "@beutl/db";
@@ -35,6 +37,7 @@ export {
 const AI_OUTPUT_WRITE_GRACE_MILLISECONDS = 15 * 60 * 1000;
 export const GATEWAY_VIDEO_COST_GRACE_MILLISECONDS = 15 * 60 * 1000;
 export const GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS = 10 * 1000;
+export const GATEWAY_VIDEO_COST_SETTLEMENT_LEASE_MILLISECONDS = 2 * 60 * 1000;
 export const MAX_AI_TEXT_RESULT_BYTES = MAX_AI_RESULT_BYTES;
 
 export class AiOutputCommitConflictError extends Error {
@@ -266,10 +269,12 @@ export async function settleDeferredGatewayVideoUsage({
   jobId,
   userId,
   providerCostUsd,
+  leaseExpiresAt,
 }: {
   jobId: string;
   userId: string;
   providerCostUsd?: ProviderCostUsd;
+  leaseExpiresAt?: Date;
 }): Promise<boolean> {
   return await startAiJobTransaction(async (prisma) => {
     const job = await getAiJobById({ jobId, prisma });
@@ -277,7 +282,9 @@ export async function settleDeferredGatewayVideoUsage({
       !job || job.userId !== userId || job.kind !== "video" ||
       job.provider !== "vercel-gateway" || job.status !== "succeeded" ||
       job.usageSettledAt !== null || job.usageUnitUsdMicros === null ||
-      job.reservedUsageUnits === null
+      job.reservedUsageUnits === null ||
+      (leaseExpiresAt !== undefined &&
+        job.providerPollLeaseExpiresAt?.getTime() !== leaseExpiresAt.getTime())
     ) {
       return false;
     }
@@ -304,32 +311,52 @@ export async function prepareGatewayVideoUsageForDeletion({
     return "ready";
   }
 
-  let providerCostUsd: ProviderCostUsd | undefined;
-  if (job.providerJobId && job.model) {
-    try {
-      const remote = await videoProviderFor("vercel-gateway").status({
-        providerJobId: job.providerJobId,
-        model: job.model,
-        signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
-      });
-      if (remote.status === "completed") providerCostUsd = remote.providerCostUsd;
-    } catch (error) {
-      console.warn("Gateway video cost check before deletion failed", {
-        jobId,
-        errorType: error instanceof Error ? error.name : typeof error,
-      });
-    }
+  const now = new Date();
+  const leaseExpiresAt = new Date(
+    now.getTime() + GATEWAY_VIDEO_COST_SETTLEMENT_LEASE_MILLISECONDS,
+  );
+  const claimed = await claimGatewayVideoCostSettlement({ jobId, now, leaseExpiresAt });
+  if (!claimed) {
+    const current = await getAiJobById({ jobId });
+    return !current || current.usageSettledAt !== null ? "ready" : "pending";
   }
 
-  const completedAt = job.resultFile?.createdAt ?? job.updatedAt;
-  const graceExpired = Date.now() - completedAt.getTime() >=
-    GATEWAY_VIDEO_COST_GRACE_MILLISECONDS;
-  if (providerCostUsd === undefined && !graceExpired) return "pending";
+  try {
+    let providerCostUsd: ProviderCostUsd | undefined;
+    if (job.providerJobId && job.model) {
+      try {
+        const remote = await videoProviderFor("vercel-gateway").status({
+          providerJobId: job.providerJobId,
+          model: job.model,
+          signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
+        });
+        if (remote.status === "completed") providerCostUsd = remote.providerCostUsd;
+      } catch (error) {
+        console.warn("Gateway video cost check before deletion failed", {
+          jobId,
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+      }
+    }
 
-  // A missing ledger cost becomes the estimate only after the same grace
-  // period used by scheduled reconciliation. Until then deletion is retryable.
-  await settleDeferredGatewayVideoUsage({ jobId, userId, providerCostUsd });
-  return "ready";
+    const completedAt = job.resultFile?.createdAt ?? job.updatedAt;
+    const graceExpired = Date.now() - completedAt.getTime() >=
+      GATEWAY_VIDEO_COST_GRACE_MILLISECONDS;
+    if (providerCostUsd === undefined && !graceExpired) return "pending";
+
+    // A missing ledger cost becomes the estimate only after the same grace
+    // period used by scheduled reconciliation. Until then deletion is retryable.
+    await settleDeferredGatewayVideoUsage({
+      jobId,
+      userId,
+      providerCostUsd,
+      leaseExpiresAt,
+    });
+    const current = await getAiJobById({ jobId });
+    return !current || current.usageSettledAt !== null ? "ready" : "pending";
+  } finally {
+    await releaseGatewayVideoCostSettlement({ jobId, leaseExpiresAt });
+  }
 }
 
 async function saveAiOutput({

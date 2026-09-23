@@ -1,15 +1,18 @@
 import {
+  claimGatewayVideoCostSettlement,
   getAiJobById,
   hasFreshAiJobFinalizationLease,
   isActiveAiJobStatus,
   listActiveAiJobsForReconciliation,
   listUnsettledGatewayVideoJobsForReconciliation,
+  releaseGatewayVideoCostSettlement,
   touchActiveAiJob,
 } from "@beutl/db";
 import { failAiJobAndRefundUsage } from "./credits";
 import {
   GATEWAY_VIDEO_COST_GRACE_MILLISECONDS,
   GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS,
+  GATEWAY_VIDEO_COST_SETTLEMENT_LEASE_MILLISECONDS,
   reconcileAiStorageCleanups,
   settleDeferredGatewayVideoUsage,
 } from "./storage";
@@ -212,39 +215,63 @@ export async function reconcileAiJobs(
   });
   result.deferredCostInspected = deferred.length;
   for (const job of deferred) {
-    const completedAt = job.resultFile?.createdAt ?? job.updatedAt;
-    const graceExpired = now.getTime() - completedAt.getTime() >=
-      GATEWAY_VIDEO_COST_GRACE_MILLISECONDS;
-    let providerCostUsd: ProviderCostUsd | undefined;
-    if (job.providerJobId && job.model) {
-      try {
-        const remote = await videoProviderFor("vercel-gateway").status({
-          providerJobId: job.providerJobId,
-          model: job.model,
-          signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
-        });
-        if (remote.status === "completed") providerCostUsd = remote.providerCostUsd;
-      } catch (error) {
-        if (!graceExpired) {
-          console.warn("Gateway video cost check failed", {
-            jobId: job.id,
-            errorType: error instanceof Error ? error.name : typeof error,
-          });
-          result.deferredCostErrors++;
-          continue;
-        }
-        console.warn(`Gateway video cost unavailable after grace period for AI job ${job.id}`);
+    const claimNow = new Date();
+    const leaseExpiresAt = new Date(
+      claimNow.getTime() + GATEWAY_VIDEO_COST_SETTLEMENT_LEASE_MILLISECONDS,
+    );
+    try {
+      const claimed = await claimGatewayVideoCostSettlement({
+        jobId: job.id,
+        now: claimNow,
+        leaseExpiresAt,
+      });
+      if (!claimed) {
+        result.deferredCostPending++;
+        continue;
       }
-    }
-    if (providerCostUsd === undefined && !graceExpired) {
-      result.deferredCostPending++;
+    } catch (error) {
+      console.error("Gateway video cost claim failed", {
+        jobId: job.id,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      result.deferredCostErrors++;
       continue;
     }
+
     try {
+      const completedAt = job.resultFile?.createdAt ?? job.updatedAt;
+      const graceExpired = now.getTime() - completedAt.getTime() >=
+        GATEWAY_VIDEO_COST_GRACE_MILLISECONDS;
+      let providerCostUsd: ProviderCostUsd | undefined;
+      if (job.providerJobId && job.model) {
+        try {
+          const remote = await videoProviderFor("vercel-gateway").status({
+            providerJobId: job.providerJobId,
+            model: job.model,
+            signal: AbortSignal.timeout(GATEWAY_VIDEO_COST_POLL_TIMEOUT_MILLISECONDS),
+          });
+          if (remote.status === "completed") providerCostUsd = remote.providerCostUsd;
+        } catch (error) {
+          if (!graceExpired) {
+            console.warn("Gateway video cost check failed", {
+              jobId: job.id,
+              errorType: error instanceof Error ? error.name : typeof error,
+            });
+            result.deferredCostErrors++;
+            continue;
+          }
+          console.warn(`Gateway video cost unavailable after grace period for AI job ${job.id}`);
+        }
+      }
+      if (providerCostUsd === undefined && !graceExpired) {
+        result.deferredCostPending++;
+        continue;
+      }
       const settled = await settleDeferredGatewayVideoUsage({
         jobId: job.id,
         userId: job.userId,
         providerCostUsd,
+        leaseExpiresAt,
       });
       if (settled) {
         if (providerCostUsd === undefined) result.deferredCostEstimated++;
@@ -256,6 +283,16 @@ export async function reconcileAiJobs(
         errorType: error instanceof Error ? error.name : typeof error,
       });
       result.deferredCostErrors++;
+    } finally {
+      try {
+        await releaseGatewayVideoCostSettlement({ jobId: job.id, leaseExpiresAt });
+      } catch (error) {
+        console.error("Gateway video cost lease release failed", {
+          jobId: job.id,
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+        result.deferredCostErrors++;
+      }
     }
   }
 
