@@ -31,12 +31,12 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export function AdminSidebar({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
   const pathname = usePathname();
-  const { setOpenMobile } = useSidebar();
+  const { isMobile, open, setOpen, setOpenMobile } = useSidebar();
 
   useEffect(() => {
     setOpenMobile(false);
@@ -47,6 +47,14 @@ export function AdminSidebar({ lang }: { lang: string }) {
   const adminIndex = segments.indexOf("admin");
   const section = adminIndex < 0 ? undefined : segments[adminIndex + 1];
   const subSection = adminIndex < 0 ? undefined : segments[adminIndex + 2];
+  const [openGroups, setOpenGroups] = useState({
+    ai: section === "ai",
+    storage: section === "storage",
+  });
+
+  useEffect(() => {
+    setOpenGroups({ ai: section === "ai", storage: section === "storage" });
+  }, [section]);
 
   const items = [
     { section: undefined, href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },
@@ -101,19 +109,40 @@ export function AdminSidebar({ lang }: { lang: string }) {
               {items.map((item) =>
                 item.section === "ai" || item.section === "storage" ? (
                   <Collapsible
-                    key={`${item.section}-${section === item.section}`}
+                    key={item.section}
                     asChild
-                    defaultOpen={section === item.section}
+                    open={openGroups[item.section]}
+                    onOpenChange={(nextOpen) =>
+                      setOpenGroups((previous) => ({ ...previous, [item.section]: nextOpen }))
+                    }
                     className="group/collapsible"
                   >
                     <SidebarMenuItem>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton isActive={section === item.section} tooltip={item.label}>
+                      {!isMobile && !open ? (
+                        <SidebarMenuButton
+                          isActive={section === item.section}
+                          tooltip={item.label}
+                          aria-label={item.label}
+                          onClick={() => {
+                            setOpenGroups({
+                              ai: item.section === "ai",
+                              storage: item.section === "storage",
+                            });
+                            setOpen(true);
+                          }}
+                        >
                           <item.icon />
                           <span>{item.label}</span>
-                          <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                         </SidebarMenuButton>
-                      </CollapsibleTrigger>
+                      ) : (
+                        <CollapsibleTrigger asChild>
+                          <SidebarMenuButton isActive={section === item.section} tooltip={item.label}>
+                            <item.icon />
+                            <span>{item.label}</span>
+                            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                          </SidebarMenuButton>
+                        </CollapsibleTrigger>
+                      )}
                       <CollapsibleContent>
                         <SidebarMenuSub>
                           {children[item.section].map((child) => (
