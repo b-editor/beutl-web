@@ -171,7 +171,37 @@
     },
     "tab": {
       "settings": "Settings",
-      "usage": "Usage"
+      "usage": "Usage",
+      "jobs": "Jobs"
+    },
+    "jobs": {
+      "title": "AI jobs",
+      "all": "All",
+      "apply": "Filter",
+      "createdAt": "Started (UTC)",
+      "jobId": "Job ID",
+      "userId": "User ID",
+      "user": "User",
+      "kind": "Operation",
+      "provider": "Provider",
+      "model": "Model",
+      "status": "Status",
+      "billing": "Billing",
+      "reservedUnits": "Reserved units",
+      "chargedUnits": "Charged units",
+      "actualCost": "Provider cost",
+      "deleted": "deleted",
+      "estimateAwaitingActual": "Estimate (awaiting actual)",
+      "unknownHint": "The historical record does not establish whether this settled charge used actual cost or an estimate.",
+      "billingState": {
+        "all": "All",
+        "actual": "Actual cost",
+        "estimated": "Estimate",
+        "pending": "Settlement pending",
+        "legacy": "Legacy billing",
+        "unknown": "Source unknown",
+        "not_settled": "Not settled"
+      }
     },
     "interventions": {
       "common": {

@@ -171,7 +171,37 @@
     },
     "tab": {
       "settings": "設定",
-      "usage": "利用状況"
+      "usage": "利用状況",
+      "jobs": "ジョブ"
+    },
+    "jobs": {
+      "title": "AI ジョブ一覧",
+      "all": "すべて",
+      "apply": "絞り込む",
+      "createdAt": "開始日時 (UTC)",
+      "jobId": "ジョブ ID",
+      "userId": "ユーザー ID",
+      "user": "ユーザー",
+      "kind": "機能",
+      "provider": "プロバイダー",
+      "model": "モデル",
+      "status": "状態",
+      "billing": "課金状態",
+      "reservedUnits": "予約ユニット",
+      "chargedUnits": "確定ユニット",
+      "actualCost": "プロバイダー実費",
+      "deleted": "削除済み",
+      "estimateAwaitingActual": "見積（実費待ち）",
+      "unknownHint": "過去の記録からは、この確定額が実費か見積か判別できません。",
+      "billingState": {
+        "all": "すべて",
+        "actual": "実費",
+        "estimated": "見積",
+        "pending": "精算待ち",
+        "legacy": "旧課金方式",
+        "unknown": "根拠不明",
+        "not_settled": "未精算"
+      }
     },
     "interventions": {
       "common": {

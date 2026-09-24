@@ -808,7 +808,7 @@ export function createInMemoryPrisma() {
   const now = () => new Date();
   const reversalKey = (kind: string, id: string) => `${kind}:${id}`;
   type AiJobWhere = {
-    id?: string;
+    id?: string | { lt: string };
     userId?: string;
     kind?: string;
     provider?: string;
@@ -816,7 +816,8 @@ export function createInMemoryPrisma() {
     model?: { not: null };
     idempotencyKeyHash?: string | null;
     callbackNonceHash?: string | null;
-    status?: string | { in?: string[]; notIn?: string[] };
+    status?: string | { in?: string[]; notIn?: string[]; not?: string };
+    createdAt?: Date | { lt: Date };
     updatedAt?: Date | { lte: Date };
     deletedAt?: null | { not: null };
     providerPollLeaseExpiresAt?: Date | null | { lte: Date };
@@ -824,20 +825,23 @@ export function createInMemoryPrisma() {
     finalizationLeaseExpiresAt?: null | { lte: Date };
     resultFileId?: string | null | { not: null };
     usageSettledAt?: null | { not?: null; gte?: Date };
-    providerCostUsdMicros?: null;
-    usageUnitUsdMicros?: { not: null };
+    providerCostUsdMicros?: null | { not: null };
+    usageUnitUsdMicros?: null | { not: null };
     reservedUsageUnits?: { not: null };
-    transactions?: { some?: { kind: string }; none?: { kind: string } };
+    transactions?: { some?: { kind: string | { in: string[] } }; none?: { kind: string | { in: string[] } } };
     OR?: AiJobWhere[];
     AND?: AiJobWhere[];
   };
   const matchesAiJobWhere = (job: AiJob, where: AiJobWhere): boolean => {
+    const kindMatches = (actual: string, expected: string | { in: string[] }) =>
+      typeof expected === "string" ? actual === expected : expected.in.includes(actual);
     const statusMatches =
       !where.status ||
       (typeof where.status === "string"
         ? job.status === where.status
         : (!where.status.in || where.status.in.includes(job.status)) &&
-          (!where.status.notIn || !where.status.notIn.includes(job.status)));
+          (!where.status.notIn || !where.status.notIn.includes(job.status)) &&
+          (!where.status.not || where.status.not !== job.status));
     const updatedAtMatches =
       !where.updatedAt ||
       (where.updatedAt instanceof Date
@@ -866,7 +870,10 @@ export function createInMemoryPrisma() {
             job.providerPollLeaseExpiresAt.getTime() <=
               where.providerPollLeaseExpiresAt.lte.getTime());
     return (
-      (!where.id || job.id === where.id) &&
+      (!where.id || (typeof where.id === "string" ? job.id === where.id : job.id < where.id.lt)) &&
+      (where.createdAt === undefined || (where.createdAt instanceof Date
+        ? job.createdAt.getTime() === where.createdAt.getTime()
+        : job.createdAt.getTime() < where.createdAt.lt.getTime())) &&
       (!where.userId || job.userId === where.userId) &&
       (!where.kind || job.kind === where.kind) &&
       (!where.provider || job.provider === where.provider) &&
@@ -881,13 +888,19 @@ export function createInMemoryPrisma() {
           : job.usageSettledAt !== null &&
             (!where.usageSettledAt.gte ||
               job.usageSettledAt.getTime() >= where.usageSettledAt.gte.getTime()))) &&
-      (where.providerCostUsdMicros === undefined || job.providerCostUsdMicros === null) &&
-      (!where.usageUnitUsdMicros || job.usageUnitUsdMicros !== null) &&
+      (where.providerCostUsdMicros === undefined ||
+        (where.providerCostUsdMicros === null
+          ? job.providerCostUsdMicros === null
+          : job.providerCostUsdMicros !== null)) &&
+      (where.usageUnitUsdMicros === undefined ||
+        (where.usageUnitUsdMicros === null
+          ? job.usageUnitUsdMicros === null
+          : job.usageUnitUsdMicros !== null)) &&
       (!where.reservedUsageUnits || job.reservedUsageUnits !== null) &&
       (!where.transactions?.some || state.creditTransactions.some((row) =>
-        row.aiJobId === job.id && row.kind === where.transactions!.some!.kind)) &&
+        row.aiJobId === job.id && kindMatches(row.kind, where.transactions!.some!.kind))) &&
       (!where.transactions?.none || !state.creditTransactions.some((row) =>
-        row.aiJobId === job.id && row.kind === where.transactions!.none!.kind)) &&
+        row.aiJobId === job.id && kindMatches(row.kind, where.transactions!.none!.kind))) &&
       statusMatches &&
       updatedAtMatches &&
       deletedAtMatches &&
@@ -1190,6 +1203,16 @@ export function createInMemoryPrisma() {
             resultFileSelection,
           )
         : null;
+    }
+    if (select?.transactions) {
+      const transactionSelection = select.transactions as {
+        where?: { kind?: { in?: string[] } };
+      };
+      selectedJob.transactions = state.creditTransactions
+        .filter((row) => row.aiJobId === job.id &&
+          (!transactionSelection.where?.kind?.in ||
+            transactionSelection.where.kind.in.includes(row.kind)))
+        .map((row) => ({ kind: row.kind }));
     }
     return selectedJob;
   };
@@ -2132,25 +2155,7 @@ export function createInMemoryPrisma() {
         include,
         select,
       }: {
-        where?: {
-          userId?: string;
-          kind?: string;
-          provider?: string;
-          providerJobId?: { not: null };
-          model?: { not: null };
-          deletedAt?: null;
-          status?: string | { in: string[] };
-          usageSettledAt?: null | { not?: null; gte?: Date };
-          providerCostUsdMicros?: null;
-          usageUnitUsdMicros?: { not: null };
-          reservedUsageUnits?: { not: null };
-          updatedAt?: { lte: Date };
-          transactions?: { some?: { kind: string }; none?: { kind: string } };
-          OR?: Array<{
-            createdAt?: Date | { lt: Date };
-            id?: { lt: string };
-          }>;
-        };
+        where?: AiJobWhere;
         orderBy?:
           | { updatedAt: "asc" | "desc" }
           | Array<
@@ -2161,76 +2166,8 @@ export function createInMemoryPrisma() {
         include?: { resultFile?: unknown };
         select?: Record<string, unknown>;
       }) => {
-        let jobs = [...state.aiJobs.values()];
-        if (where?.userId) {
-          jobs = jobs.filter((job) => job.userId === where.userId);
-        }
-        if (where?.kind) {
-          jobs = jobs.filter((job) => job.kind === where.kind);
-        }
-        if (where?.provider) {
-          jobs = jobs.filter((job) => job.provider === where.provider);
-        }
-        if (where?.providerJobId) {
-          jobs = jobs.filter((job) => job.providerJobId !== null);
-        }
-        if (where?.model) {
-          jobs = jobs.filter((job) => job.model !== null);
-        }
-        if (where?.deletedAt === null) {
-          jobs = jobs.filter((job) => job.deletedAt === null);
-        }
-        if (where?.status) {
-          const status = where.status;
-          jobs = jobs.filter((job) => typeof status === "string"
-            ? job.status === status
-            : status.in.includes(job.status));
-        }
-        if (where?.usageSettledAt === null) {
-          jobs = jobs.filter((job) => job.usageSettledAt === null);
-        } else if (where?.usageSettledAt) {
-          jobs = jobs.filter((job) => job.usageSettledAt !== null &&
-            (!where.usageSettledAt!.gte ||
-              job.usageSettledAt.getTime() >= where.usageSettledAt!.gte.getTime()));
-        }
-        if (where?.providerCostUsdMicros === null) {
-          jobs = jobs.filter((job) => job.providerCostUsdMicros === null);
-        }
-        if (where?.usageUnitUsdMicros) {
-          jobs = jobs.filter((job) => job.usageUnitUsdMicros !== null);
-        }
-        if (where?.reservedUsageUnits) {
-          jobs = jobs.filter((job) => job.reservedUsageUnits !== null);
-        }
-        if (where?.updatedAt) {
-          jobs = jobs.filter(
-            (job) =>
-              job.updatedAt.getTime() <= where.updatedAt!.lte.getTime(),
-          );
-        }
-        if (where?.transactions?.some) {
-          jobs = jobs.filter((job) => state.creditTransactions.some((row) =>
-            row.aiJobId === job.id && row.kind === where.transactions!.some!.kind));
-        }
-        if (where?.transactions?.none) {
-          jobs = jobs.filter((job) => !state.creditTransactions.some((row) =>
-            row.aiJobId === job.id && row.kind === where.transactions!.none!.kind));
-        }
-        if (where?.OR) {
-          jobs = jobs.filter((job) =>
-            where.OR!.some((condition) => {
-              const createdAtMatches =
-                condition.createdAt === undefined ||
-                (condition.createdAt instanceof Date
-                  ? job.createdAt.getTime() === condition.createdAt.getTime()
-                  : job.createdAt.getTime() <
-                    condition.createdAt.lt.getTime());
-              const idMatches =
-                condition.id === undefined || job.id < condition.id.lt;
-              return createdAtMatches && idMatches;
-            }),
-          );
-        }
+        let jobs = [...state.aiJobs.values()].filter((job) =>
+          !where || matchesAiJobWhere(job, where));
         if (Array.isArray(orderBy)) {
           jobs.sort((left, right) => {
             for (const ordering of orderBy) {

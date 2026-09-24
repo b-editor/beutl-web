@@ -5,22 +5,22 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// middleware は既定ロケールを rewrite するため、pathname にロケール接頭辞が
-// 付く場合と付かない場合がある。末尾のセグメントだけで現在地を判定する。
-function isUsagePath(pathname: string | null): boolean {
-  return (pathname ?? "").split("/").filter(Boolean).at(-1) === "usage";
-}
-
 export function AiTabs({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
-  const usage = isUsagePath(usePathname());
+  // The default locale may be rewritten without a locale prefix.
+  const section = (usePathname() ?? "").split("/").filter(Boolean).at(-1);
 
   const items = [
-    { href: `/${lang}/admin/ai`, label: t("admin:ai.tab.settings"), active: !usage },
+    { href: `/${lang}/admin/ai`, label: t("admin:ai.tab.settings"), active: section === "ai" },
     {
       href: `/${lang}/admin/ai/usage`,
       label: t("admin:ai.tab.usage"),
-      active: usage,
+      active: section === "usage",
+    },
+    {
+      href: `/${lang}/admin/ai/jobs`,
+      label: t("admin:ai.tab.jobs"),
+      active: section === "jobs",
     },
   ];
 
