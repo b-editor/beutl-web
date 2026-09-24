@@ -12,7 +12,6 @@ import {
   listUserLabels,
 } from "@beutl/db";
 import { loadAiSettings, PRO_PLAN } from "@beutl/api";
-import { STORAGE_PLAN } from "@beutl/core";
 import { aiUsageRangeStart, type AiUsageRange } from "@/lib/ai-usage-range";
 import {
   summarizeAiUsageDistribution,
@@ -47,7 +46,6 @@ export async function getAiUsageReport({
     creditAdjustments,
     balances,
     activeSubscriptions,
-    storageSubscriptions,
     topJobUsers,
     settings,
     accountUsage,
@@ -58,7 +56,6 @@ export async function getAiUsageReport({
     getAdminCreditAdjustmentTotals({ since, prisma }),
     getAiBalanceTotals({ now, prisma }),
     countActiveSubscriptions({ now, planId: PRO_PLAN.id, prisma }),
-    countActiveSubscriptions({ now, planId: STORAGE_PLAN.id, prisma }),
     getTopAiUsers({ since, limit: TOP_USER_LIMIT, prisma }),
     loadAiSettings({ prisma }),
     listCreditAccountUsageSnapshot({
@@ -97,8 +94,6 @@ export async function getAiUsageReport({
     creditAdjustments,
     balances,
     activeSubscriptions: activeSubscriptions.total,
-    // ストレージプランは AI と別契約。期間フィルタとは無関係の現在値。
-    storageSubscriptions: storageSubscriptions.byTier,
     topUsers,
     monthlyUsageLimit,
     scanLimit: USAGE_DISTRIBUTION_SCAN_LIMIT,

@@ -5,8 +5,10 @@
     "feedback": "Feedback",
     "ai": "AI",
     "storage": "Storage",
+    "payments": "Payments",
     "auditLog": "Audit log",
-    "signOut": "Sign out"
+    "signOut": "Sign out",
+    "toggleSidebar": "Toggle sidebar"
   },
   "dashboard": {
     "title": "Admin dashboard",
@@ -129,15 +131,16 @@
   },
   "ai": {
     "title": "AI settings",
-    "description": "Choose the models each AI operation uses and what percentage of actual provider cost becomes usage. Running jobs keep the conversion rate and percentage captured when they started.",
+    "description": "Configure models and the share of actual provider cost charged as usage. Running jobs keep the settings from when they started.",
+    "billingUnitsHelp": "Transcription uses started minutes, subtitle translation started blocks of 1,000 characters, and video seconds.",
     "model": "Model",
     "price": "Usage units",
     "monthlyUsageLimit": "Monthly allowance (units)",
     "providerUsdPerUsageUnit": "Provider USD per usage unit",
     "models": {
       "title": "Models on offer",
-      "description": "Users pick one model per request. Usage is settled from the actual provider cost multiplied by the model percentage. A request that names none runs on the default.",
-      "emptyDescription": "None registered, so this operation runs on the built-in model below. Registering one replaces it.",
+      "description": "Users can choose a model. Requests without one use the default.",
+      "emptyDescription": "No model registered. Using the built-in model.",
       "modelId": "Model ID",
       "provider": "Provider",
       "displayName": "Display name",
@@ -173,6 +176,11 @@
       "settings": "Settings",
       "usage": "Usage",
       "jobs": "Jobs"
+    },
+    "group": {
+      "image": "Images",
+      "audio": "Audio and subtitles",
+      "video": "Video"
     },
     "jobs": {
       "title": "AI jobs",
@@ -220,24 +228,24 @@
         "forbidden": "You do not have permission to perform this action."
       },
       "multipart": {
-        "title": "Storage multipart interventions",
-        "description": "Remote aborts that exhausted their retries or could not run because the R2 binding was unavailable. Terminalizing acknowledges the remote-handle risk and releases object cleanup only after every handle for the key is resolved.",
-        "empty": "No multipart cleanup interventions.",
+        "title": "Multipart cleanup",
+        "description": "Remote uploads that could not be aborted. Terminalizing accepts the risk of an unverified remote handle. Object cleanup resumes only after every handle for the key is resolved.",
+        "empty": "No items need attention.",
         "terminalizeConfirm": "Terminalizing preserves this handle as terminal and acknowledges that remote proof was not supplied. Continue?",
         "terminalize": "Terminalize (acknowledge risk)"
       },
       "upload": {
-        "title": "Storage upload completion interventions",
+        "title": "Upload completion",
         "description": "Ambiguous multipart completions retained for operator review.",
-        "empty": "No upload completion interventions.",
+        "empty": "No items need attention.",
         "resumeConfirm": "Resume this completion and authorize a new provider attempt?",
         "terminalizeConfirm": "Terminalize this ambiguous upload completion?",
         "unknownOutcome": "The provider outcome is still unknown. Receipt recovery continues automatically when the object becomes visible. Retry, abort, terminalization, and account deletion remain unavailable because absence cannot prove that the original completion call has terminated."
       },
       "topUp": {
-        "title": "Top-up checkout interventions",
-        "description": "Includes orphaned resolution rows with no attempt record. Terminalization is allowed only after every known refund is settled and requires operator evidence.",
-        "empty": "No top-up checkout interventions.",
+        "title": "Top-up checkout",
+        "description": "Includes orphaned recovery records. Terminalize only after all known refunds are settled and evidence is recorded.",
+        "empty": "No items need attention.",
         "attempt": "Attempt",
         "owner": "Owner",
         "attemptPresent": "Attempt present",
@@ -248,9 +256,9 @@
         "terminalizeAfterRefundProof": "Terminalize after refund proof"
       },
       "packagePayment": {
-        "title": "Package payment refund interventions",
-        "description": "Package refunds paused after exhaustive retries. Resume performs a fresh canonical Stripe identity check before another refund attempt.",
-        "empty": "No package payment refund interventions.",
+        "title": "Package refunds",
+        "description": "Package refunds paused after retries. Resuming rechecks the canonical Stripe identity before another attempt.",
+        "empty": "No items need attention.",
         "attempt": "Refund attempt",
         "paymentIntent": "PaymentIntent",
         "operatorRequired": "Operator intervention required",
@@ -277,9 +285,9 @@
     },
     "plan": {
       "title": "Subscription",
-      "description": "Usage units granted to each Pro subscription every billing period. A change applies to operations started afterwards and to the remaining balance shown to users; already consumed usage is left as it is.",
-      "digest": "In practice: median {{median}} units, 90th percentile {{p90}} units, {{exhausted}}% exhausted the allowance (across {{accounts}} accounts).",
-      "digestEmpty": "There is not enough usage yet to judge whether the allowance fits.",
+      "description": "The monthly Pro allowance. Changes affect new jobs and displayed balances; used units stay unchanged.",
+      "digest": "Usage: median {{median}} / P90 {{p90}} units, {{exhausted}}% exhausted ({{accounts}} accounts)",
+      "digestEmpty": "Not enough usage yet to judge the allowance.",
       "digestLoading": "Summarizing usage…",
       "digestLink": "See the breakdown",
       "unaffordableTitle": "Some operations cost more than the allowance",
@@ -341,7 +349,7 @@
     },
     "usage": {
       "title": "AI usage",
-      "description": "AI jobs and usage units aggregated over the selected window. Per-user balances are adjusted from each user's detail page.",
+      "description": "AI jobs and usage in the selected period. Adjust balances from a user's detail page.",
       "since": "Since {{- timestamp}}",
       "range": {
         "24h": "Last 24 hours",
@@ -383,7 +391,7 @@
       "adminUsageAdjustment": "Monthly usage change",
       "distribution": {
         "title": "How much of the allowance is used",
-        "description": "Consumption per account within the current billing period. It reflects the present state regardless of the window selected above. The allowance is currently {{limit}} units.",
+        "description": "Usage per account in its current billing period. This does not change with the date filter. The allowance is {{limit}} units.",
         "median": "Median (units)",
         "p90": "90th percentile (units)",
         "exhausted": "Exhausted the allowance",
@@ -398,9 +406,10 @@
           "upTo99": "Up to 99%",
           "exhausted": "Exhausted"
         },
-        "projected": "Extrapolated to the end of the period: median {{p50}} units, 90th percentile {{p90}} units (from {{sampleSize}} accounts).",
+        "projected": "Period-end estimate: median {{p50}} / P90 {{p90}} units ({{sampleSize}} accounts)",
         "scope": "{{measured}} of {{accounts}} accounts. Excluded: {{stale}} whose billing period has already ended, and {{withoutPeriod}} that never held the subscription.",
-        "noData": "No account can be summarized yet ({{stale}} excluded because their billing period has ended, {{withoutPeriod}} because they never held the subscription).",
+        "scopeSummary": "{{measured}} of {{accounts}} accounts included",
+        "noData": "No eligible data ({{stale}} ended periods, {{withoutPeriod}} without a subscription).",
         "censoredNote": "Consumption stops once the allowance runs out, so the upper percentiles understate real demand. Read them together with the exhaustion rate.",
         "midPeriodNote": "An account partway through its period always reads low. The extrapolated figures scale by elapsed time and leave out accounts less than 10% into their period.",
         "purchasedNote": "{{holders}} accounts hold purchased credits, which indicates demand beyond the allowance.",
@@ -415,17 +424,17 @@
     },
     "operation": {
       "image.generate": "Image generation",
-      "image.edit.remove_background": "Image edit: remove background",
-      "image.edit.upscale": "Image edit: upscale",
-      "image.edit.restyle": "Image edit: restyle",
-      "image.edit.remove_object": "Image edit: remove object",
-      "image.edit.outpaint": "Image edit: outpaint",
-      "audio.transcribe": "Transcription (per started minute)",
-      "subtitle.translate": "Subtitle translation (per started 1,000 characters)",
-      "video.generate": "Video generation (per second)",
-      "video.edit": "Video editing (per second)",
-      "video.extend": "Video extension (per second)",
-      "video.motion": "Motion control (per second)"
+      "image.edit.remove_background": "Background removal",
+      "image.edit.upscale": "Upscale",
+      "image.edit.restyle": "Restyle",
+      "image.edit.remove_object": "Object removal",
+      "image.edit.outpaint": "Outpaint",
+      "audio.transcribe": "Transcription",
+      "subtitle.translate": "Subtitle translation",
+      "video.generate": "Video generation",
+      "video.edit": "Video editing",
+      "video.extend": "Video extension",
+      "video.motion": "Motion control"
     },
     "form": {
       "unsaved": "Unsaved",
@@ -437,10 +446,81 @@
       "saveConflict": "The AI model settings changed elsewhere. Reload and review before saving."
     }
   },
+  "payments": {
+    "title": "Payments and refunds"
+  },
   "storage": {
+    "files": {
+      "title": "Files"
+    },
+    "usagePage": {
+      "title": "Subscriptions"
+    },
+    "migration": {
+      "title": "Batch migration",
+      "description": "Move files in batches; you can pause and resume."
+    },
+    "interventions": {
+      "title": "Upload interventions"
+    },
+    "stores": {
+      "primary": "Primary store",
+      "fallback": "Fallback store",
+      "none": "Not configured",
+      "configError": "Could not load storage configuration: {{error}}"
+    },
+    "search": {
+      "placeholder": "Search file names or owner emails",
+      "submit": "Search",
+      "order": "Sort order",
+      "oldestFirst": "Oldest first",
+      "newestFirst": "Newest first"
+    },
+    "columns": {
+      "name": "File",
+      "owner": "Owner",
+      "size": "Size",
+      "createdAt": "Created",
+      "location": "Location",
+      "actions": "Actions"
+    },
+    "location": {
+      "missing": "Missing",
+      "unknown": "Unable to check: {{error}}"
+    },
+    "providers": {
+      "r2": "Cloudflare R2",
+      "s3": "S3"
+    },
+    "moveTo": "Move to {{provider}}",
+    "moving": "Moving…",
+    "noResults": "No files found",
+    "messages": {
+      "invalidInput": "Invalid input.",
+      "notConfigured": "The destination store is not configured.",
+      "moved": "Moved {{name}} from {{from}} to {{to}}.",
+      "movedSourceLeft": "Copied {{name}} to {{to}}. The source in {{from}} was not removed.",
+      "alreadyThere": "{{name}} is already in {{to}}.",
+      "missing": "The storage location for {{name}} was not found.",
+      "failed": "Failed to move the file.",
+      "unauthenticated": "Sign in again to continue.",
+      "forbidden": "You do not have permission to perform this action."
+    },
+    "batch": {
+      "destination": "Destination",
+      "keepRunning": "Keep processing",
+      "run": "Start migration",
+      "running": "Moving…",
+      "stop": "Stop after this batch",
+      "reset": "Start over",
+      "progress": "Scanned {{scanned}} · Moved {{moved}} · Already there {{alreadyThere}} · Missing {{missing}} · Failed {{failed}}",
+      "done": "All files have been checked.",
+      "paused": "Paused. You can resume the migration.",
+      "noProgress": "Stopped because the cursor did not advance.",
+      "failures": "Failed files"
+    },
     "plan": "Storage subscription",
     "activeSubscriptions": "Active storage subscriptions",
-    "activeSubscriptionsHint": "By tier; independent of the selected window.",
     "byTier": "By tier",
     "tier": "Tier",
     "count": "Subscriptions",
@@ -466,6 +546,7 @@
     "OTHER": "Other"
   },
   "common": {
+    "helpFor": "Help for {{name}}",
     "loading": "Loading",
     "error": "Error",
     "forbidden": "This account does not have administrator access.",

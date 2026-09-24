@@ -18,7 +18,7 @@ import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import { firstSearchParam } from "@/lib/search-params";
 import { getStorageStores, locateFiles, type FileLocation } from "@/lib/storage";
 import { Pagination } from "@/components/admin/pagination";
-import { MoveFileButton, StorageBatchPanel, StorageSearchForm } from "./components";
+import { MoveFileButton, StorageSearchForm } from "./components";
 
 const PAGE_SIZE = 20;
 
@@ -87,131 +87,105 @@ export default async function Page(props: {
   const locations = stores
     ? await locateFiles(result.items, stores.stores)
     : new Map<string, FileLocation>();
-  const [primary, fallback] = stores?.stores ?? [];
-
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold">{t("admin:storage.title")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t("admin:storage.description")}
-        </p>
+        <h1 className="text-2xl font-bold">{t("admin:storage.files.title")}</h1>
       </div>
 
-      {configError ? (
+      {configError && (
         <p className="rounded-lg border border-destructive p-4 text-sm text-destructive">
           {t("admin:storage.stores.configError", { error: configError })}
         </p>
-      ) : (
-        <section className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-lg border bg-card p-4 text-card-foreground">
-            <p className="text-xs text-muted-foreground">{t("admin:storage.stores.primary")}</p>
-            <p className="mt-1 font-medium">{primary?.label ?? t("admin:storage.stores.none")}</p>
-          </div>
-          <div className="rounded-lg border bg-card p-4 text-card-foreground">
-            <p className="text-xs text-muted-foreground">{t("admin:storage.stores.fallback")}</p>
-            <p className="mt-1 font-medium">{fallback?.label ?? t("admin:storage.stores.none")}</p>
-          </div>
-        </section>
       )}
 
-      {stores && stores.stores.length > 1 && (
-        <StorageBatchPanel
-          lang={lang}
-          destinations={stores.stores.map((store) => ({
-            provider: store.provider,
-            label: store.label,
-          }))}
-          defaultTo={stores.primary}
+      <section className="flex flex-col gap-4">
+        <StorageSearchForm lang={lang} query={q} order={order} />
+
+        {result.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("admin:storage.noResults")}</p>
+        ) : (
+          <div className="rounded-lg border">
+            <Table className="min-w-[960px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("admin:storage.columns.name")}</TableHead>
+                  <TableHead>{t("admin:storage.columns.owner")}</TableHead>
+                  <TableHead className="text-right">{t("admin:storage.columns.size")}</TableHead>
+                  <TableHead>{t("admin:storage.columns.createdAt")}</TableHead>
+                  <TableHead>{t("admin:storage.columns.location")}</TableHead>
+                  <TableHead className="text-right">{t("admin:storage.columns.actions")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.items.map((file) => {
+                  const location = locations.get(file.objectKey);
+                  const present = new Set(
+                    location?.kind === "located"
+                      ? location.locations.map((entry) => entry.provider)
+                      : [],
+                  );
+                  // A file that is nowhere has nothing to move; one found in
+                  // both stores can be consolidated into either.
+                  const targets =
+                    location?.kind === "located" && present.size > 0
+                      ? (stores?.stores ?? []).filter(
+                          (store) => !(present.size === 1 && present.has(store.provider)),
+                        )
+                      : [];
+                  return (
+                    <TableRow key={file.id}>
+                      <TableCell className="max-w-xs">
+                        <div className="truncate font-medium" title={file.name}>{file.name}</div>
+                        <div className="truncate text-xs text-muted-foreground" title={file.objectKey}>
+                          {file.objectKey}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Link
+                          href={`/${lang}/admin/users/${file.user.id}`}
+                          className="hover:underline"
+                        >
+                          {file.user.email}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatBytes(Number(file.size))}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatTimestamp(file.createdAt, lang)}
+                      </TableCell>
+                      <TableCell>
+                        <LocationCell location={location} t={t} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          {targets.map((store) => (
+                            <MoveFileButton
+                              key={store.provider}
+                              lang={lang}
+                              fileId={file.id}
+                              to={store.provider}
+                            />
+                          ))}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <Pagination
+          basePath={`/${lang}/admin/storage`}
+          params={{ q, order }}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          previousLabel={t("admin:common.previousPage")}
+          nextLabel={t("admin:common.nextPage")}
         />
-      )}
-
-      <StorageSearchForm lang={lang} query={q} order={order} />
-
-      {result.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t("admin:storage.noResults")}</p>
-      ) : (
-        <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("admin:storage.columns.name")}</TableHead>
-                <TableHead>{t("admin:storage.columns.owner")}</TableHead>
-                <TableHead className="text-right">{t("admin:storage.columns.size")}</TableHead>
-                <TableHead>{t("admin:storage.columns.createdAt")}</TableHead>
-                <TableHead>{t("admin:storage.columns.location")}</TableHead>
-                <TableHead className="text-right">{t("admin:storage.columns.actions")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {result.items.map((file) => {
-                const location = locations.get(file.objectKey);
-                const present = new Set(
-                  location?.kind === "located"
-                    ? location.locations.map((entry) => entry.provider)
-                    : [],
-                );
-                // A file that is nowhere has nothing to move; one found in
-                // both stores can be consolidated into either.
-                const targets =
-                  location?.kind === "located" && present.size > 0
-                    ? (stores?.stores ?? []).filter(
-                        (store) => !(present.size === 1 && present.has(store.provider)),
-                      )
-                    : [];
-                return (
-                  <TableRow key={file.id}>
-                    <TableCell className="max-w-xs">
-                      <div className="truncate font-medium" title={file.name}>{file.name}</div>
-                      <div className="truncate text-xs text-muted-foreground" title={file.objectKey}>
-                        {file.objectKey}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Link
-                        href={`/${lang}/admin/users/${file.user.id}`}
-                        className="hover:underline"
-                      >
-                        {file.user.email}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatBytes(Number(file.size))}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatTimestamp(file.createdAt, lang)}
-                    </TableCell>
-                    <TableCell>
-                      <LocationCell location={location} t={t} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        {targets.map((store) => (
-                          <MoveFileButton
-                            key={store.provider}
-                            lang={lang}
-                            fileId={file.id}
-                            to={store.provider}
-                          />
-                        ))}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-
-          <Pagination
-            basePath={`/${lang}/admin/storage`}
-            params={{ q, order }}
-            currentPage={currentPage}
-            totalPages={totalPages}
-            previousLabel={t("admin:common.previousPage")}
-            nextLabel={t("admin:common.nextPage")}
-          />
-        </>
-      )}
+      </section>
     </div>
   );
 }

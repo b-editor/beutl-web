@@ -1,5 +1,8 @@
 import { requireAdmin } from "@/lib/auth-guard";
-import { AdminNav } from "@/components/admin/admin-nav";
+import { AdminSidebar } from "@/components/admin/admin-sidebar";
+import { getTranslation } from "@beutl/i18n";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@beutl/ui/ui/sidebar";
+import { cookies } from "next/headers";
 
 export default async function Layout(props: {
   children: React.ReactNode;
@@ -8,18 +11,21 @@ export default async function Layout(props: {
   const { lang } = await props.params;
   const { children } = props;
   await requireAdmin();
+  const { t } = await getTranslation(lang);
+  const defaultOpen = (await cookies()).get("sidebar_state")?.value !== "false";
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-20 border-b bg-background">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 md:px-6">
-          <div className="flex items-center gap-2 font-semibold">
-            Beutl Admin
-          </div>
-          <AdminNav lang={lang} />
+    <SidebarProvider defaultOpen={defaultOpen}>
+      <AdminSidebar lang={lang} />
+      <SidebarInset className="min-w-0">
+        <header className="flex h-12 shrink-0 items-center border-b px-4">
+          <SidebarTrigger aria-label={t("admin:nav.toggleSidebar")} />
+          <span className="ml-3 text-sm font-semibold md:hidden">Beutl Admin</span>
+        </header>
+        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 py-6 md:px-6 md:py-8">
+          {children}
         </div>
-      </header>
-      <main className="mx-auto max-w-7xl px-4 py-8 md:px-6">{children}</main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

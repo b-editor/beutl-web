@@ -55,49 +55,51 @@ export default async function Page(props: {
         <p className="text-sm text-muted-foreground">{t("admin:feedback.noResults")}</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("admin:feedback.status")}</TableHead>
-                <TableHead>{t("admin:feedback.category")}</TableHead>
-                <TableHead>{t("admin:feedback.name")}</TableHead>
-                <TableHead>{t("admin:feedback.email")}</TableHead>
-                <TableHead>{t("admin:feedback.message")}</TableHead>
-                <TableHead>{t("admin:feedback.createdAt")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {result.items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <FeedbackStatusSelect
-                      lang={lang}
-                      feedbackId={item.id}
-                      initialStatus={item.status}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{t(`admin:category.${item.category}`)}</Badge>
-                  </TableCell>
-                  <TableCell>{item.name}</TableCell>
-                  <TableCell>
-                    <a
-                      href={`mailto:${item.email}`}
-                      className="text-sm underline-offset-4 hover:underline"
-                    >
-                      {item.email}
-                    </a>
-                  </TableCell>
-                  <TableCell className="max-w-md truncate" title={item.message}>
-                    {item.message}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatTimestamp(item.createdAt, lang)}
-                  </TableCell>
+          <div className="rounded-md border">
+            <Table className="min-w-[900px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("admin:feedback.status")}</TableHead>
+                  <TableHead>{t("admin:feedback.category")}</TableHead>
+                  <TableHead>{t("admin:feedback.name")}</TableHead>
+                  <TableHead>{t("admin:feedback.email")}</TableHead>
+                  <TableHead>{t("admin:feedback.message")}</TableHead>
+                  <TableHead>{t("admin:feedback.createdAt")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {result.items.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell>
+                      <FeedbackStatusSelect
+                        lang={lang}
+                        feedbackId={item.id}
+                        initialStatus={item.status}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{t(`admin:category.${item.category}`)}</Badge>
+                    </TableCell>
+                    <TableCell>{item.name}</TableCell>
+                    <TableCell>
+                      <a
+                        href={`mailto:${item.email}`}
+                        className="text-sm underline-offset-4 hover:underline"
+                      >
+                        {item.email}
+                      </a>
+                    </TableCell>
+                    <TableCell className="max-w-md truncate" title={item.message}>
+                      {item.message}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatTimestamp(item.createdAt, lang)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
 
           <Pagination
             basePath={`/${lang}/admin/feedback`}

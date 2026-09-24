@@ -85,9 +85,11 @@ export function AiSettingField({
           {t("admin:ai.reset")}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {t("admin:ai.defaultValue")}: <code>{setting.fallback}</code>
-      </p>
+      {(setting.source === "database" || reset) && (
+        <p className="text-xs text-muted-foreground">
+          {t("admin:ai.defaultValue")}: <code>{setting.fallback}</code>
+        </p>
+      )}
     </div>
   );
 }

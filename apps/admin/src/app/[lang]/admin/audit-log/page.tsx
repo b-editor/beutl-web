@@ -66,43 +66,45 @@ export default async function Page(props: {
         <p className="text-sm text-muted-foreground">{t("admin:auditLog.noResults")}</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("admin:auditLog.action")}</TableHead>
-                <TableHead>{t("admin:auditLog.userId")}</TableHead>
-                <TableHead>{t("admin:auditLog.details")}</TableHead>
-                <TableHead>{t("admin:auditLog.ipAddress")}</TableHead>
-                <TableHead>{t("admin:auditLog.createdAt")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {result.items.map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell className="font-mono text-xs">{log.action}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {log.userId ? (
-                      <Link
-                        href={`/${lang}/admin/users/${log.userId}`}
-                        className="hover:underline"
-                      >
-                        {log.userId}
-                      </Link>
-                    ) : (
-                      "-"
-                    )}
-                  </TableCell>
-                  <TableCell className="max-w-md truncate" title={log.details || ""}>
-                    {log.details || "-"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{log.ipAddress || "-"}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatTimestamp(log.createdAt, lang)}
-                  </TableCell>
+          <div className="rounded-md border">
+            <Table className="min-w-[900px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("admin:auditLog.action")}</TableHead>
+                  <TableHead>{t("admin:auditLog.userId")}</TableHead>
+                  <TableHead>{t("admin:auditLog.details")}</TableHead>
+                  <TableHead>{t("admin:auditLog.ipAddress")}</TableHead>
+                  <TableHead>{t("admin:auditLog.createdAt")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {result.items.map((log) => (
+                  <TableRow key={log.id}>
+                    <TableCell className="font-mono text-xs">{log.action}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {log.userId ? (
+                        <Link
+                          href={`/${lang}/admin/users/${log.userId}`}
+                          className="hover:underline"
+                        >
+                          {log.userId}
+                        </Link>
+                      ) : (
+                        "-"
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-md truncate" title={log.details || ""}>
+                      {log.details || "-"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{log.ipAddress || "-"}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatTimestamp(log.createdAt, lang)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
 
           <Pagination
             basePath={`/${lang}/admin/audit-log`}

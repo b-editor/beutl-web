@@ -1,4 +1,5 @@
 import { getTranslation, type Translator } from "@beutl/i18n";
+import { HelpPopover } from "@/components/admin/help-popover";
 import { formatNumber } from "@/lib/format";
 import type {
   AiUsageDistribution,
@@ -164,15 +165,28 @@ export async function AiUsageDistributionSection({
 
   return (
     <section className="flex flex-col gap-3">
-      <div>
+      <div className="flex items-center gap-1">
         <h2 className="text-lg font-semibold">
           {t("admin:ai.usage.distribution.title")}
         </h2>
-        <p className="text-sm text-muted-foreground">
-          {t("admin:ai.usage.distribution.description", {
+        <HelpPopover lang={lang} title={t("admin:ai.usage.distribution.title")}>
+          <p>{t("admin:ai.usage.distribution.description", {
             limit: formatNumber(monthlyUsageLimit, lang),
-          })}
-        </p>
+          })}</p>
+          <p>{t("admin:ai.usage.distribution.scope", {
+            measured: formatNumber(measuredCount, lang),
+            accounts: formatNumber(accountCount, lang),
+            stale: formatNumber(distribution.staleCount, lang),
+            withoutPeriod: formatNumber(distribution.withoutPeriodCount, lang),
+          })}</p>
+          <p>{t("admin:ai.usage.distribution.censoredNote")}</p>
+          <p>{t("admin:ai.usage.distribution.midPeriodNote")}</p>
+          {distribution.purchasedCreditHolders > 0 && (
+            <p>{t("admin:ai.usage.distribution.purchasedNote", {
+              holders: formatNumber(distribution.purchasedCreditHolders, lang),
+            })}</p>
+          )}
+        </HelpPopover>
       </div>
 
       {measuredCount === 0 ? (
@@ -237,23 +251,10 @@ export async function AiUsageDistributionSection({
       )}
 
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-        <p>
-          {t("admin:ai.usage.distribution.scope", {
-            measured: formatNumber(measuredCount, lang),
-            accounts: formatNumber(accountCount, lang),
-            stale: formatNumber(distribution.staleCount, lang),
-            withoutPeriod: formatNumber(distribution.withoutPeriodCount, lang),
-          })}
-        </p>
-        <p>{t("admin:ai.usage.distribution.censoredNote")}</p>
-        <p>{t("admin:ai.usage.distribution.midPeriodNote")}</p>
-        {distribution.purchasedCreditHolders > 0 && (
-          <p>
-            {t("admin:ai.usage.distribution.purchasedNote", {
-              holders: formatNumber(distribution.purchasedCreditHolders, lang),
-            })}
-          </p>
-        )}
+        <p>{t("admin:ai.usage.distribution.scopeSummary", {
+          measured: formatNumber(measuredCount, lang),
+          accounts: formatNumber(accountCount, lang),
+        })}</p>
         {distribution.truncated && (
           <p className="text-destructive">
             {t("admin:ai.usage.distribution.truncatedNote", {

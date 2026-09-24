@@ -19,54 +19,30 @@ import {
   AiOfferCardsFallback,
 } from "./economics";
 import { AllowanceDigest, AllowanceDigestFallback } from "./digest";
-import { AiTabs } from "./tabs";
+import { HelpPopover } from "@/components/admin/help-popover";
 import {
   getAiModelCatalog,
   getAiOperationModels,
   getAiSettings,
   getUnusableImageModels,
   getUnusableVideoModels,
-  getStorageMultipartInterventions,
-  getStorageUploadInterventions,
-  getTopUpCheckoutInterventions,
-  getPackagePaymentRefundInterventions,
 } from "./queries";
-import { StorageMultipartInterventions, StorageUploadInterventions } from "./storage-interventions";
-import { TopUpResolutionInterventions } from "./topup-resolution-interventions";
-import { PackagePaymentRefundInterventions } from "./package-payment-refund-interventions";
-import { fetchPaginated, parsePageParam } from "@/lib/pagination";
-import { Pagination } from "@/components/admin/pagination";
 import type { AiOperationModelSnapshot } from "@/lib/ai-configuration-changes";
-
-const REFUND_INTERVENTION_PAGE_SIZE = 25;
 
 // Show administrators the latest value immediately after a setting change.
 export const dynamic = "force-dynamic";
 
 export default async function Page(props: {
   params: Promise<{ lang: string }>;
-  searchParams: Promise<{ page?: string | string[] }>;
 }) {
   await requireAdmin();
   const { lang } = await props.params;
-  const { page } = await props.searchParams;
   const { t } = await getTranslation(lang);
-  const [settings, registeredModels, catalog, storageInterventions, storageUploadInterventions, topUpInterventions, packagePaymentRefundPage] =
+  const [settings, registeredModels, catalog] =
     await Promise.all([
       getAiSettings(),
       getAiOperationModels(),
       getAiModelCatalog(),
-      getStorageMultipartInterventions(),
-      getStorageUploadInterventions(),
-      getTopUpCheckoutInterventions(),
-      fetchPaginated(
-        (pageNumber) => getPackagePaymentRefundInterventions(
-          pageNumber,
-          REFUND_INTERVENTION_PAGE_SIZE,
-        ),
-        parsePageParam(page),
-        REFUND_INTERVENTION_PAGE_SIZE,
-      ),
     ]);
   const monthlyUsageLimit = settings.getMonthlyUsageLimit();
   // An operation with nothing registered still offers the built-in model, and
@@ -163,78 +139,14 @@ export default async function Page(props: {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
+      <div className="flex items-center gap-1">
         <h1 className="text-2xl font-bold">{t("admin:ai.title")}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t("admin:ai.description")}
-        </p>
+        <HelpPopover lang={lang} title={t("admin:ai.title")}>
+          <p>{t("admin:ai.description")}</p>
+          <p>{t("admin:ai.models.description")}</p>
+          <p>{t("admin:ai.billingUnitsHelp")}</p>
+        </HelpPopover>
       </div>
-
-      <AiTabs lang={lang} />
-
-      <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div>
-          <h2 className="text-lg font-semibold">
-            {t("admin:ai.interventions.multipart.title")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("admin:ai.interventions.multipart.description")}
-          </p>
-        </div>
-        <StorageMultipartInterventions
-          lang={lang}
-          rows={storageInterventions.map((row) => ({
-            ...row,
-            interventionAt: row.interventionAt!,
-          }))}
-        />
-      </section>
-      <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div>
-          <h2 className="text-lg font-semibold">
-            {t("admin:ai.interventions.upload.title")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("admin:ai.interventions.upload.description")}
-          </p>
-        </div>
-        <StorageUploadInterventions
-          lang={lang}
-          rows={storageUploadInterventions.map((row) => ({
-            ...row,
-            completionInterventionAt: row.completionInterventionAt!,
-            completionState: row.completionState,
-          }))}
-        />
-      </section>
-      <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div>
-          <h2 className="text-lg font-semibold">
-            {t("admin:ai.interventions.topUp.title")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("admin:ai.interventions.topUp.description")}
-          </p>
-        </div>
-        <TopUpResolutionInterventions lang={lang} rows={topUpInterventions} />
-      </section>
-      <section className="flex flex-col gap-3 rounded-lg border p-4">
-        <div>
-          <h2 className="text-lg font-semibold">{t("admin:ai.interventions.packagePayment.title")}</h2>
-          <p className="text-sm text-muted-foreground">{t("admin:ai.interventions.packagePayment.description")}</p>
-        </div>
-        <PackagePaymentRefundInterventions
-          lang={lang}
-          rows={packagePaymentRefundPage.result.items}
-        />
-        <Pagination
-          basePath={`/${lang}/admin/ai`}
-          currentPage={packagePaymentRefundPage.currentPage}
-          totalPages={packagePaymentRefundPage.totalPages}
-          previousLabel={t("admin:common.previousPage")}
-          nextLabel={t("admin:common.nextPage")}
-        />
-      </section>
 
       {/* The allowance and every operation's models are committed together by
           one save bar: saving an allowance before the model it was raised for
@@ -250,13 +162,13 @@ export default async function Page(props: {
       >
         <div className="flex flex-col gap-8">
           <section className="flex flex-col gap-3">
-            <div>
+            <div className="flex items-center gap-1">
               <h2 className="text-lg font-semibold">
                 {t("admin:ai.plan.title")}
               </h2>
-              <p className="text-sm text-muted-foreground">
+              <HelpPopover lang={lang} title={t("admin:ai.plan.title")}>
                 {t("admin:ai.plan.description")}
-              </p>
+              </HelpPopover>
             </div>
             <Separator />
             <div className="grid gap-3 lg:grid-cols-2">
@@ -294,24 +206,35 @@ export default async function Page(props: {
           {/* Every model an operation offers, and nothing else: a second place
               to type a model would be a control that silently does nothing once
               a row exists. */}
-          {AI_OPERATIONS.map((operation) => (
-              <AiOperationModels
-                key={operation}
-                lang={lang}
-                operation={operation}
-                title={t(`admin:ai.operation.${operation}`)}
-                warningsByModel={Object.fromEntries(
-                  modelsOf(operation)
-                    .filter((model) =>
-                      unusableVideoModels[operation]?.has(model.modelId)
-                      || unusableImageModels[operation]?.has(model.modelId),
-                    )
-                    .map((model) => [
-                      model.modelId,
-                      t("admin:ai.models.unsupportedByProvider"),
-                    ]),
-                )}
-              />
+          {(["image", "audio", "video"] as const).map((group) => (
+            <section key={group} className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+              <h2 className="text-lg font-semibold">{t(`admin:ai.group.${group}`)}</h2>
+              {AI_OPERATIONS.filter((operation) =>
+                group === "image"
+                  ? operation.startsWith("image.")
+                  : group === "audio"
+                    ? operation.startsWith("audio.") || operation.startsWith("subtitle.")
+                    : operation.startsWith("video."),
+              ).map((operation) => (
+                <AiOperationModels
+                  key={operation}
+                  lang={lang}
+                  operation={operation}
+                  title={t(`admin:ai.operation.${operation}`)}
+                  warningsByModel={Object.fromEntries(
+                    modelsOf(operation)
+                      .filter((model) =>
+                        unusableVideoModels[operation]?.has(model.modelId)
+                        || unusableImageModels[operation]?.has(model.modelId),
+                      )
+                      .map((model) => [
+                        model.modelId,
+                        t("admin:ai.models.unsupportedByProvider"),
+                      ]),
+                  )}
+                />
+              ))}
+            </section>
           ))}
         </div>
       </AiConfigurationForm>

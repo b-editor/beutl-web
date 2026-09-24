@@ -5,8 +5,10 @@
     "feedback": "フィードバック",
     "ai": "AI",
     "storage": "ストレージ",
+    "payments": "決済対応",
     "auditLog": "監査ログ",
-    "signOut": "サインアウト"
+    "signOut": "サインアウト",
+    "toggleSidebar": "サイドバーを開閉"
   },
   "dashboard": {
     "title": "管理ダッシュボード",
@@ -129,15 +131,16 @@
   },
   "ai": {
     "title": "AI 設定",
-    "description": "各 AI 機能が使うモデルと、実際のプロバイダー原価の何%を使用ユニットとして消費するかを設定します。実行中のジョブは開始時の換算率と割合で精算されます。",
+    "description": "モデルと、プロバイダー実費に対する使用ユニットの消費率を設定します。実行中のジョブには開始時の設定を適用します。",
+    "billingUnitsHelp": "文字起こしは開始した1分ごと、字幕翻訳は開始した1,000文字ごと、動画は1秒ごとに計算します。",
     "model": "モデル",
     "price": "使用ユニット",
     "monthlyUsageLimit": "月間割当 (ユニット)",
     "providerUsdPerUsageUnit": "1 使用ユニットあたりのプロバイダー原価 (USD)",
     "models": {
       "title": "選べるモデル",
-      "description": "利用者はリクエストごとにモデルを選びます。実際のプロバイダー原価にモデルごとの割合を掛けて使用ユニットを精算します。指定がないときは既定のモデルで実行されます。",
-      "emptyDescription": "未登録のため、この操作は下の組み込みモデルで実行します。登録するとそちらに置き換わります。",
+      "description": "利用者はモデルを選べます。未指定時は既定モデルを使用します。",
+      "emptyDescription": "未登録。組み込みモデルを使用します。",
       "modelId": "モデル ID",
       "provider": "プロバイダー",
       "displayName": "表示名",
@@ -173,6 +176,11 @@
       "settings": "設定",
       "usage": "利用状況",
       "jobs": "ジョブ"
+    },
+    "group": {
+      "image": "画像",
+      "audio": "音声・字幕",
+      "video": "動画"
     },
     "jobs": {
       "title": "AI ジョブ一覧",
@@ -220,24 +228,24 @@
         "forbidden": "この操作を実行する権限がありません。"
       },
       "multipart": {
-        "title": "マルチパートクリーンアップの管理者対応",
-        "description": "再試行回数の上限に達したか、R2 バインディングを利用できず中止できなかったリモートアップロードです。終端化するとリモートハンドルのリスクを承認し、同じキーのすべてのハンドルが解決した後にのみオブジェクトのクリーンアップを再開します。",
-        "empty": "対応が必要なマルチパートクリーンアップはありません。",
+        "title": "クリーンアップ",
+        "description": "中止できなかったリモートアップロードです。終端化は未確認のリモートハンドルのリスクを承認する操作です。同じキーの全ハンドルが解決するまでオブジェクトのクリーンアップは再開されません。",
+        "empty": "対応が必要な項目はありません。",
         "terminalizeConfirm": "リモート側の証跡がないことを承認し、このハンドルを終端状態として保持します。続行しますか？",
         "terminalize": "リスクを承認して終端化"
       },
       "upload": {
-        "title": "アップロード完了処理の管理者対応",
+        "title": "アップロード完了",
         "description": "結果が不明なマルチパート完了処理を、管理者が確認できるよう保持しています。",
-        "empty": "対応が必要なアップロード完了処理はありません。",
+        "empty": "対応が必要な項目はありません。",
         "resumeConfirm": "完了処理を再開し、プロバイダーへの新しい試行を許可しますか？",
         "terminalizeConfirm": "結果が不明なこのアップロード完了処理を終端化しますか？",
         "unknownOutcome": "プロバイダー側の結果はまだ不明です。オブジェクトを確認できるようになると、レシートの復旧を自動的に続行します。オブジェクトが存在しないだけでは元の完了処理が終了したと証明できないため、再試行・中止・終端化・アカウント削除は利用できません。"
       },
       "topUp": {
-        "title": "トップアップ決済の管理者対応",
-        "description": "試行レコードが存在しない孤立した復旧行も含みます。既知の返金がすべて完了し、管理者の証跡がある場合のみ終端化できます。",
-        "empty": "対応が必要なトップアップ決済はありません。",
+        "title": "トップアップ",
+        "description": "孤立した復旧行を含みます。判明している返金がすべて完了し、証跡がある場合のみ終端化できます。",
+        "empty": "対応が必要な項目はありません。",
         "attempt": "試行",
         "owner": "所有者",
         "attemptPresent": "試行レコードあり",
@@ -248,9 +256,9 @@
         "terminalizeAfterRefundProof": "返金証跡を確認して終端化"
       },
       "packagePayment": {
-        "title": "パッケージ決済返金の管理者対応",
-        "description": "再試行を使い切って停止したパッケージ返金です。再開時には Stripe の正規識別情報を再確認してから返金を試行します。",
-        "empty": "対応が必要なパッケージ返金はありません。",
+        "title": "パッケージ返金",
+        "description": "停止したパッケージ返金です。再開時に Stripe の正規識別情報を再確認します。",
+        "empty": "対応が必要な項目はありません。",
         "attempt": "返金試行",
         "paymentIntent": "PaymentIntent",
         "operatorRequired": "管理者の対応が必要です",
@@ -277,9 +285,9 @@
     },
     "plan": {
       "title": "サブスクリプション",
-      "description": "Pro 契約 1 件あたりに毎月付与される使用ユニット数です。変更は以降に開始される処理と残量表示に適用され、消費済みの量はそのまま残ります。",
-      "digest": "実績: 中央値 {{median}} ユニット、90 パーセンタイル {{p90}} ユニット、割当を使い切ったのは {{exhausted}}% ({{accounts}} 件を集計)。",
-      "digestEmpty": "割当の妥当性を判断できるだけの実績がまだありません。",
+      "description": "Pro 契約の月間割当です。変更は新規処理と残量表示に適用され、消費済み量は変わりません。",
+      "digest": "利用実績: 中央値 {{median}} / P90 {{p90}} ユニット、上限到達 {{exhausted}}%（{{accounts}} 件）",
+      "digestEmpty": "割当を判断できる利用実績はまだありません。",
       "digestLoading": "実績を集計しています…",
       "digestLink": "詳しく見る",
       "unaffordableTitle": "月間割当だけでは実行できない機能があります",
@@ -341,7 +349,7 @@
     },
     "usage": {
       "title": "AI 利用状況",
-      "description": "指定した期間の AI ジョブと使用ユニットの集計です。個別の残高調整は各ユーザーの詳細ページから行えます。",
+      "description": "選択期間の AI ジョブと使用ユニットの集計です。残高調整はユーザー詳細から行えます。",
       "since": "{{- timestamp}} 以降",
       "range": {
         "24h": "過去 24 時間",
@@ -383,7 +391,7 @@
       "adminUsageAdjustment": "月間使用量の増減",
       "distribution": {
         "title": "月間割当の消費分布",
-        "description": "現在の請求期間における、アカウントごとの消費量の分布です。期間に関係なく現在の状態を示すため、上の期間フィルタでは変わりません。現在の割当は {{limit}} ユニットです。",
+        "description": "アカウントごとの現行請求期間の消費量です。期間フィルタでは変わりません。月間割当は {{limit}} ユニットです。",
         "median": "中央値 (ユニット)",
         "p90": "90 パーセンタイル (ユニット)",
         "exhausted": "割当を使い切った割合",
@@ -398,9 +406,10 @@
           "upTo99": "99% まで",
           "exhausted": "使い切り"
         },
-        "projected": "期間終了時点の見込みは中央値 {{p50}} ユニット、90 パーセンタイル {{p90}} ユニットです ({{sampleSize}} 件から算出)。",
+        "projected": "期間末予測: 中央値 {{p50}} / P90 {{p90}} ユニット（{{sampleSize}} 件）",
         "scope": "対象 {{measured}} 件 / 全アカウント {{accounts}} 件。請求期間が終了済みの {{stale}} 件と、サブスクリプションを持ったことがない {{withoutPeriod}} 件は除外しています。",
-        "noData": "集計できるアカウントがありません (請求期間が終了済みの {{stale}} 件と、サブスクリプションを持ったことがない {{withoutPeriod}} 件は除外しています)。",
+        "scopeSummary": "集計対象 {{measured}} / {{accounts}} 件",
+        "noData": "対象データがありません（期間終了 {{stale}} 件、契約なし {{withoutPeriod}} 件）。",
         "censoredNote": "割当を使い切るとそこで消費が止まるため、上位のパーセンタイルは実際の需要より小さく出ます。使い切った割合と併せて読んでください。",
         "midPeriodNote": "請求期間の途中にいるアカウントは必ず低く出ます。見込みの行は経過時間から換算した推定値で、経過が 10% 未満のアカウントは除いています。",
         "purchasedNote": "追加クレジットを保有しているアカウントが {{holders}} 件あります。割当を超える需要の目安になります。",
@@ -415,17 +424,17 @@
     },
     "operation": {
       "image.generate": "画像生成",
-      "image.edit.remove_background": "画像編集: 背景除去",
-      "image.edit.upscale": "画像編集: アップスケール",
-      "image.edit.restyle": "画像編集: スタイル変更",
-      "image.edit.remove_object": "画像編集: オブジェクト除去",
-      "image.edit.outpaint": "画像編集: 拡張",
-      "audio.transcribe": "文字起こし (1 分単位・切り上げ)",
-      "subtitle.translate": "字幕翻訳 (1,000 文字単位・切り上げ)",
-      "video.generate": "動画生成 (1 秒あたり)",
-      "video.edit": "動画編集 (1 秒あたり)",
-      "video.extend": "動画延長 (1 秒あたり)",
-      "video.motion": "モーション適用 (1 秒あたり)"
+      "image.edit.remove_background": "背景除去",
+      "image.edit.upscale": "アップスケール",
+      "image.edit.restyle": "スタイル変更",
+      "image.edit.remove_object": "オブジェクト除去",
+      "image.edit.outpaint": "拡張",
+      "audio.transcribe": "文字起こし",
+      "subtitle.translate": "字幕翻訳",
+      "video.generate": "動画生成",
+      "video.edit": "動画編集",
+      "video.extend": "動画延長",
+      "video.motion": "モーション適用"
     },
     "form": {
       "unsaved": "未保存",
@@ -437,10 +446,81 @@
       "saveConflict": "AI モデル設定が別の管理者によって変更されました。再読み込みして内容を確認してから保存してください。"
     }
   },
+  "payments": {
+    "title": "決済・返金対応"
+  },
   "storage": {
+    "files": {
+      "title": "ファイル管理"
+    },
+    "usagePage": {
+      "title": "契約状況"
+    },
+    "migration": {
+      "title": "一括移動",
+      "description": "ファイルを小分けに移動し、途中で停止・再開できます。"
+    },
+    "interventions": {
+      "title": "アップロード対応"
+    },
+    "stores": {
+      "primary": "主な保存先",
+      "fallback": "予備の保存先",
+      "none": "未設定",
+      "configError": "保存先の設定を読み込めませんでした: {{error}}"
+    },
+    "search": {
+      "placeholder": "ファイル名・所有者のメールアドレスで検索",
+      "submit": "検索",
+      "order": "表示順",
+      "oldestFirst": "古い順",
+      "newestFirst": "新しい順"
+    },
+    "columns": {
+      "name": "ファイル",
+      "owner": "所有者",
+      "size": "サイズ",
+      "createdAt": "作成日",
+      "location": "保存先",
+      "actions": "操作"
+    },
+    "location": {
+      "missing": "見つかりません",
+      "unknown": "確認できません: {{error}}"
+    },
+    "providers": {
+      "r2": "Cloudflare R2",
+      "s3": "S3"
+    },
+    "moveTo": "{{provider}} に移動",
+    "moving": "移動中…",
+    "noResults": "ファイルが見つかりません",
+    "messages": {
+      "invalidInput": "入力が不正です。",
+      "notConfigured": "移動先が設定されていません。",
+      "moved": "{{name}} を {{from}} から {{to}} に移動しました。",
+      "movedSourceLeft": "{{name}} を {{to}} にコピーしました。元の {{from}} は削除されていません。",
+      "alreadyThere": "{{name}} はすでに {{to}} にあります。",
+      "missing": "{{name}} の保存先が見つかりません。",
+      "failed": "ファイルの移動に失敗しました。",
+      "unauthenticated": "もう一度ログインしてください。",
+      "forbidden": "この操作を実行する権限がありません。"
+    },
+    "batch": {
+      "destination": "移動先",
+      "keepRunning": "続けて処理する",
+      "run": "移動を開始",
+      "running": "移動中…",
+      "stop": "この回で停止",
+      "reset": "最初からやり直す",
+      "progress": "確認 {{scanned}} 件 · 移動 {{moved}} 件 · 移動済み {{alreadyThere}} 件 · 不明 {{missing}} 件 · 失敗 {{failed}} 件",
+      "done": "すべて確認しました。",
+      "paused": "一時停止しました。再開できます。",
+      "noProgress": "進行しなかったため停止しました。",
+      "failures": "失敗したファイル"
+    },
     "plan": "ストレージ契約",
     "activeSubscriptions": "有効なストレージ契約",
-    "activeSubscriptionsHint": "ティア別の契約数。期間フィルタには依存しません。",
     "byTier": "ティア別",
     "tier": "ティア",
     "count": "契約数",
@@ -466,6 +546,7 @@
     "OTHER": "その他"
   },
   "common": {
+    "helpFor": "{{name}}の説明を表示",
     "loading": "読み込み中",
     "error": "エラー",
     "forbidden": "このアカウントには管理者権限がありません。",

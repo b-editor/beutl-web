@@ -7,7 +7,6 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth-guard";
 import { formatNumber, formatTimestamp } from "@/lib/format";
 import { firstSearchParam } from "@/lib/search-params";
-import { AiTabs } from "../tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +71,6 @@ export default async function Page(props: {
       <div>
         <h1 className="text-2xl font-bold">{t("admin:ai.jobs.title")}</h1>
       </div>
-      <AiTabs lang={lang} />
       <form method="get" className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 lg:grid-cols-6">
         <label className="flex flex-col gap-1 text-xs font-medium">
           {t("admin:ai.jobs.kind")}
