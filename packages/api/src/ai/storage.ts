@@ -250,6 +250,9 @@ async function settleCompletedAiJobUsage({
     !usesActualCostBilling || providerCostUsd === undefined
       ? null
       : providerCostUsdToMicros(providerCostUsd);
+  const costMissing = usesActualCostBilling && providerCostUsd === undefined;
+  const gatewayVideoEstimate = costMissing && job.kind === "video" &&
+    job.provider === "vercel-gateway";
   // The optional legacy INT4 audit field can overflow while the actual usage
   // charge is valid. Omit the audit value, not the settlement.
   await settleUsage({
@@ -264,8 +267,8 @@ async function settleCompletedAiJobUsage({
           end: subscription.currentPeriodEnd,
         }
       : { start: null, end: null },
-    estimatedProviderCost: usesActualCostBilling && job.kind === "video" &&
-      job.provider === "vercel-gateway" && providerCostUsd === undefined,
+    estimatedProviderCost: gatewayVideoEstimate,
+    finalEstimatedProviderCost: costMissing && !gatewayVideoEstimate,
     allowActualCorrection,
     prisma,
   });

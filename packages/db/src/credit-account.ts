@@ -62,6 +62,7 @@ export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
 export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
 export const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
 export const AI_USAGE_ESTIMATE_PENDING_KIND = "usage_estimate_pending";
+export const AI_USAGE_ESTIMATE_FINAL_KIND = "usage_estimate_final";
 export const AI_USAGE_ACTUAL_CORRECTION_KIND = "usage_actual_correction";
 const MAX_REVERSAL_CAS_ATTEMPTS = 8;
 
@@ -905,6 +906,7 @@ export async function settleUsage({
   monthlyUsageLimit,
   currentUsagePeriod,
   estimatedProviderCost = false,
+  finalEstimatedProviderCost = false,
   allowActualCorrection = false,
   prisma,
 }: {
@@ -916,6 +918,8 @@ export async function settleUsage({
   currentUsagePeriod: UsagePeriod;
   /** The Gateway video cost was unavailable, so this first settlement is an estimate. */
   estimatedProviderCost?: boolean;
+  /** Actual cost is unavailable and this provider has no deferred lookup path. */
+  finalEstimatedProviderCost?: boolean;
   /** Correct a succeeded Gateway video previously settled to its estimate. */
   allowActualCorrection?: boolean;
   prisma?: PrismaTransaction;
@@ -926,6 +930,9 @@ export async function settleUsage({
     true,
   );
   assertNonNegativeInteger(monthlyUsageLimit, "monthlyUsageLimit");
+  if (estimatedProviderCost && finalEstimatedProviderCost) {
+    throw new RangeError("An AI usage estimate cannot be both pending and final");
+  }
   if (
     providerCostUsdMicros !== null &&
     (!Number.isSafeInteger(providerCostUsdMicros) ||
@@ -1116,10 +1123,16 @@ export async function settleUsage({
         },
       });
     }
-    if (!correctingEstimate && estimatedProviderCost) {
-      if (job.kind !== "video" || job.provider !== "vercel-gateway" ||
-          providerCostUsdMicros !== null) {
-        throw new Error("Only an unpriced Gateway video may be marked as estimated");
+    const estimateKind = estimatedProviderCost
+      ? AI_USAGE_ESTIMATE_PENDING_KIND
+      : finalEstimatedProviderCost
+        ? AI_USAGE_ESTIMATE_FINAL_KIND
+        : null;
+    if (!correctingEstimate && estimateKind) {
+      if (providerCostUsdMicros !== null || job.usageUnitUsdMicros === null ||
+          job.reservedUsageUnits === null ||
+          (estimatedProviderCost && (job.kind !== "video" || job.provider !== "vercel-gateway"))) {
+        throw new Error("Only an actual-cost job without provider cost may be marked as estimated");
       }
       await tx.creditTransaction.create({
         data: {
@@ -1129,7 +1142,7 @@ export async function settleUsage({
           usageAmount: 0,
           usagePeriodStart: transactionPeriod.start,
           usagePeriodEnd: transactionPeriod.end,
-          kind: AI_USAGE_ESTIMATE_PENDING_KIND,
+          kind: estimateKind,
           aiJobId,
         },
       });

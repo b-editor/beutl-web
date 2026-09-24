@@ -1516,6 +1516,9 @@ describe("v3 AI endpoints contract", () => {
         usageUnits: 4.224,
         resultFileId: body.fileId,
       });
+      expect(state.creditTransactions.some((transaction) =>
+        transaction.aiJobId === job.id && transaction.kind === "usage_estimate_final"
+      )).toBe(true);
       expect(state.files.size).toBe(1);
       expect(vi.mocked(generateImage)).toHaveBeenCalledWith({
         prompt: "test",

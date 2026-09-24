@@ -109,6 +109,35 @@ describe("settling an AI reservation to actual provider cost", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps a successful unpriced image and marks its final charge as estimated", async () => {
+    const job = await reserve(20);
+    const settlement = {
+      userId: USER_ID,
+      aiJobId: job.id,
+      actualAmount: 15,
+      providerCostUsdMicros: null,
+      finalEstimatedProviderCost: true,
+      monthlyUsageLimit: 20,
+      currentUsagePeriod: PERIOD,
+    };
+
+    await settleUsage(settlement);
+    await settleUsage(settlement);
+
+    expect(memory.state.aiJobs.get(job.id)).toMatchObject({
+      status: "succeeded",
+      usageUnits: 15,
+      providerCostUsdMicros: null,
+    });
+    expect((await getCreditAccount({ userId: USER_ID })).monthlyUsageUsed).toBe(15);
+    expect(memory.state.creditTransactions.filter((row) =>
+      row.aiJobId === job.id && row.kind === "usage_estimate_final"
+    )).toHaveLength(1);
+    expect(memory.state.creditTransactions.some((row) =>
+      row.aiJobId === job.id && row.kind === "usage_estimate_pending"
+    )).toBe(false);
+  });
+
   it("corrects an estimated Gateway video after its actual charge arrives", async () => {
     const job = await createAiJob({
       userId: USER_ID,
