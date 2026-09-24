@@ -15,7 +15,7 @@ import { MAX_AI_AUDIO_DURATION_SECONDS } from "../ai/audio-metadata";
 import {
   AI_IMAGE_ASPECT_RATIOS, AI_IMAGE_BACKGROUNDS, AI_MAX_IMAGE_REFERENCES,
   AI_VIDEO_ASPECT_RATIOS, AI_VIDEO_RESOLUTIONS,
-  isAiVideoDurationSeconds, MAX_MODEL_ID_LENGTH,
+  isAiVideoDurationSeconds, MAX_AI_VIDEO_DURATION_SECONDS, MAX_MODEL_ID_LENGTH,
 } from "@beutl/core";
 
 // Which model the question is about. Omitting it asks about the operation's
@@ -47,6 +47,17 @@ const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
     resolution: z.enum(AI_VIDEO_RESOLUTIONS).optional(),
     generateAudio: z.boolean().optional(),
     aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).optional(),
+    model,
+  }).strict(),
+  z.object({
+    operation: z.literal("video.edit"),
+    // An edit inherits its source's measured (possibly fractional) length.
+    durationSeconds: z.number().finite().positive().max(MAX_AI_VIDEO_DURATION_SECONDS),
+    model,
+  }).strict(),
+  z.object({
+    operation: z.enum(["video.extend", "video.motion"]),
+    durationSeconds: z.number().refine(isAiVideoDurationSeconds),
     model,
   }).strict(),
   z.object({
