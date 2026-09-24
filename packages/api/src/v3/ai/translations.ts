@@ -18,7 +18,7 @@ import {
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
   parseJsonWithBodyLimit,
 } from "../../ai/upload-limits";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
@@ -361,7 +361,12 @@ const app = new Hono().post("/", async (c) => {
       aiJobId: job.id,
       error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
     });
-    if (!(error instanceof AiProviderError)) {
+    if (error instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: "subtitle.translate", jobId: job.id,
+        provider: selectedModel.provider, model: selectedModel.modelId, error,
+      });
+    } else {
       console.error("Failed to persist AI translation result", error);
     }
     return { ok: false as const, errorCode: aiProviderFailureCode(error), status: 500 as const };

@@ -21,7 +21,7 @@ import {
   aiProviderFailureCode,
   transcribeAudio,
 } from "../../ai/openrouter";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import {
@@ -313,6 +313,13 @@ const app = new Hono().post("/", async (c) => {
       error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.transcription),
     });
     if (err instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: "audio.transcribe",
+        jobId: job.id,
+        provider: selectedModel.provider,
+        model: selectedModel.modelId,
+        error: err,
+      });
       return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
         status: 500,
       });
