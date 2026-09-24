@@ -411,7 +411,9 @@
         "scopeSummary": "{{measured}} of {{accounts}} accounts included",
         "noData": "No eligible data ({{stale}} ended periods, {{withoutPeriod}} without a subscription).",
         "censoredNote": "Consumption stops once the allowance runs out, so the upper percentiles understate real demand. Read them together with the exhaustion rate.",
+        "censoredSummary": "Demand after the allowance is exhausted is unobserved, so P90 can be understated.",
         "midPeriodNote": "An account partway through its period always reads low. The extrapolated figures scale by elapsed time and leave out accounts less than 10% into their period.",
+        "midPeriodSummary": "Mid-period usage runs low; the period-end projection is an estimate.",
         "purchasedNote": "{{holders}} accounts hold purchased credits, which indicates demand beyond the allowance.",
         "truncatedNote": "More accounts exist than the {{limit}} scanned, so these figures cover only the first {{limit}}."
       }

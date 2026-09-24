@@ -251,10 +251,16 @@ export async function AiUsageDistributionSection({
       )}
 
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-        <p>{t("admin:ai.usage.distribution.scopeSummary", {
-          measured: formatNumber(measuredCount, lang),
-          accounts: formatNumber(accountCount, lang),
-        })}</p>
+        {measuredCount > 0 && (
+          <>
+            <p>{t("admin:ai.usage.distribution.scopeSummary", {
+              measured: formatNumber(measuredCount, lang),
+              accounts: formatNumber(accountCount, lang),
+            })}</p>
+            <p>{t("admin:ai.usage.distribution.censoredSummary")}</p>
+            <p>{t("admin:ai.usage.distribution.midPeriodSummary")}</p>
+          </>
+        )}
         {distribution.truncated && (
           <p className="text-destructive">
             {t("admin:ai.usage.distribution.truncatedNote", {
