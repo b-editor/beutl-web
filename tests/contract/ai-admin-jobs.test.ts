@@ -118,4 +118,26 @@ describe("admin AI job list", () => {
       .toBe("estimated");
     expect(adminAiJobBillingState({ ...base, providerCostUsdMicros: 0 })).toBe("actual");
   });
+
+  it("keeps equal-timestamp pages stable and distinguishes pending from legacy", async () => {
+    const pending = await reserve("user-a");
+    await markAiJobSucceeded({ jobId: pending.id });
+    const legacy = await createAiJob({
+      userId: "user-b", kind: "stt", provider: "openrouter",
+      status: "running", usageUnits: 5,
+    });
+    await markAiJobSucceeded({ jobId: legacy.id });
+
+    const orderedIds = [pending.id, legacy.id].sort().reverse();
+    const page1 = await listAdminAiJobs({ limit: 1 });
+    const page2 = await listAdminAiJobs({ limit: 1, cursor: page1.nextCursor! });
+    expect([page1.jobs[0].id, page2.jobs[0].id]).toEqual(orderedIds);
+    expect(page2.nextCursor).toBeNull();
+    expect((await listAdminAiJobs({ limit: 50, billing: "pending" })).jobs.map((job) => job.id))
+      .toEqual([pending.id]);
+    expect((await listAdminAiJobs({ limit: 50, billing: "legacy" })).jobs.map((job) => job.id))
+      .toEqual([legacy.id]);
+    expect((await listAdminAiJobs({ limit: 50, billing: "pending", status: "failed" })).jobs)
+      .toEqual([]);
+  });
 });
