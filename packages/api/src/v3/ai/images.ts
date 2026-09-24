@@ -59,7 +59,7 @@ import {
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
 import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
 import {
   getAiIdempotencyKeyHash,
   getAiRequestIdentity,
@@ -528,7 +528,12 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
         aiJobId: job.id,
         error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageGeneration),
       });
-      if (!(err instanceof AiProviderError)) {
+      if (err instanceof AiProviderError) {
+        reportAiProviderFailure({
+          operation: "image.generate", jobId: job.id,
+          provider: selectedModel.provider, model: selectedModel.modelId, error: err,
+        });
+      } else {
         console.error("Failed to generate an AI image", err);
       }
       return {
@@ -857,6 +862,10 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
         error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageEdit),
       });
       if (err instanceof AiProviderError) {
+        reportAiProviderFailure({
+          operation: `image.edit.${editTask}`, jobId: job.id,
+          provider: selectedModel.provider, model: selectedModel.modelId, error: err,
+        });
         return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
           status: 500,
         });

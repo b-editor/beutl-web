@@ -9,6 +9,7 @@ import {
   AiProviderError,
   aiProviderFailureCode,
   aiJobFailureMessage,
+  reportAiProviderFailure,
   publicAiJobError,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
@@ -789,6 +790,12 @@ export async function generateImageAction(
       aiJobId: job.id,
       error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
     });
+    if (error instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: "image.generate", jobId: job.id,
+        provider: selectedModel.provider, model: selectedModel.modelId, error,
+      });
+    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -940,6 +947,12 @@ export async function editImageAction(
       aiJobId: job.id,
       error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageEdit),
     });
+    if (error instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: `image.edit.${task}`, jobId: job.id,
+        provider: selectedModel.provider, model: selectedModel.modelId, error,
+      });
+    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -1062,6 +1075,12 @@ export async function transcribeAction(
       aiJobId: job.id,
       error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.transcription),
     });
+    if (error instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: "audio.transcribe", jobId: job.id,
+        provider: selectedModel.provider, model: selectedModel.modelId, error,
+      });
+    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -1221,6 +1240,12 @@ export async function translateAction(
       aiJobId: job.id,
       error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
     });
+    if (error instanceof AiProviderError) {
+      reportAiProviderFailure({
+        operation: "subtitle.translate", jobId: job.id,
+        provider: selectedModel.provider, model: selectedModel.modelId, error,
+      });
+    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }

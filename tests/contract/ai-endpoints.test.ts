@@ -2777,8 +2777,12 @@ describe("v3 AI endpoints contract", () => {
 
     it("returns 500 aiProviderError and refunds reserved usage when OpenRouter fails", async () => {
       await activatePro();
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       vi.mocked(transcribeAudio).mockRejectedValue(
-        new AiProviderError("OpenRouter request failed: 500"),
+        new AiProviderError("private audio must not appear in logs", {
+          httpStatus: 502,
+          execution: "unknown",
+        }),
       );
 
       const form = new FormData();
@@ -2797,7 +2801,7 @@ describe("v3 AI endpoints contract", () => {
         error: "AI transcription failed",
       });
       expect(JSON.stringify([...state.aiJobs.values()][0])).not.toContain(
-        "OpenRouter request failed: 500",
+        "private audio must not appear in logs",
       );
       expect(
         state.creditTransactions.some(
@@ -2811,6 +2815,14 @@ describe("v3 AI endpoints contract", () => {
       ).toBe(true);
       const account = await getCreditAccount({ userId: USER_ID });
       expect(account.monthlyUsageUsed).toBe(0);
+      expect(warning).toHaveBeenCalledWith("AI provider request failed", expect.objectContaining({
+        operation: "audio.transcribe",
+        provider: "openrouter",
+        httpStatus: 502,
+        execution: "unknown",
+      }));
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private audio must not appear in logs");
+      warning.mockRestore();
     });
   });
 
