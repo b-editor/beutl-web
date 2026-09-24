@@ -109,6 +109,45 @@ describe("POST /api/v3/user/ai-availability", () => {
     expect(await eightSeconds.json()).toEqual({ available: false });
   });
 
+  it.each(["video.edit", "video.extend", "video.motion"])(
+    "uses the requested duration for %s before the desktop upload",
+    async (operation) => {
+      await activatePro();
+      await consumeUsage({
+        userId: USER_ID,
+        amount: 470,
+        monthlyUsageLimit: 500,
+        usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+        aiJobId: `availability-${operation}`,
+      });
+      await upsertAiOperationModel({
+        operation,
+        modelId: "test/source-video",
+        priceUnits: 5,
+        displayName: null,
+        sortOrder: 0,
+        enabled: true,
+        updatedBy: "admin-1",
+      });
+
+      const fourSeconds = await checkAvailability({
+        operation,
+        durationSeconds: 4,
+        model: "test/source-video",
+      });
+      const eightSeconds = await checkAvailability({
+        operation,
+        durationSeconds: 8,
+        model: "test/source-video",
+      });
+
+      expect(fourSeconds.status).toBe(200);
+      expect(await fourSeconds.json()).toEqual({ available: true });
+      expect(eightSeconds.status).toBe(200);
+      expect(await eightSeconds.json()).toEqual({ available: false });
+    },
+  );
+
   it("uses the requested character count for the authoritative preflight", async () => {
     await activatePro();
     await consumeUsage({

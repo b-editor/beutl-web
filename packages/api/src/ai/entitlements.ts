@@ -8,6 +8,7 @@ import {
   usagePeriodsEqual,
 } from "@beutl/db";
 import {
+  aiBillingUnitOf,
   ceilUsageUnits,
   USAGE_UNIT_MICROS_PER_UNIT,
   usageUnitsForProviderCost,
@@ -336,7 +337,7 @@ export async function canStartAiOperation(
   const selectedModel = catalog.resolve(operation, request.model);
   if (!selectedModel) return false;
   if (options.rawImageInputs && providerRequiresPreparedOutpaintCanvas(selectedModel.provider, operation)) return false;
-  const quantity = operation === "video.generate"
+  const quantity = aiBillingUnitOf(operation) === "second"
     ? request.durationSeconds
     : operation === "audio.transcribe"
       ? request.durationSeconds === undefined

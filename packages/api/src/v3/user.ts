@@ -50,6 +50,11 @@ const aiAvailabilityRequestSchema = z.discriminatedUnion("operation", [
     model,
   }).strict(),
   z.object({
+    operation: z.enum(["video.edit", "video.extend", "video.motion"]),
+    durationSeconds: z.number().refine(isAiVideoDurationSeconds),
+    model,
+  }).strict(),
+  z.object({
     operation: z.literal("audio.transcribe"),
     durationSeconds: z.number().finite().positive().max(
       MAX_AI_AUDIO_DURATION_SECONDS,
