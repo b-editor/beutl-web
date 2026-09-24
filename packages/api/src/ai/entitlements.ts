@@ -338,7 +338,9 @@ export async function canStartAiOperation(
   if (!selectedModel) return false;
   if (options.rawImageInputs && providerRequiresPreparedOutpaintCanvas(selectedModel.provider, operation)) return false;
   const quantity = aiBillingUnitOf(operation) === "second"
-    ? request.durationSeconds
+    ? operation === "video.edit" && request.durationSeconds !== undefined
+      ? Math.ceil(request.durationSeconds)
+      : request.durationSeconds
     : operation === "audio.transcribe"
       ? request.durationSeconds === undefined
         ? undefined

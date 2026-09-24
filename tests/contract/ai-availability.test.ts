@@ -148,6 +148,48 @@ describe("POST /api/v3/user/ai-availability", () => {
     },
   );
 
+  it("rounds a fractional video-edit source length up like the upload reservation", async () => {
+    await activatePro();
+    await consumeUsage({
+      userId: USER_ID,
+      amount: 480,
+      monthlyUsageLimit: 500,
+      usagePeriod: { start: PERIOD_START, end: PERIOD_END },
+      aiJobId: "fractional-edit-availability-setup",
+    });
+    await upsertAiOperationModel({
+      operation: "video.edit",
+      modelId: "test/fractional-edit",
+      priceUnits: 5,
+      displayName: null,
+      sortOrder: 0,
+      enabled: true,
+      updatedBy: "admin-1",
+    });
+
+    const fits = await checkAvailability({
+      operation: "video.edit",
+      durationSeconds: 3.2,
+      model: "test/fractional-edit",
+    });
+    const exceeds = await checkAvailability({
+      operation: "video.edit",
+      durationSeconds: 4.2,
+      model: "test/fractional-edit",
+    });
+    const tooLong = await checkAvailability({
+      operation: "video.edit",
+      durationSeconds: 60.1,
+      model: "test/fractional-edit",
+    });
+
+    expect(fits.status).toBe(200);
+    expect(await fits.json()).toEqual({ available: true });
+    expect(exceeds.status).toBe(200);
+    expect(await exceeds.json()).toEqual({ available: false });
+    expect(tooLong.status).toBe(400);
+  });
+
   it("uses the requested character count for the authoritative preflight", async () => {
     await activatePro();
     await consumeUsage({
