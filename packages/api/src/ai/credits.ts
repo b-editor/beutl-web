@@ -135,7 +135,11 @@ export async function aiJobStateForIdempotencyKey({
     return "collectable";
   }
   if (existing.status !== "succeeded") return "settled";
-  return existing.updatedAt.getTime() >
+  if (!existing.resultFile) return "settled";
+  // Billing reconciliation rotates updatedAt (and may set it in the future),
+  // so it cannot measure how long a successful output has been recoverable.
+  // A missing output offers nothing to recover and must not reopen parsing.
+  return existing.resultFile.createdAt.getTime() >
       now.getTime() - COLLECTABLE_AFTER_SUCCESS_MILLISECONDS
     ? "collectable"
     : "settled";
