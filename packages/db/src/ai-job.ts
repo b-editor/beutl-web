@@ -1260,10 +1260,19 @@ export async function claimAiStorageCleanupForDeletion({
       leaseToken: nextLeaseToken,
       notBefore: cleanup.notBefore,
     };
-    if (!cleanup?.aiJobId) {
+    const dropCleanupIfLiveFile = async () => {
       const liveFile = await tx.file.findFirst({ where: { objectKey }, select: { id: true } });
-      if (liveFile) {
-        await tx.aiStorageCleanup.deleteMany({ where: { objectKey, leaseToken: nextLeaseToken } });
+      if (!liveFile) return false;
+      const dropped = await tx.aiStorageCleanup.deleteMany({
+        where: { objectKey, leaseToken: nextLeaseToken },
+      });
+      if (dropped.count !== 1) {
+        throw new Error(`AI cleanup ${objectKey} claim changed before preserving a live File`);
+      }
+      return true;
+    };
+    if (!cleanup?.aiJobId) {
+      if (await dropCleanupIfLiveFile()) {
         return { claimed: true as const, shouldDeleteObject: false as const };
       }
       return {
@@ -1278,6 +1287,9 @@ export async function claimAiStorageCleanupForDeletion({
       select: { id: true, userId: true, resultFileId: true },
     });
     if (!job?.resultFileId) {
+      if (await dropCleanupIfLiveFile()) {
+        return { claimed: true as const, shouldDeleteObject: false as const };
+      }
       return {
         claimed: true as const,
         shouldDeleteObject: true as const,
@@ -1299,6 +1311,9 @@ export async function claimAiStorageCleanupForDeletion({
       },
     });
     if (!output) {
+      if (await dropCleanupIfLiveFile()) {
+        return { claimed: true as const, shouldDeleteObject: false as const };
+      }
       return {
         claimed: true as const,
         shouldDeleteObject: true as const,
@@ -1306,9 +1321,17 @@ export async function claimAiStorageCleanupForDeletion({
       };
     }
     if (output.objectKey !== objectKey) {
-      throw new Error(
-        `AI cleanup ${objectKey} does not own output ${output.objectKey}`,
-      );
+      // A duplicate completion can leave an outbox for a superseded object
+      // after another attempt has already committed the job's result. Never
+      // delete a key owned by a live File, but do reclaim an unreferenced key.
+      if (await dropCleanupIfLiveFile()) {
+        return { claimed: true as const, shouldDeleteObject: false as const };
+      }
+      return {
+        claimed: true as const,
+        shouldDeleteObject: true as const,
+        cleanup: claimedCleanup,
+      };
     }
 
     const shared =
@@ -1420,12 +1443,9 @@ export async function finalizeReconciledAiStorageCleanup({
           },
           select: { id: true, objectKey: true },
         });
-        if (output && output.objectKey !== objectKey) {
-          throw new Error(
-            `AI cleanup ${objectKey} does not own output ${output.objectKey}`,
-          );
-        }
-        if (output) {
+        // The current result can differ from the superseded key that this
+        // outbox just deleted. Only unlink the result owned by this cleanup.
+        if (output?.objectKey === objectKey) {
           const unlinked = await tx.aiJob.updateMany({
             where: {
               id: job.id,

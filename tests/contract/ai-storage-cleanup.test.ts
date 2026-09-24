@@ -12,6 +12,7 @@ import {
   reconcileAiStorageCleanups,
   setR2BucketProvider,
 } from "@beutl/api";
+import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 describe("AI storage object cleanup", () => {
   beforeEach(() => {
@@ -230,6 +231,78 @@ describe("AI storage object cleanup", () => {
     });
     expect(deleted).toEqual(["ai/image/job-1/partial"]);
     expect(row.objectKey).toBe("");
+  });
+
+  async function supersededOutputCleanup(
+    hasLiveFileAtStaleKey: boolean,
+    resultFileId: string | null = "current-file",
+  ) {
+    const now = new Date("2026-09-24T08:00:00.000Z");
+    const memory = createInMemoryPrisma();
+    const staleKey = "ai/video/job/stale-output";
+    const currentKey = "ai/video/job/current-output";
+    const deleteObject = vi.fn(async () => undefined);
+    setDbProvider(async () => memory.prisma as never);
+    setR2BucketProvider(() => ({ delete: deleteObject }) as never);
+
+    const job = await memory.prisma.aiJob.create({
+      data: { userId: "u", kind: "video", provider: "vercel-gateway", status: "succeeded", usageUnits: 1 },
+    } as never);
+    memory.state.files.set("current-file", {
+      id: "current-file", userId: "u", objectKey: currentKey, name: "current.mp4",
+      size: 1, mimeType: "video/mp4", visibility: "PRIVATE", sha256: null,
+      createdAt: now, updatedAt: now,
+    });
+    if (resultFileId) {
+      await memory.prisma.aiJob.update({ where: { id: job.id }, data: { resultFileId } });
+    }
+    if (hasLiveFileAtStaleKey) {
+      memory.state.files.set("other-file", {
+        id: "other-file", userId: "u", objectKey: staleKey, name: "shared.mp4",
+        size: 1, mimeType: "video/mp4", visibility: "PRIVATE", sha256: null,
+        createdAt: now, updatedAt: now,
+      });
+    }
+    await memory.prisma.aiStorageCleanup.create({
+      data: { objectKey: staleKey, aiJobId: job.id, state: "cleanup", notBefore: now },
+    } as never);
+    return { memory, now, jobId: job.id, staleKey, deleteObject };
+  }
+
+  it("deletes a superseded AI output without unlinking the current result", async () => {
+    const { memory, now, jobId, staleKey, deleteObject } = await supersededOutputCleanup(false);
+
+    await expect(reconcileAiStorageCleanups(now)).resolves.toEqual({ inspected: 1, deleted: 1, errors: 0 });
+    expect(deleteObject).toHaveBeenCalledExactlyOnceWith(staleKey);
+    expect(memory.state.aiStorageCleanups.has(staleKey)).toBe(false);
+    expect(memory.state.aiJobs.get(jobId)?.resultFileId).toBe("current-file");
+    expect(memory.state.files.has("current-file")).toBe(true);
+  });
+
+  it("keeps a live object when a stale AI cleanup names its key", async () => {
+    const { memory, now, jobId, staleKey, deleteObject } = await supersededOutputCleanup(true);
+
+    await expect(reconcileAiStorageCleanups(now)).resolves.toEqual({ inspected: 1, deleted: 0, errors: 0 });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(memory.state.aiStorageCleanups.has(staleKey)).toBe(false);
+    expect(memory.state.aiJobs.get(jobId)?.resultFileId).toBe("current-file");
+    expect(memory.state.files.has("other-file")).toBe(true);
+  });
+
+  it.each([
+    ["no result pointer", null],
+    ["a missing result File", "missing-file"],
+  ])("keeps a live cleanup key when the job has %s", async (_description, resultFileId) => {
+    const { memory, now, jobId, staleKey, deleteObject } = await supersededOutputCleanup(
+      true,
+      resultFileId,
+    );
+
+    await expect(reconcileAiStorageCleanups(now)).resolves.toEqual({ inspected: 1, deleted: 0, errors: 0 });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(memory.state.aiStorageCleanups.has(staleKey)).toBe(false);
+    expect(memory.state.aiJobs.get(jobId)?.resultFileId).toBe(resultFileId);
+    expect(memory.state.files.has("other-file")).toBe(true);
   });
 
   it("allows only one claimant for an identical cleanup snapshot", async () => {
