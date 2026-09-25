@@ -82,10 +82,10 @@ describe("package payment refund interventions", () => {
     expect(formatAmount(1234, "usd", "en")).toBe("$12.34");
   });
 
-  it("wires the admin page to pagination and the selected-attempt reconciler", async () => {
+  it("wires the payments page to pagination and the selected-attempt reconciler", async () => {
     const [pageSource, actionSource] = await Promise.all([
       readFile(
-        new URL("../../apps/admin/src/app/[lang]/admin/ai/page.tsx", import.meta.url),
+        new URL("../../apps/admin/src/app/[lang]/admin/payments/page.tsx", import.meta.url),
         "utf8",
       ),
       readFile(

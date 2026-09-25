@@ -11,6 +11,7 @@ import { useTranslation } from "@beutl/ui/i18n-client";
 import { Badge } from "@beutl/ui/ui/badge";
 import { formatNumber } from "@/lib/format";
 import { useAiSettingField } from "./settings-form";
+import { HelpPopover } from "@/components/admin/help-popover";
 
 // The cards run on the client so the plan's per-unit rate follows the monthly
 // allowance field while it is being edited. Stripe prices come from the server.
@@ -84,7 +85,15 @@ function OfferCard({
     <div className="flex flex-col gap-1 rounded-lg border bg-card p-4">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">{t(titleKey)}</span>
-        <PriceSourceBadge state={state} t={t} />
+        <div className="flex items-center gap-1">
+          <PriceSourceBadge state={state} t={t} />
+          {(detail || state.stripePriceId) && (
+            <HelpPopover lang={lang} title={t(titleKey)}>
+              {detail && <p>{detail}</p>}
+              {state.stripePriceId && <code className="break-all text-xs">{state.stripePriceId}</code>}
+            </HelpPopover>
+          )}
+        </div>
       </div>
       {offer ? (
         <>
@@ -101,14 +110,6 @@ function OfferCard({
                 ),
               })}
             </div>
-          )}
-          {detail && (
-            <div className="text-xs text-muted-foreground">{detail}</div>
-          )}
-          {state.stripePriceId && (
-            <code className="truncate text-xs text-muted-foreground">
-              {state.stripePriceId}
-            </code>
           )}
           {state.mismatch && (
             <p className="text-xs text-destructive">

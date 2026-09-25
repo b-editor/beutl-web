@@ -43,34 +43,36 @@ export default async function Page(props: {
         <p className="text-sm text-muted-foreground">{t("admin:users.noResults")}</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("admin:users.name")}</TableHead>
-                <TableHead>{t("admin:users.email")}</TableHead>
-                <TableHead>{t("admin:users.createdAt")}</TableHead>
-                <TableHead className="text-right">{t("admin:users.actions")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {result.items.map((user) => (
-                <TableRow key={user.id}>
-                  <TableCell className="font-medium">{user.name || "-"}</TableCell>
-                  <TableCell>{user.email}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatTimestamp(user.createdAt, lang)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/${lang}/admin/users/${user.id}`}>
-                        {t("admin:users.detail")}
-                      </Link>
-                    </Button>
-                  </TableCell>
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("admin:users.name")}</TableHead>
+                  <TableHead>{t("admin:users.email")}</TableHead>
+                  <TableHead>{t("admin:users.createdAt")}</TableHead>
+                  <TableHead className="text-right">{t("admin:users.actions")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {result.items.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell className="font-medium">{user.name || "-"}</TableCell>
+                    <TableCell>{user.email}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatTimestamp(user.createdAt, lang)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href={`/${lang}/admin/users/${user.id}`}>
+                          {t("admin:users.detail")}
+                        </Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
 
           <Pagination
             basePath={`/${lang}/admin/users`}

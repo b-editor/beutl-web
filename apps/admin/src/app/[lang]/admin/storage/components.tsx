@@ -219,10 +219,6 @@ export function StorageBatchPanel({
 
   return (
     <section className="flex flex-col gap-3 rounded-lg border p-4">
-      <div>
-        <h2 className="font-semibold">{t("admin:storage.batch.heading")}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{t("admin:storage.batch.description")}</p>
-      </div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
           {t("admin:storage.batch.destination")}

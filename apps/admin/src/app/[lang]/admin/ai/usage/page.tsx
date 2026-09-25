@@ -1,4 +1,3 @@
-import { formatBytes, STORAGE_PLAN_TIERS } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import Link from "next/link";
 import {
@@ -13,10 +12,10 @@ import { requireAdmin } from "@/lib/auth-guard";
 import { formatNumber, formatSignedNumber, formatTimestamp } from "@/lib/format";
 import { firstSearchParam } from "@/lib/search-params";
 import { parseAiUsageRange } from "@/lib/ai-usage-range";
-import { AiTabs } from "../tabs";
 import { AiUsageRangeFilter } from "./filter";
 import { AiUsageDistributionSection } from "./distribution";
 import { getAiUsageReport, TOP_USER_LIMIT } from "./queries";
+import { HelpPopover } from "@/components/admin/help-popover";
 
 // Every visit must reflect the ledger as it stands right now.
 export const dynamic = "force-dynamic";
@@ -56,17 +55,6 @@ export default async function Page(props: {
       value: formatNumber(report.totals.purchasedCredits, lang),
       hint: t("admin:ai.usage.purchasedCreditsHint"),
     },
-    {
-      label: t("admin:storage.activeSubscriptions"),
-      value: formatNumber(
-        STORAGE_PLAN_TIERS.reduce(
-          (total, tier) => total + (report.storageSubscriptions[tier.id] ?? 0),
-          0,
-        ),
-        lang,
-      ),
-      hint: t("admin:storage.activeSubscriptionsHint"),
-    },
   ];
 
   const balances = [
@@ -105,14 +93,15 @@ export default async function Page(props: {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
+      <div className="flex items-center gap-1">
         <h1 className="text-2xl font-bold">{t("admin:ai.usage.title")}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t("admin:ai.usage.description")}
-        </p>
+        <HelpPopover lang={lang} title={t("admin:ai.usage.title")}>
+          <p>{t("admin:ai.usage.description")}</p>
+          {stats.map((stat) => (
+            <p key={stat.label}><span className="font-medium">{stat.label}:</span> {stat.hint}</p>
+          ))}
+        </HelpPopover>
       </div>
-
-      <AiTabs lang={lang} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <AiUsageRangeFilter lang={lang} range={range} />
@@ -129,18 +118,17 @@ export default async function Page(props: {
           <div key={stat.label} className="rounded-lg border bg-card p-6">
             <div className="text-2xl font-bold">{stat.value}</div>
             <div className="text-sm font-medium">{stat.label}</div>
-            <div className="mt-1 text-xs text-muted-foreground">{stat.hint}</div>
           </div>
         ))}
       </div>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">
-          {t("admin:ai.usage.balanceTitle")}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {t("admin:ai.usage.balanceDescription")}
-        </p>
+        <div className="flex items-center gap-1">
+          <h2 className="text-lg font-semibold">{t("admin:ai.usage.balanceTitle")}</h2>
+          <HelpPopover lang={lang} title={t("admin:ai.usage.balanceTitle")}>
+            {t("admin:ai.usage.balanceDescription")}
+          </HelpPopover>
+        </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {balances.map((item) => (
             <div key={item.label} className="rounded-lg border bg-card p-4">
@@ -149,41 +137,6 @@ export default async function Page(props: {
             </div>
           ))}
         </div>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">
-          {t("admin:storage.activeSubscriptions")}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {t("admin:storage.activeSubscriptionsHint")}
-        </p>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("admin:storage.tier")}</TableHead>
-              <TableHead className="text-right">
-                {t("admin:storage.quota")}
-              </TableHead>
-              <TableHead className="text-right">
-                {t("admin:storage.count")}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {STORAGE_PLAN_TIERS.map((tier) => (
-              <TableRow key={tier.id}>
-                <TableCell>{t(`admin:storage.tiers.${tier.id}`)}</TableCell>
-                <TableCell className="text-right">
-                  {formatBytes(tier.quotaBytes)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {formatNumber(report.storageSubscriptions[tier.id] ?? 0, lang)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
       </section>
 
       <AiUsageDistributionSection
@@ -316,12 +269,12 @@ export default async function Page(props: {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">
-          {t("admin:ai.usage.adjustmentTitle")}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {t("admin:ai.usage.adjustmentDescription")}
-        </p>
+        <div className="flex items-center gap-1">
+          <h2 className="text-lg font-semibold">{t("admin:ai.usage.adjustmentTitle")}</h2>
+          <HelpPopover lang={lang} title={t("admin:ai.usage.adjustmentTitle")}>
+            {t("admin:ai.usage.adjustmentDescription")}
+          </HelpPopover>
+        </div>
         <div className="grid gap-4 sm:grid-cols-3">
           {adjustments.map((item) => (
             <div key={item.label} className="rounded-lg border bg-card p-4">

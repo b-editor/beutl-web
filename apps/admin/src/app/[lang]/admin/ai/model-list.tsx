@@ -499,13 +499,11 @@ export function AiOperationModels({
 
       <CollapsibleContent className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
+        {models.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            {models.length === 0
-              ? t("admin:ai.models.emptyDescription")
-              : t("admin:ai.models.description")}
+            {t("admin:ai.models.emptyDescription")}
           </p>
-        </div>
+        )}
         {!adding && (
           <Button
             size="sm"

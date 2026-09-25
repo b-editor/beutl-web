@@ -71,7 +71,7 @@ export async function resumePackagePaymentRefundInterventionAction(lang: string,
       now,
       secretKey: secret,
     });
-    revalidatePath("/[lang]/admin/ai", "page");
+    revalidatePath("/[lang]/admin/payments", "page");
     if (outcome.status === "refunded") {
       return {
         success: true,
