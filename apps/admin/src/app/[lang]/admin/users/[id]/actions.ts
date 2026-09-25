@@ -22,6 +22,7 @@ import {
   setMonthlyUsageUsedByAdmin,
   startRetryableTransaction,
   resumeTopUpCheckoutIntervention,
+  revokeAllUserSessions,
   terminalizeTopUpCheckoutIntervention,
 } from "@beutl/db";
 import {
@@ -452,6 +453,40 @@ export async function setAiMonthlyUsage({
     }
     revalidatePath("/[lang]/admin/users/[id]", "page");
 
+    return { success: true };
+  });
+}
+
+// 乗っ取りの疑いなどで、Web とデスクトップアプリの両方からサインアウトさせる。
+export async function revokeUserSessions({
+  userId,
+}: {
+  userId: string;
+}): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    // Server Action の引数は型注釈が実行時に消えるため、値を検証してから永続化する。
+    if (typeof userId !== "string" || userId.length === 0) {
+      return { success: false, message: "Invalid user id" };
+    }
+    // 自分に使うと、この操作の直後に管理画面から締め出される。
+    if (userId === session.user.id) {
+      return { success: false, message: "You cannot revoke your own sessions here" };
+    }
+
+    const result = await startRetryableTransaction(async (tx) => {
+      if (!(await existsUserById({ id: userId, prisma: tx }))) return null;
+      const revoked = await revokeAllUserSessions({ userId, prisma: tx });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.userSessionsRevoked,
+        details: `userId: ${userId}, sessions: ${revoked.sessions}, refreshTokenFamilies: ${revoked.refreshTokenFamilies}`,
+        prisma: tx,
+      });
+      return revoked;
+    });
+    if (!result) return { success: false, message: "User not found" };
+
+    revalidatePath("/[lang]/admin/users/[id]", "page");
     return { success: true };
   });
 }

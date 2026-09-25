@@ -8,7 +8,8 @@
     "payments": "Payments",
     "auditLog": "Audit log",
     "signOut": "Sign out",
-    "toggleSidebar": "Toggle sidebar"
+    "toggleSidebar": "Toggle sidebar",
+    "packages": "Packages"
   },
   "dashboard": {
     "title": "Admin dashboard",
@@ -16,11 +17,16 @@
     "openFeedbackCount": "Open feedback",
     "auditLogCount": "Audit log entries",
     "recentAuditLogs": "Recent audit log",
-    "viewAll": "View all"
+    "viewAll": "View all",
+    "needsAttention": "Queues needing attention",
+    "storageMultipartQueue": "Multipart cleanup",
+    "storageUploadQueue": "Upload completion",
+    "activeSubscriptions": "Active subscriptions",
+    "activeSubscriptionsNote": "Subscriptions whose Stripe status is active and whose period has not ended. Holds from refunds or disputes are not subtracted."
   },
   "users": {
     "title": "Users",
-    "searchPlaceholder": "Search by email or name",
+    "searchPlaceholder": "Search by email, name, or user ID",
     "search": "Search",
     "noResults": "No users found",
     "id": "ID",
@@ -96,7 +102,39 @@
     "aiTopUpInterventionEvidence": "Payment evidence",
     "aiTopUpInterventionError": "Last error",
     "aiTopUpInterventionSuccess": "Top-up recovery updated",
-    "aiTopUpInterventionFailed": "Failed to update top-up recovery"
+    "aiTopUpInterventionFailed": "Failed to update top-up recovery",
+    "emailVerified": "Email verification",
+    "verified": "Verified",
+    "unverified": "Unverified",
+    "stripeCustomer": "Stripe customer",
+    "links": {
+      "auditLog": "Activity by this user",
+      "aiJobs": "AI jobs",
+      "packages": "Packages"
+    },
+    "security": {
+      "title": "Sign-in and sessions",
+      "signInMethods": "Sign-in methods",
+      "passkeyCount": "{{count}} passkey(s)",
+      "emailOnly": "Email link only",
+      "passkeys": "Passkeys",
+      "deviceType": "Type",
+      "backedUp": "synced",
+      "lastUsedAt": "Last used",
+      "webSessions": "Web sessions",
+      "lastActiveAt": "Last updated",
+      "userAgent": "User agent",
+      "expiresAt": "Expires",
+      "desktopSessions": "Desktop app sign-ins",
+      "signedInAt": "Signed in",
+      "active": "Active",
+      "revokedAt": "Revoked ({{date}})",
+      "revoke": "Revoke all sessions",
+      "revokeConfirmTitle": "Revoke all sessions?",
+      "revokeConfirmDescription": "This deletes the web sessions and revokes the desktop app sign-ins. The web may keep working for up to 5 minutes, and the desktop app until its issued access token expires. The action is recorded in the audit log.",
+      "revokeSuccess": "Sessions revoked",
+      "revokeFailed": "Failed to revoke sessions"
+    }
   },
   "feedback": {
     "title": "Feedback",
@@ -449,7 +487,21 @@
     }
   },
   "payments": {
-    "title": "Payments and refunds"
+    "title": "Payments and refunds",
+    "subscriptions": {
+      "title": "Subscriptions",
+      "description": "A copy of subscriptions as observed from Stripe. Change subscriptions or issue refunds from the Stripe dashboard.",
+      "plan": "Plan",
+      "allPlans": "All plans",
+      "user": "User",
+      "periodEnd": "Period end",
+      "updatedAt": "Last observed",
+      "cancelScheduled": "Cancellation scheduled",
+      "planName": {
+        "pro": "AI Pro",
+        "storage": "Storage"
+      }
+    }
   },
   "storage": {
     "files": {
@@ -556,5 +608,52 @@
     "cancel": "Cancel",
     "previousPage": "Previous page",
     "nextPage": "Next page"
+  },
+  "packages": {
+    "title": "Packages",
+    "searchPlaceholder": "Search by package name, display name, or owner email",
+    "allStates": "All states",
+    "published": "Visibility",
+    "owner": "Owner",
+    "releaseCount": "Releases",
+    "libraryCount": "In libraries",
+    "updatedAt": "Updated",
+    "overview": "Overview",
+    "webSite": "Website",
+    "tags": "Tags",
+    "shortDescription": "Short description",
+    "description": "Description",
+    "pricing": "Pricing",
+    "interval": "Billing interval",
+    "free": "No prices set (free)",
+    "currency": "Currency",
+    "price": "Price",
+    "fallback": "Default",
+    "releases": "Releases",
+    "version": "Version",
+    "releaseTitle": "Title",
+    "targetVersion": "Target Beutl",
+    "file": "File",
+    "reason": "Reason",
+    "reasonPlaceholder": "Enter a reason (at least {{count}} characters). It is recorded in the audit log.",
+    "moderationNote": "Developers can also change visibility from their dashboard. If a developer republishes a package you unpublished, it shows up in the audit log.",
+    "updateSuccess": "Visibility updated",
+    "updateFailed": "Failed to update visibility",
+    "package": {
+      "publish": "Publish",
+      "unpublish": "Unpublish",
+      "publishConfirmTitle": "Publish this package?",
+      "publishConfirmDescription": "It will appear in the store and anyone will be able to install it.",
+      "unpublishConfirmTitle": "Unpublish this package?",
+      "unpublishConfirmDescription": "It will disappear from the store and libraries and can no longer be installed, including by users who purchased it."
+    },
+    "release": {
+      "publish": "Publish",
+      "unpublish": "Unpublish",
+      "publishConfirmTitle": "Publish this release?",
+      "publishConfirmDescription": "This version becomes available for installs and updates.",
+      "unpublishConfirmTitle": "Unpublish this release?",
+      "unpublishConfirmDescription": "This version is no longer offered for installs or updates. Existing installations are not removed."
+    }
   }
 }

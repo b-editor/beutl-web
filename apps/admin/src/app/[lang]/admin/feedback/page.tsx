@@ -9,6 +9,7 @@ import { requireAdmin } from "@/lib/auth-guard";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import { firstSearchParam } from "@/lib/search-params";
 import { Pagination } from "@/components/admin/pagination";
+import Link from "next/link";
 
 const PAGE_SIZE = 20;
 
@@ -80,7 +81,18 @@ export default async function Page(props: {
                     <TableCell>
                       <Badge variant="secondary">{t(`admin:category.${item.category}`)}</Badge>
                     </TableCell>
-                    <TableCell>{item.name}</TableCell>
+                    <TableCell>
+                      {item.userId ? (
+                        <Link
+                          href={`/${lang}/admin/users/${item.userId}`}
+                          className="underline-offset-4 hover:underline"
+                        >
+                          {item.name}
+                        </Link>
+                      ) : (
+                        item.name
+                      )}
+                    </TableCell>
                     <TableCell>
                       <a
                         href={`mailto:${item.email}`}
@@ -89,8 +101,12 @@ export default async function Page(props: {
                         {item.email}
                       </a>
                     </TableCell>
-                    <TableCell className="max-w-md truncate" title={item.message}>
-                      {item.message}
+                    <TableCell className="max-w-md align-top">
+                      {/* 一覧では 1 行に収め、開くと全文を読めるようにする。 */}
+                      <details>
+                        <summary className="cursor-pointer truncate">{item.message}</summary>
+                        <p className="mt-2 whitespace-pre-wrap break-words text-sm">{item.message}</p>
+                      </details>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatTimestamp(item.createdAt, lang)}

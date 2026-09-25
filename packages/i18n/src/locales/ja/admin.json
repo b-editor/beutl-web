@@ -8,7 +8,8 @@
     "payments": "決済対応",
     "auditLog": "監査ログ",
     "signOut": "サインアウト",
-    "toggleSidebar": "サイドバーを開閉"
+    "toggleSidebar": "サイドバーを開閉",
+    "packages": "パッケージ"
   },
   "dashboard": {
     "title": "管理ダッシュボード",
@@ -16,11 +17,16 @@
     "openFeedbackCount": "未対応フィードバック",
     "auditLogCount": "監査ログ総数",
     "recentAuditLogs": "最近の監査ログ",
-    "viewAll": "すべて見る"
+    "viewAll": "すべて見る",
+    "needsAttention": "要対応のキュー",
+    "storageMultipartQueue": "マルチパートの後始末",
+    "storageUploadQueue": "アップロード完了処理",
+    "activeSubscriptions": "有効な契約",
+    "activeSubscriptionsNote": "Stripe 上の状態が active で期間内の契約数です。返金・異議による権利停止は差し引いていません。"
   },
   "users": {
     "title": "ユーザー",
-    "searchPlaceholder": "メールアドレスまたは名前で検索",
+    "searchPlaceholder": "メールアドレス・名前・ユーザー ID で検索",
     "search": "検索",
     "noResults": "ユーザーが見つかりません",
     "id": "ID",
@@ -96,7 +102,39 @@
     "aiTopUpInterventionEvidence": "支払い証跡",
     "aiTopUpInterventionError": "最後のエラー",
     "aiTopUpInterventionSuccess": "トップアップ復旧を更新しました",
-    "aiTopUpInterventionFailed": "トップアップ復旧の更新に失敗しました"
+    "aiTopUpInterventionFailed": "トップアップ復旧の更新に失敗しました",
+    "emailVerified": "メール確認",
+    "verified": "確認済み",
+    "unverified": "未確認",
+    "stripeCustomer": "Stripe の顧客",
+    "links": {
+      "auditLog": "このユーザーの操作ログ",
+      "aiJobs": "AI ジョブ",
+      "packages": "公開パッケージ"
+    },
+    "security": {
+      "title": "サインインとセッション",
+      "signInMethods": "サインイン手段",
+      "passkeyCount": "パスキー {{count}} 件",
+      "emailOnly": "メールのリンクのみ",
+      "passkeys": "パスキー",
+      "deviceType": "種類",
+      "backedUp": "同期済み",
+      "lastUsedAt": "最終使用",
+      "webSessions": "Web のセッション",
+      "lastActiveAt": "最終更新",
+      "userAgent": "ユーザーエージェント",
+      "expiresAt": "有効期限",
+      "desktopSessions": "デスクトップアプリのサインイン",
+      "signedInAt": "サインイン日時",
+      "active": "有効",
+      "revokedAt": "失効 ({{date}})",
+      "revoke": "すべてのセッションを失効",
+      "revokeConfirmTitle": "すべてのセッションを失効させますか?",
+      "revokeConfirmDescription": "Web のセッションを削除し、デスクトップアプリのサインインを失効させます。Web は最大 5 分、デスクトップアプリは発行済みアクセストークンの期限まで利用が続くことがあります。操作は監査ログに記録されます。",
+      "revokeSuccess": "セッションを失効させました",
+      "revokeFailed": "セッションの失効に失敗しました"
+    }
   },
   "feedback": {
     "title": "フィードバック",
@@ -449,7 +487,21 @@
     }
   },
   "payments": {
-    "title": "決済・返金対応"
+    "title": "決済・返金対応",
+    "subscriptions": {
+      "title": "サブスクリプション",
+      "description": "Stripe から観測した契約の写しです。契約の変更や返金は Stripe のダッシュボードで行ってください。",
+      "plan": "プラン",
+      "allPlans": "すべてのプラン",
+      "user": "ユーザー",
+      "periodEnd": "期間の終了",
+      "updatedAt": "最終観測",
+      "cancelScheduled": "解約予約あり",
+      "planName": {
+        "pro": "AI Pro",
+        "storage": "ストレージ"
+      }
+    }
   },
   "storage": {
     "files": {
@@ -556,5 +608,52 @@
     "cancel": "キャンセル",
     "previousPage": "前のページ",
     "nextPage": "次のページ"
+  },
+  "packages": {
+    "title": "パッケージ",
+    "searchPlaceholder": "パッケージ名・表示名・所有者のメールで検索",
+    "allStates": "すべての公開状態",
+    "published": "公開状態",
+    "owner": "所有者",
+    "releaseCount": "リリース数",
+    "libraryCount": "ライブラリ登録数",
+    "updatedAt": "更新日時",
+    "overview": "概要",
+    "webSite": "Web サイト",
+    "tags": "タグ",
+    "shortDescription": "短い説明",
+    "description": "説明",
+    "pricing": "価格",
+    "interval": "課金間隔",
+    "free": "価格は設定されていません (無料)",
+    "currency": "通貨",
+    "price": "価格",
+    "fallback": "既定",
+    "releases": "リリース",
+    "version": "バージョン",
+    "releaseTitle": "タイトル",
+    "targetVersion": "対象 Beutl",
+    "file": "ファイル",
+    "reason": "理由",
+    "reasonPlaceholder": "理由を入力してください ({{count}} 文字以上)。監査ログに記録されます。",
+    "moderationNote": "公開状態は開発者もダッシュボードから変更できます。非公開にしたパッケージを開発者が再公開した場合は、監査ログで確認できます。",
+    "updateSuccess": "公開状態を更新しました",
+    "updateFailed": "公開状態の更新に失敗しました",
+    "package": {
+      "publish": "公開する",
+      "unpublish": "非公開にする",
+      "publishConfirmTitle": "このパッケージを公開しますか?",
+      "publishConfirmDescription": "ストアに表示され、誰でもインストールできるようになります。",
+      "unpublishConfirmTitle": "このパッケージを非公開にしますか?",
+      "unpublishConfirmDescription": "ストアとライブラリから見えなくなり、新たにインストールできなくなります。購入済みのユーザーも含みます。"
+    },
+    "release": {
+      "publish": "公開する",
+      "unpublish": "非公開にする",
+      "publishConfirmTitle": "このリリースを公開しますか?",
+      "publishConfirmDescription": "このバージョンをインストール・更新の対象にします。",
+      "unpublishConfirmTitle": "このリリースを非公開にしますか?",
+      "unpublishConfirmDescription": "このバージョンはインストール・更新の対象から外れます。既にインストール済みの環境からは削除されません。"
+    }
   }
 }

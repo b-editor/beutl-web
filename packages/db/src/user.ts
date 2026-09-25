@@ -151,6 +151,8 @@ export async function listUsers({
     query && query.length > 0
       ? {
           OR: [
+            // ID は監査ログや AI ジョブから辿ってきた値をそのまま貼る用途なので完全一致。
+            { id: query },
             {
               email: {
                 contains: query,
@@ -228,7 +230,13 @@ export async function getUserDetail({ userId }: { userId: string }) {
       id: true,
       name: true,
       email: true,
+      emailVerified: true,
       createdAt: true,
+      Customer: {
+        select: {
+          stripeId: true,
+        },
+      },
       // スキーマ上、User のリレーションフィールド名は大文字始まり
       Package: {
         select: {
