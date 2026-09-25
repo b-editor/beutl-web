@@ -16,7 +16,7 @@ export async function getUserSecurityOverview({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  const [accounts, passkeys, sessions, refreshTokenFamilies] = await Promise.all([
+  const [accounts, passkeys, sessions, refreshTokenFamilies, activeRefreshTokenFamilyCount] = await Promise.all([
     db.account.findMany({
       where: { userId },
       select: { id: true, providerId: true, createdAt: true },
@@ -33,7 +33,7 @@ export async function getUserSecurityOverview({
         usedAt: true,
       },
       orderBy: { createdAt: "asc" },
-      take: USER_SECURITY_RELATION_LIMIT,
+      take: USER_SECURITY_RELATION_LIMIT + 1,
     }),
     db.session.findMany({
       where: { userId, expiresAt: { gt: now } },
@@ -54,8 +54,13 @@ export async function getUserSecurityOverview({
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: USER_SECURITY_RELATION_LIMIT + 1,
     }),
+    // 一覧は打ち切るので、失効できるものが残っているかは上限に依らず数える。
+    db.refreshTokenFamily.count({
+      where: { userId, expiresAt: { gt: now }, revokedAt: null },
+    }),
   ]);
   return {
+    activeRefreshTokenFamilyCount,
     accounts,
     passkeys,
     sessions,

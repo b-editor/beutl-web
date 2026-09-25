@@ -1,5 +1,5 @@
-import { getPackageDetailForAdmin } from "@beutl/db";
-import { formatBytes } from "@beutl/core";
+import { ADMIN_PACKAGE_RELEASE_LIMIT, getPackageDetailForAdmin } from "@beutl/db";
+import { formatAmount, formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Button } from "@beutl/ui/ui/button";
@@ -25,6 +25,9 @@ export default async function Page(props: {
   if (!pkg) {
     notFound();
   }
+
+  // 取得は上限より 1 件多い。余分な 1 件は表示せず、打ち切りの判定に使う。
+  const releases = pkg.Release.slice(0, ADMIN_PACKAGE_RELEASE_LIMIT);
 
   return (
     <div className="flex flex-col gap-6">
@@ -127,7 +130,10 @@ export default async function Page(props: {
               {pkg.packagePricing.map((pricing) => (
                 <TableRow key={pricing.id}>
                   <TableCell className="font-mono uppercase">{pricing.currency}</TableCell>
-                  <TableCell className="text-right font-mono">{pricing.price}</TableCell>
+                  <TableCell className="text-right font-mono">
+                    {/* price は Stripe の最小通貨単位。ストアと同じ書式で見せる。 */}
+                    {formatAmount(pricing.price, pricing.currency, lang)}
+                  </TableCell>
                   <TableCell>{pricing.fallback ? "✓" : ""}</TableCell>
                 </TableRow>
               ))}
@@ -138,7 +144,7 @@ export default async function Page(props: {
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:packages.releases")}</h2>
-        {pkg.Release.length === 0 ? (
+        {releases.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("admin:common.empty")}</p>
         ) : (
           <div className="overflow-x-auto">
@@ -155,7 +161,7 @@ export default async function Page(props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pkg.Release.map((release) => (
+                {releases.map((release) => (
                   <TableRow key={release.id}>
                     <TableCell className="font-mono">{release.version}</TableCell>
                     <TableCell>{release.title}</TableCell>
@@ -185,6 +191,11 @@ export default async function Page(props: {
                 ))}
               </TableBody>
             </Table>
+            {pkg._count.Release > ADMIN_PACKAGE_RELEASE_LIMIT && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("admin:users.truncatedNotice", { count: ADMIN_PACKAGE_RELEASE_LIMIT })}
+              </p>
+            )}
           </div>
         )}
       </section>

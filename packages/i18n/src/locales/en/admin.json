@@ -115,7 +115,7 @@
     "security": {
       "title": "Sign-in and sessions",
       "signInMethods": "Sign-in methods",
-      "passkeyCount": "{{count}} passkey(s)",
+      "passkeyCount": "{{value}} passkey(s)",
       "emailOnly": "Email link only",
       "passkeys": "Passkeys",
       "deviceType": "Type",
@@ -500,7 +500,8 @@
       "planName": {
         "pro": "AI Pro",
         "storage": "Storage"
-      }
+      },
+      "currentOnly": "Current period only"
     }
   },
   "storage": {
@@ -645,7 +646,7 @@
       "publishConfirmTitle": "Publish this package?",
       "publishConfirmDescription": "It will appear in the store and anyone will be able to install it.",
       "unpublishConfirmTitle": "Unpublish this package?",
-      "unpublishConfirmDescription": "It will disappear from the store and libraries and can no longer be installed, including by users who purchased it."
+      "unpublishConfirmDescription": "It will disappear from the store and libraries and can no longer be installed, including by users who purchased it. The landing page caches its latest-package cards for up to an hour, so it may still appear there until then."
     },
     "release": {
       "publish": "Publish",
@@ -654,6 +655,8 @@
       "publishConfirmDescription": "This version becomes available for installs and updates.",
       "unpublishConfirmTitle": "Unpublish this release?",
       "unpublishConfirmDescription": "This version is no longer offered for installs or updates. Existing installations are not removed."
-    }
+    },
+    "filteredByOwner": "Filtered by owner.",
+    "clearOwnerFilter": "Clear filter"
   }
 }

@@ -19,6 +19,7 @@ export default async function Page(props: {
   searchParams: Promise<{
     q?: string | string[];
     published?: string | string[];
+    owner?: string | string[];
     page?: string | string[];
   }>;
 }) {
@@ -29,6 +30,9 @@ export default async function Page(props: {
   const publishedFilter = PUBLISHED_FILTERS.find(
     (value) => value === firstSearchParam(searchParams.published),
   );
+  // ユーザー詳細から所有者で絞り込んで開くための ID。検索語とは別に完全一致で扱う。
+  const ownerInput = firstSearchParam(searchParams.owner)?.trim() ?? "";
+  const owner = /^[a-z0-9_-]{1,100}$/i.test(ownerInput) ? ownerInput : undefined;
   const { t } = await getTranslation(lang);
 
   const { result, currentPage, totalPages } = await fetchPaginated(
@@ -36,6 +40,7 @@ export default async function Page(props: {
       listPackagesForAdmin({
         query: q,
         published: publishedFilter === undefined ? undefined : publishedFilter === "published",
+        ownerId: owner,
         page: pageNumber,
         pageSize: PAGE_SIZE,
       }),
@@ -69,8 +74,21 @@ export default async function Page(props: {
           <option value="published">{t("admin:users.publishedValue")}</option>
           <option value="draft">{t("admin:users.draftValue")}</option>
         </select>
+        {owner && <input type="hidden" name="owner" value={owner} />}
         <Button type="submit" variant="outline">{t("admin:users.search")}</Button>
       </form>
+
+      {owner && (
+        <p className="text-sm text-muted-foreground">
+          {t("admin:packages.filteredByOwner")}{" "}
+          <Link
+            href={`/${lang}/admin/packages`}
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            {t("admin:packages.clearOwnerFilter")}
+          </Link>
+        </p>
+      )}
 
       {result.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("admin:common.empty")}</p>
@@ -126,7 +144,7 @@ export default async function Page(props: {
 
           <Pagination
             basePath={`/${lang}/admin/packages`}
-            params={{ q, published: publishedFilter }}
+            params={{ q, published: publishedFilter, owner }}
             currentPage={currentPage}
             totalPages={totalPages}
             previousLabel={t("admin:common.previousPage")}

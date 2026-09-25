@@ -33,6 +33,7 @@ export default async function Page(props: {
   searchParams: Promise<{
     plan?: string | string[];
     status?: string | string[];
+    current?: string | string[];
     page?: string | string[];
   }>;
 }) {
@@ -41,11 +42,18 @@ export default async function Page(props: {
   const searchParams = await props.searchParams;
   const plan = SUBSCRIPTION_PLAN_IDS.find((value) => value === firstSearchParam(searchParams.plan));
   const status = STATUSES.find((value) => value === firstSearchParam(searchParams.status));
+  const current = firstSearchParam(searchParams.current) === "1";
   const { t } = await getTranslation(lang);
 
   const { result, currentPage, totalPages } = await fetchPaginated(
     (pageNumber) =>
-      listSubscriptionsForAdmin({ planId: plan, status, page: pageNumber, pageSize: PAGE_SIZE }),
+      listSubscriptionsForAdmin({
+        planId: plan,
+        status,
+        currentOnly: current,
+        page: pageNumber,
+        pageSize: PAGE_SIZE,
+      }),
     parsePageParam(searchParams.page),
     PAGE_SIZE,
   );
@@ -82,6 +90,10 @@ export default async function Page(props: {
             <option key={value} value={value}>{value}</option>
           ))}
         </select>
+        <label className="flex h-9 items-center gap-2 text-sm">
+          <input type="checkbox" name="current" value="1" defaultChecked={current} />
+          {t("admin:payments.subscriptions.currentOnly")}
+        </label>
         <Button type="submit" variant="outline">{t("admin:auditLog.apply")}</Button>
       </form>
 
@@ -150,7 +162,7 @@ export default async function Page(props: {
 
           <Pagination
             basePath={`/${lang}/admin/payments/subscriptions`}
-            params={{ plan, status }}
+            params={{ plan, status, current: current ? "1" : undefined }}
             currentPage={currentPage}
             totalPages={totalPages}
             previousLabel={t("admin:common.previousPage")}

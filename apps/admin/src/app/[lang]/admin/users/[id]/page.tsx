@@ -110,7 +110,7 @@ export default async function Page(props: {
             </Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
-            <Link href={`/${lang}/admin/packages?q=${encodeURIComponent(user.email)}`}>
+            <Link href={`/${lang}/admin/packages?owner=${encodeURIComponent(user.id)}`}>
               {t("admin:users.links.packages")}
             </Link>
           </Button>

@@ -115,7 +115,7 @@
     "security": {
       "title": "サインインとセッション",
       "signInMethods": "サインイン手段",
-      "passkeyCount": "パスキー {{count}} 件",
+      "passkeyCount": "パスキー {{value}} 件",
       "emailOnly": "メールのリンクのみ",
       "passkeys": "パスキー",
       "deviceType": "種類",
@@ -500,7 +500,8 @@
       "planName": {
         "pro": "AI Pro",
         "storage": "ストレージ"
-      }
+      },
+      "currentOnly": "期間内のみ"
     }
   },
   "storage": {
@@ -645,7 +646,7 @@
       "publishConfirmTitle": "このパッケージを公開しますか?",
       "publishConfirmDescription": "ストアに表示され、誰でもインストールできるようになります。",
       "unpublishConfirmTitle": "このパッケージを非公開にしますか?",
-      "unpublishConfirmDescription": "ストアとライブラリから見えなくなり、新たにインストールできなくなります。購入済みのユーザーも含みます。"
+      "unpublishConfirmDescription": "ストアとライブラリから見えなくなり、新たにインストールできなくなります。購入済みのユーザーも含みます。トップページの新着カードは最大 1 時間キャッシュされるため、その間は表示が残ることがあります。"
     },
     "release": {
       "publish": "公開する",
@@ -654,6 +655,8 @@
       "publishConfirmDescription": "このバージョンをインストール・更新の対象にします。",
       "unpublishConfirmTitle": "このリリースを非公開にしますか?",
       "unpublishConfirmDescription": "このバージョンはインストール・更新の対象から外れます。既にインストール済みの環境からは削除されません。"
-    }
+    },
+    "filteredByOwner": "所有者で絞り込んでいます。",
+    "clearOwnerFilter": "絞り込みを解除"
   }
 }

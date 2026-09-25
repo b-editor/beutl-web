@@ -41,18 +41,27 @@ export async function countActiveSubscriptionsByPlan({
 export async function listSubscriptionsForAdmin({
   planId,
   status,
+  currentOnly = false,
+  now = new Date(),
   page,
   pageSize,
   prisma,
 }: {
   planId?: string;
   status?: string;
+  // countActiveSubscriptionsByPlan と同じく、期間末を過ぎた行を除く。
+  currentOnly?: boolean;
+  now?: Date;
   page: number;
   pageSize: number;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  const where = { planId, status };
+  const where = {
+    planId,
+    status,
+    ...(currentOnly ? { currentPeriodEnd: { gt: now } } : {}),
+  };
   const [items, total] = await Promise.all([
     db.subscription.findMany({
       where,

@@ -21,8 +21,10 @@ export async function SecuritySection({
 
   const sessions = overview.sessions.slice(0, USER_SECURITY_RELATION_LIMIT);
   const families = overview.refreshTokenFamilies.slice(0, USER_SECURITY_RELATION_LIMIT);
-  const hasActiveFamily = families.some((family) => !family.revokedAt);
-  const hasSomethingToRevoke = sessions.length > 0 || hasActiveFamily;
+  const passkeys = overview.passkeys.slice(0, USER_SECURITY_RELATION_LIMIT);
+  // 表示中の行は打ち切られているので、失効できるかは上限に依らない件数で決める。
+  const hasSomethingToRevoke =
+    overview.sessions.length > 0 || overview.activeRefreshTokenFamilyCount > 0;
 
   return (
     <section className="flex flex-col gap-6 rounded-lg border bg-card p-6">
@@ -48,7 +50,12 @@ export async function SecuritySection({
           {overview.passkeys.length > 0 && (
             <li>
               <Badge variant="outline">
-                {t("admin:users.security.passkeyCount", { count: overview.passkeys.length })}
+                {t("admin:users.security.passkeyCount", {
+                  value:
+                    overview.passkeys.length > USER_SECURITY_RELATION_LIMIT
+                      ? `${USER_SECURITY_RELATION_LIMIT}+`
+                      : overview.passkeys.length,
+                })}
               </Badge>
             </li>
           )}
@@ -71,7 +78,7 @@ export async function SecuritySection({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {overview.passkeys.map((passkey) => (
+              {passkeys.map((passkey) => (
                 <TableRow key={passkey.id}>
                   <TableCell>{passkey.name || "-"}</TableCell>
                   <TableCell className="text-xs">
@@ -88,6 +95,11 @@ export async function SecuritySection({
               ))}
             </TableBody>
           </Table>
+          {overview.passkeys.length > USER_SECURITY_RELATION_LIMIT && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t("admin:users.truncatedNotice", { count: USER_SECURITY_RELATION_LIMIT })}
+            </p>
+          )}
         </div>
       )}
 
