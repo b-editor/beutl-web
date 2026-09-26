@@ -1,4 +1,4 @@
-import { ADMIN_PACKAGE_RELEASE_LIMIT, getPackageDetailForAdmin } from "@beutl/db";
+import { ADMIN_PACKAGE_RELEASE_PAGE_SIZE, getPackageDetailForAdmin } from "@beutl/db";
 import { formatAmount, formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -10,24 +10,36 @@ import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/auth-guard";
 import { formatTimestamp } from "@/lib/format";
 import { PublishToggleButton } from "../components";
+import { fetchPaginated, parsePageParam } from "@/lib/pagination";
+import { Pagination } from "@/components/admin/pagination";
 
 // 公開状態の切り替え直後に現在値を示す必要がある。
 export const dynamic = "force-dynamic";
 
 export default async function Page(props: {
   params: Promise<{ lang: string; id: string }>;
+  searchParams: Promise<{ page?: string | string[] }>;
 }) {
   await requireAdmin();
   const { lang, id } = await props.params;
   const { t } = await getTranslation(lang);
 
-  const pkg = await getPackageDetailForAdmin({ packageId: id });
+  const { page } = await props.searchParams;
+
+  // リリースのページが範囲外なら最終ページに丸めて取り直す。
+  const { result: pkg, currentPage, totalPages } = await fetchPaginated(
+    async (releasePage) => {
+      const detail = await getPackageDetailForAdmin({ packageId: id, releasePage });
+      return { detail, total: detail?._count.Release ?? 0 };
+    },
+    parsePageParam(page),
+    ADMIN_PACKAGE_RELEASE_PAGE_SIZE,
+  ).then(({ result, ...rest }) => ({ result: result.detail, ...rest }));
   if (!pkg) {
     notFound();
   }
 
-  // 取得は上限より 1 件多い。余分な 1 件は表示せず、打ち切りの判定に使う。
-  const releases = pkg.Release.slice(0, ADMIN_PACKAGE_RELEASE_LIMIT);
+  const releases = pkg.Release;
 
   return (
     <div className="flex flex-col gap-6">
@@ -191,11 +203,15 @@ export default async function Page(props: {
                 ))}
               </TableBody>
             </Table>
-            {pkg._count.Release > ADMIN_PACKAGE_RELEASE_LIMIT && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {t("admin:users.truncatedNotice", { count: ADMIN_PACKAGE_RELEASE_LIMIT })}
-              </p>
-            )}
+            <div className="mt-3">
+              <Pagination
+                basePath={`/${lang}/admin/packages/${pkg.id}`}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                previousLabel={t("admin:common.previousPage")}
+                nextLabel={t("admin:common.nextPage")}
+              />
+            </div>
           </div>
         )}
       </section>

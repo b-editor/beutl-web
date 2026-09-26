@@ -1,8 +1,8 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
-// 詳細画面に並べるリリースの上限。打ち切りを判定できるよう 1 件多く取得する。
-export const ADMIN_PACKAGE_RELEASE_LIMIT = 100;
+// 詳細画面で 1 ページに並べるリリースの件数。
+export const ADMIN_PACKAGE_RELEASE_PAGE_SIZE = 50;
 
 // 管理画面のパッケージ一覧。公開状態で絞り込み、パッケージ名・表示名・所有者の
 // メールアドレスで検索する。
@@ -59,11 +59,15 @@ export async function listPackagesForAdmin({
   return { items, total };
 }
 
+// どのリリースも公開状態を変えられるよう、リリースはページ単位で取得する。
+// 総数は _count.Release で返す。
 export async function getPackageDetailForAdmin({
   packageId,
+  releasePage = 1,
   prisma,
 }: {
   packageId: string;
+  releasePage?: number;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -97,7 +101,8 @@ export async function getPackageDetailForAdmin({
           file: { select: { name: true, size: true } },
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: ADMIN_PACKAGE_RELEASE_LIMIT + 1,
+        skip: (releasePage - 1) * ADMIN_PACKAGE_RELEASE_PAGE_SIZE,
+        take: ADMIN_PACKAGE_RELEASE_PAGE_SIZE,
       },
       _count: { select: { UserPackage: true, Release: true } },
     },
