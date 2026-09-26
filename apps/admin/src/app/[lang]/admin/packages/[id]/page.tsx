@@ -197,6 +197,8 @@ export default async function Page(props: {
                         target="release"
                         id={release.id}
                         published={release.published}
+                        // 公開はファイルが付いているリリースに限る (サーバー側でも拒否する)。
+                        disabled={!release.published && !release.file}
                       />
                     </TableCell>
                   </TableRow>

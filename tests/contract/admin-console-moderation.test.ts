@@ -75,6 +75,20 @@ describe("administrator package visibility (db)", () => {
     ).resolves.toEqual({ name: "pkg", changed: false });
   });
 
+  it("only publishes a release that has a file", async () => {
+    const prisma = fakePrisma("release", {
+      count: 0,
+      row: { packageId: "p1", version: "1.0.0", published: false, fileId: null },
+    });
+    await expect(
+      setReleasePublishedByAdmin({ releaseId: "r1", published: true, prisma: prisma as never }),
+    ).resolves.toEqual({ packageId: "p1", version: "1.0.0", changed: false, missingFile: true });
+    expect(prisma.release.updateMany).toHaveBeenCalledWith({
+      where: { id: "r1", published: false, fileId: { not: null } },
+      data: { published: true },
+    });
+  });
+
   it("returns null for a package or release that does not exist", async () => {
     const pkg = fakePrisma("package", { count: 0, row: null });
     await expect(
@@ -113,10 +127,23 @@ describe("administrator package visibility (actions)", () => {
   });
 
   it("does not log a change that did not happen", async () => {
-    mocks.setReleasePublishedByAdmin.mockResolvedValue({ packageId: "p1", version: "1.0.0", changed: false });
+    mocks.setReleasePublishedByAdmin.mockResolvedValue({ packageId: "p1", version: "1.0.0", changed: false, missingFile: false });
     await expect(
       setReleasePublished({ releaseId: "r1", published: true, reason: REASON }),
     ).resolves.toEqual({ success: true });
+    expect(mocks.addAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("refuses to publish a release without a file", async () => {
+    mocks.setReleasePublishedByAdmin.mockResolvedValue({
+      packageId: "p1",
+      version: "1.0.0",
+      changed: false,
+      missingFile: true,
+    });
+    await expect(
+      setReleasePublished({ releaseId: "r1", published: true, reason: REASON }),
+    ).resolves.toEqual({ success: false, message: "A release without a file cannot be published" });
     expect(mocks.addAuditLog).not.toHaveBeenCalled();
   });
 

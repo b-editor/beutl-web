@@ -140,15 +140,30 @@ export async function setReleasePublishedByAdmin({
   releaseId: string;
   published: boolean;
   prisma?: PrismaTransaction;
-}): Promise<{ packageId: string; version: string; changed: boolean } | null> {
+}): Promise<
+  | { packageId: string; version: string; changed: boolean; missingFile: boolean }
+  | null
+> {
   const db = prisma ?? await getDb();
+  // ファイルの無いリリースを公開すると、ライブラリが取得できない版を最新として配る。
+  // 公開はファイルが付いている行に限り、取り下げは常に許す。
   const updated = await db.release.updateMany({
-    where: { id: releaseId, published: !published },
+    where: {
+      id: releaseId,
+      published: !published,
+      ...(published ? { fileId: { not: null } } : {}),
+    },
     data: { published },
   });
   const release = await db.release.findUnique({
     where: { id: releaseId },
-    select: { packageId: true, version: true },
+    select: { packageId: true, version: true, published: true, fileId: true },
   });
-  return release ? { ...release, changed: updated.count === 1 } : null;
+  if (!release) return null;
+  return {
+    packageId: release.packageId,
+    version: release.version,
+    changed: updated.count === 1,
+    missingFile: published && !release.published && release.fileId === null,
+  };
 }

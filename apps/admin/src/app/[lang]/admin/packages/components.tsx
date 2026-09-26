@@ -27,11 +27,13 @@ export function PublishToggleButton({
   target,
   id,
   published,
+  disabled = false,
 }: {
   lang: string;
   target: "package" | "release";
   id: string;
   published: boolean;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation(lang);
   const { toast } = useToast();
@@ -74,7 +76,7 @@ export function PublishToggleButton({
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
-        <Button size="sm" variant={next ? "outline" : "destructive"} disabled={pending}>
+        <Button size="sm" variant={next ? "outline" : "destructive"} disabled={pending || disabled}>
           {label}
         </Button>
       </AlertDialogTrigger>

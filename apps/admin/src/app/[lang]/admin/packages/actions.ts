@@ -87,6 +87,9 @@ export async function setReleasePublished(input: unknown): Promise<ActionResult>
       return updated;
     });
     if (!result) return { success: false, message: "Release not found" };
+    if (result.missingFile) {
+      return { success: false, message: "A release without a file cannot be published" };
+    }
 
     revalidatePackagePages();
     return { success: true };
