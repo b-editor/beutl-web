@@ -35,6 +35,8 @@ import {
   setReleasePublishedByAdmin,
 } from "../../packages/db/src/admin-package";
 import { revokeAllUserSessions } from "../../packages/db/src/admin-user-security";
+import { findPackageForLibraryResponse } from "../../packages/db/src/package";
+import { findReleaseForLibrary } from "../../packages/db/src/release";
 import {
   setPackagePublished,
   setReleasePublished,
@@ -172,5 +174,19 @@ describe("administrator session revocation", () => {
         details: "userId: user-1, sessions: 3, refreshTokenFamilies: 2",
       }),
     );
+  });
+});
+
+describe("library responses after a release is unpublished", () => {
+  it("only considers published releases when picking the latest", async () => {
+    const prisma = { package: { findFirst: vi.fn().mockResolvedValue(null) } };
+    await findPackageForLibraryResponse({ id: "p1", currency: null, prisma: prisma as never });
+    expect(prisma.package.findFirst.mock.calls[0][0].select.Release.where).toEqual({ published: true });
+  });
+
+  it("refuses to hand out an unpublished release", async () => {
+    const prisma = { release: { findFirst: vi.fn().mockResolvedValue(null) } };
+    await findReleaseForLibrary({ id: "r1", prisma: prisma as never });
+    expect(prisma.release.findFirst.mock.calls[0][0].where).toEqual({ id: "r1", published: true });
   });
 });
