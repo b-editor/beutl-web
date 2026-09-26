@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useTransition } from "react";
-import { deleteUser } from "./actions";
+import { deleteUser, revokeUserSessions } from "./actions";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { useRouter } from "next/navigation";
 import { Button } from "@beutl/ui/ui/button";
@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@beutl/ui/ui/alert-dialog";
-import { Trash2 } from "lucide-react";
+import { LogOut, Trash2 } from "lucide-react";
 import { useToast } from "@beutl/ui/use-toast";
 
 export function DeleteUserButton({ lang, userId }: { lang: string; userId: string }) {
@@ -78,6 +78,68 @@ export function DeleteUserButton({ lang, userId }: { lang: string; userId: strin
             onClick={handleDelete}
           >
             {t("admin:users.delete")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+export function RevokeSessionsButton({
+  lang,
+  userId,
+  disabled,
+}: {
+  lang: string;
+  userId: string;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation(lang);
+  const router = useRouter();
+  const { toast } = useToast();
+  const [isPending, startTransition] = useTransition();
+
+  const handleRevoke = useCallback(() => {
+    startTransition(async () => {
+      try {
+        const res = await revokeUserSessions({ userId });
+        toast({
+          title: res.success
+            ? t("admin:users.security.revokeSuccess")
+            : t("admin:users.security.revokeFailed"),
+          description: res.success ? undefined : res.message,
+          variant: res.success ? undefined : "destructive",
+        });
+      } catch (e) {
+        toast({
+          title: t("admin:users.security.revokeFailed"),
+          description: e instanceof Error ? e.message : String(e),
+          variant: "destructive",
+        });
+      }
+      router.refresh();
+    });
+  }, [userId, startTransition, router, toast, t]);
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="outline" size="sm" disabled={disabled || isPending}>
+          <LogOut className="mr-2 h-4 w-4" />
+          {t("admin:users.security.revoke")}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("admin:users.security.revokeConfirmTitle")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("admin:users.security.revokeConfirmDescription")}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("admin:common.cancel")}</AlertDialogCancel>
+          <AlertDialogAction disabled={isPending} onClick={handleRevoke}>
+            {t("admin:users.security.revoke")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

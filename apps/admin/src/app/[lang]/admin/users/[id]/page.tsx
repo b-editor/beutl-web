@@ -5,11 +5,14 @@ import { notFound } from "next/navigation";
 import { DeleteUserButton } from "./components";
 import Link from "next/link";
 import { Button } from "@beutl/ui/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { requireAdmin } from "@/lib/auth-guard";
 import { AiPlanSection } from "./ai-plan";
 import { StoragePlanSection } from "./storage-plan";
+import { SecuritySection } from "./security";
+import { Badge } from "@beutl/ui/ui/badge";
+import { stripeDashboardUrl } from "@/lib/stripe-dashboard";
 
 // 残高と利用状況は台帳の現在値を示す必要がある。
 export const dynamic = "force-dynamic";
@@ -17,7 +20,7 @@ export const dynamic = "force-dynamic";
 export default async function Page(props: {
   params: Promise<{ lang: string; id: string }>;
 }) {
-  await requireAdmin();
+  const session = await requireAdmin();
   const params = await props.params;
   const { lang, id } = params;
   const { t } = await getTranslation(lang);
@@ -68,8 +71,53 @@ export default async function Page(props: {
             <dt className="text-muted-foreground">{t("admin:users.createdAt")}</dt>
             <dd>{formatTimestamp(user.createdAt, lang)}</dd>
           </div>
+          <div>
+            <dt className="text-muted-foreground">{t("admin:users.emailVerified")}</dt>
+            <dd>
+              <Badge variant={user.emailVerified ? "default" : "secondary"}>
+                {t(user.emailVerified ? "admin:users.verified" : "admin:users.unverified")}
+              </Badge>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">{t("admin:users.stripeCustomer")}</dt>
+            <dd>
+              {user.Customer ? (
+                <a
+                  href={stripeDashboardUrl(`customers/${encodeURIComponent(user.Customer.stripeId)}`)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-mono underline-offset-4 hover:underline"
+                >
+                  {user.Customer.stripeId}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : (
+                "-"
+              )}
+            </dd>
+          </div>
         </dl>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/${lang}/admin/audit-log?userId=${encodeURIComponent(user.id)}`}>
+              {t("admin:users.links.auditLog")}
+            </Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/${lang}/admin/ai/jobs?userId=${encodeURIComponent(user.id)}`}>
+              {t("admin:users.links.aiJobs")}
+            </Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/${lang}/admin/packages?owner=${encodeURIComponent(user.id)}`}>
+              {t("admin:users.links.packages")}
+            </Link>
+          </Button>
+        </div>
       </section>
+
+      <SecuritySection lang={lang} userId={user.id} isSelf={user.id === session.user.id} />
 
       <AiPlanSection lang={lang} userId={user.id} />
       <StoragePlanSection lang={lang} userId={user.id} />
@@ -91,7 +139,14 @@ export default async function Page(props: {
               <TableBody>
                 {packages.map((pkg) => (
                   <TableRow key={pkg.id}>
-                    <TableCell className="font-mono text-xs">{pkg.name}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      <Link
+                        href={`/${lang}/admin/packages/${pkg.id}`}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {pkg.name}
+                      </Link>
+                    </TableCell>
                     <TableCell>{pkg.displayName || "-"}</TableCell>
                     <TableCell>
                       {t(pkg.published ? "admin:users.publishedValue" : "admin:users.draftValue")}
@@ -152,7 +207,7 @@ export default async function Page(props: {
               {feedback.map((item) => (
                 <li key={item.id} className="py-3">
                   <div className="flex items-center justify-between gap-4">
-                    <div className="text-sm font-medium">{item.message}</div>
+                    <div className="whitespace-pre-wrap break-words text-sm font-medium">{item.message}</div>
                     <div className="text-xs text-muted-foreground">
                       {formatTimestamp(item.createdAt, lang)}
                     </div>

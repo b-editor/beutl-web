@@ -13,6 +13,7 @@ export async function findReleaseForLibrary({
   return await db.release.findFirst({
     where: {
       id: latestReleaseId,
+      published: true,
     },
     select: {
       id: true,

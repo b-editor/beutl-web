@@ -121,7 +121,12 @@ export async function findPackageForLibraryResponse({
           fallback: true,
         },
       },
+      // ライブラリが配るのは公開中のリリースだけ。非公開にした (管理者による
+      // 取り下げを含む) 版を「最新」として返すと、取得済みの利用者に配り続けてしまう。
       Release: {
+        where: {
+          published: true,
+        },
         select: {
           id: true,
           version: true,

@@ -24,6 +24,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  Package,
   ScrollText,
   Sparkles,
   Users,
@@ -32,6 +33,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+
+type Group = "ai" | "storage" | "payments";
+
+// 開いているのは現在のセクションのグループだけにする。
+function groupsOpenFor(section: string | undefined): Record<Group, boolean> {
+  return { ai: section === "ai", storage: section === "storage", payments: section === "payments" };
+}
 
 export function AdminSidebar({ lang }: { lang: string }) {
   const { t } = useTranslation(lang);
@@ -47,22 +55,20 @@ export function AdminSidebar({ lang }: { lang: string }) {
   const adminIndex = segments.indexOf("admin");
   const section = adminIndex < 0 ? undefined : segments[adminIndex + 1];
   const subSection = adminIndex < 0 ? undefined : segments[adminIndex + 2];
-  const [openGroups, setOpenGroups] = useState({
-    ai: section === "ai",
-    storage: section === "storage",
-  });
+  const [openGroups, setOpenGroups] = useState(() => groupsOpenFor(section));
 
   useEffect(() => {
-    setOpenGroups({ ai: section === "ai", storage: section === "storage" });
+    setOpenGroups(groupsOpenFor(section));
   }, [section]);
 
   const items = [
     { section: undefined, href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },
     { section: "users", href: `/${lang}/admin/users`, label: t("admin:nav.users"), icon: Users },
     { section: "feedback", href: `/${lang}/admin/feedback`, label: t("admin:nav.feedback"), icon: MessageSquare },
+    { section: "packages", href: `/${lang}/admin/packages`, label: t("admin:nav.packages"), icon: Package },
     { section: "ai", label: t("admin:nav.ai"), icon: Sparkles },
     { section: "storage", label: t("admin:nav.storage"), icon: HardDrive },
-    { section: "payments", href: `/${lang}/admin/payments`, label: t("admin:nav.payments"), icon: CreditCard },
+    { section: "payments", label: t("admin:nav.payments"), icon: CreditCard },
     { section: "audit-log", href: `/${lang}/admin/audit-log`, label: t("admin:nav.auditLog"), icon: ScrollText },
   ] as const;
   const children = {
@@ -76,6 +82,10 @@ export function AdminSidebar({ lang }: { lang: string }) {
       { slug: "usage", label: t("admin:storage.usagePage.title") },
       { slug: "migration", label: t("admin:storage.migration.title") },
       { slug: "interventions", label: t("admin:storage.interventions.title") },
+    ],
+    payments: [
+      { slug: undefined, label: t("admin:payments.title") },
+      { slug: "subscriptions", label: t("admin:payments.subscriptions.title") },
     ],
   } as const;
 
@@ -107,7 +117,7 @@ export function AdminSidebar({ lang }: { lang: string }) {
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) =>
-                item.section === "ai" || item.section === "storage" ? (
+                !("href" in item) ? (
                   <Collapsible
                     key={item.section}
                     asChild
@@ -124,10 +134,7 @@ export function AdminSidebar({ lang }: { lang: string }) {
                           tooltip={item.label}
                           aria-label={item.label}
                           onClick={() => {
-                            setOpenGroups({
-                              ai: item.section === "ai",
-                              storage: item.section === "storage",
-                            });
+                            setOpenGroups(groupsOpenFor(item.section));
                             setOpen(true);
                           }}
                         >
