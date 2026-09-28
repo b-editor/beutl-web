@@ -9,8 +9,8 @@ import SemVer from "semver";
 import { z } from "zod";
 
 const searchQuerySchema = z.object({
-  // zip, debian, installer, appのいずれか
-  type: z.string().refine((value) => ["zip", "debian", "installer", "app"].includes(value)),
+  // zip, debian, installer, app, flatpakのいずれか
+  type: z.string().refine((value) => ["zip", "debian", "installer", "app", "flatpak"].includes(value)),
   // linux, osx, win
   os: z.string().refine((value) => ["linux", "osx", "win"].includes(value)),
   // x64, arm64
