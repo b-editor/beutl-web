@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isApiErrorCode } from "@beutl/core";
 
 // エラーエンベロープ (packages/api/src/api/error.ts) のワイヤ契約を固定する。
 // デスクトップアプリは error_code (文字列キー) + message をパースする。
@@ -17,6 +18,7 @@ describe("API error envelope (v1/v3 共通)", () => {
     for (const code of errorCodes) {
       expect(typeof code).toBe("string");
       expect(code).toMatch(/^[a-zA-Z]+$/);
+      expect(isApiErrorCode(code)).toBe(true);
     }
     // 契約上必須のキーが存在する
     for (const required of [
@@ -32,6 +34,12 @@ describe("API error envelope (v1/v3 共通)", () => {
       expect(errorCodes).toContain(required);
     }
   });
+
+  it.each(["futureFailure", "toString", "__proto__", "", null, 42, {}])(
+    "does not recognize an invalid public error code: %j", (value) => {
+      expect(isApiErrorCode(value)).toBe(false);
+    },
+  );
 
   it("ApiErrorResponse は error_code / message / documentation_url の 3 フィールド", () => {
     const resp: ApiErrorResponse = {

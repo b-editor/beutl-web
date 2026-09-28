@@ -33,6 +33,8 @@ import {
 } from "./_shared";
 import type { ReleaseRecord } from "./_shared";
 
+class ReleaseFileRequiredError extends Error {}
+
 export async function updateRelease(
   formData: FormData,
 ): Promise<ActionResult<ReleaseRecord>> {
@@ -93,6 +95,10 @@ export async function updateRelease(
         if (!current || current.packageId !== release.packageId || !devPackage) {
           throw new Error("Release ownership changed before publication");
         }
+        const fileId = replacementFileId ?? current.file?.id;
+        if (validated.data.published === "on" && !fileId) {
+          throw new ReleaseFileRequiredError();
+        }
 
         const replacedFileId =
           replacementFileId &&
@@ -106,7 +112,7 @@ export async function updateRelease(
           description: validated.data.description,
           targetVersion: validated.data.targetVersion,
           published: validated.data.published === "on",
-          fileId: replacementFileId ?? current.file?.id,
+          fileId,
           prisma: tx,
         });
 
@@ -128,9 +134,6 @@ export async function updateRelease(
       };
 
       const uploaded = formData.getAll("file") as File[];
-      if (validated.data.published === "on" && !release.file && uploaded.length === 0) {
-        return { success: false, message: t("developer:errors.fileNotFound") };
-      }
       let data: ReleaseRecord;
       const singleNupkg =
         uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");
@@ -197,7 +200,12 @@ export async function updateRelease(
         }
         data = published;
       } else {
-        data = await startTransaction((tx) => publishRelease(tx));
+        try {
+          data = await startTransaction((tx) => publishRelease(tx));
+        } catch (error) {
+          if (!(error instanceof ReleaseFileRequiredError)) throw error;
+          return { success: false, message: t("developer:errors.fileNotFound") };
+        }
       }
 
       await addAuditLog({

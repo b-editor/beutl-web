@@ -29,10 +29,10 @@ describe("publisher identity", () => {
     }) as never);
   });
   const change = () => upsertProfile({ userId: "owner", userName: "Publisher", displayName: "Name" });
-  function form() {
+  function form(userName = "Publisher") {
     const data = new FormData();
     data.set("displayName", "Name");
-    data.set("userName", "Publisher");
+    data.set("userName", userName);
     data.set("github", "new-social-value");
     return data;
   }
@@ -75,6 +75,24 @@ describe("publisher identity", () => {
       update: { value: "new-social-value" },
       create: { userId: "owner", providerId: "github", value: "new-social-value" },
     });
+  });
+  it.each(["john^doe", "john.doe", "john+tag"])("preserves an unchanged signup-generated name while saving the profile: %s", async (userName) => {
+    profile.findFirst.mockImplementation(async ({ where }) =>
+      where.userId === "owner" ? { userId: "owner", userName } : null);
+    expect((await updateProfile({}, form(userName))).success).toBe(true);
+    expect(profile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ userName, displayName: "Name" }),
+    }));
+    expect(socialProfile.upsert).toHaveBeenCalledOnce();
+  });
+  it.each(["john^doe", "john.doe", "john+tag", ""])("still validates changed usernames: %s", async (userName) => {
+    profile.findFirst.mockImplementation(async ({ where }) =>
+      where.userId === "owner" ? { userId: "owner", userName: "Publisher" } : null);
+    expect(await updateProfile({}, form(userName))).toMatchObject({
+      success: false, errors: { userName: expect.any(Array) },
+    });
+    expect(profile.upsert).not.toHaveBeenCalled();
+    expect(socialProfile.upsert).not.toHaveBeenCalled();
   });
   it("skips names taken with different casing during signup", async () => {
     profile.findFirst.mockResolvedValueOnce({ userId: "other" });

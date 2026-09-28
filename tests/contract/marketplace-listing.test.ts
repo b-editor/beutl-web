@@ -44,12 +44,16 @@ describe("marketplace list contracts", () => {
   it("returns an empty page past the end instead of repeating the whole catalog", async () => {
     expect(await (await discover.request("/search?count=1&offset=3")).json()).toEqual([]);
   });
-  it.each(["count=1.5", "offset=0.5", "count=101", "offset=-1", "offset=2147483648"])(
+  it.each(["count=1.5", "offset=0.5", "count=101", "offset=-1", "offset=2147483648", "offset=", "offset=%20", "offset=%09", "offset=10001"])(
     "rejects invalid pagination without a database query: %s", async (query) => {
       expect((await discover.request(`/search?${query}`)).status).toBe(400);
       expect(findMany).not.toHaveBeenCalled();
     },
   );
+  it.each(["offset=0", "offset=%202%20", "offset=10000"])("accepts nonempty offsets within the supported depth: %s", async (query) => {
+    expect((await discover.request(`/search?${query}`)).status).toBe(200);
+    expect(findMany).toHaveBeenCalledOnce();
+  });
   it.each(["/search", "/featured"])("bounds the default listing: %s", async (path) => {
     await discover.request(path);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 30, skip: 0 }));

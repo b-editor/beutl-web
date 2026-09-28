@@ -26,7 +26,7 @@ describe("native authorization security", () => {
   });
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-  it.each(["javascript://localhost/%0Aalert(1)//", "file://localhost/callback", "https://attacker.example/"])(
+  it.each(["javascript://localhost/%0Aalert(1)//", "file://localhost/callback", "https://attacker.example/", "http://beutl.beditor.net/callback"])(
     "rejects an unsafe callback before persisting an authorization: %s", async (continue_uri) => {
       expect((await post("/createAuthUri", { continue_uri })).status).toBe(400);
       expect(store.allNativeAppAuth()).toEqual([]);
@@ -36,8 +36,8 @@ describe("native authorization security", () => {
     expect((await post("/createAuthUri", { continue_uri: authorization().continueUrl })).status).toBe(200);
     expect(store.allNativeAppAuth()).toHaveLength(1);
   });
-  it("also refuses unsafe stored callbacks at the legacy handler", async () => {
-    store.putNativeAppAuth({ ...authorization(), continueUrl: "javascript://localhost/%0Aalert(1)//" });
+  it.each(["javascript://localhost/%0Aalert(1)//", "http://beutl.beditor.net/callback"])("also refuses unsafe stored callbacks at the legacy handler: %s", async (continueUrl) => {
+    store.putNativeAppAuth({ ...authorization(), continueUrl });
     const token = await sign({
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "owner",
       exp: Math.floor(Date.now() / 1000) + 60,

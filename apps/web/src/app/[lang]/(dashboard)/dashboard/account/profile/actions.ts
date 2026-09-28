@@ -5,6 +5,7 @@ import { authenticated } from "@/lib/auth-guard";
 import {
   deleteSocialProfiles,
   getSocialProviders,
+  getProfileByUserId,
   ProfileUserNameTakenError,
   startRetryableTransaction,
   upsertProfile,
@@ -18,7 +19,7 @@ const emptyStringToUndefined = (z: Zod) =>
 const profileSchema = (z: Zod) =>
   z.object({
     displayName: z.string().max(50),
-    userName: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    userName: z.string(),
     bio: z.string().max(150).optional().or(z.literal("")),
     x: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
     github: z.string().optional().or(emptyStringToUndefined(z)),
@@ -66,7 +67,20 @@ export async function updateProfile(
       validated.data;
 
     try {
-      await startRetryableTransaction(async (prisma) => {
+      const validationError = await startRetryableTransaction(async (prisma) => {
+        // Signups have historically used the email local part verbatim. Compare
+        // with the stored identity inside this transaction, not a client claim.
+        const current = await getProfileByUserId(session.user.id, prisma);
+        if (userName !== current?.userName) {
+          const name = z.string().regex(/^[a-zA-Z0-9_-]+$/).safeParse(userName);
+          if (!name.success) {
+            return {
+              success: false,
+              message: t("invalidRequest"),
+              errors: { userName: name.error.issues.map((issue) => issue.message) },
+            };
+          }
+        }
         // A rejected name must not partially change the social links either.
         await upsertProfile({ userId: session.user.id, displayName, userName, bio, prisma });
         const values: Record<string, string | undefined> = { x, github, youtube, custom };
@@ -77,7 +91,9 @@ export async function updateProfile(
             ? upsertSocialProfile({ userId: session.user.id, providerId: provider.id, value, prisma })
             : deleteSocialProfiles({ userId: session.user.id, providerId: provider.id, prisma });
         }));
+        return null;
       });
+      if (validationError) return validationError;
     } catch (error) {
       if (!(error instanceof ProfileUserNameTakenError)) throw error;
       const message = t("account:profile.userNameTaken");

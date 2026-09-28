@@ -56,13 +56,15 @@ describe("resolveNativeAuthContinueTarget", () => {
     "file://localhost/callback",
     "https://localhost.evil.example/callback",
     "https://user:password@localhost/callback",
+    "http://beutl.beditor.net/callback",
+    "http://BEUTL.beditor.net:443/callback",
   ])("rejects executable or misleading callback URLs: %s", (value) => {
     expect(isAllowedNativeAuthContinueUrl(new URL(value))).toBe(false);
     expect(() => nativeAuthCallbackUrl(value, "sign-in-code")).toThrow("Invalid continue URL");
     expect(resolveNativeAuthContinueTarget(value, ORIGIN)).toBeNull();
   });
 
-  it.each(["http://localhost:43123/callback", `${ORIGIN}/callback`])(
+  it.each(["http://localhost:43123/callback", "https://localhost:43123/callback", `${ORIGIN}/callback`])(
     "preserves supported callback URLs: %s", (value) => {
       expect(isAllowedNativeAuthContinueUrl(new URL(value))).toBe(true);
     },

@@ -12,7 +12,8 @@ export function isAllowedContinueUrlHost(hostname: string): boolean {
 
 // Host validation alone also accepts executable URLs such as javascript://localhost/.
 export function isAllowedNativeAuthContinueUrl(url: URL): boolean {
-  return (url.protocol === "http:" || url.protocol === "https:") &&
+  return (url.protocol === "https:" ||
+    (url.protocol === "http:" && url.hostname === "localhost")) &&
     isAllowedContinueUrlHost(url.hostname) &&
     url.username === "" && url.password === "";
 }

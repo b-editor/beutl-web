@@ -14,11 +14,15 @@ import { PACKAGE_TYPE_FILTERS } from "@beutl/core";
 
 // Omitting `type` keeps the pre-data-package behaviour: every kind is listed.
 const packageTypeSchema = z.enum(PACKAGE_TYPE_FILTERS).optional().default("all");
+// Offset pagination traverses discarded rows too, so count alone cannot bound it.
+const MAX_SEARCH_OFFSET = 10_000;
 
 const searchQuerySchema = z.object({
   query: z.string().optional(),
   type: packageTypeSchema,
-  offset: z.coerce.number().int().min(0).max(2_147_483_647).optional().default(0),
+  offset: z.string().trim().min(1)
+    .pipe(z.coerce.number<string>().int().min(0).max(MAX_SEARCH_OFFSET))
+    .optional().default(0),
   count: z.coerce.number().int().min(1).max(100).optional().default(30),
 });
 

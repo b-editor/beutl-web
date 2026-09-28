@@ -77,6 +77,32 @@ describe("reading AI results in the dashboard", () => {
     })));
     await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
   });
+  it.each(["futureFailure", "unknown", "invalidRequestBody", "aiPlanRequired", "aiRequestInProgress"])("keeps the recovery key for an unconfirmed streamed error: %s", async (error_code) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(event("error", { error_code }), {
+      headers: { "content-type": "text/event-stream" },
+    })));
+    const result = await run();
+    expect(result).toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+    if (!result.ok) expect(keepsIdempotencyKey(result.errorCode)).toBe(true);
+  });
+  it.each(["aiProviderError", "aiProviderBillingUnavailable"])("accepts a confirmed streamed provider failure: %s", async (error_code) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(event("error", { error_code }), {
+      headers: { "content-type": "text/event-stream" },
+    })));
+    await expect(run()).resolves.toEqual({ ok: false, errorCode: error_code });
+  });
+  it.each([[400, "futureFailure"], [402, "unknown"], [409, "futureFailure"], [429, ""]])(
+    "treats an unrecognized HTTP %s error as interrupted: %s", async (status, error_code) => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error_code }, { status: status as number })));
+      await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+    },
+  );
+  it.each([[400, "invalidRequestBody"], [402, "aiPlanRequired"], [413, "fileIsTooLarge"], [409, "aiRequestChanged"]])(
+    "preserves recognized pre-stream HTTP %s refusals: %s", async (status, error_code) => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error_code }, { status: status as number })));
+      await expect(run()).resolves.toEqual({ ok: false, errorCode: error_code });
+    },
+  );
 
   it.each([false, true])("retains the request after an unhandled server stream failure (preview=%s)", async (preview) => {
     vi.spyOn(console, "error").mockImplementation(() => {});
