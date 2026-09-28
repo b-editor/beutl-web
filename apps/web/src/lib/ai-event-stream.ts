@@ -1,4 +1,5 @@
 import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
+import { isApiErrorCode, type ApiErrorCode } from "@beutl/core";
 
 // Reading an AI answer as it arrives.
 //
@@ -17,6 +18,9 @@ export type AiStreamHandlers = {
 };
 
 const EVENT_SEPARATOR = /\r?\n\r?\n/;
+const REFUNDED_PROVIDER_ERRORS: ReadonlySet<ApiErrorCode> = new Set([
+  "aiProviderError", "aiProviderBillingUnavailable",
+]);
 
 export async function runAiStream<TResult>(
   operation: "translations" | "images",
@@ -88,7 +92,11 @@ export async function runAiStream<TResult>(
           if (parsed.event === "result") {
             return { ok: true, result: parsed.data as TResult };
           } else if (parsed.event === "error") {
-            return { ok: false, errorCode: errorCodeIn(parsed.data) };
+            const code = errorCodeIn(parsed.data);
+            return {
+              ok: false,
+              errorCode: code && REFUNDED_PROVIDER_ERRORS.has(code) ? code : "aiRequestInterrupted",
+            };
           } else {
             onEvent(parsed.event, parsed.data);
           }
@@ -124,19 +132,26 @@ function parseEvent(block: string): { event: string; data: unknown } | null {
   }
 }
 
-function errorCodeIn(data: unknown): string {
-  return typeof data === "object" &&
+function errorCodeIn(data: unknown): ApiErrorCode | null {
+  const code = typeof data === "object" &&
     data !== null &&
-    "error_code" in data &&
-    typeof (data as { error_code: unknown }).error_code === "string"
-    ? (data as { error_code: string }).error_code
-    : "aiProviderError";
+    "error_code" in data
+    ? data.error_code
+    : null;
+  return isApiErrorCode(code) ? code : null;
 }
 
 async function errorCodeOf(response: Response): Promise<string> {
   try {
-    return errorCodeIn(await response.json());
+    const code = errorCodeIn(await response.json());
+    // Only these provider failures prove that a reservation was refunded.
+    // Infrastructure failures may hide an already-paid job or its replay.
+    if (code === null || code === "unknown" ||
+      (response.status >= 500 && !REFUNDED_PROVIDER_ERRORS.has(code))) {
+      return "aiRequestInterrupted";
+    }
+    return code;
   } catch {
-    return "aiProviderError";
+    return "aiRequestInterrupted";
   }
 }

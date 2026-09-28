@@ -10,6 +10,22 @@ export function isAllowedContinueUrlHost(hostname: string): boolean {
   return ALLOWED_CONTINUE_URL_HOSTS.includes(hostname);
 }
 
+// Host validation alone also accepts executable URLs such as javascript://localhost/.
+export function isAllowedNativeAuthContinueUrl(url: URL): boolean {
+  return (url.protocol === "https:" ||
+    (url.protocol === "http:" && url.hostname === "localhost")) &&
+    isAllowedContinueUrlHost(url.hostname) &&
+    url.username === "" && url.password === "";
+}
+
+/** Validate persisted callbacks immediately before attaching a sign-in code. */
+export function nativeAuthCallbackUrl(continueUrl: string, code: string): string {
+  const url = new URL(continueUrl);
+  if (!isAllowedNativeAuthContinueUrl(url)) throw new Error("Invalid continue URL");
+  url.searchParams.set("code", code);
+  return url.toString();
+}
+
 // native-auth の同意画面の遷移先。通常はサイト内のハンドラーページ (同一オリジン)
 // だが、デスクトップアプリはローカルの待ち受け URL を渡すため別オリジンにもなる。
 // 同一オリジン判定だけでは後者を弾いてしまうので、弾かれた場合は createAuthUri と
@@ -31,7 +47,5 @@ export function resolveNativeAuthContinueTarget(
     return null;
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-
-  return isAllowedContinueUrlHost(parsed.hostname) ? parsed.toString() : null;
+  return isAllowedNativeAuthContinueUrl(parsed) ? parsed.toString() : null;
 }

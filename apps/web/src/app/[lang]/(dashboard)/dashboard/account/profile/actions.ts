@@ -5,6 +5,9 @@ import { authenticated } from "@/lib/auth-guard";
 import {
   deleteSocialProfiles,
   getSocialProviders,
+  getProfileByUserId,
+  ProfileUserNameTakenError,
+  startRetryableTransaction,
   upsertProfile,
   upsertSocialProfile,
 } from "@beutl/db";
@@ -16,7 +19,7 @@ const emptyStringToUndefined = (z: Zod) =>
 const profileSchema = (z: Zod) =>
   z.object({
     displayName: z.string().max(50),
-    userName: z.string().regex(/^[a-zA-Z0-9-_]*$/),
+    userName: z.string(),
     bio: z.string().max(150).optional().or(z.literal("")),
     x: z.string().startsWith("@").optional().or(emptyStringToUndefined(z)),
     github: z.string().optional().or(emptyStringToUndefined(z)),
@@ -63,63 +66,39 @@ export async function updateProfile(
     const { displayName, userName, bio, x, github, youtube, custom } =
       validated.data;
 
-    const promises: Promise<unknown>[] = [];
-    // プロフィール更新
-    promises.push(
-      upsertProfile({
-        userId: session.user.id,
-        displayName,
-        userName,
-        bio,
-      }),
-    );
-    const providers = await getSocialProviders([
-      "x",
-      "github",
-      "youtube",
-      "custom",
-    ]);
-    const socials = [
-      {
-        providerId: providers.find((p) => p.provider === "x")?.id,
-        value: x,
-      },
-      {
-        providerId: providers.find((p) => p.provider === "github")?.id,
-        value: github,
-      },
-      {
-        providerId: providers.find((p) => p.provider === "youtube")?.id,
-        value: youtube,
-      },
-      {
-        providerId: providers.find((p) => p.provider === "custom")?.id,
-        value: custom,
-      },
-    ];
-    for (const social of socials) {
-      if (!social.providerId) {
-        continue;
-      }
-      if (social.value) {
-        promises.push(
-          upsertSocialProfile({
-            userId: session.user.id,
-            providerId: social.providerId,
-            value: social.value,
-          }),
-        );
-      } else {
-        promises.push(
-          deleteSocialProfiles({
-            userId: session.user.id,
-            providerId: social.providerId,
-          }),
-        );
-      }
+    try {
+      const validationError = await startRetryableTransaction(async (prisma) => {
+        // Signups have historically used the email local part verbatim. Compare
+        // with the stored identity inside this transaction, not a client claim.
+        const current = await getProfileByUserId(session.user.id, prisma);
+        if (userName !== current?.userName) {
+          const name = z.string().regex(/^[a-zA-Z0-9_-]+$/).safeParse(userName);
+          if (!name.success) {
+            return {
+              success: false,
+              message: t("invalidRequest"),
+              errors: { userName: name.error.issues.map((issue) => issue.message) },
+            };
+          }
+        }
+        // A rejected name must not partially change the social links either.
+        await upsertProfile({ userId: session.user.id, displayName, userName, bio, prisma });
+        const values: Record<string, string | undefined> = { x, github, youtube, custom };
+        const providers = await getSocialProviders(Object.keys(values), prisma);
+        await Promise.all(providers.map((provider) => {
+          const value = values[provider.provider];
+          return value
+            ? upsertSocialProfile({ userId: session.user.id, providerId: provider.id, value, prisma })
+            : deleteSocialProfiles({ userId: session.user.id, providerId: provider.id, prisma });
+        }));
+        return null;
+      });
+      if (validationError) return validationError;
+    } catch (error) {
+      if (!(error instanceof ProfileUserNameTakenError)) throw error;
+      const message = t("account:profile.userNameTaken");
+      return { success: false, message, errors: { userName: [message] } };
     }
-
-    await Promise.all(promises);
     revalidatePath(`/${lang}/dashboard/account/profile`);
     return {
       success: true,

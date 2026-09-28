@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "@beutl/db";
+import { getDb, isUniqueConstraintViolation, profileUserNameFilter } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "./audit-log";
 
 // better-auth の user.create.after は、どの Worker がユーザーを作ったかに関わらず
@@ -20,23 +20,28 @@ export async function onUserCreated(user: {
   if (!userName) return;
 
   const original = userName;
-  let exists = await db.profile.findFirst({
-    where: { userName: original },
-  });
-  for (let i = 1; exists; i++) {
-    userName = `${original}${i}`;
-    exists = await db.profile.findFirst({
-      where: { userName },
+  for (let i = 0; ; i++) {
+    userName = i === 0 ? original : `${original}${i}`;
+    const exists = await db.profile.findFirst({
+      where: { userName: profileUserNameFilter(userName) },
     });
+    if (exists) continue;
+    try {
+      await db.profile.create({
+        data: {
+          userId: user.id,
+          displayName: user.name || userName,
+          userName,
+        },
+      });
+      break;
+    } catch (error) {
+      if (!isUniqueConstraintViolation(error)) throw error;
+      // A duplicate hook invocation must not loop forever on the userId key.
+      if (await db.profile.findUnique({ where: { userId: user.id } })) return;
+      // A concurrent signup claimed this name. Try the next suffix.
+    }
   }
-
-  await db.profile.create({
-    data: {
-      userId: user.id,
-      displayName: user.name || userName,
-      userName,
-    },
-  });
 
   await addAuditLog({
     userId: user.id,

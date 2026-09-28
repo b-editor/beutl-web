@@ -1,7 +1,7 @@
 import { auth } from "@/lib/better-auth";
 import { randomString } from "@beutl/core";
 import { updateNativeAppAuthCode } from "@beutl/db";
-import { isAllowedContinueUrlHost } from "@beutl/core";
+import { nativeAuthCallbackUrl } from "@beutl/core";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ClientRedirect } from "./components";
@@ -48,12 +48,7 @@ export default async function Page(
       code,
     });
 
-    const continueUrl = new URL(obj.continueUrl, xurl);
-    continueUrl.searchParams.set("code", code);
-    // continueUrl のホストが許可リストに含まれるか検証する
-    if (!isAllowedContinueUrlHost(continueUrl.hostname)) {
-      throw new Error("Invalid continue URL");
-    }
-    return <ClientRedirect url={continueUrl.toString()} />;
+    // Revalidate persisted URLs too, including rows created before scheme validation.
+    return <ClientRedirect url={nativeAuthCallbackUrl(obj.continueUrl, code)} />;
   }
 }

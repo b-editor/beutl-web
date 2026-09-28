@@ -142,6 +142,8 @@ model ConfirmationToken {
 }
 
 model Profile {
+  // Case-insensitive uniqueness is enforced by Profile_userName_lower_key in
+  // 20260928010000_unique_profile_user_names (an expression index, kept in SQL).
   userId      String  @id
   userName    String
   displayName String

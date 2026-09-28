@@ -1,5 +1,7 @@
 // @beutl/core: Next.js/Cloudflare に依存しない純粋ロジックの共有パッケージ。
 // デスクトップ API (v1/v2/v3) と Web UI の両方から参照される。
+export { errorCodes, isApiErrorCode } from "./api-error-codes";
+export type { ApiErrorCode } from "./api-error-codes";
 export { selectPricing } from "./pricing";
 export {
   formatAmount,
@@ -79,6 +81,8 @@ export type {
 export type { ActionResult } from "./action-result";
 export {
   isAllowedContinueUrlHost,
+  isAllowedNativeAuthContinueUrl,
+  nativeAuthCallbackUrl,
   resolveNativeAuthContinueTarget,
 } from "./native-auth";
 export { resolveSafeRedirectPath } from "./safe-redirect";

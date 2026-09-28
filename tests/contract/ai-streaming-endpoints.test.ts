@@ -38,8 +38,8 @@ const PNG_BYTES = Buffer.from(
 
 type SseEvent = { event: string; data: unknown };
 
-// Reads a whole event stream. Every AI stream ends, because every one of them
-// ends in a result or an error.
+// Reads a whole event stream. Confirmed outcomes end in a result or error;
+// an unhandled failure closes without a terminal event.
 async function readEvents(response: Response): Promise<SseEvent[]> {
   const text = await response.text();
   const events: SseEvent[] = [];
@@ -105,11 +105,13 @@ const TRANSLATION_BODY = {
 
 describe("asking an AI endpoint to answer as it goes", () => {
   let state: ReturnType<typeof createInMemoryPrisma>["state"];
+  let prisma: ReturnType<typeof createInMemoryPrisma>["prisma"];
 
   beforeEach(() => {
     vi.clearAllMocks();
     const memory = createInMemoryPrisma();
     state = memory.state;
+    prisma = memory.prisma;
     setDbProvider(async () => memory.prisma as never);
     setR2BucketProvider(() => ({
       put: vi.fn().mockResolvedValue(undefined),
@@ -120,6 +122,7 @@ describe("asking an AI endpoint to answer as it goes", () => {
 
   afterEach(() => {
     delete process.env.JWT_SECRET;
+    vi.restoreAllMocks();
   });
 
   it("sends each subtitle as it is translated and then the whole result", async () => {
@@ -262,5 +265,31 @@ describe("asking an AI endpoint to answer as it goes", () => {
     expect(
       state.creditTransactions.filter((item) => item.kind === "refund"),
     ).toHaveLength(1);
+  });
+
+  it.each(["translations", "images"])("does not claim a refunded failure when the %s refund transaction cannot run", async (operation) => {
+    await activatePro();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const failWithUnavailableDatabase = async () => {
+      setDbProvider(async () => { throw new Error("Database unavailable during refund"); });
+      throw new AiProviderError("Provider response lost");
+    };
+    if (operation === "images") vi.mocked(generateImage).mockImplementationOnce(failWithUnavailableDatabase);
+    else vi.mocked(translateSegments).mockImplementationOnce(failWithUnavailableDatabase);
+
+    try {
+      const response = await post(
+        `/api/v3/ai/${operation}`,
+        operation === "images" ? { prompt: "a lighthouse", aspectRatio: "16:9" } : TRANSLATION_BODY,
+        "text/event-stream",
+      );
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(await readEvents(response)).toEqual([]);
+      expect(state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+      expect(state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+      expect([...state.aiJobs.values()][0].status).toBe("running");
+    } finally {
+      setDbProvider(async () => prisma as never);
+    }
   });
 });

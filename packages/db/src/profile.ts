@@ -1,6 +1,23 @@
 import { getDb } from "./provider";
 import type { Prisma } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
+import { isUniqueConstraintViolation } from "./credit-account";
+
+export class ProfileUserNameTakenError extends Error {
+  constructor() {
+    super("Profile user name is already in use");
+    this.name = "ProfileUserNameTakenError";
+  }
+}
+
+// Prisma implements insensitive equality with ILIKE. Treat identifiers
+// literally: an underscore in a user name must not match another character.
+export function profileUserNameFilter(userName: string) {
+  return {
+    equals: userName.replace(/[\\%_]/gu, "\\$&"),
+    mode: "insensitive" as const,
+  };
+}
 
 export async function findProfileForApi({
   where,
@@ -32,10 +49,7 @@ export async function findUserIdByUserName({
   const db = prisma ?? await getDb();
   return await db.profile.findFirst({
     where: {
-      userName: {
-        equals: name,
-        mode: "insensitive",
-      },
+      userName: profileUserNameFilter(name),
     },
     select: {
       userId: true,
@@ -86,7 +100,7 @@ export async function getProfileDisplayNameByUserName({
   const db = prisma || await getDb();
   return await db.profile.findFirst({
     where: {
-      userName: userName,
+      userName: profileUserNameFilter(userName),
     },
     select: {
       displayName: true,
@@ -131,22 +145,26 @@ export async function upsertProfile({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return await db.profile.upsert({
+  const taken = await db.profile.findFirst({
     where: {
-      userId,
+      userName: profileUserNameFilter(userName),
+      userId: { not: userId },
     },
-    update: {
-      displayName,
-      userName,
-      bio,
-    },
-    create: {
-      userId,
-      displayName,
-      userName,
-      bio,
-    },
+    select: { userId: true },
   });
+  if (taken) throw new ProfileUserNameTakenError();
+  try {
+    return await db.profile.upsert({
+      where: { userId },
+      update: { displayName, userName, bio },
+      create: { userId, displayName, userName, bio },
+    });
+  } catch (error) {
+    // The unique lower(userName) index settles concurrent claims. The upsert
+    // targets the userId primary key, so a name conflict cannot replace its owner.
+    if (isUniqueConstraintViolation(error)) throw new ProfileUserNameTakenError();
+    throw error;
+  }
 }
 
 export async function getSocialProviders(

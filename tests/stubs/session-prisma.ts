@@ -9,6 +9,15 @@ export type SessionRecord = {
   userAgent: string | null;
 };
 
+export type NativeAppAuthRecord = {
+  id: string;
+  sessionId: string;
+  continueUrl: string;
+  userId: string | null;
+  code: string | null;
+  codeExpires: Date | null;
+};
+
 export type NativeRefreshTokenRecord = {
   token: string;
   userId: string;
@@ -139,6 +148,7 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
   const sessions = new Map<string, SessionRecord>();
   const refreshTokens = new Map<string, NativeRefreshTokenRecord>();
   const families = new Map<string, RefreshTokenFamilyRecord>();
+  const nativeAuths = new Map<string, NativeAppAuthRecord>();
   const transactionOptions: Array<
     { isolationLevel?: string } | undefined
   > = [];
@@ -341,13 +351,47 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
     },
   };
 
+  const nativeAppAuth = {
+    findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+      const row = [...nativeAuths.values()].find((record) => matchesWhere(record, where));
+      return row ? structuredClone(row) : null;
+    },
+    create: async ({ data }: { data: { continueUrl: string } }) => {
+      const row = {
+        id: crypto.randomUUID(), sessionId: crypto.randomUUID(),
+        ...data, userId: null, code: null, codeExpires: null,
+      };
+      nativeAuths.set(row.id, row);
+      return structuredClone(row);
+    },
+    update: async ({ where, data }: { where: { id: string }; data: Partial<NativeAppAuthRecord> }) => {
+      const row = nativeAuths.get(where.id);
+      if (!row) throw new Error("Native authorization not found");
+      const updated = { ...row, ...data };
+      nativeAuths.set(row.id, updated);
+      return structuredClone(updated);
+    },
+    deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+      let count = 0;
+      for (const [id, row] of nativeAuths) {
+        if (matchesWhere(row, where)) {
+          nativeAuths.delete(id);
+          count++;
+        }
+      }
+      return { count };
+    },
+  };
+
   let transactionQueue = Promise.resolve();
   const prisma = {
+    nativeAppAuth,
     session,
     nativeRefreshToken,
     refreshTokenFamily,
     $transaction: async <T>(
       callback: (transaction: {
+        nativeAppAuth: typeof nativeAppAuth;
         session: typeof session;
         nativeRefreshToken: typeof nativeRefreshToken;
         refreshTokenFamily: typeof refreshTokenFamily;
@@ -374,13 +418,17 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
       const familySnapshot = new Map(
         [...families].map(([id, family]) => [id, cloneFamily(family)]),
       );
+      const nativeAuthSnapshot = structuredClone(nativeAuths);
       try {
         return await callback({
+          nativeAppAuth,
           session,
           nativeRefreshToken,
           refreshTokenFamily,
         });
       } catch (error) {
+        nativeAuths.clear();
+        for (const [id, row] of nativeAuthSnapshot) nativeAuths.set(id, row);
         sessions.clear();
         for (const [token, record] of sessionSnapshot) {
           sessions.set(token, record);
@@ -402,6 +450,12 @@ export function createSessionPrisma(initialSessions: SessionSeed[] = []) {
 
   return {
     prisma,
+    putNativeAppAuth(row: NativeAppAuthRecord) {
+      nativeAuths.set(row.id, structuredClone(row));
+    },
+    allNativeAppAuth() {
+      return [...nativeAuths.values()].map((row) => structuredClone(row));
+    },
     get(token: string) {
       const record = refreshTokens.get(token);
       return record ? cloneNativeRefreshToken(record) : null;

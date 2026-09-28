@@ -16,7 +16,8 @@
       "li2": "After changing, other users may use the original ID.",
       "li3": "You will not be able to access your profile using the original ID."
     },
-    "profileUpdated": "Profile updated"
+    "profileUpdated": "Profile updated",
+    "userNameTaken": "This user ID is already in use"
   },
   "email": {
     "title": "Email Address",

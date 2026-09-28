@@ -45,7 +45,7 @@ const releaseSchema = (t: Translator) =>
         (v) => v === "on" || v === "off",
         t("developer:validation.publishedInvalid"),
       ),
-    file: z.any(),
+    file: z.any().optional(),
   });
 
 async function sameUser<TResult>(

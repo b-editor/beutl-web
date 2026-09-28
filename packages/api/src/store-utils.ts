@@ -42,6 +42,7 @@ export async function retrievePackages(
   query?: string,
   request?: Request,
   type?: PackageTypeFilter,
+  pagination: { offset: number; count: number } = { offset: 0, count: 30 },
 ): Promise<ListedPackage[]> {
   const db = await getDb();
   const currency = await guessCurrency(request);
@@ -63,9 +64,9 @@ export async function retrievePackages(
 
   const tmp = await db.package.findMany({
     where,
-    orderBy: {
-      createdAt: "desc",
-    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: pagination.offset,
+    take: pagination.count,
     select: {
       id: true,
       displayName: true,
