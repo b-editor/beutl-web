@@ -33,6 +33,30 @@ configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
 
+## Publisher identities
+
+Apply `20260928010000_unique_profile_user_names` before enabling the updated
+profile and signup flows. It preserves name spelling and adds case-insensitive
+uniqueness at the database boundary. Pause signups and profile edits in both
+Web and Admin while applying it. The preflight stops before unlocking the table
+if existing names collide; identify affected rows with:
+
+```sql
+SELECT lower("userName"), array_agg("userId")
+FROM "Profile"
+GROUP BY lower("userName")
+HAVING count(*) > 1;
+```
+
+Resolve conflicting identities after verifying their owners, then retry the
+migration. Do not assign ownership by row order or automatically rename an
+existing publisher. If Prisma recorded the duplicate-name preflight as failed,
+run `vp exec prisma migrate resolve --rolled-back 20260928010000_unique_profile_user_names`
+from `apps/web` before retrying `vp exec prisma migrate deploy`.
+Keep the `Profile_userName_lower_key` expression index
+when generating later migrations; it is maintained in SQL rather than the
+Prisma model.
+
 ## Object storage
 
 User files and AI outputs live in one object store that the Web Worker and the

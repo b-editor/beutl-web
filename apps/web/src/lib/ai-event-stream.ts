@@ -88,7 +88,7 @@ export async function runAiStream<TResult>(
           if (parsed.event === "result") {
             return { ok: true, result: parsed.data as TResult };
           } else if (parsed.event === "error") {
-            return { ok: false, errorCode: errorCodeIn(parsed.data) };
+            return { ok: false, errorCode: errorCodeIn(parsed.data) ?? "aiRequestInterrupted" };
           } else {
             onEvent(parsed.event, parsed.data);
           }
@@ -124,19 +124,27 @@ function parseEvent(block: string): { event: string; data: unknown } | null {
   }
 }
 
-function errorCodeIn(data: unknown): string {
+function errorCodeIn(data: unknown): string | null {
   return typeof data === "object" &&
     data !== null &&
     "error_code" in data &&
-    typeof (data as { error_code: unknown }).error_code === "string"
+    typeof (data as { error_code: unknown }).error_code === "string" &&
+    (data as { error_code: string }).error_code.length > 0
     ? (data as { error_code: string }).error_code
-    : "aiProviderError";
+    : null;
 }
 
 async function errorCodeOf(response: Response): Promise<string> {
   try {
-    return errorCodeIn(await response.json());
+    const code = errorCodeIn(await response.json());
+    // Only these provider failures prove that a reservation was refunded.
+    // Infrastructure failures may hide an already-paid job or its replay.
+    if (response.status >= 500 &&
+      code !== "aiProviderError" && code !== "aiProviderBillingUnavailable") {
+      return "aiRequestInterrupted";
+    }
+    return code ?? "aiRequestInterrupted";
   } catch {
-    return "aiProviderError";
+    return "aiRequestInterrupted";
   }
 }

@@ -18,8 +18,8 @@ const packageTypeSchema = z.enum(PACKAGE_TYPE_FILTERS).optional().default("all")
 const searchQuerySchema = z.object({
   query: z.string().optional(),
   type: packageTypeSchema,
-  offset: z.coerce.number().min(0).optional().default(0),
-  count: z.coerce.number().min(1).max(100).optional().default(30),
+  offset: z.coerce.number().int().min(0).max(2_147_483_647).optional().default(0),
+  count: z.coerce.number().int().min(1).max(100).optional().default(30),
 });
 
 const featuredQuerySchema = z.object({
@@ -65,7 +65,10 @@ const app = new Hono()
     const query = c.req.valid("query");
     const userId = await getUserId(c);
 
-    const packages = await retrievePackages(query.query, c.req.raw, query.type);
+    const packages = await retrievePackages(query.query, c.req.raw, query.type, {
+      offset: query.offset,
+      count: query.count,
+    });
     const result = await Promise.all(
       packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
     );

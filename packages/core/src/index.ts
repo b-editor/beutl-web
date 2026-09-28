@@ -79,6 +79,8 @@ export type {
 export type { ActionResult } from "./action-result";
 export {
   isAllowedContinueUrlHost,
+  isAllowedNativeAuthContinueUrl,
+  nativeAuthCallbackUrl,
   resolveNativeAuthContinueTarget,
 } from "./native-auth";
 export { resolveSafeRedirectPath } from "./safe-redirect";

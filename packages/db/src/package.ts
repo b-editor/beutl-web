@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { profileUserNameFilter } from "./profile";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 import { startRetryableTransaction } from "./transaction";
@@ -270,7 +271,7 @@ export async function retrievePublishedPackagesByUserName({
     where: {
       user: {
         Profile: {
-          userName: userName,
+          userName: profileUserNameFilter(userName),
         },
       },
       published: true,

@@ -6,25 +6,9 @@ const NAME_IDENTIFIER_CLAIM =
   "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
 const NOW = new Date("2026-08-09T00:00:00.000Z");
 
-const mocks = vi.hoisted(() => ({
-  findNativeAppAuthBySessionId: vi.fn(),
-}));
-
 vi.mock("@beutl/i18n", () => ({
   getTranslation: async () => ({ t: (key: string) => key }),
 }));
-
-vi.mock("@beutl/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@beutl/db")>();
-  return {
-    ...actual,
-    createNativeAppAuth: vi.fn(),
-    deleteNativeAppAuthBySessionId: vi.fn(),
-    findNativeAppAuthById: vi.fn(),
-    findNativeAppAuthBySessionId: mocks.findNativeAppAuthBySessionId,
-    updateNativeAppAuthForHandler: vi.fn(),
-  };
-});
 
 import {
   REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS,
@@ -50,7 +34,8 @@ describe("v1 refresh-token rotation", () => {
   let store: ReturnType<typeof createSessionPrisma>;
 
   async function issueCredentials(userId: string): Promise<Credentials> {
-    mocks.findNativeAppAuthBySessionId.mockResolvedValueOnce({
+    store.putNativeAppAuth({
+      id: "native-auth",
       code: "authorization-code",
       codeExpires: new Date(Date.now() + 60_000),
       continueUrl: "https://app.example/continue",
@@ -156,7 +141,8 @@ describe("v1 refresh-token rotation", () => {
     "rejects an invalid refresh-token expiration of %s days",
     async (expirationDays) => {
       process.env.JWT_REFRESH_TOKEN_EXPIRATION_DAYS = expirationDays;
-      mocks.findNativeAppAuthBySessionId.mockResolvedValueOnce({
+      store.putNativeAppAuth({
+        id: "native-auth",
         code: "authorization-code",
         codeExpires: new Date(Date.now() + 60_000),
         continueUrl: "https://app.example/continue",

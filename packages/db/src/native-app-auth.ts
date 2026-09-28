@@ -116,3 +116,25 @@ export async function deleteNativeAppAuthBySessionId({
     },
   });
 }
+
+/** Consume only the exact, still-valid authorization observed by the exchange. */
+export async function consumeNativeAppAuthCode({
+  id,
+  sessionId,
+  userId,
+  code,
+  now = new Date(),
+  prisma,
+}: {
+  id: string;
+  sessionId: string;
+  userId: string;
+  code: string;
+  now?: Date;
+  prisma: PrismaTransaction;
+}): Promise<boolean> {
+  const consumed = await prisma.nativeAppAuth.deleteMany({
+    where: { id, sessionId, userId, code, codeExpires: { gt: now } },
+  });
+  return consumed.count === 1;
+}

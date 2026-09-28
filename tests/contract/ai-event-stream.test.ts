@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAiStream } from "../../apps/web/src/lib/ai-event-stream";
+import {
+  aiRequestNameOf, commitAiRequestName, keepsIdempotencyKey,
+  newAiRequestNames, readyAiRequestNames, settleAiRequestName,
+} from "../../apps/web/src/lib/ai-screen";
 
 const RESULT = { jobId: "job-1", segments: [{ id: "line-1", text: "こんにちは" }] };
 const run = (onEvent = vi.fn()) => runAiStream("translations", {
@@ -40,6 +44,37 @@ describe("reading AI results in the dashboard", () => {
   it("keeps JSON refusals as errors", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error_code: "aiRequestInProgress" }, { status: 409 })));
     await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInProgress" });
+  });
+
+  it.each([
+    [504, "<html>Gateway Timeout</html>"],
+    [502, ""],
+    [500, JSON.stringify({ error_code: "unknown" })],
+    [500, JSON.stringify({ error_code: "" })],
+    [500, "{}"],
+  ])("retains the paid request identity after ambiguous HTTP %s (%s)", async (status, body) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status })));
+    let names = readyAiRequestNames(newAiRequestNames(), () => "original-key");
+    names = commitAiRequestName(names, "same-request", () => "next-key");
+    const outcome = await run();
+    expect(outcome).toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+    if (outcome.ok) throw new Error("Expected an interrupted request");
+    names = settleAiRequestName(names, keepsIdempotencyKey(outcome.errorCode));
+    expect(aiRequestNameOf(names, "same-request")).toBe("original-key");
+  });
+
+  it.each(["aiProviderError", "aiProviderBillingUnavailable"])(
+    "keeps a confirmed refunded failure terminal: %s", async (error_code) => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error_code }, { status: 500 })));
+      await expect(run()).resolves.toEqual({ ok: false, errorCode: error_code });
+    },
+  );
+
+  it("does not invent a provider failure for a malformed terminal event", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(event("error", {}), {
+      headers: { "content-type": "text/event-stream" },
+    })));
+    await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
   });
 
   it("delivers previews and accepts the terminal result without waiting for a later socket failure", async () => {

@@ -128,6 +128,9 @@ export async function updateRelease(
       };
 
       const uploaded = formData.getAll("file") as File[];
+      if (validated.data.published === "on" && !release.file && uploaded.length === 0) {
+        return { success: false, message: t("developer:errors.fileNotFound") };
+      }
       let data: ReleaseRecord;
       const singleNupkg =
         uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");

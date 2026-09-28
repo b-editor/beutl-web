@@ -156,13 +156,12 @@ const app = new Hono()
       userId: userId,
     });
 
-    return c.json(
-      await Promise.all(
-        packages.map(
-          async (pkg) => await createResponse(pkg.packageId, userId, c.req.raw),
-        ),
+    const items = await Promise.all(
+      packages.map(
+        async (pkg) => await createResponse(pkg.packageId, userId, c.req.raw),
       ),
     );
+    return c.json(items.filter((item) => item !== null));
   })
   .delete("/:name", async (c) => {
     const name = c.req.param("name");

@@ -3,17 +3,14 @@ import { apiErrorResponse } from "../api/error";
 import { getUserId } from "../api/auth";
 import { guessCurrency } from "../currency";
 import { getPackages, mapPackage } from "../api/packages-db";
-import { findUserIdByUserName } from "@beutl/db";
+import { findUserIdByUserName, profileUserNameFilter } from "@beutl/db";
 import { getUserProfile } from "./user";
 
 const app = new Hono()
   .get("/:name", async (c) => {
     const name = c.req.param("name");
     const profile = await getUserProfile({
-      userName: {
-        equals: name,
-        mode: "insensitive",
-      },
+      userName: profileUserNameFilter(name),
     }, c.req.raw);
 
     if (!profile) {

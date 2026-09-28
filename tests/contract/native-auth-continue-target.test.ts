@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveNativeAuthContinueTarget } from "@beutl/core";
+import { isAllowedNativeAuthContinueUrl, nativeAuthCallbackUrl, resolveNativeAuthContinueTarget } from "@beutl/core";
 
 const ORIGIN = "https://beutl.beditor.net";
 
@@ -47,5 +47,31 @@ describe("resolveNativeAuthContinueTarget", () => {
   it("未指定は null", () => {
     expect(resolveNativeAuthContinueTarget(undefined, ORIGIN)).toBeNull();
     expect(resolveNativeAuthContinueTarget("", ORIGIN)).toBeNull();
+  });
+
+  it.each([
+    "javascript://localhost/%0Aalert(1)//",
+    "javascript://beutl.beditor.net/%0Aalert(1)//",
+    "data://localhost/payload",
+    "file://localhost/callback",
+    "https://localhost.evil.example/callback",
+    "https://user:password@localhost/callback",
+  ])("rejects executable or misleading callback URLs: %s", (value) => {
+    expect(isAllowedNativeAuthContinueUrl(new URL(value))).toBe(false);
+    expect(() => nativeAuthCallbackUrl(value, "sign-in-code")).toThrow("Invalid continue URL");
+    expect(resolveNativeAuthContinueTarget(value, ORIGIN)).toBeNull();
+  });
+
+  it.each(["http://localhost:43123/callback", `${ORIGIN}/callback`])(
+    "preserves supported callback URLs: %s", (value) => {
+      expect(isAllowedNativeAuthContinueUrl(new URL(value))).toBe(true);
+    },
+  );
+
+  it("attaches one encoded sign-in code while preserving callback parameters", () => {
+    const url = new URL(nativeAuthCallbackUrl("http://localhost:43123/callback?state=abc&code=old", "new+code&value"));
+    expect(url.origin).toBe("http://localhost:43123");
+    expect(url.searchParams.get("state")).toBe("abc");
+    expect(url.searchParams.getAll("code")).toEqual(["new+code&value"]);
   });
 });

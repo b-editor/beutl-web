@@ -1,5 +1,5 @@
 // v1/account is the authentication backbone: the ONLY place that mints access
-// JWTs (createJwtToken) and refresh tokens (createRefreshToken), which every v3
+// JWTs (createJwtToken) and refresh tokens (prepareRefreshToken), which every v3
 // endpoint validates via lib/api/auth.ts (getUserId). Do NOT retire this file;
 // only its genuinely-dead sub-routes are deprecated. The desktop app is coupled
 // to the exact claim names and refresh-token crypto, so any change must stay
@@ -11,16 +11,17 @@ import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import {
   createNativeAppAuth,
-  deleteNativeAppAuthBySessionId,
+  consumeNativeAppAuthCode,
   findNativeAppAuthById,
   findNativeAppAuthBySessionId,
   updateNativeAppAuthForHandler,
+  startRetryableTransaction,
 } from "@beutl/db";
 import {
   createNativeRefreshToken,
   rotateNativeRefreshTokenByToken,
 } from "@beutl/db";
-import { isAllowedContinueUrlHost } from "@beutl/core";
+import { isAllowedNativeAuthContinueUrl, nativeAuthCallbackUrl } from "@beutl/core";
 import { sign } from "hono/jwt";
 
 const createAuthUriSchema = z.object({
@@ -137,18 +138,6 @@ async function createJwtToken(userId: string) {
   };
 }
 
-async function createRefreshToken(userId: string) {
-  const prepared = await prepareRefreshToken();
-  await createNativeRefreshToken({
-    token: prepared.rawToken,
-    expiresAt: prepared.expires,
-    userId,
-    refreshTokenFamilyId: crypto.randomUUID(),
-  });
-
-  return prepared;
-}
-
 async function prepareRefreshToken() {
   const candidate = createRefreshTokenCandidate();
   const encToken = await encryptRefreshToken(candidate.rawToken);
@@ -187,7 +176,7 @@ const app = new Hono()
       const { continue_uri } = c.req.valid("json");
 
       const url = new URL(continue_uri);
-      if (!isAllowedContinueUrlHost(url.hostname)) {
+      if (!isAllowedNativeAuthContinueUrl(url)) {
         return c.json(await apiErrorResponse("invalidRequestBody"), {
           status: 400,
         });
@@ -237,9 +226,13 @@ const app = new Hono()
       codeExpires,
     });
 
-    const url = new URL(continueUrl);
-    url.searchParams.set("code", authCode ?? "");
-    return c.redirect(url.toString());
+    let target: string;
+    try {
+      target = nativeAuthCallbackUrl(continueUrl, authCode ?? "");
+    } catch {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
+    }
+    return c.redirect(target);
   })
   .post("/refresh", zValidator("json", refreshTokenSchema), async (c) => {
     const { refresh_token, token: _unusedAccessToken } = c.req.valid("json");
@@ -297,19 +290,39 @@ const app = new Hono()
         status: 401,
       });
     }
-    await deleteNativeAppAuthBySessionId({
-      sessionId: session_id,
-    });
-
+    const userId = auth.userId;
+    // Keep cryptography outside the retryable database transaction. A failed
+    // token write must roll back consumption so the code remains usable.
+    const prepared = await prepareRefreshToken();
     const { exp: accessTokenExp, token: accessToken } = await createJwtToken(
-      auth.userId,
+      userId,
     );
-
-    const { encToken } = await createRefreshToken(auth.userId);
+    const refreshTokenFamilyId = crypto.randomUUID();
+    const issued = await startRetryableTransaction(async (prisma) => {
+      const consumed = await consumeNativeAppAuthCode({
+        id: auth.id,
+        sessionId: session_id,
+        userId,
+        code,
+        prisma,
+      });
+      if (!consumed) return false;
+      await createNativeRefreshToken({
+        token: prepared.rawToken,
+        expiresAt: prepared.expires,
+        userId,
+        refreshTokenFamilyId,
+        prisma,
+      });
+      return true;
+    });
+    if (!issued) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), { status: 401 });
+    }
 
     return c.json({
       token: accessToken,
-      refresh_token: encToken,
+      refresh_token: prepared.encToken,
       expiration: accessTokenExp,
     });
   });
