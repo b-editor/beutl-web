@@ -6,9 +6,9 @@
 // JSON body. The stream begins only once the work does, because a status code
 // cannot be taken back after the first byte of the body has gone out.
 //
-// What travels over it is the work in progress and then, always, one closing
-// event: `result` when the operation produced what it was asked for, `error`
-// when it did not. A reader that sees neither has been cut off.
+// What travels over it is the work in progress and then a closing event:
+// `result` after persistence, or `error` after failure handling has completed.
+// An unexpected failure closes without either, leaving the outcome unknown.
 
 export type SseEmitter = (event: string, data: unknown) => void;
 
@@ -50,14 +50,10 @@ export function eventStreamResponse(
             write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           );
         } catch (error) {
-          // Whatever the operation failed to say for itself. The caller's own
-          // error handling has already run by the time anything gets here.
+          // Failure handling may itself have failed, including the refund
+          // transaction. Only the operation can emit a confirmed terminal
+          // event. Close without one so readers retain their recovery key.
           console.error("Unhandled failure in an AI event stream", error);
-          write(
-            `event: error\ndata: ${JSON.stringify({
-              error_code: "aiProviderError",
-            })}\n\n`,
-          );
         } finally {
           clearInterval(heartbeat);
           open = false;

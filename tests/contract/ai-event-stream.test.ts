@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAiStream } from "../../apps/web/src/lib/ai-event-stream";
+import { eventStreamResponse } from "../../packages/api/src/ai/sse";
 import {
   aiRequestNameOf, commitAiRequestName, keepsIdempotencyKey,
   newAiRequestNames, readyAiRequestNames, settleAiRequestName,
@@ -12,7 +13,7 @@ const run = (onEvent = vi.fn()) => runAiStream("translations", {
 const event = (name: string, data: unknown) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 
 describe("reading AI results in the dashboard", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("accepts the JSON success returned when replaying a completed job", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json(RESULT)));
@@ -75,6 +76,23 @@ describe("reading AI results in the dashboard", () => {
       headers: { "content-type": "text/event-stream" },
     })));
     await expect(run()).resolves.toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+  });
+
+  it.each([false, true])("retains the request after an unhandled server stream failure (preview=%s)", async (preview) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = eventStreamResponse(async (emit) => {
+      if (preview) emit("segment", RESULT.segments[0]);
+      // In particular, the operation's refund transaction can itself reject.
+      throw new Error("Refund transaction failed");
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    let names = readyAiRequestNames(newAiRequestNames(), () => "original-key");
+    names = commitAiRequestName(names, "same-request", () => "next-key");
+    const outcome = await run();
+    expect(outcome).toEqual({ ok: false, errorCode: "aiRequestInterrupted" });
+    if (outcome.ok) throw new Error("Expected an interrupted request");
+    names = settleAiRequestName(names, keepsIdempotencyKey(outcome.errorCode));
+    expect(aiRequestNameOf(names, "same-request")).toBe("original-key");
   });
 
   it("delivers previews and accepts the terminal result without waiting for a later socket failure", async () => {
