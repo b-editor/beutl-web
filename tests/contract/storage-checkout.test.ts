@@ -557,7 +557,9 @@ describe("storage plan checkout actions", () => {
       stripeSubscriptionId: "sub_storage",
       status: "active",
     });
+    mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_100"));
     await expect(createStorageCancelPortalLink()).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.subscriptionRetrieve).toHaveBeenCalledExactlyOnceWith("sub_storage");
     expect(mocks.portalCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: "cus_1",
@@ -570,9 +572,231 @@ describe("storage plan checkout actions", () => {
     );
   });
 
-  it("does not open the portal without a live storage subscription", async () => {
-    mocks.getSubscription.mockResolvedValue(null);
+  it.each([
+    { storedCancellation: true, remote: { cancel_at_period_end: true } },
+    { storedCancellation: true, remote: { cancel_at: 1_702_592_000 } },
+    { storedCancellation: false, remote: { cancel_at_period_end: true } },
+    { storedCancellation: false, remote: { cancel_at: 1_702_592_000 } },
+    { storedCancellation: false, remote: { status: "canceled" } },
+    { storedCancellation: false, remote: { status: "incomplete_expired" } },
+  ])("opens portal management after cancellation: %j", async ({ storedCancellation, remote }) => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+      cancelAtPeriodEnd: storedCancellation,
+    });
+    mocks.subscriptionRetrieve.mockResolvedValue(
+      stripeSubscription("price_100", remote),
+    );
+    mocks.portalCreate.mockImplementation(async (params) => {
+      if (params.flow_data?.type === "subscription_cancel") {
+        throw new Error("Subscription is already scheduled for cancellation");
+      }
+      return { url: "https://billing.stripe.com/portal" };
+    });
+
+    await expect(createStorageCancelPortalLink()).rejects.toMatchObject({
+      digest: "NEXT_REDIRECT;replace;https://billing.stripe.com/portal;307;",
+    });
+    expect(mocks.portalCreate).toHaveBeenCalledExactlyOnceWith({
+      customer: "cus_1",
+      configuration: "bpc_safe",
+      return_url: "https://beutl.example/dashboard/account/billing?portal=returned",
+    });
+    expect(mocks.subscriptionCancel).not.toHaveBeenCalled();
+    expect(mocks.subscriptionUpdate).not.toHaveBeenCalled();
+  });
+
+  it("uses the cancel flow again when Stripe has resumed a scheduled cancellation", async () => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+      cancelAtPeriodEnd: true,
+    });
+    mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_100"));
+
     await expect(createStorageCancelPortalLink()).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.portalCreate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        flow_data: expect.objectContaining({
+          type: "subscription_cancel",
+          subscription_cancel: { subscription: "sub_storage" },
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    { customer: "cus_other" },
+    { metadata: { ...OWNER, beutlUserId: "user-2", planId: "storage" } },
+    { metadata: { ...OWNER, planId: "pro" } },
+  ])("does not open a cancel flow for a mismatched subscription: %j", async (remote) => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+    });
+    mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_100", remote));
+
+    await expect(createStorageCancelPortalLink()).rejects.toMatchObject({
+      digest: "NEXT_REDIRECT;replace;/dashboard/account/billing;307;",
+    });
+    expect(mocks.portalCreate).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a missing subscription before returning to billing", async () => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+      planId: "storage",
+      stripeEventCreatedAt: new Date(80_000),
+    });
+    mocks.subscriptionRetrieve.mockRejectedValue({ statusCode: 404, code: "resource_missing" });
+
+    await expect(createStorageCancelPortalLink()).rejects.toMatchObject({
+      digest: "NEXT_REDIRECT;replace;/dashboard/account/billing;307;",
+    });
+    expect(mocks.reconcileSubscriptionObservation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        userId: "user-1",
+        stripeSubscriptionId: "sub_storage",
+        status: "canceled",
+        planId: "storage",
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        stripeEventId: "sync:sub_storage:missing",
+        stripeEventCreatedAt: new Date(80_000),
+        stripeCanonicalObservedAt: expect.any(Date),
+        replaceExistingSubscription: false,
+      }),
+    );
+    expect(mocks.portalCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { cancel_at_period_end: true },
+    { cancel_at: 1_702_592_000 },
+    { status: "canceled" },
+    { status: "incomplete_expired" },
+  ])("retries portal management when cancellation races with session creation: %j", async (remote) => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+    });
+    mocks.subscriptionRetrieve
+      .mockResolvedValueOnce(stripeSubscription("price_100"))
+      .mockResolvedValueOnce(stripeSubscription("price_100", remote));
+    mocks.portalCreate.mockRejectedValueOnce(
+      new Error("Subscription is already scheduled for cancellation"),
+    );
+
+    await expect(createStorageCancelPortalLink()).rejects.toMatchObject({
+      digest: "NEXT_REDIRECT;replace;https://billing.stripe.com/portal;307;",
+    });
+    expect(mocks.subscriptionRetrieve).toHaveBeenCalledTimes(2);
+    expect(mocks.portalCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.portalCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      flow_data: expect.objectContaining({ type: "subscription_cancel" }),
+    }));
+    expect(mocks.portalCreate).toHaveBeenNthCalledWith(2, {
+      customer: "cus_1",
+      configuration: "bpc_safe",
+      return_url: "https://beutl.example/dashboard/account/billing?portal=returned",
+    });
+    expect(mocks.subscriptionCancel).not.toHaveBeenCalled();
+    expect(mocks.subscriptionUpdate).not.toHaveBeenCalled();
+  });
+
+  describe("portal session creation failures", () => {
+    const portalError = new Error("Portal session creation failed");
+
+    beforeEach(() => {
+      mocks.getSubscription.mockResolvedValue({
+        userId: "user-1",
+        stripeSubscriptionId: "sub_storage",
+        status: "active",
+      });
+      mocks.subscriptionRetrieve.mockResolvedValue(stripeSubscription("price_100"));
+      mocks.portalCreate.mockRejectedValue(portalError);
+    });
+
+    it.each([
+      {},
+      { cancel_at: 1_702_592_000, customer: "cus_other" },
+      { cancel_at: 1_702_592_000, metadata: { ...OWNER, beutlUserId: "user-2", planId: "storage" } },
+      { status: "canceled", metadata: { ...OWNER, planId: "pro" } },
+    ])("preserves the error without an owned cancellation on re-read: %j", async (remote) => {
+      mocks.subscriptionRetrieve
+        .mockResolvedValueOnce(stripeSubscription("price_100"))
+        .mockResolvedValueOnce(stripeSubscription("price_100", remote));
+
+      await expect(createStorageCancelPortalLink()).rejects.toBe(portalError);
+      expect(mocks.subscriptionRetrieve).toHaveBeenCalledTimes(2);
+      expect(mocks.portalCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves the session error when the follow-up read fails", async () => {
+      mocks.subscriptionRetrieve
+        .mockResolvedValueOnce(stripeSubscription("price_100"))
+        .mockRejectedValueOnce(new Error("Stripe read failed"));
+
+      await expect(createStorageCancelPortalLink()).rejects.toBe(portalError);
+      expect(mocks.subscriptionRetrieve).toHaveBeenCalledTimes(2);
+      expect(mocks.portalCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry a failed management session", async () => {
+      mocks.subscriptionRetrieve.mockResolvedValue(
+        stripeSubscription("price_100", { cancel_at: 1_702_592_000 }),
+      );
+
+      await expect(createStorageCancelPortalLink()).rejects.toBe(portalError);
+      expect(mocks.subscriptionRetrieve).toHaveBeenCalledTimes(1);
+      expect(mocks.portalCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates a failed management retry without retrying again", async () => {
+      const retryError = new Error("Management session creation failed");
+      mocks.subscriptionRetrieve
+        .mockResolvedValueOnce(stripeSubscription("price_100"))
+        .mockResolvedValueOnce(stripeSubscription("price_100", { cancel_at_period_end: true }));
+      mocks.portalCreate
+        .mockRejectedValueOnce(portalError)
+        .mockRejectedValueOnce(retryError);
+
+      await expect(createStorageCancelPortalLink()).rejects.toBe(retryError);
+      expect(mocks.subscriptionRetrieve).toHaveBeenCalledTimes(2);
+      expect(mocks.portalCreate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("propagates Stripe read failures instead of assuming cancellation is available", async () => {
+    mocks.getSubscription.mockResolvedValue({
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status: "active",
+    });
+    const error = new Error("Stripe is unavailable");
+    mocks.subscriptionRetrieve.mockRejectedValue(error);
+
+    await expect(createStorageCancelPortalLink()).rejects.toBe(error);
+    expect(mocks.portalCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "canceled", "incomplete_expired"])("does not open the portal with a terminal or absent stored subscription: %s", async (status) => {
+    mocks.getSubscription.mockResolvedValue(status === null ? null : {
+      userId: "user-1",
+      stripeSubscriptionId: "sub_storage",
+      status,
+    });
+    await expect(createStorageCancelPortalLink()).rejects.toMatchObject({
+      digest: "NEXT_REDIRECT;replace;/dashboard/account/billing;307;",
+    });
+    expect(mocks.subscriptionRetrieve).not.toHaveBeenCalled();
     expect(mocks.portalCreate).not.toHaveBeenCalled();
   });
 });

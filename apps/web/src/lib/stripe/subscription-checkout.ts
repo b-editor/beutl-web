@@ -27,6 +27,7 @@ import {
   isCancellationScheduled,
 } from "./cancellation";
 import type { createStripe } from "./config";
+import { isStripeResourceMissingError } from "./errors";
 import {
   getExpandableId as expandableId,
   getStripeCustomerOwnershipProof,
@@ -1189,6 +1190,7 @@ export async function changeSubscriptionTier({
 
 // Deep-link into the portal's cancellation flow for one plan's subscription.
 // The target is the stored row's subscription, never a client-supplied id.
+// Once cancellation is scheduled, open portal management so it can be resumed.
 export async function createSubscriptionCancelPortalLink({
   stripe,
   plan,
@@ -1208,20 +1210,70 @@ export async function createSubscriptionCancelPortalLink({
   ) {
     return null;
   }
+  // The webhook (or the page that rendered the button) can lag behind Stripe.
+  // An already-canceling subscription cannot enter the cancellation flow again.
+  let subscription: Stripe.Subscription;
+  try {
+    subscription = await stripe.subscriptions.retrieve(
+      stored.stripeSubscriptionId,
+    );
+  } catch (error) {
+    if (isStripeResourceMissingError(error)) {
+      // Use the normal observation path so the billing page no longer offers
+      // management of a missing subscription, without replacing a newer row.
+      await syncSubscriptionFromStripe(userId, plan.id);
+      return null;
+    }
+    throw error;
+  }
+  const isOwnedSubscription = (current: Stripe.Subscription): boolean =>
+    expandableId(current.customer) === customerId &&
+    hasStripeOwnerMetadata(current.metadata, userId) &&
+    current.metadata?.planId === plan.id;
+  const needsManagementPortal = (current: Stripe.Subscription): boolean =>
+    isCancellationScheduled(current) ||
+    current.status === "canceled" ||
+    current.status === "incomplete_expired";
+  if (!isOwnedSubscription(subscription)) {
+    return null;
+  }
   const configuration = await getSafeBillingPortalConfigurationId(stripe);
   const returnUrl = `${origin()}${BILLING_PATH}?portal=returned`;
-  const portal = await stripe.billingPortal.sessions.create({
+  const params: Stripe.BillingPortal.SessionCreateParams = {
     customer: customerId,
     configuration,
-    flow_data: {
-      type: "subscription_cancel",
-      subscription_cancel: { subscription: stored.stripeSubscriptionId },
-      after_completion: {
-        type: "redirect",
-        redirect: { return_url: returnUrl },
-      },
-    },
     return_url: returnUrl,
-  });
-  return portal.url;
+  };
+  if (needsManagementPortal(subscription)) {
+    const portal = await stripe.billingPortal.sessions.create(params);
+    return portal.url;
+  }
+  try {
+    const portal = await stripe.billingPortal.sessions.create({
+      ...params,
+      flow_data: {
+        type: "subscription_cancel",
+        subscription_cancel: { subscription: stored.stripeSubscriptionId },
+        after_completion: {
+          type: "redirect",
+          redirect: { return_url: returnUrl },
+        },
+      },
+    });
+    return portal.url;
+  } catch (error) {
+    // Another tab can cancel after our read. Retry once with management only
+    // when a fresh read confirms that change and still belongs to this user.
+    let current: Stripe.Subscription;
+    try {
+      current = await stripe.subscriptions.retrieve(stored.stripeSubscriptionId);
+    } catch {
+      throw error;
+    }
+    if (!isOwnedSubscription(current) || !needsManagementPortal(current)) {
+      throw error;
+    }
+    const portal = await stripe.billingPortal.sessions.create(params);
+    return portal.url;
+  }
 }
