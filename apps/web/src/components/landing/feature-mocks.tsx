@@ -366,7 +366,7 @@ export function NodeGraphMock({ t }: { t: Translator }) {
 export function ShaderCodeMock() {
   return (
     <>
-      <pre className="overflow-x-auto whitespace-pre rounded-[10px] border border-lp-border bg-[#0b0916] px-4 py-[14px] font-mono text-xs leading-[1.75]">
+      <pre className="overflow-x-auto whitespace-pre rounded-lg border border-lp-border bg-[#0b0916] px-4 py-[14px] font-mono text-xs leading-[1.75]">
         <code>
         <span className="text-lp-faint">{"// SKSL filter effect"}</span>
         <br />
@@ -398,7 +398,7 @@ export function ShaderCodeMock() {
         {"}"}
         </code>
       </pre>
-      <div className="mt-3 h-[60px] animate-lp-slide rounded-[10px] bg-[linear-gradient(100deg,#0b0916,var(--color-lp-indigo),var(--color-lp-coral),var(--color-lp-cyan))] bg-[length:300%_100%] motion-reduce:animate-none" />
+      <div className="mt-3 h-[60px] animate-lp-slide rounded-lg bg-[linear-gradient(100deg,#0b0916,var(--color-lp-indigo),var(--color-lp-coral),var(--color-lp-cyan))] bg-[length:300%_100%] motion-reduce:animate-none" />
     </>
   );
 }
@@ -617,7 +617,7 @@ function GpuFrame({
   children: ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-[10px] border border-lp-border">
+    <div className="overflow-hidden rounded-lg border border-lp-border">
       <div className="flex justify-between border-b border-lp-border px-2.5 py-[7px] text-[11px] font-bold text-lp-muted">
         <span>{label}</span>
         <span>{scale}</span>
@@ -692,7 +692,7 @@ export function ExportMock({ t }: { t: Translator }) {
         {EXPORT_FORMATS.map((format) => (
           <span
             key={format}
-            className="rounded-[9px] border border-lp-border2 bg-white/[0.03] px-3.5 py-[9px] font-mono text-[13px] font-bold text-lp-text"
+            className="rounded-md border border-lp-border2 bg-white/[0.03] px-3.5 py-[9px] font-mono text-[13px] font-bold text-lp-text"
           >
             {format}
           </span>
@@ -740,18 +740,16 @@ const OS = [
 export function PlatformMock({ t }: { t: Translator }) {
   return (
     <div className="flex flex-col items-center gap-6">
-      {/* A grid rather than a flex row: the three labels are different lengths
-          in every locale, and equal tracks keep the three borders matching. */}
-      <div className="grid grid-cols-3 gap-3 md:gap-4">
+      <div className="grid w-full grid-cols-3 gap-2 sm:gap-3 md:gap-4">
         {OS.map(({ key, brand, Logo }) => (
           <div
             key={key}
-            className="flex flex-col items-center gap-3 rounded-xl border border-lp-border bg-white/[0.02] px-5 py-5"
+            className="flex min-w-0 flex-col items-center gap-3 rounded-lg border border-lp-border bg-white/[0.02] px-2 py-5 sm:px-5"
           >
             <span style={{ color: brand }}>
               <Logo className="h-9 w-9" />
             </span>
-            <span className="text-sm font-bold text-lp-muted">
+            <span className="text-xs font-bold text-lp-muted sm:text-sm">
               {t(`main:${key}`)}
             </span>
           </div>
@@ -781,21 +779,21 @@ export function PackagesMock({
         <Link
           key={pkg.id}
           href={`/${lang}/store/${pkg.name}`}
-          className="flex items-center gap-[14px] rounded-xl border border-lp-border bg-lp-surface p-4 transition-colors hover:border-lp-border2"
+          className="flex items-center gap-[14px] rounded-lg border border-lp-border bg-lp-surface p-4 transition-colors hover:border-lp-border2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           {pkg.iconFileUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img
-              className="size-[46px] flex-none rounded-[10px] object-cover"
+              className="size-[46px] flex-none rounded-md object-cover"
               alt=""
               loading="lazy"
               src={pkg.iconFileUrl}
             />
           ) : (
-            <div className="size-[46px] flex-none rounded-[10px] bg-[linear-gradient(135deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
+            <div className="size-[46px] flex-none rounded-md bg-[linear-gradient(135deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
           )}
           <div className="min-w-0">
-            <h3 className="text-[15px] font-extrabold">
+            <h3 className="text-[15px] font-extrabold [overflow-wrap:anywhere]">
               {pkg.displayName}
               {pkg.publisherName && (
                 <small className="ml-2 text-[11.5px] font-normal text-lp-faint">
@@ -804,7 +802,7 @@ export function PackagesMock({
               )}
             </h3>
             {pkg.shortDescription && (
-              <p className="mt-[3px] text-[12.5px] text-lp-muted">
+              <p className="mt-[3px] text-[12.5px] text-lp-muted [overflow-wrap:anywhere]">
                 {pkg.shortDescription}
               </p>
             )}
@@ -812,7 +810,7 @@ export function PackagesMock({
         </Link>
       ))}
 
-      <div className="flex items-center justify-center gap-[14px] rounded-xl border border-dashed border-lp-border bg-lp-surface p-4 text-center">
+      <div className="flex items-center justify-center gap-[14px] rounded-lg border border-dashed border-lp-border bg-lp-surface p-4 text-center">
         <div className="min-w-0">
           <h3 className="text-[15px] font-extrabold text-lp-indigo-bright">
             {t("main:buildExtensions")}

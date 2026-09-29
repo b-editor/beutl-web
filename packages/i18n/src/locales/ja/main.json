@@ -20,7 +20,7 @@
   "tocExtensions": "拡張性",
 
   "timelineEyebrow": "タイムライン & 合成",
-  "timelineHeadline": "レイヤーを重ねて、時間で動かす。",
+  "timelineHeadline": "映像・文字・音を|レイヤーで組み立てる",
   "timelineText": "映像・図形・テキスト・音を、それぞれレイヤーとしてタイムラインに並べて編集できます。シーンはネストできるので、複雑な合成も整理しながら組み立てられます。",
   "timelineClipScene": "背景シーン",
   "timelineClipText": "テキスト",
@@ -28,7 +28,7 @@
   "timelineClipAudio": "オーディオ",
 
   "nodeGraphEyebrow": "ノードグラフ",
-  "nodeGraphHeadline": "ノードをつないで|表現を組む。",
+  "nodeGraphHeadline": "ノードで処理をつなぐ",
   "nodeGraphText": "図形やエフェクト、乱数、スイッチなどのノードを線でつないで、手続き的に表現を設計できます。ひとつの値を変えれば、つながった全体に反映されます。",
   "nodeShape": "図形",
   "nodeShapeParams": "楕円 / サイズ",
@@ -38,7 +38,7 @@
   "nodeEffectParams": "ブラー + 発光",
 
   "animationEyebrow": "アニメーション",
-  "animationHeadline": "キーフレームとイージングで|動かす。",
+  "animationHeadline": "キーフレームで|動きを調整する",
   "animationText": "フェードやスライドなどの基本的な動きから、オブジェクトごとの細かなアニメーションまで。33種類のイージングで、動きの緩急を調整できます。",
   "easeIn": "EASE IN",
   "easeOut": "EASE OUT",
@@ -49,8 +49,8 @@
 
   "effectsEyebrow": "エフェクト",
   "effectsCount": "40",
-  "effectsHeadline": "40種類の|エフェクト。",
-  "effectsText": "ぼかし・シャドウ・LUTといった定番に加え、クロマキー、ピクセルソート、ディスプレイスメントマップなども。重ねて組み合わせれば、好みのルックが作れます。拡張機能でさらに追加できます。",
+  "effectsHeadline": "40種類のエフェクトを|組み合わせる",
+  "effectsText": "ぼかし、シャドウ、LUT、クロマキーなどを重ねて適用できます。ピクセルソートやディスプレイスメントマップにも対応。エフェクトは拡張機能で追加できます。",
   "effectsChipBlur": "ブラー",
   "effectsChipDropShadow": "ドロップシャドウ",
   "effectsChipInnerShadow": "内側シャドウ",
@@ -72,7 +72,7 @@
   "shaderText": "SKSL・GLSLのシェーダや、C#スクリプトをその場で記述できます。既製のエフェクトでは足りない表現も、コードで作れます。",
 
   "audioEyebrow": "オーディオ & ビジュアライザー",
-  "audioHeadline": "音の編集まで、これ一つで。",
+  "audioHeadline": "BGMや効果音を|ミックスする",
   "audioText": "EQ、コンプレッサー、リミッター、ディレイなどで、BGMやSEのミックス・マスタリングができます。波形・スペクトラム・スペクトログラムの3種類のビジュアライザーも内蔵しています。",
   "audioChipEq": "EQ",
   "audioChipCompressor": "コンプレッサー",
@@ -116,8 +116,8 @@
   "bentoUndoText": "操作は積み重ねても元通り。安心して試せる編集履歴。",
 
   "crossPlatformEyebrow": "クロスプラットフォーム",
-  "crossPlatformHeadline": "Windows・macOS・Linuxで動く。",
-  "crossPlatformText": "最新の .NET で作られているため、主要なOSで同じように動作します。使っているマシンを問わず、同じプロジェクトを扱えます。",
+  "crossPlatformHeadline": "Windows・macOS・Linuxに対応",
+  "crossPlatformText": "それぞれのOS向けにアプリを配布しています。ダウンロードページから、お使いの環境に合うファイルを選べます。",
   "platformWindows": "Windows",
   "platformMacos": "macOS",
   "platformLinux": "Linux",
@@ -125,11 +125,12 @@
   "platformVerifiedNote": "動作確認済み",
 
   "extensibleEyebrow": "拡張性",
-  "extensibleHeadline": "拡張機能で|機能を追加。",
+  "extensibleHeadline": "必要な機能を|ストアから追加する",
   "extensibleText": "ストアから拡張機能を入手して、Beutlに機能を追加できます。エフェクト、オブジェクト、コーデック、UIなどを追加でき、自分で開発した拡張機能を公開することもできます。",
   "buildExtensions": "+ 拡張機能を開発する",
   "buildExtensionsDescription": "自作の拡張機能をストアに公開できます。",
+  "browseExtensions": "拡張機能を見る",
 
-  "finalHeadline": "無料で、今すぐはじめられます。",
-  "finalText": "ダウンロードは無料です。まずは気軽に触ってみてください。"
+  "finalHeadline": "Beutlをダウンロード",
+  "finalText": "リリースページに各OSのダウンロードと変更履歴を掲載しています。ソースコードはGitHubで公開しています。"
 }

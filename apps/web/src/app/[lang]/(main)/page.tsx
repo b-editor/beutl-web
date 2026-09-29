@@ -5,7 +5,6 @@ import { cn } from "@beutl/core";
 import EasingDemo, { EASING_CURVES } from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import FeaturesToc from "@/components/features-toc";
-import AnimatedSection from "@/components/landing/animated-section";
 import BentoSection from "@/components/landing/bento-section";
 import HeroSection from "@/components/landing/hero-section";
 import ShowcaseSection from "@/components/landing/showcase-section";
@@ -85,7 +84,7 @@ export default async function Home(props: {
   ]);
 
   return (
-    <div className="bg-lp-bg text-lp-text">
+    <main className="bg-lp-bg text-lp-text">
       <HeroSection
         downloadHref={DOWNLOAD_HREF}
         githubHref={GITHUB_HREF}
@@ -116,7 +115,6 @@ export default async function Home(props: {
       </FeatureSection>
 
       <FeatureSection
-        reverse
         tocId="features-nodes"
         eyebrow={t("main:nodeGraphEyebrow")}
         headline={t("main:nodeGraphHeadline")}
@@ -144,10 +142,8 @@ export default async function Home(props: {
       </FeatureSection>
 
       <FeatureSection
-        reverse
         tocId="features-effects"
         eyebrow={t("main:effectsEyebrow")}
-        badge={t("main:effectsCount")}
         headline={t("main:effectsHeadline")}
         body={t("main:effectsText")}
       >
@@ -163,7 +159,6 @@ export default async function Home(props: {
       </FeatureSection>
 
       <FeatureSection
-        reverse
         tocId="features-audio"
         eyebrow={t("main:audioEyebrow")}
         headline={t("main:audioHeadline")}
@@ -188,7 +183,6 @@ export default async function Home(props: {
       </FeatureSection>
 
       <FeatureSection
-        reverse
         eyebrow={t("main:gpuEyebrow")}
         headline={t("main:gpuHeadline")}
         body={t("main:gpuText")}
@@ -207,7 +201,6 @@ export default async function Home(props: {
       <BentoSection t={t} />
 
       <FeatureSection
-        reverse
         eyebrow={t("main:crossPlatformEyebrow")}
         headline={t("main:crossPlatformHeadline")}
         body={t("main:crossPlatformText")}
@@ -221,35 +214,39 @@ export default async function Home(props: {
         eyebrow={t("main:extensibleEyebrow")}
         headline={t("main:extensibleHeadline")}
         body={t("main:extensibleText")}
+        extra={
+          <Link
+            href={`/${lang}/store`}
+            className={cn(LP_BUTTON_GHOST, "mt-6")}
+          >
+            {t("main:browseExtensions")}
+          </Link>
+        }
       >
         <PackagesMock t={t} lang={lang} packages={packages} />
       </FeatureSection>
 
-      <section
-        className={cn(LP_SECTION, "py-[clamp(64px,9vw,120px)] text-center")}
-        style={{
-          background:
-            "radial-gradient(80% 120% at 50% 0%, color-mix(in srgb, var(--color-lp-indigo) 18%, transparent), transparent 60%)",
-        }}
-      >
-        <AnimatedSection className={LP_WRAP}>
-          <h2 className="text-[clamp(30px,5vw,52px)] font-extrabold tracking-[-0.02em] text-balance [overflow-wrap:anywhere]">
-            {t("main:finalHeadline")}
-          </h2>
-          <p className="mx-auto mt-[18px] max-w-[44ch] text-[17px] text-lp-muted [overflow-wrap:anywhere]">
-            {t("main:finalText")}
-          </p>
-          <div className={cn(LP_CTA_ROW, "justify-center")}>
+      <section className={LP_SECTION}>
+        <div className={cn(LP_WRAP, "flex flex-wrap items-center justify-between gap-6")}>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">
+              {t("main:finalHeadline")}
+            </h2>
+            <p className="mt-3 max-w-[48ch] text-sm leading-relaxed text-lp-muted">
+              {t("main:finalText")}
+            </p>
+          </div>
+          <div className={cn(LP_CTA_ROW, "mt-0")}>
             <Link href={DOWNLOAD_HREF} className={LP_BUTTON_PRIMARY}>
-              <Download />
+              <Download aria-hidden="true" />
               {t("main:download")}
             </Link>
             <Link href={GITHUB_HREF} className={LP_BUTTON_GHOST}>
               {t("main:viewOnGitHub")}
             </Link>
           </div>
-        </AnimatedSection>
+        </div>
       </section>
-    </div>
+    </main>
   );
 }
