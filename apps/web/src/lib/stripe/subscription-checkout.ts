@@ -27,6 +27,7 @@ import {
   isCancellationScheduled,
 } from "./cancellation";
 import type { createStripe } from "./config";
+import { isStripeResourceMissingError } from "./errors";
 import {
   getExpandableId as expandableId,
   getStripeCustomerOwnershipProof,
@@ -1189,6 +1190,7 @@ export async function changeSubscriptionTier({
 
 // Deep-link into the portal's cancellation flow for one plan's subscription.
 // The target is the stored row's subscription, never a client-supplied id.
+// Once cancellation is scheduled, open portal management so it can be resumed.
 export async function createSubscriptionCancelPortalLink({
   stripe,
   plan,
@@ -1208,20 +1210,45 @@ export async function createSubscriptionCancelPortalLink({
   ) {
     return null;
   }
+  // The webhook (or the page that rendered the button) can lag behind Stripe.
+  // An already-canceling subscription cannot enter the cancellation flow again.
+  let subscription: Stripe.Subscription;
+  try {
+    subscription = await stripe.subscriptions.retrieve(
+      stored.stripeSubscriptionId,
+    );
+  } catch (error) {
+    if (isStripeResourceMissingError(error)) return null;
+    throw error;
+  }
+  if (
+    expandableId(subscription.customer) !== customerId ||
+    !hasStripeOwnerMetadata(subscription.metadata, userId) ||
+    subscription.metadata?.planId !== plan.id
+  ) {
+    return null;
+  }
   const configuration = await getSafeBillingPortalConfigurationId(stripe);
   const returnUrl = `${origin()}${BILLING_PATH}?portal=returned`;
-  const portal = await stripe.billingPortal.sessions.create({
+  const params: Stripe.BillingPortal.SessionCreateParams = {
     customer: customerId,
     configuration,
-    flow_data: {
+    return_url: returnUrl,
+  };
+  if (
+    !isCancellationScheduled(subscription) &&
+    subscription.status !== "canceled" &&
+    subscription.status !== "incomplete_expired"
+  ) {
+    params.flow_data = {
       type: "subscription_cancel",
       subscription_cancel: { subscription: stored.stripeSubscriptionId },
       after_completion: {
         type: "redirect",
         redirect: { return_url: returnUrl },
       },
-    },
-    return_url: returnUrl,
-  });
+    };
+  }
+  const portal = await stripe.billingPortal.sessions.create(params);
   return portal.url;
 }
