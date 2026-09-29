@@ -13,7 +13,8 @@ const LP_BUTTON =
 
 export const LP_BUTTON_PRIMARY = cn(
   LP_BUTTON,
-  "bg-primary text-primary-foreground hover:bg-primary/90",
+  // White clears 4.5:1 on the dark primary; the shared off-white token does not.
+  "bg-primary text-white hover:bg-primary/90",
 );
 
 export const LP_BUTTON_GHOST = cn(
