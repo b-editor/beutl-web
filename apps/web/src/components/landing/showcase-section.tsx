@@ -1,4 +1,3 @@
-import { cn } from "@beutl/core";
 import { LP_WRAP } from "./lp-parts";
 import ShowcaseMedia, { type ShowcaseSource } from "./showcase-media";
 
@@ -22,14 +21,6 @@ const SOURCES: ReadonlyArray<ShowcaseSource> = [
   { src: "/img/showcase.mp4", type: "video/mp4" },
 ];
 
-const GLOW =
-  "radial-gradient(75% 100% at 50% 0%, color-mix(in srgb, var(--color-lp-indigo) 20%, transparent), transparent 70%)";
-
-/*
-  Deliberately not wrapped in AnimatedSection. This sits directly under the hero
-  and so is usually the largest thing painted first; fading it in from nothing
-  would push back the moment the page looks loaded.
-*/
 export default function ShowcaseSection({
   label,
   caption,
@@ -38,15 +29,9 @@ export default function ShowcaseSection({
   caption: string;
 }) {
   return (
-    <section className="relative overflow-hidden bg-lp-bg pt-[clamp(40px,6vw,72px)] pb-[clamp(48px,7vw,88px)]">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[min(60vw,520px)]"
-        style={{ background: GLOW }}
-      />
-
-      <figure className={cn(LP_WRAP, "relative")}>
-        <div className="overflow-hidden rounded-2xl border border-lp-border bg-lp-bg2 shadow-[0_50px_120px_-50px_rgba(109,92,247,0.55)]">
+    <section className="pb-[clamp(40px,6vw,72px)]">
+      <figure className={LP_WRAP}>
+        <div className="overflow-hidden rounded-lg border border-lp-border2 bg-lp-bg2">
           <ShowcaseMedia
             sources={SOURCES}
             poster={POSTER}
@@ -55,7 +40,7 @@ export default function ShowcaseSection({
             label={label}
           />
         </div>
-        <figcaption className="mt-4 text-center text-sm text-lp-muted [overflow-wrap:anywhere]">
+        <figcaption className="mt-3 text-xs leading-relaxed text-lp-muted [overflow-wrap:anywhere]">
           {caption}
         </figcaption>
       </figure>

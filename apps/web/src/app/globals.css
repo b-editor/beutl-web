@@ -55,14 +55,14 @@
   /* Landing page palette. The landing page renders on its own dark canvas
      rather than the themed app surfaces, so it carries a dedicated scale. */
   --color-lp-bg: #09080f;
-  --color-lp-bg2: #0e0c18;
-  --color-lp-surface: #15122a;
-  --color-lp-surface2: #1b1734;
+  --color-lp-bg2: #111116;
+  --color-lp-surface: #18181f;
+  --color-lp-surface2: #22222b;
   --color-lp-border: rgba(255, 255, 255, 0.09);
   --color-lp-border2: rgba(255, 255, 255, 0.16);
-  --color-lp-text: #eceaf8;
-  --color-lp-muted: #a8a3c6;
-  --color-lp-faint: #6e6990;
+  --color-lp-text: #ededf0;
+  --color-lp-muted: #acaab5;
+  --color-lp-faint: #85818f;
   --color-lp-indigo: #6d5cf7;
   --color-lp-indigo-bright: #9a8cff;
   --color-lp-coral: #ff7a6b;

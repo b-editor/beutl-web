@@ -66,7 +66,7 @@ export default function EasingDemo({
   label: string;
 }) {
   return (
-    <div className="rounded-[10px] border border-lp-border bg-white/[0.02] p-3">
+    <div className="rounded-lg border border-lp-border bg-white/[0.02] p-3">
       <svg
         viewBox="0 -30 125 150"
         className="block h-auto w-full max-w-full"

@@ -52,11 +52,11 @@ export default function BentoSection({ t }: { t: Translator }) {
             <div
               key={cell.key}
               className={cn(
-                "rounded-[14px] border border-lp-border bg-gradient-to-b from-lp-surface to-lp-bg2 p-5",
+                "rounded-lg border border-lp-border bg-gradient-to-b from-lp-surface to-lp-bg2 p-5",
                 cell.big && "col-span-2",
               )}
             >
-              <div className="mb-3 grid size-[34px] place-items-center rounded-[9px] bg-lp-indigo/[0.14] text-lp-indigo-bright [&>svg]:size-[18px]">
+              <div className="mb-3 grid size-[34px] place-items-center rounded-md bg-lp-indigo/[0.14] text-lp-indigo-bright [&>svg]:size-[18px]">
                 {cell.icon}
               </div>
               <h3 className="mb-1.5 text-[15.5px] font-extrabold">

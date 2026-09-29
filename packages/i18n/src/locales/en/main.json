@@ -20,7 +20,7 @@
   "tocExtensions": "Extensibility",
 
   "timelineEyebrow": "Timeline & Compositing",
-  "timelineHeadline": "Stack layers, move them through time.",
+  "timelineHeadline": "Arrange video, text, and audio in layers",
   "timelineText": "Place video, shapes, text, and audio on the timeline as separate layers. Scenes can be nested, so even complex composites stay organized while you build them.",
   "timelineClipScene": "Background scene",
   "timelineClipText": "Text",
@@ -28,7 +28,7 @@
   "timelineClipAudio": "Audio",
 
   "nodeGraphEyebrow": "Node Graph",
-  "nodeGraphHeadline": "Connect nodes, build the look.",
+  "nodeGraphHeadline": "Connect operations with nodes",
   "nodeGraphText": "Wire up nodes for shapes, effects, random values, and switches to design a look procedurally. Change one value and everything connected to it follows.",
   "nodeShape": "Shape",
   "nodeShapeParams": "Ellipse / Size",
@@ -38,7 +38,7 @@
   "nodeEffectParams": "Blur + Glow",
 
   "animationEyebrow": "Animation",
-  "animationHeadline": "Animate with keyframes and easing.",
+  "animationHeadline": "Control motion with keyframes",
   "animationText": "From basic moves like fades and slides to fine-grained animation on individual objects. 33 easing functions let you shape the timing.",
   "easeIn": "EASE IN",
   "easeOut": "EASE OUT",
@@ -49,8 +49,8 @@
 
   "effectsEyebrow": "Effects",
   "effectsCount": "40",
-  "effectsHeadline": "40 effects.",
-  "effectsText": "The staples like blur, shadow, and LUT, plus chroma key, pixel sort, and displacement mapping. Stack and combine them to build the look you want, and add more through extensions.",
+  "effectsHeadline": "Combine 40 built-in effects",
+  "effectsText": "Stack blur, shadows, LUTs, and chroma key. Pixel sorting and displacement maps are also included, and extensions can add more effects.",
   "effectsChipBlur": "Blur",
   "effectsChipDropShadow": "Drop Shadow",
   "effectsChipInnerShadow": "Inner Shadow",
@@ -72,7 +72,7 @@
   "shaderText": "Write SKSL and GLSL shaders or C# scripts right where you need them. When the built-in effects fall short, build it in code.",
 
   "audioEyebrow": "Audio & Visualizers",
-  "audioHeadline": "Audio editing, in the same app.",
+  "audioHeadline": "Mix music and sound effects",
   "audioText": "Mix and master music and sound effects with EQ, compressor, limiter, and delay. Three visualizers are built in: waveform, spectrum, and spectrogram.",
   "audioChipEq": "EQ",
   "audioChipCompressor": "Compressor",
@@ -116,8 +116,8 @@
   "bentoUndoText": "Every step is reversible. An edit history you can experiment against.",
 
   "crossPlatformEyebrow": "Cross-Platform",
-  "crossPlatformHeadline": "Runs on Windows, macOS, and Linux.",
-  "crossPlatformText": "Built on the latest .NET, so it behaves the same on the major operating systems. Whatever machine you are on, it is the same project.",
+  "crossPlatformHeadline": "Available for Windows, macOS, and Linux",
+  "crossPlatformText": "Download the app for your operating system from the releases page.",
   "platformWindows": "Windows",
   "platformMacos": "macOS",
   "platformLinux": "Linux",
@@ -125,11 +125,12 @@
   "platformVerifiedNote": "Verified",
 
   "extensibleEyebrow": "Extensibility",
-  "extensibleHeadline": "Add features with extensions.",
+  "extensibleHeadline": "Add extensions from the store",
   "extensibleText": "Get extensions from the store to add features to Beutl. Extensions can add effects, objects, codecs, and UI, and you can publish the ones you build yourself.",
   "buildExtensions": "+ Build an extension",
   "buildExtensionsDescription": "Publish the extensions you build to the store.",
+  "browseExtensions": "Browse extensions",
 
-  "finalHeadline": "Free, and ready when you are.",
-  "finalText": "The download is free. Give it a try and see how it feels."
+  "finalHeadline": "Download Beutl",
+  "finalText": "Find downloads for each operating system and release notes on the releases page. The source code is available on GitHub."
 }

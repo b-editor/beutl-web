@@ -1,28 +1,28 @@
 import type { ReactNode } from "react";
 import { cn } from "@beutl/core";
-import AnimatedSection from "./animated-section";
 
 export const LP_WRAP = "mx-auto w-full max-w-[1180px] px-[clamp(20px,5vw,56px)]";
 
-export const LP_SECTION = "border-t border-lp-border py-[clamp(48px,7vw,88px)]";
+export const LP_SECTION = "border-t border-lp-border py-[clamp(40px,6vw,72px)]";
 
 export const LP_MOCK_PANEL =
-  "overflow-hidden rounded-2xl border border-lp-border bg-gradient-to-b from-lp-surface to-lp-bg2 p-5";
+  "overflow-hidden rounded-lg border border-lp-border bg-lp-bg2 p-4 sm:p-5";
 
 const LP_BUTTON =
-  "inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-6 py-3 text-[15px] font-semibold transition-all outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] [&>svg]:size-[18px] [&>svg]:shrink-0";
+  "inline-flex items-center justify-center gap-2 rounded-md border border-transparent px-4 py-2.5 text-sm font-medium transition-colors outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] [&>svg]:size-4 [&>svg]:shrink-0";
 
 export const LP_BUTTON_PRIMARY = cn(
   LP_BUTTON,
-  "bg-[linear-gradient(100deg,var(--color-lp-indigo),var(--color-lp-indigo-bright))] text-white shadow-[0_8px_22px_-12px_color-mix(in_srgb,var(--color-lp-indigo)_70%,transparent)] hover:-translate-y-0.5",
+  // White clears 4.5:1 on the dark primary; the shared off-white token does not.
+  "bg-primary text-white hover:bg-primary/90",
 );
 
 export const LP_BUTTON_GHOST = cn(
   LP_BUTTON,
-  "border-lp-border2 bg-white/[0.04] text-lp-text hover:-translate-y-0.5 hover:bg-white/[0.08]",
+  "border-lp-border2 text-lp-text hover:bg-white/[0.06]",
 );
 
-export const LP_CTA_ROW = "mt-[34px] flex flex-wrap gap-[14px]";
+export const LP_CTA_ROW = "mt-6 flex flex-wrap gap-3";
 
 /** Both patterns below are built from this, so a new boundary is added once. */
 const PHRASE_BOUNDARY_CHARS = "、。！？・";
@@ -80,19 +80,10 @@ export function Eyebrow({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-[9px] text-xs font-extrabold tracking-[0.14em] text-lp-indigo-bright uppercase",
-        "before:h-0.5 before:w-[22px] before:shrink-0 before:rounded-[2px] before:bg-gradient-to-r before:from-lp-indigo before:to-lp-coral before:content-['']",
+        "inline-flex flex-wrap items-center gap-2 text-xs font-medium leading-relaxed text-lp-muted",
         className,
       )}
     >
-      {children}
-    </span>
-  );
-}
-
-export function EyebrowBadge({ children }: { children: ReactNode }) {
-  return (
-    <span className="ml-[10px] inline-flex items-center rounded-full border border-lp-indigo/30 bg-lp-indigo/[0.12] px-[10px] py-[3px] align-middle text-xs font-extrabold text-lp-indigo-bright">
       {children}
     </span>
   );
@@ -115,7 +106,7 @@ export function Headline({
     <h2
       id={tocId}
       className={cn(
-        "mt-4 text-[clamp(24px,3.6vw,38px)] font-extrabold tracking-[-0.01em] text-balance text-lp-text [overflow-wrap:anywhere] leading-[1.2]",
+        "mt-3 text-[clamp(24px,3vw,30px)] font-semibold tracking-[-0.02em] text-balance text-lp-text [overflow-wrap:anywhere] leading-[1.4]",
         tocId && "features-header scroll-mt-20 md:scroll-mt-36",
         className,
       )}
@@ -139,7 +130,7 @@ export function BodyText({
   return (
     <p
       className={cn(
-        "mt-[18px] max-w-[46ch] text-[clamp(15px,1.6vw,17px)] text-lp-muted [overflow-wrap:anywhere]",
+        "mt-4 max-w-[48ch] text-[15px] leading-[1.9] text-lp-muted [overflow-wrap:anywhere]",
         className,
       )}
     >
@@ -152,7 +143,7 @@ export function Chip({ children, hot }: { children: ReactNode; hot?: boolean }) 
   return (
     <span
       className={cn(
-        "rounded-lg border border-lp-border bg-white/[0.02] px-[11px] py-[7px] text-xs font-semibold text-lp-muted",
+        "rounded-md border border-lp-border bg-white/[0.02] px-[11px] py-[7px] text-xs font-semibold text-lp-muted",
         hot && "border-lp-coral/35 bg-lp-coral/[0.08] text-lp-coral",
       )}
     >
@@ -163,41 +154,34 @@ export function Chip({ children, hot }: { children: ReactNode; hot?: boolean }) 
 
 export function FeatureSection({
   eyebrow,
-  badge,
   headline,
   body,
   tocId,
-  reverse,
   extra,
   mockClassName,
   children,
 }: {
   eyebrow: string;
-  badge?: string;
   headline: string;
   body: string;
   tocId?: string;
-  reverse?: boolean;
   extra?: ReactNode;
   mockClassName?: string;
   children: ReactNode;
 }) {
   return (
     <section className={LP_SECTION}>
-      <AnimatedSection className={LP_WRAP}>
-        <div className="grid grid-cols-1 items-center gap-10 min-[900px]:grid-cols-2 min-[900px]:gap-14 [&>*]:min-w-0">
-          <div className={cn(reverse && "min-[900px]:order-2")}>
-            <Eyebrow>
-              {eyebrow}
-              {badge ? <EyebrowBadge>{badge}</EyebrowBadge> : null}
-            </Eyebrow>
+      <div className={LP_WRAP}>
+        <div className="grid grid-cols-1 items-center gap-8 min-[900px]:grid-cols-[1fr_1.2fr] min-[900px]:gap-16 [&>*]:min-w-0">
+          <div>
+            <Eyebrow>{eyebrow}</Eyebrow>
             <Headline text={headline} tocId={tocId} />
             <BodyText>{body}</BodyText>
             {extra}
           </div>
           <div className={cn(LP_MOCK_PANEL, mockClassName)}>{children}</div>
         </div>
-      </AnimatedSection>
+      </div>
     </section>
   );
 }
