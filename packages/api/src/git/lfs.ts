@@ -7,14 +7,16 @@ import {
   abortMultipart,
   MAX_MULTIPART_OBJECT_BYTES,
   MULTIPART_RESERVATION_MS,
-  advanceCompletedVerification,
+  verifyCompletedObject,
 } from "./multipart";
 
 const LFS_MEDIA_TYPE = "application/vnd.git-lfs+json";
 const LFS_ACTION_SECONDS = 60 * 60;
 const MAX_BATCH_OBJECTS = 100;
 const MAX_LFS_REQUEST_BYTES = 32 * 1024;
-export const MAX_LFS_SINGLE_PUT_BYTES = 5 * 1024 ** 3;
+// Use the conservative documented B2 single-request ceiling (decimal GB).
+export const MAX_LFS_SINGLE_PUT_BYTES = 5_000_000_000;
+export const LFS_BASIC_CLEANUP_GRACE_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_REPO_QUOTA_BYTES = 20 * 1024 ** 3;
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
 
@@ -41,6 +43,7 @@ export interface LfsRecord {
   versionId?: string;
   tusId?: string;
   gcComplete?: boolean;
+  cleanupStarted?: boolean;
 }
 
 interface LfsObjectRequest { oid: string; size: number }
@@ -85,6 +88,28 @@ function getQuota(env: LfsEnvironment): number {
   return value;
 }
 
+export async function cleanupExpiredLfsRecord(
+  storage: GitDurableStorage, bucket: GitObjectBucket, repoId: string, oid: string,
+  record: LfsRecord, now: number, accounting?: GitStorageAccounting,
+): Promise<void> {
+  if (record.verified || record.expiresAt > now) return;
+  if (record.kind === "multipart") {
+    await abortMultipart(bucket, storage, repoId, oid, record, accounting);
+    return;
+  }
+  const finalSweepAt = record.expiresAt + LFS_BASIC_CLEANUP_GRACE_MS;
+  if (!record.cleanupStarted || now >= finalSweepAt) {
+    await bucket.delete(keyFor(repoId, oid));
+  }
+  if (now < finalSweepAt) {
+    await storage.put(`lfs:${oid}`, { ...record, cleanupStarted: true });
+    await storage.setAlarm(finalSweepAt + 1000);
+    return;
+  }
+  await accounting?.releaseLfs(repoId, oid);
+  await storage.delete(`lfs:${oid}`);
+}
+
 export async function pruneExpiredLfs(
   storage: GitDurableStorage,
   bucket: GitObjectBucket,
@@ -100,19 +125,14 @@ export async function pruneExpiredLfs(
       await storage.put(key, { ...record, gcComplete: true });
     }
     if (!record.verified && record.expiresAt <= now) {
-      if (record.kind === "multipart") {
-        await abortMultipart(bucket, storage, repoId, key.slice(4), record, accounting);
-      } else {
-        await bucket.delete(keyFor(repoId, key.slice(4)));
-        await accounting?.releaseLfs(repoId, key.slice(4));
-        await storage.delete(key);
-      }
+      await cleanupExpiredLfsRecord(storage, bucket, repoId, key.slice(4), record, now, accounting);
     }
   }
   const nextExpiry = [...records.values()]
     .map((record) => record.verified
       ? !record.gcComplete && bucket.pruneVersions ? record.expiresAt + 2 * 60 * 60 * 1000 : Infinity
-      : record.expiresAt)
+      : record.kind === "basic" && record.expiresAt <= now
+        ? record.expiresAt + LFS_BASIC_CLEANUP_GRACE_MS : record.expiresAt)
     .filter((time) => time > now)
     .reduce((earliest, time) => Math.min(earliest, time), Infinity);
   // Revisit even when no LFS record remains: CreateMultipartUpload may have
@@ -207,6 +227,10 @@ export async function handleLfsBatch(
       }
       continue;
     }
+    if (record && record.expiresAt <= Date.now()) {
+      objects.push({ oid, size, error: { code: 409, message: "Expired LFS upload cleanup is pending" } });
+      continue;
+    }
     if (size > Math.min(MAX_MULTIPART_OBJECT_BYTES, MAX_LFS_OBJECT_BYTES) ||
         (size > MAX_LFS_SINGLE_PUT_BYTES && !customTransfer)) {
       objects.push({ oid, size, error: { code: 413, message: "The Beutl multipart LFS transfer is required for this object" } });
@@ -251,10 +275,12 @@ export async function handleLfsBatch(
         .reduce((time, value) => Math.min(time, value.expiresAt), Infinity);
       await storage.setAlarm(earliest + 1000);
     }
+    const actionSeconds = multipart ? Math.floor(MULTIPART_RESERVATION_MS / 1000)
+      : Math.max(1, Math.floor((record.expiresAt - Date.now()) / 1000));
     const uploadHref = multipart
       ? new URL(`/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/${customTransfer === "beutl-tus" ? "tus" : "multipart"}`,
         request.url).toString()
-      : await bucket.presignPut(key, size, LFS_ACTION_SECONDS);
+      : await bucket.presignPut(key, size, actionSeconds);
     const verifyHref = new URL(
       `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, request.url,
     ).toString();
@@ -276,12 +302,12 @@ export async function handleLfsBatch(
           "Content-Type": "application/octet-stream",
           "Content-Length": String(size),
         },
-        expires_in: LFS_ACTION_SECONDS,
+        expires_in: actionSeconds,
       },
       verify: {
         href: verifyHref,
         header: { Authorization: transferAuthorization },
-        expires_in: LFS_ACTION_SECONDS,
+        expires_in: actionSeconds,
       },
     } });
   }
@@ -314,12 +340,9 @@ export async function handleLfsVerify(
     if (!object?.versionId || object.size !== record.size) {
       return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
     }
-    let verification: "pending" | "verified" | "mismatch";
-    do {
-      verification = await advanceCompletedVerification(
-        bucket, storage, repoId, oid, record.size, object.versionId, request.signal);
-    } while (verification === "pending");
-    if (verification !== "verified") {
+    // Basic Git LFS verify expects one successful response. Use the native
+    // streaming hash here; custom transfers advance persisted ranges instead.
+    if (!await verifyCompletedObject(bucket, repoId, oid, record.size, object.versionId, request.signal)) {
       return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
     }
     record.versionId = object.versionId;

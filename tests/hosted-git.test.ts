@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
-import { pruneExpiredLfs } from "../packages/api/src/git/lfs";
+import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES } from "../packages/api/src/git/lfs";
+import { incomingGitObjectBytes } from "../packages/api/src/git/git-http";
+import { createGitRepositoryForOwner } from "@beutl/db";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
@@ -19,6 +21,8 @@ import { setDbProvider } from "../packages/db/src/provider";
 import {
   GIT_DELETE_SWEEP_GRACE_MS,
   reconcileGitRepositoryDeletions,
+  reconcileGitAccountStorage,
+  reconcileGitLfsReservations,
   routeGitRequest,
 } from "../packages/api/src/git/router";
 
@@ -178,6 +182,88 @@ class MemoryAccounting implements GitStorageAccounting {
   async markAccounted() { }
 }
 
+describe("hosted Git maintenance and admission", () => {
+  it("reserves pack plus index bytes, including highly compressed object counts", () => {
+    const pack = new Uint8Array(64);
+    pack.set(new TextEncoder().encode("PACK"));
+    const view = new DataView(pack.buffer);
+    view.setUint32(4, 2);
+    view.setUint32(8, 100);
+    expect(incomingGitObjectBytes(pack)).toBe(64 + 1072 + 2800);
+    expect(incomingGitObjectBytes(new Uint8Array())).toBe(0);
+    expect(() => incomingGitObjectBytes(new Uint8Array([1]))).toThrow("Invalid Git pack");
+  });
+
+  it("retries serializable repository admission after a write conflict", async () => {
+    const events: string[] = [];
+    let attempt = 0;
+    let active = 19;
+    const db = {
+      $transaction: async (work: (tx: unknown) => Promise<unknown>, options: { isolationLevel: string }) => {
+        expect(options.isolationLevel).toBe("Serializable");
+        attempt++;
+        return work({
+          user: { update: async () => {
+            events.push("lock");
+            if (attempt === 1) { active = 20; throw { code: "P2034" }; }
+          } },
+          gitRepository: {
+            count: async () => { events.push("count"); return active; },
+            create: async () => { events.push("create"); throw new Error("Cannot exceed the limit"); },
+          },
+        });
+      },
+    };
+    expect(await createGitRepositoryForOwner("owner", "name", 20, db as never)).toBeNull();
+    expect(events).toEqual(["lock", "lock", "count"]);
+  });
+
+  it.each(["deletion", "account", "lfs"])("advances %s maintenance past persistent failures", async (kind) => {
+    const failed = kind === "lfs" ? 20 : 10;
+    const rows = Array.from({ length: failed + 2 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      repoId, oid: index.toString(16).padStart(64, "0"), ownerId: "owner",
+      deletedAt: new Date(Date.now() - GIT_DELETE_SWEEP_GRACE_MS - 1), cleanupCompleteAt: null,
+      maintenanceAttemptedAt: new Date(0), maintenanceFailures: 0,
+      cleanupAttemptedAt: new Date(0), cleanupFailures: 0, completed: false,
+    }));
+    const attempted = new Set<string>();
+    const list = async ({ take }: { take: number }) => rows.filter((row) => !row.completed)
+      .sort((a, b) => (kind === "lfs" ? a.cleanupAttemptedAt.getTime() - b.cleanupAttemptedAt.getTime()
+        : a.maintenanceAttemptedAt.getTime() - b.maintenanceAttemptedAt.getTime()) || a.id.localeCompare(b.id)).slice(0, take);
+    const update = async ({ where, data }: { where: { id?: string; oid?: string }; data: Record<string, unknown> }) => {
+      const row = rows.find((item) => where.id ? item.id === where.id : item.oid === where.oid)!;
+      for (const [key, value] of Object.entries(data)) {
+        if (value && typeof value === "object" && "increment" in value) (row as any)[key] += value.increment;
+        else (row as any)[key] = value;
+      }
+      return row;
+    };
+    setDbProvider(async () => ({ gitRepository: { findMany: list, update },
+      gitLfsStorage: { findMany: list, updateMany: update } }) as never);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const routeEnv = { ...env, BEUTL_GIT_ENABLED: "false", BEUTL_GIT_REPOSITORIES: {
+        idFromName: (name: string) => name,
+        get: (id: unknown) => ({ fetch: async (request: Request) => {
+          const row = kind === "lfs" ? rows.find((item) => request.url.endsWith(item.oid))!
+            : rows.find((item) => item.id === id)!;
+          attempted.add(row.id);
+          if (rows.indexOf(row) < failed) return new Response(null, { status: 503 });
+          row.completed = true;
+          return new Response(null, { status: 204 });
+        } }),
+      } };
+      const reconcile = kind === "deletion" ? reconcileGitRepositoryDeletions
+        : kind === "account" ? reconcileGitAccountStorage : reconcileGitLfsReservations;
+      expect(await reconcile(routeEnv)).toBe(0);
+      expect(await reconcile(routeEnv)).toBe(2);
+      expect(attempted.size).toBe(rows.length);
+      expect(rows[0][kind === "lfs" ? "cleanupFailures" : "maintenanceFailures"]).toBeGreaterThan(0);
+    } finally { log.mockRestore(); }
+  });
+});
+
 describe("hosted Git token boundaries", () => {
   it("sweeps deleted repositories again after signed PUT URLs expire", async () => {
     const bucket = new MemoryBucket();
@@ -193,7 +279,7 @@ describe("hosted Git token boundaries", () => {
       },
     }) as never);
     const routeEnv = {
-      ...env, BEUTL_GIT_ENABLED: "true",
+      ...env, BEUTL_GIT_ENABLED: "false",
       BEUTL_GIT_REPOSITORIES: {
         idFromName: (name: string) => name,
         get: () => ({ fetch: (request: Request) => durable.fetch(request) }),
@@ -211,6 +297,9 @@ describe("hosted Git token boundaries", () => {
     expect(await reconcileGitRepositoryDeletions(routeEnv)).toBe(1);
     expect(bucket.objects.has(key)).toBe(false);
     expect(row.cleanupCompleteAt).toBeInstanceOf(Date);
+    await bucket.put(key, new Uint8Array([3]));
+    await durable.alarm();
+    expect(bucket.objects.has(key)).toBe(false);
   });
 
   it("binds short Git tokens to owner, repository and scope", async () => {
@@ -285,7 +374,14 @@ describe("Git Smart HTTP with the native Git CLI", () => {
   it("pushes and clones a repository through the Durable Object", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
-    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const reservations: number[] = [];
+    const accounting = new MemoryAccounting(8 * 1024);
+    accounting.reserveHistory = async (...args: unknown[]) => {
+      const bytes = args[2] as number;
+      reservations.push(bytes);
+      return bytes <= 8 * 1024;
+    };
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket, accounting);
     const server = createServer(async (incoming, outgoing) => {
       try {
         const address = `http://127.0.0.1:${(server.address() as { port: number }).port}${incoming.url}`;
@@ -344,6 +440,8 @@ describe("Git Smart HTTP with the native Git CLI", () => {
         git(join(root, "copy"), "push", "origin", "main"),
       ]);
       expect(concurrent.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(reservations.length).toBeGreaterThanOrEqual(3);
+      expect(reservations.every((bytes) => bytes > 0 && bytes <= 8 * 1024)).toBe(true);
     } finally {
       server.close();
       if (!root.startsWith(tmpdir() + sep)) throw new Error("Test directory escaped the temporary root");
@@ -432,6 +530,15 @@ describe("Git LFS reservation and integrity", () => {
     expect(await storage.get(`lfs:${oid}`)).toBeUndefined();
   });
 
+  it("selects custom transfer immediately above the decimal single-PUT limit", async () => {
+    for (const size of [MAX_LFS_SINGLE_PUT_BYTES, MAX_LFS_SINGLE_PUT_BYTES + 1]) {
+      const response = await handleLfsBatch(lfsRequest("upload", [{ oid: "e".repeat(64), size }], ["basic", "beutl-tus"]),
+        new MemoryBucket(), new MemoryStorage(), env, repoId, "write", "Bearer token");
+      const result = await response.json();
+      expect(result.transfer).toBe(size === MAX_LFS_SINGLE_PUT_BYTES ? "basic" : "beutl-tus");
+    }
+  });
+
   it("does not allocate quota for a second oversized reservation", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
@@ -463,7 +570,7 @@ describe("Git LFS reservation and integrity", () => {
     expect((await first.json()).objects[0].actions.upload).toBeDefined();
     expect((await second.json()).objects[0].error).toMatchObject({ code: 413 });
     expect(accounting.entries.size).toBe(1);
-    await pruneExpiredLfs(firstStorage, bucket, repoId, Date.now() + 2 * 60 * 60 * 1000, accounting);
+    await pruneExpiredLfs(firstStorage, bucket, repoId, Date.now() + 4 * 60 * 60 * 1000, accounting);
     expect(accounting.entries.size).toBe(0);
     const retried = await handleLfsBatch(lfsRequest("upload", [{ oid: secondOid, size: 6 }], ["basic"], "owner"),
       bucket, secondStorage, env, otherId, "write", "Bearer token", accounting);
@@ -511,8 +618,11 @@ describe("Git LFS reservation and integrity", () => {
     expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.gcComplete).toBe(true);
   });
 
-  it("enforces quota and rejects an unverified basic object", async () => {
-    const bucket = new MemoryBucket();
+  it("enforces quota and uses a native streaming hash for an unverified basic object", async () => {
+    class NativeOnlyBucket extends MemoryBucket {
+      async getRange() { throw new Error("Basic verify must not use JavaScript range checkpoints"); }
+    }
+    const bucket = new NativeOnlyBucket();
     const storage = new MemoryStorage();
     const oid = createHash("sha256").update("hello").digest("hex");
     const batch = await handleLfsBatch(lfsRequest("upload", [{ oid, size: 5 }]), bucket, storage, env, repoId, "write", "Bearer git-token");
@@ -956,6 +1066,69 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
 });
 
 describe("Durable Object queue", () => {
+  it("initializes one DB client per cold invocation, including alarms", async () => {
+    setDbProvider(async () => { throw new Error("Worker.fetch was never initialized"); });
+    const storage = new MemoryStorage();
+    await storage.put("repoId", repoId);
+    for (const digit of ["a", "b"]) await storage.put(`lfs:${digit.repeat(64)}`, {
+      kind: "basic", size: 1, verified: false, expiresAt: Date.now() - 4 * 60 * 60 * 1000,
+    } satisfies LfsRecord);
+    let clients = 0;
+    let closed = 0;
+    let adopted = 0;
+    let released = 0;
+    const factory = async () => {
+      clients++;
+      return {
+        gitLfsStorage: {
+          findUnique: async () => null,
+          upsert: async () => { adopted++; },
+          deleteMany: async () => { released++; },
+        },
+        gitRepository: { update: async () => ({}), updateMany: async () => ({ count: 1 }) },
+        $disconnect: async () => { closed++; },
+      } as never;
+    };
+    const durable = new GitRepositoryDurableObject({ storage }, env, new MemoryBucket(), undefined, factory);
+    const request = () => new Request("https://git.internal/internal/git/accounting", {
+      method: "POST", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin", "x-beutl-git-owner-id": "owner" },
+    });
+    expect((await durable.fetch(request())).status).toBe(204);
+    expect([clients, closed, adopted]).toEqual([1, 1, 2]);
+    await durable.alarm();
+    expect([clients, closed, released]).toEqual([2, 2, 2]);
+    expect((await durable.fetch(request())).status).toBe(204);
+    expect([clients, closed]).toEqual([3, 3]);
+  });
+
+  it("keeps expired Basic PUTs reserved through a later sweep and finds orphan writes afterwards", async () => {
+    const storage = new MemoryStorage();
+    const bucket = new MemoryBucket();
+    const accounting = new MemoryAccounting(10);
+    const oid = "6".repeat(64);
+    const key = `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
+    const expiresAt = Date.now() - 1;
+    await storage.put("repoId", repoId);
+    await storage.put(`lfs:${oid}`, { kind: "basic", size: 1, verified: false, expiresAt } satisfies LfsRecord);
+    await accounting.reserveLfs({ repoId, oid, ownerId: "owner", size: 1, expiresAt });
+    await bucket.put(key, new Uint8Array([1]));
+    await pruneExpiredLfs(storage, bucket, repoId, Date.now(), accounting);
+    expect(bucket.objects.has(key)).toBe(false);
+    expect(accounting.entries.size).toBe(1);
+    expect((await handleLfsBatch(lfsRequest("upload", [{ oid, size: 1 }]),
+      bucket, storage, env, repoId, "write", "Bearer token", accounting).then((r) => r.json())).objects[0].error.code).toBe(409);
+    await bucket.put(key, new Uint8Array([2]));
+    await pruneExpiredLfs(storage, bucket, repoId, expiresAt + LFS_BASIC_CLEANUP_GRACE_MS + 1, accounting);
+    expect(accounting.entries.size).toBe(0);
+    expect(await storage.get(`lfs:${oid}`)).toBeUndefined();
+    expect(bucket.objects.has(key)).toBe(false);
+    // A PUT accepted before URL expiry could take longer than the grace period.
+    await bucket.put(key, new Uint8Array([3]));
+    await new GitRepositoryDurableObject({ storage }, env, bucket, accounting).alarm();
+    expect(bucket.objects.has(key)).toBe(false);
+    expect(storage.alarms.at(-1)).toBeGreaterThan(Date.now());
+  });
+
   it("aborts outstanding multipart uploads during repository deletion", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();

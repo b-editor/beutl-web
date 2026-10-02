@@ -48,7 +48,7 @@ model User {
 }
 
 // Hosted project history is opt-in and separate from the existing user file
-// store. A deleted row remains as a tombstone until its R2 prefix is cleared.
+// store. A deleted row remains as a tombstone until its B2 prefix is cleared.
 model GitRepository {
   id                String    @id @default(uuid())
   ownerId           String?
@@ -63,10 +63,13 @@ model GitRepository {
   // by GitLfsStorage so it can be reserved and settled per OID.
   historyBytes      BigInt    @default(0)
   historyReservedBytes BigInt @default(0)
+  maintenanceAttemptedAt DateTime @default(now())
+  maintenanceFailures Int @default(0)
   owner             User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
 
   @@index([ownerId, deletedAt])
   @@index([deletedAt, cleanupCompleteAt])
+  @@index([maintenanceAttemptedAt])
 }
 
 // One logical LFS OID is charged once per repository. Pending uploads remain
@@ -78,10 +81,13 @@ model GitLfsStorage {
   size      BigInt
   verified  Boolean  @default(false)
   expiresAt DateTime
+  cleanupAttemptedAt DateTime @default(now())
+  cleanupFailures Int @default(0)
 
   @@id([repoId, oid])
   @@index([ownerId, verified])
   @@index([verified, expiresAt])
+  @@index([cleanupAttemptedAt])
 }
 
 model Account {

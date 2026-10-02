@@ -85,6 +85,8 @@ describe("Backblaze B2 S3 storage adapter", () => {
       }
       if (url.searchParams.has("delete")) {
         deletionBody = await request.text();
+        expect(request.headers.get("content-md5"))
+          .toBe(createHash("md5").update(deletionBody).digest("base64"));
         return response("<DeleteResult/>");
       }
       throw new Error(`Unexpected S3 request: ${url}`);

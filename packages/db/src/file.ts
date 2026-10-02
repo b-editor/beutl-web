@@ -709,6 +709,9 @@ export async function countFilesByUserId({
   return await db.file.count({ where: { userId, aiJobResult: null } });
 }
 
+/** Committed account storage: user File bytes plus hosted Git/LFS bytes.
+ * The historical name is retained for existing quota, billing and UI callers.
+ * AI job result bytes are excluded from this account meter. */
 export async function sumFileSizeByUserId({
   userId,
   prisma,

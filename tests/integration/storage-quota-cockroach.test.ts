@@ -6,6 +6,8 @@ import {
   commitGitLfs,
   createDedicatedStorageReservation,
   createFileWithStorageQuota,
+  createGitRepositoryForOwner,
+  reserveGitHistory,
   reserveGitLfs,
   releaseGitLfs,
   renewDedicatedStorageReservation,
@@ -144,7 +146,9 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "cleanupCompleteAt" TIMESTAMP(3),
         "accountedAt" TIMESTAMP(3),
         "historyBytes" INT8 NOT NULL DEFAULT 0,
-        "historyReservedBytes" INT8 NOT NULL DEFAULT 0
+        "historyReservedBytes" INT8 NOT NULL DEFAULT 0,
+        "maintenanceAttemptedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        "maintenanceFailures" INT4 NOT NULL DEFAULT 0
       )
     `);
     await prisma.$executeRawUnsafe(`
@@ -155,6 +159,8 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "size" INT8 NOT NULL,
         "verified" BOOL NOT NULL DEFAULT false,
         "expiresAt" TIMESTAMP(3) NOT NULL,
+        "cleanupAttemptedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        "cleanupFailures" INT4 NOT NULL DEFAULT 0,
         PRIMARY KEY ("repoId", "oid")
       )
     `);
@@ -215,6 +221,24 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
     ]);
     expect(files).toBeLessThanOrEqual(1);
     expect(BigInt(reservation._sum.size ?? 0) + BigInt(files)).toBeLessThanOrEqual(10);
+  }, 120_000);
+
+  it("serializes concurrent creation at the last active repository slot", async () => {
+    await prisma.gitRepository.createMany({ data: Array.from({ length: 19 }, (_, i) => ({
+      ownerId: userId, name: `seed-${i}`, accountedAt: new Date(),
+    })) });
+    const created = await Promise.all(["a", "b"].map((name) => createGitRepositoryForOwner(userId, name, 20, prisma)));
+    expect(created.filter(Boolean)).toHaveLength(1);
+    expect(await prisma.gitRepository.count({ where: { ownerId: userId, deletedAt: null } })).toBe(20);
+  }, 120_000);
+
+  it("reserves only the incoming history bound near the account limit", async () => {
+    await prisma.storageUpload.deleteMany({ where: { userId } });
+    await prisma.file.create({ data: { userId, objectKey: "objects/seed", name: "seed.bin",
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES - 2048), mimeType: "application/octet-stream", visibility: "PRIVATE" } });
+    const repo = await createGitRepositoryForOwner(userId, "small-push", 20, prisma);
+    expect(await reserveGitHistory(repo!.id, userId, 1024)).toBe(true);
+    expect((await prisma.gitRepository.findUniqueOrThrow({ where: { id: repo!.id } })).historyReservedBytes).toBe(BigInt(1024));
   }, 120_000);
 
   it("serializes LFS reservations across repositories and against File admission", async () => {

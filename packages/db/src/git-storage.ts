@@ -1,4 +1,4 @@
-import { getDb } from "./provider";
+import { getDb, runWithDbProvider, type PrismaClient } from "./provider";
 import { resolveStorageQuota } from "./storage-quota";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
@@ -31,6 +31,16 @@ export async function lockStorageAccount(userId: string, tx: PrismaTransaction):
   if (await tx.gitRepository.count({ where: { ownerId: userId, accountedAt: null, deletedAt: null } })) {
     throw new Error("Git account storage migration is pending");
   }
+}
+
+export async function createGitRepositoryForOwner(ownerId: string, name: string, limit = 20, prisma?: PrismaClient) {
+  const db = prisma ?? await getDb();
+  return runWithDbProvider(async () => db, () => startRetryableTransaction(async (tx) => {
+    await tx.user.update({ where: { id: ownerId }, data: { storageRevision: { increment: 1 } } });
+    const count = await tx.gitRepository.count({ where: { ownerId, deletedAt: null } });
+    if (count >= limit) return null;
+    return tx.gitRepository.create({ data: { ownerId, name, accountedAt: new Date() } });
+  }, { isolationLevel: "Serializable" }));
 }
 
 export async function adoptExistingGitLfs(input: {
@@ -101,28 +111,35 @@ export async function releaseGitLfs(repoId: string, oid: string): Promise<void> 
   await db.gitLfsStorage.deleteMany({ where: { repoId, oid } });
 }
 
-export async function listExpiredGitLfsReservations(now = new Date(), take = 20): Promise<Array<{ repoId: string; oid: string }>> {
-  const db = await getDb();
+export async function listExpiredGitLfsReservations(now = new Date(), take = 20, prisma?: PrismaTransaction):
+  Promise<Array<{ repoId: string; oid: string; cleanupFailures: number }>> {
+  const db = prisma ?? await getDb();
   const rows = await db.gitLfsStorage.findMany({
     where: { verified: false, expiresAt: { lt: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
-    select: { repoId: true, oid: true }, take,
+    select: { repoId: true, oid: true, cleanupFailures: true },
+    orderBy: [{ cleanupAttemptedAt: "asc" }, { repoId: "asc" }, { oid: "asc" }], take,
   });
   return rows;
 }
 
-export async function reserveGitHistory(repoId: string, ownerId: string): Promise<boolean> {
+export async function reserveGitHistory(repoId: string, ownerId: string, maxAdditionalBytes = 16 * 1024 * 1024): Promise<boolean> {
+  if (!Number.isSafeInteger(maxAdditionalBytes) || maxAdditionalBytes < 0 || maxAdditionalBytes > 16 * 1024 * 1024) {
+    throw new RangeError("Invalid Git history reservation bound");
+  }
   return startRetryableTransaction(async (tx) => {
     await lockStorageAccount(ownerId, tx);
     const repo = await tx.gitRepository.findFirst({ where: { id: repoId, ownerId, deletedAt: null } });
     if (!repo) throw new Error("Git repository is unavailable for history reservation");
     if (repo.historyReservedBytes > BigInt(0)) throw new Error("Git history requires reconciliation");
     const remaining = BigInt(16 * 1024 * 1024) - repo.historyBytes;
-    if (remaining <= BigInt(0)) return false;
+    if (remaining < BigInt(0)) throw new Error("Git history exceeds its repository limit");
+    const requested = BigInt(maxAdditionalBytes);
+    const reservation = requested < remaining ? requested : remaining;
     const [quota, used] = await Promise.all([
       resolveStorageQuota({ userId: ownerId, prisma: tx }), accountReserved(tx, ownerId),
     ]);
-    if (used + remaining > BigInt(quota.quotaBytes)) return false;
-    await tx.gitRepository.update({ where: { id: repoId }, data: { historyReservedBytes: remaining } });
+    if (used + reservation > BigInt(quota.quotaBytes)) return false;
+    await tx.gitRepository.update({ where: { id: repoId }, data: { historyReservedBytes: reservation } });
     return true;
   });
 }

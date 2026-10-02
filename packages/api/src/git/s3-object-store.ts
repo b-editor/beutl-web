@@ -1,5 +1,6 @@
 import { AwsClient } from "aws4fetch";
 import { XMLParser } from "fast-xml-parser";
+import { createHash } from "node:crypto";
 import type { GitMultipartUpload, GitObjectBucket } from "./git-object-store";
 
 export interface GitS3Environment {
@@ -174,7 +175,7 @@ export class S3GitObjectBucket implements GitObjectBucket {
     const body = `<Delete><Quiet>true</Quiet>${versions.map(({ key, versionId }) =>
       `<Object><Key>${escapeXml(key)}</Key><VersionId>${escapeXml(versionId)}</VersionId></Object>`).join("")}</Delete>`;
     const response = await this.send("POST", this.url(undefined, { delete: "" }), body,
-      { "Content-Type": "application/xml" });
+      { "Content-Type": "application/xml", "Content-MD5": createHash("md5").update(body).digest("base64") });
     if (response.status === 204) return;
     const result = (await xml(response)).DeleteResult;
     if (result === undefined || asArray(result.Error).length > 0) {

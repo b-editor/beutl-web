@@ -1,4 +1,4 @@
-import { getDb } from "@beutl/db";
+import { getDb, createGitRepositoryForOwner } from "@beutl/db";
 import { listExpiredGitLfsReservations } from "@beutl/db";
 import { getUserIdFromHeaders } from "../api/auth";
 import { gitTokenSecret, issueGitToken, verifyGitToken, verifyMultipartToken, type GitScope } from "./tokens";
@@ -70,19 +70,20 @@ async function cleanup(env: GitRouterEnvironment, repoId: string): Promise<boole
 }
 
 export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment): Promise<number> {
-  if (!enabled(env) || unavailable(env)) return 0;
+  if (unavailable(env)) return 0;
   const db = await getDb();
   const tombstones = await db.gitRepository.findMany({
     where: {
       OR: [{ deletedAt: { not: null } }, { ownerId: null }],
       cleanupCompleteAt: null,
     },
-    select: { id: true, deletedAt: true },
-    orderBy: { deletedAt: "asc" }, take: 10,
+    select: { id: true, deletedAt: true, maintenanceFailures: true },
+    orderBy: [{ maintenanceAttemptedAt: "asc" }, { id: "asc" }], take: 10,
   });
   let cleaned = 0;
   for (const row of tombstones) {
     try {
+      await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceAttemptedAt: new Date() } });
       const deletedAt = row.deletedAt ?? new Date();
       if (!row.deletedAt) {
         await db.gitRepository.update({ where: { id: row.id }, data: { deletedAt } });
@@ -90,13 +91,18 @@ export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment)
       if (await cleanup(env, row.id)) {
         if (Date.now() - deletedAt.getTime() >= GIT_DELETE_SWEEP_GRACE_MS) {
           await db.gitRepository.update({
-            where: { id: row.id }, data: { cleanupCompleteAt: new Date() },
+            where: { id: row.id }, data: { cleanupCompleteAt: new Date(), maintenanceFailures: 0 },
           });
         }
         cleaned++;
+      } else {
+        throw new Error("Git repository cleanup did not complete");
       }
     } catch (error) {
-      console.error("Git repository cleanup failed", { repoId: row.id, error });
+      await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: { increment: 1 } } })
+        .catch(() => undefined);
+      console.error("Git repository cleanup failed", { repoId: row.id, error,
+        failures: row.maintenanceFailures + 1, interventionRequired: row.maintenanceFailures >= 4 });
     }
   }
   return cleaned;
@@ -111,19 +117,25 @@ export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Pro
   const rows = await db.gitRepository.findMany({
     where: { OR: [{ accountedAt: null }, { historyReservedBytes: { gt: 0 } }],
       deletedAt: null, ownerId: { not: null } },
-    select: { id: true, ownerId: true }, take: 10,
+    select: { id: true, ownerId: true, maintenanceFailures: true },
+    orderBy: [{ maintenanceAttemptedAt: "asc" }, { id: "asc" }], take: 10,
   });
   let completed = 0;
   for (const row of rows) {
     try {
+      await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceAttemptedAt: new Date() } });
       const result = await stub(env, row.id).fetch(new Request("https://git.internal/internal/git/accounting", {
         method: "POST", headers: { "x-beutl-repo-id": row.id, "x-beutl-git-scope": "admin",
           "x-beutl-git-owner-id": row.ownerId! },
       }));
-      if (result.status === 204) completed++;
-      else console.error("Git account storage reconciliation failed", { repoId: row.id, status: result.status });
+      if (result.status !== 204) throw new Error(`Git account storage reconciliation returned HTTP ${result.status}`);
+      await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: 0 } });
+      completed++;
     } catch (error) {
-      console.error("Git account storage reconciliation failed", { repoId: row.id, error });
+      await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: { increment: 1 } } })
+        .catch(() => undefined);
+      console.error("Git account storage reconciliation failed", { repoId: row.id, error,
+        failures: row.maintenanceFailures + 1, interventionRequired: row.maintenanceFailures >= 4 });
     }
   }
   return completed;
@@ -131,17 +143,25 @@ export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Pro
 
 export async function reconcileGitLfsReservations(env: GitRouterEnvironment): Promise<number> {
   if (unavailable(env)) return 0;
-  const rows = await listExpiredGitLfsReservations();
+  const db = await getDb();
+  const rows = await listExpiredGitLfsReservations(new Date(), 20, db);
   let completed = 0;
   for (const row of rows) {
     try {
+      await db.gitLfsStorage.updateMany({ where: { repoId: row.repoId, oid: row.oid },
+        data: { cleanupAttemptedAt: new Date() } });
       const result = await stub(env, row.repoId).fetch(new Request(
         `https://git.internal/internal/git/lfs-cleanup/${row.oid}`, {
           method: "POST", headers: { "x-beutl-repo-id": row.repoId, "x-beutl-git-scope": "admin" },
         }));
-      if (result.status === 204) completed++;
+      if (result.status !== 204) throw new Error(`Git LFS reservation cleanup returned HTTP ${result.status}`);
+      await db.gitLfsStorage.updateMany({ where: { repoId: row.repoId, oid: row.oid }, data: { cleanupFailures: 0 } });
+      completed++;
     } catch (error) {
-      console.error("Git LFS reservation cleanup failed", { repoId: row.repoId, oid: row.oid, error });
+      await db.gitLfsStorage.updateMany({ where: { repoId: row.repoId, oid: row.oid },
+        data: { cleanupFailures: { increment: 1 } } }).catch(() => undefined);
+      console.error("Git LFS reservation cleanup failed", { repoId: row.repoId, oid: row.oid, error,
+        failures: row.cleanupFailures + 1, interventionRequired: row.cleanupFailures >= 4 });
     }
   }
   return completed;
@@ -232,9 +252,8 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
         /[\x00-\x1f\x7f/\\]/u.test(name)) {
       return json({ message: "Invalid repository name" }, 400);
     }
-    const count = await db.gitRepository.count({ where: { ownerId: userId, deletedAt: null } });
-    if (count >= MAX_REPOSITORIES_PER_USER) return json({ message: "Repository limit reached" }, 409);
-    const row = await db.gitRepository.create({ data: { ownerId: userId, name: name.trim(), accountedAt: new Date() } });
+    const row = await createGitRepositoryForOwner(userId, name.trim(), MAX_REPOSITORIES_PER_USER, db);
+    if (!row) return json({ message: "Repository limit reached" }, 409);
     return json(view(row, repoUrl(env, request, row.id)), 201);
   }
   if (!repoMatch || !UUID.test(repoMatch[1])) return new Response("Not found", { status: 404 });

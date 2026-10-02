@@ -8,9 +8,10 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
 
 ## Deployment
 
-1. Apply the CockroachDB migrations `20261002000000_add_git_repositories` and
-   `20261002010000_git_account_storage`. The second adds the account meter and
-   a nullable `accountedAt` marker for repositories created before it.
+1. Apply the CockroachDB migrations `20261002000000_add_git_repositories`,
+   `20261002010000_git_account_storage`, and `20261002190000_git_maintenance_fairness`.
+   They add the account meter, a nullable `accountedAt` marker for old
+   repositories, and persistent maintenance attempt/failure fields.
 2. Deploy the desktop API Worker with the `GitRepositoryDurableObject` SQLite
    migration. Keep `BEUTL_GIT_ENABLED=false` until configuration and a B2
    integration test have succeeded.
@@ -50,9 +51,11 @@ The existing account storage API, dashboard, billing, and admin totals include
 current Git objects and one copy of every verified LFS OID per repository,
 alongside File bytes. Pending LFS, Git push, and File writes reserve capacity
 against the same account quota. CockroachDB serializes admission through the
-user's `storageRevision` row. A Git push reserves its full remaining 16 MiB
-history allowance and settles to its actual size afterwards, so an account
-with less than that free may be unable to push. Git history counts current
+user's `storageRevision` row. Repository creation uses the same serializable
+user lock to enforce the active repository count under concurrent requests.
+A Git push reserves the incoming pack and its index bound, then settles to
+actual stored size. Small pushes can use the remaining account capacity.
+Git history counts current
 objects under `repo.git/objects/`, including packs and loose objects; refs and
 Git configuration are small control metadata and are not metered. Old B2
 versions and multipart pieces are physical garbage collected separately.
@@ -62,10 +65,13 @@ The Worker sets `limits.cpu_ms=300000`. SHA-256 verification reads at most
 byte offset, OID, size, and version ID in the repository Durable Object.
 Interruption may repeat one range; retries resume from the last checkpoint.
 A different object version discards the prior checkpoint. The object stays
-private until the full digest matches its OID. The Beutl tus agent polls HEAD
+private until the full digest matches its OID. These checkpoint steps apply
+to tus and legacy multipart transfers. The Beutl tus agent polls HEAD
 for `Upload-Verified: true` after the byte offset reaches the length; the
 legacy agent polls complete while it returns `verifying: true`. Basic LFS
-verify advances the same checkpoints within one request. This still needs a
+verify streams the pinned version through the native SHA-256 implementation
+in one request, avoiding the JavaScript compression loop over a multi-GB file.
+This still needs a
 Workers Paid plan and **has not** been measured on a real B2 bucket or
 Cloudflare account at 5 to 20 GiB. Measure wall time, CPU, restart, and retry
 behavior before enabling production traffic.
@@ -81,11 +87,13 @@ behavior before enabling production traffic.
   across B2 requests. `git-fs-s3` uses timestamp-based incoming pack names;
   the Durable Object persists the last push completion time to distinguish
   consecutive packs.
-- Git LFS `basic` uses a one-hour presigned B2 PUT/GET for objects up to 5 GiB.
+- Git LFS `basic` uses a presigned B2 PUT/GET for objects up to 5 GB
+  (5,000,000,000 bytes). PUT expiry is capped by its reservation's remaining
+  one-hour window, including repeated batch requests.
   The signed PUT fixes length and content type. The verify action reads the
   precise B2 object version as a stream and checks its full size and SHA-256
   against the LFS OID before publishing it. B2 ETags are not treated as hashes.
-- A batch with an object above 5 GiB selects `beutl-tus` when the client
+- A batch with an object above 5 GB selects `beutl-tus` when the client
   advertises it. The Beutl executable registers the matching Git LFS custom
   transfer agent. Older clients can still use `beutl-multipart` as a fallback.
   Git LFS chooses one transfer for a whole batch, so smaller objects in the
@@ -131,16 +139,28 @@ behavior before enabling production traffic.
   Git prefixes. Scheduled cleanup retries failures and sweeps for two hours
   after deletion, beyond the one-hour Basic PUT URL lifetime. Account deletion
   nulls ownership and uses the same cleanup.
+  Expired Basic uploads keep their DO record and account reservation until a
+  second sweep two hours after expiry. A daily DO alarm also removes orphan
+  objects and rechecks pinned versions, including PUTs that finish after that
+  grace period. Deleted repositories retain a daily prefix sweep as well.
   For active repositories, LFS cleanup keeps each verified record's pinned
   `versionId` and removes other versions only after the signed PUT window plus
   two hours. Git cleanup keeps current live versions and removes older versions
   before a latest delete marker. Do not apply blanket B2 noncurrent-version
   expiration to LFS keys: a verified version can be noncurrent after another
   Basic PUT and still be the version served to readers. Failed cleanup retries.
+  Scheduled deletion, account reconciliation, and expired-reservation batches
+  order by persisted last-attempt time. Failing rows move behind unattempted
+  rows; repeated failures increment counters and log an intervention flag at
+  five failures. Cleanup continues when `BEUTL_GIT_ENABLED=false` while the
+  storage bindings remain configured. Each queued DO invocation lazily opens
+  one DB client and closes it at completion, including cold-start alarms.
 
 An interrupted multipart push can be retried. A Git push that reaches Smart
 HTTP after its Git token expires obtains a new token and retries the Git
-portion once. Git LFS operations against other remotes retain their normal
+portion within five total attempts, checking actual push URLs (including
+`pushurl` and Git URL rewrites) and authenticating every hosted target.
+Hosted commands disable interactive askpass helpers. Git LFS operations against other remotes retain their normal
 credentials and transfer configuration.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
@@ -157,6 +177,7 @@ References: [B2 S3 API](https://www.backblaze.com/docs/cloud-storage-call-the-s3
 [B2 multipart listing](https://www.backblaze.com/apidocs/s3-list-multipart-uploads),
 [B2 object versions](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api-bucket-versions),
 [B2 lifecycle configuration](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration),
+[B2 single-file limits](https://www.backblaze.com/docs/cloud-storage-files),
 [Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),
 [Cloudflare Durable Object storage limits](https://developers.cloudflare.com/durable-objects/platform/limits/),
 [tus 1.0 protocol](https://tus.io/protocols/resumable-upload).

@@ -17,6 +17,19 @@ export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 const MAX_GIT_NEGOTIATION_BYTES = 64 * 1024;
 const GITDIR = "/repo.git";
 
+export function incomingGitObjectBytes(pack: Uint8Array): number {
+  if (pack.byteLength === 0) return 0; // Ref-only update/deletion.
+  if (pack.byteLength < 32 || new TextDecoder().decode(pack.subarray(0, 4)) !== "PACK") {
+    throw new Error("Invalid Git pack header");
+  }
+  const header = new DataView(pack.buffer, pack.byteOffset, pack.byteLength);
+  if (![2, 3].includes(header.getUint32(4))) throw new Error("Unsupported Git pack version");
+  // indexPack writes a v2 index: 8-byte header, 256 fanout entries, 28
+  // bytes/object (SHA-1, CRC, offset), and two 20-byte checksums. The incoming
+  // 8 MiB bound means offsets never need the additional 64-bit offset table.
+  return pack.byteLength + 1072 + header.getUint32(8) * 28;
+}
+
 export async function readBodyAtMost(request: Request, limit: number): Promise<Uint8Array> {
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
@@ -58,6 +71,7 @@ export async function handleGitHttp(
   bucket: GitObjectBucket,
   repoId: string,
   scope: GitScope,
+  reserveHistory?: (maxAdditionalBytes: number) => Promise<boolean>,
 ): Promise<Response> {
   const path = new URL(request.url).pathname;
   const base = `/api/v3/git/${repoId}.git/`;
@@ -102,10 +116,16 @@ export async function handleGitHttp(
     if (scope !== "write") return new Response("Forbidden", { status: 403 });
     const body = await readBodyAtMost(request, MAX_GIT_PUSH_BYTES);
     const parsed = parseReceivePackBody(body);
+    let additionalBytes: number;
+    try { additionalBytes = incomingGitObjectBytes(parsed.packData); }
+    catch { return new Response("Invalid Git pack header", { status: 400 }); }
     const objects = await store.list(`${prefix}/repo.git/objects/`);
     const storedBytes = objects.objects.reduce((size, object) => size + object.size, 0);
-    if (storedBytes + parsed.packData.byteLength * 2 > MAX_GIT_REPOSITORY_BYTES) {
+    if (storedBytes + additionalBytes > MAX_GIT_REPOSITORY_BYTES) {
       return new Response("Git history quota exceeded; track media with Git LFS", { status: 413 });
+    }
+    if (reserveHistory && !await reserveHistory(additionalBytes)) {
+      return new Response("Account storage quota exceeded", { status: 413 });
     }
     const { results } = await applyReceivePack(repo, parsed, { repack: false });
     return response(receivePackResponse(results));
