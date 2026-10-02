@@ -26,6 +26,17 @@ async function clearParts(storage: GitDurableStorage, oid: string): Promise<void
   for (const key of parts.keys()) await storage.delete(key);
 }
 
+export async function clearTusTail(storage: GitDurableStorage, oid: string): Promise<void> {
+  await storage.delete(`tus-tail:${oid}:meta`);
+  // Two fixed slots keep copy-on-write tails bounded even after repeated
+  // interrupted writes. Five 1 MiB values cover any pending B2 part tail.
+  for (const slot of ["a", "b"]) {
+    for (let index = 0; index < 5; index++) {
+      await storage.delete(`tus-tail:${oid}:${slot}:${index}`);
+    }
+  }
+}
+
 async function acceptedParts(
   bucket: GitObjectBucket, storage: GitDurableStorage, key: string, uploadId: string, oid: string,
 ): Promise<Part[]> {
@@ -56,6 +67,7 @@ export async function abortMultipart(
   }
   await bucket.delete(objectKey(repoId, oid));
   await clearParts(storage, oid);
+  if (record.tusId) await clearTusTail(storage, oid);
   await storage.delete(recordKey(oid));
 }
 

@@ -1,18 +1,24 @@
 import type { GitDurableStorage, LfsRecord } from "./lfs";
 import { MAX_LFS_OBJECT_BYTES } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
-import { abortMultipart, MAX_MULTIPART_PARTS, MULTIPART_PART_BYTES, verifyCompletedObject } from "./multipart";
+import { abortMultipart, clearTusTail, MAX_MULTIPART_PARTS, MULTIPART_PART_BYTES, verifyCompletedObject } from "./multipart";
 
 // tus 1.0 core, Creation, Expiration and Termination. B2 needs at least 5 MiB
-// for every non-final part; 64 MiB stays below Cloudflare's 100 MB body cap.
+// for every non-final part; smaller PATCH tails live in SQLite DO storage.
 const VERSION = "1.0.0";
 const MIN_PART_BYTES = 5 * 1024 * 1024;
+const TAIL_CHUNK_BYTES = 1024 * 1024;
 const OID = /^[0-9a-f]{64}$/u;
 const RESOURCE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
 const DECIMAL = /^(?:0|[1-9][0-9]*)$/u;
 type Part = { partNumber: number; etag: string; size: number };
+type Tail = { generation: "a" | "b"; base: number; length: number };
 
 const recordKey = (oid: string) => `lfs:${oid}`;
+const tailPrefix = (oid: string) => `tus-tail:${oid}:`;
+const tailMetaKey = (oid: string) => `${tailPrefix(oid)}meta`;
+const tailChunkKey = (oid: string, generation: string, index: number) =>
+  `${tailPrefix(oid)}${generation}:${index}`;
 const objectKey = (repoId: string, oid: string) => `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
 const expires = (record: LfsRecord) => new Date(record.expiresAt).toUTCString();
 const numberHeader = (value: string | null): number | null =>
@@ -25,14 +31,58 @@ function tusResponse(status: number, headers: Record<string, string> = {}, messa
   });
 }
 
+async function activeTail(storage: GitDurableStorage, oid: string, base: number): Promise<Tail | undefined> {
+  const tail = await storage.get<Tail>(tailMetaKey(oid));
+  if (!tail) return undefined;
+  if (tail.generation !== "a" && tail.generation !== "b" || !Number.isSafeInteger(tail.base) ||
+      !Number.isSafeInteger(tail.length) || tail.length < 1 || tail.length >= MIN_PART_BYTES ||
+      tail.base > base) {
+    throw new Error("Invalid persisted tus tail");
+  }
+  // B2 may have accepted the part before the DO could remove its old tail.
+  return tail.base === base ? tail : undefined;
+}
+
+async function readTail(storage: GitDurableStorage, oid: string, tail: Tail): Promise<Uint8Array> {
+  const bytes = new Uint8Array(tail.length);
+  for (let offset = 0, index = 0; offset < tail.length; index++) {
+    const chunk = await storage.get<Uint8Array>(tailChunkKey(oid, tail.generation, index));
+    const expected = Math.min(TAIL_CHUNK_BYTES, tail.length - offset);
+    if (!(chunk instanceof Uint8Array) || chunk.byteLength !== expected) {
+      throw new Error("Persisted tus tail is incomplete");
+    }
+    bytes.set(chunk, offset);
+    offset += expected;
+  }
+  return bytes;
+}
+
+async function writeTail(storage: GitDurableStorage, oid: string, base: number, bytes: Uint8Array): Promise<void> {
+  if (bytes.byteLength >= MIN_PART_BYTES) throw new Error("Tus tail exceeds B2 part minimum");
+  if (bytes.byteLength) {
+    const previous = await storage.get<Tail>(tailMetaKey(oid));
+    const generation = previous?.generation === "a" ? "b" : "a";
+    for (let offset = 0, index = 0; offset < bytes.byteLength; index++) {
+      const end = Math.min(offset + TAIL_CHUNK_BYTES, bytes.byteLength);
+      await storage.put(tailChunkKey(oid, generation, index), Uint8Array.from(bytes.subarray(offset, end)));
+      offset = end;
+    }
+    // Commit the new generation last. An interrupted write leaves the previous
+    // tail readable, and a lost response exposes the new offset on HEAD.
+    await storage.put<Tail>(tailMetaKey(oid), { generation, base, length: bytes.byteLength });
+  } else {
+    await clearTusTail(storage, oid);
+  }
+}
+
 async function status(
-  bucket: GitObjectBucket, record: LfsRecord, key: string,
-): Promise<{ offset: number; parts: Part[] }> {
-  if (record.completed || record.verified) return { offset: record.size, parts: [] };
+  bucket: GitObjectBucket, storage: GitDurableStorage, oid: string, record: LfsRecord, key: string,
+): Promise<{ offset: number; base: number; parts: Part[]; tail?: Tail }> {
+  if (record.completed || record.verified) return { offset: record.size, base: record.size, parts: [] };
   // A previous CompleteMultipartUpload may have succeeded before the DO
   // persisted its result. Do not call ListParts on an already completed upload.
-  if (await bucket.head(key)) return { offset: record.size, parts: [] };
-  if (!record.uploadId) return { offset: 0, parts: [] };
+  if (await bucket.head(key)) return { offset: record.size, base: record.size, parts: [] };
+  if (!record.uploadId) return { offset: 0, base: 0, parts: [] };
   const parts = (await bucket.resumeMultipartUpload(key, record.uploadId).listParts())
     .sort((a, b) => a.partNumber - b.partNumber);
   if (parts.length > MAX_MULTIPART_PARTS) throw new Error("B2 multipart part count exceeded");
@@ -47,7 +97,9 @@ async function status(
     }
     offset += part.size;
   }
-  return { offset, parts };
+  const tail = await activeTail(storage, oid, offset);
+  if (offset + (tail?.length ?? 0) > record.size) throw new Error("Tus tail exceeds upload length");
+  return { offset: offset + (tail?.length ?? 0), base: offset, parts, tail };
 }
 
 async function finish(
@@ -60,7 +112,7 @@ async function finish(
     let object = await bucket.head(key);
     if (!object) {
       if (!record.uploadId) throw new Error("B2 multipart upload is missing");
-      const parts = knownParts ?? (await status(bucket, record, key)).parts;
+      const parts = knownParts ?? (await status(bucket, storage, oid, record, key)).parts;
       if (!parts.length || parts.reduce((sum, part) => sum + part.size, 0) !== record.size) {
         throw new Error("B2 multipart upload is incomplete");
       }
@@ -82,6 +134,7 @@ async function finish(
     await abortMultipart(bucket, storage, repoId, oid, record);
     return false;
   }
+  await clearTusTail(storage, oid);
   await storage.put(recordKey(oid), { ...record, verified: true });
   return true;
 }
@@ -142,6 +195,7 @@ export async function handleTus(
   }
   if (method === "DELETE") {
     if (record.verified) {
+      await clearTusTail(storage, oid);
       await storage.put(recordKey(oid), { ...record, tusId: undefined });
     } else {
       await abortMultipart(bucket, storage, repoId, oid, record);
@@ -150,7 +204,7 @@ export async function handleTus(
   }
   if (method !== "HEAD" && method !== "PATCH") return tusResponse(405);
 
-  const current = await status(bucket, record, key);
+  const current = await status(bucket, storage, oid, record, key);
   if (current.offset === record.size && !record.verified) {
     if (!await finish(bucket, storage, repoId, oid, record, request.signal, current.parts)) {
       return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");
@@ -164,43 +218,109 @@ export async function handleTus(
       ...(record.verified ? {} : { "Upload-Expires": expires(record) }),
     });
   }
+  const patchExpires: Record<string, string> = record.verified
+    ? {} : { "Upload-Expires": expires(record) };
   if (request.headers.get("Content-Type") !== "application/offset+octet-stream") {
-    return tusResponse(415);
+    return tusResponse(415, patchExpires);
   }
   const offset = numberHeader(request.headers.get("Upload-Offset"));
-  if (offset === null) return tusResponse(400, {}, "Upload-Offset is required");
+  if (offset === null) return tusResponse(400, patchExpires, "Upload-Offset is required");
   if (offset !== current.offset) {
-    return tusResponse(409, { "Upload-Offset": String(current.offset) });
+    return tusResponse(409, { ...patchExpires, "Upload-Offset": String(current.offset) });
   }
   const length = numberHeader(request.headers.get("x-beutl-tus-length") ??
     request.headers.get("Content-Length"));
-  if (length === null) return tusResponse(411, {}, "Content-Length is required");
-  if (length > MULTIPART_PART_BYTES || offset + length > record.size) return tusResponse(413);
-  if (length !== 0 && offset + length < record.size && length < MIN_PART_BYTES) {
-    return tusResponse(400, { "Upload-Offset": String(offset) }, "B2 requires non-final chunks of at least 5 MiB");
-  }
-  if (length === 0) return tusResponse(204, { "Upload-Offset": String(offset) });
-  if (!record.uploadId || !request.body || current.parts.length >= MAX_MULTIPART_PARTS) {
-    return tusResponse(409);
-  }
+  if (length === null) return tusResponse(411, patchExpires, "Content-Length is required");
+  if (length > MULTIPART_PART_BYTES || offset + length > record.size) return tusResponse(413, patchExpires);
+  if (length === 0) return tusResponse(204, { ...patchExpires, "Upload-Offset": String(offset) });
+  if (!record.uploadId || !request.body) return tusResponse(409, patchExpires);
+  const declaredLength = length;
+  const uploadId = record.uploadId;
+  const prefix = current.tail ? await readTail(storage, oid, current.tail) : new Uint8Array();
+  const combined = prefix.byteLength + length;
+  const final = current.base + combined === record.size;
+  const uploadCount = combined < MIN_PART_BYTES && !final ? 0 :
+    combined > MULTIPART_PART_BYTES && final ? 2 : 1;
+  if (current.parts.length + uploadCount > MAX_MULTIPART_PARTS) return tusResponse(413, patchExpires);
+
+  const reader = request.body.getReader();
+  let prefixOffset = 0;
+  let buffered: Uint8Array<ArrayBufferLike> = new Uint8Array();
   let received = 0;
-  const measured = request.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
+  async function take(maximum: number): Promise<Uint8Array | null> {
+    while (true) {
       request.signal.throwIfAborted();
-      received += chunk.byteLength;
-      if (received > length) throw new RangeError("tus PATCH exceeds Content-Length");
-      controller.enqueue(chunk);
-    },
-    flush() {
-      if (received !== length) throw new RangeError("tus PATCH is incomplete");
-    },
-  }));
-  await bucket.resumeMultipartUpload(key, record.uploadId)
-    .uploadPart(current.parts.length + 1, measured, length);
-  if (received !== length) return tusResponse(422);
+      if (prefixOffset < prefix.byteLength) {
+        const end = Math.min(prefixOffset + maximum, prefix.byteLength);
+        const chunk = prefix.subarray(prefixOffset, end);
+        prefixOffset = end;
+        return chunk;
+      }
+      if (buffered.byteLength) {
+        const chunk = buffered.subarray(0, maximum);
+        buffered = buffered.subarray(chunk.byteLength);
+        return chunk;
+      }
+      const next = await reader.read();
+      if (next.done) return null;
+      received += next.value.byteLength;
+      if (received > declaredLength) throw new RangeError("tus PATCH exceeds Content-Length");
+      buffered = next.value;
+    }
+  }
+  async function readBytes(size: number): Promise<Uint8Array> {
+    const bytes = new Uint8Array(size);
+    for (let position = 0; position < size;) {
+      const chunk = await take(Math.min(size - position, TAIL_CHUNK_BYTES));
+      if (!chunk) throw new RangeError("tus PATCH is incomplete");
+      bytes.set(chunk, position);
+      position += chunk.byteLength;
+    }
+    return bytes;
+  }
+  async function assertDone(): Promise<void> {
+    if (await take(1) || received !== declaredLength) throw new RangeError("tus PATCH length mismatch");
+  }
+  async function uploadPart(size: number, number: number): Promise<void> {
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent === size) { controller.close(); return; }
+        const chunk = await take(Math.min(size - sent, TAIL_CHUNK_BYTES));
+        if (!chunk) throw new RangeError("tus PATCH is incomplete");
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    await bucket.resumeMultipartUpload(key, uploadId).uploadPart(number, stream, size);
+    if (sent !== size) throw new RangeError("B2 did not read the full tus part");
+  }
+  try {
+    if (uploadCount === 0) {
+      const tail = await readBytes(combined);
+      await assertDone();
+      await writeTail(storage, oid, current.base, tail);
+    } else {
+      const first = Math.min(combined, MULTIPART_PART_BYTES);
+      await uploadPart(first, current.parts.length + 1);
+      if (combined > first && final) {
+        await uploadPart(combined - first, current.parts.length + 2);
+        await assertDone();
+      } else if (combined > first) {
+        const tail = await readBytes(combined - first);
+        await assertDone();
+        await writeTail(storage, oid, current.base + first, tail);
+      } else {
+        await assertDone();
+        if (!final) await writeTail(storage, oid, current.base + first, new Uint8Array());
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
   const newOffset = offset + length;
   if (newOffset === record.size) {
-    const accepted = await status(bucket, record, key);
+    const accepted = await status(bucket, storage, oid, record, key);
     if (accepted.offset !== record.size ||
         !await finish(bucket, storage, repoId, oid, record, request.signal, accepted.parts)) {
       return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");

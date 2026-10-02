@@ -3,7 +3,7 @@ import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, type GitDurableStorag
 import type { GitObjectBucket } from "./git-object-store";
 import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitScope } from "./tokens";
-import { abortMultipart, handleMultipart } from "./multipart";
+import { abortMultipart, clearTusTail, handleMultipart } from "./multipart";
 import { handleTus } from "./tus";
 
 interface State {
@@ -69,7 +69,10 @@ export class GitRepositoryDurableObject {
       }
       await this.deletePrefix(bucket, `git/repos/${repoId}/`);
       await this.deletePrefix(bucket, `git-lfs/repos/${repoId}/`);
-      for (const key of records.keys()) await this.state.storage.delete(key);
+      for (const [key, record] of records) {
+        if (record.verified && record.tusId) await clearTusTail(this.state.storage, key.slice(4));
+        await this.state.storage.delete(key);
+      }
       return new Response(null, { status: 204 });
     }
     if (await this.state.storage.get<boolean>("deleted")) {

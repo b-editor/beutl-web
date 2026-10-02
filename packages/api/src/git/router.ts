@@ -103,6 +103,21 @@ export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment)
 
 /** Worker-only route: API JWT manages repos, dedicated Git JWT carries Git traffic. */
 export async function routeGitRequest(request: Request, env: GitRouterEnvironment): Promise<Response | null> {
+  const response = await routeGitRequestCore(request, env);
+  return response ? withTusProtocolHeader(request, response) : null;
+}
+
+export function withTusProtocolHeader(request: Request, response: Response): Response {
+  if (!/^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus(?:\/[^/]*)?$/u
+    .test(new URL(request.url).pathname) || response.headers.get("Tus-Resumable") === "1.0.0") {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set("Tus-Resumable", "1.0.0");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function routeGitRequestCore(request: Request, env: GitRouterEnvironment): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
   const isCollection = path === "/api/v3/repos";

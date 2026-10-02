@@ -541,6 +541,12 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
     const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const options = await durable.fetch(make(base(oid), "OPTIONS"));
     expect(options.headers.get("Tus-Extension")).toBe("creation,expiration,termination");
+    expect(options.headers.get("Tus-Version")).toBe("1.0.0");
+    const incompatible = await durable.fetch(make(base(oid), "POST", {
+      "Tus-Resumable": "0.9.0", "Upload-Length": String(data.length),
+    }));
+    expect(incompatible.status).toBe(412);
+    expect(incompatible.headers.get("Tus-Version")).toBe("1.0.0");
     const url = await create(durable, oid, data.length);
     expect(await create(durable, oid, data.length)).toBe(url);
     const before = await durable.fetch(make(url, "HEAD"));
@@ -550,8 +556,10 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
     const wrong = await durable.fetch(patch(url, 1, first));
     expect(wrong.status).toBe(409);
     expect(wrong.headers.get("Upload-Offset")).toBe("0");
-    const small = await durable.fetch(patch(url, 0, new Uint8Array(1)));
-    expect(small.status).toBe(400);
+    expect(wrong.headers.get("Upload-Expires")).not.toBeNull();
+    const empty = await durable.fetch(patch(url, 0, new Uint8Array()));
+    expect(empty.status).toBe(204);
+    expect(empty.headers.get("Upload-Offset")).toBe("0");
     const firstPatch = await durable.fetch(make(url, "POST", {
       "X-HTTP-Method-Override": "PATCH", "Upload-Offset": "0",
       "Content-Type": "application/offset+octet-stream",
@@ -588,6 +596,131 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
     expect(bucket.uploads.size).toBe(0);
   });
 
+  it("persists arbitrary small PATCH tails and resumes after their response is lost", async () => {
+    const data = new Uint8Array(5 * 1024 * 1024 + 1);
+    data.fill(17);
+    const oid = createHash("sha256").update(data).digest("hex");
+    class LostTailAckStorage extends MemoryStorage {
+      lose = true;
+      override async put<T>(key: string, value: T) {
+        await super.put(key, value);
+        if (key === `tus-tail:${oid}:meta` && this.lose) {
+          this.lose = false;
+          throw new Error("tail response lost");
+        }
+      }
+    }
+    const bucket = new MemoryBucket();
+    const storage = new LostTailAckStorage();
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: data.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, data.length);
+    await expect(durable.fetch(patch(url, 0, data.subarray(0, 1))))
+      .rejects.toThrow("tail response lost");
+    durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset")).toBe("1");
+    expect((await durable.fetch(patch(url, 0, data.subarray(0, 1)))).status).toBe(409);
+    const next = 1 + 1024 * 1024;
+    expect((await durable.fetch(patch(url, 1, data.subarray(1, next)))).headers.get("Upload-Offset"))
+      .toBe(String(next));
+    durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset")).toBe(String(next));
+    const boundary = 5 * 1024 * 1024;
+    expect((await durable.fetch(patch(url, next, data.subarray(next, boundary)))).headers.get("Upload-Offset"))
+      .toBe(String(boundary));
+    const record = await storage.get<LfsRecord>(`lfs:${oid}`);
+    expect(bucket.uploads.get(record!.uploadId!)?.get(1)?.byteLength).toBe(boundary);
+    expect((await durable.fetch(patch(url, boundary, data.subarray(boundary)))).status).toBe(204);
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    expect((await storage.list({ prefix: `tus-tail:${oid}:` })).size).toBe(0);
+  });
+
+  it("keeps the old offset if a new tail generation fails before its pointer is committed", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const oid = createHash("sha256").update(bytes).digest("hex");
+    class InterruptedStorage extends MemoryStorage {
+      failChunk = false;
+      override async put<T>(key: string, value: T) {
+        await super.put(key, value);
+        if (this.failChunk && key.startsWith(`tus-tail:${oid}:`) && key.endsWith(":0")) {
+          this.failChunk = false;
+          throw new Error("tail write interrupted");
+        }
+      }
+    }
+    const bucket = new MemoryBucket();
+    const storage = new InterruptedStorage();
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: bytes.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, bytes.length);
+    expect((await durable.fetch(patch(url, 0, bytes.subarray(0, 1)))).status).toBe(204);
+    storage.failChunk = true;
+    await expect(durable.fetch(patch(url, 1, bytes.subarray(1, 2))))
+      .rejects.toThrow("tail write interrupted");
+    durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset")).toBe("1");
+    expect((await durable.fetch(patch(url, 1, bytes.subarray(1, 2)))).headers.get("Upload-Offset"))
+      .toBe("2");
+    expect((await durable.fetch(patch(url, 2, bytes.subarray(2)))).status).toBe(204);
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    expect((await storage.list({ prefix: `tus-tail:${oid}:` })).size).toBe(0);
+  });
+
+  it("splits a final 64 MiB PATCH after a pending tail into valid B2 parts", async () => {
+    const firstSize = 1024 * 1024;
+    const data = new Uint8Array(firstSize + 64 * 1024 * 1024);
+    data.fill(8);
+    const oid = createHash("sha256").update(data).digest("hex");
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: data.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, data.length);
+    expect((await durable.fetch(patch(url, 0, data.subarray(0, firstSize)))).status).toBe(204);
+    expect((await durable.fetch(patch(url, firstSize, data.subarray(firstSize)))).status).toBe(204);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(data.length));
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    expect((await storage.list({ prefix: `tus-tail:${oid}:` })).size).toBe(0);
+  });
+
+  it("retries a failed final SHA read on HEAD and removes a mismatched OID", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const oid = createHash("sha256").update(bytes).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: bytes.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, bytes.length);
+    bucket.onGet = async () => { bucket.onGet = undefined; throw new Error("B2 GET interrupted"); };
+    await expect(durable.fetch(patch(url, 0, bytes))).rejects.toThrow("B2 GET interrupted");
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(false);
+    durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(bytes.length));
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+
+    const badOid = createHash("sha256").update(new Uint8Array([9, 9, 9])).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${badOid}`, {
+      kind: "multipart", size: bytes.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const badUrl = await create(durable, badOid, bytes.length);
+    expect((await durable.fetch(patch(badUrl, 0, bytes.subarray(0, 1)))).status).toBe(204);
+    expect((await durable.fetch(patch(badUrl, 1, bytes.subarray(1)))).status).toBe(422);
+    expect(await storage.get(`lfs:${badOid}`)).toBeUndefined();
+    expect((await durable.fetch(make(badUrl, "HEAD"))).status).toBe(404);
+    expect((await storage.list({ prefix: `tus-tail:${badOid}:` })).size).toBe(0);
+    expect(await bucket.head(`git-lfs/repos/${repoId}/${badOid.slice(0, 2)}/${badOid}`)).toBeNull();
+  });
+
   it("recovers an accepted part after its response is lost and rejects a competing stale offset", async () => {
     class LostPartBucket extends MemoryBucket {
       lose = true;
@@ -610,7 +743,8 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
     });
     const initial = new GitRepositoryDurableObject({ storage }, env, bucket);
     const url = await create(initial, oid, first.length + 1);
-    await expect(initial.fetch(patch(url, 0, first))).rejects.toThrow("response lost");
+    expect((await initial.fetch(patch(url, 0, first.subarray(0, 1)))).status).toBe(204);
+    await expect(initial.fetch(patch(url, 1, first.subarray(1)))).rejects.toThrow("response lost");
     const restarted = new GitRepositoryDurableObject({ storage }, env, bucket);
     expect((await restarted.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
       .toBe(String(first.length));
@@ -703,8 +837,9 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
         `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
       const token = await issueMultipartToken(secret, "owner-a", repoId, oid);
       const headers = { Authorization: `Bearer ${token}`, "Tus-Resumable": "1.0.0" };
-      expect((await fetch(url, { method: "POST", headers: { "Upload-Length": String(first.length + 1) } })).status)
-        .toBe(401);
+      const denied = await fetch(url, { method: "POST", headers: { "Upload-Length": String(first.length + 1) } });
+      expect(denied.status).toBe(401);
+      expect(denied.headers.get("Tus-Resumable")).toBe("1.0.0");
       const created = await fetch(url, {
         method: "POST", headers: { ...headers, "Upload-Length": String(first.length + 1) },
       });

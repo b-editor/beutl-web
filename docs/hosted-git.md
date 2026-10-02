@@ -81,14 +81,19 @@ starts again from byte zero on each attempt; it has no persisted checkpoints.
   required except for `OPTIONS`. `POST` is idempotent for the same reservation;
   the resource URL stays stable across retries. PATCH requires an exact
   `Upload-Offset`, `Content-Length`, and
-  `Content-Type: application/offset+octet-stream`. Non-final PATCH bodies must
-  be 5-64 MiB to meet B2 multipart limits; the final body may be smaller.
+  `Content-Type: application/offset+octet-stream`. PATCH bodies may be any size
+  up to 64 MiB. The Durable Object persists tails below B2's 5 MiB non-final
+  part minimum in 1 MiB SQLite values, then streams them into a B2 part when
+  enough bytes arrive. Each new tail is written copy-on-write before its
+  offset becomes visible, so a lost response or DO restart can resume it.
   Creation with upload, deferred length, and concatenation are not supported.
   `X-HTTP-Method-Override` is accepted for PATCH when a proxy blocks the verb.
-- The repository Durable Object serializes PATCH requests. B2 `ListParts` gives
-  the offset on every HEAD and before every PATCH, including after an accepted
-  part loses its response or the Durable Object restarts. A stale offset gets
-  409 without uploading its body. The final PATCH or subsequent HEAD assembles
+- The repository Durable Object serializes PATCH requests. B2 `ListParts`
+  gives the committed part prefix on every HEAD and before every PATCH; its
+  offset plus the persisted tail length is the resumable tus offset. This also
+  covers an accepted part that loses its response or a Durable Object restart.
+  A stale offset gets 409 without uploading its body. The final PATCH or
+  subsequent HEAD assembles
   the B2 object and verifies the pinned B2 version against the full LFS OID
   before reporting completion. DELETE aborts an unfinished upload and releases
   its quota reservation.
@@ -123,4 +128,5 @@ References: [B2 S3 API](https://www.backblaze.com/docs/cloud-storage-call-the-s3
 [B2 object versions](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api-bucket-versions),
 [B2 lifecycle configuration](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration),
 [Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),
+[Cloudflare Durable Object storage limits](https://developers.cloudflare.com/durable-objects/platform/limits/),
 [tus 1.0 protocol](https://tus.io/protocols/resumable-upload).

@@ -29,6 +29,7 @@ import { resolveStorageBucket } from "./storage/bucket-from-env";
 import {
   reconcileGitRepositoryDeletions,
   routeGitRequest,
+  withTusProtocolHeader,
   type GitRepositoryNamespace,
 } from "./git/router";
 
@@ -186,7 +187,7 @@ export default {
       bodyLimitExceeded = true;
     });
     if (bounded === null) {
-      return await fileTooLargeApiResponse();
+      return withTusProtocolHeader(request, await fileTooLargeApiResponse());
     }
 
     // workerd は vars/secrets を process.env に自動投入しない。
@@ -200,10 +201,10 @@ export default {
       // the endpoint sees it. The outer stream marker still gives the Worker
       // an unambiguous 413 response for chunked bodies.
       return bodyLimitExceeded
-        ? await fileTooLargeApiResponse()
+        ? withTusProtocolHeader(request, await fileTooLargeApiResponse())
         : response;
     } catch (error) {
-      if (bodyLimitExceeded) return await fileTooLargeApiResponse();
+      if (bodyLimitExceeded) return withTusProtocolHeader(request, await fileTooLargeApiResponse());
       throw error;
     }
   },
