@@ -7,7 +7,7 @@ const REPO_PATH = /^\/api\/v3\/repos\/([0-9a-f-]{36})(?:\/(token))?$/u;
 const GIT_PATH = /^\/api\/v3\/git\/([0-9a-f-]{36})\.git\/(.+)$/u;
 const MAX_REPOSITORIES_PER_USER = 20;
 // A Basic LFS PUT URL can remain usable for an hour after a repository is
-// deleted. Sweep again after that window so a late direct R2 PUT cannot leave
+// deleted. Sweep again after that window so a late direct B2 PUT cannot leave
 // an orphaned object under a completed tombstone.
 export const GIT_DELETE_SWEEP_GRACE_MS = 2 * 60 * 60 * 1000;
 
@@ -124,10 +124,11 @@ export async function routeGitRequest(request: Request, env: GitRouterEnvironmen
     // LFS batch may ask for download, so validate the read token here and
     // leave its upload operation check to the Durable Object.
     const multipartPath = /^info\/lfs\/objects\/([0-9a-f]{64})\/multipart(?:\/.*)?$/u.exec(gitMatch[2]);
+    const tusPath = /^info\/lfs\/objects\/([0-9a-f]{64})\/tus(?:\/.*)?$/u.exec(gitMatch[2]);
     const verifyPath = /^info\/lfs\/objects\/([0-9a-f]{64})\/verify$/u.exec(gitMatch[2]);
-    const session = multipartPath || verifyPath
+    const session = multipartPath || tusPath || verifyPath
       ? await verifyMultipartToken(secret, request.headers.get("authorization"),
-          repoId, (multipartPath ?? verifyPath)![1])
+          repoId, (multipartPath ?? tusPath ?? verifyPath)![1])
       : null;
     const gitAuthenticated = await verifyGitToken(
       secret, request.headers.get("authorization"), repoId,

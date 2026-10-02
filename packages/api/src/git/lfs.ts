@@ -15,7 +15,7 @@ const MAX_BATCH_OBJECTS = 100;
 const MAX_LFS_REQUEST_BYTES = 32 * 1024;
 export const MAX_LFS_SINGLE_PUT_BYTES = 5 * 1024 ** 3;
 const DEFAULT_REPO_QUOTA_BYTES = 20 * 1024 ** 3;
-const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
+export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
 
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -38,6 +38,7 @@ export interface LfsRecord {
   uploadId?: string;
   completed?: boolean;
   versionId?: string;
+  tusId?: string;
 }
 
 interface LfsObjectRequest { oid: string; size: number }
@@ -130,7 +131,8 @@ export async function handleLfsBatch(
       (input.operation !== "upload" && input.operation !== "download") ||
       !Array.isArray(input.objects) || input.objects.length > MAX_BATCH_OBJECTS ||
       (input.transfers && (!Array.isArray(input.transfers) ||
-        !input.transfers.some((transfer: unknown) => transfer === "basic" || transfer === "beutl-multipart"))) ||
+        !input.transfers.some((transfer: unknown) =>
+          transfer === "basic" || transfer === "beutl-tus" || transfer === "beutl-multipart"))) ||
       (input.hash_algo && input.hash_algo !== "sha256")) {
     return lfsResponse({ message: "Invalid Git LFS batch request" }, 400);
   }
@@ -142,8 +144,10 @@ export async function handleLfsBatch(
     typeof object === "object" && object !== null &&
     typeof (object as { size?: unknown }).size === "number" &&
     (object as { size: number }).size > MAX_LFS_SINGLE_PUT_BYTES);
-  const customTransfer = transfers.includes("beutl-multipart") &&
-    (needsMultipart || !transfers.includes("basic"));
+  const customTransfer = (needsMultipart || !transfers.includes("basic"))
+    ? transfers.includes("beutl-tus") ? "beutl-tus"
+      : transfers.includes("beutl-multipart") ? "beutl-multipart" : null
+    : null;
   const quota = getQuota(env);
   await pruneExpiredLfs(storage, bucket, repoId);
   const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
@@ -190,9 +194,17 @@ export async function handleLfsBatch(
       objects.push({ oid, size, error: { code: 413, message: "The Beutl multipart LFS transfer is required for this object" } });
       continue;
     }
-    const multipart = size > MAX_LFS_SINGLE_PUT_BYTES;
+    // Git LFS chooses one transfer for the entire batch, including smaller
+    // objects mixed with media above the Basic PUT limit.
+    const multipart = customTransfer !== null;
     if (record && record.kind !== (multipart ? "multipart" : "basic")) {
       objects.push({ oid, size, error: { code: 409, message: "LFS transfer mode changed" } });
+      continue;
+    }
+    if (multipart && record &&
+        (record.tusId && customTransfer !== "beutl-tus" ||
+          record.uploadId && !record.tusId && customTransfer === "beutl-tus")) {
+      objects.push({ oid, size, error: { code: 409, message: "LFS transfer mode changed during upload" } });
       continue;
     }
     if (!record) {
@@ -214,7 +226,8 @@ export async function handleLfsBatch(
       await storage.setAlarm(earliest + 1000);
     }
     const uploadHref = multipart
-      ? new URL(`/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/multipart`, request.url).toString()
+      ? new URL(`/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/${customTransfer === "beutl-tus" ? "tus" : "multipart"}`,
+        request.url).toString()
       : await bucket.presignPut(key, size, LFS_ACTION_SECONDS);
     const verifyHref = new URL(
       `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, request.url,
@@ -246,7 +259,7 @@ export async function handleLfsBatch(
       },
     } });
   }
-  return lfsResponse({ transfer: customTransfer ? "beutl-multipart" : "basic", objects });
+  return lfsResponse({ transfer: customTransfer ?? "basic", objects });
 }
 
 export async function handleLfsVerify(

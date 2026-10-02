@@ -45,8 +45,9 @@ Cloudflare allows up to 300 seconds of active CPU for a paid Worker request,
 but this implementation has **not** been measured against a real B2 bucket or
 Cloudflare account at 5–20 GiB. Measure the upload, verify, download, and
 retry path before enabling production traffic. A failed or interrupted
-verification leaves the object private and can be retried with the multipart
-complete action while its reservation is valid.
+verification leaves the object private and can be retried with tus HEAD or the
+legacy multipart complete action while its reservation is valid. The hash
+starts again from byte zero on each attempt; it has no persisted checkpoints.
 
 ## Protocol and trust boundary
 
@@ -63,16 +64,34 @@ complete action while its reservation is valid.
   The signed PUT fixes length and content type. The verify action reads the
   precise B2 object version as a stream and checks its full size and SHA-256
   against the LFS OID before publishing it. B2 ETags are not treated as hashes.
-- A batch with an object above 5 GiB selects `beutl-multipart` if the client
-  advertises it. The Beutl executable includes the matching Git LFS custom
-  transfer agent. Parts are 64 MiB and stream through the Worker to B2; no
-  full media file is buffered in Worker memory. The Worker request-body limit
-  for the account must allow a 64 MiB part. B2 `ListParts` is authoritative
-  for resume, including when a part succeeded but its metadata write did not.
-  The agent retries failed parts and skips accepted parts. DELETE aborts an
-  upload and releases its quota reservation. Unfinished reservations expire
-  after 24 hours. Configure a B2 lifecycle rule to abort incomplete multipart
-  uploads after seven days if an abort attempt fails.
+- A batch with an object above 5 GiB selects `beutl-tus` when the client
+  advertises it. The Beutl executable registers the matching Git LFS custom
+  transfer agent. Older clients can still use `beutl-multipart` as a fallback.
+  Git LFS chooses one transfer for a whole batch, so smaller objects in the
+  same batch use that custom transfer too; empty objects finish without a B2
+  multipart upload.
+  Both stream 64 MiB chunks through the Worker to B2 without buffering a full
+  media file. The Worker request-body limit for the account must allow a 64 MiB
+  PATCH. Unfinished reservations expire after 24 hours. Configure a B2
+  lifecycle rule to abort incomplete multipart uploads after seven days if an
+  abort attempt fails.
+- The tus endpoint supports protocol version 1.0.0 with Creation, Expiration,
+  and Termination: `OPTIONS` and `POST` on `/objects/<oid>/tus`, then `HEAD`,
+  `PATCH`, and `DELETE` on the returned upload URL. `Tus-Resumable: 1.0.0` is
+  required except for `OPTIONS`. `POST` is idempotent for the same reservation;
+  the resource URL stays stable across retries. PATCH requires an exact
+  `Upload-Offset`, `Content-Length`, and
+  `Content-Type: application/offset+octet-stream`. Non-final PATCH bodies must
+  be 5-64 MiB to meet B2 multipart limits; the final body may be smaller.
+  Creation with upload, deferred length, and concatenation are not supported.
+  `X-HTTP-Method-Override` is accepted for PATCH when a proxy blocks the verb.
+- The repository Durable Object serializes PATCH requests. B2 `ListParts` gives
+  the offset on every HEAD and before every PATCH, including after an accepted
+  part loses its response or the Durable Object restarts. A stale offset gets
+  409 without uploading its body. The final PATCH or subsequent HEAD assembles
+  the B2 object and verifies the pinned B2 version against the full LFS OID
+  before reporting completion. DELETE aborts an unfinished upload and releases
+  its quota reservation.
 - Multipart action tokens are scoped to one owner, repository, and LFS OID,
   and expire after 24 hours. Completed media remains private until the server
   streams a specific B2 version through SHA-256, checks size and OID, and
@@ -92,7 +111,7 @@ credentials and transfer configuration.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,
-SHA-256 verification and multipart resume/abort; and an S3 HTTP fixture for
+SHA-256 verification and tus/multipart resume/abort; and an S3 HTTP fixture for
 B2-style signing, multipart calls and versioned deletion. A local `git lfs
 push` fixture also confirms that Git LFS starts the bundled Beutl transfer
 agent and completes the init handshake. The fixture intentionally rejects a
@@ -103,4 +122,5 @@ References: [B2 S3 API](https://www.backblaze.com/docs/cloud-storage-call-the-s3
 [B2 multipart operations](https://www.backblaze.com/apidocs/s3-create-multipart-upload),
 [B2 object versions](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api-bucket-versions),
 [B2 lifecycle configuration](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration),
-[Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/).
+[Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),
+[tus 1.0 protocol](https://tus.io/protocols/resumable-upload).

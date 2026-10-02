@@ -4,6 +4,7 @@ import type { GitObjectBucket } from "./git-object-store";
 import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitScope } from "./tokens";
 import { abortMultipart, handleMultipart } from "./multipart";
+import { handleTus } from "./tus";
 
 interface State {
   storage: GitDurableStorage;
@@ -93,9 +94,16 @@ export class GitRepositoryDurableObject {
       const multipart = /^info\/lfs\/objects\/([0-9a-f]{64})\/multipart(?:\/(.*))?$/u.exec(operation);
       if (multipart) {
         if (scope !== "write") return new Response("Forbidden", { status: 403 });
+        const record = await this.state.storage.get<LfsRecord>(`lfs:${multipart[1]}`);
+        if (record?.tusId) return new Response("Use the tus upload resource", { status: 409 });
         return await handleMultipart(
           request, bucket, this.state.storage, repoId, multipart[1], multipart[2] ?? "",
         );
+      }
+      const tus = /^info\/lfs\/objects\/([0-9a-f]{64})\/tus(?:\/([0-9a-f-]+))?$/u.exec(operation);
+      if (tus) {
+        if (scope !== "write") return new Response("Forbidden", { status: 403 });
+        return await handleTus(request, bucket, this.state.storage, repoId, tus[1], tus[2]);
       }
       if (request.method === "POST" && operation === "git-receive-pack") {
         // git-fs-s3 v0.3.5 names incoming packs with Date.now(). Even with

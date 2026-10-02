@@ -66,6 +66,9 @@ export function apiRequestBodyLimit(
   if (normalizedMethod === "PUT" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/multipart\/parts\/\d+$/u.test(path)) {
     return 64 * 1024 * 1024;
   }
+  if (normalizedMethod === "PATCH" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[0-9a-f-]+$/u.test(path)) {
+    return 64 * 1024 * 1024;
+  }
   if (
     normalizedMethod === "POST" &&
     /^\/api\/v3\/ai\/videos\/[^/]+\/(openrouter|gateway)-callback$/u.test(path)

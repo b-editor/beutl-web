@@ -140,7 +140,8 @@ export function withBoundedBody(
   if (BODYLESS_METHODS.has(request.method) || !request.body) return request;
 
   const limit = requestBodyLimitForWorker(
-    request.method,
+    /^\/api\/v3\/git\/.*\/info\/lfs\/objects\/.*\/tus\//u.test(new URL(request.url).pathname) &&
+      request.headers.get("x-http-method-override") === "PATCH" ? "PATCH" : request.method,
     new URL(request.url).pathname,
     request.headers.get("content-type"),
   );
@@ -155,8 +156,12 @@ export function withBoundedBody(
 
   const headers = new Headers(request.headers);
   headers.delete("x-beutl-git-part-length");
+  headers.delete("x-beutl-tus-length");
   if (/^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/multipart\/parts\/\d+$/u.test(new URL(request.url).pathname) && declared !== null) {
     headers.set("x-beutl-git-part-length", declared);
+  }
+  if (/^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[0-9a-f-]+$/u.test(new URL(request.url).pathname) && declared !== null) {
+    headers.set("x-beutl-tus-length", declared);
   }
   // Multipart storage providers require the declared part length; the route
   // additionally bounds the stream to that length before handing it to storage.

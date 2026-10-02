@@ -249,6 +249,8 @@ it("allocates the larger body cap only to the Git pack and LFS part methods", ()
     .toBe(64 * 1024);
   expect(apiRequestBodyLimit("PUT", `${base}/info/lfs/objects/${"a".repeat(64)}/multipart/parts/1`, "application/octet-stream"))
     .toBe(64 * 1024 * 1024);
+  expect(apiRequestBodyLimit("PATCH", `${base}/info/lfs/objects/${"a".repeat(64)}/tus/12345678-1234-1234-1234-123456789012`,
+    "application/offset+octet-stream")).toBe(64 * 1024 * 1024);
   expect(apiRequestBodyLimit("POST", `${base}/info/lfs/objects/${"a".repeat(64)}/multipart/parts/1`, "application/octet-stream"))
     .toBe(MAX_API_JSON_REQUEST_BYTES);
 });
@@ -324,7 +326,7 @@ describe("Git Smart HTTP with the native Git CLI", () => {
   }, 30_000);
 });
 
-describe("R2 object adapter", () => {
+describe("Git object adapter", () => {
   it("lists all pages without dropping objects", async () => {
     const bucket = new MemoryBucket();
     for (let index = 0; index < 1_001; index++) bucket.objects.set(`key/${index.toString().padStart(4, "0")}`, new Uint8Array([index % 256]));
@@ -333,6 +335,39 @@ describe("R2 object adapter", () => {
 });
 
 describe("Git LFS reservation and integrity", () => {
+  it("prefers tus for a large LFS upload when the client advertises it", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const oid = "e".repeat(64);
+    const smallOid = "d".repeat(64);
+    const result = await handleLfsBatch(
+      lfsRequest("upload", [{ oid, size: 5 * 1024 ** 3 + 1 }, { oid: smallOid, size: 1 }],
+        ["basic", "beutl-tus", "beutl-multipart"]),
+      bucket, storage, env, repoId, "write", "Bearer git-token",
+    );
+    const batch = await result.json();
+    expect(batch.transfer).toBe("beutl-tus");
+    expect(batch.objects[0].actions.upload.href).toContain(`/${oid}/tus`);
+    expect(batch.objects[1].actions.upload.href).toContain(`/${smallOid}/tus`);
+  });
+  it("uses one legacy custom transfer for a mixed batch and accepts an empty object", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const emptyOid = createHash("sha256").digest("hex");
+    const batch = await (await handleLfsBatch(
+      lfsRequest("upload", [{ oid: "e".repeat(64), size: 5 * 1024 ** 3 + 1 },
+        { oid: emptyOid, size: 0 }], ["basic", "beutl-multipart"]),
+      bucket, storage, env, repoId, "write", "Bearer git-token",
+    )).json();
+    expect(batch.transfer).toBe("beutl-multipart");
+    expect(batch.objects[1].actions.upload.href).toContain(`/${emptyOid}/multipart`);
+    const result = await handleMultipart(new Request(batch.objects[1].actions.upload.href, {
+      method: "POST",
+    }), bucket, storage, repoId, emptyOid, "");
+    expect((await result.json()).complete).toBe(true);
+    expect((await storage.get<LfsRecord>(`lfs:${emptyOid}`))?.verified).toBe(true);
+    expect(bucket.uploads.size).toBe(0);
+  });
   it("negotiates multipart above 5 GiB, resumes metadata, and aborts", async () => {
     const bucket = new CountingBucket();
     const storage = new MemoryStorage();
@@ -465,6 +500,233 @@ describe("Git LFS reservation and integrity", () => {
     }), bucket, storage, repoId, oid, "complete");
     expect(result.status).toBe(200);
     expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+  });
+});
+
+describe("tus 1.0 upload backed by B2 multipart", () => {
+  const base = (oid: string) =>
+    `https://beutl.beditor.net/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
+  const make = (url: string, method: string, headers: Record<string, string> = {}, body?: Uint8Array) =>
+    new Request(url, {
+      method,
+      headers: {
+        "x-beutl-repo-id": repoId, "x-beutl-git-scope": "write",
+        ...(method === "OPTIONS" ? {} : { "Tus-Resumable": "1.0.0" }),
+        ...headers,
+        ...(body ? { "x-beutl-tus-length": String(body.byteLength) } : {}),
+      },
+      ...(body ? { body: body as Uint8Array<ArrayBuffer> } : {}),
+    });
+  const patch = (url: string, offset: number, bytes: Uint8Array) =>
+    make(url, "PATCH", {
+      "Upload-Offset": String(offset), "Content-Type": "application/offset+octet-stream",
+    }, bytes);
+  const create = async (durable: GitRepositoryDurableObject, oid: string, size: number) => {
+    const result = await durable.fetch(make(base(oid), "POST", { "Upload-Length": String(size) }));
+    expect(result.status).toBe(201);
+    return result.headers.get("Location")!;
+  };
+
+  it("creates, queries, patches, verifies and terminates a tus resource", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const first = new Uint8Array(5 * 1024 * 1024);
+    first.fill(7);
+    const data = new Uint8Array(first.length + 1);
+    data.set(first); data[first.length] = 9;
+    const oid = createHash("sha256").update(data).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: data.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const options = await durable.fetch(make(base(oid), "OPTIONS"));
+    expect(options.headers.get("Tus-Extension")).toBe("creation,expiration,termination");
+    const url = await create(durable, oid, data.length);
+    expect(await create(durable, oid, data.length)).toBe(url);
+    const before = await durable.fetch(make(url, "HEAD"));
+    expect(before.headers.get("Upload-Offset")).toBe("0");
+    expect(before.headers.get("Upload-Length")).toBe(String(data.length));
+    expect(before.headers.get("Cache-Control")).toBe("no-store");
+    const wrong = await durable.fetch(patch(url, 1, first));
+    expect(wrong.status).toBe(409);
+    expect(wrong.headers.get("Upload-Offset")).toBe("0");
+    const small = await durable.fetch(patch(url, 0, new Uint8Array(1)));
+    expect(small.status).toBe(400);
+    const firstPatch = await durable.fetch(make(url, "POST", {
+      "X-HTTP-Method-Override": "PATCH", "Upload-Offset": "0",
+      "Content-Type": "application/offset+octet-stream",
+    }, first));
+    expect(firstPatch.status).toBe(204);
+    expect(firstPatch.headers.get("Upload-Offset")).toBe(String(first.length));
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(first.length));
+    expect((await durable.fetch(patch(url, first.length, data.subarray(first.length)))).status).toBe(204);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(data.length));
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    const download = await handleLfsBatch(lfsRequest("download", [{ oid, size: data.length }]),
+      bucket, storage, env, repoId, "read", "Bearer git-token");
+    expect((await download.json()).objects[0].actions.download.href).toContain("versionId=test-v1");
+    expect((await durable.fetch(make(url, "DELETE"))).status).toBe(204);
+    expect((await durable.fetch(make(url, "HEAD"))).status).toBe(404);
+    expect((await bucket.head(`git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`))?.size)
+      .toBe(data.length);
+  });
+
+  it("finishes an empty tus object without creating an invalid zero-part B2 upload", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const oid = createHash("sha256").digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: 0, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, 0);
+    const head = await durable.fetch(make(url, "HEAD"));
+    expect(head.headers.get("Upload-Offset")).toBe("0");
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    expect(bucket.uploads.size).toBe(0);
+  });
+
+  it("recovers an accepted part after its response is lost and rejects a competing stale offset", async () => {
+    class LostPartBucket extends MemoryBucket {
+      lose = true;
+      override resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload {
+        const upload = super.resumeMultipartUpload(key, uploadId);
+        return { ...upload, uploadPart: async (partNumber, body, length) => {
+          const accepted = await upload.uploadPart(partNumber, body, length);
+          if (this.lose) { this.lose = false; throw new Error("response lost"); }
+          return accepted;
+        } };
+      }
+    }
+    const bucket = new LostPartBucket();
+    const storage = new MemoryStorage();
+    const first = new Uint8Array(5 * 1024 * 1024);
+    const last = new Uint8Array([1]);
+    const oid = createHash("sha256").update(first).update(last).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: first.length + 1, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const initial = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(initial, oid, first.length + 1);
+    await expect(initial.fetch(patch(url, 0, first))).rejects.toThrow("response lost");
+    const restarted = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await restarted.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(first.length));
+    const stale = await restarted.fetch(patch(url, 0, first));
+    expect(stale.status).toBe(409);
+    const competing = await Promise.all([
+      restarted.fetch(patch(url, first.length, last)),
+      restarted.fetch(patch(url, first.length, last)),
+    ]);
+    expect(competing.map((response) => response.status).sort()).toEqual([204, 409]);
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+  });
+
+  it("recovers B2 completion after the completion response is lost", async () => {
+    class LostCompletionBucket extends MemoryBucket {
+      lose = true;
+      override resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload {
+        const upload = super.resumeMultipartUpload(key, uploadId);
+        return { ...upload, complete: async (parts) => {
+          const completed = await upload.complete(parts);
+          if (this.lose) { this.lose = false; throw new Error("completion response lost"); }
+          return completed;
+        } };
+      }
+    }
+    const bucket = new LostCompletionBucket();
+    const storage = new MemoryStorage();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const oid = createHash("sha256").update(bytes).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: bytes.length, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    const initial = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(initial, oid, bytes.length);
+    await expect(initial.fetch(patch(url, 0, bytes))).rejects.toThrow("completion response lost");
+    const restarted = new GitRepositoryDurableObject({ storage }, env, bucket);
+    expect((await restarted.fetch(make(url, "HEAD"))).headers.get("Upload-Offset"))
+      .toBe(String(bytes.length));
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+  });
+
+  it("serves an authenticated tus upload over local HTTP across a DO restart", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const first = new Uint8Array(5 * 1024 * 1024);
+    first.fill(3);
+    const final = new Uint8Array([4]);
+    const oid = createHash("sha256").update(first).update(final).digest("hex");
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: first.length + final.length, verified: false,
+      expiresAt: Date.now() + 60_000,
+    });
+    setDbProvider(async () => ({
+      gitRepository: {
+        findFirst: async ({ where }: { where: { ownerId: string; id: string } }) =>
+          where.ownerId === "owner-a" && where.id === repoId ? { id: repoId } : null,
+      },
+    }) as never);
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const routeEnv = {
+      ...env, BEUTL_GIT_ENABLED: "true",
+      BEUTL_GIT_REPOSITORIES: {
+        idFromName: (name: string) => name,
+        get: () => ({ fetch: (request: Request) => durable.fetch(request) }),
+      },
+    };
+    const server = createServer(async (incoming, outgoing) => {
+      try {
+        const address = `http://127.0.0.1:${(server.address() as { port: number }).port}${incoming.url}`;
+        const headers = new Headers(incoming.headers as Record<string, string>);
+        if (incoming.method === "PATCH" && incoming.headers["content-length"])
+          headers.set("x-beutl-tus-length", incoming.headers["content-length"]);
+        const request = new Request(address, {
+          method: incoming.method, headers,
+          ...(["POST", "PATCH"].includes(incoming.method ?? "")
+            ? { body: Readable.toWeb(incoming), duplex: "half" } : {}),
+        } as RequestInit & { duplex?: "half" });
+        const response = await routeGitRequest(request, routeEnv);
+        if (!response) throw new Error("Git route missing");
+        outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+        outgoing.end(Buffer.from(await response.arrayBuffer()));
+      } catch (error) {
+        outgoing.writeHead(500);
+        outgoing.end(String(error));
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as { port: number }).port}` +
+        `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
+      const token = await issueMultipartToken(secret, "owner-a", repoId, oid);
+      const headers = { Authorization: `Bearer ${token}`, "Tus-Resumable": "1.0.0" };
+      expect((await fetch(url, { method: "POST", headers: { "Upload-Length": String(first.length + 1) } })).status)
+        .toBe(401);
+      const created = await fetch(url, {
+        method: "POST", headers: { ...headers, "Upload-Length": String(first.length + 1) },
+      });
+      expect(created.status).toBe(201);
+      const upload = created.headers.get("Location")!;
+      expect((await fetch(upload, {
+        method: "PATCH", headers: { ...headers, "Upload-Offset": "0",
+          "Content-Type": "application/offset+octet-stream" }, body: Buffer.from(first),
+      })).headers.get("Upload-Offset")).toBe(String(first.length));
+      durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+      expect((await fetch(upload, { method: "HEAD", headers })).headers.get("Upload-Offset"))
+        .toBe(String(first.length));
+      const completed = await fetch(upload, {
+        method: "PATCH", headers: { ...headers, "Upload-Offset": String(first.length),
+          "Content-Type": "application/offset+octet-stream" }, body: Buffer.from(final),
+      });
+      expect(completed.status).toBe(204);
+      expect(completed.headers.get("Upload-Offset")).toBe(String(first.length + 1));
+      expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
+    } finally {
+      server.close();
+    }
   });
 });
 

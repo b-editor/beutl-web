@@ -102,6 +102,19 @@ export async function handleMultipart(
   }
   if (request.method === "POST" && operation === "") {
     if (record.verified) return response({ complete: true, partSize: MULTIPART_PART_BYTES, parts: [] });
+    if (record.size === 0) {
+      if (!await bucket.head(key)) await bucket.put(key, new Uint8Array());
+      const object = await bucket.head(key);
+      if (!object?.versionId || !await verifyCompletedObject(
+        bucket, repoId, oid, 0, object.versionId, request.signal)) {
+        await abortMultipart(bucket, storage, repoId, oid, record);
+        return response({ message: "Completed object SHA-256 or size mismatch" }, 422);
+      }
+      await storage.put(recordKey(oid), {
+        ...record, completed: true, versionId: object.versionId, verified: true,
+      });
+      return response({ complete: true, partSize: MULTIPART_PART_BYTES, parts: [] });
+    }
     if (!record.uploadId) {
       const upload = await bucket.createMultipartUpload(key);
       record.uploadId = upload.uploadId;
