@@ -28,6 +28,8 @@ export type Sha256Checkpoint = {
 export class CheckpointSha256 {
   private readonly state: number[];
   private readonly buffer = new Uint8Array(64);
+  private readonly schedule = new Uint32Array(64);
+  private readonly view = new DataView(this.buffer.buffer);
   private buffered = 0;
   private bytes = 0;
 
@@ -57,7 +59,7 @@ export class CheckpointSha256 {
       this.bytes += count;
       offset += count;
       if (this.buffered === 64) {
-        this.compress(this.buffer);
+        this.compress();
         this.buffered = 0;
       }
     }
@@ -69,20 +71,20 @@ export class CheckpointSha256 {
     this.buffer[tail] = 0x80;
     this.buffer.fill(0, tail + 1);
     if (tail >= 56) {
-      this.compress(this.buffer);
+      this.compress();
       this.buffer.fill(0);
     }
     const bits = BigInt(length) * BigInt(8);
-    const view = new DataView(this.buffer.buffer);
+    const view = this.view;
     view.setUint32(56, Number((bits >> BigInt(32)) & BigInt(0xffffffff)));
     view.setUint32(60, Number(bits & BigInt(0xffffffff)));
-    this.compress(this.buffer);
+    this.compress();
     return this.state.map((word) => word.toString(16).padStart(8, "0")).join("");
   }
 
-  private compress(block: Uint8Array): void {
-    const words = new Uint32Array(64);
-    const view = new DataView(block.buffer, block.byteOffset, 64);
+  private compress(): void {
+    const words = this.schedule;
+    const view = this.view;
     for (let i = 0; i < 16; i++) words[i] = view.getUint32(i * 4);
     for (let i = 16; i < 64; i++) {
       const a = words[i - 15];

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { S3GitObjectBucket } from "../packages/api/src/git/s3-object-store";
 import { verifyCompletedObject } from "../packages/api/src/git/multipart";
@@ -16,6 +16,40 @@ const response = (body: string, headers: Record<string, string> = {}) => new Res
 });
 
 describe("Backblaze B2 S3 storage adapter", () => {
+  it.each([4, 3, 5])("uses a fixed-length Worker stream and enforces the declared %i-byte part", async (length) => {
+    const lengths: number[] = [];
+    class FixedLength extends TransformStream<Uint8Array, Uint8Array> {
+      constructor(expected: number) {
+        let received = 0;
+        super({
+          transform(chunk, controller) {
+            received += chunk.byteLength;
+            if (received > expected) throw new Error("too many bytes");
+            controller.enqueue(chunk);
+          },
+          flush() { if (received !== expected) throw new Error("too few bytes"); },
+        });
+        lengths.push(expected);
+      }
+    }
+    vi.stubGlobal("FixedLengthStream", FixedLength);
+    try {
+      const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+        expect(request.headers.get("content-length")).toBe(String(length));
+        expect(request.headers.get("authorization")).toContain("content-length");
+        expect(await request.text()).toBe("data");
+        return response("", { ETag: "part-etag" });
+      }) as typeof fetch);
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(new TextEncoder().encode("data")); controller.close();
+      } });
+      const upload = bucket.resumeMultipartUpload("git-lfs/item", "upload").uploadPart(1, body, length);
+      if (length === 4) await expect(upload).resolves.toEqual({ partNumber: 1, etag: "part-etag" });
+      else await expect(upload).rejects.toThrow(length < 4 ? "too many bytes" : "too few bytes");
+      expect(lengths).toEqual([length]);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("constrains the endpoint and pins downloads to an object version", async () => {
     expect(() => new S3GitObjectBucket({ ...env, BEUTL_GIT_S3_ENDPOINT: "http://127.0.0.1/" }))
       .toThrow("not configured");

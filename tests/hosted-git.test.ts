@@ -539,6 +539,24 @@ describe("Git LFS reservation and integrity", () => {
     }
   });
 
+  it("bounds renewed multipart actions and tokens by the original reservation expiry", async () => {
+    const storage = new MemoryStorage();
+    const oid = "9".repeat(64);
+    const size = MAX_LFS_SINGLE_PUT_BYTES + 1;
+    const expiresAt = Date.now() + 5 * 60_000;
+    await storage.put<LfsRecord>(`lfs:${oid}`, { kind: "multipart", size, verified: false, expiresAt });
+    const response = await handleLfsBatch(lfsRequest("upload", [{ oid, size }], ["beutl-multipart"]),
+      new MemoryBucket(), storage, env, repoId, "write", "Bearer token");
+    const { actions } = (await response.json()).objects[0];
+    expect(actions.upload.expires_in).toBeGreaterThan(0);
+    expect(actions.upload.expires_in).toBeLessThanOrEqual(300);
+    expect(actions.verify.expires_in).toBe(actions.upload.expires_in);
+    const authorization = actions.upload.header.Authorization;
+    const payload = JSON.parse(Buffer.from(authorization.split(".")[1], "base64url").toString());
+    expect(payload.exp).toBe(Math.floor(expiresAt / 1000));
+    expect(await verifyMultipartToken(secret, authorization, repoId, oid, payload.exp)).toBeNull();
+  });
+
   it("does not allocate quota for a second oversized reservation", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();

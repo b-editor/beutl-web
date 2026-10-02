@@ -308,8 +308,14 @@ export class S3GitObjectBucket implements GitObjectBucket {
     return {
       uploadId,
       uploadPart: async (partNumber, value, length) => {
+        if (!Number.isSafeInteger(length) || length < 0) throw new RangeError("Invalid S3 part length");
+        // Workers infers the wire length from FixedLengthStream; setting the
+        // header alone on an ordinary stream does not prevent chunked encoding.
+        const FixedLength = (globalThis as { FixedLengthStream?: new (length: number) =>
+          TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
+        const body = typeof FixedLength === "function" ? value.pipeThrough(new FixedLength(length)) : value;
         const response = await this.send("PUT", this.url(key, { partNumber: String(partNumber), uploadId }),
-          value, { "Content-Length": String(length), "Content-Type": "application/octet-stream",
+          body, { "Content-Length": String(length), "Content-Type": "application/octet-stream",
             "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD" });
         const etag = response.headers.get("etag");
         if (!etag || etag.length > 256) throw new Error("S3 returned no valid part ETag");

@@ -62,11 +62,12 @@ export async function verifyGitToken(
 export async function issueMultipartToken(
   secret: string, ownerId: string, repoId: string, oid: string,
   now = Math.floor(Date.now() / 1000),
+  reservationExpiry = now + MULTIPART_LIFETIME_SECONDS,
 ): Promise<string> {
   return sign({
     sub: ownerId, repo_id: repoId, oid, scope: "multipart",
     iss: ISSUER, aud: MULTIPART_AUDIENCE,
-    iat: now, nbf: now, exp: now + MULTIPART_LIFETIME_SECONDS,
+    iat: now, nbf: now, exp: Math.min(now + MULTIPART_LIFETIME_SECONDS, reservationExpiry),
   }, secret);
 }
 

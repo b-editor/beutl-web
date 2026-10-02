@@ -275,8 +275,7 @@ export async function handleLfsBatch(
         .reduce((time, value) => Math.min(time, value.expiresAt), Infinity);
       await storage.setAlarm(earliest + 1000);
     }
-    const actionSeconds = multipart ? Math.floor(MULTIPART_RESERVATION_MS / 1000)
-      : Math.max(1, Math.floor((record.expiresAt - Date.now()) / 1000));
+    const actionSeconds = Math.max(1, Math.floor((record.expiresAt - Date.now()) / 1000));
     const uploadHref = multipart
       ? new URL(`/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/${customTransfer === "beutl-tus" ? "tus" : "multipart"}`,
         request.url).toString()
@@ -289,13 +288,14 @@ export async function handleLfsBatch(
         // The Worker has already verified the Git token and owner; the
         // Durable Object does not receive the owner ID. Take it from the
         // verified token context forwarded by the Worker.
-        request.headers.get("x-beutl-git-owner-id") ?? "", repoId, oid)}`
+        request.headers.get("x-beutl-git-owner-id") ?? "", repoId, oid,
+        Math.floor(Date.now() / 1000), Math.floor(record.expiresAt / 1000))}`
       : authorization;
     objects.push({ oid, size, authenticated: true, actions: {
       upload: multipart ? {
         href: uploadHref,
         header: { Authorization: transferAuthorization },
-        expires_in: Math.floor(MULTIPART_RESERVATION_MS / 1000),
+        expires_in: actionSeconds,
       } : {
         href: uploadHref,
         header: {

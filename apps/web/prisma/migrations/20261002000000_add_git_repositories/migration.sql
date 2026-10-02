@@ -9,7 +9,9 @@ CREATE TABLE "GitRepository" (
     CONSTRAINT "GitRepository_pkey" PRIMARY KEY ("id")
 );
 
+ALTER TABLE "GitRepository" SET (schema_locked = false);
 CREATE INDEX "GitRepository_ownerId_deletedAt_idx" ON "GitRepository"("ownerId", "deletedAt");
 CREATE INDEX "GitRepository_deletedAt_cleanupCompleteAt_idx" ON "GitRepository"("deletedAt", "cleanupCompleteAt");
 ALTER TABLE "GitRepository" ADD CONSTRAINT "GitRepository_ownerId_fkey"
     FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "GitRepository" SET (schema_locked = true);
