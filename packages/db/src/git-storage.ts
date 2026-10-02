@@ -95,7 +95,10 @@ export async function commitGitLfs(repoId: string, oid: string): Promise<void> {
 
 export async function releaseGitLfs(repoId: string, oid: string): Promise<void> {
   const db = await getDb();
-  await db.gitLfsStorage.deleteMany({ where: { repoId, oid, verified: false } });
+  // The account commit can succeed before the DO's verified flag is saved.
+  // Callers release only after every physical B2 version was deleted, so this
+  // must also clear a stranded committed entry.
+  await db.gitLfsStorage.deleteMany({ where: { repoId, oid } });
 }
 
 export async function listExpiredGitLfsReservations(now = new Date(), take = 20): Promise<Array<{ repoId: string; oid: string }>> {

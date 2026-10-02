@@ -3,9 +3,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import {
   commitDedicatedStorageReservation,
+  commitGitLfs,
   createDedicatedStorageReservation,
   createFileWithStorageQuota,
   reserveGitLfs,
+  releaseGitLfs,
   renewDedicatedStorageReservation,
   setDbProvider,
   sumFileSizeByUserId,
@@ -254,6 +256,20 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
     expect((await sumFileSizeByUserId({ userId })) +
       (await prisma.gitLfsStorage.aggregate({ where: { ownerId: userId, verified: false },
         _sum: { size: true } }))._sum.size!).toBe(BigInt(STORAGE_FREE_QUOTA_BYTES));
+  }, 120_000);
+
+  it("releases a committed LFS ledger entry after B2 cleanup if the DO flag write was lost", async () => {
+    const repo = await prisma.gitRepository.create({ data: { ownerId: userId, name: "recovery",
+      accountedAt: new Date() } });
+    const oid = "d".repeat(64);
+    expect(await reserveGitLfs({ repoId: repo.id, oid, ownerId: userId, size: 1,
+      expiresAt: Date.now() + 60_000 })).toBe("reserved");
+    await commitGitLfs(repo.id, oid);
+    expect((await prisma.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId: repo.id, oid } } }))?.verified)
+      .toBe(true);
+    await releaseGitLfs(repo.id, oid);
+    expect(await prisma.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId: repo.id, oid } } }))
+      .toBeNull();
   }, 120_000);
 
   it("serializes a dedicated reservation against a competing multipart-sized commit", async () => {
