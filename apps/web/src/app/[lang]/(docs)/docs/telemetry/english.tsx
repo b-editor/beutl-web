@@ -10,7 +10,7 @@ export function EnglishTelemetryPage() {
         Telemetry Policy
       </h1>
       <p className="mt-4 text-sm text-muted-foreground">
-        Last revised: September 6, 2026
+        Last revised: October 1, 2026
       </p>
       <p className="leading-7 not-first:mt-6">
         This document applies to the Beutl desktop application. The person or
@@ -28,17 +28,29 @@ export function EnglishTelemetryPage() {
         <li>Logs relating to application errors and failures</li>
         <li>Processing times, response times, and other performance data</li>
         <li>Feature usage and application operating status</li>
+        <li>Session starts, ends and running time, including idle time</li>
+        <li>Counts, outcomes and elapsed times for project creation and opening, scene saves and exports, plus playback start counts</li>
+        <li>Tool tab openings and interactions, commands, button actions, setting changes, committed edits and edited property types</li>
+        <li>Enabled video and audio effect types used in an editor</li>
         <li>
           Technical information such as application, operating system, and
           runtime versions
         </li>
       </ul>
+      <p className="leading-7 not-first:mt-6">
+        Detailed usage is aggregated in the application and sent approximately once per minute.
+        These aggregates exclude project and file names, paths, browsing URLs, search terms,
+        AI prompts, terminal input, command arguments, edited property values and media content.
+        Built-in features use identifiers defined in code; external extensions use a shared
+        category instead of their names. A session identifier changes with each application launch.
+      </p>
 
       <h2 className={headingClass}>2. Purposes of use</h2>
       <p className="leading-7 not-first:mt-6">
         We use Telemetry Data to detect and investigate defects, improve
         performance and stability, monitor security issues, compile usage
         statistics, and improve features.
+        Usage aggregates are also displayed in Beutl&apos;s administrator-only dashboard.
       </p>
 
       <h2 className={headingClass}>

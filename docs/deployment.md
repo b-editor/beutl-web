@@ -395,3 +395,49 @@ job outputs for 30 days. Authenticated job-detail and history endpoints return
 their content URLs so the desktop app can recover a paid result after a lost
 HTTP response. Private translation results retain subtitle timing context, but
 that context is removed before text is sent to the AI provider.
+
+## Desktop usage report
+
+The administrator-only `/[lang]/admin/usage` page reads usage summaries from
+Grafana Tempo. Set these on **the admin Worker** (or its local server environment):
+
+| Variable | Value |
+| --- | --- |
+| `GRAFANA_TEMPO_URL` | HTTPS Tempo query base URL, including `/tempo` if required by the stack |
+| `GRAFANA_TEMPO_USER` | Grafana Cloud Traces tenant/user ID |
+| `GRAFANA_TEMPO_TOKEN` | Secret access-policy token with `traces:read` for that stack |
+
+Store the token with `wrangler secret put GRAFANA_TEMPO_TOKEN`, not in source,
+public variables or a browser bundle. The page checks `requireAdmin` before any
+query. No browser calls Grafana directly. Missing configuration, failed/partial
+queries and a valid empty report are displayed as different states.
+
+The existing desktop OTLP trace pipeline must retain the `Beutl.Usage` source and
+`beutl.usage.*` attributes, and Tempo must support
+[TraceQL metrics](https://grafana.com/docs/tempo/latest/metrics-from-traces/metrics-queries/).
+The report uses [`GET /api/metrics/query_range`](https://grafana.com/docs/tempo/latest/api_docs/#traceql-metrics).
+No database migration or new ingestion endpoint is required. Existing versions
+without usage schema v1 will not populate the report.
+
+Each span summarizes occurrences accumulated in the app. Queries therefore sum
+`span.beutl.usage.count` and `span.beutl.usage.duration_ms`; counting spans would
+undercount actions. Feature counts and durations are grouped by event, tool,
+feature and outcome. A separate query groups session starts by event, OS and app
+version; feature queries exclude session starts so they are never counted twice.
+This keeps each query within Tempo's five-attribute grouping limit. Each 24-hour
+window uses three queries, with no more than two requests in flight.
+Reports show complete five-minute/hourly buckets (up to one hour behind)
+and split a seven-day selection into disjoint 24-hour requests. Retention and
+sampling still constrain observations; configure retention for the desired range
+and avoid sampling these summaries if counts are to be comparable.
+
+Tab openings include restored layouts. Tab interactions, button actions,
+commands, settings, committed edits and property edits are separate measurements:
+one user action can appear in several of them. Effect inventory is once per enabled
+type per editor lifetime. Session starts are not unique users, and running time
+includes idle time. No identifying event payload or user-entered content is sent by
+the detailed usage collector. The published telemetry policy lists this scope.
+
+Validate locally with `pnpm exec vitest run tests/contract/desktop-usage*.test.ts`
+and `pnpm --filter @beutl/admin typecheck`. Deploying this code does not itself
+configure Grafana credentials or change backend retention/sampling.
