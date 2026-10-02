@@ -20,11 +20,12 @@ export interface GitRouterEnvironment {
   BEUTL_GIT_ENABLED?: string;
   BEUTL_GIT_TOKEN_SECRET?: string;
   BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
-  BEUTL_R2_BUCKET?: unknown;
-  BEUTL_GIT_R2_S3_ENDPOINT?: string;
-  BEUTL_GIT_R2_S3_BUCKET?: string;
-  BEUTL_GIT_R2_S3_ACCESS_KEY_ID?: string;
-  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_GIT_S3_ENDPOINT?: string;
+  BEUTL_GIT_S3_REGION?: string;
+  BEUTL_GIT_S3_BUCKET?: string;
+  BEUTL_GIT_S3_ACCESS_KEY_ID?: string;
+  BEUTL_GIT_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_GIT_S3_PATH_STYLE?: string;
   PUBLIC_ORIGIN?: string;
 }
 
@@ -38,10 +39,10 @@ function enabled(env: GitRouterEnvironment): boolean {
 }
 
 function unavailable(env: GitRouterEnvironment): boolean {
-  return !env.BEUTL_GIT_REPOSITORIES || !env.BEUTL_R2_BUCKET ||
+  return !env.BEUTL_GIT_REPOSITORIES ||
     !env.BEUTL_GIT_TOKEN_SECRET ||
-    !env.BEUTL_GIT_R2_S3_ENDPOINT || !env.BEUTL_GIT_R2_S3_BUCKET ||
-    !env.BEUTL_GIT_R2_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY;
+    !env.BEUTL_GIT_S3_ENDPOINT || !env.BEUTL_GIT_S3_REGION || !env.BEUTL_GIT_S3_BUCKET ||
+    !env.BEUTL_GIT_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_S3_SECRET_ACCESS_KEY;
 }
 
 function stub(env: GitRouterEnvironment, repoId: string) {

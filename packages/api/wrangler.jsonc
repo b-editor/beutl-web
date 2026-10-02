@@ -50,6 +50,7 @@
     }
   ],
   "durable_objects": {
+    // Hosted Git uses a separate Backblaze B2 S3 bucket, not BEUTL_R2_BUCKET.
     "bindings": [
       { "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" }
     ]

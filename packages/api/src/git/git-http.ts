@@ -8,7 +8,7 @@ import {
   receivePackResponse,
 } from "git-fs-s3/http";
 import type { GitScope } from "./tokens";
-import { R2GitObjectStore, type GitR2Bucket } from "./r2-object-store";
+import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 
 // git-fs-s3's HTTP handlers and isomorphic-git build full packs in memory.
 // Keep the Git history small; media must go through LFS.
@@ -55,7 +55,7 @@ function response(result: { status: number; headers: Record<string, string>; bod
 
 export async function handleGitHttp(
   request: Request,
-  bucket: GitR2Bucket,
+  bucket: GitObjectBucket,
   repoId: string,
   scope: GitScope,
 ): Promise<Response> {
@@ -63,7 +63,7 @@ export async function handleGitHttp(
   const base = `/api/v3/git/${repoId}.git/`;
   if (!path.startsWith(base)) return new Response("Not found", { status: 404 });
   const operation = path.slice(base.length);
-  const store = new R2GitObjectStore(bucket);
+  const store = new GitObjectStore(bucket);
   const prefix = `git/repos/${repoId}`;
   const fs = createGitFs(store, { prefix });
   const repo = { fs, gitdir: GITDIR, cache: {} };
@@ -87,7 +87,10 @@ export async function handleGitHttp(
       return new Response("Git history exceeds the serving limit", { status: 413 });
     }
     const result = await handleUploadPack(repo, body, {
-      beforeWalk: () => fs.detectLooseObjects(GITDIR),
+      beforeWalk: async () => {
+        await fs.detectLooseObjects(GITDIR);
+        await fs.prefetchPacks(GITDIR);
+      },
     });
     if (result.body.byteLength > MAX_GIT_REPOSITORY_BYTES * 2) {
       return new Response("Git pack exceeds the serving limit", { status: 413 });

@@ -1,5 +1,4 @@
-import { AwsClient } from "aws4fetch";
-import type { GitR2Bucket } from "./r2-object-store";
+import type { GitObjectBucket } from "./git-object-store";
 import { readBodyAtMost } from "./git-http";
 import type { GitScope } from "./tokens";
 import { gitTokenSecret, issueMultipartToken } from "./tokens";
@@ -7,6 +6,7 @@ import {
   abortMultipart,
   MAX_MULTIPART_OBJECT_BYTES,
   MULTIPART_RESERVATION_MS,
+  verifyCompletedObject,
 } from "./multipart";
 
 const LFS_MEDIA_TYPE = "application/vnd.git-lfs+json";
@@ -15,6 +15,7 @@ const MAX_BATCH_OBJECTS = 100;
 const MAX_LFS_REQUEST_BYTES = 32 * 1024;
 export const MAX_LFS_SINGLE_PUT_BYTES = 5 * 1024 ** 3;
 const DEFAULT_REPO_QUOTA_BYTES = 20 * 1024 ** 3;
+const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
 
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -26,10 +27,6 @@ export interface GitDurableStorage {
 
 export interface LfsEnvironment {
   BEUTL_GIT_TOKEN_SECRET?: string;
-  BEUTL_GIT_R2_S3_ENDPOINT?: string;
-  BEUTL_GIT_R2_S3_BUCKET?: string;
-  BEUTL_GIT_R2_S3_ACCESS_KEY_ID?: string;
-  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY?: string;
   BEUTL_GIT_LFS_REPO_QUOTA_BYTES?: string;
 }
 
@@ -40,6 +37,7 @@ export interface LfsRecord {
   kind: "basic" | "multipart";
   uploadId?: string;
   completed?: boolean;
+  versionId?: string;
 }
 
 interface LfsObjectRequest { oid: string; size: number }
@@ -68,35 +66,10 @@ function keyFor(repoId: string, oid: string): string {
   return `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
 }
 
-function checksumBase64(oid: string): string {
-  let bytes = "";
-  for (let i = 0; i < oid.length; i += 2) {
-    bytes += String.fromCharCode(Number.parseInt(oid.slice(i, i + 2), 16));
-  }
-  return btoa(bytes);
-}
-
-function checksumHex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function hasMatchingObject(
-  bucket: GitR2Bucket,
-  repoId: string,
-  oid: string,
-  size: number,
-): Promise<boolean> {
-  const object = await bucket.head(keyFor(repoId, oid));
-  return object?.size === size && object.checksums?.sha256 !== undefined &&
-    checksumHex(object.checksums.sha256) === oid;
-}
-
-async function hasVerifiedObject(bucket: GitR2Bucket, repoId: string, oid: string, record: LfsRecord): Promise<boolean> {
-  if (record.kind === "basic") return hasMatchingObject(bucket, repoId, oid, record.size);
-  const object = await bucket.head(keyFor(repoId, oid));
-  // Multipart content was fully streamed and hashed before record.verified
-  // became true; R2 does not expose a full SHA-256 for multipart objects.
-  return record.verified && object?.size === record.size;
+async function hasVerifiedObject(bucket: GitObjectBucket, repoId: string, oid: string, record: LfsRecord): Promise<boolean> {
+  if (!record.verified || !record.versionId) return false;
+  const object = await bucket.head(keyFor(repoId, oid), record.versionId);
+  return object?.size === record.size && object.versionId === record.versionId;
 }
 
 function getQuota(env: LfsEnvironment): number {
@@ -109,56 +82,9 @@ function getQuota(env: LfsEnvironment): number {
   return value;
 }
 
-function signingConfig(env: LfsEnvironment): {
-  client: AwsClient;
-  objectUrl: (key: string, expiresSeconds: number) => string;
-} {
-  let endpoint: URL;
-  try {
-    endpoint = new URL(env.BEUTL_GIT_R2_S3_ENDPOINT ?? "");
-  } catch {
-    throw new Error("Hosted Git LFS R2 signing is not configured");
-  }
-  const bucket = env.BEUTL_GIT_R2_S3_BUCKET;
-  const accessKeyId = env.BEUTL_GIT_R2_S3_ACCESS_KEY_ID;
-  const secretAccessKey = env.BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY;
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password ||
-      endpoint.search || endpoint.hash || endpoint.pathname !== "/" ||
-      !bucket || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u.test(bucket) ||
-      !accessKeyId || !secretAccessKey) {
-    throw new Error("Hosted Git LFS R2 signing is not configured");
-  }
-  const client = new AwsClient({ service: "s3", region: "auto", accessKeyId, secretAccessKey });
-  return {
-    client,
-    objectUrl: (key, expiresSeconds) =>
-      `${endpoint.origin}/${bucket}/${key}?X-Amz-Expires=${expiresSeconds}`,
-  };
-}
-
-async function signedUrl(
-  config: ReturnType<typeof signingConfig>,
-  key: string,
-  method: "GET" | "PUT",
-  oid?: string,
-  size?: number,
-  expiresSeconds = LFS_ACTION_SECONDS,
-): Promise<string> {
-  const headers = method === "PUT" && oid !== undefined && size !== undefined
-    ? {
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(size),
-        "x-amz-checksum-sha256": checksumBase64(oid),
-      }
-    : undefined;
-  const request = new Request(config.objectUrl(key, expiresSeconds), { method, headers });
-  const signed = await config.client.sign(request, { aws: { signQuery: true, allHeaders: true } });
-  return signed.url;
-}
-
 export async function pruneExpiredLfs(
   storage: GitDurableStorage,
-  bucket: GitR2Bucket,
+  bucket: GitObjectBucket,
   repoId: string,
   now = Date.now(),
 ): Promise<void> {
@@ -168,8 +94,8 @@ export async function pruneExpiredLfs(
       if (record.kind === "multipart") {
         await abortMultipart(bucket, storage, repoId, key.slice(4), record);
       } else {
-        await storage.delete(key);
         await bucket.delete(keyFor(repoId, key.slice(4)));
+        await storage.delete(key);
       }
     }
   }
@@ -190,7 +116,7 @@ async function parseLfsJson(request: Request): Promise<unknown> {
 
 export async function handleLfsBatch(
   request: Request,
-  bucket: GitR2Bucket,
+  bucket: GitObjectBucket,
   storage: GitDurableStorage,
   env: LfsEnvironment,
   repoId: string,
@@ -204,20 +130,19 @@ export async function handleLfsBatch(
       (input.operation !== "upload" && input.operation !== "download") ||
       !Array.isArray(input.objects) || input.objects.length > MAX_BATCH_OBJECTS ||
       (input.transfers && (!Array.isArray(input.transfers) ||
-        !input.transfers.some((transfer: unknown) => transfer === "basic" || transfer === "beutl-r2-multipart"))) ||
+        !input.transfers.some((transfer: unknown) => transfer === "basic" || transfer === "beutl-multipart"))) ||
       (input.hash_algo && input.hash_algo !== "sha256")) {
     return lfsResponse({ message: "Invalid Git LFS batch request" }, 400);
   }
   if (input.operation === "upload" && scope !== "write") {
     return lfsResponse({ message: "Write access is required" }, 403);
   }
-  const config = signingConfig(env);
   const transfers = Array.isArray(input.transfers) ? input.transfers : ["basic"];
   const needsMultipart = input.objects.some((object: unknown) =>
     typeof object === "object" && object !== null &&
     typeof (object as { size?: unknown }).size === "number" &&
     (object as { size: number }).size > MAX_LFS_SINGLE_PUT_BYTES);
-  const customTransfer = transfers.includes("beutl-r2-multipart") &&
+  const customTransfer = transfers.includes("beutl-multipart") &&
     (needsMultipart || !transfers.includes("basic"));
   const quota = getQuota(env);
   await pruneExpiredLfs(storage, bucket, repoId);
@@ -244,7 +169,7 @@ export async function handleLfsBatch(
       }
       objects.push({ oid, size, authenticated: true, actions: {
         download: {
-          href: await signedUrl(config, key, "GET", undefined, undefined,
+          href: await bucket.presignGet(key, record.versionId!,
             record.kind === "multipart" ? Math.floor(MULTIPART_RESERVATION_MS / 1000) : LFS_ACTION_SECONDS),
           expires_in: record.kind === "multipart"
             ? Math.floor(MULTIPART_RESERVATION_MS / 1000) : LFS_ACTION_SECONDS,
@@ -260,7 +185,8 @@ export async function handleLfsBatch(
       }
       continue;
     }
-    if (size > MAX_MULTIPART_OBJECT_BYTES || (size > MAX_LFS_SINGLE_PUT_BYTES && !customTransfer)) {
+    if (size > Math.min(MAX_MULTIPART_OBJECT_BYTES, MAX_LFS_OBJECT_BYTES) ||
+        (size > MAX_LFS_SINGLE_PUT_BYTES && !customTransfer)) {
       objects.push({ oid, size, error: { code: 413, message: "The Beutl multipart LFS transfer is required for this object" } });
       continue;
     }
@@ -289,7 +215,7 @@ export async function handleLfsBatch(
     }
     const uploadHref = multipart
       ? new URL(`/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/multipart`, request.url).toString()
-      : await signedUrl(config, key, "PUT", oid, size);
+      : await bucket.presignPut(key, size, LFS_ACTION_SECONDS);
     const verifyHref = new URL(
       `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, request.url,
     ).toString();
@@ -310,7 +236,6 @@ export async function handleLfsBatch(
         header: {
           "Content-Type": "application/octet-stream",
           "Content-Length": String(size),
-          "x-amz-checksum-sha256": checksumBase64(oid),
         },
         expires_in: LFS_ACTION_SECONDS,
       },
@@ -321,12 +246,12 @@ export async function handleLfsBatch(
       },
     } });
   }
-  return lfsResponse({ transfer: customTransfer ? "beutl-r2-multipart" : "basic", objects });
+  return lfsResponse({ transfer: customTransfer ? "beutl-multipart" : "basic", objects });
 }
 
 export async function handleLfsVerify(
   request: Request,
-  bucket: GitR2Bucket,
+  bucket: GitObjectBucket,
   storage: GitDurableStorage,
   repoId: string,
   oid: string,
@@ -344,9 +269,18 @@ export async function handleLfsVerify(
   if (!record.verified && record.kind === "multipart") {
     return lfsResponse({ message: "Multipart object has not passed full SHA-256 verification" }, 422);
   }
-  if (!await hasVerifiedObject(bucket, repoId, oid, record)) {
-    return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
+  if (!record.verified && record.kind === "basic") {
+    const object = await bucket.head(keyFor(repoId, oid));
+    if (!object?.versionId || object.size !== record.size ||
+        !await verifyCompletedObject(bucket, repoId, oid, record.size, object.versionId, request.signal)) {
+      return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
+    }
+    record.versionId = object.versionId;
+    record.verified = true;
+    await storage.put(key, record);
   }
-  if (!record.verified) await storage.put(key, { ...record, verified: true });
+  if (!await hasVerifiedObject(bucket, repoId, oid, record)) {
+    return lfsResponse({ message: "Verified LFS object version is unavailable" }, 404);
+  }
   return lfsResponse({ oid, size: record.size });
 }

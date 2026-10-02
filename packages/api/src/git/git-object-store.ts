@@ -5,15 +5,17 @@ import type { ListOptions, ListResult, ObjectStore } from "git-fs-s3";
 export const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 10_000;
 
-export interface GitR2Bucket {
-  get(key: string): Promise<{
+export interface GitObjectBucket {
+  get(key: string, versionId?: string): Promise<{
     size: number;
+    versionId?: string;
     body: ReadableStream<Uint8Array>;
     arrayBuffer(): Promise<ArrayBuffer>;
   } | null>;
   put(key: string, value: Uint8Array): Promise<unknown>;
   delete(key: string | string[]): Promise<unknown>;
-  head(key: string): Promise<{ size: number; checksums?: { sha256?: ArrayBuffer } } | null>;
+  deletePrefix?(prefix: string): Promise<void>;
+  head(key: string, versionId?: string): Promise<{ size: number; versionId?: string } | null>;
   list(options: {
     prefix: string;
     delimiter?: string;
@@ -25,19 +27,22 @@ export interface GitR2Bucket {
     truncated: boolean;
     cursor?: string;
   }>;
-  createMultipartUpload(key: string): Promise<GitR2MultipartUpload>;
-  resumeMultipartUpload(key: string, uploadId: string): GitR2MultipartUpload;
+  createMultipartUpload(key: string): Promise<GitMultipartUpload>;
+  resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload;
+  presignPut(key: string, size: number, expiresSeconds: number): Promise<string>;
+  presignGet(key: string, versionId: string, expiresSeconds: number): Promise<string>;
 }
 
-export interface GitR2MultipartUpload {
+export interface GitMultipartUpload {
   uploadId: string;
-  uploadPart(partNumber: number, value: ReadableStream<Uint8Array>): Promise<{ partNumber: number; etag: string }>;
-  complete(parts: { partNumber: number; etag: string }[]): Promise<{ size: number }>;
+  uploadPart(partNumber: number, value: ReadableStream<Uint8Array>, length: number): Promise<{ partNumber: number; etag: string }>;
+  listParts(): Promise<{ partNumber: number; etag: string; size: number }[]>;
+  complete(parts: { partNumber: number; etag: string }[]): Promise<{ size: number; versionId?: string }>;
   abort(): Promise<void>;
 }
 
-export class R2GitObjectStore implements ObjectStore {
-  constructor(private readonly bucket: GitR2Bucket) {}
+export class GitObjectStore implements ObjectStore {
+  constructor(private readonly bucket: GitObjectBucket) {}
 
   async get(key: string): Promise<Uint8Array | null> {
     const object = await this.bucket.get(key);
@@ -87,7 +92,7 @@ export class R2GitObjectStore implements ObjectStore {
       if (objects.length + prefixes.size >= limit) break;
       if (!page.truncated) break;
       if (!page.cursor || page.cursor === cursor) {
-        throw new Error("R2 listing did not advance");
+        throw new Error("S3 listing did not advance");
       }
       cursor = page.cursor;
     } while (true);

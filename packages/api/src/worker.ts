@@ -58,10 +58,12 @@ export interface Env {
   BEUTL_GIT_ENABLED?: string;
   BEUTL_GIT_TOKEN_SECRET?: string;
   BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
-  BEUTL_GIT_R2_S3_ENDPOINT?: string;
-  BEUTL_GIT_R2_S3_BUCKET?: string;
-  BEUTL_GIT_R2_S3_ACCESS_KEY_ID?: string;
-  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_GIT_S3_ENDPOINT?: string;
+  BEUTL_GIT_S3_REGION?: string;
+  BEUTL_GIT_S3_BUCKET?: string;
+  BEUTL_GIT_S3_ACCESS_KEY_ID?: string;
+  BEUTL_GIT_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_GIT_S3_PATH_STYLE?: string;
   BEUTL_GIT_LFS_REPO_QUOTA_BYTES?: string;
   BEUTL_STORAGE_PROVIDER?: string;
   BEUTL_S3_ENDPOINT?: string;

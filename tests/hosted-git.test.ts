@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
 import { handleMultipart } from "../packages/api/src/git/multipart";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
-import { R2GitObjectStore, type GitR2Bucket, type GitR2MultipartUpload } from "../packages/api/src/git/r2-object-store";
+import { GitObjectStore, type GitObjectBucket, type GitMultipartUpload } from "../packages/api/src/git/git-object-store";
 import { issueGitToken, issueMultipartToken, verifyGitToken, verifyMultipartToken } from "../packages/api/src/git/tokens";
 import { apiRequestBodyLimit, MAX_API_JSON_REQUEST_BYTES } from "../packages/core/src/request-body-limit";
 import { setDbProvider } from "../packages/db/src/provider";
@@ -25,10 +25,11 @@ const otherId = "00000000-0000-4000-8000-000000000002";
 const secret = "hosted-git-test-secret-with-32-or-more-characters";
 const env = {
   BEUTL_GIT_TOKEN_SECRET: secret,
-  BEUTL_GIT_R2_S3_ENDPOINT: "https://example.r2.cloudflarestorage.com/",
-  BEUTL_GIT_R2_S3_BUCKET: "git-test",
-  BEUTL_GIT_R2_S3_ACCESS_KEY_ID: "test-key",
-  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY: "test-secret",
+  BEUTL_GIT_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/",
+  BEUTL_GIT_S3_REGION: "us-east-005",
+  BEUTL_GIT_S3_BUCKET: "git-test",
+  BEUTL_GIT_S3_ACCESS_KEY_ID: "test-key",
+  BEUTL_GIT_S3_SECRET_ACCESS_KEY: "test-secret",
   BEUTL_GIT_LFS_REPO_QUOTA_BYTES: String(6 * 1024 ** 3),
 };
 
@@ -44,28 +45,29 @@ class MemoryStorage implements GitDurableStorage {
   async setAlarm(time: number) { this.alarms.push(time); }
 }
 
-class MemoryBucket implements GitR2Bucket {
+class MemoryBucket implements GitObjectBucket {
   objects = new Map<string, Uint8Array>();
   uploads = new Map<string, Map<number, Uint8Array>>();
   onGet?: () => Promise<void>;
-  async get(key: string) {
+  async get(key: string, _versionId?: string) {
     await this.onGet?.();
     const data = this.objects.get(key);
     if (!data) return null;
     return {
       size: data.byteLength,
+      versionId: "test-v1",
       body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(data); controller.close(); } }),
-      arrayBuffer: async () => data.slice().buffer,
+      arrayBuffer: async () => Uint8Array.from(data).buffer,
     };
   }
-  async put(key: string, value: Uint8Array) { this.objects.set(key, value.slice()); }
+  async put(key: string, value: Uint8Array) { this.objects.set(key, Uint8Array.from(value)); }
   async delete(key: string | string[]) { for (const item of Array.isArray(key) ? key : [key]) this.objects.delete(item); }
-  async head(key: string) {
+  async head(key: string, _versionId?: string) {
     const data = this.objects.get(key);
     if (!data) return null;
     return {
       size: data.byteLength,
-      checksums: { sha256: createHash("sha256").update(data).digest().buffer as ArrayBuffer },
+      versionId: "test-v1",
     };
   }
   async list({ prefix, delimiter, cursor, limit }: { prefix: string; delimiter?: string; cursor?: string; limit: number }) {
@@ -93,10 +95,10 @@ class MemoryBucket implements GitR2Bucket {
     this.uploads.set(uploadId, new Map());
     return this.resumeMultipartUpload(key, uploadId);
   }
-  resumeMultipartUpload(key: string, uploadId: string): GitR2MultipartUpload {
+  resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload {
     return {
       uploadId,
-      uploadPart: async (partNumber, stream) => {
+      uploadPart: async (partNumber, stream, _length) => {
         const chunks: Uint8Array[] = [];
         for await (const chunk of stream) chunks.push(chunk);
         const data = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
@@ -105,6 +107,8 @@ class MemoryBucket implements GitR2Bucket {
         this.uploads.get(uploadId)!.set(partNumber, data);
         return { partNumber, etag: createHash("md5").update(data).digest("hex") };
       },
+      listParts: async () => [...(this.uploads.get(uploadId) ?? new Map()).entries()]
+        .map(([partNumber, data]) => ({ partNumber, etag: createHash("md5").update(data).digest("hex"), size: data.byteLength })),
       complete: async (parts) => {
         const chunks = parts.map((part) => this.uploads.get(uploadId)!.get(part.partNumber)!);
         const data = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
@@ -112,23 +116,31 @@ class MemoryBucket implements GitR2Bucket {
         for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.length; }
         this.objects.set(key, data);
         this.uploads.delete(uploadId);
-        return { size: data.length };
+        return { size: data.length, versionId: "test-v1" };
       },
       abort: async () => { this.uploads.delete(uploadId); },
     };
+  }
+  async presignPut(key: string) { return `https://s3.us-east-005.backblazeb2.com/git-test/${key}?X-Amz-Signature=test`; }
+  async presignGet(key: string, versionId: string) {
+    return `https://s3.us-east-005.backblazeb2.com/git-test/${key}?versionId=${versionId}&X-Amz-Signature=test`;
   }
 }
 
 class CountingBucket extends MemoryBucket {
   bytesReceived = 0;
-  override resumeMultipartUpload(key: string, uploadId: string): GitR2MultipartUpload {
+  accepted = new Map<number, { partNumber: number; etag: string; size: number }>();
+  override resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload {
     const base = super.resumeMultipartUpload(key, uploadId);
     return {
       ...base,
-      uploadPart: async (partNumber, body) => {
-        for await (const chunk of body) this.bytesReceived += chunk.byteLength;
+      uploadPart: async (partNumber, body, _length) => {
+        let size = 0;
+        for await (const chunk of body) { this.bytesReceived += chunk.byteLength; size += chunk.byteLength; }
+        this.accepted.set(partNumber, { partNumber, etag: "counted", size });
         return { partNumber, etag: "counted" };
       },
+      listParts: async () => [...this.accepted.values()],
     };
   }
 }
@@ -144,7 +156,7 @@ describe("hosted Git token boundaries", () => {
   it("sweeps deleted repositories again after signed PUT URLs expire", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
-    const durable = new GitRepositoryDurableObject({ storage }, { ...env, BEUTL_R2_BUCKET: bucket });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const row: { id: string; deletedAt: Date; cleanupCompleteAt: Date | null } = {
       id: repoId, deletedAt: new Date(), cleanupCompleteAt: null,
     };
@@ -155,7 +167,7 @@ describe("hosted Git token boundaries", () => {
       },
     }) as never);
     const routeEnv = {
-      ...env, BEUTL_GIT_ENABLED: "true", BEUTL_R2_BUCKET: bucket,
+      ...env, BEUTL_GIT_ENABLED: "true",
       BEUTL_GIT_REPOSITORIES: {
         idFromName: (name: string) => name,
         get: () => ({ fetch: (request: Request) => durable.fetch(request) }),
@@ -203,7 +215,7 @@ describe("hosted Git token boundaries", () => {
     }) as never);
     const bucket = new MemoryBucket();
     const routeEnv = {
-      ...env, BEUTL_GIT_ENABLED: "true", BEUTL_R2_BUCKET: bucket,
+      ...env, BEUTL_GIT_ENABLED: "true",
       BEUTL_GIT_REPOSITORIES: {
         idFromName: (name: string) => name,
         get: () => ({ fetch: async (request: Request) => Response.json({
@@ -245,7 +257,7 @@ describe("Git Smart HTTP with the native Git CLI", () => {
   it("pushes and clones a repository through the Durable Object", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
-    const durable = new GitRepositoryDurableObject({ storage }, { ...env, BEUTL_R2_BUCKET: bucket });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const server = createServer(async (incoming, outgoing) => {
       try {
         const address = `http://127.0.0.1:${(server.address() as { port: number }).port}${incoming.url}`;
@@ -283,6 +295,14 @@ describe("Git Smart HTTP with the native Git CLI", () => {
       await git(root, "clone", url, join(root, "copy"));
       expect(readFileSync(join(root, "copy", "project.txt"), "utf8").replace(/\r\n/gu, "\n"))
         .toBe("hello hosted git\n");
+      writeFileSync(join(root, "second.txt"), "pulled from origin\n");
+      await git(root, "add", "second.txt");
+      await git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "-c", "commit.gpgsign=false", "commit", "-m", "second");
+      await git(root, "push", "origin", "main");
+      await git(join(root, "copy"), "pull", "--ff-only", "origin", "main");
+      expect(readFileSync(join(root, "copy", "second.txt"), "utf8").replace(/\r\n/gu, "\n"))
+        .toBe("pulled from origin\n");
       writeFileSync(join(root, "from-original.txt"), "one");
       writeFileSync(join(root, "copy", "from-copy.txt"), "two");
       await git(root, "add", "from-original.txt");
@@ -308,7 +328,7 @@ describe("R2 object adapter", () => {
   it("lists all pages without dropping objects", async () => {
     const bucket = new MemoryBucket();
     for (let index = 0; index < 1_001; index++) bucket.objects.set(`key/${index.toString().padStart(4, "0")}`, new Uint8Array([index % 256]));
-    expect((await new R2GitObjectStore(bucket).list("key/")).objects).toHaveLength(1_001);
+    expect((await new GitObjectStore(bucket).list("key/")).objects).toHaveLength(1_001);
   });
 });
 
@@ -319,11 +339,11 @@ describe("Git LFS reservation and integrity", () => {
     const oid = "c".repeat(64);
     const size = 5 * 1024 ** 3 + 1;
     const result = await handleLfsBatch(
-      lfsRequest("upload", [{ oid, size }], ["basic", "beutl-r2-multipart"]),
+      lfsRequest("upload", [{ oid, size }], ["basic", "beutl-multipart"]),
       bucket, storage, env, repoId, "write", "Bearer git-token",
     );
     const batch = await result.json();
-    expect(batch.transfer).toBe("beutl-r2-multipart");
+    expect(batch.transfer).toBe("beutl-multipart");
     expect(batch.objects[0].actions.upload.href).toContain("/multipart");
     const base = batch.objects[0].actions.upload.href;
     const first = await (await handleMultipart(new Request(base, { method: "POST" }), bucket, storage, repoId, oid, "")).json();
@@ -358,7 +378,7 @@ describe("Git LFS reservation and integrity", () => {
     const result = await handleLfsBatch(
       lfsRequest("upload", [
         { oid: "c".repeat(64), size }, { oid: "d".repeat(64), size },
-      ], ["beutl-r2-multipart"]),
+      ], ["beutl-multipart"]),
       bucket, storage, env, repoId, "write", "Bearer git-token",
     );
     const batch = await result.json();
@@ -459,7 +479,7 @@ describe("Durable Object queue", () => {
       kind: "multipart", size: 5 * 1024 ** 3 + 1, verified: false,
       expiresAt: Date.now() + 60_000, uploadId: upload.uploadId,
     });
-    const durable = new GitRepositoryDurableObject({ storage }, { ...env, BEUTL_R2_BUCKET: bucket });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const result = await durable.fetch(new Request("https://git.internal/internal/git/cleanup", {
       method: "DELETE",
       headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
@@ -472,7 +492,7 @@ describe("Durable Object queue", () => {
   it("rejects a second repository ID on the same object", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
-    const durable = new GitRepositoryDurableObject({ storage }, { ...env, BEUTL_R2_BUCKET: bucket });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const make = (id: string) => new Request(`https://beutl.beditor.net/api/v3/git/${id}.git/info/refs?service=git-upload-pack`, {
       headers: { "x-beutl-repo-id": id, "x-beutl-git-scope": "read" },
     });
@@ -496,7 +516,7 @@ describe("Durable Object queue", () => {
     bucket.onGet = async () => {
       if (firstRead) { firstRead = false; entered(); await gate; }
     };
-    const durable = new GitRepositoryDurableObject({ storage }, { ...env, BEUTL_R2_BUCKET: bucket });
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
     const make = () => new Request(`https://beutl.beditor.net/api/v3/git/${repoId}.git/info/refs?service=git-upload-pack`, {
       headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "read" },
     });

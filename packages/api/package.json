@@ -30,6 +30,7 @@
     "ai": "^7.0.106",
     "aws4fetch": "^1.0.20",
     "country-to-currency": "^2.0.2",
+    "fast-xml-parser": "5.7.0",
     "git-fs-s3": "0.3.5",
     "hono": "^4.13.5",
     "isomorphic-git": "1.27.0",

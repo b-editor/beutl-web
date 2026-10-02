@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { GitDurableStorage, LfsRecord } from "./lfs";
-import type { GitR2Bucket } from "./r2-object-store";
+import type { GitObjectBucket } from "./git-object-store";
 
 export const MULTIPART_PART_BYTES = 64 * 1024 * 1024;
 export const MAX_MULTIPART_PARTS = 10_000;
@@ -26,14 +26,30 @@ async function clearParts(storage: GitDurableStorage, oid: string): Promise<void
   for (const key of parts.keys()) await storage.delete(key);
 }
 
+async function acceptedParts(
+  bucket: GitObjectBucket, storage: GitDurableStorage, key: string, uploadId: string, oid: string,
+): Promise<Part[]> {
+  // B2 ListParts is authoritative if uploadPart succeeded but the Durable
+  // Object lost its response before storing the ETag.
+  const parts = await bucket.resumeMultipartUpload(key, uploadId).listParts();
+  if (parts.length > MAX_MULTIPART_PARTS || parts.some((part) =>
+    !Number.isSafeInteger(part.partNumber) || part.partNumber < 1 ||
+    !Number.isSafeInteger(part.size) || part.size < 1 || !part.etag)) {
+    throw new Error("S3 returned invalid multipart parts");
+  }
+  await clearParts(storage, oid);
+  for (const part of parts) await storage.put(partKey(oid, part.partNumber), part);
+  return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
 export async function abortMultipart(
-  bucket: GitR2Bucket, storage: GitDurableStorage, repoId: string, oid: string, record: LfsRecord,
+  bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, oid: string, record: LfsRecord,
 ): Promise<void> {
   if (record.uploadId && !record.completed) {
     try {
       await bucket.resumeMultipartUpload(objectKey(repoId, oid), record.uploadId).abort();
     } catch (error) {
-      // The upload can already have expired in R2. Its final object still
+      // The upload can already have expired in B2. Its final object still
       // cannot be served without a verified Durable Object record.
       console.warn("Git LFS multipart abort failed", { repoId, oid, error });
     }
@@ -43,9 +59,12 @@ export async function abortMultipart(
   await storage.delete(recordKey(oid));
 }
 
-async function verifyCompletedObject(bucket: GitR2Bucket, repoId: string, oid: string, expectedSize: number, signal: AbortSignal): Promise<boolean> {
-  const object = await bucket.get(objectKey(repoId, oid));
-  if (!object || object.size !== expectedSize) return false;
+export async function verifyCompletedObject(
+  bucket: GitObjectBucket, repoId: string, oid: string, expectedSize: number,
+  versionId: string, signal: AbortSignal,
+): Promise<boolean> {
+  const object = await bucket.get(objectKey(repoId, oid), versionId);
+  if (!object || object.size !== expectedSize || object.versionId !== versionId) return false;
   const hash = createHash("sha256");
   const reader = object.body.getReader();
   let size = 0;
@@ -67,7 +86,7 @@ async function verifyCompletedObject(bucket: GitR2Bucket, repoId: string, oid: s
 }
 
 export async function handleMultipart(
-  request: Request, bucket: GitR2Bucket, storage: GitDurableStorage,
+  request: Request, bucket: GitObjectBucket, storage: GitDurableStorage,
   repoId: string, oid: string, operation: string,
 ): Promise<Response> {
   request.signal.throwIfAborted();
@@ -88,11 +107,13 @@ export async function handleMultipart(
       record.uploadId = upload.uploadId;
       await storage.put(recordKey(oid), record);
     }
+    const existing = await bucket.head(key);
     return response({
       complete: false,
       partSize: MULTIPART_PART_BYTES,
       partCount: Math.ceil(record.size / MULTIPART_PART_BYTES),
-      parts: await partsFor(storage, oid),
+      parts: existing ? await partsFor(storage, oid) :
+        await acceptedParts(bucket, storage, key, record.uploadId, oid),
     });
   }
   if (request.method === "PUT" && /^parts\/\d+$/u.test(operation)) {
@@ -120,7 +141,7 @@ export async function handleMultipart(
         if (received !== expected) throw new RangeError("Multipart part is incomplete");
       },
     }));
-    const result = await bucket.resumeMultipartUpload(key, record.uploadId).uploadPart(partNumber, measured);
+    const result = await bucket.resumeMultipartUpload(key, record.uploadId).uploadPart(partNumber, measured, expected);
     if (received !== expected) return response({ message: "Part length mismatch" }, 422);
     const part = { partNumber, etag: result.etag, size: expected };
     await storage.put(partKey(oid, partNumber), part);
@@ -130,11 +151,11 @@ export async function handleMultipart(
     if (record.verified) return response({ oid, size: record.size });
     if (!record.uploadId) return response({ message: "Multipart upload has not started" }, 409);
     if (!record.completed) {
-      // Completion can succeed in R2 and then lose its response or the DO
+      // Completion can succeed in B2 and then lose its response or the DO
       // write. Re-read the private key before retrying CompleteMultipartUpload.
       const existing = await bucket.head(key);
       if (!existing) {
-        const parts = await partsFor(storage, oid);
+        const parts = await acceptedParts(bucket, storage, key, record.uploadId, oid);
         const partCount = Math.ceil(record.size / MULTIPART_PART_BYTES);
         if (partCount > MAX_MULTIPART_PARTS || parts.length !== partCount ||
             parts.some((part, index) => part.partNumber !== index + 1 ||
@@ -144,21 +165,25 @@ export async function handleMultipart(
         const object = await bucket.resumeMultipartUpload(key, record.uploadId).complete(
           parts.map(({ partNumber, etag }) => ({ partNumber, etag })),
         );
-        if (object.size !== record.size) {
+        if (object.size !== record.size || !object.versionId) {
           await abortMultipart(bucket, storage, repoId, oid, record);
           return response({ message: "Completed object size mismatch" }, 422);
         }
-      } else if (existing.size !== record.size) {
+        record.versionId = object.versionId;
+      } else if (existing.size !== record.size || !existing.versionId) {
         await abortMultipart(bucket, storage, repoId, oid, record);
         return response({ message: "Completed object size mismatch" }, 422);
+      } else {
+        record.versionId = existing.versionId;
       }
       record.completed = true;
       await storage.put(recordKey(oid), record);
     }
-    // A completed multipart object has no trustworthy full-object SHA-256
-    // metadata. Read the private R2 object as a stream and hash it here.
+    // B2 multipart ETags and S3 checksums do not establish the full LFS OID.
+    // Read the pinned private version as a stream and hash it here.
     // If this invocation fails, the next complete request retries verification.
-    if (!await verifyCompletedObject(bucket, repoId, oid, record.size, request.signal)) {
+    if (!record.versionId || !await verifyCompletedObject(
+      bucket, repoId, oid, record.size, record.versionId, request.signal)) {
       await abortMultipart(bucket, storage, repoId, oid, record);
       return response({ message: "Completed object SHA-256 or size mismatch" }, 422);
     }

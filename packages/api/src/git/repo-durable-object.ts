@@ -1,6 +1,7 @@
 import { handleGitHttp } from "./git-http";
 import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, type GitDurableStorage, type LfsEnvironment, type LfsRecord } from "./lfs";
-import type { GitR2Bucket } from "./r2-object-store";
+import type { GitObjectBucket } from "./git-object-store";
+import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitScope } from "./tokens";
 import { abortMultipart, handleMultipart } from "./multipart";
 
@@ -8,18 +9,24 @@ interface State {
   storage: GitDurableStorage;
 }
 
-interface Environment extends LfsEnvironment {
-  BEUTL_R2_BUCKET?: GitR2Bucket;
-}
+interface Environment extends LfsEnvironment, GitS3Environment {}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const OID = /^[0-9a-f]{64}$/u;
 
-/** All R2 and Git operations for one repository pass through this queue. */
+/** All storage and Git operations for one repository pass through this queue. */
 export class GitRepositoryDurableObject {
   private tail: Promise<unknown> = Promise.resolve();
+  private bucket?: GitObjectBucket;
 
-  constructor(private readonly state: State, private readonly env: Environment) {}
+  constructor(
+    private readonly state: State, private readonly env: Environment,
+    testBucket?: GitObjectBucket,
+  ) { this.bucket = testBucket; }
+
+  private objectBucket(): GitObjectBucket {
+    return this.bucket ??= new S3GitObjectBucket(this.env);
+  }
 
   private enqueue<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work);
@@ -34,8 +41,8 @@ export class GitRepositoryDurableObject {
   async alarm(): Promise<void> {
     await this.enqueue(async () => {
       const repoId = await this.state.storage.get<string>("repoId");
-      if (repoId && UUID.test(repoId) && this.env.BEUTL_R2_BUCKET) {
-        await pruneExpiredLfs(this.state.storage, this.env.BEUTL_R2_BUCKET, repoId);
+      if (repoId && UUID.test(repoId)) {
+        await pruneExpiredLfs(this.state.storage, this.objectBucket(), repoId);
       }
     });
   }
@@ -43,8 +50,8 @@ export class GitRepositoryDurableObject {
   private async handle(request: Request): Promise<Response> {
     const repoId = request.headers.get("x-beutl-repo-id") ?? "";
     const scope = request.headers.get("x-beutl-git-scope");
-    const bucket = this.env.BEUTL_R2_BUCKET;
-    if (!UUID.test(repoId) || !bucket) return new Response("Repository unavailable", { status: 503 });
+    if (!UUID.test(repoId)) return new Response("Repository unavailable", { status: 503 });
+    const bucket = this.objectBucket();
     const boundId = await this.state.storage.get<string>("repoId");
     if (boundId && boundId !== repoId) return new Response("Repository mismatch", { status: 403 });
     if (!boundId) await this.state.storage.put("repoId", repoId);
@@ -111,7 +118,8 @@ export class GitRepositoryDurableObject {
     }
   }
 
-  private async deletePrefix(bucket: GitR2Bucket, prefix: string): Promise<void> {
+  private async deletePrefix(bucket: GitObjectBucket, prefix: string): Promise<void> {
+    if (bucket.deletePrefix) return bucket.deletePrefix(prefix);
     // Restart from the first page after deletion; a cursor into a mutating
     // listing can skip objects. A failed batch leaves the tombstone retryable.
     while (true) {

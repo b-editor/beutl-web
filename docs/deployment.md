@@ -59,8 +59,9 @@ Prisma model.
 
 ## Object storage
 
-Hosted Git has separate configuration and storage prefixes. See
-[Hosted Git repositories](hosted-git.md) before enabling it.
+Hosted Git uses a separate private Backblaze B2 bucket through its S3-compatible
+API. Its `BEUTL_GIT_S3_*` settings are independent of the user-file storage
+provider below. See [Hosted Git repositories](hosted-git.md) before enabling it.
 
 User files and AI outputs live in one object store that the Web Worker and the
 desktop API Worker share. Both Workers must be configured for the same bucket:
