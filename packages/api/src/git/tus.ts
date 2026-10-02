@@ -1,7 +1,8 @@
 import type { GitDurableStorage, LfsRecord } from "./lfs";
 import { MAX_LFS_OBJECT_BYTES } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
-import { abortMultipart, clearTusTail, MAX_MULTIPART_PARTS, MULTIPART_PART_BYTES, verifyCompletedObject } from "./multipart";
+import { abortMultipart, advanceCompletedVerification, clearTusTail, MAX_MULTIPART_PARTS, MULTIPART_PART_BYTES } from "./multipart";
+import type { GitStorageAccounting } from "./accounting";
 
 // tus 1.0 core, Creation, Expiration and Termination. B2 needs at least 5 MiB
 // for every non-final part; smaller PATCH tails live in SQLite DO storage.
@@ -104,9 +105,9 @@ async function status(
 
 async function finish(
   bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, oid: string,
-  record: LfsRecord, signal: AbortSignal, knownParts?: Part[],
-): Promise<boolean> {
-  if (record.verified) return true;
+  record: LfsRecord, signal: AbortSignal, accounting?: GitStorageAccounting, knownParts?: Part[],
+): Promise<"verified" | "pending" | "mismatch"> {
+  if (record.verified) return "verified";
   const key = objectKey(repoId, oid);
   if (!record.completed) {
     let object = await bucket.head(key);
@@ -121,27 +122,31 @@ async function finish(
       );
     }
     if (object.size !== record.size || !object.versionId) {
-      await abortMultipart(bucket, storage, repoId, oid, record);
-      return false;
+      await abortMultipart(bucket, storage, repoId, oid, record, accounting);
+      return "mismatch";
     }
     // Persist the completed B2 version before the full hash. If this request
     // disappears, HEAD can retry verification without reassembling the file.
     record = { ...record, completed: true, versionId: object.versionId };
     await storage.put(recordKey(oid), record);
   }
-  if (!record.versionId || !await verifyCompletedObject(
-    bucket, repoId, oid, record.size, record.versionId, signal)) {
-    await abortMultipart(bucket, storage, repoId, oid, record);
-    return false;
+  const verification = record.versionId ? await advanceCompletedVerification(
+    bucket, storage, repoId, oid, record.size, record.versionId, signal) : "mismatch";
+  if (verification === "pending") return "pending";
+  if (verification !== "verified") {
+    await abortMultipart(bucket, storage, repoId, oid, record, accounting);
+    return "mismatch";
   }
+  await accounting?.commitLfs(repoId, oid);
   await clearTusTail(storage, oid);
   await storage.put(recordKey(oid), { ...record, verified: true });
-  return true;
+  return "verified";
 }
 
 export async function handleTus(
   request: Request, bucket: GitObjectBucket, storage: GitDurableStorage,
   repoId: string, oid: string, resourceId: string | undefined,
+  accounting?: GitStorageAccounting,
 ): Promise<Response> {
   if (!OID.test(oid)) return tusResponse(404);
   const method = request.method === "POST" &&
@@ -176,7 +181,7 @@ export async function handleTus(
     }
     if (record.size === 0 && !record.verified) {
       if (!await bucket.head(key)) await bucket.put(key, new Uint8Array());
-      if (!await finish(bucket, storage, repoId, oid, record, request.signal)) {
+      if (await finish(bucket, storage, repoId, oid, record, request.signal, accounting) !== "verified") {
         return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");
       }
       record = { ...record, verified: true };
@@ -198,7 +203,7 @@ export async function handleTus(
       await clearTusTail(storage, oid);
       await storage.put(recordKey(oid), { ...record, tusId: undefined });
     } else {
-      await abortMultipart(bucket, storage, repoId, oid, record);
+      await abortMultipart(bucket, storage, repoId, oid, record, accounting);
     }
     return tusResponse(204);
   }
@@ -206,15 +211,17 @@ export async function handleTus(
 
   const current = await status(bucket, storage, oid, record, key);
   if (current.offset === record.size && !record.verified) {
-    if (!await finish(bucket, storage, repoId, oid, record, request.signal, current.parts)) {
+    const verification = await finish(bucket, storage, repoId, oid, record, request.signal, accounting, current.parts);
+    if (verification === "mismatch") {
       return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");
     }
-    record = { ...record, verified: true };
+    if (verification === "verified") record = { ...record, verified: true };
   }
   if (method === "HEAD") {
     return tusResponse(200, {
       "Upload-Offset": String(current.offset),
       "Upload-Length": String(record.size),
+      "Upload-Verified": record.verified ? "true" : "false",
       ...(record.verified ? {} : { "Upload-Expires": expires(record) }),
     });
   }
@@ -321,10 +328,16 @@ export async function handleTus(
   const newOffset = offset + length;
   if (newOffset === record.size) {
     const accepted = await status(bucket, storage, oid, record, key);
-    if (accepted.offset !== record.size ||
-        !await finish(bucket, storage, repoId, oid, record, request.signal, accepted.parts)) {
+    if (accepted.offset !== record.size) {
       return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");
     }
+    const verification = await finish(bucket, storage, repoId, oid, record, request.signal, accounting, accepted.parts);
+    if (verification === "mismatch") {
+      return tusResponse(422, {}, "LFS object SHA-256 or size mismatch");
+    }
+    return tusResponse(204, { "Upload-Offset": String(newOffset),
+      "Upload-Verified": verification === "verified" ? "true" : "false",
+      ...(verification === "verified" ? {} : { "Upload-Expires": expires(record) }) });
   }
   return tusResponse(204, { "Upload-Offset": String(newOffset),
     ...(newOffset === record.size ? {} : { "Upload-Expires": expires(record) }) });

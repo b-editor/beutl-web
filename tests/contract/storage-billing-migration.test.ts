@@ -87,7 +87,7 @@ describe("subscription plan generalization migration", () => {
   });
 
   it("matches the Prisma schema", async () => {
-    const source = await readFile(schema, "utf8");
+    const source = (await readFile(schema, "utf8")).replace(/\r\n/gu, "\n");
     expect(source).not.toContain("model StorageSubscription {");
     expect(source).not.toContain("model StorageCheckoutAttempt {");
     expect(source).not.toContain("model ProCheckoutAttempt {");

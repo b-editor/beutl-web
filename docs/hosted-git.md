@@ -8,7 +8,9 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
 
 ## Deployment
 
-1. Apply the CockroachDB migration `20261002000000_add_git_repositories`.
+1. Apply the CockroachDB migrations `20261002000000_add_git_repositories` and
+   `20261002010000_git_account_storage`. The second adds the account meter and
+   a nullable `accountedAt` marker for repositories created before it.
 2. Deploy the desktop API Worker with the `GitRepositoryDurableObject` SQLite
    migration. Keep `BEUTL_GIT_ENABLED=false` until configuration and a B2
    integration test have succeeded.
@@ -29,25 +31,44 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
    completing and aborting multipart uploads. Keep the bucket private. Do not
    put credentials in `wrangler.jsonc`, source control, or desktop settings.
    `PUBLIC_ORIGIN` must remain the public Beutl origin.
-4. Set `BEUTL_GIT_ENABLED=true` only after the database and Durable Object
-   migrations, secrets, and storage smoke test are complete. It defaults to
-   `false`.
+4. Run scheduled account reconciliation with B2 configured. It adopts old
+   repositories' LFS reservations, lists current Git object sizes, and marks
+   `accountedAt`. Until then, storage admission and Git traffic for an affected
+   account fail closed. Check that no active repository has `accountedAt IS NULL`
+   and compare account usage before and after reconciliation. Existing bytes
+   remain counted even if they exceed the current plan; new uploads then wait
+   for space or a larger plan.
+5. Set `BEUTL_GIT_ENABLED=true` only after the migrations, secrets,
+   reconciliation, and storage smoke test are complete. It defaults to `false`.
 
 `BEUTL_GIT_LFS_REPO_QUOTA_BYTES` optionally changes the 20 GiB per repository
 LFS quota. A single object is capped at 20 GiB even if that quota is raised.
 Git history is limited to 16 MiB of stored objects and an 8 MiB incoming pack;
 track media with LFS. Each user can create at most 20 active repositories.
 
-The Worker sets `limits.cpu_ms=300000`. The final SHA-256 check streams the
-entire B2 object through a Durable Object request. This needs a Workers Paid
-plan and may take longer than a deployment or client connection survives.
-Cloudflare allows up to 300 seconds of active CPU for a paid Worker request,
-but this implementation has **not** been measured against a real B2 bucket or
-Cloudflare account at 5–20 GiB. Measure the upload, verify, download, and
-retry path before enabling production traffic. A failed or interrupted
-verification leaves the object private and can be retried with tus HEAD or the
-legacy multipart complete action while its reservation is valid. The hash
-starts again from byte zero on each attempt; it has no persisted checkpoints.
+The existing account storage API, dashboard, billing, and admin totals include
+current Git objects and one copy of every verified LFS OID per repository,
+alongside File bytes. Pending LFS, Git push, and File writes reserve capacity
+against the same account quota. CockroachDB serializes admission through the
+user's `storageRevision` row. A Git push reserves its full remaining 16 MiB
+history allowance and settles to its actual size afterwards, so an account
+with less than that free may be unable to push. Git history counts current
+objects under `repo.git/objects/`, including packs and loose objects; refs and
+Git configuration are small control metadata and are not metered. Old B2
+versions and multipart pieces are physical garbage collected separately.
+
+The Worker sets `limits.cpu_ms=300000`. SHA-256 verification reads at most
+128 MiB of a fixed B2 `versionId` per step and persists the chaining words,
+byte offset, OID, size, and version ID in the repository Durable Object.
+Interruption may repeat one range; retries resume from the last checkpoint.
+A different object version discards the prior checkpoint. The object stays
+private until the full digest matches its OID. The Beutl tus agent polls HEAD
+for `Upload-Verified: true` after the byte offset reaches the length; the
+legacy agent polls complete while it returns `verifying: true`. Basic LFS
+verify advances the same checkpoints within one request. This still needs a
+Workers Paid plan and **has not** been measured on a real B2 bucket or
+Cloudflare account at 5 to 20 GiB. Measure wall time, CPU, restart, and retry
+behavior before enabling production traffic.
 
 ## Protocol and trust boundary
 
@@ -72,9 +93,11 @@ starts again from byte zero on each attempt; it has no persisted checkpoints.
   multipart upload.
   Both stream 64 MiB chunks through the Worker to B2 without buffering a full
   media file. The Worker request-body limit for the account must allow a 64 MiB
-  PATCH. Unfinished reservations expire after 24 hours. Configure a B2
-  lifecycle rule to abort incomplete multipart uploads after seven days if an
-  abort attempt fails.
+  PATCH. Unfinished reservations expire after 24 hours. The Durable Object
+  retries failed aborts. A daily S3 multipart listing also aborts untracked
+  uploads older than 26 hours, including a Create response lost before its ID
+  was saved, while protecting IDs in active records. A B2 lifecycle rule to
+  abort incomplete uploads after seven days is an optional backstop.
 - The tus endpoint supports protocol version 1.0.0 with Creation, Expiration,
   and Termination: `OPTIONS` and `POST` on `/objects/<oid>/tus`, then `HEAD`,
   `PATCH`, and `DELETE` on the returned upload URL. `Tus-Resumable: 1.0.0` is
@@ -93,9 +116,9 @@ starts again from byte zero on each attempt; it has no persisted checkpoints.
   offset plus the persisted tail length is the resumable tus offset. This also
   covers an accepted part that loses its response or a Durable Object restart.
   A stale offset gets 409 without uploading its body. The final PATCH or
-  subsequent HEAD assembles
-  the B2 object and verifies the pinned B2 version against the full LFS OID
-  before reporting completion. DELETE aborts an unfinished upload and releases
+  subsequent HEAD assembles the B2 object; later HEAD requests may advance
+  verification until `Upload-Verified: true` reports completion. DELETE aborts
+  an unfinished upload and releases
   its quota reservation.
 - Multipart action tokens are scoped to one owner, repository, and LFS OID,
   and expire after 24 hours. Completed media remains private until the server
@@ -104,10 +127,16 @@ starts again from byte zero on each attempt; it has no persisted checkpoints.
   presign the verified `versionId`, so a later write to the same key cannot
   change the bytes served by an existing action.
 - B2 buckets retain versions. Repository deletion tombstones the repository,
-  aborts uploads, and deletes **all** versions and delete markers under both
+  aborts known and orphaned uploads, and deletes **all** versions and delete markers under both
   Git prefixes. Scheduled cleanup retries failures and sweeps for two hours
   after deletion, beyond the one-hour Basic PUT URL lifetime. Account deletion
   nulls ownership and uses the same cleanup.
+  For active repositories, LFS cleanup keeps each verified record's pinned
+  `versionId` and removes other versions only after the signed PUT window plus
+  two hours. Git cleanup keeps current live versions and removes older versions
+  before a latest delete marker. Do not apply blanket B2 noncurrent-version
+  expiration to LFS keys: a verified version can be noncurrent after another
+  Basic PUT and still be the version served to readers. Failed cleanup retries.
 
 An interrupted multipart push can be retried. A Git push that reaches Smart
 HTTP after its Git token expires obtains a new token and retries the Git
@@ -125,6 +154,7 @@ B2 integration or multi-GiB Cloudflare verification test.
 
 References: [B2 S3 API](https://www.backblaze.com/docs/cloud-storage-call-the-s3-compatible-api),
 [B2 multipart operations](https://www.backblaze.com/apidocs/s3-create-multipart-upload),
+[B2 multipart listing](https://www.backblaze.com/apidocs/s3-list-multipart-uploads),
 [B2 object versions](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api-bucket-versions),
 [B2 lifecycle configuration](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration),
 [Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),

@@ -2,11 +2,12 @@ import type { GitObjectBucket } from "./git-object-store";
 import { readBodyAtMost } from "./git-http";
 import type { GitScope } from "./tokens";
 import { gitTokenSecret, issueMultipartToken } from "./tokens";
+import type { GitStorageAccounting } from "./accounting";
 import {
   abortMultipart,
   MAX_MULTIPART_OBJECT_BYTES,
   MULTIPART_RESERVATION_MS,
-  verifyCompletedObject,
+  advanceCompletedVerification,
 } from "./multipart";
 
 const LFS_MEDIA_TYPE = "application/vnd.git-lfs+json";
@@ -39,6 +40,7 @@ export interface LfsRecord {
   completed?: boolean;
   versionId?: string;
   tusId?: string;
+  gcComplete?: boolean;
 }
 
 interface LfsObjectRequest { oid: string; size: number }
@@ -88,22 +90,37 @@ export async function pruneExpiredLfs(
   bucket: GitObjectBucket,
   repoId: string,
   now = Date.now(),
+  accounting?: GitStorageAccounting,
 ): Promise<void> {
   const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
   for (const [key, record] of records) {
+    if (record.verified && !record.gcComplete && record.versionId &&
+        record.expiresAt + 2 * 60 * 60 * 1000 <= now && bucket.pruneVersions) {
+      await bucket.pruneVersions(keyFor(repoId, key.slice(4)), [record.versionId]);
+      await storage.put(key, { ...record, gcComplete: true });
+    }
     if (!record.verified && record.expiresAt <= now) {
       if (record.kind === "multipart") {
-        await abortMultipart(bucket, storage, repoId, key.slice(4), record);
+        await abortMultipart(bucket, storage, repoId, key.slice(4), record, accounting);
       } else {
         await bucket.delete(keyFor(repoId, key.slice(4)));
+        await accounting?.releaseLfs(repoId, key.slice(4));
         await storage.delete(key);
       }
     }
   }
   const nextExpiry = [...records.values()]
-    .filter((record) => !record.verified && record.expiresAt > now)
-    .reduce((earliest, record) => Math.min(earliest, record.expiresAt), Infinity);
-  if (Number.isFinite(nextExpiry)) await storage.setAlarm(nextExpiry + 1000);
+    .map((record) => record.verified
+      ? !record.gcComplete && bucket.pruneVersions ? record.expiresAt + 2 * 60 * 60 * 1000 : Infinity
+      : record.expiresAt)
+    .filter((time) => time > now)
+    .reduce((earliest, time) => Math.min(earliest, time), Infinity);
+  // Revisit even when no LFS record remains: CreateMultipartUpload may have
+  // succeeded while its response was lost, leaving no recorded upload ID.
+  const orphanSweep = bucket.cleanupMultipartUploads ? now + 24 * 60 * 60 * 1000 : Infinity;
+  if (Number.isFinite(Math.min(nextExpiry, orphanSweep))) {
+    await storage.setAlarm(Math.min(nextExpiry + 1000, orphanSweep));
+  }
 }
 
 async function parseLfsJson(request: Request): Promise<unknown> {
@@ -123,6 +140,7 @@ export async function handleLfsBatch(
   repoId: string,
   scope: GitScope,
   authorization: string,
+  accounting?: GitStorageAccounting,
 ): Promise<Response> {
   const input = await parseLfsJson(request) as {
     operation?: unknown; objects?: unknown; transfers?: unknown; hash_algo?: unknown;
@@ -149,7 +167,7 @@ export async function handleLfsBatch(
       : transfers.includes("beutl-multipart") ? "beutl-multipart" : null
     : null;
   const quota = getQuota(env);
-  await pruneExpiredLfs(storage, bucket, repoId);
+  await pruneExpiredLfs(storage, bucket, repoId, Date.now(), accounting);
   const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
   let reserved = [...records.values()].reduce((total, record) => total + record.size, 0);
   const objects: LfsObjectResponse[] = [];
@@ -217,6 +235,14 @@ export async function handleLfsBatch(
         expiresAt: Date.now() + (multipart ? MULTIPART_RESERVATION_MS : LFS_ACTION_SECONDS * 1000),
         kind: multipart ? "multipart" : "basic",
       };
+      if (accounting) {
+        const ownerId = request.headers.get("x-beutl-git-owner-id") ?? "";
+        const result = await accounting.reserveLfs({ repoId, oid, ownerId, size, expiresAt: record.expiresAt });
+        if (result === "overQuota") {
+          objects.push({ oid, size, error: { code: 413, message: "Account storage quota exceeded" } });
+          continue;
+        }
+      }
       await storage.put(recordKey, record);
       records.set(recordKey, record);
       reserved += size;
@@ -268,6 +294,7 @@ export async function handleLfsVerify(
   storage: GitDurableStorage,
   repoId: string,
   oid: string,
+  accounting?: GitStorageAccounting,
 ): Promise<Response> {
   if (!validOid(oid)) return lfsResponse({ message: "Invalid OID" }, 400);
   const input = await parseLfsJson(request) as { oid?: unknown; size?: unknown } | null;
@@ -284,11 +311,19 @@ export async function handleLfsVerify(
   }
   if (!record.verified && record.kind === "basic") {
     const object = await bucket.head(keyFor(repoId, oid));
-    if (!object?.versionId || object.size !== record.size ||
-        !await verifyCompletedObject(bucket, repoId, oid, record.size, object.versionId, request.signal)) {
+    if (!object?.versionId || object.size !== record.size) {
+      return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
+    }
+    let verification: "pending" | "verified" | "mismatch";
+    do {
+      verification = await advanceCompletedVerification(
+        bucket, storage, repoId, oid, record.size, object.versionId, request.signal);
+    } while (verification === "pending");
+    if (verification !== "verified") {
       return lfsResponse({ message: "LFS size or SHA-256 verification failed" }, 422);
     }
     record.versionId = object.versionId;
+    await accounting?.commitLfs(repoId, oid);
     record.verified = true;
     await storage.put(key, record);
   }

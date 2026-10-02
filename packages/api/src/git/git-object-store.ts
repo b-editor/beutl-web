@@ -12,9 +12,15 @@ export interface GitObjectBucket {
     body: ReadableStream<Uint8Array>;
     arrayBuffer(): Promise<ArrayBuffer>;
   } | null>;
+  getRange?(key: string, versionId: string, start: number, length: number): Promise<{
+    size: number; versionId: string; body: ReadableStream<Uint8Array>;
+  }>;
   put(key: string, value: Uint8Array): Promise<unknown>;
   delete(key: string | string[]): Promise<unknown>;
   deletePrefix?(prefix: string): Promise<void>;
+  pruneVersions?(key: string, keepVersionIds: readonly string[]): Promise<void>;
+  pruneGitVersions?(prefix: string): Promise<void>;
+  cleanupMultipartUploads?(prefix: string, activeUploadIds: readonly string[], initiatedBefore: number): Promise<void>;
   head(key: string, versionId?: string): Promise<{ size: number; versionId?: string } | null>;
   list(options: {
     prefix: string;

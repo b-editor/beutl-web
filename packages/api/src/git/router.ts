@@ -1,4 +1,5 @@
 import { getDb } from "@beutl/db";
+import { listExpiredGitLfsReservations } from "@beutl/db";
 import { getUserIdFromHeaders } from "../api/auth";
 import { gitTokenSecret, issueGitToken, verifyGitToken, verifyMultipartToken, type GitScope } from "./tokens";
 
@@ -101,6 +102,51 @@ export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment)
   return cleaned;
 }
 
+// Run after the schema migration, before enabling hosted Git. Existing DO
+// records are adopted without discarding uploads or forcing users under a
+// newly introduced limit. Account admission remains blocked until adopted.
+export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Promise<number> {
+  if (unavailable(env)) return 0;
+  const db = await getDb();
+  const rows = await db.gitRepository.findMany({
+    where: { OR: [{ accountedAt: null }, { historyReservedBytes: { gt: 0 } }],
+      deletedAt: null, ownerId: { not: null } },
+    select: { id: true, ownerId: true }, take: 10,
+  });
+  let completed = 0;
+  for (const row of rows) {
+    try {
+      const result = await stub(env, row.id).fetch(new Request("https://git.internal/internal/git/accounting", {
+        method: "POST", headers: { "x-beutl-repo-id": row.id, "x-beutl-git-scope": "admin",
+          "x-beutl-git-owner-id": row.ownerId! },
+      }));
+      if (result.status === 204) completed++;
+      else console.error("Git account storage reconciliation failed", { repoId: row.id, status: result.status });
+    } catch (error) {
+      console.error("Git account storage reconciliation failed", { repoId: row.id, error });
+    }
+  }
+  return completed;
+}
+
+export async function reconcileGitLfsReservations(env: GitRouterEnvironment): Promise<number> {
+  if (unavailable(env)) return 0;
+  const rows = await listExpiredGitLfsReservations();
+  let completed = 0;
+  for (const row of rows) {
+    try {
+      const result = await stub(env, row.repoId).fetch(new Request(
+        `https://git.internal/internal/git/lfs-cleanup/${row.oid}`, {
+          method: "POST", headers: { "x-beutl-repo-id": row.repoId, "x-beutl-git-scope": "admin" },
+        }));
+      if (result.status === 204) completed++;
+    } catch (error) {
+      console.error("Git LFS reservation cleanup failed", { repoId: row.repoId, oid: row.oid, error });
+    }
+  }
+  return completed;
+}
+
 /** Worker-only route: API JWT manages repos, dedicated Git JWT carries Git traffic. */
 export async function routeGitRequest(request: Request, env: GitRouterEnvironment): Promise<Response | null> {
   const response = await routeGitRequestCore(request, env);
@@ -156,9 +202,10 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
       status: 401, headers: { "WWW-Authenticate": "Bearer realm=\"Beutl Git\"", ...noStore },
     });
     const repo = await db.gitRepository.findFirst({
-      where: { id: repoId, ownerId: authenticated.ownerId, deletedAt: null }, select: { id: true },
+      where: { id: repoId, ownerId: authenticated.ownerId, deletedAt: null }, select: { id: true, accountedAt: true },
     });
     if (!repo) return new Response("Not found", { status: 404 });
+    if (repo.accountedAt === null) return new Response("Git account storage reconciliation is pending", { status: 503 });
     const headers = new Headers(request.headers);
     headers.set("x-beutl-repo-id", repoId);
     headers.set("x-beutl-git-scope", authenticated.scope);
@@ -187,7 +234,7 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
     }
     const count = await db.gitRepository.count({ where: { ownerId: userId, deletedAt: null } });
     if (count >= MAX_REPOSITORIES_PER_USER) return json({ message: "Repository limit reached" }, 409);
-    const row = await db.gitRepository.create({ data: { ownerId: userId, name: name.trim() } });
+    const row = await db.gitRepository.create({ data: { ownerId: userId, name: name.trim(), accountedAt: new Date() } });
     return json(view(row, repoUrl(env, request, row.id)), 201);
   }
   if (!repoMatch || !UUID.test(repoMatch[1])) return new Response("Not found", { status: 404 });

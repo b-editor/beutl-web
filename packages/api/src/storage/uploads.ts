@@ -29,6 +29,7 @@ import {
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
+  lockStorageAccount,
   resolveStorageQuota,
 } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
@@ -254,6 +255,7 @@ export async function startUpload({
         return "conflict";
       }
       if (raced) return raced;
+      await lockStorageAccount(userId, prisma);
 
       // 小さなアップロードは枠をほとんど使わないので、大きさだけでは歯止めに
       // ならない。同時に抱えられる本数そのものを限る。

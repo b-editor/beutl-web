@@ -88,6 +88,22 @@ describe("storage entitlement for the desktop API", () => {
     expect(entitlement.cancelAtPeriodEnd).toBe(true);
   });
 
+  it("includes Git and LFS across repositories in the existing usage and admission totals", async () => {
+    const mib = 1024 * 1024;
+    memory.state.gitRepositories.set("repo-a", { ownerId: USER_ID, accountedAt: new Date(),
+      deletedAt: null, historyBytes: BigInt(10 * mib), historyReservedBytes: BigInt(2 * mib) });
+    memory.state.gitRepositories.set("repo-b", { ownerId: USER_ID, accountedAt: new Date(),
+      deletedAt: null, historyBytes: BigInt(5 * mib), historyReservedBytes: BigInt(1 * mib) });
+    memory.state.gitLfsStorage.set("repo-a:oid", { ownerId: USER_ID, verified: true,
+      size: BigInt(800 * mib) });
+    memory.state.gitLfsStorage.set("repo-b:oid", { ownerId: USER_ID, verified: false,
+      size: BigInt(210 * mib) });
+    const entitlement = await getStorageEntitlement(USER_ID);
+    expect(entitlement.usedBytes).toBe(815 * mib);
+    expect(entitlement.fileCount).toBe(0);
+    expect(entitlement.canUpload).toBe(false);
+  });
+
   it("denies uploads at the quota line without touching the AI fields", async () => {
     file("full", STORAGE_FREE_QUOTA_BYTES);
     const [entitlement, ai] = await Promise.all([

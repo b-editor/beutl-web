@@ -5,9 +5,12 @@ import {
   commitDedicatedStorageReservation,
   createDedicatedStorageReservation,
   createFileWithStorageQuota,
+  reserveGitLfs,
   renewDedicatedStorageReservation,
   setDbProvider,
+  sumFileSizeByUserId,
 } from "@beutl/db";
+import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const describeWithCockroach = connectionString ? describe : describe.skip;
@@ -36,7 +39,8 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "image" STRING,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
-        "emailVerified" BOOL DEFAULT false
+        "emailVerified" BOOL DEFAULT false,
+        "storageRevision" INT4 NOT NULL DEFAULT 0
       )
     `);
     await prisma.$executeRawUnsafe(`
@@ -106,11 +110,59 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp()
       )
     `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "Subscription" (
+        "userId" STRING NOT NULL,
+        "planId" STRING NOT NULL,
+        "stripeSubscriptionId" STRING NOT NULL UNIQUE,
+        "status" STRING NOT NULL,
+        "tier" STRING,
+        "currentPeriodStart" TIMESTAMP(3),
+        "currentPeriodEnd" TIMESTAMP(3),
+        "cancelAtPeriodEnd" BOOL NOT NULL DEFAULT false,
+        "cancelAt" TIMESTAMP(3),
+        "stripeEventId" STRING,
+        "stripeEventCreatedAt" TIMESTAMP(3),
+        "stripeCanonicalObservedAt" TIMESTAMP(3),
+        "stripeObservationRank" STRING,
+        "billingOfferId" STRING,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        PRIMARY KEY ("userId", "planId")
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "GitRepository" (
+        "id" STRING PRIMARY KEY DEFAULT gen_random_uuid()::STRING,
+        "ownerId" STRING,
+        "name" STRING NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
+        "deletedAt" TIMESTAMP(3),
+        "cleanupCompleteAt" TIMESTAMP(3),
+        "accountedAt" TIMESTAMP(3),
+        "historyBytes" INT8 NOT NULL DEFAULT 0,
+        "historyReservedBytes" INT8 NOT NULL DEFAULT 0
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "GitLfsStorage" (
+        "repoId" STRING NOT NULL,
+        "oid" STRING NOT NULL,
+        "ownerId" STRING NOT NULL,
+        "size" INT8 NOT NULL,
+        "verified" BOOL NOT NULL DEFAULT false,
+        "expiresAt" TIMESTAMP(3) NOT NULL,
+        PRIMARY KEY ("repoId", "oid")
+      )
+    `);
     setDbProvider(async () => prisma);
     await prisma.user.create({ data: { id: userId, email: `${userId}@example.com` } });
   });
 
   beforeEach(async () => {
+    await prisma.gitLfsStorage.deleteMany({ where: { ownerId: userId } });
+    await prisma.gitRepository.deleteMany({ where: { ownerId: userId } });
     await prisma.file.deleteMany({ where: { userId } });
     await prisma.storageUpload.deleteMany({ where: { userId } });
     await prisma.aiStorageCleanup.deleteMany({});
@@ -161,6 +213,47 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
     ]);
     expect(files).toBeLessThanOrEqual(1);
     expect(BigInt(reservation._sum.size ?? 0) + BigInt(files)).toBeLessThanOrEqual(10);
+  }, 120_000);
+
+  it("serializes LFS reservations across repositories and against File admission", async () => {
+    await prisma.storageUpload.deleteMany({ where: { userId } });
+    await prisma.file.create({ data: { userId, objectKey: "objects/seed", name: "seed.bin",
+      size: BigInt(STORAGE_FREE_QUOTA_BYTES - 1), mimeType: "application/octet-stream",
+      visibility: "PRIVATE" } });
+    const [a, b] = await Promise.all(["a", "b"].map((name) =>
+      prisma.gitRepository.create({ data: { ownerId: userId, name, accountedAt: new Date() } })));
+    const reserve = (repoId: string, oid: string) => reserveGitLfs({
+      repoId, oid, ownerId: userId, size: 1, expiresAt: Date.now() + 60_000,
+    });
+    const first = await Promise.all([reserve(a.id, "a".repeat(64)), reserve(b.id, "b".repeat(64))]);
+    expect(first.sort()).toEqual(["overQuota", "reserved"]);
+    expect(await sumFileSizeByUserId({ userId })).toBe(BigInt(STORAGE_FREE_QUOTA_BYTES - 1));
+    const objectKey = "objects/competing";
+    await prisma.aiStorageCleanup.create({ data: { objectKey, state: "writing", notBefore: new Date(Date.now() + 60_000) } });
+    const file = await createFileWithStorageQuota({ userId, objectKey, name: "competing.bin", size: 1,
+      mimeType: "application/octet-stream", visibility: "PRIVATE",
+      quotaBytes: BigInt(STORAGE_FREE_QUOTA_BYTES), fileCountLimit: 10 });
+    expect(file.kind).toBe("overQuota");
+    const accepted = await prisma.gitLfsStorage.findMany({ where: { ownerId: userId } });
+    expect(accepted).toHaveLength(1);
+    await prisma.gitLfsStorage.update({ where: { repoId_oid: { repoId: accepted[0].repoId, oid: accepted[0].oid } },
+      data: { verified: true } });
+    expect(await sumFileSizeByUserId({ userId })).toBe(BigInt(STORAGE_FREE_QUOTA_BYTES));
+
+    await prisma.gitLfsStorage.deleteMany({ where: { ownerId: userId } });
+    const competingKey = "objects/file-vs-git";
+    await prisma.aiStorageCleanup.create({ data: { objectKey: competingKey, state: "writing",
+      notBefore: new Date(Date.now() + 60_000) } });
+    const [git, nextFile] = await Promise.all([
+      reserve(a.id, "c".repeat(64)),
+      createFileWithStorageQuota({ userId, objectKey: competingKey, name: "file-vs-git.bin", size: 1,
+        mimeType: "application/octet-stream", visibility: "PRIVATE",
+        quotaBytes: BigInt(STORAGE_FREE_QUOTA_BYTES), fileCountLimit: 10 }),
+    ]);
+    expect(Number(git === "reserved") + Number(nextFile.kind === "created")).toBe(1);
+    expect((await sumFileSizeByUserId({ userId })) +
+      (await prisma.gitLfsStorage.aggregate({ where: { ownerId: userId, verified: false },
+        _sum: { size: true } }))._sum.size!).toBe(BigInt(STORAGE_FREE_QUOTA_BYTES));
   }, 120_000);
 
   it("serializes a dedicated reservation against a competing multipart-sized commit", async () => {

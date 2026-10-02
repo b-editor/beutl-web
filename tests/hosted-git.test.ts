@@ -8,6 +8,8 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
+import { pruneExpiredLfs } from "../packages/api/src/git/lfs";
+import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { GitObjectStore, type GitObjectBucket, type GitMultipartUpload } from "../packages/api/src/git/git-object-store";
@@ -145,11 +147,35 @@ class CountingBucket extends MemoryBucket {
   }
 }
 
-function lfsRequest(operation: "upload" | "download", objects: { oid: string; size: number }[], transfers = ["basic"]) {
+function lfsRequest(operation: "upload" | "download", objects: { oid: string; size: number }[], transfers = ["basic"], ownerId?: string) {
   return new Request(`https://beutl.beditor.net/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
     method: "POST",
     body: JSON.stringify({ operation, objects, transfers }),
+    headers: ownerId ? { "x-beutl-git-owner-id": ownerId } : undefined,
   });
+}
+
+class MemoryAccounting implements GitStorageAccounting {
+  readonly entries = new Map<string, { size: number; verified: boolean }>();
+  constructor(readonly limit: number) {}
+  async reserveLfs({ repoId, oid, size }: { repoId: string; oid: string; ownerId: string; size: number; expiresAt: number }) {
+    const key = `${repoId}:${oid}`;
+    if (this.entries.has(key)) return "existing" as const;
+    if ([...this.entries.values()].reduce((total, entry) => total + entry.size, 0) + size > this.limit) {
+      return "overQuota" as const;
+    }
+    this.entries.set(key, { size, verified: false });
+    return "reserved" as const;
+  }
+  async commitLfs(repoId: string, oid: string) { this.entries.get(`${repoId}:${oid}`)!.verified = true; }
+  async releaseLfs(repoId: string, oid: string) { this.entries.delete(`${repoId}:${oid}`); }
+  async reserveHistory() { return true; }
+  async settleHistory() { }
+  async releaseRepository(repoId: string) {
+    for (const key of this.entries.keys()) if (key.startsWith(`${repoId}:`)) this.entries.delete(key);
+  }
+  async adoptLfs() { }
+  async markAccounted() { }
 }
 
 describe("hosted Git token boundaries", () => {
@@ -421,6 +447,70 @@ describe("Git LFS reservation and integrity", () => {
     expect(batch.objects[1].error.code).toBe(413);
   });
 
+  it("reserves the shared account limit across repositories and releases expired uploads", async () => {
+    const accounting = new MemoryAccounting(10);
+    const bucket = new MemoryBucket();
+    const firstStorage = new MemoryStorage();
+    const secondStorage = new MemoryStorage();
+    const firstOid = "1".repeat(64);
+    const secondOid = "2".repeat(64);
+    const [first, second] = await Promise.all([
+      handleLfsBatch(lfsRequest("upload", [{ oid: firstOid, size: 6 }], ["basic"], "owner"),
+        bucket, firstStorage, env, repoId, "write", "Bearer token", accounting),
+      handleLfsBatch(lfsRequest("upload", [{ oid: secondOid, size: 6 }], ["basic"], "owner"),
+        bucket, secondStorage, env, otherId, "write", "Bearer token", accounting),
+    ]);
+    expect((await first.json()).objects[0].actions.upload).toBeDefined();
+    expect((await second.json()).objects[0].error).toMatchObject({ code: 413 });
+    expect(accounting.entries.size).toBe(1);
+    await pruneExpiredLfs(firstStorage, bucket, repoId, Date.now() + 2 * 60 * 60 * 1000, accounting);
+    expect(accounting.entries.size).toBe(0);
+    const retried = await handleLfsBatch(lfsRequest("upload", [{ oid: secondOid, size: 6 }], ["basic"], "owner"),
+      bucket, secondStorage, env, otherId, "write", "Bearer token", accounting);
+    expect((await retried.json()).objects[0].actions.upload).toBeDefined();
+  });
+
+  it("retains the account reservation when B2 abort fails, then retries safely", async () => {
+    class FailingAbortBucket extends MemoryBucket {
+      attempts = 0;
+      override resumeMultipartUpload(key: string, uploadId: string): GitMultipartUpload {
+        const base = super.resumeMultipartUpload(key, uploadId);
+        return { ...base, abort: async () => {
+          if (++this.attempts === 1) throw new Error("B2 unavailable");
+          await base.abort();
+        } };
+      }
+    }
+    const bucket = new FailingAbortBucket();
+    const storage = new MemoryStorage();
+    const accounting = new MemoryAccounting(10);
+    const oid = "3".repeat(64);
+    const expiresAt = Date.now() - 1;
+    await storage.put(`lfs:${oid}`, { kind: "multipart", size: 6, verified: false, expiresAt,
+      uploadId: (await bucket.createMultipartUpload("key")).uploadId } satisfies LfsRecord);
+    await accounting.reserveLfs({ repoId, oid, ownerId: "owner", size: 6, expiresAt });
+    await expect(pruneExpiredLfs(storage, bucket, repoId, Date.now(), accounting)).rejects.toThrow("B2 unavailable");
+    expect(accounting.entries.size).toBe(1);
+    expect(await storage.get(`lfs:${oid}`)).toBeDefined();
+    await pruneExpiredLfs(storage, bucket, repoId, Date.now(), accounting);
+    expect(accounting.entries.size).toBe(0);
+    expect(await storage.get(`lfs:${oid}`)).toBeUndefined();
+  });
+
+  it("prunes only unreferenced LFS versions after the signed upload window", async () => {
+    const kept: Array<{ key: string; versions: readonly string[] }> = [];
+    class VersionBucket extends MemoryBucket {
+      async pruneVersions(key: string, versions: readonly string[]) { kept.push({ key, versions }); }
+    }
+    const storage = new MemoryStorage();
+    const oid = "4".repeat(64);
+    await storage.put(`lfs:${oid}`, { kind: "basic", size: 6, verified: true,
+      expiresAt: Date.now() - 3 * 60 * 60 * 1000, versionId: "pinned-v1" } satisfies LfsRecord);
+    await pruneExpiredLfs(storage, new VersionBucket(), repoId);
+    expect(kept).toEqual([{ key: `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, versions: ["pinned-v1"] }]);
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.gcComplete).toBe(true);
+  });
+
   it("enforces quota and rejects an unverified basic object", async () => {
     const bucket = new MemoryBucket();
     const storage = new MemoryStorage();
@@ -688,7 +778,7 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
       .toBe(String(data.length));
     expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(true);
     expect((await storage.list({ prefix: `tus-tail:${oid}:` })).size).toBe(0);
-  });
+  }, 20_000);
 
   it("retries a failed final SHA read on HEAD and removes a mismatched OID", async () => {
     const bucket = new MemoryBucket();

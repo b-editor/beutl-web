@@ -21,6 +21,7 @@ export * from "./credit-transaction";
 export * from "./customer";
 export * from "./feedback";
 export * from "./file";
+export * from "./git-storage";
 export * from "./native-app-auth";
 export * from "./package";
 export * from "./package-payment";

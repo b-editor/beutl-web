@@ -96,6 +96,126 @@ describe("Backblaze B2 S3 storage adapter", () => {
     expect(listed).toBe(2);
   });
 
+  it("keeps a pinned old LFS version while removing an unreferenced newer write", async () => {
+    let remaining = new Set(["pinned", "newer", "marker"]);
+    const removed: string[] = [];
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.searchParams.has("versions")) {
+        const entries = [...remaining].map((version) =>
+          `<Version><Key>git-lfs/item</Key><VersionId>${version}</VersionId></Version>`).join("");
+        return response(`<ListVersionsResult>${entries}<IsTruncated>false</IsTruncated></ListVersionsResult>`);
+      }
+      if (url.searchParams.has("delete")) {
+        const body = await request.text();
+        for (const version of [...remaining]) {
+          if (body.includes(`<VersionId>${version}</VersionId>`)) {
+            remaining.delete(version); removed.push(version);
+          }
+        }
+        return response("<DeleteResult/>");
+      }
+      throw new Error(`Unexpected S3 request: ${url}`);
+    }) as typeof fetch);
+    await bucket.pruneVersions("git-lfs/item", ["pinned"]);
+    expect(remaining).toEqual(new Set(["pinned"]));
+    expect(removed).toEqual(expect.arrayContaining(["newer", "marker"]));
+    expect(removed).not.toContain("pinned");
+  });
+
+  it("removes old Git versions before a latest delete marker", async () => {
+    const versions = new Set(["old", "marker", "live"]);
+    const removed: string[] = [];
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.searchParams.has("versions")) {
+        const old = versions.has("old")
+          ? '<Version><Key>git/repos/r/deleted</Key><VersionId>old</VersionId><IsLatest>false</IsLatest></Version>' : "";
+        const marker = versions.has("marker")
+          ? '<DeleteMarker><Key>git/repos/r/deleted</Key><VersionId>marker</VersionId><IsLatest>true</IsLatest></DeleteMarker>' : "";
+        const live = versions.has("live")
+          ? '<Version><Key>git/repos/r/live</Key><VersionId>live</VersionId><IsLatest>true</IsLatest></Version>' : "";
+        return response(`<ListVersionsResult>${old}${marker}${live}<IsTruncated>false</IsTruncated></ListVersionsResult>`);
+      }
+      if (url.searchParams.has("delete")) {
+        const body = await request.text();
+        for (const version of [...versions]) {
+          if (body.includes(`<VersionId>${version}</VersionId>`)) {
+            if (version === "marker") expect(versions.has("old")).toBe(false);
+            versions.delete(version); removed.push(version);
+          }
+        }
+        return response("<DeleteResult/>");
+      }
+      throw new Error(`Unexpected S3 request: ${url}`);
+    }) as typeof fetch);
+    await bucket.pruneGitVersions("git/repos/r/");
+    expect(versions).toEqual(new Set(["live"]));
+    expect(removed).toEqual(["old", "marker"]);
+  });
+
+  it("aborts only stale untracked multipart uploads and retries after an abort failure", async () => {
+    const old = "2026-09-25T00:00:00.000Z";
+    const fresh = "2026-10-02T00:00:00.000Z";
+    const uploads = new Map([ ["orphan", old], ["active", old], ["recent", fresh] ]);
+    let failOnce = true;
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      const url = new URL(request.url);
+      if (request.method === "GET" && url.searchParams.has("uploads")) {
+        const xmlUploads = [...uploads].map(([id, initiated]) =>
+          `<Upload><Key>git-lfs/repos/r/${id}</Key><UploadId>${id}</UploadId><Initiated>${initiated}</Initiated></Upload>`).join("");
+        return response(`<ListMultipartUploadsResult>${xmlUploads}<IsTruncated>false</IsTruncated></ListMultipartUploadsResult>`);
+      }
+      if (request.method === "DELETE") {
+        const id = url.searchParams.get("uploadId")!;
+        expect(id).toBe("orphan");
+        if (failOnce) { failOnce = false; return new Response("temporary", { status: 503 }); }
+        uploads.delete(id);
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected S3 request: ${url}`);
+    }) as typeof fetch);
+    const run = () => bucket.cleanupMultipartUploads("git-lfs/repos/r/", ["active"], Date.parse(fresh));
+    await expect(run()).rejects.toThrow("503");
+    await run();
+    expect([...uploads.keys()]).toEqual(["active", "recent"]);
+  });
+
+  it("continues multipart cleanup through pages of protected uploads", async () => {
+    const listed: string[] = [];
+    let orphan = true;
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      const url = new URL(request.url);
+      if (request.method === "GET" && url.searchParams.has("uploads")) {
+        listed.push(url.searchParams.get("key-marker") ?? "first");
+        return url.searchParams.has("key-marker")
+          ? response(`<ListMultipartUploadsResult>${orphan
+            ? '<Upload><Key>git-lfs/repos/r/orphan</Key><UploadId>orphan</UploadId><Initiated>2026-09-20T00:00:00Z</Initiated></Upload>'
+            : ""}<IsTruncated>false</IsTruncated></ListMultipartUploadsResult>`)
+          : response('<ListMultipartUploadsResult><Upload><Key>git-lfs/repos/r/active</Key><UploadId>active</UploadId><Initiated>2026-09-20T00:00:00Z</Initiated></Upload><IsTruncated>true</IsTruncated><NextKeyMarker>page-2</NextKeyMarker><NextUploadIdMarker>active</NextUploadIdMarker></ListMultipartUploadsResult>');
+      }
+      if (request.method === "DELETE") {
+        expect(url.searchParams.get("uploadId")).toBe("orphan");
+        orphan = false;
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected S3 request: ${url}`);
+    }) as typeof fetch);
+    await bucket.cleanupMultipartUploads("git-lfs/repos/r/", ["active"], Date.parse("2026-10-01"));
+    expect(orphan).toBe(false);
+    expect(listed).toEqual(["first", "page-2", "first", "page-2"]);
+  });
+
+  it("rejects a range from a different version or span", async () => {
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      expect(request.headers.get("range")).toBe("bytes=2-4");
+      return new Response("abc", { status: 206, headers: {
+        "content-range": "bytes 2-4/10", "content-length": "3", "x-amz-version-id": "wrong",
+      } });
+    }) as typeof fetch);
+    await expect(bucket.getRange("git-lfs/item", "pinned", 2, 3)).rejects.toThrow("pinned object version");
+  });
+
   it("hashes the requested object version instead of the latest write", async () => {
     const valid = new TextEncoder().encode("valid");
     const oid = createHash("sha256").update(valid).digest("hex");

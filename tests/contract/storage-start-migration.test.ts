@@ -12,7 +12,7 @@ const IMMUTABLE_MIGRATION_SHA256 =
 describe("durable storage-upload start migration contract", () => {
   it("preserves the applied 1600 migration and its maintenance-window contract", async () => {
     const migration = await readFile(new URL(migrationPath, import.meta.url), "utf8");
-    expect(createHash("sha256").update(migration).digest("hex")).toBe(
+    expect(createHash("sha256").update(migration.replace(/\r\n/gu, "\n")).digest("hex")).toBe(
       IMMUTABLE_MIGRATION_SHA256,
     );
     expect(migration).toContain(

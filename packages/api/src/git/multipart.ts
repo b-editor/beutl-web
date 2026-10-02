@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { CheckpointSha256, type Sha256Checkpoint } from "./checkpoint-sha256";
+import type { GitStorageAccounting } from "./accounting";
 import type { GitDurableStorage, LfsRecord } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
 
@@ -14,6 +16,8 @@ const recordKey = (oid: string) => `lfs:${oid}`;
 const partPrefix = (oid: string) => `part:${oid}:`;
 const partKey = (oid: string, number: number) => `${partPrefix(oid)}${String(number).padStart(5, "0")}`;
 const objectKey = (repoId: string, oid: string) => `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
+const VERIFY_RANGE_BYTES = 128 * 1024 * 1024;
+const checkpointKey = (oid: string) => `sha256:${oid}`;
 type Part = { partNumber: number; etag: string; size: number };
 
 async function partsFor(storage: GitDurableStorage, oid: string): Promise<Part[]> {
@@ -55,17 +59,17 @@ async function acceptedParts(
 
 export async function abortMultipart(
   bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, oid: string, record: LfsRecord,
+  accounting?: GitStorageAccounting,
 ): Promise<void> {
   if (record.uploadId && !record.completed) {
-    try {
-      await bucket.resumeMultipartUpload(objectKey(repoId, oid), record.uploadId).abort();
-    } catch (error) {
-      // The upload can already have expired in B2. Its final object still
-      // cannot be served without a verified Durable Object record.
-      console.warn("Git LFS multipart abort failed", { repoId, oid, error });
-    }
+    // Keep the reservation and upload ID on transient failure so the alarm or
+    // deletion reconciler can retry. The S3 adapter treats a missing upload as
+    // already aborted.
+    await bucket.resumeMultipartUpload(objectKey(repoId, oid), record.uploadId).abort();
   }
   await bucket.delete(objectKey(repoId, oid));
+  await accounting?.releaseLfs(repoId, oid);
+  await storage.delete(checkpointKey(oid));
   await clearParts(storage, oid);
   if (record.tusId) await clearTusTail(storage, oid);
   await storage.delete(recordKey(oid));
@@ -97,9 +101,80 @@ export async function verifyCompletedObject(
   return size === expectedSize && hash.digest("hex") === oid;
 }
 
+// One bounded read per invocation. Only an exact, pinned B2 version and a
+// block-aligned chaining state may advance the checkpoint. A lost response
+// repeats at most this range; no partial range state is trusted.
+export async function advanceCompletedVerification(
+  bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, oid: string,
+  expectedSize: number, versionId: string, signal: AbortSignal,
+  maxRangeBytes = VERIFY_RANGE_BYTES,
+): Promise<"pending" | "verified" | "mismatch"> {
+  if (!Number.isSafeInteger(maxRangeBytes) || maxRangeBytes < 64 || maxRangeBytes % 64 !== 0) {
+    throw new RangeError("SHA-256 verification range must be block aligned");
+  }
+  const key = objectKey(repoId, oid);
+  const head = await bucket.head(key, versionId);
+  if (!head || head.size !== expectedSize || head.versionId !== versionId) return "mismatch";
+  const saved = await storage.get<Sha256Checkpoint>(checkpointKey(oid));
+  const valid = saved?.version === 1 && saved.oid === oid && saved.size === expectedSize &&
+    saved.versionId === versionId && Number.isSafeInteger(saved.offset) && saved.offset >= 0 &&
+    saved.offset < expectedSize && saved.offset % 64 === 0 &&
+    Array.isArray(saved.words) && saved.words.length === 8 &&
+    saved.words.every((word) => Number.isInteger(word) && word >= 0 && word <= 0xffffffff);
+  const hash = new CheckpointSha256(valid ? saved.words : undefined, valid ? saved.offset : 0);
+  const start = hash.offset;
+  const length = Math.min(maxRangeBytes, expectedSize - start);
+  if (length > 0) {
+    const object = bucket.getRange
+      ? await bucket.getRange(key, versionId, start, length)
+      : await bucket.get(key, versionId);
+    if (!object || object.size !== expectedSize || object.versionId !== versionId) return "mismatch";
+    const reader = object.body.getReader();
+    let read = 0;
+    let skipped = 0;
+    let complete = false;
+    try {
+      while (read < length) {
+        signal.throwIfAborted();
+        const next = await reader.read();
+        if (next.done) throw new Error("B2 verification range ended early");
+        let bytes = next.value;
+        if (!bucket.getRange && skipped < start) {
+          const discard = Math.min(start - skipped, bytes.byteLength);
+          bytes = bytes.subarray(discard);
+          skipped += discard;
+        }
+        if (read + bytes.byteLength > length) {
+          if (bucket.getRange) throw new Error("B2 verification range exceeded its declared length");
+          bytes = bytes.subarray(0, length - read);
+        }
+        hash.update(bytes);
+        read += bytes.byteLength;
+      }
+      if (bucket.getRange && !(await reader.read()).done) {
+        throw new Error("B2 verification range has trailing bytes");
+      }
+      complete = true;
+    } finally {
+      if (!complete || !bucket.getRange) await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  if (hash.offset === expectedSize) {
+    await storage.delete(checkpointKey(oid));
+    return hash.digestHex() === oid ? "verified" : "mismatch";
+  }
+  const snapshot = hash.snapshot();
+  await storage.put<Sha256Checkpoint>(checkpointKey(oid), {
+    version: 1, oid, size: expectedSize, versionId, ...snapshot,
+  });
+  return "pending";
+}
+
 export async function handleMultipart(
   request: Request, bucket: GitObjectBucket, storage: GitDurableStorage,
   repoId: string, oid: string, operation: string,
+  accounting?: GitStorageAccounting,
 ): Promise<Response> {
   request.signal.throwIfAborted();
   const record = await storage.get<LfsRecord>(recordKey(oid));
@@ -109,7 +184,7 @@ export async function handleMultipart(
   const key = objectKey(repoId, oid);
   if (request.method === "DELETE" && operation === "") {
     if (record.verified) return response({ message: "Object is already verified" }, 409);
-    await abortMultipart(bucket, storage, repoId, oid, record);
+    await abortMultipart(bucket, storage, repoId, oid, record, accounting);
     return new Response(null, { status: 204 });
   }
   if (request.method === "POST" && operation === "") {
@@ -119,9 +194,10 @@ export async function handleMultipart(
       const object = await bucket.head(key);
       if (!object?.versionId || !await verifyCompletedObject(
         bucket, repoId, oid, 0, object.versionId, request.signal)) {
-        await abortMultipart(bucket, storage, repoId, oid, record);
+        await abortMultipart(bucket, storage, repoId, oid, record, accounting);
         return response({ message: "Completed object SHA-256 or size mismatch" }, 422);
       }
+      await accounting?.commitLfs(repoId, oid);
       await storage.put(recordKey(oid), {
         ...record, completed: true, versionId: object.versionId, verified: true,
       });
@@ -191,12 +267,12 @@ export async function handleMultipart(
           parts.map(({ partNumber, etag }) => ({ partNumber, etag })),
         );
         if (object.size !== record.size || !object.versionId) {
-          await abortMultipart(bucket, storage, repoId, oid, record);
+          await abortMultipart(bucket, storage, repoId, oid, record, accounting);
           return response({ message: "Completed object size mismatch" }, 422);
         }
         record.versionId = object.versionId;
       } else if (existing.size !== record.size || !existing.versionId) {
-        await abortMultipart(bucket, storage, repoId, oid, record);
+        await abortMultipart(bucket, storage, repoId, oid, record, accounting);
         return response({ message: "Completed object size mismatch" }, 422);
       } else {
         record.versionId = existing.versionId;
@@ -207,11 +283,14 @@ export async function handleMultipart(
     // B2 multipart ETags and S3 checksums do not establish the full LFS OID.
     // Read the pinned private version as a stream and hash it here.
     // If this invocation fails, the next complete request retries verification.
-    if (!record.versionId || !await verifyCompletedObject(
-      bucket, repoId, oid, record.size, record.versionId, request.signal)) {
-      await abortMultipart(bucket, storage, repoId, oid, record);
+    const verification = record.versionId ? await advanceCompletedVerification(
+      bucket, storage, repoId, oid, record.size, record.versionId, request.signal) : "mismatch";
+    if (verification === "pending") return response({ verifying: true }, 202);
+    if (verification !== "verified") {
+      await abortMultipart(bucket, storage, repoId, oid, record, accounting);
       return response({ message: "Completed object SHA-256 or size mismatch" }, 422);
     }
+    await accounting?.commitLfs(repoId, oid);
     record.verified = true;
     await storage.put(recordKey(oid), record);
     await clearParts(storage, oid);

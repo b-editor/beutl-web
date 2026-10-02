@@ -27,6 +27,8 @@ import {
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
 import {
+  reconcileGitAccountStorage,
+  reconcileGitLfsReservations,
   reconcileGitRepositoryDeletions,
   routeGitRequest,
   withTusProtocolHeader,
@@ -245,6 +247,8 @@ export default {
         stripeCheckoutCleanups,
         reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
         reconcileGitRepositoryDeletions(env),
+        reconcileGitAccountStorage(env),
+        reconcileGitLfsReservations(env),
       ]).then(([
         storageUploads,
         storageMultipartCleanups,
@@ -256,6 +260,9 @@ export default {
         stripeCustomerProvisioning,
         stripeCheckoutCleanups,
         billingRefunds,
+        gitDeletionCount,
+        gitAccountReconciled,
+        gitLfsReconciled,
       ]) => {
         console.log("Scheduled reconciliation completed", {
           storageUploads,
@@ -268,6 +275,9 @@ export default {
           stripeCustomerProvisioning,
           stripeCheckoutCleanups,
           billingRefunds,
+          gitDeletionCount,
+          gitAccountReconciled,
+          gitLfsReconciled,
         });
         if (topUpRefunds.interventionRequired > 0) {
           console.error("Top-up refunds require manual intervention", {

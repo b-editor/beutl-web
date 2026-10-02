@@ -14,6 +14,8 @@ model User {
   image                        String?
   createdAt                    DateTime                      @default(now())
   updatedAt                    DateTime                      @updatedAt
+  // Mutated by every storage admission transaction to serialize File and Git quotas.
+  storageRevision              Int                           @default(0)
   emailVerified                Boolean?                      @default(false)
   accounts                     Account[]
   AuditLog                     AuditLog[]
@@ -55,10 +57,31 @@ model GitRepository {
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?
   cleanupCompleteAt DateTime?
+  // Null only for repositories predating the account-meter migration.
+  accountedAt       DateTime?
+  // Current Git object bytes and an in-flight push reservation. LFS is tracked
+  // by GitLfsStorage so it can be reserved and settled per OID.
+  historyBytes      BigInt    @default(0)
+  historyReservedBytes BigInt @default(0)
   owner             User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
 
   @@index([ownerId, deletedAt])
   @@index([deletedAt, cleanupCompleteAt])
+}
+
+// One logical LFS OID is charged once per repository. Pending uploads remain
+// reserved until their B2 data has actually been removed.
+model GitLfsStorage {
+  repoId    String
+  oid       String
+  ownerId   String
+  size      BigInt
+  verified  Boolean  @default(false)
+  expiresAt DateTime
+
+  @@id([repoId, oid])
+  @@index([ownerId, verified])
+  @@index([verified, expiresAt])
 }
 
 model Account {

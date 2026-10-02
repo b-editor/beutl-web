@@ -103,6 +103,23 @@ export class S3GitObjectBucket implements GitObjectBucket {
       arrayBuffer: () => response.arrayBuffer() };
   }
 
+  async getRange(key: string, versionId: string, start: number, length: number) {
+    if (!versionId || !Number.isSafeInteger(start) || start < 0 ||
+        !Number.isSafeInteger(length) || length < 1) throw new Error("Invalid versioned S3 range");
+    const response = await this.send("GET", this.url(key, { versionId }), undefined,
+      { Range: `bytes=${start}-${start + length - 1}` });
+    const range = response.headers.get("content-range");
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(range ?? "");
+    const returnedVersion = response.headers.get("x-amz-version-id");
+    if (response.status !== 206 || !match || Number(match[1]) !== start ||
+        Number(match[2]) !== start + length - 1 || !validSize(match[3]) ||
+        response.headers.get("content-length") !== String(length) ||
+        returnedVersion !== versionId || !response.body) {
+      throw new Error("S3 range did not return the pinned object version and exact span");
+    }
+    return { size: Number(match[3]), versionId, body: response.body };
+  }
+
   async head(key: string, versionId?: string) {
     const response = await this.send("HEAD", this.url(key, versionId ? { versionId } : undefined));
     if (response.status === 404) return null;
@@ -180,6 +197,101 @@ export class S3GitObjectBucket implements GitObjectBucket {
       const versions = await this.versions(prefix);
       if (!versions.length) return;
       await this.removeVersions(versions);
+    }
+  }
+
+  async pruneVersions(key: string, keepVersionIds: readonly string[]): Promise<void> {
+    const keep = new Set(keepVersionIds);
+    while (true) {
+      const page = (await this.versions(key)).filter((item) => item.key === key);
+      const removable = page.filter((item) => !keep.has(item.versionId));
+      if (!removable.length) return;
+      await this.removeVersions(removable);
+    }
+  }
+
+  async pruneGitVersions(prefix: string): Promise<void> {
+    let keyMarker: string | undefined;
+    let versionMarker: string | undefined;
+    let removeLatestMarkers = false;
+    while (true) {
+      const result = (await xml(await this.send("GET", this.url(undefined, {
+        versions: "", prefix, "max-keys": "1000",
+        ...(keyMarker ? { "key-marker": keyMarker } : {}),
+        ...(versionMarker ? { "version-id-marker": versionMarker } : {}),
+      })))).ListVersionsResult;
+      if (!result) throw new Error("Invalid S3 ListObjectVersions result");
+      const versions = asArray<{ Key: string; VersionId: string; IsLatest: string }>(result.Version)
+        .map((item) => ({ ...item, marker: false }));
+      const markers = asArray<{ Key: string; VersionId: string; IsLatest: string }>(result.DeleteMarker)
+        .map((item) => ({ ...item, marker: true }));
+      const page = [...versions, ...markers];
+      if (page.some((item) => !item.Key?.startsWith(prefix) || !item.VersionId)) {
+        throw new Error("Invalid S3 Git version listing");
+      }
+      // Remove old versions before the latest delete marker. Otherwise a
+      // partial batch failure could reveal an older Git object again.
+      const stale = page.filter((item) => item.IsLatest !== "true" ||
+        removeLatestMarkers && item.marker)
+        .map((item) => ({ key: item.Key, versionId: item.VersionId }));
+      if (stale.length) {
+        await this.removeVersions(stale);
+        keyMarker = undefined;
+        versionMarker = undefined;
+        continue;
+      }
+      if (result.IsTruncated !== "true") {
+        if (removeLatestMarkers) return;
+        removeLatestMarkers = true;
+        keyMarker = undefined;
+        versionMarker = undefined;
+        continue;
+      }
+      const nextKey = result.NextKeyMarker;
+      const nextVersion = result.NextVersionIdMarker;
+      if (!nextKey || nextKey === keyMarker && nextVersion === versionMarker) {
+        throw new Error("S3 Git version listing did not advance");
+      }
+      keyMarker = nextKey;
+      versionMarker = nextVersion || undefined;
+    }
+  }
+
+  async cleanupMultipartUploads(prefix: string, activeUploadIds: readonly string[], initiatedBefore: number): Promise<void> {
+    const active = new Set(activeUploadIds);
+    let keyMarker: string | undefined;
+    let uploadMarker: string | undefined;
+    while (true) {
+      const result = (await xml(await this.send("GET", this.url(undefined, {
+        uploads: "", prefix, "max-uploads": "1000",
+        ...(keyMarker ? { "key-marker": keyMarker } : {}),
+        ...(uploadMarker ? { "upload-id-marker": uploadMarker } : {}),
+      })))).ListMultipartUploadsResult;
+      if (!result) throw new Error("Invalid S3 ListMultipartUploads result");
+      const uploads = asArray<{ Key: string; UploadId: string; Initiated: string }>(result.Upload);
+      if (uploads.some((item) => !item.Key?.startsWith(prefix) || !item.UploadId ||
+          !Number.isFinite(Date.parse(item.Initiated)))) {
+        throw new Error("Invalid S3 multipart upload listing");
+      }
+      const stale = uploads.filter((item) => !active.has(item.UploadId) &&
+        Date.parse(item.Initiated) < initiatedBefore);
+      if (stale.length) {
+        for (const item of stale) {
+          await this.resumeMultipartUpload(item.Key, item.UploadId).abort();
+        }
+        // Aborting mutates the listing; restarting avoids skipping entries.
+        keyMarker = undefined;
+        uploadMarker = undefined;
+        continue;
+      }
+      if (result.IsTruncated !== "true") return;
+      const nextKey = result.NextKeyMarker;
+      const nextUpload = result.NextUploadIdMarker;
+      if (!nextKey || !nextUpload || nextKey === keyMarker && nextUpload === uploadMarker) {
+        throw new Error("S3 multipart upload listing did not advance");
+      }
+      keyMarker = nextKey;
+      uploadMarker = nextUpload;
     }
   }
 
