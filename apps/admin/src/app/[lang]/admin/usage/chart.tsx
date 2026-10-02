@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { UsagePoint } from "@/lib/desktop-usage";
 
 export function UsageActivityChart({
@@ -14,15 +14,19 @@ export function UsageActivityChart({
 }) {
   const [active, setActive] = useState<number | null>(null);
   const maximum = Math.max(1, ...points.map((point) => point.count));
-  const format = (time: number) =>
-    new Intl.DateTimeFormat(lang, {
-      timeZone: "UTC",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZoneName: "short",
-    }).format(time);
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(lang, {
+        timeZone: "UTC",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }),
+    [lang],
+  );
+  const format = (time: number) => formatter.format(time);
   const width = 900;
   const height = 180;
   const barWidth = width / Math.max(1, points.length);

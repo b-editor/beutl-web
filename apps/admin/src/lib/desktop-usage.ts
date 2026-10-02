@@ -176,6 +176,7 @@ export function buildUsageReport(
     for (const series of parseUsageSeries(reply.data)) {
       const get = (key: string) => series.labels[USAGE_PREFIX + key] ?? "";
       const event = get("event") as UsageEvent;
+      if (!event) throw new Error("Missing usage event label");
       if (!USAGE_EVENTS.includes(event)) continue;
       const dimensions = {
         event,

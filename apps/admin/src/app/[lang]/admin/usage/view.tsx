@@ -231,6 +231,7 @@ export async function DesktopUsageView({
           <form action={base} className="flex gap-2">
             <input type="hidden" name="range" value={range} />
             <select
+              key={tool}
               name="tool"
               defaultValue={tool}
               aria-label={t("admin:desktopUsage.tool")}

@@ -188,6 +188,17 @@ describe("desktop usage metrics", () => {
     expect(parseUsageSeries(data)[0].samples[0].value).toBe(0);
   });
 
+  it("ignores named future events without rejecting an otherwise valid report", () => {
+    const data = reply("future.event");
+    data.series.push(...reply().series);
+    const report = buildUsageReport(
+      [window],
+      [{ window, measure: "count", data }],
+    );
+    expect(report.rows).toHaveLength(1);
+    expect(report.rows[0].event).toBe("tool.command");
+  });
+
   it("keeps tools and features separate even when two tabs use the same command", () => {
     const data = reply("tool.command", "Refresh");
     const second = reply("tool.command", "Refresh");
@@ -259,6 +270,22 @@ describe("server-only Grafana queries", () => {
       status: "unavailable",
     });
   });
+
+  it.each(["missing", "empty"])(
+    "reports a %s event label as unavailable instead of empty usage",
+    async (kind) => {
+      const data = reply(kind === "empty" ? "" : "tool.command");
+      if (kind === "missing") {
+        data.series[0].labels = data.series[0].labels.filter(
+          (label) => label.key !== USAGE_PREFIX + "event",
+        );
+      }
+      const fetcher = vi.fn(async () => Response.json(data));
+      expect(await fetchDesktopUsage("1h", NOW, env, fetcher)).toEqual({
+        status: "unavailable",
+      });
+    },
+  );
 
   it("rejects HTTP and URL-embedded credentials before sending the read token", async () => {
     const fetcher = vi.fn();
