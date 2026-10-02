@@ -26,6 +26,13 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
+import {
+  reconcileGitRepositoryDeletions,
+  routeGitRequest,
+  type GitRepositoryNamespace,
+} from "./git/router";
+
+export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 
 export interface Env {
   BEUTL_DATABASE_HYPERDRIVE: {
@@ -48,6 +55,14 @@ export interface Env {
   // オブジェクトストレージ。既定は R2 バインディング。BEUTL_STORAGE_PROVIDER=s3
   // のときは BEUTL_S3_* から S3 互換ストレージへ接続する (docs/deployment.md)。
   BEUTL_R2_BUCKET?: R2BucketLike;
+  BEUTL_GIT_ENABLED?: string;
+  BEUTL_GIT_TOKEN_SECRET?: string;
+  BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
+  BEUTL_GIT_R2_S3_ENDPOINT?: string;
+  BEUTL_GIT_R2_S3_BUCKET?: string;
+  BEUTL_GIT_R2_S3_ACCESS_KEY_ID?: string;
+  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_GIT_LFS_REPO_QUOTA_BYTES?: string;
   BEUTL_STORAGE_PROVIDER?: string;
   BEUTL_S3_ENDPOINT?: string;
   BEUTL_S3_BUCKET?: string;
@@ -137,10 +152,15 @@ export function withBoundedBody(
   }
 
   const headers = new Headers(request.headers);
+  headers.delete("x-beutl-git-part-length");
+  if (/^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/multipart\/parts\/\d+$/u.test(new URL(request.url).pathname) && declared !== null) {
+    headers.set("x-beutl-git-part-length", declared);
+  }
   // Multipart storage providers require the declared part length; the route
   // additionally bounds the stream to that length before handing it to storage.
-  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname)))
+  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname))) {
     headers.delete("content-length");
+  }
   return new Request(request.url, {
     method: request.method,
     headers,
@@ -168,7 +188,7 @@ export default {
     // process.env を直接参照するため、これがないと独立 Worker で undefined になる。
     configureRuntime(env);
     try {
-      const response = await api.fetch(bounded, env);
+      const response = await routeGitRequest(bounded, env) ?? await api.fetch(bounded, env);
       // Hono's JSON parser can turn a stream error into a generic 400 before
       // the endpoint sees it. The outer stream marker still gives the Worker
       // an unambiguous 413 response for chunked bodies.
@@ -216,6 +236,7 @@ export default {
         reconcileStripeCustomerProvisioning(scheduledAt, env.STRIPE_SECRET_KEY),
         stripeCheckoutCleanups,
         reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
+        reconcileGitRepositoryDeletions(env),
       ]).then(([
         storageUploads,
         storageMultipartCleanups,

@@ -1,0 +1,198 @@
+import { getDb } from "@beutl/db";
+import { getUserIdFromHeaders } from "../api/auth";
+import { gitTokenSecret, issueGitToken, verifyGitToken, verifyMultipartToken, type GitScope } from "./tokens";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const REPO_PATH = /^\/api\/v3\/repos\/([0-9a-f-]{36})(?:\/(token))?$/u;
+const GIT_PATH = /^\/api\/v3\/git\/([0-9a-f-]{36})\.git\/(.+)$/u;
+const MAX_REPOSITORIES_PER_USER = 20;
+// A Basic LFS PUT URL can remain usable for an hour after a repository is
+// deleted. Sweep again after that window so a late direct R2 PUT cannot leave
+// an orphaned object under a completed tombstone.
+export const GIT_DELETE_SWEEP_GRACE_MS = 2 * 60 * 60 * 1000;
+
+export interface GitRepositoryNamespace {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(request: Request): Promise<Response> };
+}
+
+export interface GitRouterEnvironment {
+  BEUTL_GIT_ENABLED?: string;
+  BEUTL_GIT_TOKEN_SECRET?: string;
+  BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
+  BEUTL_R2_BUCKET?: unknown;
+  BEUTL_GIT_R2_S3_ENDPOINT?: string;
+  BEUTL_GIT_R2_S3_BUCKET?: string;
+  BEUTL_GIT_R2_S3_ACCESS_KEY_ID?: string;
+  BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY?: string;
+  PUBLIC_ORIGIN?: string;
+}
+
+const noStore = { "Cache-Control": "no-store" };
+function json(body: unknown, status = 200): Response {
+  return Response.json(body, { status, headers: noStore });
+}
+
+function enabled(env: GitRouterEnvironment): boolean {
+  return env.BEUTL_GIT_ENABLED === "true";
+}
+
+function unavailable(env: GitRouterEnvironment): boolean {
+  return !env.BEUTL_GIT_REPOSITORIES || !env.BEUTL_R2_BUCKET ||
+    !env.BEUTL_GIT_TOKEN_SECRET ||
+    !env.BEUTL_GIT_R2_S3_ENDPOINT || !env.BEUTL_GIT_R2_S3_BUCKET ||
+    !env.BEUTL_GIT_R2_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_R2_S3_SECRET_ACCESS_KEY;
+}
+
+function stub(env: GitRouterEnvironment, repoId: string) {
+  const namespace = env.BEUTL_GIT_REPOSITORIES;
+  if (!namespace) throw new Error("Git Durable Object binding is missing");
+  return namespace.get(namespace.idFromName(repoId));
+}
+
+function repoUrl(env: GitRouterEnvironment, request: Request, repoId: string): string {
+  const origin = env.PUBLIC_ORIGIN ? new URL(env.PUBLIC_ORIGIN).origin : new URL(request.url).origin;
+  return `${origin}/api/v3/git/${repoId}.git`;
+}
+
+function view(repo: { id: string; name: string; createdAt: Date; updatedAt: Date }, url: string) {
+  return { id: repo.id, name: repo.name, url, createdAt: repo.createdAt, updatedAt: repo.updatedAt };
+}
+
+async function cleanup(env: GitRouterEnvironment, repoId: string): Promise<boolean> {
+  const headers = new Headers({ "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" });
+  const result = await stub(env, repoId).fetch(new Request("https://git.internal/internal/git/cleanup", {
+    method: "DELETE", headers,
+  }));
+  return result.status === 204;
+}
+
+export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment): Promise<number> {
+  if (!enabled(env) || unavailable(env)) return 0;
+  const db = await getDb();
+  const tombstones = await db.gitRepository.findMany({
+    where: {
+      OR: [{ deletedAt: { not: null } }, { ownerId: null }],
+      cleanupCompleteAt: null,
+    },
+    select: { id: true, deletedAt: true },
+    orderBy: { deletedAt: "asc" }, take: 10,
+  });
+  let cleaned = 0;
+  for (const row of tombstones) {
+    try {
+      const deletedAt = row.deletedAt ?? new Date();
+      if (!row.deletedAt) {
+        await db.gitRepository.update({ where: { id: row.id }, data: { deletedAt } });
+      }
+      if (await cleanup(env, row.id)) {
+        if (Date.now() - deletedAt.getTime() >= GIT_DELETE_SWEEP_GRACE_MS) {
+          await db.gitRepository.update({
+            where: { id: row.id }, data: { cleanupCompleteAt: new Date() },
+          });
+        }
+        cleaned++;
+      }
+    } catch (error) {
+      console.error("Git repository cleanup failed", { repoId: row.id, error });
+    }
+  }
+  return cleaned;
+}
+
+/** Worker-only route: API JWT manages repos, dedicated Git JWT carries Git traffic. */
+export async function routeGitRequest(request: Request, env: GitRouterEnvironment): Promise<Response | null> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const isCollection = path === "/api/v3/repos";
+  const repoMatch = REPO_PATH.exec(path);
+  const gitMatch = GIT_PATH.exec(path);
+  if (!isCollection && !repoMatch && !gitMatch) return null;
+  if (!enabled(env)) return new Response("Not found", { status: 404 });
+  if (unavailable(env)) return json({ message: "Hosted Git is not configured" }, 503);
+  const secret = gitTokenSecret(env);
+  const db = await getDb();
+
+  if (gitMatch) {
+    const repoId = gitMatch[1];
+    if (!UUID.test(repoId)) return new Response("Not found", { status: 404 });
+    const requiredScope: GitScope = gitMatch[2] === "git-receive-pack" ||
+      (gitMatch[2] === "info/refs" && url.searchParams.get("service") === "git-receive-pack") ||
+      (gitMatch[2] === "info/lfs/objects/batch" && request.method === "POST") ||
+      gitMatch[2].endsWith("/verify") ? "write" : "read";
+    // LFS batch may ask for download, so validate the read token here and
+    // leave its upload operation check to the Durable Object.
+    const multipartPath = /^info\/lfs\/objects\/([0-9a-f]{64})\/multipart(?:\/.*)?$/u.exec(gitMatch[2]);
+    const verifyPath = /^info\/lfs\/objects\/([0-9a-f]{64})\/verify$/u.exec(gitMatch[2]);
+    const session = multipartPath || verifyPath
+      ? await verifyMultipartToken(secret, request.headers.get("authorization"),
+          repoId, (multipartPath ?? verifyPath)![1])
+      : null;
+    const gitAuthenticated = await verifyGitToken(
+      secret, request.headers.get("authorization"), repoId,
+      gitMatch[2] === "info/lfs/objects/batch" ? "read" : requiredScope,
+    );
+    const authenticated = session
+      ? { ownerId: session.ownerId, scope: "write" as const }
+      : gitAuthenticated;
+    if (!authenticated) return new Response("Unauthorized", {
+      status: 401, headers: { "WWW-Authenticate": "Bearer realm=\"Beutl Git\"", ...noStore },
+    });
+    const repo = await db.gitRepository.findFirst({
+      where: { id: repoId, ownerId: authenticated.ownerId, deletedAt: null }, select: { id: true },
+    });
+    if (!repo) return new Response("Not found", { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.set("x-beutl-repo-id", repoId);
+    headers.set("x-beutl-git-scope", authenticated.scope);
+    headers.set("x-beutl-git-owner-id", authenticated.ownerId);
+    const forwarded = new Request(request, { headers });
+    return stub(env, repoId).fetch(forwarded);
+  }
+
+  const userId = await getUserIdFromHeaders(request.headers);
+  if (!userId) return json({ message: "Authentication is required" }, 401);
+
+  if (isCollection && request.method === "GET") {
+    const rows = await db.gitRepository.findMany({
+      where: { ownerId: userId, deletedAt: null },
+      orderBy: { createdAt: "desc" }, take: MAX_REPOSITORIES_PER_USER,
+    });
+    return json({ repositories: rows.map((row) => view(row, repoUrl(env, request, row.id))) });
+  }
+  if (isCollection && request.method === "POST") {
+    let input: unknown;
+    try { input = await request.json(); } catch { return json({ message: "Invalid JSON" }, 400); }
+    const name = (input as { name?: unknown } | null)?.name;
+    if (typeof name !== "string" || name.trim().length < 1 || name.length > 80 ||
+        /[\x00-\x1f\x7f/\\]/u.test(name)) {
+      return json({ message: "Invalid repository name" }, 400);
+    }
+    const count = await db.gitRepository.count({ where: { ownerId: userId, deletedAt: null } });
+    if (count >= MAX_REPOSITORIES_PER_USER) return json({ message: "Repository limit reached" }, 409);
+    const row = await db.gitRepository.create({ data: { ownerId: userId, name: name.trim() } });
+    return json(view(row, repoUrl(env, request, row.id)), 201);
+  }
+  if (!repoMatch || !UUID.test(repoMatch[1])) return new Response("Not found", { status: 404 });
+  const repoId = repoMatch[1];
+  const row = await db.gitRepository.findFirst({ where: { id: repoId, ownerId: userId, deletedAt: null } });
+  if (!row) return new Response("Not found", { status: 404 });
+  if (!repoMatch[2] && request.method === "GET") return json(view(row, repoUrl(env, request, repoId)));
+  if (repoMatch[2] === "token" && request.method === "POST") {
+    let input: unknown;
+    try { input = await request.json(); } catch { return json({ message: "Invalid JSON" }, 400); }
+    const scope = (input as { scope?: unknown } | null)?.scope;
+    if (scope !== "read" && scope !== "write") return json({ message: "Invalid Git scope" }, 400);
+    return json(await issueGitToken(secret, userId, repoId, scope));
+  }
+  if (!repoMatch[2] && request.method === "DELETE") {
+    await db.gitRepository.update({ where: { id: repoId }, data: { deletedAt: new Date() } });
+    try {
+      await cleanup(env, repoId);
+    } catch (error) {
+      console.error("Git repository cleanup deferred", { repoId, error });
+    }
+    return new Response(null, { status: 204 });
+  }
+  return new Response("Method not allowed", { status: 405 });
+}

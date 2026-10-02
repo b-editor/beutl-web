@@ -59,6 +59,9 @@ Prisma model.
 
 ## Object storage
 
+Hosted Git has separate configuration and storage prefixes. See
+[Hosted Git repositories](hosted-git.md) before enabling it.
+
 User files and AI outputs live in one object store that the Web Worker and the
 desktop API Worker share. Both Workers must be configured for the same bucket:
 the Web Worker writes uploads that the API Worker's scheduled reconcilers

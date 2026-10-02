@@ -42,6 +42,23 @@ model User {
   StorageFolder                StorageFolder[]
   AiOperationModel             AiOperationModel[]
   StorageUpload                StorageUpload[]
+  GitRepository                GitRepository[]
+}
+
+// Hosted project history is opt-in and separate from the existing user file
+// store. A deleted row remains as a tombstone until its R2 prefix is cleared.
+model GitRepository {
+  id                String    @id @default(uuid())
+  ownerId           String?
+  name              String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+  cleanupCompleteAt DateTime?
+  owner             User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, deletedAt])
+  @@index([deletedAt, cleanupCompleteAt])
 }
 
 model Account {

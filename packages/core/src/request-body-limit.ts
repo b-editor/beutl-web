@@ -57,6 +57,15 @@ export function apiRequestBodyLimit(
   if (normalizedMethod === "POST" && path === "/api/v3/storage/uploads") return MAX_INTERNAL_STORAGE_START_BODY_BYTES;
   if (normalizedMethod === "POST" && /^\/api\/v3\/storage\/uploads\/[^/]+\/complete$/u.test(path)) return STORAGE_UPLOAD_FINISH_BODY_BYTES;
   if (normalizedMethod === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)) return STORAGE_UPLOAD_PART_BYTES;
+  if (normalizedMethod === "POST" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/git-receive-pack$/u.test(path)) {
+    return 8 * 1024 * 1024;
+  }
+  if (normalizedMethod === "POST" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/git-upload-pack$/u.test(path)) {
+    return 64 * 1024;
+  }
+  if (normalizedMethod === "PUT" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/multipart\/parts\/\d+$/u.test(path)) {
+    return 64 * 1024 * 1024;
+  }
   if (
     normalizedMethod === "POST" &&
     /^\/api\/v3\/ai\/videos\/[^/]+\/(openrouter|gateway)-callback$/u.test(path)

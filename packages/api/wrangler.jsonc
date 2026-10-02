@@ -9,6 +9,7 @@
     "enable_request_signal"
   ],
   "keep_vars": true,
+  "limits": { "cpu_ms": 300000 },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -48,12 +49,21 @@
       "bucket_name": "beutl-dev"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "git-repositories-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] }
+  ],
   "vars": {
     // MUST MATCH beutl-web (apps/web/wrangler.jsonc)
     "JWT_EXPIRATION_MINUTES": "5",
     "JWT_REFRESH_TOKEN_EXPIRATION_DAYS": "30",
     "OPENROUTER_REQUEST_TIMEOUT_MS": "120000",
     "VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS": "120000",
-    "PUBLIC_ORIGIN": "https://beutl.beditor.net"
+    "PUBLIC_ORIGIN": "https://beutl.beditor.net",
+    "BEUTL_GIT_ENABLED": "false"
   }
 }
