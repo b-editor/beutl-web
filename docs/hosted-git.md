@@ -222,12 +222,20 @@ progressing downloads have no minimum speed cutoff. Headers and each network
 read have a two-minute idle timeout; a stalled final EOF check fails the transfer.
 Upload idle deadlines restart for outgoing writes and incoming response bytes;
 advancing uploads and their control responses have no total-duration cutoff.
-Mixed hosted/external pushes pin one source commit and stop if its branch moves
-before another push or before the original pre-push hook runs. Credential renewal
+Mixed hosted/external pushes pin one source commit. When an original pre-push
+hook is present, a branch change stops the push before invoking it. Without that
+hook, all destinations continue using the captured commit. Credential renewal
 recognizes hosted Git transport diagnostics and Beutl LFS/tus authentication
 failures; arbitrary hook messages such as `Authentication failed` do not repeat
 the hook. Connecting a created repository checks every `remote.origin.*` key in
 the locked config snapshot and preserves origins with no fetch URL as well.
+Before a mixed hosted/external push, Beutl checks that the installed Git resolves
+the isolated push configuration to exactly one selected URL. Git versions that
+append the empty reset value are rejected before credentials or network writes;
+update Git or use separate remotes. Ordinary Git operations keep their existing
+minimum-version support. The compatible reset behavior was exercised locally
+with Git 2.55; Git 2.43's
+[remote parser](https://github.com/git/git/blob/v2.43.0/remote.c) does not implement it.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,
