@@ -1,6 +1,6 @@
+-- Adding the owner foreign key also changes the referenced User table.
 ALTER TABLE "User" SET (schema_locked = false);
 ALTER TABLE "User" ADD COLUMN "storageRevision" INT4 NOT NULL DEFAULT 0;
-ALTER TABLE "User" SET (schema_locked = true);
 
 CREATE TABLE "GitRepository" (
   "id" STRING NOT NULL, "ownerId" STRING, "name" STRING NOT NULL,
@@ -16,6 +16,7 @@ CREATE INDEX "GitRepository_ownerId_deletedAt_idx" ON "GitRepository"("ownerId",
 CREATE INDEX "GitRepository_deletedAt_cleanupCompleteAt_idx" ON "GitRepository"("deletedAt", "cleanupCompleteAt");
 CREATE INDEX "GitRepository_maintenanceAttemptedAt_idx" ON "GitRepository"("maintenanceAttemptedAt");
 ALTER TABLE "GitRepository" ADD CONSTRAINT "GitRepository_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "User" SET (schema_locked = true);
 ALTER TABLE "GitRepository" SET (schema_locked = true);
 
 CREATE TABLE "GitLfsStorage" (
