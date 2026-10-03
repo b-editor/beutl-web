@@ -4,6 +4,16 @@ Hosted Git is an optional service in the public `beutl-web` Worker. It adds a pr
 Git remote and Git LFS storage in Backblaze B2. Existing Forgejo repositories
 and desktop remotes remain in place; no migration is performed.
 
+## Storage configuration
+
+Git storage uses `BEUTL_GIT_S3_*`, separately from the ordinary File/AI
+`BEUTL_S3_*` configuration. Set development and production Git credentials on
+their respective environments; the existing S3 settings do not enable Git.
+Git/LFS pins object versions, so its bucket must retain referenced versions.
+The ordinary storage lifecycle that expires noncurrent versions must not be
+applied to the Git bucket. Enable Git through the environment only after its
+bucket, secrets and database schema are ready; deployments preserve that setting.
+
 ## Enablement
 
 Apply `20261003000000_add_hosted_git` through the existing CockroachDB migration

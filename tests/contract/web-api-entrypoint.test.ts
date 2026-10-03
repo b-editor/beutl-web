@@ -134,6 +134,10 @@ describe("public Web Worker API entrypoint", () => {
     const root = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
     const api = JSON.parse(readFileSync(new URL("../../packages/api/package.json", import.meta.url), "utf8"));
     expect(config).toContain('"main": "worker.js"');
+    const vars = config.slice(config.indexOf('"vars":'));
+    expect(vars).not.toContain('"JWT_EXPIRATION_MINUTES"');
+    expect(vars).not.toContain('"JWT_REFRESH_TOKEN_EXPIRATION_DAYS"');
+    expect(vars).not.toContain('"BEUTL_GIT_ENABLED"');
     expect(config).toContain('"class_name": "GitRepositoryDurableObject"');
     expect(config).toContain('"new_sqlite_classes": ["GitRepositoryDurableObject"]');
     expect(GitRepositoryDurableObject).toBeTypeOf("function");

@@ -82,6 +82,10 @@ entrypoint dispatches `/api/v{1,2,3}/*` before OpenNext so uploads remain stream
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `vp run deploy:admin` |
 | `beutl-ai-images` | Service binding only; no public route | `vp run --filter @beutl/api deploy:image-worker` |
 
+The `vp` commands require the [Vite+ CLI](https://viteplus.dev/guide/).
+The workspace also supports the pnpm runner configured in `package.json`: use
+`pnpm run deploy:web` or `pnpm run deploy:admin` when Vite+ is not installed.
+
 Deploy `beutl-ai-images` and configure its secrets before deploying a Web
 version that binds to it.
 

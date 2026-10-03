@@ -34,6 +34,15 @@ configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
 
+## First hosted Git deployment
+
+The `hosted-git-v1` Durable Object migration creates a new namespace in the
+Web Worker. Cloudflare `versions upload` cannot apply a pending Durable Object
+migration. After reviewing the change and applying the database migration,
+perform the first Web release with `vp run deploy:web` (`wrangler deploy`)
+before using `vp run upload:web` for later preview versions. This is a production
+release step; a successful local build or dry run does not apply the migration.
+
 ## Publisher identities
 
 Apply `20260928010000_unique_profile_user_names` before enabling the updated
