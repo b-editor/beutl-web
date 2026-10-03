@@ -62,8 +62,13 @@ alongside File bytes. Pending LFS, Git push, and File writes reserve capacity
 against the same account quota. CockroachDB serializes admission through the
 user's `storageRevision` row. Repository creation uses the same serializable
 user lock to enforce the active repository count under concurrent requests.
-The desktop persists a random creation ID in its local Git config, scoped by
-account and repository name, before sending the POST. `/api/v3/repos` accepts
+Stable-ID retry recovery requires a compatible desktop build containing
+[b-editor/beutl #2562](https://github.com/b-editor/beutl/pull/2562). That build
+persists a random creation ID in its local Git config, scoped by account and
+repository name, before sending the POST, and resends the same ID on retry.
+Deploying the Worker
+alone does not enable this recovery for clients that omit `creationId`.
+`/api/v3/repos` accepts
 optional `creationId` and `ownerId`: a retry with the same ID returns the same
 repository even at the count limit; another account, changed name, or deleted
 repository conflicts. The authenticated account must match `ownerId` when it
@@ -177,6 +182,14 @@ portion within five total attempts, checking actual push URLs (including
 `pushurl` and Git URL rewrites) and authenticating every hosted target.
 Hosted commands disable interactive askpass helpers. Git LFS operations against other remotes retain their normal
 credentials and transfer configuration.
+
+Hosted LFS downloads retain partial bytes across HTTP 401/403 authentication
+renewal in the user's local application data, scoped by project and OID.
+The agent locks each OID and rehashes the saved prefix before a range request;
+it reports completion only after checking the full size and SHA-256. It saves
+bytes without transfer URLs or headers. The next download collects idle
+partials older than 24 hours. Cancellation and other permanent failures
+remove the partial file; progressing downloads have no minimum speed cutoff.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,
