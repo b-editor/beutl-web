@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -38,6 +38,26 @@ it("rejects unsupported Git routes before creating unreserved objects", async ()
     expect(response.status).toBe(404);
   }
   expect(bucket.objects.size).toBe(0);
+});
+it("waits a full second after the previous push before writing Git objects to B2", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(10_000);
+    const bucket = new Bucket();
+    const put = vi.spyOn(bucket, "put");
+    const values = new Map<string, unknown>([["lastPushFinishedAt", 9_750]]);
+    const storage = { get: async (key: string) => values.get(key), put: async (key: string, value: unknown) => { values.set(key, value); },
+      getAlarm: async () => null, setAlarm: async () => undefined };
+    const durable = new GitRepositoryDurableObject({ storage: storage as never }, {}, bucket as never);
+    const pending = durable.fetch(new Request(`https://git.internal/api/v3/git/${repoId}.git/git-receive-pack`, {
+      method: "POST", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "write" }, body: "0000",
+    }));
+    await vi.advanceTimersByTimeAsync(749);
+    expect(put).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(put).toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
 });
 it("pushes, clones, pushes again, pulls, and rejects a stale native Git push", async () => {
   const root = mkdtempSync(join(tmpdir(), "beutl-hosted-git-")), bucket = new Bucket();

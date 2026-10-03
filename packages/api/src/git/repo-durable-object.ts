@@ -112,7 +112,9 @@ export class GitRepositoryDurableObject {
       }
       if (operation === "git-receive-pack" && request.method === "POST") {
         const last = await storage.get<number>("lastPushFinishedAt") ?? 0;
-        if (Date.now() <= last) await new Promise(resolve => setTimeout(resolve, last - Date.now() + 1));
+        // B2 can order same-key versions incorrectly within one second.
+        const delay = last + 1000 - Date.now();
+        if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
         await this.accounting?.settleHistory(repoId, await this.gitBytes(repoId));
         try {
           return await handleGitHttp(request, this.objectBucket(), repoId, scope,
