@@ -61,7 +61,7 @@ export default async function LangLayout(props: Props) {
   const { children } = props;
 
   return (
-    <html lang={lang} className="dark">
+    <html lang={lang} className="dark" data-scroll-behavior="smooth">
       <body className={`${notoSansJP.variable} antialiased`}>
         <ProgressBarProvider>
           {children}

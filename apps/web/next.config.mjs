@@ -50,7 +50,7 @@ const nextConfig = {
     // A request that goes through the middleware has its body buffered, and
     // whatever runs past this limit is dropped. The 10 MB default cut a larger
     // upload down to a body its own handler could no longer parse.
-    middlewareClientMaxBodySize: "100mb",
+    proxyClientMaxBodySize: "100mb",
   },
 };
 

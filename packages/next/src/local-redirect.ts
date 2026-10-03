@@ -1,6 +1,6 @@
 import "server-only";
 import { headers } from "next/headers";
-import { redirect, type RedirectType } from "next/navigation";
+import { redirect } from "next/navigation";
 import {
   resolveNativeAuthContinueTarget,
   resolveSafeRedirectPath,
@@ -44,7 +44,7 @@ export async function resolveNativeAuthReturnUrl(
 
 export async function localRedirect(
   url: string,
-  type?: RedirectType,
+  type?: Parameters<typeof redirect>[1],
 ): Promise<never> {
   const safePath = await resolveSafeReturnUrl(url);
   // 検証を通らない入力はサイト内トップへ送る。両アプリともルートは
