@@ -182,25 +182,6 @@ export default function NodeGraphMock({
     y: portY(effect, NODES.effect.outputs[0]),
   };
 
-  const ports: { key: string; x: number; y: number }[] = NODE_KEYS.flatMap(
-    (key) => {
-      const spec = NODES[key];
-      const state = nodes[key];
-      return [
-        ...spec.inputs.map((offset, i) => ({
-          key: `${key}-in-${i}`,
-          x: state.x,
-          y: portY(state, offset),
-        })),
-        ...spec.outputs.map((offset, i) => ({
-          key: `${key}-out-${i}`,
-          x: state.x + spec.width,
-          y: portY(state, offset),
-        })),
-      ];
-    },
-  );
-
   return (
     <svg
       ref={svgRef}
@@ -266,16 +247,6 @@ export default function NodeGraphMock({
         />
       ))}
 
-      {ports.map((port) => (
-        <circle
-          key={port.key}
-          cx={port.x}
-          cy={port.y}
-          r="3.5"
-          fill={NODE_WIRE}
-          pointerEvents="none"
-        />
-      ))}
     </svg>
   );
 }
@@ -385,6 +356,28 @@ function GraphNode({
           pointerEvents="none"
         />
       </g>
+      {/* Ports belong to the node's group so a node dragged over another
+          covers its ports too, instead of them showing through on top. */}
+      {spec.inputs.map((offset, i) => (
+        <circle
+          key={`in-${i}`}
+          cx={x}
+          cy={portY(state, offset)}
+          r="3.5"
+          fill={NODE_WIRE}
+          pointerEvents="none"
+        />
+      ))}
+      {spec.outputs.map((offset, i) => (
+        <circle
+          key={`out-${i}`}
+          cx={x + width}
+          cy={portY(state, offset)}
+          r="3.5"
+          fill={NODE_WIRE}
+          pointerEvents="none"
+        />
+      ))}
     </g>
   );
 }

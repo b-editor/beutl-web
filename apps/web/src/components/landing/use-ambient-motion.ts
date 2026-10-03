@@ -12,7 +12,7 @@ type Options = {
 
 /**
  * Runs `frame` on every animation frame while `ref` is on screen, passing the
- * seconds elapsed since the loop started and since the previous frame. Return
+ * seconds of animation shown so far and since the previous frame. Return
  * `false` from `frame` to end the loop for good, for a one-shot animation.
  *
  * Nothing runs under prefers-reduced-motion, and the preference is followed
@@ -33,8 +33,12 @@ export function useAmbientMotion(
     let visible = false;
     let finished = false;
     let handle = 0;
-    let start: number | null = null;
-    let last = 0;
+    /** Timestamp of the previous frame, or null right after (re)starting. */
+    let previous: number | null = null;
+    /** Seconds of animation actually shown. It advances by each frame's
+     * delta, capped, so time spent in a background tab (where frames are
+     * suspended but timestamps keep moving) or scrolled away is not counted. */
+    let time = 0;
 
     const stop = () => {
       cancelAnimationFrame(handle);
@@ -42,18 +46,15 @@ export function useAmbientMotion(
     };
 
     const tick = (now: number) => {
-      if (start === null) {
-        // Resume where the loop left off rather than jumping by however long
-        // the loop was paused.
-        start = now - last * 1000;
-      }
-      const time = (now - start) / 1000;
-      if (frame(time, Math.min(0.1, time - last)) === false) {
+      const delta =
+        previous === null ? 0 : Math.min(0.1, (now - previous) / 1000);
+      previous = now;
+      time += delta;
+      if (frame(time, delta) === false) {
         finished = true;
         handle = 0;
         return;
       }
-      last = time;
       handle = requestAnimationFrame(tick);
     };
 
@@ -63,7 +64,7 @@ export function useAmbientMotion(
         onReducedMotion?.();
       } else if (visible && !finished) {
         if (!handle) {
-          start = null;
+          previous = null;
           handle = requestAnimationFrame(tick);
         }
       } else {
