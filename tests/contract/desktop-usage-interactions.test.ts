@@ -62,6 +62,29 @@ describe("desktop usage interactions", () => {
     }
   });
 
+  it.each([
+    { name: "no points", points: [] },
+    {
+      name: "empty activity buckets",
+      points: report.activity.map((point) => ({ ...point, count: 0 })),
+    },
+  ])("displays a zero maximum for $name", async ({ points }) => {
+    await act(() =>
+      root.render(
+        createElement(UsageActivityChart, {
+          points,
+          lang: "en",
+          label: "Usage",
+        }),
+      ),
+    );
+    expect(container.querySelector("output")!.textContent).toBe("max: 0");
+    const bars = container.querySelectorAll("svg g rect:nth-of-type(2)");
+    expect(bars).toHaveLength(points.length);
+    for (const bar of bars) expect(bar.getAttribute("height")).toBe("0");
+    expect(container.innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
   it("reuses the date formatter during hover and changes it when the locale changes", async () => {
     const DateTimeFormat = Intl.DateTimeFormat;
     const formatter = vi
@@ -80,6 +103,7 @@ describe("desktop usage interactions", () => {
         ),
       );
     await render("en");
+    expect(container.querySelector("output")!.textContent).toBe("max: 168");
     expect(formatter).toHaveBeenCalledTimes(1);
     for (const index of [0, 1, 100]) {
       const bar = container.querySelectorAll("svg g")[index];

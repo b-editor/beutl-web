@@ -314,6 +314,63 @@ describe("server-only Grafana queries", () => {
     expect(fetcher).toHaveBeenCalledTimes(21);
   });
 
+  it.each([
+    { delay: 2_000, status: "ready", requests: 21 },
+    { delay: 11_000, status: "unavailable", requests: 2 },
+  ])(
+    "keeps weekly queries bounded with $delay ms responses",
+    async ({ delay, status, requests }) => {
+      vi.useFakeTimers();
+      // Node's native AbortSignal.timeout uses an internal timer, so route it
+      // through the fake clock while retaining real AbortSignal.any behavior.
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockImplementation((ms) => {
+          const controller = new AbortController();
+          setTimeout(
+            () =>
+              controller.abort(new DOMException("Timed out", "TimeoutError")),
+            ms,
+          );
+          return controller.signal;
+        });
+      let active = 0;
+      let maximumActive = 0;
+      const fetcher = vi.fn(
+        (_input: RequestInfo | URL, options?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const signal = options!.signal!;
+            signal.throwIfAborted();
+            maximumActive = Math.max(maximumActive, ++active);
+            const timer = setTimeout(() => {
+              signal.removeEventListener("abort", onAbort);
+              active--;
+              resolve(Response.json({}));
+            }, delay);
+            function onAbort() {
+              clearTimeout(timer);
+              active--;
+              reject(signal.reason);
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          }),
+      );
+      try {
+        const pending = fetchDesktopUsage("7d", NOW, env, fetcher);
+        // Seven days need 28 seconds at 2 seconds per request, even with the
+        // count/duration pairs in parallel. No individual request is slow.
+        await vi.advanceTimersByTimeAsync(28_000);
+        expect((await pending).status).toBe(status);
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+        expect(maximumActive).toBe(2);
+        expect(active).toBe(0);
+      } finally {
+        timeout.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retains session breakdowns and operation durations without counting sessions twice", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const query = new URL(String(input)).searchParams.get("q")!;

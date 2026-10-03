@@ -36,10 +36,11 @@ export async function fetchDesktopUsage(
       return { status: "unavailable" };
     const windows = usageWindows(range, now);
     const reports: UsageReport[] = [];
-    const deadline = AbortSignal.timeout(20_000);
     // At most two requests in flight. Grafana Cloud's default metrics range
     // limit is 24h; a week is seven disjoint queries, not a silently truncated one.
     for (const window of windows) {
+      // Give each day its own budget so earlier days cannot abort later ones.
+      const deadline = AbortSignal.timeout(20_000);
       const fetchQuery = async (
         measure: "count" | "duration_ms",
         query: string,

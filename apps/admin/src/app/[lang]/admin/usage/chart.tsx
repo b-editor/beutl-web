@@ -13,7 +13,8 @@ export function UsageActivityChart({
   label: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
-  const maximum = Math.max(1, ...points.map((point) => point.count));
+  const maximum = Math.max(0, ...points.map((point) => point.count));
+  const scaleMaximum = Math.max(1, maximum);
   const formatter = useMemo(
     () =>
       new Intl.DateTimeFormat(lang, {
@@ -41,7 +42,7 @@ export function UsageActivityChart({
       >
         <title>{label}</title>
         {points.map((point, index) => {
-          const barHeight = (point.count / maximum) * (height - 10);
+          const barHeight = (point.count / scaleMaximum) * (height - 10);
           return (
             <g key={point.timestampMs} onMouseEnter={() => setActive(index)}>
               <rect
