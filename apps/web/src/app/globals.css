@@ -77,6 +77,31 @@
     }
   }
 
+  /* One character of the landing page's text mock entering, holding and
+     leaving. Each character runs it on its own delay; see TextMock. */
+  --animate-lp-char: lp-char 3.6s cubic-bezier(0.22, 1, 0.36, 1) infinite both;
+
+  @keyframes lp-char {
+    0% {
+      opacity: 0;
+      transform: translateY(0.45em) rotate(8deg) scale(0.9);
+    }
+    14% {
+      opacity: 1;
+      transform: translateY(-0.06em) rotate(0deg) scale(1.03);
+    }
+    22%,
+    72% {
+      opacity: 1;
+      transform: none;
+    }
+    86%,
+    100% {
+      opacity: 0;
+      transform: translateY(-0.3em) scale(0.97);
+    }
+  }
+
   /* A band of light travelling across a placeholder. Used while something is
      being generated or an image is still loading, where a pulse reads as
      "disabled" and this reads as "working". */
