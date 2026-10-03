@@ -245,12 +245,35 @@ describe("server-only Grafana queries", () => {
     expect(url.searchParams.get("q")).toContain("sum_over_time");
     expect(options).toMatchObject({
       cache: "no-store",
-      redirect: "error",
+      redirect: "manual",
       headers: {
         Authorization: `Basic ${Buffer.from("tenant:private-token").toString("base64")}`,
       },
     });
   });
+
+  it.each([301, 302, 303, 307, 308])(
+    "rejects an HTTP %i redirect instead of following it or parsing its body",
+    async (status) => {
+      const fetcher = vi.fn(async () =>
+        new Response(JSON.stringify(reply()), {
+          status,
+          headers: { Location: "https://other.example.test/metrics" },
+        }),
+      );
+      expect(await fetchDesktopUsage("1h", NOW, env, fetcher)).toEqual({
+        status: "unavailable",
+      });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      for (const [input, options] of fetcher.mock.calls as unknown as [
+        URL,
+        RequestInit,
+      ][]) {
+        expect(input.origin).toBe("https://tempo.example.test");
+        expect(options.redirect).toBe("manual");
+      }
+    },
+  );
 
   it("reports unavailable when any chunk fails and never returns credentials or raw errors", async () => {
     const fetcher = vi.fn(
