@@ -3,7 +3,8 @@
 The monorepo behind Beutl's marketplace, account and developer dashboards,
 checkout flows, admin console, and desktop-facing APIs.
 
-The Web and admin applications use Next.js App Router. Desktop APIs use Hono,
+The Web and admin applications use Next.js App Router; the admin console runs
+it on [vinext](https://github.com/cloudflare/vinext) (Vite). Desktop APIs use Hono,
 with Prisma and CockroachDB for persistence. Production workloads run on
 Cloudflare Workers.
 
@@ -59,8 +60,8 @@ and leaves `apps/web/prisma/schema.prisma` unchanged.
 | --- | --- |
 | `pnpm dev` | Start the public Web app |
 | `pnpm dev:admin` | Start the admin console |
-| `pnpm build` | Build both Next.js apps and type-check the desktop API |
-| `pnpm lint` | Lint both Next.js apps |
+| `pnpm build` | Build the Web and admin apps and type-check the desktop API |
+| `pnpm lint` | Lint the Web and admin apps |
 | `pnpm typecheck` | Type-check every workspace that defines a type-check script |
 | `pnpm test` | Run the Vitest contract and integration suites |
 | `pnpm test:watch` | Run Vitest in watch mode |

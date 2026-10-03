@@ -1,19 +1,18 @@
 "use client";
 
-import { AppProgressBar as ProgressBar } from "next-nprogress-bar";
+import { ProgressProvider } from "@bprogress/next/app";
 
 export default function ProgressBarProvider({
   children,
 }: { children: React.ReactNode }) {
   return (
-    <>
+    <ProgressProvider
+      height="2px"
+      color="hsl(var(--primary))"
+      options={{ showSpinner: false }}
+      shallowRouting
+    >
       {children}
-      <ProgressBar
-        height="2px"
-        color="hsl(var(--primary))"
-        options={{ showSpinner: false }}
-        shallowRouting
-      />
-    </>
+    </ProgressProvider>
   );
 }
