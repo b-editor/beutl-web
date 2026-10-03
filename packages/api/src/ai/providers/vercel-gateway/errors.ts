@@ -44,6 +44,7 @@ export function gatewayResponseErrorType(cause: unknown): string | null {
     try {
       response = JSON.parse(raw);
     } catch {
+      // A body that is not JSON carries no structured error.
       return null;
     }
   }

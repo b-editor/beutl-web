@@ -76,6 +76,7 @@ export async function runAiStream<TResult>(
       try {
         next = await reader.read();
       } catch {
+        // A dropped connection is reported as an interruption the request can recover from.
         return { ok: false, errorCode: "aiRequestInterrupted" };
       }
       if (next.done) break;
@@ -128,6 +129,7 @@ function parseEvent(block: string): { event: string; data: unknown } | null {
   try {
     return { event, data: JSON.parse(data.join("\n")) };
   } catch {
+    // A malformed event is skipped; the final result is checked separately.
     return null;
   }
 }
@@ -152,6 +154,7 @@ async function errorCodeOf(response: Response): Promise<string> {
     }
     return code;
   } catch {
+    // An unreadable error body proves no refund, so the request stays recoverable.
     return "aiRequestInterrupted";
   }
 }

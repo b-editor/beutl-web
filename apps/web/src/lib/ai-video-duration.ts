@@ -70,6 +70,7 @@ export async function readVideoDurationSeconds(file: File, signal: AbortSignal):
       video.src = url;
       video.load();
     } catch {
+      // A file the browser cannot load has no known duration.
       finish(null);
     }
   });

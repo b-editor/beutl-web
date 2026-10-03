@@ -49,7 +49,8 @@ export function Form({
         provider,
         callbackURL: `/${lang}/dashboard/account/security`,
       });
-    } catch {
+    } catch (error) {
+      console.error("Linking a social account failed", error);
       toast({
         title: t("error"),
         description: t("auth:errors.oauth"),
@@ -71,7 +72,8 @@ export function Form({
         description: t("account:security.passkeyRegistered"),
       });
       router.refresh();
-    } catch {
+    } catch (error) {
+      console.error("Passkey registration failed", error);
       toast({
         title: t("error"),
         description: t("account:security.passkeyRegisterFailed"),

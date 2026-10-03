@@ -24,7 +24,8 @@ export async function submitAiImageEdit(
   let outcome: AiRequestOutcome<unknown>;
   try {
     outcome = await runAiRequest<unknown>("images/edit", { body, idempotencyKey });
-  } catch {
+  } catch (error) {
+    console.error("AI image edit request was interrupted", error);
     return interrupted();
   }
 

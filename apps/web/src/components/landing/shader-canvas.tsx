@@ -96,6 +96,7 @@ export default function ShaderCanvas() {
           "experimental-webgl",
         ) as WebGLRenderingContext | null);
     } catch {
+      // Without WebGL the static fallback is shown.
       context = null;
     }
     if (!context) {

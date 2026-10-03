@@ -170,14 +170,6 @@ export type AiJobSummary = {
   updatedAt: string;
 };
 
-async function authenticatedUserId(c: Context): Promise<string | null> {
-  try {
-    return await getUserId(c);
-  } catch {
-    return null;
-  }
-}
-
 function encodeCursor(cursor: AiJobHistoryCursor): string {
   return btoa(
     JSON.stringify({
@@ -209,6 +201,7 @@ function decodeCursor(value: string): AiJobHistoryCursor | null {
       id: parsed.data.id,
     };
   } catch {
+    // A cursor that does not decode is the caller's input.
     return null;
   }
 }
@@ -319,7 +312,7 @@ async function toSummary(
 
 const app = new Hono()
   .get("/", async (c) => {
-    const userId = await authenticatedUserId(c);
+    const userId = await getUserId(c);
     if (!userId) {
       return c.json(await apiErrorResponse("authenticationIsRequired"), {
         status: 401,
@@ -356,7 +349,7 @@ const app = new Hono()
     });
   })
   .get("/:id", async (c) => {
-    const userId = await authenticatedUserId(c);
+    const userId = await getUserId(c);
     if (!userId) {
       return c.json(await apiErrorResponse("authenticationIsRequired"), {
         status: 401,
@@ -382,7 +375,7 @@ const app = new Hono()
     return c.json(await toSummary(job, c.req.raw));
   })
   .delete("/:id", async (c) => {
-    const userId = await authenticatedUserId(c);
+    const userId = await getUserId(c);
     if (!userId) {
       return c.json(await apiErrorResponse("authenticationIsRequired"), {
         status: 401,

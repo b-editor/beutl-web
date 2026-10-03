@@ -95,6 +95,7 @@ function ownerParamsMatch(paramsJson: string, userId: string): boolean {
     const metadata = params.metadata && typeof params.metadata === "object" ? params.metadata : null;
     return metadata?.beutlApplication === "beutl-web" && metadata.beutlUserId === userId;
   } catch {
+    // Params that are not JSON cannot prove ownership.
     return false;
   }
 }

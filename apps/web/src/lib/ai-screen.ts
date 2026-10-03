@@ -298,6 +298,7 @@ export function restoreAiRecoveryEntries(
     return [...newestByDigest.values()]
       .sort((left, right) => right.updatedAt - left.updatedAt);
   } catch {
+    // A corrupt recovery record restores nothing.
     return [];
   }
 }
@@ -310,6 +311,7 @@ export function readAiRecoverySafely(
   try {
     return restoreAiRecoveryEntries(read(), now);
   } catch {
+    // Browser storage is unavailable; there is nothing to restore.
     return [];
   }
 }
@@ -359,6 +361,7 @@ function isSafeRecoveryCapability(value: unknown): boolean {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).byteLength <= MAX_AI_RECOVERY_CAPABILITY_BYTES;
   } catch {
+    // A value that cannot be serialized is not storable.
     return false;
   }
 }
@@ -532,6 +535,7 @@ export function isAiRecoveryTombstoned(
         typeof value.settledAt === "number" && Number.isFinite(value.settledAt)
       ));
   } catch {
+    // A corrupt tombstone does not match.
     return false;
   }
 }

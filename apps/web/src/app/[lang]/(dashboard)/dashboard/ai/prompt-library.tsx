@@ -77,6 +77,7 @@ function loadPromptLibrary(userId: string): PromptTemplate[] {
       return template ? [template] : [];
     });
   } catch {
+    // An unavailable or corrupt store reads as an empty library.
     return [];
   }
 }

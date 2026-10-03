@@ -46,7 +46,8 @@ export default function Form({
         resolveSafeRedirectPath(returnUrl, window.location.origin) ??
           `/${lang}/admin`,
       );
-    } catch {
+    } catch (error) {
+      console.error("Passkey sign-in failed", error);
       toast({
         title: t("error"),
         description: t("auth:errors.passkey"),

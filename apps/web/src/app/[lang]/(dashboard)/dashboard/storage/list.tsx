@@ -159,6 +159,7 @@ function readStoredView(): ViewMode | null {
     const value = window.localStorage.getItem(VIEW_STORAGE_KEY);
     return value === "grid" || value === "list" ? value : null;
   } catch {
+    // A blocked store only loses the preference.
     return null;
   }
 }
@@ -212,6 +213,7 @@ function readDrag(event: DragEvent): DragPayload | null {
       list.filter((value): value is string => typeof value === "string");
     return { files: strings(files), folders: strings(folders) };
   } catch {
+    // A drop from outside this page carries no payload of ours.
     return null;
   }
 }
@@ -587,7 +589,8 @@ export function List({
         }
         if (successTitle) toast({ title: successTitle });
         return true;
-      } catch {
+      } catch (error) {
+        console.error("Storage request failed", error);
         toast({
           title: t("error"),
           description: t("somethingWentWrong"),
@@ -810,7 +813,7 @@ export function List({
           // step fails the file is still safe at the root.
           const folderId = currentFolderRef.current;
           if (folderId !== null) {
-            await moveFiles([outcome.file.id], folderId).catch(() => undefined);
+            await moveFiles([outcome.file.id], folderId).catch((error) => console.error("Moving an uploaded file into the current folder failed", error));
           }
           // Each finished file shows up right away rather than after the batch.
           router.refresh();
