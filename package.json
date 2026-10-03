@@ -29,9 +29,10 @@
     "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
   },
   "devDependencies": {
-    "fflate": "^0.8.3",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "fflate": "^0.8.3",
+    "happy-dom": "20.14.5",
     "hono": "^4.13.5",
     "vitest": "^4.1.11"
   },
