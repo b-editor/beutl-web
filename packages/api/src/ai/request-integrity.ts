@@ -21,11 +21,12 @@ function bytesToHex(bytes: Uint8Array): string {
 export async function sha256Hex(
   value: string | ArrayBuffer | Uint8Array,
 ): Promise<string> {
-  const bytes = typeof value === "string"
+  // Callers pass Uint8Array<ArrayBufferLike>; never backed by a SharedArrayBuffer here.
+  const bytes = (typeof value === "string"
     ? new TextEncoder().encode(value)
     : value instanceof Uint8Array
       ? value
-      : new Uint8Array(value);
+      : new Uint8Array(value)) as Uint8Array<ArrayBuffer>;
   return bytesToHex(
     new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
   );
