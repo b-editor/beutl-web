@@ -72,15 +72,14 @@ skipped when their respective variables are absent.
 
 ## Deployment
 
-Production is split across the Web, desktop API, admin, and private image-edit
-Workers. The longest matching
-Cloudflare route sends desktop API traffic to the dedicated API Worker.
+The public Web app and all desktop APIs deploy together as `beutl-web`.
+`packages/api` is shared application code, not a separate API Worker. The Web
+entrypoint dispatches `/api/v{1,2,3}/*` before OpenNext so uploads remain streamed.
 
 | Worker | Routes | Command |
 | --- | --- | --- |
-| `beutl-web` | `beutl.beditor.net/*`, except the desktop API routes | `pnpm deploy:web` |
-| `beutl-web-api` | `beutl.beditor.net/api/v{1,2,3}/*` | `pnpm deploy:api` |
-| `beutl-admin` | `admin.beutl.beditor.net/*` | `pnpm deploy:admin` |
+| `beutl-web` | `beutl.beditor.net/*`, including all public APIs | `vp run deploy:web` |
+| `beutl-admin` | `admin.beutl.beditor.net/*` | `vp run deploy:admin` |
 | `beutl-ai-images` | Service binding only; no public route | `vp run --filter @beutl/api deploy:image-worker` |
 
 Deploy `beutl-ai-images` and configure its secrets before deploying a Web
@@ -88,12 +87,12 @@ version that binds to it.
 
 Before deploying, read [Deployment configuration](docs/deployment.md) for
 cross-Worker secrets, admin session sharing, Paid AI settings, and required
-Stripe webhook events. The route split and its rollback procedure are recorded
+Stripe webhook events. The single public deployment requirement is recorded
 in [ADR 0002](docs/adr/0002-api-worker-split.md).
 
 ## Documentation
 
 - [Deployment configuration](docs/deployment.md)
 - [ADR 0001: v1 account is the authentication backbone](docs/adr/0001-v1-account-is-the-auth-backbone.md)
-- [ADR 0002: desktop API Worker split](docs/adr/0002-api-worker-split.md)
+- [ADR 0002: public Web/API deployment](docs/adr/0002-api-worker-split.md)
 - [Stripe AI billing migration safety](docs/stripe-ai-billing-migration.md)

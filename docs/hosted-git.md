@@ -1,17 +1,17 @@
 # Hosted Git and large media
 
-Hosted Git is an optional service in the desktop API Worker. It adds a private
+Hosted Git is an optional service in the public `beutl-web` Worker. It adds a private
 Git remote and Git LFS storage in Backblaze B2. Existing Forgejo repositories
 and desktop remotes remain in place; no migration is performed.
 
 ## Enablement
 
 Apply `20261003000000_add_hosted_git` through the existing CockroachDB migration
-procedure before enabling the API. Web, admin and API must use that schema
+procedure before enabling the API. Web (including its APIs) and admin must use that schema
 because their account storage queries include Git usage. The migration adds
 new tables and a storage admission counter; it does not import old repositories.
 
-Configure the API Worker with a dedicated private B2 bucket and these values:
+Configure the Web Worker (`apps/web/wrangler.jsonc`) with a dedicated private B2 bucket and these values:
 
 | Setting | Value |
 | --- | --- |
@@ -26,7 +26,7 @@ Configure the API Worker with a dedicated private B2 bucket and these values:
 
 The key needs object read, write, list, version deletion and multipart operations
 for `git/` and `git-lfs/`. Keep credentials in Worker secrets and ignored local
-configuration. The checked-in Wrangler configuration includes the SQLite Durable
+configuration. The checked-in Web Wrangler configuration includes the SQLite Durable
 Object binding/migration and leaves the feature disabled. Use Workers Paid for
 the bundle size and bounded Git pack processing.
 

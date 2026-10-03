@@ -1,9 +1,9 @@
-// Storage bucket injection point shared by the standalone Worker and OpenNext.
+// Storage bucket injection point shared by the embedded API runtime and OpenNext.
 // The shape is the R2 binding's; storage/s3-compatible-bucket.ts adapts S3
 // compatible services to it, and storage/bucket-from-env.ts picks which one
 // the configuration names.
 // Keep its startup path dependency-free: instrumentation imports it before any
-// API route. The Cron-only scope loads async_hooks on demand.
+// API route. The invocation scope loads async_hooks on demand.
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
 const SCOPE_KEY = "__BEUTL_R2_BUCKET_PROVIDER_SCOPE__";
 

@@ -1,55 +1,38 @@
-# 0002: デスクトップ API の独立 Worker デプロイ (同一ドメイン・パス分割)
+# 0002: Web と公開 API を同じ Worker に含める
 
-- 状態: Accepted
-- 日付: 2026-08-06
+- 状態: Accepted (2026-08-06 の API Worker 分離を撤回)
+- 更新日: 2026-10-04
 
 ## 背景
 
-beutl-web は Next.js 15 モノリスとして単一 Cloudflare Worker (beutl-web) にデプロイされていた。
-デスクトップアプリ (Beutl) が消費する Hono API (v1/v2/v3) と Web UI が同じデプロイ単位にあり、
-API の変更が Web 全体のデプロイに影響していた。
+API を別 Worker の入口だけに接続すると、Web のデプロイが成功しても追加した
+API が公開されない。Hosted Git のリポジトリ作成で、この状態による 404 が発生した。
 
 ## 決定
 
-デスクトップ API (v1/v2/v3) を **同一ドメイン・パス分割**で独立 Worker (`beutl-web-api`) としてデプロイする。
+Web とすべての公開 API は **単一の `beutl-web` Worker** に含める。
+`packages/api` はコード共有の単位であり、独立したデプロイ単位にはしない。
 
-- `beutl.beditor.net/api/v1/*`, `/api/v2/*`, `/api/v3/*` → `beutl-web-api`
-- それ以外 (`/api/auth`, `/api/contents`, `/api/stripe`, Web ページ) → `beutl-web`
-- Workers Routes の最長一致により、api パターンが優先される
+- `apps/web/worker.js` が `/api/v1`, `/api/v2`, `/api/v3` を共通 API runtime に渡す。
+- Git/LFS とストレージの本文は OpenNext のバッファリングより前に処理する。
+- その他の Web ページ、認証、コンテンツ、Stripe API は OpenNext が処理する。
+- 公開 API の bindings、Durable Objects、cron は `apps/web/wrangler.jsonc` に置く。
+- API runtime は呼び出しごとの DB/ストレージ provider を使い、並行する Web 処理の
+  provider を置き換えない。背景処理が終わってから DB 接続を閉じる。
+- Admin と非公開の画像処理 service Worker はそれぞれの用途のまま維持する。
 
-## 理由
+## 再発防止
 
-- **native-auth フロー維持**: v1 `createAuthUri` が返す `auth_uri` は Web の page handler (`/account/native-auth/handler`) を指す。
-  better-auth の Cookie セッションを共有するため、**同一ドメインであることが必須**。
-- **外部契約の不変性**: v1/account は唯一の JWT 発行面 (v1-is-auth-backbone, ADR 0001)。
-  デスクトップアプリとのバイト等価性 (v3 JSON, JWT claim, refresh 暗号化) を維持する。
-- **独立デプロイ**: API のデプロイが Web に影響しない。Web の変更も API に影響しない。
+新しい公開 API は Web の入口を通して契約テストを行う。
+`tests/contract/web-api-entrypoint.test.ts` はリポジトリ作成、Git 転送、サイズ制限、
+Web へのフォールバック、cron 接続と実際のデプロイ設定を確認する。
+独立 API Worker の Wrangler 設定や deploy/upload コマンドを再導入しない。
 
-## 構成
-
-```
-apps/web/            # Next.js Web アプリ (@beutl/web) → beutl-web Worker
-packages/api/        # Hono API パッケージ (@beutl/api) → beutl-web-api Worker
-  src/worker.ts      # fetch エントリ (setDbProvider + api.fetch)
-  wrangler.jsonc     # routes: beutl.beditor.net/api/v{1,2,3}/*
-packages/db/         # データアクセス層 (setDbProvider/getDb)
-packages/i18n/       # i18n (静的 resource map)
-packages/core/       # 純粋ロジック
-```
-
-## 環境変数の共有 (MUST MATCH)
-
-デスクトップ API の JWT 検証は Web 側 (v1) で発行したトークンを使うため、
-`JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE` は両 Worker で**同一値**であること。
-CI (deploy.yml) は GitHub Secrets を単一ソースとし、両 Worker へ同一値を投入する。
-
-## ロールバック手順
-
-1. Cloudflare Dashboard で `beutl.beditor.net/api/v{1,2,3}/*` の routes を削除
-2. Web Worker (beutl-web) が従来どおり v1/v2/v3 を処理する
-   (apps/web/src/app/api/v{1,2,3} の route.ts は `@beutl/api` 参照のまま温存)
+以前の分離構成を使用していた環境では、旧 `/api/v{1,2,3}/*` の Worker routes を
+取り除き、Web のカスタムドメインに全公開リクエストを届ける。
+JWT の発行・検証は同じ Web secrets を使う。クライアントの URL は変更しない。
 
 ## 関連
 
 - ADR 0001: v1/account は認証の背骨 (削除不可)
-- REFACTORING_PLAN.md: 内部リファクタ計画 (独立した計画)
+- [Deployment configuration](../deployment.md)

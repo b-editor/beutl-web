@@ -8,7 +8,6 @@ function workerConfig(relativePath: string): string {
 describe("Cloudflare request cancellation", () => {
   it.each([
     "apps/web/wrangler.jsonc",
-    "packages/api/wrangler.jsonc",
   ])("enables client disconnect signals in %s", (path) => {
     expect(workerConfig(path)).toContain('"enable_request_signal"');
   });

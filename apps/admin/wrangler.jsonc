@@ -42,7 +42,7 @@
       "bucket_name": "beutl-admin-inc-cache"
     },
     {
-      // MUST MATCH beutl-web / beutl-web-api. /admin/storage がファイルの所在を
+      // MUST MATCH beutl-web. /admin/storage がファイルの所在を
       // 確認し、ストア間で移動するのに使う。BEUTL_STORAGE_PROVIDER と BEUTL_S3_*
       // も両 Worker と同じ値にする。See docs/deployment.md#object-storage.
       "binding": "BEUTL_R2_BUCKET",

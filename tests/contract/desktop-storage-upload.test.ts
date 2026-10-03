@@ -7,7 +7,7 @@ import {
   STORAGE_UPLOAD_PART_BYTES,
   STORAGE_UPLOAD_FINISH_BODY_BYTES,
 } from "@beutl/core";
-import { withBoundedBody } from "../../packages/api/src/worker";
+import { withBoundedBody } from "../../packages/api/src/runtime";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 describe.each([false, true])(

@@ -23,9 +23,12 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
-  // 同一ドメイン・パス分割: /api/v{1,2,3}/* は beutl-web-api (packages/api/wrangler.jsonc) が処理。
-  // 最長一致で api パターンが優先されるため、この Worker は Web ページと
-  // /api/auth・/api/contents・/api/stripe を受ける。カスタムドメインはダッシュボード側で設定済み。
+  // This Worker owns Web pages and all public APIs, including /api/v{1,2,3}/*.
+  // Keep API bindings and scheduled work in this deployment.
+  "durable_objects": {
+    "bindings": [{ "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" }]
+  },
+  "migrations": [{ "tag": "hosted-git-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] }],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",
@@ -58,7 +61,6 @@
       "binding": "NEXT_INC_CACHE_R2_BUCKET",
       "bucket_name": "beutl-web-inc-cache",
     },
-    // MUST MATCH beutl-web-api (packages/api/wrangler.jsonc).
     // BEUTL_STORAGE_PROVIDER=s3 (vars) + BEUTL_S3_* (vars/secrets) sends new
     // objects to S3 compatible storage; keep this binding so objects already in
     // R2 stay readable. See docs/deployment.md#object-storage.
@@ -74,6 +76,10 @@
     }
   ],
   "vars": {
+    "BEUTL_GIT_ENABLED": "false",
+    "JWT_EXPIRATION_MINUTES": "5",
+    "JWT_REFRESH_TOKEN_EXPIRATION_DAYS": "30",
+    "PUBLIC_ORIGIN": "https://beutl.beditor.net",
     "OPENROUTER_REQUEST_TIMEOUT_MS": "120000",
     "VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS": "120000"
   }

@@ -37,7 +37,7 @@ vi.mock("../../packages/api/src/ai/package-payment-refunds", () => ({ reconcileP
 vi.mock("../../packages/api/src/ai/topup-duplicate-refunds", () => ({ reconcileTopUpDuplicateRefunds: mocks.duplicate }));
 vi.mock("../../packages/api/src/ai/stripe-checkout-cleanups", () => ({ reconcileStripeCheckoutCleanups: mocks.cleanup }));
 
-import worker, { type Env } from "../../packages/api/src/worker";
+import worker, { type Env } from "../../packages/api/src/runtime";
 
 const env = {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://scheduler-test" },
