@@ -15,7 +15,7 @@ import { createGitRepositoryForOwner, reserveGitLfs, commitGitLfs, GitLfsQuotaEx
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
-import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
+import { GitRepositoryDurableObject, GIT_DELETED_REPOSITORY_CLEANUP_MS } from "../packages/api/src/git/repo-durable-object";
 import { GitObjectStore, type GitObjectBucket, type GitMultipartUpload } from "../packages/api/src/git/git-object-store";
 import { issueGitToken, issueMultipartToken, verifyGitToken, verifyMultipartToken } from "../packages/api/src/git/tokens";
 import { apiRequestBodyLimit, MAX_API_JSON_REQUEST_BYTES, MAX_GIT_NEGOTIATION_BYTES } from "../packages/core/src/request-body-limit";
@@ -1555,6 +1555,55 @@ describe("Durable Object queue", () => {
     await new GitRepositoryDurableObject({ storage }, env, bucket, accounting).alarm();
     expect(bucket.objects.has(key)).toBe(false);
     expect(storage.alarms.at(-1)).toBeGreaterThan(Date.now());
+  });
+
+  it("stops deleted-repository alarms after the persisted cleanup window", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const deletedAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(deletedAt);
+    const cleanup = () => new Request("https://git.internal/internal/git/cleanup", {
+      method: "DELETE", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
+    });
+    try {
+      const first = new GitRepositoryDurableObject({ storage }, env, bucket);
+      expect((await first.fetch(cleanup())).status).toBe(204);
+      expect(await storage.get("deletedAt")).toBe(deletedAt);
+      clock.mockReturnValue(deletedAt + 24 * 60 * 60 * 1000);
+      const restarted = new GitRepositoryDurableObject({ storage }, env, bucket);
+      expect((await restarted.fetch(cleanup())).status).toBe(204);
+      expect(await storage.get("deletedAt")).toBe(deletedAt);
+      clock.mockReturnValue(deletedAt + GIT_DELETED_REPOSITORY_CLEANUP_MS - 1);
+      await restarted.alarm();
+      expect(storage.alarms.at(-1)).toBe(deletedAt + GIT_DELETED_REPOSITORY_CLEANUP_MS);
+      const lateKey = `git-lfs/repos/${repoId}/aa/${"a".repeat(64)}`;
+      await bucket.put(lateKey, new Uint8Array([1]));
+      clock.mockReturnValue(deletedAt + GIT_DELETED_REPOSITORY_CLEANUP_MS);
+      storage.alarms.length = 0; // Cloudflare consumes the alarm before invoking it.
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(bucket.objects.has(lateKey)).toBe(false);
+      expect(storage.alarms).toEqual([]);
+      expect((await restarted.fetch(cleanup())).status).toBe(204);
+      expect(storage.alarms).toEqual([]);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("persists a single cleanup window for legacy deleted repositories", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    await storage.put("repoId", repoId);
+    await storage.put("deleted", true);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(await storage.get("deletedAt")).toBe(now);
+      clock.mockReturnValue(now + GIT_DELETED_REPOSITORY_CLEANUP_MS);
+      storage.alarms.length = 0;
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(await storage.get("deletedAt")).toBe(now);
+      expect(storage.alarms).toEqual([]);
+    } finally { clock.mockRestore(); }
   });
 
   it("aborts outstanding multipart uploads during repository deletion", async () => {

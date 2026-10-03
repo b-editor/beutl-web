@@ -17,6 +17,7 @@ interface Environment extends LfsEnvironment, GitS3Environment, GitDatabaseEnvir
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const OID = /^[0-9a-f]{64}$/u;
 interface LfsSweepProgress { startedAt: number; cursor?: string }
+export const GIT_DELETED_REPOSITORY_CLEANUP_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** All storage and Git operations for one repository pass through this queue. */
 export class GitRepositoryDurableObject {
@@ -60,10 +61,11 @@ export class GitRepositoryDurableObject {
       if (repoId && UUID.test(repoId)) {
         try {
           if (await this.state.storage.get<boolean>("deleted")) {
+            const deletedAt = await this.deletionTime();
             await this.cleanupMultipartUploads(this.objectBucket(), repoId, Infinity);
             await this.deletePrefix(this.objectBucket(), `git/repos/${repoId}/`);
             await this.deletePrefix(this.objectBucket(), `git-lfs/repos/${repoId}/`);
-            await this.state.storage.setAlarm(Date.now() + 24 * 60 * 60 * 1000);
+            await this.scheduleDeletedCleanup(deletedAt);
             return;
           }
           let progress = await this.state.storage.get<LfsSweepProgress>("lfsSweepProgress");
@@ -96,6 +98,21 @@ export class GitRepositoryDurableObject {
         }
       }
     }));
+  }
+
+  private async deletionTime(): Promise<number> {
+    const recorded = await this.state.storage.get<number>("deletedAt");
+    if (recorded !== undefined) return recorded;
+    const now = Date.now();
+    // Older tombstones get one persisted window; restarts never extend it.
+    await this.state.storage.put("deletedAt", now);
+    return now;
+  }
+
+  private async scheduleDeletedCleanup(deletedAt: number): Promise<void> {
+    const deadline = deletedAt + GIT_DELETED_REPOSITORY_CLEANUP_MS;
+    const now = Date.now();
+    if (now < deadline) await this.state.storage.setAlarm(Math.min(now + 24 * 60 * 60 * 1000, deadline));
   }
 
   private async handle(request: Request): Promise<Response> {
@@ -151,6 +168,7 @@ export class GitRepositoryDurableObject {
     }
     if (request.method === "DELETE" && path === "/internal/git/cleanup") {
       if (scope !== "admin") return new Response("Forbidden", { status: 403 });
+      const deletedAt = await this.deletionTime();
       await this.state.storage.put("deleted", true);
       const records = await this.state.storage.list<LfsRecord>({ prefix: "lfs:" });
       for (const [key, record] of records) {
@@ -166,7 +184,7 @@ export class GitRepositoryDurableObject {
         if (record.verified && record.tusId) await clearTusTail(this.state.storage, key.slice(4));
         await this.state.storage.delete(key);
       }
-      await this.state.storage.setAlarm(Date.now() + 24 * 60 * 60 * 1000);
+      await this.scheduleDeletedCleanup(deletedAt);
       return new Response(null, { status: 204 });
     }
     if (await this.state.storage.get<boolean>("deleted")) {

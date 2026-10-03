@@ -166,7 +166,11 @@ behavior before enabling production traffic.
   Expired Basic uploads keep their DO record and account reservation until a
   second sweep two hours after expiry. A daily DO alarm also removes orphan
   objects and rechecks pinned versions, including PUTs that finish after that
-  grace period. Deleted repositories retain a daily prefix sweep as well.
+  grace period. Deleted repositories retain a daily prefix sweep for seven days
+  from the first persisted deletion time, including a final pass at the deadline.
+  A successful final pass stops the alarm; failures keep retrying until cleanup
+  succeeds. Existing tombstones without a timestamp get one persisted seven-day
+  window. PUTs that finish after that window require operational cleanup.
   For active repositories, LFS cleanup keeps each verified record's pinned
   `versionId` and removes other versions only after the signed PUT window plus
   two hours. Git cleanup keeps current live versions and removes older versions
@@ -210,12 +214,20 @@ bytes without transfer URLs or headers. The next download for this project
 collects idle partials and unconsumed verified handoff files older than 24 hours;
 locked handoffs are retained and lock files are removed at close. A failed
 completion-message write removes its current handoff immediately.
-Authentication expiry, cancellation and exhausted transient retries retain
-resumable bytes. Disk errors, malformed ranges and hash failures discard them;
+Authentication expiry, cancellation, a closed progress pipe and exhausted
+transient retries retain resumable bytes. HTTP 408, 429 and server errors retry
+with the saved range; uploads use the same retryable statuses.
+Disk errors, malformed ranges and hash failures discard partial downloads;
 progressing downloads have no minimum speed cutoff. Headers and each network
 read have a two-minute idle timeout; a stalled final EOF check fails the transfer.
 Upload idle deadlines restart for outgoing writes and incoming response bytes;
 advancing uploads and their control responses have no total-duration cutoff.
+Mixed hosted/external pushes pin one source commit and stop if its branch moves
+before another push or before the original pre-push hook runs. Credential renewal
+recognizes hosted Git transport diagnostics and Beutl LFS/tus authentication
+failures; arbitrary hook messages such as `Authentication failed` do not repeat
+the hook. Connecting a created repository checks every `remote.origin.*` key in
+the locked config snapshot and preserves origins with no fetch URL as well.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,
