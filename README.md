@@ -3,8 +3,8 @@
 The monorepo behind Beutl's marketplace, account and developer dashboards,
 checkout flows, admin console, and desktop-facing APIs.
 
-The Web and admin applications use Next.js App Router; the admin console runs
-it on [vinext](https://github.com/cloudflare/vinext) (Vite). Desktop APIs use Hono,
+The Web and admin applications use Next.js App Router, built and served by
+[vinext](https://github.com/cloudflare/vinext) (Vite). Desktop APIs use Hono,
 with Prisma and CockroachDB for persistence. Production workloads run on
 Cloudflare Workers.
 

@@ -63,6 +63,12 @@ export default defineConfig({
         find: /^next\/(cache|headers|navigation)$/,
         replacement: `${nextModulesDir}/$1.js`,
       },
+      // cloudflare:workers は workerd の組み込みモジュール。node 環境には無いので
+      // スタブに解決し、必要なテストが vi.mock で差し替える。
+      {
+        find: /^cloudflare:workers$/,
+        replacement: path.resolve(__dirname, "tests/stubs/cloudflare-workers.ts"),
+      },
       // server-only は Next.js 専用パッケージ。契約テストは node 環境で実行するため
       // 空モジュールに解決する。
       {

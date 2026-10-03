@@ -77,9 +77,9 @@ export async function POST(request: Request): Promise<Response> {
   } as RequestInit & { duplex: "half" });
 
   if (imageWorker) {
-    // Keep decoding, provider output, and storage writes out of OpenNext's
-    // already-heavy isolate. next dev has no Cloudflare context and retains
-    // the local in-process route; production must have the service binding.
+    // Keep decoding, provider output, and storage writes out of the Web
+    // Worker's already-heavy isolate. Local development runs no image Worker
+    // and retains the in-process route; production must have the binding.
     return await imageWorker.fetch(forwarded);
   }
 

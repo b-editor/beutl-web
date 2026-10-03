@@ -65,7 +65,7 @@ describe("what one request body may come to", () => {
       .rejects.toBeInstanceOf(RequestBodyLimitExceededError);
   });
 
-  it("uses an explicit method and path matrix before OpenNext buffering", () => {
+  it("uses an explicit method and path matrix before the body is read", () => {
     expect(requestBodyLimit(
       "/api/auth/sign-in/email",
       "POST",

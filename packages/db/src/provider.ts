@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-// ランタイム環境 (Next.js/Cloudflare OpenNext, 独立 Worker など) ごとに
+// ランタイム環境 (vinext で動く Web/admin, 独立 Worker など) ごとに
 // PrismaClient の生成方法を注入する。デフォルトは未設定で、getDb() はエラーを投げる。
 // 各アプリは起動時に setDbProvider() を呼ぶこと。
 //

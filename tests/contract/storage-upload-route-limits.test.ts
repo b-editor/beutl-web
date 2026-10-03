@@ -45,7 +45,7 @@ describe("storage upload route limits", () => {
   });
 
   it("lets the Worker's outer body guard pass what the finish route can read", () => {
-    // The OpenNext wrapper caps the body before the route runs. If its cap
+    // The Worker's outer wrapper caps the body before the route runs. If its cap
     // were the old 64 KiB, a completion with enough parts would get a 413
     // there and never reach the route that could accept it.
     expect(requestBodyLimit("/api/internal/storage/uploads/upload-1", "POST")).toBe(

@@ -90,7 +90,7 @@ export function apiRequestBodyLimit(
 }
 
 /**
- * Select the OpenNext outer cap before its generated handler buffers a body.
+ * Select the Worker's outer cap before vinext or a route handler reads a body.
  * The matrix is method-sensitive so a binary allowance cannot be borrowed by
  * posting to a different handler at the same path.
  */

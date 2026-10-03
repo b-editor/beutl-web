@@ -19,20 +19,22 @@ describe("旧 URL から /dashboard へのリダイレクト", () => {
   // 旧 URL を指しているブックマークやメールのリンクが壊れないか、この表で確かめる。
   const EXPECTED: ReadonlyArray<readonly [string, string]> = [
     ["/storage/:path*", "/dashboard/storage/:path*"],
-    ["/:lang(ja|en)/storage/:path*", "/:lang/dashboard/storage/:path*"],
+    ["/ja/storage/:path*", "/ja/dashboard/storage/:path*"],
+    ["/en/storage/:path*", "/en/dashboard/storage/:path*"],
     ["/library/:path*", "/dashboard/library/:path*"],
-    ["/:lang(ja|en)/library/:path*", "/:lang/dashboard/library/:path*"],
+    ["/ja/library/:path*", "/ja/dashboard/library/:path*"],
+    ["/en/library/:path*", "/en/dashboard/library/:path*"],
     ["/developer/:path*", "/dashboard/developer/:path*"],
-    ["/:lang(ja|en)/developer/:path*", "/:lang/dashboard/developer/:path*"],
+    ["/ja/developer/:path*", "/ja/dashboard/developer/:path*"],
+    ["/en/developer/:path*", "/en/dashboard/developer/:path*"],
     // AI プランの画面が請求ページへ統合されたあとも、発行済みの Checkout
     // success_url / ポータル return_url が戻ってこられるようにする。
     ["/dashboard/account/ai-plan", "/dashboard/account/billing"],
-    [
-      "/:lang(ja|en)/dashboard/account/ai-plan",
-      "/:lang/dashboard/account/billing",
-    ],
+    ["/ja/dashboard/account/ai-plan", "/ja/dashboard/account/billing"],
+    ["/en/dashboard/account/ai-plan", "/en/dashboard/account/billing"],
     ["/account/manage/:path*", "/dashboard/account/:path*"],
-    ["/:lang(ja|en)/account/manage/:path*", "/:lang/dashboard/account/:path*"],
+    ["/ja/account/manage/:path*", "/ja/dashboard/account/:path*"],
+    ["/en/account/manage/:path*", "/en/dashboard/account/:path*"],
   ];
 
   it("対応表がそのまま登録されている", () => {
@@ -50,6 +52,14 @@ describe("旧 URL から /dashboard へのリダイレクト", () => {
       });
     });
   }
+
+  it("ロケール接頭辞を制約付きパラメータで書かない", () => {
+    // vinext 1.0.1 は `/:lang(ja|en)/...` の後半を固定文字列として照合するため、
+    // `:path*` を含む旧 URL が一致しなくなる。接頭辞は言語ごとに書き出す。
+    for (const redirect of redirects) {
+      expect(redirect.source).not.toMatch(/^\/:[\w-]+\(/u);
+    }
+  });
 
   it("permanent を立てない (307 のまま)", () => {
     // 308 をブラウザにキャッシュさせると、確認メールのリンクのような一回性 URL の

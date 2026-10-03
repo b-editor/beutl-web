@@ -1,8 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // OpenNext の worker をそのまま指さず、本文の大きさを見る入口で包む。
-  // 生成されるハンドラは利用者の middleware より先に本文をまるごと持つので、
-  // 抱える前に断れるのはここだけ。中身は worker.js を参照。
+  // vinext のハンドラをそのまま指さず、本文の大きさを見る入口で包む。
+  // cron の scheduled もここで受ける。中身は worker.js を参照。
   "main": "worker.js",
   "name": "beutl-web",
   "compatibility_date": "2025-04-04",
@@ -16,6 +15,11 @@
     // Propagate a browser reload/navigation through Request.signal so long AI
     // submissions release their Worker resources when the client disconnects.
     "enable_request_signal",
+    // vinext の開発サーバーはバンドルせずに依存を読み込むため、React の開発ビルドが
+    // 使う WeakRef と、依存が import する node:worker_threads が必要になる。
+    // どちらも 2025-04-04 の互換日付では既定で無効。
+    "enable_weak_ref",
+    "enable_nodejs_worker_threads_module",
   ],
   "keep_vars": true,
   // The billing migration leaves old Worker preview URLs disabled.
@@ -27,18 +31,14 @@
   // 最長一致で api パターンが優先されるため、この Worker は Web ページと
   // /api/auth・/api/contents・/api/stripe を受ける。カスタムドメインはダッシュボード側で設定済み。
   "assets": {
-    "directory": ".open-next/assets",
+    "directory": "dist/client",
+    "not_found_handling": "none",
     "binding": "ASSETS",
   },
   "services": [
     {
       "binding": "AI_IMAGE_WORKER",
       "service": "beutl-ai-images"
-    },
-    {
-      "binding": "WORKER_SELF_REFERENCE",
-      // The service should match the "name" of your worker
-      "service": "beutl-web",
     },
   ],
   "observability": {
@@ -53,11 +53,6 @@
     }
   },
   "r2_buckets": [
-    // Create a R2 binding with the binding name "NEXT_INC_CACHE_R2_BUCKET"
-    {
-      "binding": "NEXT_INC_CACHE_R2_BUCKET",
-      "bucket_name": "beutl-web-inc-cache",
-    },
     // MUST MATCH beutl-web-api (packages/api/wrangler.jsonc).
     // BEUTL_STORAGE_PROVIDER=s3 (vars) + BEUTL_S3_* (vars/secrets) sends new
     // objects to S3 compatible storage; keep this binding so objects already in

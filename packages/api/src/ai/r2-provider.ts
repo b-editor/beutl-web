@@ -1,4 +1,4 @@
-// Storage bucket injection point shared by the standalone Worker and OpenNext.
+// Storage bucket injection point shared by the standalone Worker and the Web app.
 // The shape is the R2 binding's; storage/s3-compatible-bucket.ts adapts S3
 // compatible services to it, and storage/bucket-from-env.ts picks which one
 // the configuration names.

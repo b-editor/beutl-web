@@ -1,14 +1,8 @@
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { env } from "cloudflare:workers";
 
-/** The private service is absent only in local Next development. */
+/** The private service is not running in local development. */
 export function getImageWorkerBinding(): { fetch(request: Request): Promise<Response> } | null {
-  let env: CloudflareEnv;
-  try {
-    env = getCloudflareContext().env;
-  } catch (error) {
-    if (process.env.NODE_ENV !== "development") throw error;
-    return null;
-  }
+  if (process.env.NODE_ENV === "development") return null;
   if (!env.AI_IMAGE_WORKER) {
     throw new Error("AI_IMAGE_WORKER service binding is missing");
   }

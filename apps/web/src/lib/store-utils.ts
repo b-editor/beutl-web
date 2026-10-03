@@ -1,6 +1,7 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
 import { getDb } from "@beutl/db";
+import { withScopedPrismaClient } from "@/prisma";
 import { contentPath } from "@/lib/content-url";
 import { selectPricing, packageTypeWhere } from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
@@ -135,10 +136,13 @@ export type LandingPackage = {
   The landing page route is dynamic, so without this every visit to the front
   door would open a database connection for a list that changes on the order of
   weeks. The cache wraps the query alone: an error must not be cached, or one
-  blip would blank the section for the whole revalidation window.
+  blip would blank the section for the whole revalidation window. The query
+  runs on a client of its own because after(), which releases the shared one,
+  cannot be called inside unstable_cache().
 */
 const cachedLatestPublishedPackages = unstable_cache(
-  (take: number) => retrieveLatestPublishedPackages({ take }),
+  (take: number) =>
+    withScopedPrismaClient(() => retrieveLatestPublishedPackages({ take })),
   ["landing-latest-packages"],
   { revalidate: 3600 },
 );

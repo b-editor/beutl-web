@@ -29,7 +29,7 @@ async function expectFileTooLarge(response: Response): Promise<void> {
   });
 }
 
-describe("OpenNext outer body limit", () => {
+describe("Worker outer body limit", () => {
   it.each([true, false])("passes a small AI Server Action through middleware (declared length: %s)", async (declared) => {
     const response = await fetchWithBodyLimit(
       new Request("https://beutl.beditor.net/ja/dashboard/ai/generate", {
@@ -40,7 +40,7 @@ describe("OpenNext outer body limit", () => {
       } as RequestInit & { duplex: "half" }),
       {}, {},
       async (request) => {
-        expect(request.headers.get("content-length")).toBeNull();
+        expect(request.headers.get("content-length")).toBe(declared ? "2" : null);
         const rejection = refuseOversizedAiUpload({
           method: request.method,
           nextUrl: new URL(request.url),
@@ -79,7 +79,7 @@ describe("OpenNext outer body limit", () => {
     await expectFileTooLarge(response);
   });
 
-  it("maps a generated handler buffer rejection to 413", async () => {
+  it("maps a downstream read past the limit to 413", async () => {
     const response = await fetchWithBodyLimit(
       new Request("https://beutl.beditor.net/ja/dashboard", {
         method: "POST",
@@ -156,7 +156,7 @@ describe("OpenNext outer body limit", () => {
     ["auth", "POST", "/api/auth/sign-in/email", MAX_AUTH_REQUEST_BODY_BYTES],
     ["Stripe webhook", "POST", "/api/stripe/webhook", MAX_STRIPE_WEBHOOK_BODY_BYTES],
     ["storage control", "POST", "/api/internal/storage/uploads", MAX_INTERNAL_STORAGE_START_BODY_BYTES],
-  ])("rejects declared oversized %s bodies before OpenNext", async (
+  ])("rejects declared oversized %s bodies before vinext", async (
     _name,
     method,
     pathname,
@@ -183,7 +183,7 @@ describe("OpenNext outer body limit", () => {
     expect(called).toBe(false);
   });
 
-  it("passes a valid storage part and lets OpenNext restore its actual length", async () => {
+  it("passes a valid storage part with its declared length", async () => {
     const actualLength = 1024;
     const response = await fetchWithBodyLimit(
       new Request(
@@ -201,12 +201,10 @@ describe("OpenNext outer body limit", () => {
       {},
       {},
       async (request) => {
-        expect(request.headers.get("content-length")).toBeNull();
+        // The part route hands the stream to the bucket with this length.
+        expect(Number(request.headers.get("content-length"))).toBe(actualLength);
         const body = await request.arrayBuffer();
-        const openNextHeaders = new Headers(request.headers);
-        openNextHeaders.set("content-length", String(body.byteLength));
-        expect(Number(openNextHeaders.get("content-length")))
-          .toBe(actualLength);
+        expect(body.byteLength).toBe(actualLength);
         expect(body.byteLength).toBeLessThanOrEqual(STORAGE_UPLOAD_PART_BYTES);
         return new Response("ok");
       },

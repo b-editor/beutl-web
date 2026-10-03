@@ -1,17 +1,15 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 
 vi.mock("server-only", () => ({}));
-const getContext = vi.hoisted(() => vi.fn());
+const waitUntil = vi.hoisted(() => vi.fn());
+vi.mock("cloudflare:workers", () => ({ env: {}, waitUntil }));
 
 let createStorageFile: typeof import("../../apps/web/src/lib/storage").createStorageFile;
 let createDedicatedStorageFile: typeof import("../../apps/web/src/lib/storage").createDedicatedStorageFile;
 let deleteStorageFile: typeof import("../../apps/web/src/lib/storage").deleteStorageFile;
 
 beforeAll(async () => {
-  const requireFromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
-  vi.doMock(requireFromWeb.resolve("@opennextjs/cloudflare"), () => ({ getCloudflareContext: getContext }));
   ({ createStorageFile, createDedicatedStorageFile, deleteStorageFile } = await import("../../apps/web/src/lib/storage"));
 });
 
@@ -50,10 +48,7 @@ describe("legacy storage cleanup contracts", () => {
     };
     setDbProvider(async () => memory.prisma as never);
     setR2BucketProvider(() => bucket as never);
-    getContext.mockReturnValue({
-      env: { BEUTL_R2_BUCKET: bucket },
-      ctx: { waitUntil: (promise: Promise<unknown>) => background.push(promise) },
-    });
+    waitUntil.mockImplementation((promise: Promise<unknown>) => background.push(promise));
   });
 
   afterEach(() => vi.useRealTimers());

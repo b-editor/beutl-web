@@ -1,6 +1,6 @@
 // 環境変数からオブジェクトストレージの実装を選ぶ。既定は Cloudflare R2 の
 // バインディング (BEUTL_R2_BUCKET)。BEUTL_STORAGE_PROVIDER=s3 なら S3 互換
-// ストレージへ SigV4 署名付き HTTP でアクセスする。Web (OpenNext) と API
+// ストレージへ SigV4 署名付き HTTP でアクセスする。Web (vinext) と API
 // Worker の両方がここを通るので、設定の読み方はこの 1 か所に閉じる。
 import type { R2BucketLike } from "../ai/r2-provider";
 import { createLayeredBucket } from "./layered-bucket";

@@ -163,8 +163,7 @@ export default {
     }
 
     // workerd は vars/secrets を process.env に自動投入しない。
-    // OpenNext (Web Worker) の populateProcessEnv と同じく文字列バインディングを
-    // process.env へコピーする。v1/account (JWT) や v1/app (バージョン) は
+    // 文字列バインディングを process.env へコピーする。v1/account (JWT) や v1/app (バージョン) は
     // process.env を直接参照するため、これがないと独立 Worker で undefined になる。
     configureRuntime(env);
     try {

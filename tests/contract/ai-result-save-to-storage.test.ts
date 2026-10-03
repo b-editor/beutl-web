@@ -1,14 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRequire } from "node:module";
 
 vi.mock("server-only", () => ({}));
-const getContext = vi.hoisted(() => vi.fn());
+vi.mock("cloudflare:workers", () => ({ env: {}, waitUntil: () => undefined }));
 
 let copyAiResultToStorage: typeof import("../../apps/web/src/lib/storage").copyAiResultToStorage;
 
 beforeAll(async () => {
-  const requireFromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
-  vi.doMock(requireFromWeb.resolve("@opennextjs/cloudflare"), () => ({ getCloudflareContext: getContext }));
   ({ copyAiResultToStorage } = await import("../../apps/web/src/lib/storage"));
 });
 
@@ -108,10 +105,6 @@ describe("keeping an AI result in storage", () => {
     };
     setDbProvider(async () => memory.prisma as never);
     setR2BucketProvider(() => bucket as never);
-    getContext.mockReturnValue({
-      env: { BEUTL_R2_BUCKET: bucket },
-      ctx: { waitUntil: () => undefined },
-    });
   });
 
   it("copies the result under a new key as a private storage file", async () => {

@@ -1,11 +1,11 @@
 import "server-only";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { waitUntil } from "cloudflare:workers";
 import { createStorageOperations } from "@beutl/api/storage/files";
 export type { StorageWriteSource, AiResultStorageCopyOutcome } from "@beutl/api/storage/files";
 
 function operations() {
   return createStorageOperations({
-    waitUntil: (task) => getCloudflareContext().ctx?.waitUntil?.(task),
+    waitUntil: (task) => waitUntil(task),
   });
 }
 

@@ -21,45 +21,12 @@ const nextConfig = {
       },
     ],
   },
-  serverExternalPackages: [
-    "@prisma/client",
-    ".prisma/client",
-    // pg (pgpass) は Node 組み込みモジュール (path/fs) に依存するため
-    // サーバーバンドルから外部化する (instrumentation → prisma.ts 経由でロードされる)。
-    "pg",
-    "@prisma/adapter-pg",
-  ],
-  webpack: (config) => {
-    // instrumentation hook のバンドルには serverExternalPackages が適用されないため、
-    // pg 系を明示的に外部化する (ランタイムの node_modules から解決される)。
-    config.externals = [
-      ...(Array.isArray(config.externals)
-        ? config.externals
-        : config.externals
-          ? [config.externals]
-          : []),
-      { pg: "commonjs pg", pgpass: "commonjs pgpass" },
-    ];
-    return config;
-  },
   experimental: {
     // Material packages routinely exceed the 1 MB default Server Action body limit.
     serverActions: {
       bodySizeLimit: "100mb",
     },
-    // A request that goes through the middleware has its body buffered, and
-    // whatever runs past this limit is dropped. The 10 MB default cut a larger
-    // upload down to a body its own handler could no longer parse.
-    proxyClientMaxBodySize: "100mb",
   },
 };
 
-import analyzer from '@next/bundle-analyzer';
-const withBundleAnalyzer = analyzer({
-  enabled: process.env.ANALYZE === 'true',
-});
-
-export default withBundleAnalyzer(nextConfig);
-
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
-initOpenNextCloudflareForDev();
+export default nextConfig;

@@ -23,7 +23,7 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("Cloudflare Worker memory footprint", () => {
-  it("keeps the OpenNext R2 registry independent from the API barrel", () => {
+  it("keeps the Web R2 registry independent from the API barrel", () => {
     const apiPackage = packageJson("packages/api/package.json");
     const prisma = source("apps/web/src/prisma.ts");
     const provider = source("packages/api/src/ai/r2-provider.ts");
