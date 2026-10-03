@@ -408,7 +408,7 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
         leaseToken,
         expectedLeaseUntil: leaseUntil,
         now: new Date(),
-      }).catch(() => undefined);
+      }).catch((releaseError) => console.error("Failed to release a dedicated storage reservation", reservation.reservation.id, releaseError));
       throw error;
     }
     const bucket = getR2Bucket();
@@ -426,7 +426,7 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
         leaseToken,
         expectedLeaseUntil: leaseUntil,
         now: new Date(),
-      }).catch(() => undefined);
+      }).catch((releaseError) => console.error("Failed to release a dedicated storage reservation", reservation.reservation.id, releaseError));
       throw error;
     }
     let putSucceeded = false;
@@ -632,7 +632,10 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
           publish,
           visibility,
           folderId,
-        }).catch(() => null);
+        }).catch((commitError) => {
+          console.error("Failed to recover a dedicated storage reservation", reservation.reservation.id, commitError);
+          return null;
+        });
         if (recovered?.kind === "created") return recovered;
       }
       // Preserve both the reservation and the physical cleanup key even when the

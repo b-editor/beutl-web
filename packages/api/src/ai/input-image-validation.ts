@@ -469,6 +469,7 @@ export async function validateAiInputImage(
     bytes = await file.arrayBuffer();
     signal?.throwIfAborted();
   } catch {
+    // An unreadable upload is invalid input, unless the request was aborted.
     signal?.throwIfAborted();
     return null;
   }
@@ -498,6 +499,7 @@ export async function validateAiInputImage(
         break;
     }
   } catch {
+    // An image that cannot be inspected is invalid input, unless the request was aborted.
     signal?.throwIfAborted();
     return null;
   }

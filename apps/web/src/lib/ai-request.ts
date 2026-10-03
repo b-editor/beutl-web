@@ -126,6 +126,7 @@ async function boundedJsonOf(
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return { ok: true, value: JSON.parse(text) };
   } catch {
+    // A body that is not UTF-8 JSON is reported as unreadable.
     return { ok: false };
   }
 }

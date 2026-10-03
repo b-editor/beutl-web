@@ -57,7 +57,7 @@ export async function resolvePackageCheckoutMultiple(input: unknown): Promise<Ac
     if (!secret) return { success: false, message: "Stripe is not configured" };
     try {
       const result = await resolveLegacyPackageCheckoutMultiple({ stripe: new Stripe(secret), attempt, discoveryToken, recoveryLeaseToken: leaseToken, operatorUserId: session.user.id, choice: choice === "all-refund" ? { kind: "all-refund" } : { kind: "choose", sessionId: choice } });
-      try { await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.packageCheckoutResolution, details: `attemptId: ${attempt.id}, discoveryToken: ${discoveryToken}, choice: ${choice}, refunds: ${result.refundCount}` }); } catch { /* durable resolution operatorUserId remains authoritative */ }
+      try { await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.packageCheckoutResolution, details: `attemptId: ${attempt.id}, discoveryToken: ${discoveryToken}, choice: ${choice}, refunds: ${result.refundCount}` }); } catch (error) { /* durable resolution operatorUserId remains authoritative */ console.error("Package checkout resolution audit log failed", error); }
       return { success: true, message: `Resolution scheduled (${result.refundCount} refunds)` };
     } catch (error) {
       await reschedulePackageCheckoutIntervention({ id: attempt.id, discoveryToken, leaseToken, notBefore: new Date(), lastError: error instanceof Error ? error.message : "Resolution failed" });

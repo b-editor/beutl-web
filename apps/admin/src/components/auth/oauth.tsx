@@ -32,7 +32,8 @@ export function useOAuthSignIn({
       if (result?.error) {
         throw new Error(result.error.message);
       }
-    } catch {
+    } catch (error) {
+      console.error("OAuth sign-in failed", error);
       toast({
         title: t("admin:common.error"),
         description: t("auth:errors.oauth"),

@@ -27,7 +27,10 @@ import {
   isCancellationScheduled,
 } from "./cancellation";
 import type { createStripe } from "./config";
-import { isStripeResourceMissingError } from "./errors";
+import {
+  isStripeInvalidRequestError,
+  isStripeResourceMissingError,
+} from "./errors";
 import {
   getExpandableId as expandableId,
   getStripeCustomerOwnershipProof,
@@ -882,7 +885,9 @@ export async function createSubscriptionCheckout({
 // Validates the Session the user came back with and records the subscription
 // immediately, without waiting for the webhook. The success URL is
 // user-controlled: an expired, forged, or inaccessible session must not
-// prevent the account page from rendering, so every failure is a quiet false.
+// prevent the account page from rendering, so a Session Stripe rejects is a
+// quiet false. Stripe being unreachable says nothing about the URL and is
+// thrown for the caller to report.
 export async function reconcileSubscriptionCheckoutSuccess({
   stripe,
   plan,
@@ -902,7 +907,8 @@ export async function reconcileSubscriptionCheckoutSuccess({
     checkoutSession = await stripe.checkout.sessions.retrieve(
       stripeCheckoutSessionId,
     );
-  } catch {
+  } catch (error) {
+    if (!isStripeInvalidRequestError(error)) throw error;
     return false;
   }
   const customerId = expandableId(checkoutSession.customer);

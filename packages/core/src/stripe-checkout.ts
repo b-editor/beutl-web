@@ -9,6 +9,7 @@ export function allowsStripePromotionCodes(params: unknown): boolean {
     try {
       value = JSON.parse(value);
     } catch {
+      // Params that are not JSON do not allow promotion codes.
       return false;
     }
   }

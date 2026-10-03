@@ -358,7 +358,7 @@ export async function reconcileAiJobs(
       }
     } catch (error) {
       await deferEstimatedGatewayVideoCostLookup({ jobId: job.id, updatedAt: retryUpdatedAt })
-        .catch(() => undefined);
+        .catch((deferError) => console.error("Failed to defer a Gateway late video cost check", job.id, deferError));
       console.warn("Gateway late video cost check failed", {
         jobId: job.id,
         errorType: error instanceof Error ? error.name : typeof error,

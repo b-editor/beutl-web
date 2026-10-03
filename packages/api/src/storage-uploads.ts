@@ -145,7 +145,10 @@ export async function reconcileUnknownStorageUploadCompletions(
       expectedRevision: listed.completionRevision,
       expectedInterventionAt: listed.completionInterventionAt!,
       now: new Date(),
-    }).catch(() => null);
+    }).catch((error) => {
+      console.error("Failed to claim an unknown storage upload completion", listed.id, error);
+      return null;
+    });
     if (!candidate) continue;
     let object: { size?: number } | null;
     try {
@@ -454,7 +457,10 @@ export async function abandonStaleStorageUploads(
             settlementAt.getTime() +
               STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
           ),
-        }).catch(() => false);
+        }).catch((settleError) => {
+          console.error("Failed to settle a terminal storage upload", upload.id, settleError);
+          return false;
+        });
         if (settled) abandoned++;
         else failed++;
         continue;
@@ -499,7 +505,10 @@ async function stillOwnCleanupLease(
   const current = await findStorageUploadByIdAndUserId({
     id: expected.id,
     userId: expected.userId,
-  }).catch(() => null);
+  }).catch((error) => {
+    console.error("Failed to confirm a storage upload cleanup lease", expected.id, error);
+    return null;
+  });
   return Boolean(
     current &&
     current.createdAt.getTime() === expected.createdAt.getTime() &&

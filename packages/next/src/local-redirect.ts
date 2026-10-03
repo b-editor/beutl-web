@@ -18,6 +18,7 @@ async function getRequestOrigin(): Promise<string | undefined> {
     if (protocol !== "http:" && protocol !== "https:") return undefined;
     return origin;
   } catch {
+    // A forwarded URL that is not a URL is ignored.
     return undefined;
   }
 }

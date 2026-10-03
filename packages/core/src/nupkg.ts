@@ -224,6 +224,7 @@ export function rewriteTemplateReferences(
     try {
       value = JSON.parse(token) as string;
     } catch {
+      // A token that is not a JSON string is used as written.
       return token;
     }
     // URI schemes are case-insensitive, so `FILE://` names the same thing.

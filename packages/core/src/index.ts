@@ -4,6 +4,11 @@ export { errorCodes, isApiErrorCode } from "./api-error-codes";
 export type { ApiErrorCode } from "./api-error-codes";
 export { selectPricing } from "./pricing";
 export {
+  isStripeChargeAlreadyRefundedError,
+  isStripeInvalidRequestError,
+  isStripeResourceMissingError,
+} from "./stripe-errors";
+export {
   formatAmount,
   formatFractionalAmount,
   isZeroDecimalCurrency,

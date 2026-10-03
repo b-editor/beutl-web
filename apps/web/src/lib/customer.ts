@@ -829,10 +829,10 @@ export async function closeStripeCustomerForAccountDeletion({
         const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
         if (!paymentIntentId) return { status: "owner-mismatch", customerId: customer.id };
         let paymentIntent: Stripe.PaymentIntent;
-        try { paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId); } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        try { paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId); } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: customer.id }; }
         const chargeId = typeof paymentIntent.latest_charge === "string" ? paymentIntent.latest_charge : paymentIntent.latest_charge?.id;
         let charge: Stripe.Charge | null;
-        try { charge = chargeId ? await stripe.charges.retrieve(chargeId) : null; } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        try { charge = chargeId ? await stripe.charges.retrieve(chargeId) : null; } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: customer.id }; }
         if (!charge) return { status: "owner-mismatch", customerId: customer.id };
         if (charge.created < Math.floor(deletionAuthorizedAt.getTime() / 1000)) continue;
         if (isTopUp) {
@@ -842,7 +842,7 @@ export async function closeStripeCustomerForAccountDeletion({
         const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
         if (!subscriptionId) return { status: "owner-mismatch", customerId: customer.id };
         let subscription: Stripe.Subscription;
-        try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch { return { status: "owner-mismatch", customerId: customer.id }; }
+        try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: customer.id }; }
         if (subscription.created < Math.floor(deletionAuthorizedAt.getTime() / 1000)) continue;
         await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: subscriptionPlan, customerId: customer.id, packageId: null, billingOfferId: session.metadata?.billingOfferId });
       } else return { status: "owner-mismatch", customerId: customer.id };

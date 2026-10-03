@@ -348,6 +348,7 @@ export function useVideoInputDurations(
       try {
         return [file, await readVideoDurationSeconds(file, controller.signal)] as const;
       } catch {
+        // A file the browser cannot decode simply has no known duration.
         return [file, null] as const;
       }
     })).then((entries) => {
@@ -396,6 +397,7 @@ export function useFileFingerprints(
       .then((contents) => {
         if (current) setRead({ files, contents });
       })
+      // Files that cannot be read keep the previous fingerprints; submit re-reads them.
       .catch(() => undefined);
     return () => {
       current = false;
@@ -461,6 +463,7 @@ function migratePersistedRecovery(
     window.localStorage.removeItem(recoveryStorageKey(userId, operation));
     return true;
   } catch {
+    // Browser storage is unavailable or full; the caller keeps the legacy record.
     return false;
   }
 }
@@ -490,6 +493,7 @@ function writePersistedRecoveryEntry(
       candidate.digest === entry.digest && candidate.key === entry.key,
     );
   } catch {
+    // Browser storage is unavailable or full; the caller fails closed.
     return false;
   }
 }
@@ -563,6 +567,7 @@ function removePersistedRecoveryEntry(
     );
     return true;
   } catch {
+    // Browser storage is unavailable; the caller keeps the entry recoverable.
     return false;
   }
 }
@@ -594,6 +599,7 @@ function readRecoveryTombstone(
     if (settledAt > now || now - settledAt > AI_RECOVERY_TTL_MS) return null;
     return { key: value.key, settledAt };
   } catch {
+    // A corrupt tombstone is treated as absent.
     return null;
   }
 }
@@ -1303,7 +1309,8 @@ export function CopyButton({
           // Long enough to read, short enough that the button is ready again
           // before a second copy.
           window.setTimeout(() => setCopied(false), 2000);
-        } catch {
+        } catch (error) {
+          console.error("Copying to the clipboard failed", error);
           toast({
             title: t("dashboard:ai.copyFailed"),
             variant: "destructive",
@@ -1447,7 +1454,8 @@ function SaveToStorageDialog({
     let result: Awaited<ReturnType<typeof saveResultToStorageAction>>;
     try {
       result = await saveResultToStorageAction(jobId, target, saveKey);
-    } catch {
+    } catch (error) {
+      console.error("Saving an AI result to storage failed", error);
       result = { success: false };
     }
     setPending(false);

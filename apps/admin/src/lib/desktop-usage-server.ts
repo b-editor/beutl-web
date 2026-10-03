@@ -86,8 +86,10 @@ export async function fetchDesktopUsage(
       reports.push(buildUsageReport([window], results));
     }
     return { status: "ready", report: mergeUsageReports(reports) };
-  } catch {
-    // Backend errors and credentials must never be rendered or logged in the browser.
+  } catch (error) {
+    // Backend errors and credentials must never be rendered or logged in the
+    // browser. The server log is where an operator looks for why.
+    console.error("Desktop usage report failed", error);
     return { status: "unavailable" };
   }
 }

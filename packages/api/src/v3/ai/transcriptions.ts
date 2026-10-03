@@ -189,6 +189,7 @@ const app = new Hono().post("/", async (c) => {
   try {
     parsedAudio = await parseAudio(file);
   } catch {
+    // parseAudio throws only for audio it cannot read, which is the caller's input.
     return c.json(await apiErrorResponse("invalidRequestBody"), {
       status: 400,
     });

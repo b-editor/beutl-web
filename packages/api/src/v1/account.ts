@@ -230,6 +230,7 @@ const app = new Hono()
     try {
       target = nativeAuthCallbackUrl(continueUrl, authCode ?? "");
     } catch {
+      // A continue URL that is not allowed is the caller's input.
       return c.json(await apiErrorResponse("invalidRequestBody"), { status: 400 });
     }
     return c.redirect(target);

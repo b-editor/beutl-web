@@ -25,6 +25,7 @@ export function resolveSafeRedirectPath(
   try {
     resolved = new URL(value, base);
   } catch {
+    // A value that is not a URL is not a safe redirect.
     return null;
   }
 

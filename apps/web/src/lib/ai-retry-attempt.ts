@@ -123,6 +123,7 @@ export function readStoredRetryAttempt(
       state: value.state === "submitting" ? "ambiguous" : value.state!,
     };
   } catch {
+    // An unavailable store or corrupt record reads as no retry attempt.
     return null;
   }
 }
@@ -170,6 +171,7 @@ async function migrateLegacyAttempt(
       );
       return true;
     } catch {
+      // Browser storage is unavailable or full; the record is not migrated.
       return false;
     }
   };
@@ -226,6 +228,7 @@ export async function getOrCreateStoredRetryAttempt({
           })
         : "";
     } catch {
+      // Payloads that are not JSON are fingerprinted as opaque text.
       fingerprint = await fingerprintText(expectedPayload);
     }
   }
@@ -251,6 +254,7 @@ export async function getOrCreateStoredRetryAttempt({
           ? persisted
           : null;
       } catch {
+        // Browser storage is unavailable or full; the caller fails closed.
         return null;
       }
     },
@@ -292,6 +296,7 @@ export async function updateStoredRetryAttempt({
       return persisted?.idempotencyKey === attempt.idempotencyKey &&
         persisted.expectedFingerprint === attempt.expectedFingerprint;
     } catch {
+      // Browser storage is unavailable or full; the caller fails closed.
       return false;
     }
   };
@@ -332,6 +337,7 @@ export async function removeStoredRetryAttempt({
       storage.removeItem(retryAttemptStorageKey(userId, jobId));
       return readStoredRetryAttempt(storage, userId, jobId) === null;
     } catch {
+      // Browser storage is unavailable; the attempt is not known to be cleared.
       return false;
     }
   };

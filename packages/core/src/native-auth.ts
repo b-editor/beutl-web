@@ -44,6 +44,7 @@ export function resolveNativeAuthContinueTarget(
   try {
     parsed = new URL(value);
   } catch {
+    // A value that is not a URL is not an allowed callback.
     return null;
   }
 

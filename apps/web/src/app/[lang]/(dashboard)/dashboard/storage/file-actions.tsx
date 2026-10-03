@@ -118,7 +118,8 @@ export function useFileActions(
               new URL(contentUrl(single), window.location.origin).toString(),
             );
             toast({ title: t("storage:linkCopied") });
-          } catch {
+          } catch (error) {
+            console.error("Copying the file link failed", error);
             toast({
               title: t("error"),
               description: t("storage:copyFailed"),

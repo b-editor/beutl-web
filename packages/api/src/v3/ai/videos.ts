@@ -399,6 +399,7 @@ function publicHttpsOrigin(request: Request): string | undefined {
   try {
     origin = new URL(process.env.PUBLIC_ORIGIN || new URL(request.url).origin);
   } catch {
+    // An origin that is not a URL is a deployment without a reachable HTTPS origin.
     return undefined;
   }
   return origin.protocol === "https:" ? origin.origin : undefined;
@@ -879,6 +880,7 @@ const app = new Hono()
         try {
           metadata = inspectGeneratedVideo(bytes, entry.file.type);
         } catch {
+          // A video that cannot be inspected is the caller's input.
           return c.json(await apiErrorResponse("invalidRequestBody"), {
             status: 400,
           });
@@ -1226,6 +1228,7 @@ const app = new Hono()
         new TextDecoder("utf-8", { fatal: true }).decode(rawBody),
       ) as unknown;
     } catch {
+      // A callback body that is not UTF-8 JSON is rejected.
       return new Response(null, { status: 400 });
     }
     const event = openRouterVideoWebhookSchema.safeParse(payload);
@@ -1360,6 +1363,7 @@ const app = new Hono()
     try {
       metadata = inspectGeneratedVideo(bytes, file.type);
     } catch {
+      // A video that cannot be inspected is the caller's input.
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
@@ -1625,6 +1629,7 @@ const app = new Hono()
     try {
       metadata = inspectGeneratedVideo(bytes, file.type);
     } catch {
+      // A video that cannot be inspected is the caller's input.
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });
@@ -1854,6 +1859,7 @@ const app = new Hono()
         new TextDecoder("utf-8", { fatal: true }).decode(rawBody),
       ) as unknown;
     } catch {
+      // A callback body that is not UTF-8 JSON is rejected.
       return new Response(null, { status: 400 });
     }
     const event = gatewayVideoWebhookSchema.safeParse(payload);
