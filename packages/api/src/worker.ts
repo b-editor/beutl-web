@@ -1,3 +1,5 @@
+import { routeGitRequest, reconcileGitRepositoryDeletions, reconcileGitLfsReservations, reconcileGitHistoryReservations, withTusProtocolHeader, type GitRouterEnvironment } from "./git/router";
+export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 // beutl-web-api: デスクトップアプリ向け API 専用 Cloudflare Worker。
 // 同一ドメイン・パス分割 (beutl.beditor.net/api/v{1,2,3}/*) で受ける。
 import { PrismaClient } from "@prisma/client";
@@ -27,7 +29,7 @@ import {
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
 
-export interface Env {
+export interface Env extends GitRouterEnvironment {
   BEUTL_DATABASE_HYPERDRIVE: {
     connectionString: string;
   };
@@ -137,9 +139,10 @@ export function withBoundedBody(
   }
 
   const headers = new Headers(request.headers);
+  const tusPatch = request.method === "PATCH" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[0-9a-f-]+$/u.test(new URL(request.url).pathname);
   // Multipart storage providers require the declared part length; the route
   // additionally bounds the stream to that length before handing it to storage.
-  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname)))
+  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname)) && !tusPatch)
     headers.delete("content-length");
   return new Request(request.url, {
     method: request.method,
@@ -159,7 +162,7 @@ export default {
       bodyLimitExceeded = true;
     });
     if (bounded === null) {
-      return await fileTooLargeApiResponse();
+      return withTusProtocolHeader(request, await fileTooLargeApiResponse());
     }
 
     // workerd は vars/secrets を process.env に自動投入しない。
@@ -168,15 +171,17 @@ export default {
     // process.env を直接参照するため、これがないと独立 Worker で undefined になる。
     configureRuntime(env);
     try {
+      const git = await routeGitRequest(bounded, env);
+      if (git) return git;
       const response = await api.fetch(bounded, env);
       // Hono's JSON parser can turn a stream error into a generic 400 before
       // the endpoint sees it. The outer stream marker still gives the Worker
       // an unambiguous 413 response for chunked bodies.
       return bodyLimitExceeded
-        ? await fileTooLargeApiResponse()
+        ? withTusProtocolHeader(request, await fileTooLargeApiResponse())
         : response;
     } catch (error) {
-      if (bodyLimitExceeded) return await fileTooLargeApiResponse();
+      if (bodyLimitExceeded) return withTusProtocolHeader(request, await fileTooLargeApiResponse());
       throw error;
     }
   },
@@ -216,6 +221,9 @@ export default {
         reconcileStripeCustomerProvisioning(scheduledAt, env.STRIPE_SECRET_KEY),
         stripeCheckoutCleanups,
         reconcileBillingRefunds(scheduledAt, env.STRIPE_SECRET_KEY),
+        reconcileGitRepositoryDeletions(env),
+        reconcileGitLfsReservations(env),
+        reconcileGitHistoryReservations(env),
       ]).then(([
         storageUploads,
         storageMultipartCleanups,
@@ -227,6 +235,9 @@ export default {
         stripeCustomerProvisioning,
         stripeCheckoutCleanups,
         billingRefunds,
+        gitDeletions,
+        gitLfsReservations,
+        gitHistoryReservations,
       ]) => {
         console.log("Scheduled reconciliation completed", {
           storageUploads,
@@ -239,6 +250,9 @@ export default {
           stripeCustomerProvisioning,
           stripeCheckoutCleanups,
           billingRefunds,
+          gitDeletions,
+          gitLfsReservations,
+          gitHistoryReservations,
         });
         if (topUpRefunds.interventionRequired > 0) {
           console.error("Top-up refunds require manual intervention", {

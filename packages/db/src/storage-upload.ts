@@ -1,4 +1,5 @@
 import { countFilesByUserId, storedMimeType, sumFileSizeByUserId } from "./file";
+import { lockStorageAccount, sumGitCommittedBytes, sumGitReservedBytes } from "./git-storage";
 import { getDb } from "./provider";
 import { resolveStorageQuota } from "./storage-quota";
 import {
@@ -171,6 +172,7 @@ export async function createDedicatedStorageReservation({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    await lockStorageAccount(userId, tx);
     const creationLeaseToken = crypto.randomUUID();
     const creationLeaseUntil = new Date(
       Date.now() + DEDICATED_STORAGE_WRITE_LEASE_MILLISECONDS,
@@ -181,7 +183,8 @@ export async function createDedicatedStorageReservation({
       tx.file.count({ where: { userId, aiJobResult: null } } as never),
       tx.storageUpload.count({ where: { userId, completedFileId: null, abandonedAt: null } } as never),
     ]);
-    const total = BigInt(stored._sum?.size ?? 0) + BigInt(reserved._sum?.size ?? 0) + size;
+    const total = BigInt(stored._sum?.size ?? 0) + BigInt(reserved._sum?.size ?? 0) +
+      await sumGitReservedBytes(userId, tx) + await sumGitCommittedBytes(userId, tx) + size;
     if (total > quotaBytes) return { kind: "overQuota" as const };
     if (files + activeUploads >= fileCountLimit) return { kind: "tooManyFiles" as const };
     const reservation = await insertStorageUpload({
@@ -431,16 +434,18 @@ export async function commitDedicatedStorageReservation({
       reservation.abandonedAt ||
       (leaseToken !== undefined && reservation.creationLeaseToken !== leaseToken)
     ) return { kind: "changed" as const };
+    await lockStorageAccount(userId, tx);
     // The plan may have lapsed or been held since the reservation was taken.
     // Read the quota again here, as the multipart finalizer does, and refuse
     // what no longer fits; the caller releases the reservation, which queues
     // the object it already wrote for cleanup.
-    const [quota, stored, files] = await Promise.all([
+    const [quota, stored, files, gitReserved] = await Promise.all([
       resolveStorageQuota({ userId, prisma: tx }),
       sumFileSizeByUserId({ userId, prisma: tx }),
       countFilesByUserId({ userId, prisma: tx }),
+      sumGitReservedBytes(userId, tx),
     ]);
-    if (stored + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
+    if (stored + gitReserved + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
       return { kind: "overQuota" as const };
     }
     if (files >= quota.fileCountLimit) {
@@ -1894,5 +1899,5 @@ export async function sumStorageUploadSizeByUserId({
     where: { userId, completedFileId: null },
     _sum: { size: true },
   });
-  return result._sum.size ?? BigInt(0);
+  return (result._sum.size ?? BigInt(0)) + await sumGitReservedBytes(userId, db);
 }

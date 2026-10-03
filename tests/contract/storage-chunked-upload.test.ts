@@ -123,6 +123,33 @@ describe("uploading a file too large for one request", () => {
     vi.useRealTimers();
   });
 
+  it.each(["history", "lfs"])("preserves pending %s capacity when a multipart file completes after a quota reduction", async (kind) => {
+    const now = Date.now();
+    state.subscriptions.set(`${USER_ID}:storage`, {
+      userId: USER_ID, stripeSubscriptionId: "sub_storage", status: "active", planId: "storage", tier: "1tb",
+      billingOfferId: "offer_storage", currentPeriodStart: new Date(now - 60_000), currentPeriodEnd: new Date(now + 60_000),
+      cancelAtPeriodEnd: false, cancelAt: null, stripeEventId: null, stripeEventCreatedAt: null,
+      stripeCanonicalObservedAt: null, stripeObservationRank: null, createdAt: new Date(now), updatedAt: new Date(now),
+    });
+    state.files.set("existing", { id: "existing", userId: USER_ID, size: STORAGE_FREE_QUOTA_BYTES - 32,
+      objectKey: "existing", visibility: "PRIVATE", name: "existing", mimeType: "application/octet-stream" } as never);
+    const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "pending.bin",
+      mimeType: "application/octet-stream", size: 24n });
+    if (!started.ok) throw new Error(started.reason);
+    const part = await uploadPart({ userId: USER_ID, uploadId: started.upload.id, partNumber: 1,
+      contentLength: 24, body: streamOf(24) });
+    if (!part.ok) throw new Error(part.reason);
+    state.gitRepositories.set("repo", { ownerId: USER_ID, deletedAt: null,
+      historyBytes: 0n, historyReservedBytes: kind === "history" ? 16n : 0n } as never);
+    if (kind === "lfs") state.gitLfsStorage.set("repo:pending", { ownerId: USER_ID, verified: false, size: 16n });
+    state.subscriptions.clear();
+    const revision = state.storageRevisions.get(USER_ID) ?? 0;
+    expect(await finishUpload({ userId: USER_ID, uploadId: started.upload.id,
+      parts: [{ partNumber: 1, etag: part.etag }] })).toEqual({ ok: false, reason: "insufficientStorageSpace" });
+    expect(state.files.size).toBe(1);
+    expect(state.storageRevisions.get(USER_ID)).toBeGreaterThan(revision);
+  });
+
   it("returns at the completion deadline and durably records an unknown provider outcome", async () => {
     vi.useFakeTimers();
     const started = await startUpload({ userId: USER_ID, id: crypto.randomUUID(), name: "deadline.bin", mimeType: "application/octet-stream", size: BigInt(1) });

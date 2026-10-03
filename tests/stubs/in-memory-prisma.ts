@@ -361,6 +361,10 @@ type BillingOffer = {
 };
 
 export type InMemoryPrismaState = {
+  storageRevisions: Map<string, number>;
+  gitRepositories: Map<string, { ownerId: string | null;
+    deletedAt: Date | null; historyBytes: bigint; historyReservedBytes: bigint }>;
+  gitLfsStorage: Map<string, { ownerId: string; verified: boolean; size: bigint }>;
   billingOffers: Map<string, BillingOffer>;
   creditAccounts: Map<string, CreditAccount>;
   aiOperationModels: Map<string, AiOperationModel>;
@@ -759,6 +763,9 @@ function matchesDateFilter(
 export function createInMemoryPrisma() {
   let transactionTail: Promise<void> = Promise.resolve();
   let state: InMemoryPrismaState = {
+    storageRevisions: new Map(),
+    gitRepositories: new Map(),
+    gitLfsStorage: new Map(),
     billingOffers: new Map(),
     creditAccounts: new Map(),
     aiOperationModels: new Map(),
@@ -1220,6 +1227,9 @@ export function createInMemoryPrisma() {
   // Snapshot state for $transaction rollback so contract tests reproduce the
   // discard-on-failure behavior of the real database.
   const snapshot = () => ({
+    storageRevisions: new Map(state.storageRevisions),
+    gitRepositories: new Map([...state.gitRepositories].map(([key, value]) => [key, { ...value }])),
+    gitLfsStorage: new Map([...state.gitLfsStorage].map(([key, value]) => [key, { ...value }])),
     // Every table the state carries, so a rolled-back transaction leaves none
     // of them holding what the aborted callback wrote. An omission here is
     // invisible until a test asserts that a failure changed nothing.
@@ -1282,6 +1292,30 @@ export function createInMemoryPrisma() {
   };
 
   const prisma = {
+    user: {
+      update: async ({ where }: { where: { id: string } }) => {
+        const storageRevision = (state.storageRevisions.get(where.id) ?? 0) + 1;
+        state.storageRevisions.set(where.id, storageRevision);
+        return { id: where.id, storageRevision };
+      },
+    },
+    gitRepository: {
+      count: async ({ where }: { where: { ownerId: string; deletedAt: null } }) =>
+        [...state.gitRepositories.values()].filter((row) => row.ownerId === where.ownerId &&
+          row.deletedAt === null).length,
+      aggregate: async ({ where }: { where: { ownerId: string } }) => ({ _sum: {
+        historyBytes: [...state.gitRepositories.values()].filter((row) => row.ownerId === where.ownerId)
+          .reduce((sum, row) => sum + row.historyBytes, BigInt(0)),
+        historyReservedBytes: [...state.gitRepositories.values()].filter((row) => row.ownerId === where.ownerId)
+          .reduce((sum, row) => sum + row.historyReservedBytes, BigInt(0)),
+      } }),
+    },
+    gitLfsStorage: {
+      aggregate: async ({ where }: { where: { ownerId: string; verified: boolean } }) => ({ _sum: {
+        size: [...state.gitLfsStorage.values()].filter((row) => row.ownerId === where.ownerId &&
+          row.verified === where.verified).reduce((sum, row) => sum + row.size, BigInt(0)),
+      } }),
+    },
     $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
       const sql = query.join("?");
       if (sql.includes('SUM(COALESCE("reservedUsageUnits", "usageUnits"))')) {

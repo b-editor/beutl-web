@@ -59,6 +59,10 @@ Prisma model.
 
 ## Object storage
 
+Optional hosted Git uses its own private Backblaze B2 bucket and adds Git/LFS
+bytes to the existing account meter. See [Hosted Git and large media](hosted-git.md)
+for the required migration, API Worker configuration, transfer limits and cleanup.
+
 User files and AI outputs live in one object store that the Web Worker and the
 desktop API Worker share. Both Workers must be configured for the same bucket:
 the Web Worker writes uploads that the API Worker's scheduled reconcilers

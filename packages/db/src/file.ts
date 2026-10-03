@@ -6,6 +6,7 @@ import {
 } from "@beutl/core";
 import type { Prisma } from "@prisma/client";
 import { getDb } from "./provider";
+import { lockStorageAccount, sumGitCommittedBytes, sumGitReservedBytes } from "./git-storage";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
 type FileReferenceSnapshot = {
@@ -708,6 +709,9 @@ export async function countFilesByUserId({
   return await db.file.count({ where: { userId, aiJobResult: null } });
 }
 
+/** Committed account storage: user File bytes plus hosted Git/LFS bytes.
+ * The historical name is retained for existing quota, billing and UI callers.
+ * AI job result bytes are excluded from this account meter. */
 export async function sumFileSizeByUserId({
   userId,
   prisma,
@@ -731,7 +735,7 @@ export async function sumFileSizeByUserId({
       size: true,
     },
   });
-  return result._sum.size ?? BigInt(0);
+  return (result._sum.size ?? BigInt(0)) + await sumGitCommittedBytes(userId, db);
 }
 
 /** Atomically enforce the file quota/count against committed files and active
@@ -760,6 +764,7 @@ export async function createFileWithStorageQuota({
   prisma?: PrismaTransaction;
 }) {
   const run = async (tx: PrismaTransaction) => {
+    await lockStorageAccount(userId, tx);
     const [stored, reserved, files, activeUploads] = await Promise.all([
       sumFileSizeByUserId({ userId, prisma: tx }),
       tx.storageUpload.aggregate({
@@ -772,7 +777,8 @@ export async function createFileWithStorageQuota({
       countFilesByUserId({ userId, prisma: tx }),
       tx.storageUpload.count({ where: { userId, completedFileId: null, abandonedAt: null } } as never),
     ]);
-    const total = stored + BigInt(reserved._sum?.size ?? 0) + BigInt(size);
+    const total = stored + BigInt(reserved._sum?.size ?? 0) +
+      await sumGitReservedBytes(userId, tx) + BigInt(size);
     const count = files + activeUploads;
     if (total > quotaBytes) return { kind: "overQuota" as const };
     if (count >= fileCountLimit) return { kind: "tooManyFiles" as const };
