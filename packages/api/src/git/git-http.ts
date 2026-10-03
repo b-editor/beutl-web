@@ -14,6 +14,9 @@ import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 // Keep the Git history small; media must go through LFS.
 export const MAX_GIT_PUSH_BYTES = 8 * 1024 * 1024;
 export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
+// Leave room below the object adapter's 10,000-entry listing ceiling, including
+// directories. Rejected pushes must leave the repository readable and deletable.
+export const MAX_GIT_REPOSITORY_OBJECTS = 9_000;
 const MAX_GIT_NEGOTIATION_BYTES = 64 * 1024;
 const GITDIR = "/repo.git";
 
@@ -121,6 +124,9 @@ export async function handleGitHttp(
     catch { return new Response("Invalid Git pack header", { status: 400 }); }
     const objects = await store.list(`${prefix}/repo.git/objects/`);
     const storedBytes = objects.objects.reduce((size, object) => size + object.size, 0);
+    if (parsed.packData.byteLength > 0 && objects.objects.length + 2 > MAX_GIT_REPOSITORY_OBJECTS) {
+      return new Response("Git history object count limit exceeded", { status: 413 });
+    }
     if (storedBytes + additionalBytes > MAX_GIT_REPOSITORY_BYTES) {
       return new Response("Git history quota exceeded; track media with Git LFS", { status: 413 });
     }

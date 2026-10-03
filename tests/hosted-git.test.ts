@@ -8,8 +8,8 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
-import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES } from "../packages/api/src/git/lfs";
-import { incomingGitObjectBytes } from "../packages/api/src/git/git-http";
+import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES, MAX_LFS_RECORDS_PER_REPOSITORY } from "../packages/api/src/git/lfs";
+import { incomingGitObjectBytes, MAX_GIT_REPOSITORY_OBJECTS } from "../packages/api/src/git/git-http";
 import { createGitRepositoryForOwner } from "@beutl/db";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
@@ -372,7 +372,21 @@ it("allocates the larger body cap only to the Git pack and LFS part methods", ()
 
 describe("Git Smart HTTP with the native Git CLI", () => {
   it("pushes and clones a repository through the Durable Object", async () => {
-    const bucket = new MemoryBucket();
+    class CountedBucket extends MemoryBucket {
+      padding = 0;
+      override async list(options: Parameters<MemoryBucket["list"]>[0]) {
+        const page = await super.list(options);
+        // Model many small stored objects for admission without transferring
+        // thousands of unrelated packs through the native Git fixture.
+        if (options.prefix === `git/repos/${repoId}/repo.git/objects/` && !options.delimiter && !options.cursor) {
+          page.objects.push(...Array.from({ length: this.padding }, (_, i) => ({
+            key: `${options.prefix}count-fixture/${i}`, size: 0,
+          })));
+        }
+        return page;
+      }
+    }
+    const bucket = new CountedBucket();
     const storage = new MemoryStorage();
     const reservations: number[] = [];
     const accounting = new MemoryAccounting(8 * 1024);
@@ -442,6 +456,31 @@ describe("Git Smart HTTP with the native Git CLI", () => {
       expect(concurrent.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       expect(reservations.length).toBeGreaterThanOrEqual(3);
       expect(reservations.every((bytes) => bytes > 0 && bytes <= 8 * 1024)).toBe(true);
+
+      await git(root, "fetch", "origin", "main");
+      await git(root, "reset", "--hard", "FETCH_HEAD");
+      const prefix = `git/repos/${repoId}/repo.git/objects/`;
+      const existing = await new GitObjectStore(bucket).list(prefix);
+      bucket.padding = MAX_GIT_REPOSITORY_OBJECTS - existing.objects.length - 2;
+      writeFileSync(join(root, "at-limit.txt"), "last admitted pack\n");
+      await git(root, "add", "at-limit.txt");
+      await git(root, ...commitArgs);
+      await git(root, "push", "origin", "main");
+      expect((await new GitObjectStore(bucket).list(prefix)).objects).toHaveLength(MAX_GIT_REPOSITORY_OBJECTS);
+      const admittedRefs = [...bucket.objects].filter(([key]) => key.includes("/refs/"));
+      const reservationCount = reservations.length;
+      writeFileSync(join(root, "too-many.txt"), "must not be admitted\n");
+      await git(root, "add", "too-many.txt");
+      await git(root, ...commitArgs);
+      await expect(git(root, "push", "origin", "main")).rejects.toThrow("413");
+      expect([...bucket.objects].filter(([key]) => key.includes("/refs/"))).toEqual(admittedRefs);
+      expect(reservations).toHaveLength(reservationCount);
+      await git(root, "clone", url, join(root, "copy-at-limit"));
+      expect(readFileSync(join(root, "copy-at-limit", "at-limit.txt"), "utf8").replace(/\r\n/gu, "\n"))
+        .toBe("last admitted pack\n");
+      expect(() => readFileSync(join(root, "copy-at-limit", "too-many.txt"))).toThrow();
+      await git(root, "push", "origin", ":main");
+      expect((await fetch(`${url}/info/refs?service=git-upload-pack`)).status).toBe(200);
     } finally {
       server.close();
       if (!root.startsWith(tmpdir() + sep)) throw new Error("Test directory escaped the temporary root");
@@ -570,6 +609,37 @@ describe("Git LFS reservation and integrity", () => {
     const batch = await result.json();
     expect(batch.objects[0].actions.upload).toBeDefined();
     expect(batch.objects[1].error.code).toBe(413);
+  });
+
+  it("bounds zero-byte LFS reservations across batches, including verified records, and reuses freed slots", async () => {
+    const bucket = new MemoryBucket();
+    const storage = new MemoryStorage();
+    const accounting = new MemoryAccounting(10);
+    const expiresAt = Date.now() + 60_000;
+    for (let i = 0; i < MAX_LFS_RECORDS_PER_REPOSITORY - 1; i++) {
+      storage.values.set(`lfs:${i.toString(16).padStart(64, "0")}`, {
+        kind: "basic", size: 0, verified: i === 0, expiresAt,
+      } satisfies LfsRecord);
+    }
+    const admitted = "e".repeat(64);
+    const rejected = "f".repeat(64);
+    const batch = async (oids: string[]) => (await handleLfsBatch(
+      lfsRequest("upload", oids.map((oid) => ({ oid, size: 0 })), ["basic"], "owner"),
+      bucket, storage, env, repoId, "write", "Bearer token", accounting)).json();
+    const first = await batch([admitted, rejected]);
+    expect(first.objects[0].actions.upload).toBeDefined();
+    expect(first.objects[1].error).toMatchObject({ code: 413, message: expect.stringContaining("count limit") });
+    expect(storage.values.size).toBe(MAX_LFS_RECORDS_PER_REPOSITORY);
+    expect(accounting.entries.size).toBe(1);
+    const retry = await batch([admitted, rejected]);
+    expect(retry.objects[0].actions.upload).toBeDefined();
+    expect(retry.objects[1].error.code).toBe(413);
+    await storage.put<LfsRecord>("lfs:" + "1".padStart(64, "0"), {
+      kind: "basic", size: 0, verified: false, expiresAt: Date.now() - LFS_BASIC_CLEANUP_GRACE_MS - 1000,
+    });
+    expect((await batch([rejected])).objects[0].actions.upload).toBeDefined();
+    expect(storage.values.size).toBe(MAX_LFS_RECORDS_PER_REPOSITORY);
+    expect(await storage.get("lfs:" + "0".repeat(64))).toMatchObject({ verified: true });
   });
 
   it("reserves the shared account limit across repositories and releases expired uploads", async () => {

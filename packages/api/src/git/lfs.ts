@@ -19,6 +19,7 @@ export const MAX_LFS_SINGLE_PUT_BYTES = 5_000_000_000;
 export const LFS_BASIC_CLEANUP_GRACE_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_REPO_QUOTA_BYTES = 20 * 1024 ** 3;
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
+export const MAX_LFS_RECORDS_PER_REPOSITORY = 10_000;
 
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -250,6 +251,10 @@ export async function handleLfsBatch(
       continue;
     }
     if (!record) {
+      if (records.size >= MAX_LFS_RECORDS_PER_REPOSITORY) {
+        objects.push({ oid, size, error: { code: 413, message: "LFS repository object count limit exceeded" } });
+        continue;
+      }
       if (reserved + size > quota) {
         objects.push({ oid, size, error: { code: 413, message: "LFS repository quota exceeded" } });
         continue;

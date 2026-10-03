@@ -44,8 +44,14 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
 
 `BEUTL_GIT_LFS_REPO_QUOTA_BYTES` optionally changes the 20 GiB per repository
 LFS quota. A single object is capped at 20 GiB even if that quota is raised.
-Git history is limited to 16 MiB of stored objects and an 8 MiB incoming pack;
-track media with LFS. Each user can create at most 20 active repositories.
+Git history is limited to 16 MiB of stored objects, an 8 MiB incoming pack,
+and 9,000 stored object entries. A non-empty push reserves two entries for its
+pack and index and is rejected before it could make listings unusable. Fetches,
+ref-only pushes and repository deletion remain available at this limit.
+Each repository can retain at most 10,000 LFS records, counting both pending
+reservations and verified objects, including zero-byte objects. Reusing an OID
+does not consume another slot; completed cleanup frees expired reservations.
+Track media with LFS. Each user can create at most 20 active repositories.
 
 The existing account storage API, dashboard, billing, and admin totals include
 current Git objects and one copy of every verified LFS OID per repository,
