@@ -94,7 +94,24 @@ export default function EasingDemo({
   const hoveredRef = useRef(false);
   const frameRef = useRef(0);
 
-  useEffect(() => () => cancelAnimationFrame(frameRef.current), []);
+  // Turning on reduced motion mid-pass stops the pass at once instead of
+  // letting it run to the end; play() then refuses to start another.
+  useEffect(() => {
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const stop = () => {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+      setProgress(null);
+    };
+    const onChange = () => {
+      if (motion.matches) stop();
+    };
+    motion.addEventListener("change", onChange);
+    return () => {
+      motion.removeEventListener("change", onChange);
+      cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
 
   const play = () => {
     hoveredRef.current = true;

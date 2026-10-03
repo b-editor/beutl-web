@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { cn } from "@beutl/core";
 import { useAmbientMotion } from "./use-ambient-motion";
 
@@ -20,26 +20,34 @@ export default function ExportMock({ statusLabel }: { statusLabel: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLElement>(null);
   const [percent, setPercent] = useState(0);
+  /** Set once the export has been shown finished, by playing or by reduced
+   * motion, so turning motion back on never replays it from 0%. */
+  const finishedRef = useRef(false);
 
-  // Without motion the export is shown already finished rather than stuck at 0%.
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setPercent(100);
-      if (barRef.current) barRef.current.style.width = "100%";
+  const showProgress = (progress: number) => {
+    if (barRef.current) {
+      barRef.current.style.width = `${(progress * 100).toFixed(2)}%`;
     }
-  }, []);
+    setPercent(Math.floor(progress * 100));
+  };
 
   useAmbientMotion(
     rootRef,
     (time) => {
+      if (finishedRef.current) return false;
       const progress = Math.min(1, time / EXPORT_SECONDS);
-      if (barRef.current) {
-        barRef.current.style.width = `${(progress * 100).toFixed(2)}%`;
-      }
-      setPercent(Math.floor(progress * 100));
+      showProgress(progress);
+      if (progress >= 1) finishedRef.current = true;
       return progress < 1;
     },
-    START_THRESHOLD,
+    {
+      threshold: START_THRESHOLD,
+      // Without motion the export is shown already finished, not stuck at 0%.
+      onReducedMotion: () => {
+        finishedRef.current = true;
+        showProgress(1);
+      },
+    },
   );
 
   return (
