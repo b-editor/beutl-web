@@ -8,7 +8,7 @@
   "scripts": {
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "dev": "next dev --turbopack",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
@@ -60,8 +60,7 @@
     "@types/react-dom": "19.1.1",
     "@types/semver": "^7.8.0",
     "dotenv": "17.4.2",
-    "eslint": "^9.39.5",
-    "eslint-config-next": "16.3.8",
+    "oxlint": "^1.86.0",
     "postcss": "^8.5.28",
     "prisma": "^7.10.0",
     "tailwindcss": "^4.3.3",
