@@ -107,9 +107,28 @@ export async function reserveGitLfs({ repoId, oid, ownerId, size, expiresAt }: {
 }
 
 export async function commitGitLfs(repoId: string, oid: string): Promise<void> {
-  const db = await getDb();
-  const changed = await db.gitLfsStorage.updateMany({ where: { repoId, oid }, data: { verified: true } });
-  if (changed.count !== 1) throw new Error("Git LFS account reservation is missing");
+  await startRetryableTransaction(async (tx) => {
+    const reservation = await tx.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId, oid } } });
+    if (!reservation?.ownerId) throw new Error("Git LFS account reservation is missing");
+    await lockStorageAccount(reservation.ownerId, tx);
+    if (!await tx.gitRepository.findFirst({ where: { id: repoId, ownerId: reservation.ownerId, deletedAt: null } }))
+      throw new Error("Git repository is unavailable for storage commit");
+    // A successful account commit can precede the DO flag write. Its replay
+    // must recover that receipt even if the account plan subsequently changed.
+    if (reservation.verified) return;
+    const [quota, used] = await Promise.all([
+      resolveStorageQuota({ userId: reservation.ownerId, prisma: tx }), accountReserved(tx, reservation.ownerId),
+    ]);
+    if (used > BigInt(quota.quotaBytes)) throw new GitLfsQuotaExceededError();
+    const changed = await tx.gitLfsStorage.updateMany({
+      where: { repoId, oid, ownerId: reservation.ownerId, verified: false }, data: { verified: true },
+    });
+    if (changed.count !== 1) throw new Error("Git LFS account reservation changed before commit");
+  }, { isolationLevel: "Serializable" });
+}
+
+export class GitLfsQuotaExceededError extends RangeError {
+  constructor() { super("Account storage quota exceeded at LFS completion"); }
 }
 
 export async function releaseGitLfs(repoId: string, oid: string): Promise<void> {

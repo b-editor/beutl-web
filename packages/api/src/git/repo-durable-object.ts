@@ -1,5 +1,5 @@
 import { handleGitHttp } from "./git-http";
-import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, cleanupExpiredLfsRecord, LFS_BASIC_CLEANUP_GRACE_MS, type GitDurableStorage, type LfsEnvironment, type LfsRecord } from "./lfs";
+import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, cleanupExpiredLfsRecord, LFS_BASIC_CLEANUP_GRACE_MS, LFS_MAINTENANCE_BATCH_SIZE, type GitDurableStorage, type LfsEnvironment, type LfsRecord } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
 import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitScope } from "./tokens";
@@ -16,6 +16,7 @@ interface Environment extends LfsEnvironment, GitS3Environment, GitDatabaseEnvir
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const OID = /^[0-9a-f]{64}$/u;
+interface LfsSweepProgress { startedAt: number; cursor?: string }
 
 /** All storage and Git operations for one repository pass through this queue. */
 export class GitRepositoryDurableObject {
@@ -65,8 +66,10 @@ export class GitRepositoryDurableObject {
             await this.state.storage.setAlarm(Date.now() + 24 * 60 * 60 * 1000);
             return;
           }
-          await pruneExpiredLfs(this.state.storage, this.objectBucket(), repoId, Date.now(), this.accounting);
-          await this.sweepLfsObjects(this.objectBucket(), repoId);
+          if (!await this.state.storage.get<LfsSweepProgress>("lfsSweepProgress"))
+            await this.state.storage.put<LfsSweepProgress>("lfsSweepProgress", { startedAt: Date.now() });
+          const reservationsPending = await pruneExpiredLfs(this.state.storage, this.objectBucket(), repoId, Date.now(), this.accounting);
+          const sweepPending = await this.sweepLfsObjects(this.objectBucket(), repoId);
           await this.cleanupMultipartUploads(this.objectBucket(), repoId, Date.now() - 26 * 60 * 60 * 1000);
           if (await this.state.storage.get<boolean>("gitGcPending")) {
             await this.objectBucket().pruneGitVersions?.(`git/repos/${repoId}/`);
@@ -79,7 +82,9 @@ export class GitRepositoryDurableObject {
             : record.kind === "basic" && record.expiresAt <= now
               ? record.expiresAt + LFS_BASIC_CLEANUP_GRACE_MS : record.expiresAt)
             .filter((time) => time > now);
-          await this.state.storage.setAlarm(Math.min(now + 24 * 60 * 60 * 1000, ...next.map((time) => time + 1000)));
+          await this.state.storage.setAlarm(Math.min(
+            now + (reservationsPending || sweepPending ? 60_000 : 24 * 60 * 60 * 1000),
+            ...next.map((time) => time + 1000)));
         } catch (error) {
           await this.state.storage.setAlarm(Date.now() + 60_000);
           throw error;
@@ -236,23 +241,35 @@ export class GitRepositoryDurableObject {
     await bucket.cleanupMultipartUploads(`git-lfs/repos/${repoId}/`, active, initiatedBefore);
   }
 
-  private async sweepLfsObjects(bucket: GitObjectBucket, repoId: string): Promise<void> {
-    const records = await this.state.storage.list<LfsRecord>({ prefix: "lfs:" });
-    let cursor: string | undefined;
-    do {
-      const page = await bucket.list({ prefix: `git-lfs/repos/${repoId}/`, cursor, limit: 1000 });
-      for (const object of page.objects) {
-        const oid = object.key.slice(object.key.lastIndexOf("/") + 1);
-        if (!OID.test(oid)) continue;
-        const record = records.get(`lfs:${oid}`);
-        if (!record) await bucket.delete(object.key);
-        else if (record.verified && record.versionId && record.expiresAt + 2 * 60 * 60 * 1000 <= Date.now()) {
-          await bucket.pruneVersions?.(object.key, [record.versionId]);
-        }
+  private async sweepLfsObjects(bucket: GitObjectBucket, repoId: string): Promise<boolean> {
+    const progress = (await this.state.storage.get<LfsSweepProgress>("lfsSweepProgress"))!;
+    const page = await bucket.list({ prefix: `git-lfs/repos/${repoId}/`, cursor: progress.cursor,
+      limit: LFS_MAINTENANCE_BATCH_SIZE });
+    let deleted = false;
+    for (const object of page.objects) {
+      const oid = object.key.slice(object.key.lastIndexOf("/") + 1);
+      if (!OID.test(oid)) continue;
+      const key = `lfs:${oid}`;
+      const record = await this.state.storage.get<LfsRecord>(key);
+      if (!record) { await bucket.delete(object.key); deleted = true; }
+      else if (record.verified && record.versionId && bucket.pruneVersions &&
+          record.expiresAt + LFS_BASIC_CLEANUP_GRACE_MS <= Date.now() &&
+          (record.versionSweepAt ?? 0) < progress.startedAt) {
+        await bucket.pruneVersions(object.key, [record.versionId]);
+        // Resume a failed page without pruning the already completed keys again.
+        await this.state.storage.put(key, { ...record, gcComplete: true, versionSweepAt: progress.startedAt });
       }
-      cursor = page.truncated ? page.cursor : undefined;
-      if (page.truncated && !cursor) throw new Error("LFS object listing did not advance");
-    } while (cursor);
+    }
+    // Deleting objects changes the listing. Re-read this page before advancing
+    // its opaque S3 continuation token, so adjacent orphan keys cannot be skipped.
+    if (deleted) return true;
+    if (page.truncated) {
+      if (!page.cursor || page.cursor === progress.cursor) throw new Error("LFS object listing did not advance");
+      await this.state.storage.put<LfsSweepProgress>("lfsSweepProgress", { ...progress, cursor: page.cursor });
+      return true;
+    }
+    await this.state.storage.delete("lfsSweepProgress");
+    return false;
   }
 
   private async deletePrefix(bucket: GitObjectBucket, prefix: string): Promise<void> {

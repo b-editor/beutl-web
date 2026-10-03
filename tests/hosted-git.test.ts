@@ -11,7 +11,8 @@ import { sign } from "hono/jwt";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
 import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES, MAX_LFS_RECORDS_PER_REPOSITORY } from "../packages/api/src/git/lfs";
 import { incomingGitObjectBytes, handleGitHttp, MAX_GIT_REPOSITORY_OBJECTS, MAX_GIT_REPOSITORY_REFS } from "../packages/api/src/git/git-http";
-import { createGitRepositoryForOwner } from "@beutl/db";
+import { createGitRepositoryForOwner, reserveGitLfs, commitGitLfs, GitLfsQuotaExceededError } from "@beutl/db";
+import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
@@ -288,6 +289,49 @@ describe("hosted Git maintenance and admission", () => {
     };
     expect(await createGitRepositoryForOwner("owner", "name", 20, db as never)).toBeNull();
     expect(events).toEqual(["lock", "lock", "count"]);
+  });
+
+  it.each([false, true])("rechecks an LFS reservation's current plan before commit (expired=%s)", async (expired) => {
+    const size = 20 * 1024 ** 3;
+    let reservation: { ownerId: string; size: bigint; verified: boolean } | null = null;
+    let locks = 0;
+    const isolation: Array<string | undefined> = [];
+    const subscription = { status: "active", planId: "storage", tier: "100gb", billingOfferId: "offer",
+      stripeSubscriptionId: "subscription", currentPeriodStart: new Date(Date.now() - 3600_000),
+      currentPeriodEnd: new Date(Date.now() + 3600_000), cancelAt: null };
+    const tx = {
+      user: { update: async () => { locks++; } },
+      subscription: { findUnique: async () => subscription },
+      subscriptionEntitlementHold: { findFirst: async () => null },
+      gitRepository: { count: async () => 0, findFirst: async () => ({ id: repoId }),
+        aggregate: async () => ({ _sum: { historyBytes: 0n, historyReservedBytes: 0n } }) },
+      gitLfsStorage: { findUnique: async () => reservation,
+        aggregate: async ({ where }: { where: { verified: boolean } }) => ({ _sum: {
+          size: reservation?.verified === where.verified ? reservation.size : 0n } }),
+        create: async () => { reservation = { ownerId: "owner", size: BigInt(size), verified: false }; },
+        updateMany: async () => { reservation!.verified = true; return { count: 1 }; } },
+      file: { aggregate: async () => ({ _sum: { size: BigInt(STORAGE_FREE_QUOTA_BYTES + 1) } }) },
+      storageUpload: { aggregate: async () => ({ _sum: { size: 0n } }) },
+    };
+    setDbProvider(async () => ({ $transaction: async (work: (db: unknown) => Promise<unknown>, options?: { isolationLevel?: string }) => {
+      isolation.push(options?.isolationLevel);
+      return work(tx);
+    } }) as never);
+    expect(await reserveGitLfs({ repoId, oid: "a".repeat(64), ownerId: "owner", size,
+      expiresAt: Date.now() + 24 * 3600_000 })).toBe("reserved");
+    if (expired) subscription.currentPeriodEnd = new Date(Date.now() - 1);
+    if (expired) {
+      await expect(commitGitLfs(repoId, "a".repeat(64))).rejects.toBeInstanceOf(GitLfsQuotaExceededError);
+      expect(reservation!.verified).toBe(false);
+    } else {
+      await commitGitLfs(repoId, "a".repeat(64));
+      expect(reservation!.verified).toBe(true);
+      // Recover an already committed receipt after the plan subsequently lapses.
+      subscription.currentPeriodEnd = new Date(Date.now() - 1);
+      await commitGitLfs(repoId, "a".repeat(64));
+    }
+    expect(locks).toBe(expired ? 2 : 3);
+    expect(isolation.slice(1)).toEqual(expired ? ["Serializable"] : ["Serializable", "Serializable"]);
   });
 
   it.each([true, false].flatMap(signingConfigured => ["deletion", "account", "lfs"]
@@ -805,6 +849,102 @@ describe("Git LFS reservation and integrity", () => {
     await pruneExpiredLfs(storage, new VersionBucket(), repoId);
     expect(kept).toEqual([{ key: `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, versions: ["pinned-v1"] }]);
     expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.gcComplete).toBe(true);
+  });
+
+  it.each([false, true])("resumes bounded daily LFS sweeps after a DO restart (failedPage=%s)", async (failedPage) => {
+    const storage = new MemoryStorage();
+    const completed = new Map<string, number>();
+    let failed = false;
+    let requests = 0;
+    let gitSweeps = 0;
+    const failingOid = (16).toString(16).padStart(64, "0");
+    class SweptBucket extends MemoryBucket {
+      async pruneVersions(key: string, versions: readonly string[]) {
+        requests++;
+        expect(versions).toEqual(["pinned"]);
+        if (failedPage && key.endsWith(failingOid) && !failed) { failed = true; throw new Error("lost sweep response"); }
+        completed.set(key, (completed.get(key) ?? 0) + 1);
+      }
+      async pruneGitVersions() { gitSweeps++; }
+    }
+    const bucket = new SweptBucket();
+    await storage.put("repoId", repoId);
+    await storage.put("gitGcPending", true);
+    for (let index = 0; index < 120; index++) {
+      const oid = index.toString(16).padStart(64, "0");
+      await storage.put<LfsRecord>(`lfs:${oid}`, { kind: "basic", size: 1, verified: true,
+        versionId: "pinned", gcComplete: true, expiresAt: Date.now() - 3 * 3600_000 });
+      await bucket.put(`git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, new Uint8Array([1]));
+    }
+    const initial = new GitRepositoryDurableObject({ storage }, env, bucket);
+    if (failedPage) await expect(initial.alarm()).rejects.toThrow("lost sweep response");
+    else { await initial.alarm(); expect(requests).toBe(50); }
+    expect(await storage.get("lfsSweepProgress")).toBeDefined();
+    for (let alarm = 0; alarm < 4 && await storage.get("lfsSweepProgress"); alarm++) {
+      const before = requests;
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(requests - before).toBeLessThanOrEqual(50);
+    }
+    expect(completed.size).toBe(120);
+    expect([...completed.values()]).toEqual(Array(120).fill(1));
+    expect(gitSweeps).toBe(1);
+    expect(await storage.get("lfsSweepProgress")).toBeUndefined();
+  });
+
+  it("bounds the first version-pruning pass and keeps adjacent orphan cleanup resumable", async () => {
+    const storage = new MemoryStorage();
+    let pruned = 0;
+    class SweptBucket extends MemoryBucket { async pruneVersions() { pruned++; } }
+    const bucket = new SweptBucket();
+    await storage.put("repoId", repoId);
+    for (let index = 0; index < 120; index++) {
+      const oid = index.toString(16).padStart(64, "0");
+      await storage.put<LfsRecord>(`lfs:${oid}`, { kind: "basic", size: 1, verified: true,
+        versionId: "pinned", expiresAt: Date.now() - 3 * 3600_000 });
+      await bucket.put(`git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, new Uint8Array([1]));
+    }
+    for (let index = 0; index < 80; index++) {
+      const oid = "f" + index.toString(16).padStart(63, "0");
+      await bucket.put(`git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, new Uint8Array([2]));
+    }
+    for (let alarm = 0; alarm < 10; alarm++) {
+      const before = pruned;
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(pruned - before).toBeLessThanOrEqual(100);
+      if (!await storage.get("lfsSweepProgress")) break;
+    }
+    expect(pruned).toBe(120);
+    expect(bucket.objects.size).toBe(120);
+    expect(await storage.get("lfsSweepProgress")).toBeUndefined();
+  });
+
+  it.each(["basic", "multipart", "tus"])("keeps %s objects private when completion exceeds current account quota", async (kind) => {
+    const bytes = new TextEncoder().encode("private until account completion");
+    const oid = createHash("sha256").update(bytes).digest("hex");
+    const storage = new MemoryStorage();
+    const bucket = new MemoryBucket();
+    const accounting = new MemoryAccounting(100);
+    const resourceId = "00000000-0000-4000-8000-000000000004";
+    await accounting.reserveLfs({ repoId, oid, ownerId: "owner", size: bytes.length, expiresAt: Date.now() + 60_000 });
+    accounting.commitLfs = async () => { throw new GitLfsQuotaExceededError(); };
+    await storage.put<LfsRecord>(`lfs:${oid}`, { kind: kind === "basic" ? "basic" : "multipart",
+      size: bytes.length, verified: false, expiresAt: Date.now() + 60_000,
+      completed: kind !== "basic", versionId: "test-v1", uploadId: "completed-upload",
+      ...(kind === "tus" ? { tusId: resourceId } : {}) });
+    await bucket.put(`git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`, bytes);
+    const base = `https://beutl.example/api/v3/git/${repoId}.git/info/lfs/objects/${oid}`;
+    const result = await new GitRepositoryDurableObject({ storage }, env, bucket, accounting).fetch(new Request(
+      kind === "basic" ? `${base}/verify` : kind === "multipart" ? `${base}/multipart/complete` : `${base}/tus/${resourceId}`, {
+        method: kind === "tus" ? "HEAD" : "POST",
+        headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "write", "Tus-Resumable": "1.0.0" },
+        ...(kind === "basic" ? { body: JSON.stringify({ oid, size: bytes.length }) } : {}),
+      }));
+    expect(result.status).toBe(413);
+    expect((await storage.get<LfsRecord>(`lfs:${oid}`))?.verified).toBe(false);
+    expect(accounting.entries.get(`${repoId}:${oid}`)?.verified).toBe(false);
+    const download = await handleLfsBatch(lfsRequest("download", [{ oid, size: bytes.length }]),
+      bucket, storage, env, repoId, "read", "Bearer token", accounting);
+    expect((await download.json()).objects[0].error.code).toBe(404);
   });
 
   it("enforces quota and uses a native streaming hash for an unverified basic object", async () => {

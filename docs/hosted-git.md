@@ -173,13 +173,25 @@ behavior before enabling production traffic.
   order by persisted last-attempt time. Failing rows move behind unattempted
   rows; repeated failures increment counters and log an intervention flag at
   five failures. Cleanup continues when `BEUTL_GIT_ENABLED=false` while the
-  storage bindings remain configured. Each queued DO invocation lazily opens
+  storage bindings remain configured, even if the Git signing secret is removed.
+  LFS reservation cleanup and the daily object sweep each process at most 50
+  records per alarm. The sweep persists its S3 continuation token and completed
+  keys, resumes after a DO restart, and schedules another alarm in one minute
+  while work remains. Daily passes also collect versions from very late PUTs.
+  Each queued DO invocation lazily opens
   one DB client and closes it at completion, including cold-start alarms.
 
 An interrupted multipart push can be retried. A Git push that reaches Smart
 HTTP after its Git token expires obtains a new token and retries the Git
 portion within five total attempts, checking actual push URLs (including
 `pushurl` and Git URL rewrites) and authenticating every hosted target.
+Expired Basic, multipart and tus transfer actions that return HTTP 403 also
+trigger this bounded credential refresh. At LFS completion, the account lock
+serializes a fresh check of the current entitlement and all reserved/committed
+bytes. A plan that no longer covers them yields HTTP 413 and leaves the object
+private and reserved until the user frees space, restores the plan, or cleanup
+releases the expired reservation. Replaying an already committed receipt remains
+valid after a later plan change.
 Hosted commands disable interactive askpass helpers. Git LFS operations against other remotes retain their normal
 credentials and transfer configuration.
 
@@ -191,7 +203,8 @@ bytes without transfer URLs or headers. The next download for this project
 collects idle partials older than 24 hours; lock files are removed at close.
 Authentication expiry, cancellation and exhausted transient retries retain
 resumable bytes. Disk errors, malformed ranges and hash failures discard them;
-progressing downloads have no minimum speed cutoff.
+progressing downloads have no minimum speed cutoff. Headers and each network
+read have a two-minute idle timeout; a stalled final EOF check fails the transfer.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,

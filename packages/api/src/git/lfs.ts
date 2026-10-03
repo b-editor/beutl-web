@@ -20,6 +20,7 @@ export const LFS_BASIC_CLEANUP_GRACE_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_REPO_QUOTA_BYTES = 20 * 1024 ** 3;
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
 export const MAX_LFS_RECORDS_PER_REPOSITORY = 10_000;
+export const LFS_MAINTENANCE_BATCH_SIZE = 50;
 
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -44,6 +45,7 @@ export interface LfsRecord {
   versionId?: string;
   tusId?: string;
   gcComplete?: boolean;
+  versionSweepAt?: number;
   cleanupStarted?: boolean;
 }
 
@@ -117,15 +119,23 @@ export async function pruneExpiredLfs(
   repoId: string,
   now = Date.now(),
   accounting?: GitStorageAccounting,
-): Promise<void> {
+): Promise<boolean> {
   const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
+  let processed = 0;
+  let pending = false;
   for (const [key, record] of records) {
     if (record.verified && !record.gcComplete && record.versionId &&
         record.expiresAt + 2 * 60 * 60 * 1000 <= now && bucket.pruneVersions) {
+      if (processed >= LFS_MAINTENANCE_BATCH_SIZE) { pending = true; continue; }
+      processed++;
       await bucket.pruneVersions(keyFor(repoId, key.slice(4)), [record.versionId]);
-      await storage.put(key, { ...record, gcComplete: true });
+      await storage.put(key, { ...record, gcComplete: true, versionSweepAt: now });
     }
     if (!record.verified && record.expiresAt <= now) {
+      if (record.kind === "basic" && record.cleanupStarted && now < record.expiresAt + LFS_BASIC_CLEANUP_GRACE_MS)
+        continue;
+      if (processed >= LFS_MAINTENANCE_BATCH_SIZE) { pending = true; continue; }
+      processed++;
       await cleanupExpiredLfsRecord(storage, bucket, repoId, key.slice(4), record, now, accounting);
     }
   }
@@ -139,9 +149,11 @@ export async function pruneExpiredLfs(
   // Revisit even when no LFS record remains: CreateMultipartUpload may have
   // succeeded while its response was lost, leaving no recorded upload ID.
   const orphanSweep = bucket.cleanupMultipartUploads ? now + 24 * 60 * 60 * 1000 : Infinity;
-  if (Number.isFinite(Math.min(nextExpiry, orphanSweep))) {
-    await storage.setAlarm(Math.min(nextExpiry + 1000, orphanSweep));
+  const retry = pending ? now + 60_000 : Infinity;
+  if (Number.isFinite(Math.min(nextExpiry, orphanSweep, retry))) {
+    await storage.setAlarm(Math.min(nextExpiry + 1000, orphanSweep, retry));
   }
+  return pending;
 }
 
 async function parseLfsJson(request: Request): Promise<unknown> {
