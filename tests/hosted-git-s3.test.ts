@@ -16,6 +16,17 @@ const response = (body: string, headers: Record<string, string> = {}) => new Res
 });
 
 describe("Backblaze B2 S3 storage adapter", () => {
+  it("rejects redirects without forwarding the signed request", async () => {
+    let requests = 0;
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      requests++;
+      expect(request.redirect).toBe("manual");
+      return new Response("redirect refused", { status: 302, headers: { Location: "https://another.example/object" } });
+    }) as typeof fetch);
+    await expect(bucket.head("item")).rejects.toThrow("HTTP 302");
+    expect(requests).toBe(1);
+  });
+
   it.each([4, 3, 5])("uses a fixed-length Worker stream and enforces the declared %i-byte part", async (length) => {
     const lengths: number[] = [];
     class FixedLength extends TransformStream<Uint8Array, Uint8Array> {

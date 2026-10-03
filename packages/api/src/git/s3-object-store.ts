@@ -83,9 +83,9 @@ export class S3GitObjectBucket implements GitObjectBucket {
     const request = new Request(url, {
       method, headers,
       ...(body === undefined ? {} : { body, duplex: "half" }),
-      redirect: "error",
+      redirect: "manual",
     } as RequestInit & { duplex?: "half" });
-    const signed = await this.client.sign(request, { aws: { allHeaders: true } });
+    const signed = await this.client.sign(request, { redirect: "manual", aws: { allHeaders: true } });
     const response = await this.fetcher(signed);
     if (!response.ok && response.status !== 404) {
       const detail = (await response.text()).slice(0, 512);
