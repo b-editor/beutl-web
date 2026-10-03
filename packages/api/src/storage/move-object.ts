@@ -110,6 +110,7 @@ const inFlight = new Map<string, Promise<unknown>>();
 
 async function serialized<T>(objectKey: string, run: () => Promise<T>): Promise<T> {
   const previous = inFlight.get(objectKey) ?? Promise.resolve();
+  // The previous move reports its own failure to its own caller.
   const current = previous.catch(() => undefined).then(run);
   inFlight.set(objectKey, current);
   try {
@@ -520,7 +521,7 @@ async function withLeaseHeartbeat<T>(
     while (!stopped) {
       await new Promise((resolve) => setTimeout(resolve, LEASE_HEARTBEAT_MILLISECONDS));
       if (stopped) break;
-      await confirm().catch(() => false);
+      await confirm().catch((error) => console.warn("Storage move lease heartbeat failed", error));
     }
   })();
   try {

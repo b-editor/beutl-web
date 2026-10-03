@@ -11,17 +11,9 @@ export default async function Page(props: {
   const { traceId } = await props.searchParams;
   const { t } = await getTranslation(lang);
 
-  let defaultName = "";
-  let defaultEmail = "";
-  try {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (session?.user) {
-      defaultName = session.user.name || "";
-      defaultEmail = session.user.email || "";
-    }
-  } catch {
-    // Anonymous is fine
-  }
+  const session = await auth.api.getSession({ headers: await headers() });
+  const defaultName = session?.user?.name || "";
+  const defaultEmail = session?.user?.email || "";
 
   return (
       <div className="container mx-auto px-6 py-12 md:px-12 max-w-2xl">

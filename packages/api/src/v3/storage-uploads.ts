@@ -98,6 +98,7 @@ export default new Hono<{ Variables: { storageUserId: string } }>()
     const fixed = FixedLength ? new FixedLength(Number(length)) : null;
     const abort = new AbortController();
     const pumping = fixed ? bounded.pipeTo(fixed.writable, { signal: abort.signal }) : null;
+    // uploadPart reports a failed pipe through the stream it reads.
     void pumping?.catch(() => {});
     try {
       const result = await uploadPart({

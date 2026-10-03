@@ -314,7 +314,8 @@ export function ImageEditForm({
             message: t(`api-errors:${outcome.errorCode}`),
             keepIdempotencyKey: outcome.keepIdempotencyKey,
           });
-    } catch {
+    } catch (error) {
+      console.error("AI image edit request failed", error);
       setState({
         success: false,
         message: t("api-errors:aiRequestInterrupted"),

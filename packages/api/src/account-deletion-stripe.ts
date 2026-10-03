@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { scheduleStripeCheckoutCleanup, setTopUpCheckoutSession } from "@beutl/db";
-import { subscriptionPlanOf } from "@beutl/core";
+import { isStripeResourceMissingError, subscriptionPlanOf } from "@beutl/core";
 
 export type AdminStripeClosureResult =
   | { status: "not-linked" | "already-closed" | "closed"; customerId: string | null }
@@ -81,9 +81,9 @@ export async function closeStripeCustomerForAdminAccountDeletion({
       const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
       if (!paymentIntentId) return { status: "owner-mismatch", customerId: stripeCustomerId };
       let paymentIntent: Stripe.PaymentIntent;
-      try { paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId); } catch { return { status: "owner-mismatch", customerId: stripeCustomerId }; }
+      try { paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId); } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: stripeCustomerId }; }
       let charge: Stripe.Charge | null;
-      try { charge = typeof paymentIntent.latest_charge === "object" ? paymentIntent.latest_charge : paymentIntent.latest_charge ? await stripe.charges.retrieve(paymentIntent.latest_charge) : null; } catch { return { status: "owner-mismatch", customerId: stripeCustomerId }; }
+      try { charge = typeof paymentIntent.latest_charge === "object" ? paymentIntent.latest_charge : paymentIntent.latest_charge ? await stripe.charges.retrieve(paymentIntent.latest_charge) : null; } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: stripeCustomerId }; }
       if (!charge) return { status: "owner-mismatch", customerId: stripeCustomerId };
       if (charge.created * 1000 < deletionAuthorizedAt.getTime()) continue;
       if (isTopUp) { if (!session.metadata?.topUpAttemptId || (await setTopUpCheckoutSession({ attemptId: session.metadata.topUpAttemptId, stripeCheckoutSessionId: session.id, expiresAt: session.expires_at ? new Date(session.expires_at * 1000) : new Date() })) === "not-stored") return { status: "owner-mismatch", customerId: stripeCustomerId }; }
@@ -92,7 +92,7 @@ export async function closeStripeCustomerForAdminAccountDeletion({
       const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
       if (!subscriptionId) return { status: "owner-mismatch", customerId: stripeCustomerId };
       let subscription: Stripe.Subscription;
-      try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch { return { status: "owner-mismatch", customerId: stripeCustomerId }; }
+      try { subscription = await stripe.subscriptions.retrieve(subscriptionId); } catch (error) { if (!isStripeResourceMissingError(error)) throw error; return { status: "owner-mismatch", customerId: stripeCustomerId }; }
       if (subscription.created * 1000 < deletionAuthorizedAt.getTime()) continue;
       await scheduleStripeCheckoutCleanup({ sessionId: session.id, userId, kind: subscriptionPlan, customerId: stripeCustomerId, packageId: null, billingOfferId: session.metadata?.billingOfferId });
     }

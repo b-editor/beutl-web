@@ -167,21 +167,29 @@ describe("admin Stripe customer closure", () => {
     expect(scheduled).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "cs-pro-at", kind: "pro" }));
   });
 
-  it.each(["paymentIntent", "charge", "subscription"])("fails closed when %s retrieval fails", async (kind) => {
+  it.each([
+    ["paymentIntent", "missing"], ["charge", "missing"], ["subscription", "missing"],
+    ["paymentIntent", "unavailable"], ["charge", "unavailable"], ["subscription", "unavailable"],
+  ] as const)("fails closed when %s retrieval is %s", async (kind, failure) => {
+    const failed = (message: string) => failure === "missing" ? Object.assign(new Error(message), { statusCode: 404, code: "resource_missing" }) : new Error(message);
     const metadata = { beutlApplication: "beutl-web", beutlUserId: "u1", beutlPurchaseKind: kind === "subscription" ? undefined : "package", packageId: kind === "subscription" ? undefined : "p1", billingOfferId: kind === "subscription" ? "offer-1" : undefined };
     const stripe: any = {
       customers: { retrieve: vi.fn().mockResolvedValue({ id: "cus_1", deleted: false, metadata: { beutlApplication: "beutl-web", beutlUserId: "u1" } }), del: vi.fn() },
-      subscriptions: { retrieve: vi.fn().mockRejectedValue(new Error("subscription unavailable")), list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
+      subscriptions: { retrieve: vi.fn().mockRejectedValue(failed("subscription unavailable")), list: vi.fn().mockResolvedValue({ data: [], has_more: false }) },
       checkout: { sessions: {
         list: vi.fn()
           .mockResolvedValueOnce({ data: [], has_more: false })
           .mockResolvedValueOnce({ data: [{ id: "cs-fail", metadata, payment_intent: "pi-fail", subscription: "sub-fail" }], has_more: false }),
         expire: vi.fn(), retrieve: vi.fn(),
       } },
-      paymentIntents: { retrieve: kind === "paymentIntent" ? vi.fn().mockRejectedValue(new Error("PI unavailable")) : vi.fn().mockResolvedValue({ id: "pi-fail", latest_charge: "ch-fail" }) },
-      charges: { retrieve: kind === "charge" ? vi.fn().mockRejectedValue(new Error("charge unavailable")) : vi.fn().mockResolvedValue({ id: "ch-fail", created: 1_000 }) },
+      paymentIntents: { retrieve: kind === "paymentIntent" ? vi.fn().mockRejectedValue(failed("PI unavailable")) : vi.fn().mockResolvedValue({ id: "pi-fail", latest_charge: "ch-fail" }) },
+      charges: { retrieve: kind === "charge" ? vi.fn().mockRejectedValue(failed("charge unavailable")) : vi.fn().mockResolvedValue({ id: "ch-fail", created: 1_000 }) },
     };
-    await expect(closeStripeCustomerForAdminAccountDeletion({ userId: "u1", stripeCustomerId: "cus_1", deletionAuthorizedAt: new Date(1_000_000), secretKey: "sk_test", stripeClient: stripe })).resolves.toMatchObject({ status: "owner-mismatch" });
+    const closing = closeStripeCustomerForAdminAccountDeletion({ userId: "u1", stripeCustomerId: "cus_1", deletionAuthorizedAt: new Date(1_000_000), secretKey: "sk_test", stripeClient: stripe });
+    // A missing object is evidence against ownership. Stripe being unreachable
+    // is not, and is reported as the failure it is.
+    if (failure === "missing") await expect(closing).resolves.toMatchObject({ status: "owner-mismatch" });
+    else await expect(closing).rejects.toThrow("unavailable");
     expect(stripe.customers.del).not.toHaveBeenCalled();
   });
 

@@ -69,6 +69,7 @@ function browserStore(name: "localStorage" | "sessionStorage"): StorageLike | nu
   try {
     return typeof globalThis[name] === "undefined" ? null : globalThis[name];
   } catch {
+    // Some browsers throw on access to a blocked store; treat it as absent.
     return null;
   }
 }
@@ -124,6 +125,7 @@ function loadFromStorage(
     }
     return [...byId.values()];
   } catch {
+    // Browser storage is unavailable; the server sweeps unfinished receipts.
     return [];
   }
 }
@@ -304,6 +306,7 @@ export async function uploadStorageFile(
       upload = (await started.json()) as StartedUpload;
       break;
     } catch {
+      // A truncated response is retried like a lost one.
       if (attempt === COMPLETION_ATTEMPTS) {
         await cancelUpload(id);
         return { ok: false, errorCode: "uploadFailed" };
@@ -376,6 +379,7 @@ export async function resumeStorageUploadCompletion(
     try {
       finished = await postCompletion(pending.uploadId, pending.body);
     } catch {
+      // A network failure is retried; the receipt survives the last attempt.
       if (attempt === COMPLETION_ATTEMPTS) {
         return {
           ok: false,
@@ -415,6 +419,7 @@ export async function resumeStorageUploadCompletion(
       discardPendingStorageUploadCompletion(pending.uploadId, pending.ownerId);
       return { ok: true, file: result };
     } catch {
+      // A truncated response is retried; the receipt survives the last attempt.
       if (attempt === COMPLETION_ATTEMPTS) {
         return {
           ok: false,
@@ -490,6 +495,7 @@ async function errorCodeOf(response: Response): Promise<string> {
     const body = (await response.json()) as { error_code?: unknown };
     return typeof body.error_code === "string" ? body.error_code : "uploadFailed";
   } catch {
+    // An error body that is not JSON carries no error code.
     return "uploadFailed";
   }
 }

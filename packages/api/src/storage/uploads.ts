@@ -543,7 +543,8 @@ export async function finishUpload({
   >;
   try {
     multipart = bucket().resumeMultipartUpload(upload.objectKey, upload.uploadId);
-  } catch {
+  } catch (error) {
+    console.error("Failed to resume a storage multipart upload", upload.id, error);
     return { ok: false, reason: "uploadFailed" };
   }
 
@@ -617,11 +618,11 @@ export async function finishUpload({
       // It can only settle the same generation after reloading its durable
       // unknown state; it never issues another provider complete call.
       void providerCompletion.then(async (late) => {
-        const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch(() => null);
+        const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch((error) => { console.error("Failed to reload a late storage completion", completing.id, error); return null; });
         if (!current || current.completionState !== "unknown") return;
         if (late.kind !== "completed") {
           if (!current.completionInterventionAt) return;
-          await recordStorageUploadCompletionLateFailure({ id: completing.id, userId, expected: storageUploadGenerationOf(current), expectedInterventionAt: current.completionInterventionAt, error: late.error instanceof Error ? late.error.message : String(late.error) }).catch(() => undefined);
+          await recordStorageUploadCompletionLateFailure({ id: completing.id, userId, expected: storageUploadGenerationOf(current), expectedInterventionAt: current.completionInterventionAt, error: late.error instanceof Error ? late.error.message : String(late.error) }).catch((error) => console.error("Failed to record a late storage completion failure", completing.id, error));
           return;
         }
         await finalizeUpload(current, userId, BigInt(late.value.size)).catch((error) => console.error("Failed to finalize a late storage completion", completing.id, error));
@@ -657,7 +658,7 @@ export async function finishUpload({
         deadlineTimer = undefined;
         await persistUnknownBounded(completing, userId, completionLeaseToken, "Remote multipart completion exceeded deadline");
         void providerCompletion.then(async (late) => {
-          const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch(() => null);
+          const current = await findStorageUploadByIdAndUserId({ id: completing.id, userId }).catch((error) => { console.error("Failed to reload a late storage completion", completing.id, error); return null; });
           if (!current || current.completionState !== "unknown") return;
           if (late.kind !== "completed") return;
           await finalizeUpload(current, userId, BigInt(late.value.size)).catch((error) => console.error("Failed to finalize a late storage completion", completing.id, error));
@@ -693,7 +694,7 @@ export async function finishUpload({
     const settled = await completedFileOf(completing.id, userId, completing);
     if (settled.kind === "completed") return { ok: true, file: settled.file };
     if (settled.kind === "unknown") {
-      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Completion receipt lookup failed", now: new Date() }).catch(() => undefined);
+      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Completion receipt lookup failed", now: new Date() }).catch((recordError) => console.error("Failed to record an unknown storage completion", completing.id, recordError));
       return { ok: false, reason: "uploadFailed" };
     }
 
@@ -710,7 +711,7 @@ export async function finishUpload({
       // complete() may have committed even though its response was lost. A
       // transient HEAD failure is not proof that the object is absent, so do
       // not claim cleanup, abort the handle, or schedule object deletion.
-      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Joined object lookup failed", now: new Date() }).catch(() => undefined);
+      await recordStorageUploadCompletionUnknown({ id: completing.id, userId, leaseToken: completionLeaseToken, expected: storageUploadGenerationOf(completing), error: "Joined object lookup failed", now: new Date() }).catch((recordError) => console.error("Failed to record an unknown storage completion", completing.id, recordError));
       return { ok: false, reason: "uploadFailed" };
     }
 
@@ -721,7 +722,7 @@ export async function finishUpload({
       expected: storageUploadGenerationOf(completing),
       error: error instanceof Error ? error.message : String(error),
       now: new Date(),
-    }).catch(() => undefined);
+    }).catch((recordError) => console.error("Failed to record an unknown storage completion", completing.id, recordError));
     const concurrent = await completedFileOf(completing.id, userId, completing);
     if (concurrent.kind === "completed") return { ok: true, file: concurrent.file };
     return { ok: false, reason: "uploadFailed" };
@@ -936,7 +937,7 @@ async function persistUnknownBounded(
     expected: storageUploadGenerationOf(upload),
     error,
     now: new Date(),
-  }).catch(() => undefined);
+  }).catch((recordError) => console.error("Failed to record an unknown storage completion", upload.id, recordError));
   await Promise.race([
     persistence,
     new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
@@ -995,7 +996,8 @@ export async function cancelUpload({
     let current;
     try {
       current = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
-    } catch {
+    } catch (error) {
+      console.error("Failed to reload a storage upload being cancelled", uploadId, error);
       // 読めなかった。取れなかったのが「もう無いから」なのか「一時の不調」なのか
       // 分からない以上、片付いたとは言えない——言えば呼び出し側はそこで手を引き、
       // パートは誰も取りに行かないまま残る。もう一度来てもらう。
@@ -1162,7 +1164,8 @@ async function recordCancellation(
       return true;
     });
     return placed ? "cancelled" : "missing";
-  } catch {
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
     // 一瞬の差で行のほうが現れた。もう一度来てもらえば、そちらを片付ける。
     return "missing";
   }
@@ -1282,7 +1285,8 @@ async function stillOwnClaimedUpload(
       current.abandonedAt?.getTime() === expected.abandonedAt?.getTime() &&
       current.cleanupLeaseToken === expected.cleanupLeaseToken,
     );
-  } catch {
+  } catch (error) {
+    console.error("Failed to confirm a storage upload cleanup lease", expected.id, error);
     return false;
   }
 }

@@ -35,6 +35,7 @@ function logicalParamsEqual(existingJson: string, currentJson: string): boolean 
   try {
     return JSON.stringify(withoutPackageCheckoutAttemptToken(JSON.parse(existingJson))) === JSON.stringify(withoutPackageCheckoutAttemptToken(JSON.parse(currentJson)));
   } catch {
+    // Records that are not JSON cannot be shown to match.
     return false;
   }
 }

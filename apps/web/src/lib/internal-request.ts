@@ -27,6 +27,7 @@ export function fromThisSite(request: Request): boolean {
   try {
     return new URL(origin).origin === new URL(request.url).origin;
   } catch {
+    // An Origin header that is not a URL is not this origin.
     return false;
   }
 }
@@ -77,6 +78,7 @@ export async function readJsonWithLimit(
       chunks.push(value);
     }
   } catch {
+    // The client went away mid-body; there is no request to answer.
     return { ok: false };
   } finally {
     reader.releaseLock();
@@ -92,6 +94,7 @@ export async function readJsonWithLimit(
   try {
     return { ok: true, value: JSON.parse(new TextDecoder().decode(joined)) };
   } catch {
+    // A body that is not JSON is the caller's input, not a server error.
     return { ok: false };
   }
 }

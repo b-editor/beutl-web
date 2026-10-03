@@ -335,6 +335,7 @@ function looksLikeJsonDocument(text: string): boolean {
     const parsed: unknown = JSON.parse(text);
     return parsed !== null && typeof parsed === "object";
   } catch {
+    // Text that is not JSON is some other subtitle format.
     return false;
   }
 }
@@ -344,6 +345,7 @@ function fromJson(text: string): SubtitleParseResult {
   try {
     parsed = JSON.parse(text);
   } catch {
+    // The file is the user's input, reported as invalid JSON.
     return { ok: false, reason: "invalidJson" };
   }
   if (!Array.isArray(parsed) || parsed.length === 0) {

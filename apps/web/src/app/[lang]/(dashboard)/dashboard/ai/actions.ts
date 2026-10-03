@@ -488,6 +488,7 @@ function readTranslationContexts(
   try {
     parsed = JSON.parse(value);
   } catch {
+    // Cue timings are optional context; unreadable ones are dropped like mismatched ones.
     return {};
   }
   if (parsed === null || typeof parsed !== "object") return {};
@@ -567,6 +568,7 @@ async function resolveMediaOrigin(): Promise<string | undefined> {
   try {
     origin = new URL(await resolveOrigin());
   } catch {
+    // An origin that is not a URL is a deployment without a reachable HTTPS origin.
     return undefined;
   }
   return origin.protocol === "https:" ? origin.origin : undefined;
@@ -587,6 +589,7 @@ async function resolveVideoCallbackUrl(
       origin,
     );
   } catch {
+    // A job id that does not form a URL cannot be called back.
     return undefined;
   }
   if (callbackUrl.protocol !== "https:") return undefined;
@@ -980,6 +983,7 @@ export async function transcribeAction(
   try {
     parsedAudio = await parseAudio(file);
   } catch {
+    // parseAudio throws only for audio it cannot read, which is the caller's input.
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   const identity = await requestIdentityOf(formData, "audio.transcribe", {
@@ -1132,6 +1136,7 @@ export async function translateAction(
       return { id: record.id, text: record.text };
     });
   } catch {
+    // Segments that are not JSON are the caller's input, not a server error.
     return { success: false, message: t("api-errors:invalidRequestBody") };
   }
   // Timings from the source the user pasted. A translated line that does not

@@ -25,6 +25,7 @@ export default new Hono()
     try {
       input = saveSchema.safeParse(await parseJsonWithBodyLimit(c.req));
     } catch {
+      // A body that is not JSON or is too large is the caller's input.
       return c.json(await apiErrorResponse("invalidRequestBody"), 400);
     }
     if (!jobId.success || !input.success)

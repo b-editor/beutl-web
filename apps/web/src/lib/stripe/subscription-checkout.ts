@@ -27,7 +27,10 @@ import {
   isCancellationScheduled,
 } from "./cancellation";
 import type { createStripe } from "./config";
-import { isStripeResourceMissingError } from "./errors";
+import {
+  isStripeInvalidRequestError,
+  isStripeResourceMissingError,
+} from "./errors";
 import {
   getExpandableId as expandableId,
   getStripeCustomerOwnershipProof,
@@ -902,7 +905,8 @@ export async function reconcileSubscriptionCheckoutSuccess({
     checkoutSession = await stripe.checkout.sessions.retrieve(
       stripeCheckoutSessionId,
     );
-  } catch {
+  } catch (error) {
+    if (!isStripeInvalidRequestError(error)) throw error;
     return false;
   }
   const customerId = expandableId(checkoutSession.customer);

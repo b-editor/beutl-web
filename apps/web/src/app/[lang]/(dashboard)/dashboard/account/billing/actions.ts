@@ -7,6 +7,7 @@ import {
   fulfillOrRefundTopUpPayment,
 } from "@/lib/stripe/ai-billing";
 import { createStripe } from "@/lib/stripe/config";
+import { isStripeInvalidRequestError } from "@/lib/stripe/errors";
 import {
   getStripeCustomerOwnershipProof,
   hasStripeOwnerMetadata,
@@ -584,9 +585,11 @@ export async function reconcileAiCheckoutSuccess(
     checkoutSession = await stripe.checkout.sessions.retrieve(
       stripeCheckoutSessionId,
     );
-  } catch {
+  } catch (error) {
     // The success URL is user-controlled. An expired, forged, or inaccessible
-    // session must not prevent the account page from rendering.
+    // session must not prevent the account page from rendering. Stripe being
+    // unreachable is not something the URL caused, and is not hidden.
+    if (!isStripeInvalidRequestError(error)) throw error;
     return false;
   }
   const customerId =

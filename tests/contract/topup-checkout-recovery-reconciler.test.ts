@@ -566,7 +566,7 @@ describe("top-up account-deletion recovery reconciliation", () => {
     const stripe: any = {
       checkout: { sessions: {
         list: vi.fn(async ({ status }: any) => ({ data: status === "open" ? open : [], has_more: false })),
-        expire: vi.fn(async () => { throw new Error("race"); }),
+        expire: vi.fn(async () => { throw Object.assign(new Error("race"), { type: "StripeInvalidRequestError" }); }),
         retrieve: vi.fn(async (id: string) => ({ ...open.find((item) => item.id === id), status: "open" })),
       } },
       paymentIntents: { retrieve: vi.fn() },
