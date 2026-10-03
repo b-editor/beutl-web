@@ -16,6 +16,18 @@ const response = (body: string, headers: Record<string, string> = {}) => new Res
 });
 
 describe("Backblaze B2 S3 storage adapter", () => {
+  it("rejects missing-bucket writes while preserving missing reads and idempotent aborts", async () => {
+    const bucket = new S3GitObjectBucket(env, (async () =>
+      new Response("<Error><Code>NoSuchBucket</Code></Error>", { status: 404 })) as typeof fetch);
+    await expect(bucket.put("git/item", new Uint8Array([1]))).rejects.toThrow("S3 PUT failed: HTTP 404");
+    await expect(bucket.createMultipartUpload("git-lfs/item")).rejects.toThrow("S3 POST failed: HTTP 404");
+    await expect(bucket.resumeMultipartUpload("git-lfs/item", "missing").complete([]))
+      .rejects.toThrow("S3 POST failed: HTTP 404");
+    await expect(bucket.get("missing")).resolves.toBeNull();
+    await expect(bucket.head("missing")).resolves.toBeNull();
+    await expect(bucket.resumeMultipartUpload("git-lfs/item", "missing").abort()).resolves.toBeUndefined();
+  });
+
   it("rejects redirects without forwarding the signed request", async () => {
     let requests = 0;
     const bucket = new S3GitObjectBucket(env, (async (request: Request) => {

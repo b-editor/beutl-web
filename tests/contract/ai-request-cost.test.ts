@@ -27,7 +27,8 @@ const video = {
   id: videoModel, canonical_slug: videoModel, name: "Request video", created: 1,
   supported_resolutions: ["720p", "1080p"], supported_durations: [5],
   supported_aspect_ratios: ["16:9", "1:1"], supported_frame_images: [],
-  supported_sizes: null, generate_audio: true, seed: true, allowed_passthrough_parameters: [],
+  supported_sizes: null, upscale_factor: null, creativity: null, generate_audio: true, seed: true,
+  allowed_passthrough_parameters: [],
   pricing_skus: {
     duration_seconds_720p_without_audio: "0.01", duration_seconds_720p_with_audio: "0.02",
     duration_seconds_1080p_without_audio: "0.03", duration_seconds_1080p_with_audio: "0.04",

@@ -3,6 +3,7 @@ import { MAX_LFS_OBJECT_BYTES } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
 import { abortMultipart, advanceCompletedVerification, clearTusTail, MAX_MULTIPART_PARTS, MULTIPART_PART_BYTES } from "./multipart";
 import type { GitStorageAccounting } from "./accounting";
+import { reserveTusTail } from "./tus-tail-storage";
 
 // tus 1.0 core, Creation, Expiration and Termination. B2 needs at least 5 MiB
 // for every non-final part; smaller PATCH tails live in SQLite DO storage.
@@ -249,6 +250,14 @@ export async function handleTus(
   const uploadCount = combined < MIN_PART_BYTES && !final ? 0 :
     combined > MULTIPART_PART_BYTES && final ? 2 : 1;
   if (current.parts.length + uploadCount > MAX_MULTIPART_PARTS) return tusResponse(413, patchExpires);
+  const pendingTail = !final && (uploadCount === 0 || combined > MULTIPART_PART_BYTES);
+  if (pendingTail) {
+    const capacity = await reserveTusTail(storage, oid);
+    if (capacity !== "reserved") return tusResponse(capacity === "full" ? 429 : 503, {
+      ...patchExpires, "Upload-Offset": String(current.offset), "Retry-After": "60",
+    }, capacity === "full" ? "Repository tus tail storage limit reached; flush or terminate pending uploads"
+      : "Repository tus tail accounting is being recovered; retry this PATCH");
+  }
 
   const reader = request.body.getReader();
   let prefixOffset = 0;

@@ -343,6 +343,8 @@ describe("OpenRouter video client contract", () => {
                 supported_aspect_ratios: ["16:9"],
                 supported_frame_images: ["first_frame"],
                 supported_sizes: null,
+                upscale_factor: null,
+                creativity: null,
                 generate_audio: true,
                 seed: false,
                 allowed_passthrough_parameters: [],

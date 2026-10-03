@@ -87,7 +87,9 @@ export class S3GitObjectBucket implements GitObjectBucket {
     } as RequestInit & { duplex?: "half" });
     const signed = await this.client.sign(request, { redirect: "manual", aws: { allHeaders: true } });
     const response = await this.fetcher(signed);
-    if (!response.ok && response.status !== 404) {
+    const missingIsExpected = response.status === 404 &&
+      (method === "GET" || method === "HEAD" || method === "DELETE");
+    if (!response.ok && !missingIsExpected) {
       const detail = (await response.text()).slice(0, 512);
       throw new Error(`S3 ${method} failed: HTTP ${response.status} ${detail}`);
     }

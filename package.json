@@ -29,25 +29,26 @@
     "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
   },
   "devDependencies": {
-    "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.1",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "@types/node": "^22.20.5",
     "fflate": "^0.8.3",
     "happy-dom": "20.14.5",
-    "hono": "^4.13.5",
+    "hono": "^4.13.12",
     "vitest": "^4.1.11"
   },
   "pnpm": {
     "overrides": {
-      "zod": "4.5.4",
-      "@types/react": "19.1.0",
-      "@types/react-dom": "19.1.1",
+      "zod": "4.6.5",
+      "@types/react": "19.3.0",
+      "@types/react-dom": "19.3.0",
       "minimatch@3": "3.1.5",
       "minimatch@9": "9.0.9",
       "brace-expansion@1": "1.1.18",
       "brace-expansion@2": "2.1.4",
       "brace-expansion@5": "5.0.9",
       "undici": "7.29.0",
-      "postcss": "8.5.26",
+      "postcss": "8.5.28",
       "lodash": "4.18.1",
       "fast-xml-parser": "5.7.0",
       "fast-xml-builder": "1.1.7",
@@ -71,7 +72,7 @@
       "@simplewebauthn/server": "13.3.2"
     },
     "patchedDependencies": {
-      "@ai-sdk/gateway@4.0.86": "patches/@ai-sdk__gateway@4.0.86.patch"
+      "@ai-sdk/gateway@4.0.103": "patches/@ai-sdk__gateway@4.0.103.patch"
     }
   },
   "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a"

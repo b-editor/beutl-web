@@ -102,6 +102,8 @@ const VIDEO_MODELS = {
       supported_aspect_ratios: ["16:9", "9:16"],
       supported_frame_images: ["first_frame"],
       supported_sizes: null,
+      upscale_factor: null,
+      creativity: null,
       generate_audio: true,
       seed: true,
       allowed_passthrough_parameters: [],

@@ -3,6 +3,7 @@ import { CheckpointSha256, type Sha256Checkpoint } from "./checkpoint-sha256";
 import type { GitStorageAccounting } from "./accounting";
 import type { GitDurableStorage, LfsRecord } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
+import { releaseTusTail } from "./tus-tail-storage";
 
 export const MULTIPART_PART_BYTES = 64 * 1024 * 1024;
 export const MAX_MULTIPART_PARTS = 10_000;
@@ -39,6 +40,7 @@ export async function clearTusTail(storage: GitDurableStorage, oid: string): Pro
       await storage.delete(`tus-tail:${oid}:${slot}:${index}`);
     }
   }
+  await releaseTusTail(storage, oid);
 }
 
 async function acceptedParts(

@@ -1,25 +1,25 @@
 diff --git a/dist/index.js b/dist/index.js
-index e6ea132e212af89ed3b600faa2045f7fecab71ad..3ac7bd1b131551626f5e72e0ee0e24ccae8880cf 100644
+index 705490b9bbc1191c6af9c807c7da0a76b4618f4b..890889ffd8e367b72fc180e5becafb293e35a92d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1748,7 +1748,7 @@ var GatewayImageModel = class _GatewayImageModel {
-           n,
-           ...size && { size },
-           ...aspectRatio && { aspectRatio },
--          ...seed && { seed },
-+          ...seed != null && { seed },
-           ...providerOptions && { providerOptions },
-           ...files && {
-             files: files.map((file) => maybeEncodeImageFile(file))
-@@ -2135,7 +2135,7 @@ var GatewayVideoModel = class {
-       ...resolution && { resolution },
-       ...duration && { duration },
-       ...fps && { fps },
--      ...seed && { seed },
-+      ...seed != null && { seed },
-       ...generateAudio !== void 0 && { generateAudio },
-       ...providerOptions && { providerOptions },
-       ...image && { image: maybeEncodeVideoFile(image) },
+@@ -1387,7 +1387,7 @@ var GatewayImageModel = class GatewayImageModel {
+ 					n,
+ 					...size && { size },
+ 					...aspectRatio && { aspectRatio },
+-					...seed && { seed },
++					...seed != null && { seed },
+ 					...providerOptions && { providerOptions },
+ 					...files && { files: files.map((file) => maybeEncodeImageFile(file)) },
+ 					...mask && { mask: maybeEncodeImageFile(mask) }
+@@ -1658,7 +1658,7 @@ var GatewayVideoModel = class {
+ 			...resolution && { resolution },
+ 			...duration && { duration },
+ 			...fps && { fps },
+-			...seed && { seed },
++			...seed != null && { seed },
+ 			...generateAudio !== void 0 && { generateAudio },
+ 			...providerOptions && { providerOptions },
+ 			...image && { image: maybeEncodeVideoFile(image) },
 diff --git a/src/gateway-image-model.ts b/src/gateway-image-model.ts
 index 53379973c6bf6561f97f412db35a097c85363a0b..aaa5880f0d36d9b77db9e60edeb6ca731e8fdb1e 100644
 --- a/src/gateway-image-model.ts

@@ -135,7 +135,7 @@ export function sanitizePayloadPath(path: string): string {
   return segments.join("/");
 }
 
-export function buildNupkg(options: NupkgOptions): Uint8Array {
+export function buildNupkg(options: NupkgOptions): Uint8Array<ArrayBuffer> {
   const entries: Record<string, Uint8Array> = {
     [`${options.id}.${options.version}.nuspec`]: strToU8(buildNuspec(options)),
   };
@@ -145,7 +145,8 @@ export function buildNupkg(options: NupkgOptions): Uint8Array {
     entries[path] = file.data;
   }
 
-  return zipSync(entries);
+  // zipSync allocates a fresh ArrayBuffer-backed array.
+  return zipSync(entries) as Uint8Array<ArrayBuffer>;
 }
 
 function splitPath(path: string): string[] {

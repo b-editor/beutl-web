@@ -15,6 +15,7 @@ import { createGitRepositoryForOwner, reserveGitLfs, commitGitLfs, GitLfsQuotaEx
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
+import { MAX_TUS_TAIL_RESERVATIONS, MAX_TUS_TAIL_STORAGE_BYTES } from "../packages/api/src/git/tus-tail-storage";
 import { GitRepositoryDurableObject, GIT_DELETED_REPOSITORY_CLEANUP_MS } from "../packages/api/src/git/repo-durable-object";
 import { GitObjectStore, type GitObjectBucket, type GitMultipartUpload } from "../packages/api/src/git/git-object-store";
 import { issueGitToken, issueMultipartToken, verifyGitToken, verifyMultipartToken } from "../packages/api/src/git/tokens";
@@ -1073,6 +1074,111 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
     expect(result.status).toBe(201);
     return result.headers.get("Location")!;
   };
+
+  it("bounds aggregate COW tail slots across restart and releases capacity only after physical cleanup", async () => {
+    class CleanupFailureStorage extends MemoryStorage {
+      failingKey?: string;
+      override async delete(key: string) {
+        if (key === this.failingKey) throw new Error("tail cleanup failed");
+        return super.delete(key);
+      }
+    }
+    const storage = new CleanupFailureStorage();
+    const bucket = new CountingBucket();
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const urls: string[] = [];
+    const oids: string[] = [];
+    for (let i = 0; i <= MAX_TUS_TAIL_RESERVATIONS; i++) {
+      const oid = i.toString(16).padStart(64, "0");
+      oids.push(oid);
+      await storage.put<LfsRecord>(`lfs:${oid}`, {
+        kind: "multipart", size: 8 * 1024 * 1024, verified: false, expiresAt: Date.now() + 60_000,
+      });
+      urls.push(await create(durable, oid, 8 * 1024 * 1024));
+      if (i < MAX_TUS_TAIL_RESERVATIONS) {
+        expect((await durable.fetch(patch(urls[i], 0, new Uint8Array([1])))).status).toBe(204);
+        expect((await durable.fetch(patch(urls[i], 1, new Uint8Array([2])))).status).toBe(204);
+      }
+    }
+    // Both generations remain physically present and are covered by each
+    // fixed 10 MiB reservation, independent of active-tail logical length.
+    expect(await storage.get(`tus-tail:${oids[0]}:a:0`)).toEqual(new Uint8Array([1]));
+    expect(await storage.get(`tus-tail:${oids[0]}:b:0`)).toEqual(new Uint8Array([1, 2]));
+    expect(MAX_TUS_TAIL_STORAGE_BYTES).toBe(640 * 1024 * 1024);
+    durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const blocked = await durable.fetch(patch(urls.at(-1)!, 0, new Uint8Array([1])));
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("Upload-Offset")).toBe("0");
+    expect(bucket.bytesReceived).toBe(0);
+    storage.failingKey = `tus-tail:${oids[0]}:b:0`;
+    await expect(durable.fetch(make(urls[0], "DELETE"))).rejects.toThrow("tail cleanup failed");
+    expect(await storage.get(`tus-tail-budget:${oids[0]}`)).toBe(true);
+    expect((await durable.fetch(patch(urls.at(-1)!, 0, new Uint8Array([1])))).status).toBe(429);
+    storage.failingKey = undefined;
+    expect((await durable.fetch(make(urls[0], "DELETE"))).status).toBe(204);
+    expect(await storage.get(`tus-tail-budget:${oids[0]}`)).toBeUndefined();
+    expect((await durable.fetch(patch(urls.at(-1)!, 0, new Uint8Array([1])))).status).toBe(204);
+    expect((await storage.list({ prefix: "tus-tail-budget:" })).size).toBe(MAX_TUS_TAIL_RESERVATIONS);
+  });
+
+  it("adopts legacy tails in bounded pages, including interrupted slots without metadata", async () => {
+    const storage = new MemoryStorage();
+    const bucket = new CountingBucket();
+    for (let i = 0; i < 125; i++) {
+      const oid = i.toString(16).padStart(64, "0");
+      await storage.put<LfsRecord>(`lfs:${oid}`, {
+        kind: "multipart", size: 8 * 1024 * 1024, verified: false, expiresAt: Date.now() + 60_000,
+      });
+      if (i % 50 === 0) await storage.put(`tus-tail:${oid}:b:4`, new Uint8Array([1]));
+    }
+    const oid = "f".repeat(64);
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: 8 * 1024 * 1024, verified: false, expiresAt: Date.now() + 60_000,
+    });
+    let durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = await create(durable, oid, 8 * 1024 * 1024);
+    for (let page = 0; page < 2; page++) {
+      const result = await durable.fetch(patch(url, 0, new Uint8Array([2])));
+      expect(result.status).toBe(503);
+      expect(result.headers.get("Upload-Offset")).toBe("0");
+      expect((await storage.list({ prefix: "tus-tail-budget:" })).size).toBe(page + 1);
+      durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    }
+    expect((await durable.fetch(patch(url, 0, new Uint8Array([2])))).status).toBe(204);
+    expect((await storage.list({ prefix: "tus-tail-budget:" })).size).toBe(4);
+    expect(bucket.bytesReceived).toBe(0);
+  });
+
+  it("rejects tail-producing PATCH before B2 writes when legacy reservations exceed the budget, but permits flushing", async () => {
+    const storage = new MemoryStorage();
+    const bucket = new CountingBucket();
+    const oid = "f".repeat(64);
+    const resourceId = crypto.randomUUID();
+    const key = `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
+    const upload = await bucket.createMultipartUpload(key);
+    await storage.put<LfsRecord>(`lfs:${oid}`, {
+      kind: "multipart", size: 128 * 1024 * 1024, verified: false, expiresAt: Date.now() + 60_000,
+      tusId: resourceId, uploadId: upload.uploadId,
+    });
+    await storage.put("tusTailBudgetScan", { complete: true });
+    await storage.put(`tus-tail:${oid}:meta`, { generation: "a", base: 0, length: 1 });
+    await storage.put(`tus-tail:${oid}:a:0`, new Uint8Array([1]));
+    for (let i = 0; i < MAX_TUS_TAIL_RESERVATIONS; i++) {
+      await storage.put(`tus-tail-budget:${i.toString(16).padStart(64, "0")}`, true);
+    }
+    await storage.put(`tus-tail-budget:${oid}`, true);
+    const durable = new GitRepositoryDurableObject({ storage }, env, bucket);
+    const url = `${base(oid)}/${resourceId}`;
+    const result = await durable.fetch(patch(url, 1, new Uint8Array(64 * 1024 * 1024)));
+    expect(result.status).toBe(429);
+    expect(result.headers.get("Upload-Offset")).toBe("1");
+    expect(bucket.bytesReceived).toBe(0);
+    expect((await durable.fetch(make(url, "HEAD"))).headers.get("Upload-Offset")).toBe("1");
+    expect((await durable.fetch(patch(url, 1, new Uint8Array(5 * 1024 * 1024 - 1)))).status).toBe(204);
+    expect(bucket.bytesReceived).toBe(5 * 1024 * 1024);
+    expect(await storage.get(`tus-tail-budget:${oid}`)).toBeUndefined();
+    expect((await storage.list({ prefix: `tus-tail:${oid}:` })).size).toBe(0);
+  });
 
   it("creates, queries, patches, verifies and terminates a tus resource", async () => {
     const bucket = new MemoryBucket();

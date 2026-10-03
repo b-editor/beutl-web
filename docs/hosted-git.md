@@ -117,6 +117,11 @@ behavior before enabling production traffic.
   The signed PUT fixes length and content type. The verify action reads the
   precise B2 object version as a stream and checks its full size and SHA-256
   against the LFS OID before publishing it. B2 ETags are not treated as hashes.
+  **Unresolved rollout blocker:** a direct signed Basic PUT URL can be replayed
+  during its validity window and create additional B2 versions. Logical quotas
+  and later garbage collection do not bound that transient physical storage.
+  Keep hosted Git disabled until a provider-enforced single-use write or an
+  agreed transfer compatibility change addresses this.
 - A batch with an object above 5 GB selects `beutl-tus` when the client
   advertises it. The Beutl executable registers the matching Git LFS custom
   transfer agent. Older clients can still use `beutl-multipart` as a fallback.
@@ -141,6 +146,16 @@ behavior before enabling production traffic.
   part minimum in 1 MiB SQLite values, then streams them into a B2 part when
   enough bytes arrive. Each new tail is written copy-on-write before its
   offset becomes visible, so a lost response or DO restart can resume it.
+  Buffered OIDs reserve both 5 MiB COW slots, including stale or interrupted
+  chunks. At most 64 such reservations exist per repository: 640 MiB of tail
+  value capacity, separately from the logical media quota. Admission persists
+  before body processing/B2 writes; a full budget returns 429 with unchanged
+  Upload-Offset. Flushing, completion, termination or expiry cleanup frees a
+  reservation only after both physical slots are successfully deleted.
+  Legacy tails are recovered in pages of 50 LFS records, including partial
+  chunks without metadata. Tail-producing PATCH requests get 503 during
+  recovery; HEAD, full-part flushing and termination remain available. Existing
+  over-budget tails must be flushed or removed before further tails are admitted.
   Creation with upload, deferred length, and concatenation are not supported.
   `X-HTTP-Method-Override` is accepted for PATCH when a proxy blocks the verb.
 - The repository Durable Object serializes PATCH requests. B2 `ListParts`
@@ -197,7 +212,9 @@ HTTP after its Git token expires obtains a new token and retries the Git
 portion within five total attempts, checking actual push URLs (including
 `pushurl` and Git URL rewrites) and authenticating every hosted target.
 Expired Basic, multipart and tus transfer actions that return HTTP 403 also
-trigger this bounded credential refresh. At LFS completion, the account lock
+trigger this bounded credential refresh. Hosted Git LFS batch authentication
+diagnostics also trigger renewal when they name the parsed hosted batch endpoint.
+At LFS completion, the account lock
 serializes a fresh check of the current entitlement and all reserved/committed
 bytes. A plan that no longer covers them yields HTTP 413 and leaves the object
 private and reserved until the user frees space, restores the plan, or cleanup
