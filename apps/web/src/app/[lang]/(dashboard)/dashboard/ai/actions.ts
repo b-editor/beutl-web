@@ -589,7 +589,9 @@ async function resolveVideoCallbackUrl(
       origin,
     );
   } catch {
-    // A job id that does not form a URL cannot be called back.
+    // The job id is encoded and the path is fixed, so only a missing or
+    // malformed deployment origin fails here; such a deployment cannot be
+    // called back.
     return undefined;
   }
   if (callbackUrl.protocol !== "https:") return undefined;

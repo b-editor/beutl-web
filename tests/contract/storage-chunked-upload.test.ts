@@ -1711,6 +1711,25 @@ describe("uploading a file too large for one request", () => {
     expect(state.storageUploads.size).toBe(0);
   });
 
+  it("answers missing only when the upload row wins the race for the mark", async () => {
+    // 墓標を置く一瞬前に行のほうが現れると、一意制約にぶつかる。それは「もう
+    // 一度来れば普通の取り消しになる」という意味なので missing でよい。
+    vi.spyOn(storageDb, "createStorageUploadCancellationTombstone")
+      .mockRejectedValue(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }));
+
+    expect(await cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
+      .toBe("missing");
+  });
+
+  it("does not answer missing when the mark could not be written for another reason", async () => {
+    // DB が落ちていたのを「そんなものは無い」と答えると、障害が 404 に紛れる。
+    vi.spyOn(storageDb, "createStorageUploadCancellationTombstone")
+      .mockRejectedValue(new Error("database unavailable"));
+
+    await expect(cancelUpload({ userId: USER_ID, uploadId: crypto.randomUUID() }))
+      .rejects.toThrow("database unavailable");
+  });
+
   it("stops placing marks for uploads that never appear", async () => {
     // 墓標はどんな名前にも置けるので、数だけが際限なく増える。抱えているものが
     // 無いぶん枠にも本数にも数えられないから、ここで限る。
