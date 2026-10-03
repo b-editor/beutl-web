@@ -187,9 +187,11 @@ Hosted LFS downloads retain partial bytes across HTTP 401/403 authentication
 renewal in the user's local application data, scoped by project and OID.
 The agent locks each OID and rehashes the saved prefix before a range request;
 it reports completion only after checking the full size and SHA-256. It saves
-bytes without transfer URLs or headers. The next download collects idle
-partials older than 24 hours. Cancellation and other permanent failures
-remove the partial file; progressing downloads have no minimum speed cutoff.
+bytes without transfer URLs or headers. The next download for this project
+collects idle partials older than 24 hours; lock files are removed at close.
+Authentication expiry, cancellation and exhausted transient retries retain
+resumable bytes. Disk errors, malformed ranges and hash failures discard them;
+progressing downloads have no minimum speed cutoff.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,

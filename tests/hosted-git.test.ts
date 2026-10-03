@@ -290,7 +290,10 @@ describe("hosted Git maintenance and admission", () => {
     expect(events).toEqual(["lock", "lock", "count"]);
   });
 
-  it.each(["deletion", "account", "lfs"])("advances %s maintenance past persistent failures", async (kind) => {
+  it.each([true, false].flatMap(signingConfigured => ["deletion", "account", "lfs"]
+    .map(kind => ({ kind, signingConfigured }))))(
+    "advances $kind maintenance past persistent failures (signingConfigured=$signingConfigured)",
+    async ({ kind, signingConfigured }) => {
     const failed = kind === "lfs" ? 20 : 10;
     const rows = Array.from({ length: failed + 2 }, (_, index) => ({
       id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
@@ -315,7 +318,8 @@ describe("hosted Git maintenance and admission", () => {
       gitLfsStorage: { findMany: list, updateMany: update } }) as never);
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const routeEnv = { ...env, BEUTL_GIT_ENABLED: "false", BEUTL_GIT_REPOSITORIES: {
+      const routeEnv = { ...env, BEUTL_GIT_TOKEN_SECRET: signingConfigured ? secret : undefined,
+        BEUTL_GIT_ENABLED: "false", BEUTL_GIT_REPOSITORIES: {
         idFromName: (name: string) => name,
         get: (id: unknown) => ({ fetch: async (request: Request) => {
           const row = kind === "lfs" ? rows.find((item) => request.url.endsWith(item.oid))!
@@ -328,6 +332,13 @@ describe("hosted Git maintenance and admission", () => {
       } };
       const reconcile = kind === "deletion" ? reconcileGitRepositoryDeletions
         : kind === "account" ? reconcileGitAccountStorage : reconcileGitLfsReservations;
+      expect(await reconcile({ ...routeEnv, BEUTL_GIT_S3_SECRET_ACCESS_KEY: undefined })).toBe(0);
+      expect(attempted.size).toBe(0);
+      if (!signingConfigured) {
+        const response = await routeGitRequest(new Request("https://beutl.example/api/v3/repos"),
+          { ...routeEnv, BEUTL_GIT_ENABLED: "true" });
+        expect(response?.status).toBe(503);
+      }
       expect(await reconcile(routeEnv)).toBe(0);
       expect(await reconcile(routeEnv)).toBe(2);
       expect(attempted.size).toBe(rows.length);

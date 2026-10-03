@@ -39,9 +39,8 @@ function enabled(env: GitRouterEnvironment): boolean {
   return env.BEUTL_GIT_ENABLED === "true";
 }
 
-function unavailable(env: GitRouterEnvironment): boolean {
+function storageUnavailable(env: GitRouterEnvironment): boolean {
   return !env.BEUTL_GIT_REPOSITORIES ||
-    !env.BEUTL_GIT_TOKEN_SECRET ||
     !env.BEUTL_GIT_S3_ENDPOINT || !env.BEUTL_GIT_S3_REGION || !env.BEUTL_GIT_S3_BUCKET ||
     !env.BEUTL_GIT_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_S3_SECRET_ACCESS_KEY;
 }
@@ -70,7 +69,7 @@ async function cleanup(env: GitRouterEnvironment, repoId: string): Promise<boole
 }
 
 export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment): Promise<number> {
-  if (unavailable(env)) return 0;
+  if (storageUnavailable(env)) return 0;
   const db = await getDb();
   const tombstones = await db.gitRepository.findMany({
     where: {
@@ -112,7 +111,7 @@ export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment)
 // records are adopted without discarding uploads or forcing users under a
 // newly introduced limit. Account admission remains blocked until adopted.
 export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Promise<number> {
-  if (unavailable(env)) return 0;
+  if (storageUnavailable(env)) return 0;
   const db = await getDb();
   const rows = await db.gitRepository.findMany({
     where: { OR: [{ accountedAt: null }, { historyReservedBytes: { gt: 0 } }],
@@ -142,7 +141,7 @@ export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Pro
 }
 
 export async function reconcileGitLfsReservations(env: GitRouterEnvironment): Promise<number> {
-  if (unavailable(env)) return 0;
+  if (storageUnavailable(env)) return 0;
   const db = await getDb();
   const rows = await listExpiredGitLfsReservations(new Date(), 20, db);
   let completed = 0;
@@ -191,7 +190,8 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
   const gitMatch = GIT_PATH.exec(path);
   if (!isCollection && !repoMatch && !gitMatch) return null;
   if (!enabled(env)) return new Response("Not found", { status: 404 });
-  if (unavailable(env)) return json({ message: "Hosted Git is not configured" }, 503);
+  if (storageUnavailable(env) || !env.BEUTL_GIT_TOKEN_SECRET)
+    return json({ message: "Hosted Git is not configured" }, 503);
   const secret = gitTokenSecret(env);
   const db = await getDb();
 
