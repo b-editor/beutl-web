@@ -1,15 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { env } from "cloudflare:workers";
 import { setDbProvider } from "@beutl/db";
 import { after } from "next/server";
 import { cache } from "react";
 
-// Register a lazy OpenNext factory without reusing request-bound I/O across
-// Worker invocations. The React cache below deduplicates Server Component calls.
+// Register a lazy factory without reusing request-bound I/O across Worker
+// invocations. The React cache below deduplicates Server Component calls.
 const createPrismaClient = async () => {
-  const { env } = await getCloudflareContext({ async: true });
-
   if (!env.BEUTL_DATABASE_HYPERDRIVE) {
     throw new Error("BEUTL_DATABASE_HYPERDRIVE binding not found");
   }
@@ -25,8 +23,8 @@ const createPrismaClient = async () => {
   return prisma;
 };
 
-// OpenNext recommends React cache for sharing one Prisma client throughout a
-// Server Component render. Calls outside that render create their own client.
+// React cache shares one Prisma client throughout a Server Component render.
+// Calls outside that render create their own client.
 const getPrismaClient = cache(createPrismaClient);
 
 setDbProvider(getPrismaClient);
