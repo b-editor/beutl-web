@@ -9,10 +9,10 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",
-    "semver": "^7.7.1",
+    "semver": "^7.8.5",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
-    "@types/semver": "^7.7.0"
+    "@types/semver": "^7.8.0"
   }
 }
