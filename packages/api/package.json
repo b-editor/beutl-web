@@ -47,6 +47,6 @@
     "@types/node": "^22.14.0",
     "@types/semver": "^7.7.0",
     "typescript": "^5.7.3",
-    "wrangler": "^4.119.0"
+    "wrangler": "^4.147.0"
   }
 }
