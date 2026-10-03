@@ -135,7 +135,7 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.descriptionRequired") };
   }
 
-  let nupkg: Uint8Array;
+  let nupkg: Uint8Array<ArrayBuffer>;
   try {
     nupkg = buildNupkg({
       id,
